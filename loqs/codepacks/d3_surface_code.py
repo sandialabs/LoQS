@@ -5,6 +5,10 @@ from pygsti.circuits import Circuit
 
 from loqs.core.syndromecircuit import StabilizerPlaquetteFactory, SyndromeCircuit
 
+
+# TODO: Moving away from just including python files, we can do like pyGSTi modelpacks
+# but what should be the objects/interface?
+
 # One minor modification to prevent collisions with the alternate schedule
 # The alt schedule swaps a/d checks, so we will insert spacers
 # For the normal schedule, we will do a/d/space
@@ -13,7 +17,7 @@ from loqs.core.syndromecircuit import StabilizerPlaquetteFactory, SyndromeCircui
 surface_factory = StabilizerPlaquetteFactory(
     {
         # Fig 2a
-        "X": Circuit([('Gh', 'aux'), ('Gcnot', 'aux', 'b'), ('Gh', 'aux', 'a'), 
+        "X": Circuit([('Gh', 'aux'), ('Gcnot', 'aux', 'b'), ('Gcnot', 'aux', 'a'), 
                       ('Gcnot', 'aux', 'd'), [], ('Gcnot', 'aux', 'c'), ('Gh', 'aux'),
                       ('Iz', 'aux')],
                      line_labels=['aux', 'a', 'b', 'c', 'd']),
@@ -60,7 +64,7 @@ surface25_stabilizers = {
 }
 surface25_syndrome = SyndromeCircuit(
     factory=surface_factory,
-    checks=surface25_stabilizers
+    stabilizers=surface25_stabilizers
 )
 
 # We can also easily use the alternate schedule by swapping out the stabilizer type
@@ -90,7 +94,7 @@ surface17_stabilizers = {
 }
 surface17_syndrome = SyndromeCircuit(
     factory=surface_factory,
-    checks=surface17_stabilizers
+    stabilizers=surface17_stabilizers
 )
 
 # Again, can use alternate Z stabilizer schedule
@@ -130,7 +134,7 @@ surface13_stabilizers = [
 
 surface13_syndrome = SyndromeCircuit(
     factory=surface_factory,
-    checks=surface13_stabilizers
+    stabilizers=surface13_stabilizers
 )
 
 # Again, can use alternate Z stabilizer schedule

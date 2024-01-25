@@ -1,4 +1,5 @@
-"""Let's code codes!"""
+"""Creation of syndrome circuits from stabilizer plaquette templates.
+"""
 
 from typing import Iterable, Mapping, Optional, TypeAlias, Union
 
@@ -41,16 +42,17 @@ class SyndromeCircuit():
     def __init__(self, factory: StabilizerPlaquetteFactory,
                  stabilizers: Union[ListStrMap, Iterable[ListStrMap]]) -> None:
         self.factory = factory
-        if isinstance(stabilizers, ListStrMap):
-            self.stabilizer_stages = [stabilizers]
-        else:
+        if isinstance(stabilizers, (list, tuple)):
             self.stabilizer_stages = stabilizers
+        else:
+            # We only got one stage, make it a list for consistency
+            self.stabilizer_stages = [stabilizers]
         
         for stage in self.stabilizer_stages:
             assert all([c in factory.template_circuit_dict.keys() for c in stage.keys()]), \
                 "Not all provided checks can be created by the provided factory"
     
-    def get_circuit(self, qubit_labels: Optional[Iterable[str]] = None,
+    def get_circuit(self, qubit_labels: Iterable[str],
                     omit_gates: Optional[Union[Iterable[str], str]] = None,
                     compress_within_stages: bool = False,
                     compress_between_stages: bool = False,
@@ -61,18 +63,19 @@ class SyndromeCircuit():
         circuit = Circuit([], line_labels=qubit_labels, editable=True)
         for stage in self.stabilizer_stages:
             stage_layers = []
-            for i, (key, qubits) in enumerate(stage.items()):
-                check_circuit = self.factory.get_circuit(key, qubits, omit_gates=omit_gates)
-                if i == 0:
-                    # Just take layers directly
-                    stage_layers.extend([list(check_circuit.layer(j)) for j in range(check_circuit.num_layers)])
-                else:
-                    # Concatenate layers
-                    for j in range(check_circuit.num_layers):
-                        if j > len(stage_layers) - 1:
-                            stage_layers.append([])
-                        
-                        stage_layers[j] += list(check_circuit.layer(j))
+            for i, (key, qubit_list) in enumerate(stage.items()):
+                for j, qubits in enumerate(qubit_list):
+                    check_circuit = self.factory.get_circuit(key, qubits, omit_gates=omit_gates)
+                    if i == 0 and j == 0:
+                        # Just take layers directly
+                        stage_layers.extend([list(check_circuit.layer(j)) for j in range(check_circuit.num_layers)])
+                    else:
+                        # Concatenate layers
+                        for k in range(check_circuit.num_layers):
+                            if k > len(stage_layers) - 1:
+                                stage_layers.append([])
+                            
+                            stage_layers[k] += list(check_circuit.layer(k))
 
             # TODO: I expect this to fail on a collision
             # Figure out what that error is and put a nice error message
@@ -82,12 +85,14 @@ class SyndromeCircuit():
                 stage_circuit = stage_circuit.parallelize()
 
             circuit.append_circuit_inplace(stage_circuit)
-        circuit.done_editing()
 
         if compress_between_stages:
             circuit = circuit.parallelize()
         if delete_idle_layers:
-            circuit = circuit.delete_idle_layers()
+            if circuit._static:
+                circuit = circuit.copy(editable=True)
+            circuit.delete_idle_layers_inplace()
+        circuit.done_editing()
 
         return circuit
 
