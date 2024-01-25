@@ -1,0 +1,7 @@
+*.pyc
+__pycache__
+
+src/pygsti
+
+.vscode
+venv/
