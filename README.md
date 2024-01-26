@@ -6,11 +6,11 @@ It is eventually intended to be public on GitHub in the SandiaLabs organization.
 
 Remaining items before ready for release:
 
-- [] Port over necessary simulation functions from `loqs-code`
-- [] Refactor all high-level objects (syndrome data, decoder, etc)
-- [] Add subsystem surface code and 9-qubit Shor as additional codepacks
-- [] Add some semblance of testing and tutorials
-- [] Deal with QuantumSim licensing. It is GPL, and we almost certainly don't want to distribute it/have to GPL LoQS.
+- [ ] Port over necessary simulation functions from `loqs-code`
+- [ ] Refactor all high-level objects (syndrome data, decoder, etc)
+- [ ] Add subsystem surface code and 9-qubit Shor as additional codepacks
+- [ ] Add some semblance of testing and tutorials
+- [ ] Deal with QuantumSim licensing. It is GPL, and we almost certainly don't want to distribute it/have to GPL LoQS.
 
 Note that this is not a full "LoQS 2.0" wishlish. A full refactor would also include major backend changes, which we are avoiding here. However, this should move us to at least a LoQS 1.0 release when we go public, i.e. this should be a reasonable interface when we are done.
 
