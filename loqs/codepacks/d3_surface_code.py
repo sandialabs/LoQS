@@ -64,7 +64,8 @@ surface25_stabilizers = {
 }
 surface25_syndrome = SyndromeCircuit(
     factory=surface_factory,
-    stabilizers=surface25_stabilizers
+    stabilizers=surface25_stabilizers,
+    qubit_labels=surface25_qubits
 )
 
 # We can also easily use the alternate schedule by swapping out the stabilizer type
@@ -94,7 +95,8 @@ surface17_stabilizers = {
 }
 surface17_syndrome = SyndromeCircuit(
     factory=surface_factory,
-    stabilizers=surface17_stabilizers
+    stabilizers=surface17_stabilizers,
+    qubit_labels=surface17_qubits
 )
 
 # Again, can use alternate Z stabilizer schedule
@@ -134,7 +136,8 @@ surface13_stabilizers = [
 
 surface13_syndrome = SyndromeCircuit(
     factory=surface_factory,
-    stabilizers=surface13_stabilizers
+    stabilizers=surface13_stabilizers,
+    qubit_labels=surface13_qubits
 )
 
 # Again, can use alternate Z stabilizer schedule
