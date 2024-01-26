@@ -1,0 +1,12 @@
+"python:3.11"
+
+stages:
+  - Static Analysis
+
+black:
+  stage: Static Analysis
+  script:
+  image: milansuk/python-black:latest
+  script:
+  - black --fast ./loqs
+  - black --fast ./examples
