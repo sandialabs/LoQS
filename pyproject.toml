@@ -11,3 +11,9 @@ exclude = '''
     | venv
 )/
 '''
+
+[tool.pyright]
+exclude = [
+    "**/pycache",
+    "**/venv"
+]
