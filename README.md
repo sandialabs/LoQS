@@ -46,3 +46,8 @@ can also set this up to be done locally by performing the following steps:
 pip install pre-commit
 pre-commit install
 ```
+
+If you have staged files for a commit, you can then do `pre-commit run`
+to run the script that will be ran during the commit process.
+Alternatively, you can run `pre-commit run -a` to just format and lint
+the entire codebase.

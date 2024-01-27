@@ -3,7 +3,10 @@
 
 from pygsti.circuits import Circuit
 
-from loqs.core.syndromecircuit import StabilizerPlaquetteFactory, SyndromeCircuit
+from loqs.core.syndromecircuit import (
+    StabilizerPlaquetteFactory,
+    SyndromeCircuit,
+)
 
 
 # TODO: Moving away from just including python files, we can do like pyGSTi modelpacks
@@ -64,7 +67,9 @@ surface_factory = StabilizerPlaquetteFactory(
 ##############
 # SURFACE-25 #
 ##############
-surface25_qubits = [f"D{i}" for i in range(12)] + [f"A{i}" for i in range(12, 15)]
+surface25_qubits = [f"D{i}" for i in range(12)] + [
+    f"A{i}" for i in range(12, 15)
+]
 
 # For Surface-25, we can perform all stabilizers at once (Fig 1a)
 # Note that for weight-3 stabilizers, we still use the weight-4 template
@@ -104,7 +109,9 @@ surface25_syndrome_alt = surface25_syndrome.map_stabilizer_keys({"Z": "Zalt"})
 ##############
 # SURFACE-17 #
 ##############
-surface17_qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
+surface17_qubits = [f"D{i}" for i in range(9)] + [
+    f"A{i}" for i in range(9, 17)
+]
 
 # For Surface-17, we can also perform all stabilizers at once (Fig 1b)
 # This time, we have weight-2 checks instead of weight-3
@@ -134,7 +141,9 @@ surface17_syndrome_alt = surface17_syndrome.map_stabilizer_keys({"Z": "Zalt"})
 ##############
 # SURFACE-13 #
 ##############
-surface13_qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
+surface13_qubits = [f"D{i}" for i in range(9)] + [
+    f"A{i}" for i in range(9, 13)
+]
 
 # For Surface-13, we perform the stabilizers in two stages to reuse aux qubits (Fig 1c)
 surface13_stabilizers = [
@@ -152,7 +161,10 @@ surface13_stabilizers = [
     {
         # And then all weight-2 checks
         # (note that these plaquettes are flipped from Surface-17 weight-2 checks)
-        "X": [["A10", "D1", "D2", None, None], ["A11", None, None, "D6", "D7"]],
+        "X": [
+            ["A10", "D1", "D2", None, None],
+            ["A11", None, None, "D6", "D7"],
+        ],
         "Z": [["A9", "D0", None, "D3", None], ["A12", None, "D5", None, "D8"]],
     },
 ]
