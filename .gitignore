@@ -3,8 +3,10 @@ __pycache__
 .pytest_cache
 
 src/pygsti
-docs/_build
-docs/_autosummary
+src/loqs.egg-info
+
+doc/_build
+doc/_autosummary
 
 .vscode
 venv/

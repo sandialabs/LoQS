@@ -1,3 +1,46 @@
+[project]
+name = "loqs"
+version = "1.0-alpha"
+dependencies = [
+    "pygsti[extensions]>=0.9.12",
+]
+requires-python = ">=3.8"
+authors = [
+    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
+    {name = "Stefan Seritan", email = "sserita@sandia.gov"},
+    {name = "Megan Dahlhauser", email = "mldahlh@sandia.gov"},
+    {name = "Julie Campos"},
+    {name = "Mario M-O."},
+]
+maintainers = [
+    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
+    {name = "Stefan Seritan", email = "sserita@sandia.gov"}
+]
+description = "Logical Qubit Simulator (LoQS)"
+readme = "README.md"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python"
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme"
+]
+dev = [
+    "pre-commit",
+    "black",
+    "flake8"
+]
+examples = ["jupyter"]
+all = ["loqs[test,docs,dev,examples]"]
+
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
 [tool.black]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'

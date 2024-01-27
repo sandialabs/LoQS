@@ -23,19 +23,40 @@ release when we go public, i.e. this should be a reasonable interface when we ar
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
 
 ```
-conda create -p ./venv python=3.11 cvxopt       # Note that we install cvxopt here for the M1/M2 Macs.
-                                                # Other platforms can skip that and install via pip
+conda create -p ./venv python=3.11
 conda activate ./venv
-pip install -r requirements.txt
 pip install -e src/quantumsim
+pip install -e .
 ```
 
-## Using LoQS
+There are various optional requirements that are available, such as `test`, `docs`, `examples`, and `dev`.
+If you want to install all optional dependencies, you can use `all`.
+
+To use these, simply modify the last line of the installation instructions. For example:
+
+```
+pip install -e ".[all]"
+```
+
+(where the quotes are only needed if using zsh instead of bash).
+
+### Using LoQS
 
 TODO. I plan to have a series of examples/tutorials that we point users to.
 
-
 ## Developer Guide
+### Editable pyGSTi
+
+For developers who may want an editable version of `pyGSTi`, you can run:
+
+```
+pip install -e git+https://github.com/sandialabs/pyGSTi.git@v0.9.12#egg=pyGSTi
+```
+
+to get the 0.9.12 release of pyGSTi, which will be located in `src`.
+Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
+if you are working off of a feature branch.
+
 ### Code Formatting and Linting
 
 This project uses `black` for autoformatting code and `flake8` for linting.
