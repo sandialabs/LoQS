@@ -3,6 +3,8 @@ __pycache__
 .pytest_cache
 
 src/pygsti
+docs/_build
+docs/_autosummary
 
 .vscode
 venv/
