@@ -17,6 +17,10 @@ cache:
   paths:
     - .cache/pip
 
+default:
+  tags:
+    - do.small # Run on global small runner
+
 before_script:
   - python --version ; pip --version  # For debugging
   - pip install virtualenv
