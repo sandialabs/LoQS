@@ -1,6 +1,6 @@
 """Classes corresponding to physical circuit construction.
 
-This file defines one interface class, :class:`_ReturnsPygstiCircuit`,
+This file defines one interface class, :class:`ReturnsPygstiCircuit`,
 which serves to localize our dependency on :class:`pygsti.circuits.Circuit`.
 
 There are several user-facing classes designed to avoid the user
@@ -174,9 +174,6 @@ class PhysicalCircuit(IsCastable, ReturnsPygstiCircuit):
         """
         if isinstance(circuit, PhysicalCircuit):
             self._circuit = circuit._circuit
-
-            if qubit_labels is None:
-                self.qubit_labels = circuit.qubit_labels
         else:
             try:
                 self._circuit = PygstiCircuit.cast(circuit)
@@ -185,7 +182,9 @@ class PhysicalCircuit(IsCastable, ReturnsPygstiCircuit):
                     f"Failed to cast {circuit} as a pyGSTi Circuit"
                 ) from e
 
-        if qubit_labels is None:
+        if qubit_labels is None and isinstance(circuit, PhysicalCircuit):
+            self.qubit_labels = circuit.qubit_labels
+        elif qubit_labels is None:
             self.qubit_labels = self._circuit.line_labels
         else:
             assert set(self._circuit.line_labels).issubset(

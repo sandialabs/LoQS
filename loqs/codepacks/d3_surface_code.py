@@ -1,7 +1,7 @@
 """A LoQS QEC codepack for the surface code as implemented in Tomita & Svore 2014.
 """
 
-from loqs.core.physicalcircuit import (
+from loqs.operations.physicalcircuits import (
     PhysicalCircuit,
     CircuitPlaquetteFactory,
     PlaquetteCircuit,
