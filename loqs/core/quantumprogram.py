@@ -3,9 +3,7 @@
 
 from typing import Optional
 
-from loqs.core import QECCodeSpec
-from loqs.operations import OperationStack
-from loqs.records import RecordHistory
+from loqs.core import QECCode, OperationStack, RecordHistory
 
 
 class QuantumProgram:
@@ -13,10 +11,11 @@ class QuantumProgram:
 
     def __init__(
         self,
-        code: QECCodeSpec,
+        code: QECCode,
         input_stack: OperationStack,
         initial_history: Optional[RecordHistory] = None,
     ) -> None:
         """Initialize a QuantumProgram from a list of operations."""
+        self.code = code
         self.input_stack = input_stack
         self.history = initial_history

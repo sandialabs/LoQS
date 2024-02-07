@@ -2,7 +2,10 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, TypeVar
+
+# Generic type variable to stand-in for derived class below
+T = TypeVar("T")
 
 
 class IsCastable(ABC):
@@ -18,7 +21,7 @@ class IsCastable(ABC):
         pass
 
     @classmethod
-    def cast(cls, obj: "IsCastable.Castable") -> Any:
+    def cast(cls: T, obj: "IsCastable.Castable") -> T:
         """Cast to the derived class.
 
         Parameters
@@ -28,8 +31,8 @@ class IsCastable(ABC):
 
         Returns
         -------
-        Any
-            An object with the type of the derived class
+        T
+            An object with type T (matching the derived class)
         """
         # If we are already of the same type as the class, return
         if isinstance(obj, cls):
