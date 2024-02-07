@@ -1,15 +1,15 @@
-"""Utility class for objects that are castable.
+"""Definition of IsCastable utility class.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T")
 
 
 class IsCastable(ABC):
-    """ """
+    """Utility class for objects that are castable."""
 
     @property
     @abstractmethod

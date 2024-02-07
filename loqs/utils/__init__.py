@@ -2,3 +2,4 @@
 """
 
 from .castable import IsCastable
+from .recordable import IsRecordable
