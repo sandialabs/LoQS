@@ -3,4 +3,4 @@
 
 from .castable import IsCastable
 from .recordable import IsRecordable
-from .sigtools import merge_preprocessing_func
+from .sigtools import compose_funcs_by_first_arg
