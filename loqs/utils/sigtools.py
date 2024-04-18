@@ -145,7 +145,7 @@ def compose_funcs_by_first_arg(  # noqa: C901
         if fn.__qualname__ == fn.__name__:
             # Bare function, we can skip rest of checks
             continue
-        if fs.startswith("self"):
+        elif fs.startswith("self"):
             # If we are here, we were able to look it up in self
             # so skip the rest of the checks below
             continue
@@ -167,17 +167,16 @@ def compose_funcs_by_first_arg(  # noqa: C901
         # The only way for fnself to be not None is for us to be have been able
         # to look it up in global scope, so if it is not None here, it is OK.
 
-        if fnself is None:
+        if fnself is None and not is_static:
             # This is a member function that is unbound, i.e. called directly
             # from the class. This is only OK if the function is static
-            if not is_static:
-                raise ValueError(
-                    f"Unbound function {fs} is available but is not static. "
-                    + "Make it static or use a instance-bound version, either "
-                    + "as part of global scope, or make it available in "
-                    + "`self_obj` (and modify the entry into `func_strs` "
-                    + "appropriately)."
-                )
+            raise ValueError(
+                f"Unbound function {fs} is available but is not static. "
+                + "Make it static or use a instance-bound version, either "
+                + "as part of global scope, or make it available in "
+                + "`self_obj` (and modify the entry into `func_strs` "
+                + "appropriately)."
+            )
 
     # Get merged parameters and return type
     processed_params = []

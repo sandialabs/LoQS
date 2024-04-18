@@ -1,7 +1,9 @@
 """Definition of IsCastable utility class.
 """
 
-from abc import ABC, abstractmethod
+from __future__ import annotations
+
+from abc import ABC
 from typing import TypeAlias, TypeVar
 
 # Generic type variable to stand-in for derived class below
@@ -11,17 +13,14 @@ T = TypeVar("T")
 class IsCastable(ABC):
     """Utility class for objects that are castable."""
 
-    @property
-    @abstractmethod
-    def Castable(self) -> TypeAlias:
-        """A type alias for the allowed inputs to cast().
+    Castable: TypeAlias
+    """A type alias for the allowed inputs to cast().
 
-        Typically the same as allowed inputs to the derived class's constructor.
-        """
-        pass
+    Typically the same as allowed inputs to the derived class's constructor.
+    """
 
     @classmethod
-    def cast(cls: T, obj: "IsCastable.Castable") -> T:
+    def cast(cls: T, obj: IsCastable.Castable) -> T:
         """Cast to the derived class.
 
         Parameters
