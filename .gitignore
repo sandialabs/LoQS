@@ -5,8 +5,8 @@ __pycache__
 src/pygsti
 src/loqs.egg-info
 
-doc/_build
-doc/_autosummary
+docs/_build
+docs/_autosummary
 
 .vscode
 venv/
