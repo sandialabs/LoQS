@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any, Optional, Type, TypeAlias, Union
+from typing import Optional, Type, TypeAlias, Union
 
-from quantumsim.sparsedm import SparseDM
+# This should only be loaded if this file is explicitly imported by the user
+try:
+    from quantumsim.sparsedm import SparseDM
+except ImportError as e:
+    raise ImportError("Failed import, cannot use QuantumSim as backend") from e
 
 from loqs.backends.model import OpRep
 from loqs.backends.state import BaseQuantumState
@@ -27,7 +30,6 @@ class QSimQuantumState(BaseQuantumState):
         # Technically not a true restriction of SparseDM, but keeping it simple
         return Union[str, int]
 
-    @abstractmethod
     @property
     def OpRepInputs(self) -> Iterable[OpRep]:
         return [OpRep.PTM_QSIM]
@@ -59,7 +61,7 @@ class QSimQuantumState(BaseQuantumState):
     def __init__(
         self,
         state: Union[StateType, QSimQuantumState, int],
-        qubit_labels: Optional[Iterable[QubitTypes]],
+        qubit_labels: Optional[Iterable[QubitTypes]] = None,
     ) -> None:
         """Initialize a BaseQuantumState.
 

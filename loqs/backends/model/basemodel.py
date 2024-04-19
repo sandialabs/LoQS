@@ -7,8 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from enum import StrEnum
 
-from loqs.backends.circuit import BaseCircuitBackend
-from loqs.core.physicalcircuit import PhysicalCircuit
+from loqs.backends.circuit import BasePhysicalCircuit
 
 
 class OpRep(StrEnum):
@@ -27,27 +26,27 @@ class BaseNoiseModel(ABC):
     and operations that will be applied to a quantum state.
     """
 
-    @abstractmethod
     @property
+    @abstractmethod
     def name(self) -> str:
         """Name of circuit backend"""
         pass
 
-    @abstractmethod
     @property
-    def CircuitBackendInputs(self) -> Iterable[BaseCircuitBackend]:
+    @abstractmethod
+    def CircuitBackendInputs(self) -> Iterable[BasePhysicalCircuit]:
         """The types of circuit backends allowed as "input" to this model."""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def OpRepOutputs(self) -> Iterable[OpRep]:
         """The type of operator representations this model can "output" to."""
         pass
 
     @abstractmethod
     def get_operator_reps(
-        self, circuit: PhysicalCircuit, reptype: OpRep
+        self, circuit: BasePhysicalCircuit, reptype: OpRep
     ) -> Iterable:
         """Get list of operator representations that can be applied.
 

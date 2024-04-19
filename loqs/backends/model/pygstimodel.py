@@ -8,10 +8,14 @@ import functools
 import itertools
 import numpy as np
 
-from pygsti.baseobjs import ExplicitBasis
-from pygsti.models.model import OpModel
-from pygsti.models import ExplicitOpModel, ImplicitOpModel
-from pygsti.tools import basistools as bt
+# This should only be loaded if this file is explicitly imported by the user
+try:
+    from pygsti.baseobjs import ExplicitBasis
+    from pygsti.models.model import OpModel
+    from pygsti.models import ExplicitOpModel, ImplicitOpModel
+    from pygsti.tools import basistools as bt
+except ImportError as e:
+    raise ImportError("Failed import, cannot use pyGSTi as backend") from e
 
 from loqs.backends.circuit import BaseCircuitBackend, PyGSTiCircuitBackend
 from loqs.backends.model import BaseNoiseModel, OpRep
@@ -73,7 +77,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             q1basis,
             ["myEl%d" % i for i in range(4**1)],
             name="qsim_1q",
-            longname="QuantumSim_1Q",
+            longname="QuantumSim_1qubit",
         )
 
         q2basis = itertools.product(q1basis, repeat=2)
@@ -82,7 +86,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             q1basis,
             ["myEl%d" % i for i in range(4**2)],
             name="qsim_2q",
-            longname="QuantumSim_2Q",
+            longname="QuantumSim_2qubit",
         )
 
         # Iterate through circuit and pull out representations

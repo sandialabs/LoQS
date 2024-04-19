@@ -7,29 +7,70 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from typing import Optional, Type, TypeAlias
 
+from loqs.utils.castable import IsCastable
 
-class BaseCircuitBackend(ABC):
-    """Base class for an object that can create physical quantum circuits."""
+
+class BasePhysicalCircuit(IsCastable, ABC):
+    """Base class for an object that can holds a physical quantum circuit."""
+
+    _circuit: CircuitType
+    """The underlying quantum circuit"""
 
     @abstractmethod
+    def __init__(
+        self,
+        circuit: Castable,
+        qubit_labels: Optional[Iterable[QubitTypes]] = None,
+    ) -> None:
+        """Initialize a PhysicalCircuit.
+
+        Parameters
+        ----------
+        circuit:
+            The underlying circuit object
+
+        qubit_labels:
+            Qubit labels to use for the circuit
+        """
+        pass
+
+    def __str__(self) -> str:
+        return f"Physical {self.name} circuit:\n{str(self.circuit)}"
+
+    def __repr__(self) -> str:
+        return f"Physical {self.name} circuit:\n{repr(self.circuit)}"
+
     @property
+    @abstractmethod
     def name(self) -> str:
         """Name of circuit backend"""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
+    def Castable(self) -> TypeAlias:
+        """Types that this backend can cast to an underlying circuit object."""
+        pass
+
+    @property
+    @abstractmethod
     def CircuitType(self) -> Type:
         """The type of underlying circuit objects handled by this backend."""
         pass
 
     @property
-    def CircuitCastable(self) -> TypeAlias:
-        """The types this backend is able to cast into a raw circuit object."""
-        return self.CircuitType
+    def circuit(self) -> CircuitType:
+        """Getter for underlying circuit object"""
+        return self._circuit
 
-    @abstractmethod
     @property
+    @abstractmethod
+    def finalized(self) -> bool:
+        """Whether the underlying circuit is finalized, i.e. not editable"""
+        pass
+
+    @property
+    @abstractmethod
     def QubitTypes(self) -> TypeAlias:
         """Possible types for a circuit's qubit labels.
 
@@ -38,8 +79,19 @@ class BaseCircuitBackend(ABC):
         """
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
+    def qubit_labels(self) -> Iterable[QubitTypes]:
+        """Get the qubit labels of an underlying circuit.
+
+        Returns
+        -------
+            Qubit labels
+        """
+        pass
+
+    @property
+    @abstractmethod
     def OperationTypes(self) -> TypeAlias:
         """Possible types for a circuit's operations.
 
@@ -48,38 +100,43 @@ class BaseCircuitBackend(ABC):
         """
         pass
 
-    def cast_circuit(self, obj: CircuitCastable) -> CircuitType:
-        """Helper function to create the raw circuit
+    @abstractmethod
+    def append(self, circuit: BasePhysicalCircuit) -> BasePhysicalCircuit:
+        """Append another circuit to a copy of this circuit.
 
         Parameters
         ----------
-        obj: CircuitBackend.CircuitCastable
-            Object to cast to a circuit
+        Other Parameters:
+            Refer to :meth:`append_qubits_inplace`
 
         Returns
         -------
-        CircuitBackend.CircuitType
-            The cast circuit with specified qubit labels, if given
+        modified_circuit:
+            A modified copy of the circuit.
         """
-        if isinstance(obj, self.CircuitType):
-            return obj
-        else:
-            raise NotImplementedError(
-                "Derived classes must implement "
-                + "casting to a circuit types other the base circuit type."
-            )
+        modified_circuit = self.copy(finalized=False)
+        modified_circuit.append_inplace(circuit)
+        if self.finalized:
+            modified_circuit.finalize_inplace()
+        return modified_circuit
 
     @abstractmethod
-    def copy_circuit(
-        self, circuit: CircuitType, finalized: bool = False
-    ) -> CircuitType:
-        """Copy a circuit object.
+    def append_inplace(self, circuit: BasePhysicalCircuit) -> None:
+        """Append another circuit in-place to this circuit.
 
         Parameters
         ----------
         circuit:
-            Circuit to copy
+            Circuit to append
+        """
+        pass
 
+    @abstractmethod
+    def copy(self, finalized: bool = False) -> BasePhysicalCircuit:
+        """Copy a circuit object.
+
+        Parameters
+        ----------
         finalized:
             If True, the returned circuit will be in a non-editable "finalized"
             state (if the backend supports this). If False, the returned
@@ -89,16 +146,13 @@ class BaseCircuitBackend(ABC):
 
         Returns
         -------
-        copied_circuit:
             Copied circuit
         """
-        pass
+        return BasePhysicalCircuit(self.circuit)
 
     def delete_qubits(
-        self,
-        circuit: CircuitType,
-        qubits_to_delete: Iterable[QubitTypes],
-    ) -> CircuitType:
+        self, qubits_to_delete: Iterable[QubitTypes]
+    ) -> BasePhysicalCircuit:
         """Delete qubit lines in a copy of the provided circuit.
 
         Operations involving the deleted qubits are also removed.
@@ -113,32 +167,27 @@ class BaseCircuitBackend(ABC):
         modified_circuit:
             A modified copy of the circuit.
         """
-        # Providing a default implementation for circuits
-        # that can be modified in-place
-        modified_circuit = self.copy_circuit(circuit)
-        self.delete_qubits_inplace(modified_circuit, qubits_to_delete)
+        modified_circuit = self.copy(finalized=False)
+        modified_circuit.delete_qubits_inplace(qubits_to_delete)
+        if self.finalized:
+            modified_circuit.finalize_inplace()
         return modified_circuit
 
     @abstractmethod
     def delete_qubits_inplace(
-        self,
-        circuit: CircuitType,
-        qubits_to_delete: Iterable[QubitTypes],
+        self, qubits_to_delete: Iterable[QubitTypes]
     ) -> None:
         """Delete qubit lines in-place in a provided circuit.
 
         Parameters
         ----------
-        circuit:
-            Circuit to modify.
-
         qubits_to_delete:
             List of qubit lines to remove.
         """
         pass
 
     @abstractmethod
-    def finalize_circuit_inplace(self, circuit: CircuitType) -> None:
+    def finalize_inplace(self) -> None:
         """Indicate a circuit is in a finalized state.
 
         For backends that support both editable and non-editable modes for
@@ -149,35 +198,13 @@ class BaseCircuitBackend(ABC):
 
         For backends that do not support multiple circuit modes, this should
         be a no-op.
-
-        Parameters
-        ----------
-        circuit:
-            Circuit to finalize.
-        """
-        pass
-
-    @abstractmethod
-    def get_qubit_labels(self, circuit: CircuitType) -> Iterable[QubitTypes]:
-        """Get the qubit labels of an underlying circuit.
-
-        Parameters
-        ----------
-        circuit: CircuitBackend.CircuitType
-            Circuit to extract qubit labels from
-
-        Returns
-        -------
-        Iterable[CircuitBackend.QubitTypes]
-            Qubit labels
         """
         pass
 
     def map_qubit_labels(
         self,
-        circuit: CircuitType,
         qubit_mapping: Mapping[QubitTypes, QubitTypes],
-    ) -> CircuitType:
+    ) -> BasePhysicalCircuit:
         """Substitute qubit labels in underlying circuit objects.
 
         Parameters
@@ -192,23 +219,20 @@ class BaseCircuitBackend(ABC):
         """
         # Providing a default implementation for circuits
         # that can be modified in-place
-        modified_circuit = self.copy_circuit(circuit)
-        self.map_qubit_labels_inplace(modified_circuit, qubit_mapping)
+        modified_circuit = self.copy(finalized=False)
+        modified_circuit.map_qubit_labels_inplace(qubit_mapping)
+        if self.finalized:
+            modified_circuit.finalize_inplace()
         return modified_circuit
 
     @abstractmethod
     def map_qubit_labels_inplace(
-        self,
-        circuit: CircuitType,
-        qubit_mapping: Mapping[QubitTypes, QubitTypes],
+        self, qubit_mapping: Mapping[QubitTypes, QubitTypes]
     ) -> None:
         """Substitute qubit labels in underlying circuit objects.
 
         Parameters
         ----------
-        circuit:
-            Circuit to modify.
-
         qubit_mapping:
             Mapping from old qubit labels to new qubit labels.
             If a qubit label is not provided, it remains unchanged.
@@ -216,8 +240,8 @@ class BaseCircuitBackend(ABC):
         pass
 
     def set_qubit_labels(
-        self, circuit: CircuitType, qubit_labels: Iterable[QubitTypes]
-    ) -> CircuitType:
+        self, qubit_labels: Iterable[QubitTypes]
+    ) -> BasePhysicalCircuit:
         """Set the qubit labels of an underlying circuit.
 
         Parameters
@@ -232,41 +256,40 @@ class BaseCircuitBackend(ABC):
         """
         # Providing a default implementation for circuits
         # that can be modified in-place
-        modified_circuit = self.copy_circuit(circuit)
-        self.set_qubit_labels_inplace(modified_circuit, qubit_labels)
+        modified_circuit = self.copy(finalized=False)
+        modified_circuit.set_qubit_labels_inplace(qubit_labels)
+        if self.finalized:
+            modified_circuit.finalize_inplace()
         return modified_circuit
 
     @abstractmethod
     def set_qubit_labels_inplace(
-        self, circuit: CircuitType, qubit_labels: Iterable[QubitTypes]
+        self, qubit_labels: Iterable[QubitTypes]
     ) -> None:
         """Set the qubit labels of an underlying circuit.
 
         Parameters
         ----------
-        circuit: CircuitBackend.CircuitType
-            Circuit to modify.
-
         qubit_labels:
             Qubit labels to assign to circuit.
         """
+        assert len(qubit_labels) == len(self.qubit_labels), (
+            f"Only provided {len(qubit_labels)} labels for ",
+            f"{len(self.qubit_labels)} qubits",
+        )
         pass
 
     @abstractmethod
     def process_circuit(
         self,
-        circuit: CircuitType,
         qubit_labels: Optional[Iterable[QubitTypes]] = None,
         omit_gates: Optional[Iterable[OperationTypes]] = None,
         delete_idle_layers: bool = False,
-    ) -> CircuitType:
+    ) -> BasePhysicalCircuit:
         """Helper function to provide consistent circuit processing.
 
         Parameters
         ----------
-        circuit: CircuitBackend.CircuitType
-            Circuit to process
-
         qubit_labels: list of str, optional
             Qubit labels to use for the returned circuit. If not provided,
             the default qubit labels of the object are used.

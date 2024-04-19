@@ -16,14 +16,14 @@ class BaseQuantumState(ABC):
     _state: StateType
     """The underlying quantum state"""
 
-    @abstractmethod
     @property
+    @abstractmethod
     def name(self) -> str:
         """Name of circuit backend"""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def QubitTypes(self) -> TypeAlias:
         """Possible types for a state's qubit labels.
 
@@ -32,8 +32,8 @@ class BaseQuantumState(ABC):
         """
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def OpRepInputs(self) -> Iterable[OpRep]:
         """The "input" operator representations that can act on this state."""
         pass
@@ -43,8 +43,8 @@ class BaseQuantumState(ABC):
         """Getter of the underlying quantum state."""
         return self._state
 
-    @abstractmethod
     @property
+    @abstractmethod
     def StateType(self) -> Type:
         """The type of underlying state objects handled by this backend."""
         pass
@@ -64,11 +64,6 @@ class BaseQuantumState(ABC):
     @abstractmethod
     def copy(self) -> BaseQuantumState:
         """Copy a state object.
-
-        Parameters
-        ----------
-        state:
-            State to copy
 
         Returns
         -------

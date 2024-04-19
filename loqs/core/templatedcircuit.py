@@ -2,26 +2,38 @@
 """
 
 from __future__ import annotations
-from collections.abc import Iterator
 
-from typing import Iterable, Mapping, Optional, TypeAlias, Union
-
-from loqs.backends import (
-    CircuitBackendCastable,
-    PhysicalCircuit,
-    PhysicalCircuitContainer,
+from typing import (
+    Generic,
+    Iterable,
+    Mapping,
+    Optional,
+    TypeAlias,
+    TypeVar,
+    Union,
 )
+
+from loqs.backends.circuit import BasePhysicalCircuit
+
 from loqs.utils import IsCastable
 
+# Generic physical circuit type for these containers
+PhysicalCircuit = TypeVar("PhysicalCircuit", bound=BasePhysicalCircuit)
 
-class CircuitTemplateFactory(PhysicalCircuitContainer, IsCastable):
+
+class CircuitTemplateFactory(Generic[PhysicalCircuit], IsCastable):
     """Object to create circuits from templates.
 
     This object generates circuit fragments on a specified set of qubits
     from a set of circuit templates. For example, this could be used to
     generate stabilizer checks for a syndrome extraction circuit.
 
-    Templates should take the form of a :class:`PhysicalCircuit` with temporary
+    Note that this class takes the type of `PhysicalCircuit` as a generic type.
+    The user should specify which circuit backend the factory creates at
+    runtime, e.g. CircuitTemplateFactory[PyGSTiPhysicalCircuit](...).
+
+    Templates should take the form of a `PhysicalCircuit` (matching the generic
+    circuit backend type used during instantiation) with temporary
     line labels. These line labels will be replaced one-to-one by
     final qubit labels, so it is HIGHLY RECOMMENDED that the order is
     manually specified by the user.
@@ -97,34 +109,29 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
         """Type alias for allowed inputs to CircuitTemplateFactory.
 
         Either take another factory or something that maps string keys
-        to something that the CircuitBackend can cast as a circuit."""
+        to something that the circuit backend can cast as a circuit."""
         return Union[
             CircuitTemplateFactory,
-            Mapping[str, PhysicalCircuit],
-            Mapping[str, self.circuit_backend.CircuitCastable],
+            Mapping[str, Union[PhysicalCircuit, PhysicalCircuit.Castable]],
         ]
 
     def __init__(
         self,
         circuit_templates: CircuitTemplateFactory.Castable,
-        backend: CircuitBackendCastable,
     ) -> None:
         """Initialize a CircuitTemplateFactory from circuit templates.
 
         Parameters
         ----------
-        circuit_templates: CircuitTemplateFactory.Castable
+        circuit_templates:
             Another factory or a dict where keys will be string labels for each
             template type, and values will be :attr:`PhysicalCircuit.Castable`.
         """
-        super().__init__(backend)
-
         if isinstance(circuit_templates, CircuitTemplateFactory):
             self.circuit_templates = circuit_templates.circuit_templates
         else:
             self.circuit_templates = {
-                k: PhysicalCircuit(v, backend=backend)
-                for k, v in circuit_templates.items()
+                k: BasePhysicalCircuit(v) for k, v in circuit_templates.items()
             }
 
     def add_template(
@@ -134,10 +141,10 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
 
         Parameters
         ----------
-        key: str
+        key:
             Key for new template type
 
-        template: pygsti.circuits.Circuit
+        template:
             New template circuit
         """
         assert key not in self.circuit_templates, "Template key already exists"
@@ -145,20 +152,12 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
             template
         )
 
-    def get_bare_circuit(self, key: str) -> CircuitTemplateFactory.CircuitType:
-        return self.circuit_templates[key]
-
-    def get_bare_circuit_iter(
-        self,
-    ) -> Iterator[CircuitTemplateFactory.CircuitType]:
-        return super().get_bare_circuit_iter()
-
     def get_processed_circuit(
         self,
         template_key: str,
         qubit_labels: Iterable[Optional[CircuitTemplateFactory.QubitTypes]],
         **kwargs,
-    ) -> PhysicalCircuit:
+    ) -> BasePhysicalCircuit:
         """Create a stabilizer check circuit from one of the templates.
 
         If removing a line or operation results in an empty layer,
@@ -167,10 +166,10 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
 
         Parameters
         ----------
-        template_key: str
+        template_key:
             Stabilizer template key for self.stabilizer_templates
 
-        qubit_labels: list of str or None
+        qubit_labels:
             Qubit labels that match exactly with the template line_labels.
             If an entry is None, then that template line_label (and all
             gates that touch that line) are removed.
@@ -182,10 +181,12 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
 
         Returns
         -------
-        circuit: pygsti.circuits.Circuit
+        circuit:
             The qubit-replaced circuit fragment/plaquette
         """
-        circuit: PhysicalCircuit = self.circuit_templates[template_key].copy()
+        circuit: BasePhysicalCircuit = self.circuit_templates[
+            template_key
+        ].copy()
         old_qubit_labels = circuit.get_qubit_labels(circuit)
 
         qubits_to_delete = []
@@ -201,8 +202,28 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
 
         return circuit.process_circuit(**kwargs)
 
+    def map_all_qubit_labels_inplace(
+        self,
+        qubit_mapping: Mapping[
+            PhysicalCircuit.QubitTypes, PhysicalCircuit.QubitTypes
+        ],
+    ) -> None:
+        """Map the qubit labels in-place for all template circuits.
 
-class CircuitTemplateSpec(IsCastable):
+        Parameters
+        ----------
+        qubit_mapping: dict
+            Mapping from old qubit labels to new qubit labels.
+            If a qubit label is not provided, it remains unchanged.
+        """
+        for v in self.circuit_templates.values():
+            v.map_qubit_labels_inplace(qubit_mapping)
+
+
+QubitType = TypeVar("QubitType")
+
+
+class CircuitTemplateSpec(Generic[QubitType], IsCastable):
     """Convenience type for specifying circuit templates to stitch together.
 
     Template specs are given as dictionaries where the keys are templates in
@@ -234,7 +255,7 @@ class CircuitTemplateSpec(IsCastable):
     ...         ["D5", None, "D8", None, "A15"],
     ...     ],
     ... }
-    >>> surface17_spec = CircuitTemplateSpec(checks)
+    >>> surface17_spec = CircuitTemplateSpec[str](checks)
 
     Note that the Surface-17 spec only has a single stage.
 
@@ -294,18 +315,9 @@ class CircuitTemplateSpec(IsCastable):
     """
 
     @property
-    def QubitTypes(self) -> TypeAlias:
-        """The allowed values of qubit types.
-
-        This should be a subset of the QubitTypes of the intended
-        CircuitBackend in :class:`CircuitTemplateFactory`.
-        """
-        return self._qubit_types
-
-    @property
     def SpecStage(self) -> TypeAlias:
         """Convenience type alias for a single stage specification dict."""
-        return Mapping[str, Iterable[Iterable[self.QubitTypes]]]
+        return Mapping[str, Iterable[Iterable[QubitType]]]
 
     @property
     def Castable(self):
@@ -335,7 +347,7 @@ class CircuitTemplateSpec(IsCastable):
 
     def map_qubit_labels(
         self,
-        qubit_mapping: Mapping[QubitTypes, QubitTypes],
+        qubit_mapping: Mapping[QubitType, QubitType],
         stage_indices: Optional[Iterable[int]] = None,
     ) -> None:
         """Substitute qubit labels in some spec stages.
@@ -389,12 +401,18 @@ class CircuitTemplateSpec(IsCastable):
             }
 
 
-class TemplatedCircuit(PhysicalCircuitContainer):
+class TemplatedCircuit(Generic[PhysicalCircuit]):
     """Generate a circuit from circuit templates & specifications.
 
     This takes the circuit template factory and template specifications,
     generates the individual plaquettes, and stitches them together
     into a full circuit.
+
+    Note that this class takes the type of `PhysicalCircuit` as a generic type.
+    The user should specify which circuit backend the factory creates at
+    runtime, e.g. TemplatedCircuit[PyGSTiPhysicalCircuit](...).
+    The value of this generic should probably match that used in the underlying
+    :class:`CircuitTemplateFactory`.
 
     Examples
     --------
@@ -527,7 +545,7 @@ Gcnot:A14:D4Gcnot:A16:D6Gcnot:D1:A12Gcnot:D5:A15Gcnot:D3:A10Gcnot:D7:A13]\
         if qubit_labels is None:
             qubit_labels = self.qubit_labels
 
-        circuit = PhysicalCircuit([], line_labels=qubit_labels)
+        circuit: PhysicalCircuit = PhysicalCircuit([], qubit_labels)
         for stage in self.spec.stage_specs:
             stage_layers = []
             for i, (key, qubit_list) in enumerate(stage.items()):
@@ -551,16 +569,12 @@ Gcnot:A14:D4Gcnot:A16:D6Gcnot:D1:A12Gcnot:D5:A15Gcnot:D3:A10Gcnot:D7:A13]\
 
             # TODO: I expect this to fail on a collision
             # Figure out what that error is and put a nice error message
-            stage_circuit = PhysicalCircuit(
-                stage_layers,
-                qubit_labels=qubit_labels,
-                backend=self.circuit_backend,
-            )
+            stage_circuit = PhysicalCircuit(stage_layers, qubit_labels)
 
-            circuit.append_circuit_inplace(stage_circuit)
+            circuit.append_inplace(stage_circuit)
 
-        final_circuit = self.circuit_backend.process_circuit(circuit, **kwargs)
-        final_circuit.finalize_circuit_inplace()
+        final_circuit: PhysicalCircuit = circuit.process_circuit(**kwargs)
+        final_circuit.finalize_inplace()
 
         return final_circuit
 
