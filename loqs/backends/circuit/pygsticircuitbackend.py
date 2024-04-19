@@ -1,4 +1,4 @@
-"""TODO
+""":class:`PyGSTiCircuitBackend` definition.
 """
 
 from __future__ import annotations

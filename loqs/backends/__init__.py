@@ -3,12 +3,16 @@
 
 from typing import TypeAlias, Union, Literal
 
-from .circuitbackend import CircuitBackend
 
-from .physicalcircuit import PhysicalCircuit, PhysicalCircuitInterface
+### CIRCUIT BACKENDS ###
+from .circuit import CircuitBackend
+from .circuit.pygsticircuitbackend import PyGSTiCircuitBackend
 
-from .pygsti import PyGSTiCircuitBackend
+### MODEL BACKENDS ###
+from .model import ModelBackend
+from .model.pygstimodelbackend import PyGSTiModelBackend
 
+### STATE BACKENDS ###
 
 CircuitBackendCastable: TypeAlias = Union[CircuitBackend, Literal["pygsti"]]
 

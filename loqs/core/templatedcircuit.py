@@ -9,12 +9,12 @@ from typing import Iterable, Mapping, Optional, TypeAlias, Union
 from loqs.backends import (
     CircuitBackendCastable,
     PhysicalCircuit,
-    PhysicalCircuitInterface,
+    PhysicalCircuitContainer,
 )
 from loqs.utils import IsCastable
 
 
-class CircuitTemplateFactory(PhysicalCircuitInterface, IsCastable):
+class CircuitTemplateFactory(PhysicalCircuitContainer, IsCastable):
     """Object to create circuits from templates.
 
     This object generates circuit fragments on a specified set of qubits
@@ -389,7 +389,7 @@ class CircuitTemplateSpec(IsCastable):
             }
 
 
-class TemplatedCircuit(PhysicalCircuitInterface):
+class TemplatedCircuit(PhysicalCircuitContainer):
     """Generate a circuit from circuit templates & specifications.
 
     This takes the circuit template factory and template specifications,

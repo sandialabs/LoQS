@@ -1,4 +1,4 @@
-"""TODO
+""":class:`PhysicalCircuitContainer` and :class:`PhysicalCircuit` definitions.
 """
 
 from __future__ import annotations
@@ -13,16 +13,46 @@ from loqs.backends import (
     CircuitBackendCastable,
     cast_circuit_backend,
 )
-from loqs.utils import compose_funcs_by_first_arg
+from loqs.utils.sigtools import compose_funcs_by_first_arg
 
 
-class PhysicalCircuitInterface(ABC):
-    """ """
+class PhysicalCircuitContainer(ABC):
+    """An abstract interface class for containers of bare circuit objects.
+
+    This class has some pretty nonstandard intialization logic intended to
+    provide transparency to the underlying :class:`CircuitBackend` while making
+    it simple to add new backends or types of circuit containers.
+
+    Derived classes just need to implement :meth:`get_bare_circuit` and
+    :meth:`get_bare_circuit_iter`. The :meth:`compose_funcs_by_first_arg`
+    utility function will then be used to create the remaining member functions
+    such that the first arguments will be those required to retrieve a bare
+    circuit from the container, and the remaining arguments will be whatever
+    is expected by the backend.
+
+    For example, a container with a list or dict of circuits may have an index
+    or key arg prepended to the backend functions, while a more complicated
+    factory container could generate a bare circuit on the fly to be then
+    further modified by the backend.
+    Examples can be found in :class:`PhysicalCircuit` below, or in
+    :class:`CircuitTemplateFactory` or :class:`TemplatedCircuit`.
+    """
 
     circuit_backend: CircuitBackend
     """Underlying circuit backend for handling bare circuit objects."""
 
     def __init__(self, backend: CircuitBackendCastable) -> None:  # noqa: C901
+        """Initialize a PhysicalCircuitContainer.
+
+        This includes dynamically generating the passthrough functions to the
+        circuit backend based on the type of container, i.e. implementations of
+        :meth:`get_bare_circuit` and :meth:`get_bare_circuit_iter`.
+
+        Parameters
+        ----------
+        backend:
+            The underlying circuit backend
+        """
         self.circuit_backend = cast_circuit_backend(backend=backend)
 
         ### Create convenience passthrough functions to backend
@@ -243,8 +273,12 @@ class PhysicalCircuitInterface(ABC):
             self.set_qubit_labels_inplace(circ, *args, **kwargs)
 
 
-class PhysicalCircuit(PhysicalCircuitInterface):
-    """TODO"""
+class PhysicalCircuit(PhysicalCircuitContainer):
+    """Base wrapped circuit class.
+
+    This is essentially a :class:`PhysicalCircuitContainer` for a single
+    circuit.
+    """
 
     def __init__(
         self,
@@ -252,7 +286,19 @@ class PhysicalCircuit(PhysicalCircuitInterface):
         qubit_labels: Optional[Iterable[PhysicalCircuit.QubitTypes]] = None,
         backend: Optional[CircuitBackendCastable] = None,
     ) -> None:
-        """TODO"""
+        """Initialize a PhysicalCircuit.
+
+        Parameters
+        ----------
+        circuit:
+            The underlying (potentially bare) circuit to store
+
+        qubit_labels:
+            Explicit qubit labels to use
+
+        backend:
+            The underlying circuit backend
+        """
         super().__init__(backend)
 
         if isinstance(circuit, PhysicalCircuit):

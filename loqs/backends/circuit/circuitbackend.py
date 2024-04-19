@@ -1,4 +1,4 @@
-"""TODO
+""":class:`CircuitBackend` definition.
 """
 
 from __future__ import annotations

@@ -13,13 +13,14 @@ from .operation import (
     OperationStack,
 )
 
-# from .physicalcircuits import (
-#     PhysicalCircuit,
-#     CircuitPlaquetteFactory,
-#     CircuitPlaquetteSpec,
-#     PlaquetteCircuit,
-# )
+from .physicalcircuit import PhysicalCircuit, PhysicalCircuitContainer
 
 from .qeccode import QECCode
 
 from .quantumprogram import QuantumProgram
+
+from .templatedcircuit import (
+    CircuitTemplateFactory,
+    CircuitTemplateSpec,
+    TemplatedCircuit,
+)
