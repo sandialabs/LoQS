@@ -1,4 +1,4 @@
 """Circuit backend classes."""
 
-from circuitbackend import CircuitBackend
-from pygsticircuitbackend import PyGSTiCircuitBackend
+from loqs.backends.circuit.basebackend import BaseCircuitBackend
+from loqs.backends.circuit.pygstibackend import PyGSTiCircuitBackend

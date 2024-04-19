@@ -9,10 +9,10 @@ from typing import Optional, Type, TypeAlias, Union
 from pygsti.baseobjs import Label as PyGSTiLabel
 from pygsti.circuits import Circuit as PyGSTiCircuit
 
-from loqs.backends import CircuitBackend
+from loqs.backends import BaseCircuitBackend
 
 
-class PyGSTiCircuitBackend(CircuitBackend):
+class PyGSTiCircuitBackend(BaseCircuitBackend):
     """Circuit backend for handling pygsti.circuits.Circuit."""
 
     @property

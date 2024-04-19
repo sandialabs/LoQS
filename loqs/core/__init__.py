@@ -6,11 +6,11 @@ orchestrate the execution of logical qubit simulation.
 
 from .record import RecordSpec, Record, RecordHistory
 
-from .operation import (
-    OperationSpec,
-    Operation,
-    CompositeOperation,
-    OperationStack,
+from .instruction import (
+    InstructionSpec,
+    Instruction,
+    CompositeInstruction,
+    InstructionStack,
 )
 
 from .physicalcircuit import PhysicalCircuit, PhysicalCircuitContainer

@@ -1,4 +1,4 @@
-""":class:`CircuitBackend` definition.
+""":class:`BaseCircuitBackend` definition.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import Optional, Type, TypeAlias
 
 
-class CircuitBackend(ABC):
+class BaseCircuitBackend(ABC):
     """Base class for an object that can create physical quantum circuits."""
 
     @abstractmethod

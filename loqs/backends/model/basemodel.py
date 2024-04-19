@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from enum import StrEnum
 
-from loqs.backends.circuit import CircuitBackend
+from loqs.backends.circuit import BaseCircuitBackend
 from loqs.core.physicalcircuit import PhysicalCircuit
 
 
@@ -20,7 +20,7 @@ class OpRep(StrEnum):
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 
-class ModelBackend(ABC):
+class BaseNoiseModel(ABC):
     """Base class for an object that holds noisy operation specifications.
 
     This class is primarily designed to translate between a circuit description
@@ -35,7 +35,7 @@ class ModelBackend(ABC):
 
     @abstractmethod
     @property
-    def CircuitBackendInputs(self) -> Iterable[CircuitBackend]:
+    def CircuitBackendInputs(self) -> Iterable[BaseCircuitBackend]:
         """The types of circuit backends allowed as "input" to this model."""
         pass
 
@@ -65,7 +65,11 @@ class ModelBackend(ABC):
         list
             List of operator representations for the circuit
         """
+        assert circuit.circuit_backend in self.CircuitBackendInputs, (
+            f"Passed circuit with {circuit.circuit_backend} backend, but ",
+            f"model backend can only process {self.CircuitBackendInputs}",
+        )
         assert reptype in self.OpRepOutputs, (
             f"Requested op rep {reptype}, but ",
-            f"backend can only provide {self.OpRepOutputs}",
+            f"model backend can only provide {self.OpRepOutputs}",
         )

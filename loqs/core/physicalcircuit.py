@@ -9,7 +9,7 @@ from typing import Optional, Union
 
 
 from loqs.backends import (
-    CircuitBackend,
+    BaseCircuitBackend,
     CircuitBackendCastable,
     cast_circuit_backend,
 )
@@ -38,7 +38,7 @@ class PhysicalCircuitContainer(ABC):
     :class:`CircuitTemplateFactory` or :class:`TemplatedCircuit`.
     """
 
-    circuit_backend: CircuitBackend
+    circuit_backend: BaseCircuitBackend
     """Underlying circuit backend for handling bare circuit objects."""
 
     def __init__(self, backend: CircuitBackendCastable) -> None:  # noqa: C901

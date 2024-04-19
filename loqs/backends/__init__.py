@@ -5,19 +5,28 @@ from typing import TypeAlias, Union, Literal
 
 
 ### CIRCUIT BACKENDS ###
-from .circuit import CircuitBackend
-from .circuit.pygsticircuitbackend import PyGSTiCircuitBackend
+from .circuit import BaseCircuitBackend
+from .circuit.pygstibackend import PyGSTiCircuitBackend
 
 ### MODEL BACKENDS ###
-from .model import ModelBackend
-from .model.pygstimodelbackend import PyGSTiModelBackend
+from .model import BaseNoiseModel
+from .model.pygstimodel import PyGSTiNoiseModel
 
 ### STATE BACKENDS ###
+from .state import BaseQuantumState
+from .state.qsimstate import QSimQuantumState
 
-CircuitBackendCastable: TypeAlias = Union[CircuitBackend, Literal["pygsti"]]
+
+### Circuit Backend Utilities
+### TODO: Get rid of?
+CircuitBackendCastable: TypeAlias = Union[
+    BaseCircuitBackend, Literal["pygsti"]
+]
 
 
-def cast_circuit_backend(backend: CircuitBackendCastable) -> CircuitBackend:
+def cast_circuit_backend(
+    backend: CircuitBackendCastable,
+) -> BaseCircuitBackend:
     """Helper function to create CircuitBackends from strings.
 
     Parameters
@@ -30,7 +39,7 @@ def cast_circuit_backend(backend: CircuitBackendCastable) -> CircuitBackend:
     CircuitBackend
         The created circuit backend
     """
-    if isinstance(backend, CircuitBackend):
+    if isinstance(backend, BaseCircuitBackend):
         return backend
     elif backend is None or backend == "pygsti":
         return PyGSTiCircuitBackend()

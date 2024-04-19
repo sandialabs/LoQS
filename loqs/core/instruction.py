@@ -5,6 +5,8 @@ several Records or a RecordHistory) and propagate or generate new state
 information into a new Record.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, MutableSequence
 from typing import Optional, Type, TypeAlias, Union, get_args
@@ -13,7 +15,7 @@ from loqs.utils import IsCastable, IsRecordable
 from loqs.core import Record, RecordHistory, RecordSpec
 
 
-class OperationSpec:
+class InstructionSpec:
     def __init__(
         self,
         input_type: Type,
@@ -62,14 +64,14 @@ class OperationSpec:
         return True
 
 
-class Operation(IsRecordable, ABC):
+class Instruction(IsRecordable, ABC):
     def __init__(
         self,
-        operation_spec: OperationSpec,
+        instruction_spec: InstructionSpec,
         name: Optional[str] = None,
-        parent: Optional["Operation"] = None,
+        parent: Optional[Instruction] = None,
     ) -> None:
-        self._spec = operation_spec
+        self._spec = instruction_spec
         self._name = name
         self._parent = parent
 
@@ -78,11 +80,11 @@ class Operation(IsRecordable, ABC):
         return "(Unnamed)" if self._name is None else self._name
 
     @property
-    def operation_spec(self) -> OperationSpec:
+    def instruction_spec(self) -> InstructionSpec:
         return self._spec
 
     @property
-    def parent(self) -> Optional["Operation"]:
+    def parent(self) -> Optional[Instruction]:
         return self._parent
 
     @abstractmethod
@@ -90,84 +92,88 @@ class Operation(IsRecordable, ABC):
         pass
 
 
-class CompositeOperation(Operation, IsCastable):
+class CompositeInstruction(Instruction, IsCastable):
 
-    Castable: TypeAlias = Union["CompositeOperation", Iterable[Operation]]
+    @property
+    def Castable(self) -> TypeAlias:
+        return Union[CompositeInstruction, Iterable[Instruction]]
 
     def __init__(
         self,
-        operations: "CompositeOperation.Castable",
-        parent: Optional[Union["Operation", "OperationStack"]] = None,
+        instructions: CompositeInstruction.Castable,
+        parent: Optional[Instruction] = None,
     ) -> None:
-        if isinstance(operations, CompositeOperation):
-            self.operations = operations.operations
-            self.parent = operations.parent if parent is None else parent
+        if isinstance(instructions, CompositeInstruction):
+            self.instructions = instructions.instructions
+            self.parent = instructions.parent if parent is None else parent
         else:
-            self.operations = operations
+            self.instructions = instructions
             self.parent = parent
 
 
-class OperationStack(MutableSequence[Operation], IsCastable, IsRecordable):
+class InstructionStack(MutableSequence[Instruction], IsCastable, IsRecordable):
 
-    Castable = Union["OperationStack", Iterable[Operation], Operation]
+    @property
+    def Castable(self) -> TypeAlias:
+        return Union[InstructionStack, Iterable[Instruction], Instruction]
 
     def __init__(
         self,
-        operations: Optional["OperationStack.Castable"] = None,
+        instructions: Optional[InstructionStack.Castable] = None,
         static: bool = True,
     ) -> None:
-        """Initialize an OperationStack."""
+        """Initialize an InstructionStack."""
         self.static = False  # Just for initialization
 
-        if isinstance(operations, OperationStack):
-            self._ops = operations._ops
+        if isinstance(instructions, InstructionStack):
+            self._instructions = instructions._instructions
         else:
-            if isinstance(operations, Operation):
-                operations = [operations]
+            if isinstance(instructions, Instruction):
+                instructions = [instructions]
 
-            for op in operations:
+            for inst in instructions:
                 # This should use .insert under the hool and have proper logic
-                self.append(op)
+                self.append(inst)
 
         self.static = static
 
     def __getitem__(self, i):
-        return self._ops[i]
+        return self._instructions[i]
 
     def __setitem__(self, i, item):
         if self.static:
             raise RuntimeError(
                 "Cannot set an item in a static "
-                + "OperationStack. First set .static to False."
+                + "InstructionStack. First set .static to False."
             )
-        self._ops[i] = item
+        self._instructions[i] = item
 
     def __delitem__(self, i):
         if self.static:
             raise RuntimeError(
                 "Cannot delete an item in a static "
-                + "OperationStack. First set .static to False."
+                + "InstructionStack. First set .static to False."
             )
-        del self._ops[i]
+        del self._instructions[i]
 
     def __iter__(self):
-        return iter(self._ops)
+        return iter(self._instructions)
 
     def __len__(self):
-        return len(self._ops)
+        return len(self._instructions)
 
     def insert(self, i, item):
         if self.static:
             raise RuntimeError(
                 "Cannot insert an item into a static "
-                + "OperationStack. First set .static to False."
+                + "InstructionStack. First set .static to False."
             )
 
         assert isinstance(
-            item, Operation
-        ), "OperationStack can only hold Operations"
+            item, Instruction
+        ), "InstructionStack can only hold Instructions"
 
-        return self._ops.insert(i, item)
+        return self._instructions.insert(i, item)
 
     def reverse(self):
-        raise RuntimeError("Cannot reverse an OperationStack")
+        raise RuntimeError("Cannot reverse an InstructionStack")

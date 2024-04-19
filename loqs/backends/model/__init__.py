@@ -1,4 +1,4 @@
 """Model backend classes."""
 
-from modelbackend import ModelBackend, OpRep
-from pygstimodelbackend import PyGSTiModelBackend
+from loqs.backends.model.basemodel import BaseNoiseModel, OpRep
+from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
