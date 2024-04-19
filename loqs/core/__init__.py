@@ -4,6 +4,9 @@ These are primarily objects used for high-level objects that store or
 orchestrate the execution of logical qubit simulation.
 """
 
+# First for import order reasons
+from .record import RecordSpec, Record, RecordHistory
+
 from .instruction import (
     InstructionSpec,
     Instruction,
@@ -14,8 +17,6 @@ from .instruction import (
 from .qeccode import QECCode
 
 from .quantumprogram import QuantumProgram
-
-from .record import RecordSpec, Record, RecordHistory
 
 from .templatedcircuit import (
     CircuitTemplateFactory,

@@ -27,7 +27,8 @@ classifiers = [
 test = ["pytest"]
 docs = [
     "sphinx",
-    "sphinx-rtd-theme"
+    "sphinx-rtd-theme",
+    "jupyter-book"
 ]
 dev = [
     "pre-commit",

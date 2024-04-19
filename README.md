@@ -72,3 +72,26 @@ If you have staged files for a commit, you can then do `pre-commit run`
 to run the script that will be ran during the commit process.
 Alternatively, you can run `pre-commit run -a` to just format and lint
 the entire codebase.
+
+### Documentation
+
+This project uses `JupyterBook` for its documentation, which should be
+installed if using the `[docs]` optional dependencies.
+I have also noticed that `PYTHONPATH` needs to be set to the root directory
+in order for `sphinx.ext.autosummary` to find the package properly.
+
+For a developer with a local install, this should build the docs:
+
+```
+pip install -e .'[docs]'
+PYTHONPATH=. jupyter-book build docs
+```
+
+Open `docs/_build/html/index.html` and view your docs!
+
+Something close to the following should work for `Sphinx`-only builds:
+
+```
+jupyter-book config sphinx docs # Generate the Sphinx conf.py file
+PYTHONPATH=. sphinx-build docs docs/_build/html -b html
+```

@@ -1,4 +1,4 @@
-""":class:`PyGSTiCircuitBackend` definition.
+""":class:`PyGSTiPhysicalCircuit` definition.
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ try:
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
 
-from loqs.backends.circuit import BaseCircuitBackend, PyGSTiCircuitBackend
+from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, OpRep
-from loqs.core.physicalcircuit import PhysicalCircuit
 
 
 class PyGSTiNoiseModel(BaseNoiseModel):
@@ -48,16 +48,16 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         return "pyGSTi"
 
     @property
-    def CircuitBackendInputs(self) -> Iterable[BaseCircuitBackend]:
+    def CircuitBackendInputs(self) -> Iterable[BasePhysicalCircuit]:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
-        return [PyGSTiCircuitBackend]
+        return [PyGSTiPhysicalCircuit]
 
     @property
     def OpRepOutputs(self) -> Iterable[OpRep]:
         return [OpRep.UNITARY, OpRep.PTM, OpRep.PTM_QSIM]
 
     def get_operator_reps(
-        self, circuit: PhysicalCircuit, reptype: OpRep
+        self, circuit: PyGSTiPhysicalCircuit, reptype: OpRep
     ) -> Iterable:
         # Check we can process it
         super().get_operator_reps(circuit, reptype)
