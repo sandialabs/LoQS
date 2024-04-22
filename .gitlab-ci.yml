@@ -3,6 +3,9 @@ stages:
   - test
   - docs
 
+include:
+  - template: Security/SAST.gitlab-ci.yml
+
 # Change pip's cache directory to be inside the project directory since we can
 # only cache local items.
 variables:
@@ -18,7 +21,7 @@ default:
 
 Run code formatting and linting:
   stage: lint
-  image: python:${PYTHON_VERSION}
+  image: quay.sandia.gov/dice/rhel8-minimal-python
   script:
     - pip install -e ".[dev]"
     - black --fast loqs
@@ -26,17 +29,20 @@ Run code formatting and linting:
 
 Run unit tests:
   stage: lint
-  image: python:${PYTHON_VERSION}
-  script:
+  image: quay.sandia.gov/dice/rhel8-minimal-python
+  before_script:
     - python --version; pip --version # For debugging
     - pip install ".[pygsti,quantumsim,test]"
+  script:
     - pytest loqs # This should run doctests in docstrings
     - pytest test # This should run unit tests
 
 Build documentation:
   stage: docs
-  script:
+  image: quay.sandia.gov/dice/rhel8-minimal-python
+  before_script:
     - pip install ".[docs]"
+  script:
     - jupyter-book build docs
     - mv docs/_build/html/ ../public/
   artifacts:
