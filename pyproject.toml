@@ -48,7 +48,6 @@ force-exclude = '''
     | \.pytest_cache
     | \.vscode
     | docs
-    | src
     | venv
 )/
 '''

@@ -6,26 +6,26 @@ from __future__ import annotations
 from collections.abc import Iterable
 import functools
 import itertools
+from typing import TypeAlias, Union
 import numpy as np
 
-# This should only be loaded if this file is explicitly imported by the user
-try:
-    from pygsti.baseobjs import ExplicitBasis
-    from pygsti.models.model import OpModel
-    from pygsti.models import ExplicitOpModel, ImplicitOpModel
-    from pygsti.tools import basistools as bt
-except ImportError as e:
-    raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
+from loqs.backends.circuit.pygsti import PyGSTiPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, OpRep
 
 
 class PyGSTiNoiseModel(BaseNoiseModel):
     """Model backend for handling :class:`pygsti.model.OpModel`s."""
 
-    def __init__(self, model: OpModel) -> None:
+    @property
+    def AllowedModelTypes(self) -> TypeAlias:
+        try:
+            from pygsti.models import ExplicitOpModel, ImplicitOpModel
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+        return Union[ExplicitOpModel, ImplicitOpModel]
+
+    def __init__(self, model: AllowedModelTypes) -> None:
         """Initialize a PyGSTiModelBackend.
 
         Parameters
@@ -33,6 +33,11 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         model:
             A pyGSTi model to use when looking up operations
         """
+        try:
+            from pygsti.models import ExplicitOpModel, ImplicitOpModel
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+
         self.model = model
         if isinstance(self.model, ExplicitOpModel):
             self.gate_dict = self.model.operations
@@ -59,6 +64,12 @@ class PyGSTiNoiseModel(BaseNoiseModel):
     def get_operator_reps(
         self, circuit: PyGSTiPhysicalCircuit, reptype: OpRep
     ) -> Iterable:
+        try:
+            from pygsti.baseobjs import ExplicitBasis
+            from pygsti.tools import basistools as bt
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+        
         # Check we can process it
         super().get_operator_reps(circuit, reptype)
 

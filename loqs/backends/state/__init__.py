@@ -1,6 +1,5 @@
 """Quantum state backends.
 """
 
-from .basestate import BaseQuantumState
-
-# Explicitly do not import derived backends to avoid potential optional imports
+from .base import BaseQuantumState
+from .qsim import QSimQuantumState

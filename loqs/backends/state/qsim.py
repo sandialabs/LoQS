@@ -6,20 +6,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Optional, Type, TypeAlias, Union
 
-# This should only be loaded if this file is explicitly imported by the user
-try:
-    from quantumsim.sparsedm import SparseDM
-except ImportError as e:
-    raise ImportError("Failed import, cannot use QuantumSim as backend") from e
-
 from loqs.backends.model import OpRep
 from loqs.backends.state import BaseQuantumState
 
 
 class QSimQuantumState(BaseQuantumState):
     """Base class for an object that holds a QuantumSim SparseDM state."""
-
-    _state: SparseDM
 
     @property
     def name(self) -> str:
@@ -35,11 +27,12 @@ class QSimQuantumState(BaseQuantumState):
         return [OpRep.PTM_QSIM]
 
     @property
-    def state(self) -> SparseDM:
-        return self._state
-
-    @property
     def StateType(self) -> Type:
+        try:
+            from quantumsim.sparsedm import SparseDM
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use QuantumSim as backend") from e
+
         return SparseDM
 
     def apply_operator_reps_inplace(self, op_reps: Iterable) -> None:
@@ -75,6 +68,11 @@ class QSimQuantumState(BaseQuantumState):
             Optional qubit labels. If not provided, the default range of ints
             is used.
         """
+        try:
+            from quantumsim.sparsedm import SparseDM
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use QuantumSim as backend") from e
+        
         if isinstance(state, QSimQuantumState):
             self.state = state.state.copy()
         elif isinstance(state, SparseDM):

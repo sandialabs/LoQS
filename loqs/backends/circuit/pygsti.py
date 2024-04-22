@@ -6,33 +6,29 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Optional, Type, TypeAlias, Union
 
-# This should only be loaded if this file is explicitly imported by the user
-try:
-    from pygsti.baseobjs import Label as PyGSTiLabel
-    from pygsti.circuits import Circuit as PyGSTiCircuit
-except ImportError as e:
-    raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-
 from loqs.backends.circuit import BasePhysicalCircuit
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     """Circuit backend for handling :class:`pygsti.circuits.Circuit`s."""
 
-    _circuit: PyGSTiCircuit
-
     def __init__(
         self,
         circuit: Castable,
         qubit_labels: Optional[Iterable[QubitTypes]] = None,
     ) -> None:
+        try:
+            from pygsti.circuits import Circuit
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+        
         if isinstance(circuit, PyGSTiPhysicalCircuit):
             self._circuit = circuit.circuit
-        elif isinstance(circuit, PyGSTiCircuit):
+        elif isinstance(circuit, Circuit):
             self._circuit = circuit
         else:
             try:
-                self._circuit = PyGSTiCircuit.cast(circuit)
+                self._circuit = Circuit.cast(circuit)
             except Exception as e:
                 raise ValueError("Failed to cast to pyGSTi circuit") from e
 
@@ -51,9 +47,15 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         or things that a pyGSTi Circuit can cast (a subset of these include
         a string and a list of operations/layers).
         """
+        # This should only be loaded if this file is explicitly imported by the user
+        try:
+            from pygsti.circuits import Circuit
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+        
         return Union[
             PyGSTiPhysicalCircuit,
-            PyGSTiCircuit,
+            Circuit,
             str,
             Iterable[self.OperationTypes],
         ]
@@ -61,11 +63,12 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     @property
     def CircuitType(self) -> Type:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
-        return PyGSTiCircuit
-
-    @property
-    def circuit(self) -> PyGSTiCircuit:
-        return self._circuit
+        try:
+            from pygsti.circuits import Circuit
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+        
+        return Circuit
 
     @property
     def finalized(self) -> bool:
@@ -91,6 +94,11 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         - actual Labels (which is what all the above cast to anyway)
         - or lists and tuples of the above (in which case it is a whole layer)
         """
+        try:
+            from pygsti.baseobjs import Label
+        except ImportError as e:
+            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+        
         return Union[
             str,  # e.g., gate names
             tuple[str, self.QubitTypes],  # e.g., gate name and one qubit
@@ -101,7 +109,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             list[
                 str, Iterable[self.QubitTypes]
             ],  # e.g., gate name and tuple of qubits
-            PyGSTiLabel,  # or an actual pyGSTi label
+            Label,  # or an actual pyGSTi label
         ]
 
     @property
@@ -109,10 +117,10 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         """PyGSTi backend operations type (one or several gates/layers)"""
         return Union[self.LayerTypes, Iterable[self.LayerTypes]]
 
-    def append(self, circuit: PyGSTiCircuit) -> PyGSTiCircuit:
+    def append(self, circuit: CircuitType) -> CircuitType:
         return super().append(circuit)
 
-    def append_inplace(self, circuit: PyGSTiCircuit) -> None:
+    def append_inplace(self, circuit: CircuitType) -> None:
         self.circuit.append_circuit_inplace(circuit.circuit)
 
     def copy(self, finalized: bool = False) -> PyGSTiPhysicalCircuit:
