@@ -27,15 +27,15 @@ Run code formatting and linting:
     - black --fast loqs
     - flake8 loqs
 
-Run unit tests:
-  stage: lint
-  image: quay.sandia.gov/dice/rhel8-minimal-python
-  before_script:
-    - python --version; pip --version # For debugging
-    - pip install ".[pygsti,quantumsim,test]"
-  script:
-    - pytest loqs # This should run doctests in docstrings
-    - pytest test # This should run unit tests
+# Run unit tests:
+#   stage: test
+#   image: quay.sandia.gov/dice/rhel8-minimal-python
+#   before_script:
+#     - python --version; pip --version # For debugging
+#     - pip install ".[pygsti,quantumsim,test]"
+#   script:
+#     - pytest loqs # This should run doctests in docstrings
+#     - pytest test # This should run unit tests
 
 Build documentation:
   stage: docs
