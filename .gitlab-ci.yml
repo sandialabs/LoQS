@@ -13,6 +13,8 @@ default:
   cache:
     paths:
       - .cache/pip
+  tags:
+    - do.small
 
 Run code formatting and linting:
   stage: lint
