@@ -2,11 +2,9 @@
 __pycache__
 .pytest_cache
 
-src/pygsti
-src/loqs.egg-info
-
 docs/_build
 docs/_autosummary
 
 .vscode
 venv/
+loqs.egg-info/

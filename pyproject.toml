@@ -1,16 +1,13 @@
 [project]
 name = "loqs"
 version = "1.0-alpha"
-dependencies = [
-    "pygsti[extensions]>=0.9.12"
-]
 requires-python = ">=3.8"
 authors = [
     {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
-    {name = "Megan Dahlhauser", email = "mldahlh@sandia.gov"},
+    {name = "Megan Dahlhauser"},
     {name = "Julie Campos"},
-    {name = "Mario M-O."},
+    {name = "Mario Morford-Oberst"},
 ]
 maintainers = [
     {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
@@ -24,19 +21,19 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
-docs = [
-    "sphinx",
-    "sphinx-rtd-theme",
-    "jupyter-book"
-]
 dev = [
     "pre-commit",
     "black",
     "flake8"
 ]
-examples = ["jupyter"]
-all = ["loqs[test,docs,dev,examples]"]
+docs = [
+    "sphinx",
+    "jupyter-book"
+]
+quantumsim = ["quantumsim==0.2.0"]
+pygsti = ["pygsti[extensions]>=0.9.12"]
+test = ["pytest"]
+all = ["loqs[dev,docs,quantumsim,pygsti,test]"]
 
 [build-system]
 requires = ["setuptools >= 61.0"]

@@ -29,7 +29,24 @@ pip install -e src/quantumsim
 pip install -e .
 ```
 
-There are various optional requirements that are available, such as `test`, `docs`, `examples`, and `dev`.
+By default, this will not install any of the backends.
+In order to install PyGSTi and QuantumSim (i.e. previous LoQS backends),
+you can alter the last line to 
+
+```
+pip install -e ".[pygsti,quantumsim]"
+```
+
+
+There are various optional requirements that are available, including:
+
+- `dev`: Allows the use of `black` and `flake8` prior to committing
+(see Code Formatting and Linting below).
+- `docs`: Allows building of the JupyterBook documentation (see Documentation below).
+- `quantumsim`: Enables the QuantumSim backend.
+- `pygsti`: Enables the PyGSTi backend.
+- `test`: Allows testing (see Testing below)
+
 If you want to install all optional dependencies, you can use `all`.
 
 To use these, simply modify the last line of the installation instructions. For example:
@@ -64,7 +81,7 @@ These will be automatically run as part of the CI/CD platform, but developers
 can also set this up to be done locally by performing the following steps:
 
 ```
-pip install pre-commit
+pip install -e ."[dev]"
 pre-commit install
 ```
 
@@ -72,6 +89,16 @@ If you have staged files for a commit, you can then do `pre-commit run`
 to run the script that will be ran during the commit process.
 Alternatively, you can run `pre-commit run -a` to just format and lint
 the entire codebase.
+
+### Testing
+
+This project uses `pytest` to run its unit tests.
+These can be run by doing:
+
+```
+pip install -e ."[test]"
+pytest
+```
 
 ### Documentation
 
@@ -84,7 +111,7 @@ For a developer with a local install, this should build the docs:
 
 ```
 pip install -e .'[docs]'
-PYTHONPATH=. jupyter-book build docs
+jupyter-book build docs
 ```
 
 Open `docs/_build/html/index.html` and view your docs!
@@ -92,6 +119,8 @@ Open `docs/_build/html/index.html` and view your docs!
 Something close to the following should work for `Sphinx`-only builds:
 
 ```
-jupyter-book config sphinx docs # Generate the Sphinx conf.py file
-PYTHONPATH=. sphinx-build docs docs/_build/html -b html
+jupyter-book config sphinx docs
+sphinx-build docs docs/_build/html -b html
 ```
+
+**Note:** Depending on how your environment is set up, you may need to include `PYTHONPATH=. ` to the beginning of any `jupyter-book` or `sphinx` build instructions.
