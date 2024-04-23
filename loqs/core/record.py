@@ -1,6 +1,8 @@
 """Definitions for the RecordSpec, Record, and RecordHistory classes.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence
 from typing import Any, Optional, Type, Union
 
@@ -75,9 +77,7 @@ class RecordSpec(MutableMapping[str, Type[IsRecordable]], IsCastable):
         """
         return key in self and isinstance(instance, self[key])
 
-    def create_record(
-        self, data: Mapping[str, IsRecordable], log: str
-    ) -> "Record":
+    def create_record(self, data: Mapping[str, IsRecordable], log: str) -> Record:
         return Record(self, data, log)
 
 

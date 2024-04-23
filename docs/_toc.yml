@@ -4,10 +4,10 @@
 format: jb-book
 root: intro
 chapters:
-- file: ch1sec0quantumprogram
+- file: ch1intro
   sections:
-  - file: ch1sec1instructions
-  - file: ch1sec2records
-  - file: ch1sec3stack
-  - file: ch1sec4runningit
+  - file: ch1quantumprogram
+  - file: ch1records
+  - file: ch1instructions
+  - file: ch1runningit
 - file: api

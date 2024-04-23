@@ -1,6 +1,6 @@
-"""Base classes for Operations.
+"""Base classes for Instructions.
 
-Operations are generally objects that take state information (i.e. from one or
+Instructions are generally objects that take state information (i.e. from one or
 several Records or a RecordHistory) and propagate or generate new state
 information into a new Record.
 """

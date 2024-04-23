@@ -1,5 +1,0 @@
-# Instructions
-
-TODO
-
-## Test subsection
