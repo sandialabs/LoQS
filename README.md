@@ -24,7 +24,6 @@ you can alter the last line to
 pip install -e ".[pygsti,quantumsim]"
 ```
 
-
 There are various optional requirements that are available, including:
 
 - `dev`: Allows the use of `black` and `flake8` prior to committing

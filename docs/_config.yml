@@ -41,3 +41,6 @@ sphinx:
   config:
     add_module_names: False
     autosummary_generate: True
+    suppress_warnings:
+    - "etoc.toctree"
+    templates_path: ["_templates"]

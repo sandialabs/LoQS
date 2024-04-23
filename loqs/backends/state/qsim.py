@@ -1,4 +1,4 @@
-""":class:`QSimQuantumState` definition.
+""":class:``QSimQuantumState`` definition.
 """
 
 from __future__ import annotations

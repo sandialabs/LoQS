@@ -1,4 +1,4 @@
-""":class:`PyGSTiCircuitBackend` definition.
+""":class:``PyGSTiPhysicalCircuit`` definition.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ from loqs.backends.circuit import BasePhysicalCircuit
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
-    """Circuit backend for handling :class:`pygsti.circuits.Circuit`s."""
+    """Circuit backend for handling pygsti.circuits.Circuits.
+    """
 
     def __init__(
         self,
@@ -62,7 +63,8 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def CircuitType(self) -> Type:
-        """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
+        """PyGSTi backend circuit type (pygsti.circuits.Circuit)
+        """
         try:
             from pygsti.circuits import Circuit
         except ImportError as e:
