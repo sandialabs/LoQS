@@ -1,4 +1,4 @@
-""":class:``PyGSTiPhysicalCircuit`` definition.
+""":class:`PyGSTiPhysicalCircuit` definition.
 """
 
 from __future__ import annotations
@@ -10,8 +10,7 @@ from loqs.backends.circuit import BasePhysicalCircuit
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
-    """Circuit backend for handling pygsti.circuits.Circuits.
-    """
+    """Circuit backend for handling ``pygsti.circuits.Circuit`` objects."""
 
     def __init__(
         self,
@@ -21,8 +20,10 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         try:
             from pygsti.circuits import Circuit
         except ImportError as e:
-            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-        
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
+
         if isinstance(circuit, PyGSTiPhysicalCircuit):
             self._circuit = circuit.circuit
         elif isinstance(circuit, Circuit):
@@ -52,8 +53,10 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         try:
             from pygsti.circuits import Circuit
         except ImportError as e:
-            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-        
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
+
         return Union[
             PyGSTiPhysicalCircuit,
             Circuit,
@@ -63,13 +66,14 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def CircuitType(self) -> Type:
-        """PyGSTi backend circuit type (pygsti.circuits.Circuit)
-        """
+        """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
         try:
             from pygsti.circuits import Circuit
         except ImportError as e:
-            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-        
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
+
         return Circuit
 
     @property
@@ -92,15 +96,17 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         For PyGSTi, this would be:
         - strings, e.g. "Gcnot"
         - tuples or lists of strings with either one or several qubits,
-            e.g. ('Gxpi2', 0) or ['Gcnot', ("Q0", "Q1")]
+        e.g. ('Gxpi2', 0) or ['Gcnot', ("Q0", "Q1")]
         - actual Labels (which is what all the above cast to anyway)
         - or lists and tuples of the above (in which case it is a whole layer)
         """
         try:
             from pygsti.baseobjs import Label
         except ImportError as e:
-            raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-        
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
+
         return Union[
             str,  # e.g., gate names
             tuple[str, self.QubitTypes],  # e.g., gate name and one qubit

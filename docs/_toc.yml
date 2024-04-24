@@ -10,4 +10,13 @@ chapters:
   - file: ch1records
   - file: ch1instructions
   - file: ch1runningit
+- file: ch2backends
+  sections:
+  - file: ch2circuits
+  - file: ch2models
+  - file: ch2states
+- file: ch3recordables
+- file: ch4instructionspecs
+- file: ch5qeccodes
+- file: ch6codepacks
 - file: api
