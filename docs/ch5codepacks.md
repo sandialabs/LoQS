@@ -1,4 +1,4 @@
-# QEC Code Packs
+# Built-in Codepacks
 
 ```{warning}
 This chapter is currently a plan/outline, and may not represent the exact implementation once completed. 

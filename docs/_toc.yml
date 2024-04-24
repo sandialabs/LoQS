@@ -18,5 +18,7 @@ chapters:
 - file: ch3recordables
 - file: ch4instructionspecs
 - file: ch5qeccodes
-- file: ch6codepacks
+  sections:
+  - file: ch5codepacks
+  - file: ch5surfacecode-notebook
 - file: api

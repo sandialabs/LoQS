@@ -1,4 +1,4 @@
-# Implementing Quantum Error Correcting Codes
+# QEC Codes
 
 ```{warning}
 This chapter is currently a plan/outline, and may not represent the exact implementation once completed. 

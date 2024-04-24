@@ -110,3 +110,23 @@ sphinx-build docs docs/_build/html -b html
 ```
 
 **Note:** Depending on how your environment is set up, you may need to include `PYTHONPATH=. ` to the beginning of any `jupyter-book` or `sphinx` build instructions.
+
+#### Jupytext Notebooks
+
+Several of the MyST Markdown files are actually Jupyter notebooks.
+We are storing them as Markdown and converting to Jupyter notebooks using Jupytext.
+
+Jupytext needs to be told about the kernel to use when running these as Jupyter notebooks (see the metadata block at the top of a `-notebook.md` file).
+I am using the virtual environment installed during the User Guide above, which I have installed as a kernel on my system using:
+
+```
+python -m ipykernel install --user --display-name="Python 3.11 (loqs)" --name=loqs
+```
+
+A `.md` file can be initialized with this metadata using
+
+```
+jupyter-book myst init --kernel loqs <name>.md
+```
+
+or by simply copying the metadata block to the new file.
