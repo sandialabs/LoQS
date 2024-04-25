@@ -8,14 +8,16 @@ from collections.abc import Iterable, Mapping
 from typing import Optional, Type, TypeAlias
 
 from loqs.utils.castable import IsCastable
+from loqs.utils.classproperty import abstractroclassproperty
 
 
-class BasePhysicalCircuit(IsCastable, ABC):
+class BasePhysicalCircuit(IsCastable):
     """Base class for an object that can holds a physical quantum circuit."""
 
     _circuit: CircuitType
     """The underlying quantum circuit"""
 
+    ## Dunder methods
     @abstractmethod
     def __init__(
         self,
@@ -40,24 +42,41 @@ class BasePhysicalCircuit(IsCastable, ABC):
     def __repr__(self) -> str:
         return f"Physical {self.name} circuit:\n{repr(self.circuit)}"
 
-    @property
-    @abstractmethod
+    # Class properties
+    @abstractroclassproperty
     def name(self) -> str:
         """Name of circuit backend"""
         pass
 
-    @property
-    @abstractmethod
+    @abstractroclassproperty
     def Castable(self) -> TypeAlias:
         """Types that this backend can cast to an underlying circuit object."""
         pass
 
-    @property
-    @abstractmethod
+    @abstractroclassproperty
     def CircuitType(self) -> Type:
         """The type of underlying circuit objects handled by this backend."""
         pass
 
+    @abstractroclassproperty
+    def QubitTypes(self) -> TypeAlias:
+        """Possible types for a circuit's qubit labels.
+
+        In general, these will be the only types we accept for arguments
+        that ask for qubit labels.
+        """
+        pass
+
+    @abstractroclassproperty
+    def OperationTypes(self) -> TypeAlias:
+        """Possible types for a circuit's operations.
+
+        In general, these will be the only types we accept for arguments
+        that ask for operations.
+        """
+        pass
+
+    # Instance properties
     @property
     def circuit(self) -> CircuitType:
         """Getter for underlying circuit object"""
@@ -71,16 +90,6 @@ class BasePhysicalCircuit(IsCastable, ABC):
 
     @property
     @abstractmethod
-    def QubitTypes(self) -> TypeAlias:
-        """Possible types for a circuit's qubit labels.
-
-        In general, these will be the only types we accept for arguments
-        that ask for qubit labels.
-        """
-        pass
-
-    @property
-    @abstractmethod
     def qubit_labels(self) -> Iterable[QubitTypes]:
         """Get the qubit labels of an underlying circuit.
 
@@ -90,16 +99,7 @@ class BasePhysicalCircuit(IsCastable, ABC):
         """
         pass
 
-    @property
-    @abstractmethod
-    def OperationTypes(self) -> TypeAlias:
-        """Possible types for a circuit's operations.
-
-        In general, these will be the only types we accept for arguments
-        that ask for operations.
-        """
-        pass
-
+    # Instance methods
     @abstractmethod
     def append(self, circuit: BasePhysicalCircuit) -> BasePhysicalCircuit:
         """Append another circuit to a copy of this circuit.

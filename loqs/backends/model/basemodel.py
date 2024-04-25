@@ -8,38 +8,39 @@ from collections.abc import Iterable
 from enum import StrEnum
 
 from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.utils.classproperty import (
+    abstractroclassproperty,
+    HasAbstractROClassProperties,
+)
 
 
 class OpRep(StrEnum):
     """TODO"""
 
     UNITARY = "Unitary"
-    PTM = "PTM"
-    PTM_QSIM = "PTM (QSim basis)"
+    PTM = "Pauli transfer matrix"
+    QSIM_SUPEROPERATOR = "QuantumSim superoperator"
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 
-class BaseNoiseModel(ABC):
+class BaseNoiseModel(HasAbstractROClassProperties):
     """Base class for an object that holds noisy operation specifications.
 
     This class is primarily designed to translate between a circuit description
     and operations that will be applied to a quantum state.
     """
 
-    @property
-    @abstractmethod
+    @abstractroclassproperty
     def name(self) -> str:
         """Name of circuit backend"""
         pass
 
-    @property
-    @abstractmethod
+    @abstractroclassproperty
     def CircuitBackendInputs(self) -> Iterable[BasePhysicalCircuit]:
         """The types of circuit backends allowed as "input" to this model."""
         pass
 
-    @property
-    @abstractmethod
+    @abstractroclassproperty
     def OpRepOutputs(self) -> Iterable[OpRep]:
         """The type of operator representations this model can "output" to."""
         pass

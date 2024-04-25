@@ -8,25 +8,26 @@ from typing import Optional, Type, TypeAlias, Union
 
 from loqs.backends.model import OpRep
 from loqs.backends.state import BaseQuantumState
+from loqs.utils.classproperty import roclassproperty
 
 
 class QSimQuantumState(BaseQuantumState):
     """Base class for an object that holds a QuantumSim SparseDM state."""
 
-    @property
+    @roclassproperty
     def name(self) -> str:
         return "QuantumSim"
 
-    @property
+    @roclassproperty
     def QubitTypes(self) -> TypeAlias:
         # Technically not a true restriction of SparseDM, but keeping it simple
         return Union[str, int]
 
-    @property
+    @roclassproperty
     def OpRepInputs(self) -> Iterable[OpRep]:
-        return [OpRep.PTM_QSIM]
+        return [OpRep.QSIM_SUPEROPERATOR]
 
-    @property
+    @roclassproperty
     def StateType(self) -> Type:
         try:
             from quantumsim.sparsedm import SparseDM

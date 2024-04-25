@@ -38,6 +38,7 @@ sphinx:
   - 'sphinx.ext.autosummary'
   - 'sphinx.ext.napoleon'
   - 'sphinx.ext.viewcode'
+  - 'sphinx.ext.doctest'
   config:
     add_module_names: False
     autosummary_generate: True

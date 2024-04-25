@@ -1,24 +1,29 @@
 """Tester for loqs.utils.roclassproperty
 """
 
+from abc import abstractmethod
 import pytest
 
-from loqs.utils import roclassproperty
+from loqs.utils import (
+    readonlyclassproperty,
+    HasAbstractROClassProperties
+)
 
 class TestROClassProperty:
 
     def test_roclassproperty(self):
-        class A:
-            @roclassproperty
+        class A(HasAbstractROClassProperties):
+            @readonlyclassproperty
             def a(self):
                 return "A"
             
-            @roclassproperty
+            @readonlyclassproperty
+            @abstractmethod
             def b(self):
-                raise NotImplementedError("TODO")
+                pass
             
         class B(A):
-            @roclassproperty
+            @readonlyclassproperty
             def b(self):
                 return "B"
             

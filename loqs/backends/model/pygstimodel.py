@@ -12,12 +12,13 @@ import numpy as np
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, OpRep
+from loqs.utils.classproperty import roclassproperty
 
 
 class PyGSTiNoiseModel(BaseNoiseModel):
     """Model backend for handling ``pygsti.model.OpModel`` objects."""
 
-    @property
+    @roclassproperty
     def AllowedModelTypes(self) -> TypeAlias:
         try:
             from pygsti.models import ExplicitOpModel, ImplicitOpModel
@@ -52,18 +53,18 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
         # TODO: Crosstalk specification?
 
-    @property
+    @roclassproperty
     def name(self) -> str:
         return "pyGSTi"
 
-    @property
+    @roclassproperty
     def CircuitBackendInputs(self) -> Iterable[BasePhysicalCircuit]:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
         return [PyGSTiPhysicalCircuit]
 
-    @property
+    @roclassproperty
     def OpRepOutputs(self) -> Iterable[OpRep]:
-        return [OpRep.UNITARY, OpRep.PTM, OpRep.PTM_QSIM]
+        return [OpRep.UNITARY, OpRep.PTM, OpRep.QSIM_SUPEROPERATOR]
 
     def get_operator_reps(
         self, circuit: PyGSTiPhysicalCircuit, reptype: OpRep
@@ -123,7 +124,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                         ) from e
                 elif reptype == OpRep.PTM:
                     rep = op.to_dense(on_space="HilbertSchmidt")
-                elif reptype == OpRep.PTM_QSIM:
+                elif reptype == OpRep.QSIM_SUPEROP:
                     rep = op.to_dense(on_space="HilbertSchmidt")
 
                     if comp.num_qubits == 1:

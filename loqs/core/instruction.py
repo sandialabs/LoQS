@@ -7,7 +7,7 @@ information into a new Record.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Iterable, MutableSequence
 from typing import Optional, Type, TypeAlias, Union, get_args
 
@@ -64,7 +64,7 @@ class InstructionSpec:
         return True
 
 
-class Instruction(IsRecordable, ABC):
+class Instruction(IsRecordable, IsCastable):
     def __init__(
         self,
         instruction_spec: InstructionSpec,
@@ -92,7 +92,7 @@ class Instruction(IsRecordable, ABC):
         pass
 
 
-class CompositeInstruction(Instruction, IsCastable):
+class CompositeInstruction(Instruction):
 
     @property
     def Castable(self) -> TypeAlias:
@@ -111,7 +111,7 @@ class CompositeInstruction(Instruction, IsCastable):
             self.parent = parent
 
 
-class InstructionStack(MutableSequence[Instruction], IsCastable, IsRecordable):
+class InstructionStack(MutableSequence[Instruction], IsRecordable, IsCastable):
 
     @property
     def Castable(self) -> TypeAlias:

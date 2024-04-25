@@ -3,25 +3,27 @@
 
 from __future__ import annotations
 
-from abc import ABC
 from typing import TypeAlias, TypeVar
 
-from .roclassproperty import roclassproperty
+from .classproperty import (
+    abstractroclassproperty,
+    HasAbstractROClassProperties,
+)
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T")
 
 
-class IsCastable(ABC):
+class IsCastable(HasAbstractROClassProperties):
     """Utility class for objects that are castable."""
 
-    @roclassproperty
+    @abstractroclassproperty
     def Castable(cls) -> TypeAlias:
         """A type alias for the allowed inputs to cast().
 
         Typically the same as allowed inputs to the derived class's constructor.
         """
-        raise NotImplementedError("Derived classes should implement this")
+        pass
 
     @classmethod
     def cast(cls: T, obj: Castable) -> T:

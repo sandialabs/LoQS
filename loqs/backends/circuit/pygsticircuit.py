@@ -8,6 +8,7 @@ from typing import Optional, Type, TypeAlias, Union
 import warnings
 
 from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.utils.classproperty import roclassproperty
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
@@ -38,11 +39,11 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         if qubit_labels is not None:
             self.circuit.line_labels = qubit_labels
 
-    @property
+    @roclassproperty
     def name(self) -> str:
         return "pyGSTi"
 
-    @property
+    @roclassproperty
     def Castable(self) -> TypeAlias:
         """Types we can cast to a pyGSTi circuit.
 
@@ -68,7 +69,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             )
             return None
 
-    @property
+    @roclassproperty
     def CircuitType(self) -> Type:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
         try:
@@ -84,20 +85,12 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             )
             return None
 
-    @property
-    def finalized(self) -> bool:
-        return self.circuit._static
-
-    @property
+    @roclassproperty
     def QubitTypes(self) -> TypeAlias:
         """PyGSTi backend qubit label types (strs and ints)"""
         return Union[str, int]
 
-    @property
-    def qubit_labels(self) -> Iterable[QubitTypes]:
-        return self.circuit.line_labels
-
-    @property
+    @roclassproperty
     def LayerTypes(self) -> TypeAlias:
         """Helper type alias for things allowed to be in circuit layer
 
@@ -132,10 +125,18 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             )
             return None
 
-    @property
+    @roclassproperty
     def OperationTypes(self) -> TypeAlias:
         """PyGSTi backend operations type (one or several gates/layers)"""
         return Union[self.LayerTypes, Iterable[self.LayerTypes]]
+
+    @property
+    def finalized(self) -> bool:
+        return self.circuit._static
+
+    @property
+    def qubit_labels(self) -> Iterable[QubitTypes]:
+        return self.circuit.line_labels
 
     def append(self, circuit: CircuitType) -> CircuitType:
         return super().append(circuit)
