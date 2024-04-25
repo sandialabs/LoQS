@@ -1,5 +1,5 @@
 """Quantum state backends.
 """
 
-from .base import BaseQuantumState
-from .qsim import QSimQuantumState
+from .basestate import BaseQuantumState
+from .qsimstate import QSimQuantumState

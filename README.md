@@ -111,6 +111,15 @@ sphinx-build docs docs/_build/html -b html
 
 **Note:** Depending on how your environment is set up, you may need to include `PYTHONPATH=. ` to the beginning of any `jupyter-book` or `sphinx` build instructions.
 
+If rebuilding the docs, it may be worth cleaning the build directory first:
+
+```
+jb clean docs
+jb build docs
+```
+
+where `jb` is a built-in alias for `jupyter-book`.
+
 #### Jupytext Notebooks
 
 Several of the MyST Markdown files are actually Jupyter notebooks.

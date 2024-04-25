@@ -17,10 +17,9 @@ class BaseQuantumState(ABC):
     """The underlying quantum state"""
 
     @property
-    @abstractmethod
     def name(self) -> str:
         """Name of circuit backend"""
-        pass
+        raise NotImplementedError("Derived class should implement this")
 
     @property
     @abstractmethod

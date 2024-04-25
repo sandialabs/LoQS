@@ -10,7 +10,7 @@ from typing import TypeAlias, Union
 import numpy as np
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.circuit.pygsti import PyGSTiPhysicalCircuit
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, OpRep
 
 

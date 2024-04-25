@@ -8,4 +8,4 @@ repos:
     rev: 7.0.0
     hooks:
     - id: flake8
-      exclude: 'src/'
+      exclude: 'tests/'

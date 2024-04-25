@@ -1,4 +1,4 @@
 """Circuit backend classes."""
 
-from .base import BasePhysicalCircuit
-from .pygsti import PyGSTiPhysicalCircuit
+from .basecircuit import BasePhysicalCircuit
+from .pygsticircuit import PyGSTiPhysicalCircuit

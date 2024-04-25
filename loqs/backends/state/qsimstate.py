@@ -31,7 +31,9 @@ class QSimQuantumState(BaseQuantumState):
         try:
             from quantumsim.sparsedm import SparseDM
         except ImportError as e:
-            raise ImportError("Failed import, cannot use QuantumSim as backend") from e
+            raise ImportError(
+                "Failed import, cannot use QuantumSim as backend"
+            ) from e
 
         return SparseDM
 
@@ -71,8 +73,10 @@ class QSimQuantumState(BaseQuantumState):
         try:
             from quantumsim.sparsedm import SparseDM
         except ImportError as e:
-            raise ImportError("Failed import, cannot use QuantumSim as backend") from e
-        
+            raise ImportError(
+                "Failed import, cannot use QuantumSim as backend"
+            ) from e
+
         if isinstance(state, QSimQuantumState):
             self.state = state.state.copy()
         elif isinstance(state, SparseDM):

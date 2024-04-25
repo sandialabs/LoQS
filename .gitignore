@@ -1,10 +1,14 @@
 *.pyc
 __pycache__
 .pytest_cache
+.coverage
+coverage.xml
+.tox
+.mypy_cache
 
 docs/_build
 docs/_autosummary
 
 .vscode
-venv/
+venv*/
 loqs.egg-info/

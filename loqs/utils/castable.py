@@ -6,6 +6,8 @@ from __future__ import annotations
 from abc import ABC
 from typing import TypeAlias, TypeVar
 
+from .roclassproperty import roclassproperty
+
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T")
 
@@ -13,15 +15,22 @@ T = TypeVar("T")
 class IsCastable(ABC):
     """Utility class for objects that are castable."""
 
-    Castable: TypeAlias
-    """A type alias for the allowed inputs to cast().
+    @roclassproperty
+    def Castable(cls) -> TypeAlias:
+        """A type alias for the allowed inputs to cast().
 
-    Typically the same as allowed inputs to the derived class's constructor.
-    """
+        Typically the same as allowed inputs to the derived class's constructor.
+        """
+        raise NotImplementedError("Derived classes should implement this")
 
     @classmethod
-    def cast(cls: T, obj: IsCastable.Castable) -> T:
+    def cast(cls: T, obj: Castable) -> T:
         """Cast to the derived class.
+
+        This is the base implementation, which either returns
+        `obj` if it matches the class or simply passes it to the
+        constructor. Derived classes should reimplement this if
+        additional casting logic is desired.
 
         Parameters
         ----------
@@ -33,11 +42,7 @@ class IsCastable(ABC):
         T
             An object with type T (matching the derived class)
         """
-        # If we are already of the same type as the class, return
         if isinstance(obj, cls):
             return obj
 
-        # Derived classes could do additional casting logic here
-
-        # Otherwise, assume the constructor can handle the object
         return cls(obj)
