@@ -1,4 +1,4 @@
-"""A utility read-only class property class.
+"""Utilities for read-only class properties.
 
 This file is heavily based on
 https://stackoverflow.com/a/5191224,
@@ -17,9 +17,9 @@ for more details.
 It is still possible to code up a simple read-only
 version of a class property though, which is provided
 here. Additionally, there are lots of places in the code
-where we want to define an interface for read-only
-class properties -- i.e. have abstract read-only class
-properties -- so we also define a metaclass that combines
+where we want to define an interface class using
+:mod:`abc.ABC` and also have class properties -- i.e.
+backends -- so we also define a metaclass that combines
 this with :class:`abc.ABCMeta`.
 
 Examples
@@ -75,7 +75,7 @@ this sort of overwrite.
 .. doctest::
 
     >>> class Good(HasROClassProperties):
-    ...     @readonlyclassproperty
+    ...     @roclassproperty
     ...     def a(self):
     ...         return "A"
     >>> Good.a
@@ -87,23 +87,24 @@ this sort of overwrite.
 
 Now, let's consider how we want to define an abstract base class
 with read-only class properties that the derived classes should
-implement. This can be done using :meth:`@abstractroclassproperty`.
+implement. This can be done using :obj:`@abstractroclassproperty`.
+
+If only the class properties are abstract, you can actually
+get away with only inheriting from :class:`HasROClassProperties`,
+because the abstract class property does not make use of
+:mod:`abc.ABC` at all -- it simply throws a warning if the
+class property is accessed.
+
+For sake of using :mod:`doctest`, we will upgrade the expected
+:class:`UserWarning` to an error to make it easier to catch in
+this example.
 
 .. doctest::
 
-    >>> class Base(HasAbstractROClassProperties):
+    >>> class Base(HasROClassProperties):
     ...     @abstractroclassproperty
     ...     def a(self):
     ...         pass
-
-Unlike :meth:`@abstractmethod`, there's no initializiation here where
-we can check that this has been defined. The best we can do is throw
-a warning if the user accesses this abstrac property.
-For sake of using :mod:`doctest`, we will upgrade the expected
-:class:`UserWarning` to an error to make it easier to catch.
-
-.. doctest::
-
     >>> warnings.simplefilter('error', UserWarning)
     >>> Base.a
     UserWarning: Abstract read-only class property called from \
@@ -111,7 +112,7 @@ For sake of using :mod:`doctest`, we will upgrade the expected
 class property. Be aware that downstream code depending on this property \
 may break in unexpected ways.
 
-But we can construct a derived class and implement the class property.
+But we can construct a derived class and implement the class property!
 
 .. doctest::
 
@@ -121,6 +122,43 @@ But we can construct a derived class and implement the class property.
     ...         return "A"
     >>> Derived.a
     'A'
+
+
+If your base class also needs to inherit from :class:`abc.ABC`,
+then you should use :class:`ABCWithROClassProperties` instead.
+Because both of these classes depend on metaclasses, you need to use
+a metaclass that inherits both of them (which is all that
+:class:`ABCWithROClassProperties` is). If you don't, you get:
+
+.. doctest::
+
+    >>> class MetaclassConflict(ABC, HasROClassProperties):
+    ...     pass
+    Traceback (most recent call last)
+    TypeError: metaclass conflict: the metaclass of a derived class \
+must be a (non-strict) subclass of the metaclasses of all its bases
+
+If we instead use :class:`ABCWithROClassProperties`, everything
+works as intended:
+
+.. doctest::
+
+    >>> class ABCBase(ABCWithROClassProperties):
+    ...     @roclassproperty
+    ...     def a(self):
+    ...         return "A"
+    ...     @abstractmethod
+    ...     def b(self):
+    ...         pass
+    >>> class ABCDerived(ABCBase):
+    ...     def b(self):
+    ...         return "B"
+    >>> ABCDerived.a
+    'A'
+    >>> derived = ABCDerived()
+    >>> derived.b
+    'B'
+
 """
 
 from abc import ABCMeta
@@ -165,7 +203,7 @@ class _HasROClassPropertiesMeta(type):
 
     def __setattr__(self, key, value):
         obj = self.__dict__.get(key, None)
-        if obj and type(obj) is _ReadOnlyClassPropertyDescriptor:
+        if obj and issubclass(type(obj), _ReadOnlyClassPropertyDescriptor):
             raise AttributeError("Cannot set read-only class properties")
 
         return super().__setattr__(key, value)
@@ -213,7 +251,7 @@ def abstractroclassproperty(property):
     return _AbstractReadOnlyClassPropertyDescriptor(property)
 
 
-class _HasAbstractROClassPropertiesMeta(ABCMeta, _HasROClassPropertiesMeta):
+class _ABCWithROClassPropertiesMeta(ABCMeta, _HasROClassPropertiesMeta):
     """A combined metaclass for ABCMeta and _HasROClassPropertiesMeta.
 
     Users should inherit from :class:`HasAbstractROClassProperties`
@@ -223,13 +261,11 @@ class _HasAbstractROClassPropertiesMeta(ABCMeta, _HasROClassPropertiesMeta):
     pass
 
 
-class HasAbstractROClassProperties(
-    metaclass=_HasAbstractROClassPropertiesMeta
-):
+class ABCWithROClassProperties(metaclass=_ABCWithROClassPropertiesMeta):
     """A combined class for ABC and HasROClassProperties.
 
-    Use this if you need the features of both, or have (abstract) read-only
-    class properties.
+    Use this if you need the features of both, as this prevents
+    metaclass collisions.
 
     See :mod:`loqs.utils.classproperty` for examples.
     """

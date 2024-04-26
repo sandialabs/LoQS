@@ -5,7 +5,7 @@ from .classproperty import (
     roclassproperty,
     HasROClassProperties,
     abstractroclassproperty,
-    HasAbstractROClassProperties,
+    ABCWithROClassProperties,
 )
 
 from .castable import IsCastable

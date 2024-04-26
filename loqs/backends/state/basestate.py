@@ -10,11 +10,11 @@ from typing import Type, TypeAlias
 from loqs.backends.model import OpRep
 from loqs.utils.classproperty import (
     abstractroclassproperty,
-    HasAbstractROClassProperties,
+    ABCWithROClassProperties,
 )
 
 
-class BaseQuantumState(HasAbstractROClassProperties):
+class BaseQuantumState(ABCWithROClassProperties):
     """Base class for an object that holds a (physical) quantum state."""
 
     _state: StateType

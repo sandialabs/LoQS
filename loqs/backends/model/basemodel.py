@@ -10,7 +10,7 @@ from enum import StrEnum
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.utils.classproperty import (
     abstractroclassproperty,
-    HasAbstractROClassProperties,
+    ABCWithROClassProperties,
 )
 
 
@@ -23,7 +23,7 @@ class OpRep(StrEnum):
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 
-class BaseNoiseModel(HasAbstractROClassProperties):
+class BaseNoiseModel(ABCWithROClassProperties):
     """Base class for an object that holds noisy operation specifications.
 
     This class is primarily designed to translate between a circuit description

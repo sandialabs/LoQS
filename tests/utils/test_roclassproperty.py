@@ -5,51 +5,87 @@ from abc import abstractmethod
 import pytest
 
 from loqs.utils import (
-    readonlyclassproperty,
-    HasAbstractROClassProperties
+    roclassproperty,
+    abstractroclassproperty,
+    HasROClassProperties,
+    ABCWithROClassProperties
 )
 
 class TestROClassProperty:
 
+    def _check(self, obj):
+        # Getter should work
+        assert obj.a == "A"
+
+        # Setter should error
+        with pytest.raises(AttributeError):
+            obj.a = "Should not work"
+    
+    def _check_abstract(self, obj):
+        # Getter should warn
+        with pytest.warns(UserWarning):
+            obj.a
+
+        # Setter should error
+        with pytest.raises(AttributeError):
+            obj.a = "Should not work"
+
     def test_roclassproperty(self):
-        class A(HasAbstractROClassProperties):
-            @readonlyclassproperty
+        class A(HasROClassProperties):
+            @roclassproperty
             def a(self):
                 return "A"
+        
+        self._check(A)
+        # Should also still work on an instance
+        self._check(A())
+    
+    def test_abstractroclassproperty(self):
+        class A(HasROClassProperties):
+            @abstractroclassproperty
+            def a(self):
+                pass
+        
+        class B(A):
+            @roclassproperty
+            def a(self):
+                return "A"
+        
+        self._check_abstract(A)
+        self._check_abstract(A())
+
+        self._check(B)
+        self._check(B())
+    
+    def test_abcwithroclassproperties(self):
+        class A(ABCWithROClassProperties):            
+            @abstractroclassproperty
+            def a(self):
+                pass
             
-            @readonlyclassproperty
             @abstractmethod
             def b(self):
                 pass
-            
+        
         class B(A):
-            @readonlyclassproperty
+            @roclassproperty
+            def a(self):
+                return "A"
+            
             def b(self):
                 return "B"
-            
-        # Should work on instantiated class
-        assert A.a == "A"
-        with pytest.raises(NotImplementedError):
-            A.b
+        
+        self._check_abstract(A)
 
-        # Should also still work on an instance
-        a = A()
-        assert a.a == "A"
-        with pytest.raises(NotImplementedError):
-            a.b
+        # Making instance should fail because of ABC
+        with pytest.raises(TypeError):
+            A()
+        
+        # But B should work as intended
+        self._check(B)
+        self._check(B())
+        assert B().b() == 'B'
 
-        # And then B should have both
-        assert B.a == "A"
-        assert B.b == "B"
-
-        b = B()
-        assert B.a == "A"
-        assert B.b == "B"
-
-        # Setter/deleter should error
-        with pytest.raises(AttributeError):
-            A.a = "Should not work"
-        with pytest.raises(AttributeError):
-            del A.a
+        
         
         

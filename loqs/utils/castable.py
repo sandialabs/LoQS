@@ -7,14 +7,14 @@ from typing import TypeAlias, TypeVar
 
 from .classproperty import (
     abstractroclassproperty,
-    HasAbstractROClassProperties,
+    ABCWithROClassProperties,
 )
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T")
 
 
-class IsCastable(HasAbstractROClassProperties):
+class IsCastable(ABCWithROClassProperties):
     """Utility class for objects that are castable."""
 
     @abstractroclassproperty
