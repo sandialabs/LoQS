@@ -1,9 +1,7 @@
 """Tester for loqs.backends.circuit.pygsti.PyGSTiPhysicalCircuit"""
 
-import importlib
 import mock
 import pytest
-import sys
 
 try:
     from pygsti.baseobjs import Label
@@ -13,7 +11,6 @@ try:
 except ImportError:
     NO_PYGSTI = True
 
-import loqs.backends.circuit as cbackend
 from loqs.backends import PyGSTiPhysicalCircuit as PhysCirc
 
 
@@ -78,7 +75,7 @@ class TestPyGSTiPhysicalCircuit:
             pc.append_inplace(pc)
 
 
-class TestPyGSTiPhyiscalCircuitFailedImport:
+class TestPyGSTiPhysicalCircuitFailedImport:
         # Mock not having the pygsti available
         with mock.patch.dict('sys.modules', {
                 'pygsti.circuits': None,

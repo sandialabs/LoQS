@@ -33,7 +33,12 @@ There are various optional requirements that are available, including:
 - `pygsti`: Enables the PyGSTi backend.
 - `test`: Allows testing (see Testing below)
 
-If you want to install all optional dependencies, you can use `all`.
+There are several helper "categories" for optional dependencies, including:
+
+- `backends`: Packages needed to enable *all* backends
+- `nobackends`: The complement of `backends`, i.e. all developer packages with no backends
+(useful for testing)
+- `all`: All optional dependencies
 
 To use these, simply modify the last line of the installation instructions. For example:
 
@@ -42,13 +47,6 @@ pip install -e ".[all]"
 ```
 
 (where the quotes are only needed if using zsh instead of bash).
-
-### Using LoQS
-
-TODO. I plan to have a series of examples/tutorials that we point users to.
-
-## Developer Guide
-### Editable pyGSTi
 
 For developers who may want an editable version of `pyGSTi`, you can run:
 
@@ -60,11 +58,41 @@ to get the 0.9.12 release of pyGSTi, which will be located in `src`.
 Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
 if you are working off of a feature branch.
 
+### Using LoQS
+
+TODO. I plan to have a series of examples/tutorials that we point users to.
+
+## Testing
+
+This project uses `tox` to perform code formatting/linting, type checking,
+unit tests, and coverage reporting.
+These features are available to anyone who has installed `loqs` with at least
+the `[tests]` optional dependency.
+
+Developers can run all tests using:
+
+```
+tox run
+```
+
+The first time you run `tox`, it will create different environments for each
+testing stage in `.tox`.
+Subsequent runs will be much faster, although these environments will need to
+be rebuilt if the configuration in `tox.ini` changes (specifically if the
+requirements of each environment change).
+
 ### Code Formatting and Linting
 
 This project uses `black` for autoformatting code and `flake8` for linting.
-These will be automatically run as part of the CI/CD platform, but developers
-can also set this up to be done locally by performing the following steps:
+
+This can be run with `tox` using
+
+```
+tox run -e lint
+```
+
+Developers can also set this up to be done locally before committing
+by performing the following steps:
 
 ```
 pip install -e ."[dev]"
@@ -76,17 +104,56 @@ to run the script that will be ran during the commit process.
 Alternatively, you can run `pre-commit run -a` to just format and lint
 the entire codebase.
 
-### Testing
+### Type Checking
 
-This project uses `pytest` to run its unit tests.
-These can be run by doing:
+This project uses lots of type annotations and `mypy` for type checking.
+This can be run using `tox` via
 
 ```
-pip install -e ."[test]"
-pytest
+tox run -e type
 ```
 
-### Documentation
+### Unit Tests
+
+This project uses `pytest` to run unit tests.
+With `tox`, the unit tests can be run in a specific environment.
+For example, the `py311` environment tests Python 3.11, and tests can be
+run with this version of Python via:
+
+```
+tox run -e py311
+```
+
+Developers can run `pytest` outside of `tox` also by simply doing:
+
+```
+pytest tests
+```
+
+This can be helpful to test specific files, or perhaps run `pytest` with
+nonstandard flags.
+
+### Coverage
+
+The `tox` pipeline also generates coverage reports by using the `pytest-cov`
+and `coverage` packages.
+Coverage information is generated during the unit tests, and the coverage
+report can be regenerated via:
+
+```
+tox run -e report
+```
+
+It's worth noting that the coverage information is also cleaned at the beginning
+of each run to ensure there's no residual coverage inforomation (especially important
+if using the `--cov-append` flag for `pytest`.)
+This can be done at any time with:
+
+```
+tox run -e clean
+```
+
+## Documentation
 
 This project uses `JupyterBook` for its documentation, which should be
 installed if using the `[docs]` optional dependencies.
@@ -120,7 +187,7 @@ jb build docs
 
 where `jb` is a built-in alias for `jupyter-book`.
 
-#### Jupytext Notebooks
+### Jupytext Notebooks
 
 Several of the MyST Markdown files are actually Jupyter notebooks.
 We are storing them as Markdown and converting to Jupyter notebooks using Jupytext.
