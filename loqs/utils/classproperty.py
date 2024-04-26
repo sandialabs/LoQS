@@ -27,6 +27,7 @@ Examples
 
 .. testsetup:: *
 
+    from abc import ABC, abstractmethod
     from loqs.utils.classproperty import *
     import warnings
 
@@ -101,18 +102,20 @@ this example.
 
 .. doctest::
 
+    >>> import warnings
     >>> class Base(HasROClassProperties):
     ...     @abstractroclassproperty
     ...     def a(self):
     ...         pass
     >>> warnings.simplefilter('error', UserWarning)
-    >>> Base.a
+    >>> Base.a # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
     UserWarning: Abstract read-only class property called from \
-<class '__main__.Base'>. Ensure that all derived classes implement this \
-class property. Be aware that downstream code depending on this property \
-may break in unexpected ways.
+<class 'Base'>. Ensure that all derived classes implement this \
+class property. Be aware that downstream code depending on \
+this property may break in unexpected ways.
 
-But we can construct a derived class and implement the class property!
+But we *can* construct a derived class and implement the class property!
 
 .. doctest::
 
@@ -132,9 +135,10 @@ a metaclass that inherits both of them (which is all that
 
 .. doctest::
 
+    >>> from abc import ABC, abstractmethod
     >>> class MetaclassConflict(ABC, HasROClassProperties):
     ...     pass
-    Traceback (most recent call last)
+    Traceback (most recent call last):
     TypeError: metaclass conflict: the metaclass of a derived class \
 must be a (non-strict) subclass of the metaclasses of all its bases
 
@@ -156,7 +160,7 @@ works as intended:
     >>> ABCDerived.a
     'A'
     >>> derived = ABCDerived()
-    >>> derived.b
+    >>> derived.b()
     'B'
 
 """
