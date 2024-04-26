@@ -39,8 +39,9 @@ quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti[extensions]>=0.9.12"]
 test = [
     "loqs[dev]",
-    "pytest",
-    "pytest-cov",
+    "mock>=5",
+    "pytest>=8",
+    "pytest-cov>=5",
     "tox>=4"
 ]
 backends = ["loqs[quantumsim,pygsti]"]

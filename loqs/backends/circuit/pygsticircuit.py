@@ -53,37 +53,28 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         """
         try:
             from pygsti.circuits import Circuit
+        except ImportError as e:
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
 
-            return Union[
-                PyGSTiPhysicalCircuit,
-                Circuit,
-                str,
-                Iterable[self.OperationTypes],
-            ]
-        except ImportError:
-            warnings.warn(
-                UserWarning(
-                    "Calling PyGSTiPhysicalCircuit property, but "
-                    "pygsti is not installed and backend is unavailable"
-                )
-            )
-            return None
+        return Union[
+            PyGSTiPhysicalCircuit,
+            Circuit,
+            str,
+            Iterable[self.OperationTypes],
+        ]
 
     @roclassproperty
     def CircuitType(self) -> Type:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
         try:
             from pygsti.circuits import Circuit
-
-            return Circuit
-        except ImportError:
-            warnings.warn(
-                UserWarning(
-                    "Calling PyGSTiPhysicalCircuit property, but "
-                    "pygsti is not installed and backend is unavailable"
-                )
-            )
-            return None
+        except ImportError as e:
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
+        return Circuit
 
     @roclassproperty
     def QubitTypes(self) -> TypeAlias:
@@ -102,28 +93,24 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         - or lists and tuples of the above (in which case it is a whole layer)
         """
         try:
-            from pygsti.circuits import Label
+            from pygsti.baseobjs import Label
+        except ImportError as e:
+            raise ImportError(
+                "Failed import, cannot use pyGSTi as backend"
+            ) from e
 
-            return Union[
-                str,  # e.g., gate names
-                tuple[str, self.QubitTypes],  # e.g., gate name and one qubit
-                list[str, self.QubitTypes],  # e.g., gate name and one qubit
-                tuple[
-                    str, Iterable[self.QubitTypes]
-                ],  # e.g., gate name and tuple of qubits
-                list[
-                    str, Iterable[self.QubitTypes]
-                ],  # e.g., gate name and tuple of qubits
-                Label,  # or an actual pyGSTi label
-            ]
-        except ImportError:
-            warnings.warn(
-                UserWarning(
-                    "Calling PyGSTiPhysicalCircuit property, but "
-                    "pygsti is not installed and backend is unavailable"
-                )
-            )
-            return None
+        return Union[
+            str,  # e.g., gate names
+            tuple[str, self.QubitTypes],  # e.g., gate name and one qubit
+            list[str, self.QubitTypes],  # e.g., gate name and one qubit
+            tuple[
+                str, Iterable[self.QubitTypes]
+            ],  # e.g., gate name and tuple of qubits
+            list[
+                str, Iterable[self.QubitTypes]
+            ],  # e.g., gate name and tuple of qubits
+            Label,  # or an actual pyGSTi label
+        ]
 
     @roclassproperty
     def OperationTypes(self) -> TypeAlias:

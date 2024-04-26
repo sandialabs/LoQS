@@ -1,6 +1,9 @@
 """Tester for loqs.backends.circuit.pygsti.PyGSTiPhysicalCircuit"""
 
+import importlib
+import mock
 import pytest
+import sys
 
 try:
     from pygsti.baseobjs import Label
@@ -10,7 +13,9 @@ try:
 except ImportError:
     NO_PYGSTI = True
 
+import loqs.backends.circuit as cbackend
 from loqs.backends import PyGSTiPhysicalCircuit as PhysCirc
+
 
 @pytest.mark.skipif(
     NO_PYGSTI,
@@ -72,22 +77,22 @@ class TestPyGSTiPhysicalCircuit:
         with pytest.raises(AssertionError):
             pc.append_inplace(pc)
 
-# I tried very hard to make this work with mock and sys.module and importlib manipulation...
-# In the end, I think we just want to run tests in different environments
-@pytest.mark.skipif(
-    not NO_PYGSTI,
-    reason="Skipping no-pyGSTi backend tests as pygsti is available"
-)
-class TestNoPyGSTi:
-    def test_no_pygsti(self):
-        with pytest.raises(ImportError):
-            PhysCirc([])
-        
-        with pytest.warns(UserWarning):
-            PhysCirc.Castable
-        
-        with pytest.warns(UserWarning):
-            PhysCirc.CircuitType
 
-        with pytest.warns(UserWarning):
-            PhysCirc.LayerTypes
+class TestPyGSTiPhyiscalCircuitFailedImport:
+        # Mock not having the pygsti available
+        with mock.patch.dict('sys.modules', {
+                'pygsti.circuits': None,
+                'pygsti.baseobjs': None
+            }):
+
+            with pytest.raises(ImportError):
+                PhysCirc([])
+            
+            with pytest.raises(ImportError):
+                PhysCirc.Castable
+            
+            with pytest.raises(ImportError):
+                PhysCirc.CircuitType
+
+            with pytest.raises(ImportError):
+                PhysCirc.LayerTypes

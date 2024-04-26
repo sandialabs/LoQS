@@ -15,13 +15,20 @@ T = TypeVar("T")
 
 
 class IsCastable(ABCWithROClassProperties):
-    """Utility class for objects that are castable."""
+    """Utility class for objects that are castable.
+
+    This inherits from :class:`ABCWithROClassProperties`
+    when technically :class:`HasROClassProperties` would have been
+    sufficient for this interface.
+    However, so many derived classes would also need :class:`abc.ABC`
+    so it is just easier to sort out the metaclasses here.
+    """
 
     @abstractroclassproperty
     def Castable(cls) -> TypeAlias:
         """A type alias for the allowed inputs to cast().
 
-        Typically the same as allowed inputs to the derived class's constructor.
+        Typically a superset of allowed inputs to the derived class's constructor.
         """
         pass
 
