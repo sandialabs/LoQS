@@ -4,8 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Optional, Type, TypeAlias, Union
-import warnings
+from typing import Optional, Type, TypeAlias, Union, Unpack
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.utils.classproperty import roclassproperty
@@ -18,6 +17,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         self,
         circuit: Castable,
         qubit_labels: Optional[Iterable[QubitTypes]] = None,
+        finalized: bool = True,
     ) -> None:
         try:
             from pygsti.circuits import Circuit
@@ -36,8 +36,10 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             except Exception as e:
                 raise ValueError("Failed to cast to pyGSTi circuit") from e
 
-        if qubit_labels is not None:
-            self.circuit.line_labels = qubit_labels
+        if self.finalized and finalized is False:
+            self._circuit = self.circuit.copy(editable=True)
+
+        super().__init__(circuit, qubit_labels, finalized)
 
     @roclassproperty
     def name(self) -> str:
@@ -101,13 +103,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
         return Union[
             str,  # e.g., gate names
-            tuple[str, self.QubitTypes],  # e.g., gate name and one qubit
-            list[str, self.QubitTypes],  # e.g., gate name and one qubit
-            tuple[
-                str, Iterable[self.QubitTypes]
-            ],  # e.g., gate name and tuple of qubits
-            list[
-                str, Iterable[self.QubitTypes]
+            Iterable[str, self.QubitTypes],  # e.g., gate name and one qubit
+            Iterable[
+                str, Unpack[Iterable[self.QubitTypes]]
             ],  # e.g., gate name and tuple of qubits
             Label,  # or an actual pyGSTi label
         ]
@@ -125,19 +123,18 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def qubit_labels(self) -> Iterable[QubitTypes]:
         return self.circuit.line_labels
 
-    def append(self, circuit: CircuitType) -> CircuitType:
-        return super().append(circuit)
-
     def append_inplace(self, circuit: CircuitType) -> None:
-        self.circuit.append_circuit_inplace(circuit.circuit)
+        super().append_inplace(circuit)
+        try:
+            self.circuit.append_circuit_inplace(circuit.circuit)
+        except AssertionError as e:
+            raise AssertionError(
+                "Underlying circuit is static.",
+                "Try using .copy(finalized=False) first",
+            ) from e
 
-    def copy(self, finalized: bool = False) -> PyGSTiPhysicalCircuit:
-        return PyGSTiPhysicalCircuit(self.circuit.copy(editable=not finalized))
-
-    def delete_qubits(
-        self, qubits_to_delete: Iterable[QubitTypes]
-    ) -> PyGSTiPhysicalCircuit:
-        return super().delete_qubits(qubits_to_delete)
+    def copy(self, finalized: bool = True) -> PyGSTiPhysicalCircuit:
+        return PyGSTiPhysicalCircuit(self.circuit, finalized=finalized)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Iterable[QubitTypes]
@@ -154,12 +151,6 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def finalize_inplace(self) -> None:
         self.circuit.done_editing()
 
-    def map_qubit_labels(
-        self,
-        qubit_mapping: Mapping[QubitTypes, QubitTypes],
-    ) -> PyGSTiPhysicalCircuit:
-        return super().map_qubit_labels(qubit_mapping)
-
     def map_qubit_labels_inplace(
         self, qubit_mapping: Mapping[QubitTypes, QubitTypes]
     ) -> None:
@@ -175,46 +166,44 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 "Try using .copy(finalized=False) first",
             ) from e
 
-    def set_qubit_labels(
-        self, circuit: CircuitType, qubit_labels: Iterable[QubitTypes]
-    ) -> CircuitType:
-        return super().set_qubit_labels(circuit, qubit_labels)
-
     def set_qubit_labels_inplace(
         self, qubit_labels: Iterable[QubitTypes]
     ) -> None:
+        """Set the qubit labels of an underlying circuit.
+
+        This only adds or deletes qubits from the circuit,
+        but does not modify the qubit labels of operations.
+        For a complete change of qubit labels, see
+        :meth:`map_qubit_labels_inplace` instead.
+
+        Parameters
+        ----------
+        qubit_labels:
+            Qubit labels to assign to circuit.
+        """
         super().set_qubit_labels_inplace(qubit_labels)
         self.circuit.line_labels = qubit_labels
 
     def process_circuit(
         self,
-        qubit_labels: Optional[Iterable[QubitTypes]] = None,
+        qubit_mapping: Optional[Mapping[QubitTypes, QubitTypes]] = None,
         omit_gates: Optional[Iterable[OperationTypes]] = None,
         delete_idle_layers: bool = False,
+        finalized: bool = True,
     ) -> PyGSTiPhysicalCircuit:
         processed = self.copy(finalized=False)
 
-        if qubit_labels is not None:
-            processed.circuit.line_labels = qubit_labels
+        if qubit_mapping is not None:
+            processed.map_qubit_labels_inplace(qubit_mapping)
 
-        try:
-            if omit_gates is None:
-                omit_gates = {}
-            else:
-                omit_gates = {k: [] for k in omit_gates}
-            processed.circuit.change_gate_library(
-                omit_gates, depth_compression=False, allow_unchanged_gates=True
-            )
+        if omit_gates is not None:
+            for og in omit_gates:
+                processed.circuit.replace_gatename_with_idle_inplace(og)
 
-            if delete_idle_layers:
-                processed.circuit.delete_idle_layers_inplace()
-        except AssertionError as e:
-            raise AssertionError(
-                "Underlying circuit is static.",
-                "Try using .copy(finalized=False) first",
-            ) from e
+        if delete_idle_layers:
+            processed.circuit.delete_idle_layers_inplace()
 
-        if self.finalized:
+        if finalized:
             processed.finalize_inplace()
 
         return processed

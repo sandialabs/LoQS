@@ -23,6 +23,7 @@ class BasePhysicalCircuit(IsCastable):
         self,
         circuit: Castable,
         qubit_labels: Optional[Iterable[QubitTypes]] = None,
+        finalized: bool = True,
     ) -> None:
         """Initialize a PhysicalCircuit.
 
@@ -33,8 +34,18 @@ class BasePhysicalCircuit(IsCastable):
 
         qubit_labels:
             Qubit labels to use for the circuit
+
+        finalized:
+            If True, the returned circuit will be in a non-editable "finalized"
+            state (if the backend supports this). If False, the returned
+            circuit will be in an editable state (if the backend support this),
+            and :meth:`finalize_circuit_inplace` can be used to get the
+            finalized version of the circuit later.
         """
-        pass
+        if qubit_labels is not None:
+            self.set_qubit_labels_inplace(qubit_labels)
+        if finalized:
+            self.finalize_inplace()
 
     def __str__(self) -> str:
         return f"Physical {self.name} circuit:\n{str(self.circuit)}"
@@ -100,7 +111,6 @@ class BasePhysicalCircuit(IsCastable):
         pass
 
     # Instance methods
-    @abstractmethod
     def append(self, circuit: BasePhysicalCircuit) -> BasePhysicalCircuit:
         """Append another circuit to a copy of this circuit.
 
@@ -132,7 +142,7 @@ class BasePhysicalCircuit(IsCastable):
         pass
 
     @abstractmethod
-    def copy(self, finalized: bool = False) -> BasePhysicalCircuit:
+    def copy(self, finalized: bool = True) -> BasePhysicalCircuit:
         """Copy a circuit object.
 
         Parameters
@@ -142,13 +152,13 @@ class BasePhysicalCircuit(IsCastable):
             state (if the backend supports this). If False, the returned
             circuit will be in an editable state (if the backend support this),
             and :meth:`finalize_circuit_inplace` can be used to get the
-            finalized version of the circuit later. Defaults to False.
+            finalized version of the circuit later.
 
         Returns
         -------
             Copied circuit
         """
-        return BasePhysicalCircuit(self.circuit)
+        return BasePhysicalCircuit(self.circuit, finalized=True)
 
     def delete_qubits(
         self, qubits_to_delete: Iterable[QubitTypes]
@@ -184,6 +194,7 @@ class BasePhysicalCircuit(IsCastable):
         qubits_to_delete:
             List of qubit lines to remove.
         """
+        # TODO: Check qubits available
         pass
 
     @abstractmethod
@@ -237,6 +248,7 @@ class BasePhysicalCircuit(IsCastable):
             Mapping from old qubit labels to new qubit labels.
             If a qubit label is not provided, it remains unchanged.
         """
+        # TODO: Type check
         pass
 
     def set_qubit_labels(
@@ -268,40 +280,50 @@ class BasePhysicalCircuit(IsCastable):
     ) -> None:
         """Set the qubit labels of an underlying circuit.
 
+        Note that depending on the backend, this may only adjust
+        the qubit labels and not the operations in the circuit.
+        For a complete change of qubit labels, see
+        :meth:`map_qubit_labels_inplace` instead.
+
         Parameters
         ----------
         qubit_labels:
             Qubit labels to assign to circuit.
         """
-        assert len(qubit_labels) == len(self.qubit_labels), (
-            f"Only provided {len(qubit_labels)} labels for ",
-            f"{len(self.qubit_labels)} qubits",
-        )
+        # TODO: Type check
         pass
 
     @abstractmethod
     def process_circuit(
         self,
-        qubit_labels: Optional[Iterable[QubitTypes]] = None,
+        qubit_mapping: Optional[Mapping[QubitTypes, QubitTypes]] = None,
         omit_gates: Optional[Iterable[OperationTypes]] = None,
         delete_idle_layers: bool = False,
+        finalized: bool = True,
     ) -> BasePhysicalCircuit:
         """Helper function to provide consistent circuit processing.
 
         Parameters
         ----------
-        qubit_labels: list of str, optional
-            Qubit labels to use for the returned circuit. If not provided,
-            the default qubit labels of the object are used.
+        qubit_mapping:
+            Mapping from old qubit labels to new qubit labels.
+            If a qubit label is not provided, it remains unchanged.
 
-        omit_gates: str or list of str, optional
+        omit_gates:
             If provided, an operation (or list of operations) to replace with
             idles in the final circuit.
 
-        delete_idle_layers: bool, optional
+        delete_idle_layers:
             If True, drop any layers with no operations.
             Defaults to False, maintaining idle layers which may be used for
             scheduling later in circuit composition pipeline.
+
+        finalized:
+            If True, the returned circuit will be in a non-editable "finalized"
+            state (if the backend supports this). If False, the returned
+            circuit will be in an editable state (if the backend support this),
+            and :meth:`finalize_circuit_inplace` can be used to get the
+            finalized version of the circuit later.
 
         Returns
         -------

@@ -117,7 +117,7 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
 
     def __init__(
         self,
-        circuit_templates: CircuitTemplateFactory.Castable,
+        circuit_templates: PhysicalCircuit.Castable,
     ) -> None:
         """Initialize a CircuitTemplateFactory from circuit templates.
 
@@ -135,7 +135,7 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
             }
 
     def add_template(
-        self, key: str, template: CircuitTemplateFactory.CircuitCastable
+        self, key: str, template: PhysicalCircuit.Castable
     ) -> None:
         """Add an additional template to the CircuitTemplateFactory.
 
@@ -155,7 +155,7 @@ Circuit([]Gcnot:D1:A4Gcnot:D3:A4Gcnot:D0:A4Gcnot:D2:A4[]Iz:A4\
     def get_processed_circuit(
         self,
         template_key: str,
-        qubit_labels: Iterable[Optional[CircuitTemplateFactory.QubitTypes]],
+        qubit_labels: Iterable[Optional[PhysicalCircuit.QubitTypes]],
         **kwargs,
     ) -> BasePhysicalCircuit:
         """Create a stabilizer check circuit from one of the templates.
