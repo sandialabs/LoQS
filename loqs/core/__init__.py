@@ -5,7 +5,7 @@ orchestrate the execution of logical qubit simulation.
 """
 
 # First for import order reasons
-from .record import RecordSpec, Record, RecordHistory
+from .record import TrajectoryFrameSpec, TrajectoryFrame, Trajectory
 
 from .instruction import (
     InstructionSpec,

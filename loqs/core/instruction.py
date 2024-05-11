@@ -12,40 +12,40 @@ from collections.abc import Iterable, MutableSequence
 from typing import Optional, Type, TypeAlias, Union, get_args
 
 from loqs.utils import IsCastable, IsRecordable
-from loqs.core import Record, RecordHistory, RecordSpec
+from loqs.core import TrajectoryFrame, Trajectory, TrajectoryFrameSpec
 
 
 class InstructionSpec:
     def __init__(
         self,
         input_type: Type,
-        input_spec: RecordSpec.Castable,
-        output_spec: RecordSpec.Castable,
+        input_spec: TrajectoryFrameSpec.Castable,
+        output_spec: TrajectoryFrameSpec.Castable,
     ):
-        assert input_type in [Record] + get_args(
-            RecordHistory.Castable
+        assert input_type in [TrajectoryFrame] + get_args(
+            Trajectory.Castable
         ), "Input type Must be Record or RecordHistory.Castable"
         self._input_type = input_type
-        self._input_spec = RecordSpec.cast(input_spec)
-        self._output_spec = RecordSpec.cast(output_spec)
+        self._input_spec = TrajectoryFrameSpec.cast(input_spec)
+        self._output_spec = TrajectoryFrameSpec.cast(output_spec)
 
     @property
-    def minimum_input_spec(self) -> RecordSpec:
+    def minimum_input_spec(self) -> TrajectoryFrameSpec:
         return self._input_spec
 
     @property
-    def minimum_output_spec(self) -> RecordSpec:
+    def minimum_output_spec(self) -> TrajectoryFrameSpec:
         return self._output_spec
 
     def check_record(
         self,
-        record_object: Union[RecordSpec, Record, RecordHistory],
+        record_object: Union[TrajectoryFrameSpec, TrajectoryFrame, Trajectory],
         check_input: bool = True,
         check_output: bool = True,
     ) -> bool:
-        if isinstance(record_object, Record):
+        if isinstance(record_object, TrajectoryFrame):
             spec = record_object.spec
-        elif isinstance(record_object, RecordHistory):
+        elif isinstance(record_object, Trajectory):
             spec = record_object.standard_record_spec
         else:
             spec = record_object
@@ -88,7 +88,9 @@ class Instruction(IsRecordable, IsCastable):
         return self._parent
 
     @abstractmethod
-    def apply(self, input: Union[Record, RecordHistory.Castable]) -> Record:
+    def apply(
+        self, input: Union[TrajectoryFrame, Trajectory.Castable]
+    ) -> TrajectoryFrame:
         pass
 
 

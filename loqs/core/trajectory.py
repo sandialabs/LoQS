@@ -1,4 +1,4 @@
-"""Definitions for the RecordSpec, Record, and RecordHistory classes.
+"""TODO
 """
 
 from __future__ import annotations
@@ -7,16 +7,19 @@ from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence
 from typing import Any, Optional, Type, Union
 
 from loqs.utils import IsCastable, IsRecordable
+from loqs.utils.classproperty import roclassproperty
 
 
-class RecordSpec(MutableMapping[str, Type[IsRecordable]], IsCastable):
-    """A dict-like object describing allowed entries for a :class:`Record`.
+class TrajectoryFrameSpec(MutableMapping[str, Type[IsRecordable]], IsCastable):
+    """A dict-like object describing allowed entries for a :class:`TrajectoryFrame`.
 
     This acts like a dict, except values must be of type IsRecordable
     (or a derived class).
     """
 
-    Castable = Union["RecordSpec", Mapping[str, Type[IsRecordable]]]
+    @roclassproperty
+    def Castable(self):
+        return Union[TrajectoryFrameSpec, Mapping[str, Type[IsRecordable]]]
 
     def __init__(
         self, spec: Optional[Mapping[str, Type[IsRecordable]]] = None
@@ -79,15 +82,15 @@ class RecordSpec(MutableMapping[str, Type[IsRecordable]], IsCastable):
 
     def create_record(
         self, data: Mapping[str, IsRecordable], log: str
-    ) -> Record:
-        return Record(self, data, log)
+    ) -> TrajectoryFrame:
+        return TrajectoryFrame(self, data, log)
 
 
-class Record(Mapping[str, IsRecordable]):
+class TrajectoryFrame(Mapping[str, IsRecordable]):
     """A read-only(ish) record of the state of the simulation at a given time.
 
     The core functionality is a dict that relates keys to individual
-    :class:`RecordEntry` values with type checking, and an interface
+    :class:`TrajectoryFrameSpec` values with type checking, and an interface
     that encourages a more "immutable" usage of this class.
 
     Note that this is not truly immutable, as users can modify :attr:`._data`
@@ -97,11 +100,11 @@ class Record(Mapping[str, IsRecordable]):
 
     def __init__(
         self,
-        record_spec: RecordSpec.Castable,
+        frame_spec: TrajectoryFrameSpec.Castable,
         data: Mapping[str, IsRecordable],
         log: str,
     ):
-        self._spec = RecordSpec.cast(record_spec)
+        self._spec = TrajectoryFrameSpec.cast(frame_spec)
 
         for k, v in data.items():
             assert self.spec.check(k, v), (
@@ -131,7 +134,7 @@ class Record(Mapping[str, IsRecordable]):
 
     def update(
         self, new_data: Mapping[str, IsRecordable], new_log: str
-    ) -> "Record":
+    ) -> TrajectoryFrame:
         """Return an updated copy of this Record."""
         for k, v in new_data.items():
             assert self.spec.check(k, v), (
@@ -142,34 +145,34 @@ class Record(Mapping[str, IsRecordable]):
         modified_data = self._data.copy()
         modified_data.update(new_data)
 
-        return Record(self.spec, modified_data, new_log)
+        return TrajectoryFrame(self.spec, modified_data, new_log)
 
 
-class RecordHistory(MutableSequence[Record], IsCastable):
-    """A semi-mutable list of Records.
+class Trajectory(MutableSequence[TrajectoryFrame], IsCastable):
+    """A semi-mutable list of :class:`TrajectoryFrame` objects.
 
     The intention is to provide a list-like object where existing
-    Records cannot be changed or removed, and insertion can only occur at
-    the end of the list.
+    :class:`TrajectoryFrame` objects cannot be changed or removed,
+    and insertion can only occur at the end of the list.
     """
 
-    Castable = Union["RecordHistory", Iterable[Record]]
+    @roclassproperty
+    def Castable(self):
+        return Union[Trajectory, Iterable[TrajectoryFrame]]
 
-    def __init__(
-        self, history: Optional["RecordHistory.Castable"] = None
-    ) -> None:
-        """Initialize a RecordHistory."""
-        if isinstance(history, RecordHistory):
+    def __init__(self, history: Optional[Trajectory.Castable] = None) -> None:
+        """Initialize a :class:`Trajectory`."""
+        if isinstance(history, Trajectory):
             self._history = history._history
             self._std_spec = history._std_spec
             self._nonstd_spec = history._nonstd_spec
         else:
-            self._history: Iterable[Record] = []
-            self._std_spec: Optional[RecordSpec] = None
-            self._nonstd_spec = RecordSpec()
+            self._history: Iterable[TrajectoryFrame] = []
+            self._std_spec = TrajectoryFrameSpec()
+            self._nonstd_spec = TrajectoryFrameSpec()
 
             for r in history:
-                # This should use .insert under the hool and have proper logic
+                # This should use .insert under the hood and have proper logic
                 self.append(r)
 
     def __getitem__(self, i):
@@ -191,7 +194,9 @@ class RecordHistory(MutableSequence[Record], IsCastable):
         if i != len(self):
             raise RuntimeError("Can only append items to a RecordHistory")
 
-        assert isinstance(item, Record), "RecordHistory can only hold Records"
+        assert isinstance(
+            item, TrajectoryFrame
+        ), "RecordHistory can only hold Records"
 
         if self._std_spec is None:
             self._std_spec = item.spec.copy()
@@ -200,7 +205,7 @@ class RecordHistory(MutableSequence[Record], IsCastable):
             new_items = set(item.spec.items())
 
             intersection = std_items.intersection(new_items)
-            self._std_spec = RecordSpec(dict(intersection))
+            self._std_spec = TrajectoryFrameSpec(dict(intersection))
 
             difference = std_items.difference(new_items)
             self._nonstd_spec.update(difference)
@@ -208,15 +213,15 @@ class RecordHistory(MutableSequence[Record], IsCastable):
         return self._history.insert(i, item)
 
     def reverse(self):
-        raise RuntimeError("Cannot reverse a RecordHistory")
+        raise RuntimeError("Cannot reverse a Trajectory")
 
     @property
-    def standard_record_spec(self) -> RecordSpec:
+    def standard_frame_spec(self) -> TrajectoryFrameSpec:
         if not len(self):
-            return RecordSpec()
+            return TrajectoryFrameSpec()
 
         return self._std_spec
 
     @property
-    def nonstandard_record_spec(self) -> RecordSpec:
+    def nonstandard_frame_spec(self) -> TrajectoryFrameSpec:
         return self._nonstd_spec
