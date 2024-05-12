@@ -10,13 +10,12 @@ jupytext:
 kernelspec:
   display_name: Python 3.11 (loqs)
   language: python
-  name: loqs 
+  name: loqs
 ---
 
 # Example: Distance-3 Surface Code
 
 Working on making a nice interface for the d=3 surface codes from {cite}`tomita_lowdistance_2014`.
-
 
 ```{code-cell}
 from loqs.codepacks import d3_surface_code as codepack
@@ -26,13 +25,13 @@ from loqs.codepacks import d3_surface_code as codepack
 
 One of the nice things about the surface code is that the stabilizers can be described in a tileable way.
 
-```{image} ./images/TomitaSvoreFig2.png
+```{image} ../images/TomitaSvoreFig2.png
 :name: fig2
 :width: 400px
 ```
 (Reproduced from {cite}`tomita_lowdistance_2014`)
 
-```{image} ./images/TomitaSvoreFig4b.png
+```{image} ../images/TomitaSvoreFig4b.png
 :name: fig4b
 :width: 400px
 ```
@@ -65,7 +64,6 @@ print(str(c))
 
 There are a few advanced modes that can be used. We can also drop certain CNOTs in the case of lower weight stabilizer checks that maintain the same schedule to avoid CNOT collisions, or the midcircuit measurement can be removed in case one wants to generate the syndrome preparation circuit rather than the syndrome extraction circuit.
 
-
 ```{code-cell}
 # Pass in Nones to skip some checks
 c = codepack.surface_factory.get_circuit("X", ["A0", "D0", None, "D2", None])
@@ -82,7 +80,7 @@ print(str(c))
 
 A syndrome circuit can now be quickly specified as a `PlaquetteCircuit` by giving the factory (from above) and the stabilizer types and qubit lists, which is essentially the information provided in the figure below.
 
-```{image} ./images/TomitaSvoreFig1.png
+```{image} ../images/TomitaSvoreFig1.png
 :name: fig1
 :width: 400px
 ```

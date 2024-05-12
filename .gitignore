@@ -9,8 +9,10 @@ htmlcov
 
 docs/_build
 docs/_autosummary
+docs/*.ipynb
 
 .vscode
 venv*/
 loqs.egg-info/
+
 .DS_Store

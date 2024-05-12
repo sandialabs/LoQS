@@ -217,3 +217,25 @@ jupyter-book myst init --kernel loqs <name>.md
 ```
 
 or by simply copying the metadata block to the new file.
+
+#### Syncing MyST Markdown and Jupyter Notebooks
+
+The MyST Markdown is great for generating documentation for Sphinx, but less interactive than a Jupyter notebook.
+For users with a local copy of the codebase or developers creating tutorials,
+it can be convenient to work with the Jupyter notebook instead or switch back and forth between the two formats.
+
+Luckily, conversion can be easily accomplished:
+
+```
+jupytext --to ipynb <file>.md # Convert from MyST Markdown to a Jupyter notebook
+jupytext --to myst <file>.ipynb # Convert from a Jupyter notebook to MyST Markdown
+```
+
+Once the paired notebooks are created, changes can be easily propagated between the two:
+
+```
+jupytext --sync <file>.ipynb
+```
+
+Note that only the MyST Markdown will be commited to the repo,
+so make sure to convert/sync to the MyST Markdown version of the file to save your work.
