@@ -8,7 +8,6 @@ orchestrate the execution of logical qubit simulation.
 from .trajectory import TrajectoryFrame, Trajectory
 
 from .instruction import (
-    InstructionSpec,
     Instruction,
     CompositeInstruction,
     InstructionStack,

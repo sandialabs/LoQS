@@ -1,2 +1,4 @@
-"""Common types of Operations
+"""TODO
 """
+
+from .mockoperation import MockOperation

@@ -1,109 +1,166 @@
-"""Base classes for Instructions.
-
-Instructions are generally objects that take state information (i.e. from one or
-several Records or a RecordHistory) and propagate or generate new state
-information into a new Record.
+"""TODO
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Iterable, MutableSequence
-from typing import Optional, Type, TypeAlias, Union, get_args
+from typing import TypeAlias
 
+from loqs.core import TrajectoryFrame, Trajectory
 from loqs.utils import IsCastable, IsRecordable
-from loqs.core import TrajectoryFrame, Trajectory, TrajectoryFrameSpec
+from loqs.utils.classproperty import abstractroclassproperty
 
 
-class InstructionSpec:
+class Instruction(IsCastable, IsRecordable):
+
     def __init__(
         self,
-        input_type: Type,
-        input_spec: TrajectoryFrameSpec.Castable,
-        output_spec: TrajectoryFrameSpec.Castable,
-    ):
-        assert input_type in [TrajectoryFrame] + get_args(
-            Trajectory.Castable
-        ), "Input type Must be Record or RecordHistory.Castable"
-        self._input_type = input_type
-        self._input_spec = TrajectoryFrameSpec.cast(input_spec)
-        self._output_spec = TrajectoryFrameSpec.cast(output_spec)
+        name: str = "(Unnamed)",
+        parent: Instruction | InstructionStack | None = None,
+    ) -> None:
+        self.name = name
+        self.parent = parent
 
-    @property
-    def minimum_input_spec(self) -> TrajectoryFrameSpec:
-        return self._input_spec
+    # Derived classes should define Castable also
 
-    @property
-    def minimum_output_spec(self) -> TrajectoryFrameSpec:
-        return self._output_spec
+    @abstractroclassproperty
+    def input_frame_spec(self) -> dict[str, type[IsRecordable]]:
+        """Minimum specification of an input :class:`Trajectory`."""
+        pass
 
-    def check_record(
+    def num_req_input_frames(self) -> int:
+        """Minimum number of frames needed in the input :class:`Trajectory`.
+
+        Defaults to 1, which only looks at the previous frame and allows
+        a single :class:`TrajectoryFrame` to be passed in.
+        An :class:`Instruction` that requires more history should override
+        this to specify the number of frames needed.
+        """
+        return 1
+
+    @abstractroclassproperty
+    def output_frame_spec(self) -> dict[str, type[IsRecordable]]:
+        """Minimum specification of the returned :class:`TrajectoryFrame`."""
+        pass
+
+    def check_frame(
         self,
-        record_object: Union[TrajectoryFrameSpec, TrajectoryFrame, Trajectory],
+        traj_obj: Trajectory.Castable,
         check_input: bool = True,
-        check_output: bool = True,
+        check_output: bool = False,
     ) -> bool:
-        if isinstance(record_object, TrajectoryFrame):
-            spec = record_object.spec
-        elif isinstance(record_object, Trajectory):
-            spec = record_object.standard_record_spec
-        else:
-            spec = record_object
+        """Checks whether a frame matches the input or output frame spec.
+
+        Parameters
+        ----------
+        traj_obj:
+            A Trajectory-type object that holds input state information
+
+        check_input:
+            Whether to check keys/types against the :meth:`InputFrameSpec`.
+            By default, this is True (i.e. we are only checking input frames).
+
+        check_output:
+            Whether to check keys/types against the :meth:`OutputFrameSpec`.
+            By default, this is False (i.e. we are only checking input frames).
+
+        Returns
+        -------
+            True if the Trajectory-type object matches in frame specification,
+            False otherwise
+        """
+        try:
+            traj = Trajectory.cast(traj_obj)
+        except Exception as e:
+            raise ValueError(
+                "Instruction input must be castable to a Trajectory"
+            ) from e
+
+        frame_spec = traj.std_frame_spec
 
         if check_input:
-            for rec_key, rec_class in self.inputs:
-                if not spec.check_class(rec_key, rec_class):
+            if len(traj) < self.num_req_input_frames:
+                # We don't have a long enough history for this Instruction
+                return False
+
+            for rec_key, rec_class in self.input_frame_spec.items():
+                if rec_key in frame_spec and issubclass(
+                    frame_spec[rec_key], rec_class
+                ):
+                    # We don't have a piece of information this Instruction needs
                     return False
 
         if check_output:
-            for rec_key, rec_class in self.outputs:
-                if not spec.check_class(rec_key, rec_class):
+            for rec_key, rec_class in self.output_frame_spec.items():
+                if rec_key in frame_spec and issubclass(
+                    frame_spec[rec_key], rec_class
+                ):
+                    # We don't have a piece of information this Instruction would have outputted
                     return False
 
-        # If everything checked out, we can act on this Record/RecordSpec
         return True
 
-
-class Instruction(IsRecordable, IsCastable):
-    def __init__(
-        self,
-        instruction_spec: InstructionSpec,
-        name: Optional[str] = None,
-        parent: Optional[Instruction] = None,
-    ) -> None:
-        self._spec = instruction_spec
-        self._name = name
-        self._parent = parent
-
-    @property
-    def name(self) -> str:
-        return "(Unnamed)" if self._name is None else self._name
-
-    @property
-    def instruction_spec(self) -> InstructionSpec:
-        return self._spec
-
-    @property
-    def parent(self) -> Optional[Instruction]:
-        return self._parent
-
     @abstractmethod
-    def apply(
-        self, input: Union[TrajectoryFrame, Trajectory.Castable]
-    ) -> TrajectoryFrame:
+    def apply_unsafe(self, input: Trajectory.Castable) -> TrajectoryFrame:
+        """Workhorse function for generating a new :class:`TrajectoryFrame`.
+
+        This is an application of the :class:`Instruction` with no safety checks.
+        Derived classes should implement this method to enact whatever transformation
+        they would like on the state.
+
+        Parameters
+        ----------
+        input:
+            The input frame/trajectory information
+
+        Returns
+        -------
+        output_frame:
+            The new output frame
+        """
         pass
+
+    def apply(self, input: Trajectory.Castable, **kwargs) -> TrajectoryFrame:
+        """Generate a new :class:`TrajectoryFrame` from the input :class:`Trajectory`.
+
+        Parameters
+        ----------
+        input:
+            The input frame/trajectory information
+
+        kwargs:
+            Additional kwargs to be passed on to the underlying :meth:`apply_unsafe`
+            call. See that function documentation for more details.
+
+        Returns
+        -------
+        output_frame:
+            The new output frame
+        """
+        assert self.check_frame(
+            input, check_input=True, check_output=False
+        ), "Input frame does not match required specification"
+
+        output_frame = self._apply(input, **kwargs)
+
+        assert self.check_frame(
+            input, check_input=True, check_output=False
+        ), "Output frame does not match required specification"
+
+        return output_frame
 
 
 class CompositeInstruction(Instruction):
 
     @property
     def Castable(self) -> TypeAlias:
-        return Union[CompositeInstruction, Iterable[Instruction]]
+        return CompositeInstruction | Iterable[Instruction]
 
     def __init__(
         self,
         instructions: CompositeInstruction.Castable,
-        parent: Optional[Instruction] = None,
+        parent: Instruction | None = None,
     ) -> None:
         if isinstance(instructions, CompositeInstruction):
             self.instructions = instructions.instructions
@@ -117,11 +174,11 @@ class InstructionStack(MutableSequence[Instruction], IsRecordable, IsCastable):
 
     @property
     def Castable(self) -> TypeAlias:
-        return Union[InstructionStack, Iterable[Instruction], Instruction]
+        return InstructionStack | Iterable[Instruction] | Instruction
 
     def __init__(
         self,
-        instructions: Optional[InstructionStack.Castable] = None,
+        instructions: InstructionStack.Castable | None = None,
         static: bool = True,
     ) -> None:
         """Initialize an InstructionStack."""
