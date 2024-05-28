@@ -4,15 +4,18 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Iterable, MutableSequence
-from typing import TypeAlias
+from collections.abc import Iterable, Sequence
 
-from loqs.core import TrajectoryFrame, Trajectory
-from loqs.utils import IsCastable, IsRecordable
-from loqs.utils.classproperty import abstractroclassproperty
+from loqs.core import HistoryFrame, HistoryStack
+from loqs.core import Recordable
+from loqs.internal.castable import Castable
+from loqs.internal.classproperty import (
+    abstractroclassproperty,
+    roclassproperty,
+)
 
 
-class Instruction(IsCastable, IsRecordable):
+class Instruction(Castable, Recordable):
 
     def __init__(
         self,
@@ -22,10 +25,13 @@ class Instruction(IsCastable, IsRecordable):
         self.name = name
         self.parent = parent
 
-    # Derived classes should define Castable also
+    @abstractroclassproperty
+    def CastableTypes(cls) -> type:
+        """The types of objects that can be cast to an :class:`Instruction`."""
+        pass
 
     @abstractroclassproperty
-    def input_frame_spec(self) -> dict[str, type[IsRecordable]]:
+    def input_frame_spec(self) -> dict[str, type[Recordable]]:
         """Minimum specification of an input :class:`Trajectory`."""
         pass
 
@@ -40,13 +46,13 @@ class Instruction(IsCastable, IsRecordable):
         return 1
 
     @abstractroclassproperty
-    def output_frame_spec(self) -> dict[str, type[IsRecordable]]:
+    def output_frame_spec(self) -> dict[str, type[Recordable]]:
         """Minimum specification of the returned :class:`TrajectoryFrame`."""
         pass
 
     def check_frame(
         self,
-        traj_obj: Trajectory.Castable,
+        traj_obj: HistoryStack.Castable,
         check_input: bool = True,
         check_output: bool = False,
     ) -> bool:
@@ -71,7 +77,7 @@ class Instruction(IsCastable, IsRecordable):
             False otherwise
         """
         try:
-            traj = Trajectory.cast(traj_obj)
+            traj = HistoryStack.cast(traj_obj)
         except Exception as e:
             raise ValueError(
                 "Instruction input must be castable to a Trajectory"
@@ -102,7 +108,7 @@ class Instruction(IsCastable, IsRecordable):
         return True
 
     @abstractmethod
-    def apply_unsafe(self, input: Trajectory.Castable) -> TrajectoryFrame:
+    def apply_unsafe(self, input: HistoryStack.Castable) -> HistoryFrame:
         """Workhorse function for generating a new :class:`TrajectoryFrame`.
 
         This is an application of the :class:`Instruction` with no safety checks.
@@ -121,7 +127,7 @@ class Instruction(IsCastable, IsRecordable):
         """
         pass
 
-    def apply(self, input: Trajectory.Castable, **kwargs) -> TrajectoryFrame:
+    def apply(self, input: HistoryStack.Castable, **kwargs) -> HistoryFrame:
         """Generate a new :class:`TrajectoryFrame` from the input :class:`Trajectory`.
 
         Parameters
@@ -153,86 +159,87 @@ class Instruction(IsCastable, IsRecordable):
 
 class CompositeInstruction(Instruction):
 
-    @property
-    def Castable(self) -> TypeAlias:
-        return CompositeInstruction | Iterable[Instruction]
-
     def __init__(
         self,
-        instructions: CompositeInstruction.Castable,
+        instructions: CastableTypes,
+        name: str = "(Unnamed composite)",
         parent: Instruction | None = None,
     ) -> None:
+        super().__init__(name=name, parent=parent)
+
         if isinstance(instructions, CompositeInstruction):
             self.instructions = instructions.instructions
             self.parent = instructions.parent if parent is None else parent
         else:
+            # TODO: Type-check
             self.instructions = instructions
-            self.parent = parent
+
+    @roclassproperty
+    def CastableTypes(self) -> type:
+        return CompositeInstruction | Iterable[Instruction]
+
+    def apply_unsafe(self, input: HistoryStack.Castable) -> HistoryFrame:
+        """Workhorse function for generating a new :class:`TrajectoryFrame`.
+
+        This is an application of the :class:`Instruction` with no safety checks.
+
+        For :class:`CompositeInstruction`, this simply calls the underlying
+        :meth:`apply_unsafe` methods of the contained :class:`Instruction` objects,
+        feeding forward the resulting frames as needed.
+
+        Parameters
+        ----------
+        input:
+            The input frame/trajectory information
+
+        Returns
+        -------
+        output_frame:
+            The new output frame
+        """
+        output = HistoryStack.cast(input)
+        for instruction in self.instructions:
+            output.append(instruction.apply_unsafe(output))
+        return output
 
 
-class InstructionStack(MutableSequence[Instruction], IsRecordable, IsCastable):
+class InstructionStack(Sequence[Instruction], Castable, Recordable):
 
-    @property
-    def Castable(self) -> TypeAlias:
-        return InstructionStack | Iterable[Instruction] | Instruction
-
-    def __init__(
-        self,
-        instructions: InstructionStack.Castable | None = None,
-        static: bool = True,
-    ) -> None:
+    def __init__(self, instructions: CastableTypes | None = None) -> None:
         """Initialize an InstructionStack."""
-        self.static = False  # Just for initialization
-
         if isinstance(instructions, InstructionStack):
             self._instructions = instructions._instructions
+        elif isinstance(instructions, Instruction):
+            self._instructions = [instructions]
         else:
-            if isinstance(instructions, Instruction):
-                instructions = [instructions]
+            assert all(
+                [isinstance(inst, Instruction) for inst in instructions]
+            ), "InstructionStack can only hold Instructions"
 
-            for inst in instructions:
-                # This should use .insert under the hool and have proper logic
-                self.append(inst)
+            self._instructions = instructions
 
-        self.static = static
+        for inst in self._instructions:
+            inst.parent = self
+
+    @roclassproperty
+    def CastableTypes(self) -> type:
+        return InstructionStack | Iterable[Instruction] | Instruction
 
     def __getitem__(self, i):
         return self._instructions[i]
 
-    def __setitem__(self, i, item):
-        if self.static:
-            raise RuntimeError(
-                "Cannot set an item in a static "
-                + "InstructionStack. First set .static to False."
-            )
-        self._instructions[i] = item
-
-    def __delitem__(self, i):
-        if self.static:
-            raise RuntimeError(
-                "Cannot delete an item in a static "
-                + "InstructionStack. First set .static to False."
-            )
-        del self._instructions[i]
-
-    def __iter__(self):
-        return iter(self._instructions)
-
     def __len__(self):
         return len(self._instructions)
 
-    def insert(self, i, item):
-        if self.static:
-            raise RuntimeError(
-                "Cannot insert an item into a static "
-                + "InstructionStack. First set .static to False."
-            )
+    def append_instruction(self, item):
+        return self.insert_instruction(len(self), item)
 
-        assert isinstance(
-            item, Instruction
-        ), "InstructionStack can only hold Instructions"
+    def delete_instruction(self, i):
+        instructions = self._instructions.copy()
+        del instructions[i]
+        return InstructionStack(instructions)
 
-        return self._instructions.insert(i, item)
-
-    def reverse(self):
-        raise RuntimeError("Cannot reverse an InstructionStack")
+    def insert_instruction(self, i, item):
+        instructions = self._instructions.copy()
+        instructions.insert(i, item)
+        return InstructionStack(instructions)

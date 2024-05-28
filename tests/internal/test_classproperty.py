@@ -4,7 +4,7 @@
 from abc import abstractmethod
 import pytest
 
-from loqs.utils import (
+from loqs.internal.classproperty import (
     roclassproperty,
     abstractroclassproperty,
     HasROClassProperties,

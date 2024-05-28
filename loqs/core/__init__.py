@@ -5,7 +5,10 @@ orchestrate the execution of logical qubit simulation.
 """
 
 # First for import order reasons
-from .trajectory import TrajectoryFrame, Trajectory
+from .recordable import Recordable
+
+# Second for import order reasons
+from .history import HistoryFrame, HistoryStack
 
 from .instruction import (
     Instruction,

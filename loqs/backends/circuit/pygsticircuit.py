@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Optional, Type, TypeAlias, Union, Unpack
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.utils.classproperty import roclassproperty
+from loqs.internal.classproperty import roclassproperty
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
@@ -15,8 +14,8 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: Castable,
-        qubit_labels: Optional[Iterable[QubitTypes]] = None,
+        circuit: CastableTypes,
+        qubit_labels: Iterable[QubitTypes] | None = None,
         finalized: bool = True,
     ) -> None:
         try:
@@ -36,17 +35,17 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             except Exception as e:
                 raise ValueError("Failed to cast to pyGSTi circuit") from e
 
-        if self.finalized and finalized is False:
-            self._circuit = self.circuit.copy(editable=True)
+        # Keep our version of the circuit mutable
+        self._circuit = self.circuit.copy(editable=True)
 
-        super().__init__(circuit, qubit_labels, finalized)
+        super().__init__(circuit, qubit_labels)
 
     @roclassproperty
     def name(self) -> str:
         return "pyGSTi"
 
     @roclassproperty
-    def Castable(self) -> TypeAlias:
+    def CastableTypes(self) -> type:
         """Types we can cast to a pyGSTi circuit.
 
         These include another PyGSTiPhysicalCircuit, a bare pyGSTi Circuit,
@@ -60,15 +59,15 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 "Failed import, cannot use pyGSTi as backend"
             ) from e
 
-        return Union[
-            PyGSTiPhysicalCircuit,
-            Circuit,
-            str,
-            Iterable[self.OperationTypes],
-        ]
+        return (
+            PyGSTiPhysicalCircuit
+            | Circuit
+            | str
+            | Iterable[self.OperationTypes]
+        )
 
     @roclassproperty
-    def CircuitType(self) -> Type:
+    def CircuitType(self) -> type:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
         try:
             from pygsti.circuits import Circuit
@@ -79,12 +78,12 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return Circuit
 
     @roclassproperty
-    def QubitTypes(self) -> TypeAlias:
+    def QubitTypes(self) -> type:
         """PyGSTi backend qubit label types (strs and ints)"""
-        return Union[str, int]
+        return str | int
 
     @roclassproperty
-    def LayerTypes(self) -> TypeAlias:
+    def LayerTypes(self) -> type:
         """Helper type alias for things allowed to be in circuit layer
 
         For PyGSTi, this would be:
@@ -101,70 +100,56 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 "Failed import, cannot use pyGSTi as backend"
             ) from e
 
-        return Union[
-            str,  # e.g., gate names
-            Iterable[str, self.QubitTypes],  # e.g., gate name and one qubit
-            Iterable[
-                str, Unpack[Iterable[self.QubitTypes]]
-            ],  # e.g., gate name and tuple of qubits
-            Label,  # or an actual pyGSTi label
-        ]
+        return (
+            str
+            | Iterable[str, self.QubitTypes]  # e.g., gate names
+            | Iterable[  # e.g., gate name and one qubit
+                str, Iterable[self.QubitTypes]
+            ]
+            | Label  # e.g., gate name and tuple of qubits  # or an actual pyGSTi label
+        )
 
     @roclassproperty
-    def OperationTypes(self) -> TypeAlias:
+    def OperationTypes(self) -> type:
         """PyGSTi backend operations type (one or several gates/layers)"""
-        return Union[self.LayerTypes, Iterable[self.LayerTypes]]
-
-    @property
-    def finalized(self) -> bool:
-        return self.circuit._static
+        return self.LayerTypes | Iterable[self.LayerTypes]
 
     @property
     def qubit_labels(self) -> Iterable[QubitTypes]:
         return self.circuit.line_labels
 
-    def append_inplace(self, circuit: CircuitType) -> None:
-        super().append_inplace(circuit)
-        try:
-            self.circuit.append_circuit_inplace(circuit.circuit)
-        except AssertionError as e:
-            raise AssertionError(
-                "Underlying circuit is static.",
-                "Try using .copy(finalized=False) first",
-            ) from e
+    def append_inplace(self, circuit: BasePhysicalCircuit) -> None:
+        # Convert to a pyGSTi circuit
+        circuit = PyGSTiPhysicalCircuit.cast(circuit)
 
-    def copy(self, finalized: bool = True) -> PyGSTiPhysicalCircuit:
-        return PyGSTiPhysicalCircuit(self.circuit, finalized=finalized)
+        # Base class checks
+        super().append_inplace(circuit)
+
+        self.circuit.append_circuit_inplace(circuit.circuit)
+
+    def copy(self) -> PyGSTiPhysicalCircuit:
+        return PyGSTiPhysicalCircuit(self.circuit)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Iterable[QubitTypes]
     ) -> None:
+        # Base class checks
         super().delete_qubits_inplace(qubits_to_delete)
-        try:
-            self.circuit.delete_lines(qubits_to_delete, delete_straddlers=True)
-        except AssertionError as e:
-            raise AssertionError(
-                "Underlying circuit is static.",
-                "Try using .copy(finalized=False) first",
-            ) from e
 
-    def finalize_inplace(self) -> None:
-        self.circuit.done_editing()
+        self.circuit.delete_lines(qubits_to_delete, delete_straddlers=True)
 
     def map_qubit_labels_inplace(
         self, qubit_mapping: Mapping[QubitTypes, QubitTypes]
     ) -> None:
+        # Pass through any unspecified qubits
         complete_mapping = {
             q: qubit_mapping.get(q, q) for q in self.circuit.line_labels
         }
+
+        # Base class checks
         super().map_qubit_labels_inplace(qubit_mapping)
-        try:
-            self.circuit.map_state_space_labels_inplace(complete_mapping)
-        except AssertionError as e:
-            raise AssertionError(
-                "Underlying circuit is static.",
-                "Try using .copy(finalized=False) first",
-            ) from e
+
+        self.circuit.map_state_space_labels_inplace(complete_mapping)
 
     def set_qubit_labels_inplace(
         self, qubit_labels: Iterable[QubitTypes]
@@ -186,12 +171,11 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     def process_circuit(
         self,
-        qubit_mapping: Optional[Mapping[QubitTypes, QubitTypes]] = None,
-        omit_gates: Optional[Iterable[OperationTypes]] = None,
+        qubit_mapping: Mapping[QubitTypes, QubitTypes] | None = None,
+        omit_gates: Iterable[OperationTypes] | None = None,
         delete_idle_layers: bool = False,
-        finalized: bool = True,
     ) -> PyGSTiPhysicalCircuit:
-        processed = self.copy(finalized=False)
+        processed = self.copy()
 
         if qubit_mapping is not None:
             processed.map_qubit_labels_inplace(qubit_mapping)
@@ -202,8 +186,5 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
         if delete_idle_layers:
             processed.circuit.delete_idle_layers_inplace()
-
-        if finalized:
-            processed.finalize_inplace()
 
         return processed

@@ -3,27 +3,16 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Iterable
-from enum import StrEnum
 
+from loqs.backends import OpRep
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.utils.classproperty import (
-    abstractroclassproperty,
-    ABCWithROClassProperties,
-)
+from loqs.internal.castable import Castable
+from loqs.internal.classproperty import abstractroclassproperty
 
 
-class OpRep(StrEnum):
-    """TODO"""
-
-    UNITARY = "Unitary"
-    PTM = "Pauli transfer matrix"
-    QSIM_SUPEROPERATOR = "QuantumSim superoperator"
-    # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
-
-
-class BaseNoiseModel(ABCWithROClassProperties):
+class BaseNoiseModel(Castable):
     """Base class for an object that holds noisy operation specifications.
 
     This class is primarily designed to translate between a circuit description
@@ -36,13 +25,13 @@ class BaseNoiseModel(ABCWithROClassProperties):
         pass
 
     @abstractroclassproperty
-    def CircuitBackendInputs(self) -> Iterable[BasePhysicalCircuit]:
-        """The types of circuit backends allowed as "input" to this model."""
+    def CircuitBackendInputs(self) -> type[BasePhysicalCircuit]:
         pass
+        """The types of circuit backends allowed as "input" to this model."""
 
     @abstractroclassproperty
-    def OpRepOutputs(self) -> Iterable[OpRep]:
-        """The type of operator representations this model can "output" to."""
+    def OpRepOutputs(self) -> type[OpRep]:
+        """The types of operator representations this model can "output" to."""
         pass
 
     @abstractmethod

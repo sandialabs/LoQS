@@ -1,10 +1,10 @@
 """:class:`MockState` definition.
 """
 
-from loqs.utils import IsRecordable
+from loqs.core import Recordable
 
 
-class MockState(IsRecordable):
+class MockState(Recordable):
     """A "mock" state.
 
     This simply holds a string that indicates a "state".

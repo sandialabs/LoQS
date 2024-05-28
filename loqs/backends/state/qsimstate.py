@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Optional, Type, TypeAlias, Union
 
-from loqs.backends.model import OpRep
+from loqs.backends import OpRep
 from loqs.backends.state import BaseQuantumState
-from loqs.utils.classproperty import roclassproperty
+from loqs.internal.classproperty import roclassproperty
 
 
 class QSimQuantumState(BaseQuantumState):
@@ -19,16 +18,20 @@ class QSimQuantumState(BaseQuantumState):
         return "QuantumSim"
 
     @roclassproperty
-    def QubitTypes(self) -> TypeAlias:
+    def CastableTypes(self) -> type:
+        return QSimQuantumState | int | self.StateType
+
+    @roclassproperty
+    def QubitTypes(self) -> type:
         # Technically not a true restriction of SparseDM, but keeping it simple
-        return Union[str, int]
+        return str | int
 
     @roclassproperty
-    def OpRepInputs(self) -> Iterable[OpRep]:
-        return [OpRep.QSIM_SUPEROPERATOR]
+    def OpRepInputs(self) -> type[OpRep]:
+        return OpRep.QSIM_SUPEROPERATOR
 
     @roclassproperty
-    def StateType(self) -> Type:
+    def StateType(self) -> type:
         try:
             from quantumsim.sparsedm import SparseDM
         except ImportError as e:
@@ -56,8 +59,8 @@ class QSimQuantumState(BaseQuantumState):
 
     def __init__(
         self,
-        state: Union[StateType, QSimQuantumState, int],
-        qubit_labels: Optional[Iterable[QubitTypes]] = None,
+        state: CastableTypes,
+        qubit_labels: Iterable[QubitTypes] | None = None,
     ) -> None:
         """Initialize a BaseQuantumState.
 

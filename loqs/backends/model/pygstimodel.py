@@ -6,29 +6,28 @@ from __future__ import annotations
 from collections.abc import Iterable
 import functools
 import itertools
-from typing import TypeAlias, Union
 import numpy as np
 
-from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.backends.model import BaseNoiseModel, OpRep
-from loqs.utils.classproperty import roclassproperty
+from loqs.backends import OpRep
+from loqs.backends.circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from loqs.internal.castable import Castable
+from loqs.internal.classproperty import roclassproperty
 
 
-class PyGSTiNoiseModel(BaseNoiseModel):
+class PyGSTiNoiseModel(Castable):
     """Model backend for handling ``pygsti.model.OpModel`` objects."""
 
     @roclassproperty
-    def AllowedModelTypes(self) -> TypeAlias:
+    def CastableTypes(self) -> type:
         try:
             from pygsti.models import ExplicitOpModel, ImplicitOpModel
         except ImportError as e:
             raise ImportError(
                 "Failed import, cannot use pyGSTi as backend"
             ) from e
-        return Union[ExplicitOpModel, ImplicitOpModel]
+        return ExplicitOpModel | ImplicitOpModel
 
-    def __init__(self, model: AllowedModelTypes) -> None:
+    def __init__(self, model: CastableTypes) -> None:
         """Initialize a PyGSTiModelBackend.
 
         Parameters
@@ -58,13 +57,13 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         return "pyGSTi"
 
     @roclassproperty
-    def CircuitBackendInputs(self) -> Iterable[BasePhysicalCircuit]:
+    def CircuitBackendInputs(self) -> type[BasePhysicalCircuit]:
         """PyGSTi backend circuit type (pygsti.circuits.Circuit)"""
-        return [PyGSTiPhysicalCircuit]
+        return PyGSTiPhysicalCircuit
 
     @roclassproperty
-    def OpRepOutputs(self) -> Iterable[OpRep]:
-        return [OpRep.UNITARY, OpRep.PTM, OpRep.QSIM_SUPEROPERATOR]
+    def OpRepOutputs(self) -> type[OpRep]:
+        return OpRep.UNITARY | OpRep.PTM | OpRep.QSIM_SUPEROPERATOR
 
     def get_operator_reps(
         self, circuit: PyGSTiPhysicalCircuit, reptype: OpRep

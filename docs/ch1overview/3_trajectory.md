@@ -1,4 +1,6 @@
-# Records
+
+
+# Trajectories and Frames
 
 ```{warning}
 This chapter is currently a plan/outline, and may not represent the exact implementation once completed. 
@@ -9,11 +11,12 @@ Since this is potentially different for every hardware platform, architecture, a
 
 ## Overview
 
-The expected structure of the three `Record`-type objects is as follows:
+Unfortunately, the word "state" quickly becomes overloaded when talking about simulating quantum devices.
+To avoid this, all stateful information related to a simulated run of a logical circuit is held in "Trajectory"-type objects.
+There are two "Trajectory"-type objects:
 
-* All state information is stored in `Record` objects.
-* These are potentially user-defined and specified using a `RecordSpec`.
-* The output of an executed `QuantumProgram` is a series of `Record` objects, which is stored in a `RecordHistory`
+1. `TrajectoryFrame`: This is a snapshot of the relevant state information at a single point in the simulated logical circuit, often directly after an operation has been applied.
+2. `Trajectory`: This is a stack-like list of `TrajectoryFrame` objects that together describe the entire simulatied logical circuit. This would be the output of an entire `QuantumProgram`.
 
 ## The `RecordSpec`
 
@@ -43,3 +46,4 @@ It may be the case that some objects (such as the quantum state) are too large t
 This is essentially a list of `Record` objects.
 TODO on the analysis this can do, but it at least stores the "standard" `RecordSpec` shared by all of its `Record` objects and the "nonstandard" `RecordSpec` for things only some `Records` store.
 
++++

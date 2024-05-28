@@ -1,9 +1,7 @@
 """Class definition for QuantumProgram
 """
 
-from typing import Optional
-
-from loqs.core import QECCode, InstructionStack, Trajectory
+from loqs.core import QECCode, InstructionStack, HistoryStack
 
 
 class QuantumProgram:
@@ -13,7 +11,7 @@ class QuantumProgram:
         self,
         code: QECCode,
         input_stack: InstructionStack,
-        initial_history: Optional[Trajectory] = None,
+        initial_history: HistoryStack | None = None,
     ) -> None:
         """Initialize a QuantumProgram from a list of operations."""
         self.code = code

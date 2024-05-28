@@ -5,16 +5,13 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Iterable
-from typing import Type, TypeAlias
 
-from loqs.backends.model import OpRep
-from loqs.utils.classproperty import (
-    abstractroclassproperty,
-    ABCWithROClassProperties,
-)
+from loqs.backends import OpRep
+from loqs.internal.castable import Castable
+from loqs.internal.classproperty import abstractroclassproperty
 
 
-class BaseQuantumState(ABCWithROClassProperties):
+class BaseQuantumState(Castable):
     """Base class for an object that holds a (physical) quantum state."""
 
     _state: StateType
@@ -26,7 +23,12 @@ class BaseQuantumState(ABCWithROClassProperties):
         raise NotImplementedError("Derived class should implement this")
 
     @abstractroclassproperty
-    def QubitTypes(self) -> TypeAlias:
+    def CastableTypes(self) -> type:
+        """Types that this backend can cast to an underlying state object."""
+        pass
+
+    @abstractroclassproperty
+    def QubitTypes(self) -> type:
         """Possible types for a state's qubit labels.
 
         In general, these will be the only types we accept for arguments
@@ -35,12 +37,12 @@ class BaseQuantumState(ABCWithROClassProperties):
         pass
 
     @abstractroclassproperty
-    def OpRepInputs(self) -> Iterable[OpRep]:
+    def OpRepInputs(self) -> type[OpRep]:
         """The "input" operator representations that can act on this state."""
         pass
 
     @abstractroclassproperty
-    def StateType(self) -> Type:
+    def StateType(self) -> type:
         """The type of underlying state objects handled by this backend."""
         pass
 
