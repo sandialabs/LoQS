@@ -20,8 +20,4 @@ from .qeccode import QECCode
 
 from .quantumprogram import QuantumProgram
 
-from .templatedcircuit import (
-    CircuitTemplateFactory,
-    CircuitTemplateSpec,
-    TemplatedCircuit,
-)
+from .templatedcircuit import TemplatedCircuit

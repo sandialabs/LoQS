@@ -1,4 +1,4 @@
 """Noise model backend classes."""
 
-from .basemodel import BaseNoiseModel
+from .basemodel import BaseNoiseModel, OpRep
 from .pygstimodel import PyGSTiNoiseModel

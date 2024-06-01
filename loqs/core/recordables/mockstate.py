@@ -1,7 +1,12 @@
 """:class:`MockState` definition.
 """
 
+from typing import TypeAlias
+
 from loqs.core import Recordable
+
+
+MockStateCastableTypes: TypeAlias = "MockState | str"
 
 
 class MockState(Recordable):
@@ -12,10 +17,16 @@ class MockState(Recordable):
     the high-level flow of a class:`QuantumProgram`.
     """
 
-    def __init__(self, state: str) -> None:
+    state: str
+    """Underlying "state"."""
+
+    def __init__(self, state: MockStateCastableTypes) -> None:
         """Initialize a :class:`MockState`.
 
         Parameters
         ----------
         """
-        self.state = state
+        if isinstance(state, MockState):
+            self.state = state.state
+        else:
+            self.state = state

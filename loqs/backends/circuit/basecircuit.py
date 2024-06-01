@@ -4,24 +4,31 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Iterable, Mapping
+from collections.abc import Sequence, Mapping
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.internal.castable import Castable
-from loqs.internal.classproperty import abstractroclassproperty
+
+
+# Generic type variable to stand-in for derived class below
+T = TypeVar("T", bound="BasePhysicalCircuit")
 
 
 class BasePhysicalCircuit(Castable):
     """Base class for an object that can holds a physical quantum circuit."""
 
-    _circuit: CircuitType
-    """The underlying quantum circuit"""
+    # Class attributes
+    name: ClassVar[str]
+    """Name of circuit backend"""
+
+    CastableTypes: ClassVar[TypeAlias]
 
     ## Dunder methods
     @abstractmethod
     def __init__(
         self,
-        circuit: CastableTypes,
-        qubit_labels: Iterable[QubitTypes] | None = None,
+        circuit: object,
+        qubit_labels: Sequence | None = None,
     ) -> None:
         """Initialize a PhysicalCircuit.
 
@@ -42,49 +49,22 @@ class BasePhysicalCircuit(Castable):
     def __repr__(self) -> str:
         return f"Physical {self.name} circuit:\n{repr(self.circuit)}"
 
-    # Class properties
-    @abstractroclassproperty
-    def name(self) -> str:
-        """Name of circuit backend"""
-        return ""
-
-    @abstractroclassproperty
-    def CastableTypes(self) -> type:
-        """Types that this backend can cast to an underlying circuit object."""
-        return type(None)
-
-    @abstractroclassproperty
-    def CircuitType(self) -> type:
-        """The type of underlying circuit objects handled by this backend."""
-        return type(None)
-
-    @abstractroclassproperty
-    def QubitTypes(self) -> type:
-        """Possible types for a circuit's qubit labels.
-
-        In general, these will be the only types we accept for arguments
-        that ask for qubit labels.
-        """
-        return type(None)
-
-    @abstractroclassproperty
-    def OperationTypes(self) -> type:
-        """Possible types for a circuit's operations.
-
-        In general, these will be the only types we accept for arguments
-        that ask for operations.
-        """
-        pass
-
     # Instance properties
     @property
-    def circuit(self) -> CircuitType:
+    @abstractmethod
+    def circuit(self) -> object:
         """Getter for underlying circuit object"""
-        return self._circuit
+        pass
 
     @property
     @abstractmethod
-    def qubit_labels(self) -> Iterable[QubitTypes]:
+    def depth(self) -> int:
+        """The length/depth of the circuit (number of layers)."""
+        pass
+
+    @property
+    @abstractmethod
+    def qubit_labels(self) -> Sequence:
         """Get the qubit labels of an underlying circuit.
 
         Returns
@@ -94,7 +74,7 @@ class BasePhysicalCircuit(Castable):
         pass
 
     # Instance methods
-    def append(self, circuit: BasePhysicalCircuit) -> BasePhysicalCircuit:
+    def append(self: T, circuit: BasePhysicalCircuit) -> T:
         """Append another circuit to a copy of this circuit.
 
         Parameters
@@ -111,7 +91,6 @@ class BasePhysicalCircuit(Castable):
         modified_circuit.append_inplace(circuit)
         return modified_circuit
 
-    @abstractmethod
     def append_inplace(self, circuit: BasePhysicalCircuit) -> None:
         """Append another circuit in-place to this circuit.
 
@@ -120,21 +99,19 @@ class BasePhysicalCircuit(Castable):
         circuit:
             Circuit to append
         """
-        pass
+        self.insert_inplace(circuit, self.depth)
 
     @abstractmethod
-    def copy(self) -> BasePhysicalCircuit:
+    def copy(self: T) -> T:
         """Copy a circuit object.
 
         Returns
         -------
             Copied circuit
         """
-        return BasePhysicalCircuit(self.circuit)
+        pass
 
-    def delete_qubits(
-        self, qubits_to_delete: Iterable[QubitTypes]
-    ) -> BasePhysicalCircuit:
+    def delete_qubits(self: T, qubits_to_delete: Sequence) -> T:
         """Delete qubit lines in a copy of the provided circuit.
 
         Operations involving the deleted qubits are also removed.
@@ -154,9 +131,7 @@ class BasePhysicalCircuit(Castable):
         return modified_circuit
 
     @abstractmethod
-    def delete_qubits_inplace(
-        self, qubits_to_delete: Iterable[QubitTypes]
-    ) -> None:
+    def delete_qubits_inplace(self, qubits_to_delete: Sequence) -> None:
         """Delete qubit lines in-place in a provided circuit.
 
         Parameters
@@ -167,10 +142,7 @@ class BasePhysicalCircuit(Castable):
         # TODO: Check qubits available
         pass
 
-    def map_qubit_labels(
-        self,
-        qubit_mapping: Mapping[QubitTypes, QubitTypes],
-    ) -> BasePhysicalCircuit:
+    def map_qubit_labels(self: T, qubit_mapping: Mapping) -> T:
         """Substitute qubit labels in underlying circuit objects.
 
         Parameters
@@ -189,10 +161,39 @@ class BasePhysicalCircuit(Castable):
         modified_circuit.map_qubit_labels_inplace(qubit_mapping)
         return modified_circuit
 
+    def insert(self: T, circuit: BasePhysicalCircuit, idx: int) -> T:
+        """Insert another circuit to a copy of this circuit.
+
+        Parameters
+        ----------
+        Other Parameters:
+            Refer to :meth:`insert_inplace`
+
+        Returns
+        -------
+        modified_circuit:
+            A modified copy of the circuit.
+        """
+        modified_circuit = self.copy()
+        modified_circuit.insert_inplace(circuit, idx)
+        return modified_circuit
+
     @abstractmethod
-    def map_qubit_labels_inplace(
-        self, qubit_mapping: Mapping[QubitTypes, QubitTypes]
-    ) -> None:
+    def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
+        """Insert another circuit to this circuit.
+
+        Parameters
+        ----------
+        circuit:
+            Circuit to append
+
+        idx:
+            Starting index to begin insert. If -1, append to the end.
+        """
+        pass
+
+    @abstractmethod
+    def map_qubit_labels_inplace(self, qubit_mapping: Mapping) -> None:
         """Substitute qubit labels in underlying circuit objects.
 
         Parameters
@@ -204,9 +205,7 @@ class BasePhysicalCircuit(Castable):
         # TODO: Type check
         pass
 
-    def set_qubit_labels(
-        self, qubit_labels: Iterable[QubitTypes]
-    ) -> BasePhysicalCircuit:
+    def set_qubit_labels(self: T, qubit_labels: Sequence) -> T:
         """Set the qubit labels of an underlying circuit.
 
         Parameters
@@ -226,9 +225,7 @@ class BasePhysicalCircuit(Castable):
         return modified_circuit
 
     @abstractmethod
-    def set_qubit_labels_inplace(
-        self, qubit_labels: Iterable[QubitTypes]
-    ) -> None:
+    def set_qubit_labels_inplace(self, qubit_labels: Sequence) -> None:
         """Set the qubit labels of an underlying circuit.
 
         Note that depending on the backend, this may only adjust
@@ -246,11 +243,11 @@ class BasePhysicalCircuit(Castable):
 
     @abstractmethod
     def process_circuit(
-        self,
-        qubit_mapping: Mapping[QubitTypes, QubitTypes] | None = None,
-        omit_gates: Iterable[OperationTypes] | None = None,
+        self: T,
+        qubit_mapping: Mapping | None = None,
+        omit_gates: Sequence | None = None,
         delete_idle_layers: bool = False,
-    ) -> BasePhysicalCircuit:
+    ) -> T:
         """Helper function to provide consistent circuit processing.
 
         Parameters

@@ -7,4 +7,4 @@ by process matrices
 from . import backends
 from . import codepacks
 from . import core
-from . import utils
+from . import internal

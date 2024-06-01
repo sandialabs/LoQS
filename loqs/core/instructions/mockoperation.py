@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TypeAlias
 
 from loqs.core import Instruction, Recordable, HistoryStack, HistoryFrame
+from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import MockState
-from loqs.internal.classproperty import roclassproperty
+
+
+MockOperationCastableTypes: TypeAlias = "MockOperation | Mapping[str, str]"
+"""TODO"""
 
 
 class MockOperation(Instruction):
@@ -19,27 +24,29 @@ class MockOperation(Instruction):
     the high-level flow of a class:`QuantumProgram`.
     """
 
-    def __init__(self, state_map: CastableTypes) -> None:
+    state_map: dict[str, str]
+    """Underlying map from old states to new states"""
+
+    def __init__(self, state_map: MockOperationCastableTypes) -> None:
         """Initialize a :class:`MockOperation`.
 
         Parameters
         ----------
         """
-        self.state_map = state_map
+        if isinstance(state_map, MockOperation):
+            self.state_map = state_map.state_map
+        else:
+            self.state_map = {k: v for k, v in state_map.items()}
 
-    @roclassproperty
-    def CastableTypes(self) -> type:
-        return MockOperation | Mapping[str, str]
-
-    @roclassproperty
-    def input_frame_spec(self) -> dict[str, type[Recordable]]:
+    @property
+    def input_frame_spec(self) -> dict[str, type]:
         return {"mock_state": MockState}
 
-    @roclassproperty
-    def output_frame_spec(self) -> dict[str, type[Recordable]]:
+    @property
+    def output_frame_spec(self) -> dict[str, type]:
         return {"mock_state": MockState, "instruction": MockOperation}
 
-    def apply_unsafe(self, input: HistoryStack.Castable) -> HistoryFrame:
+    def apply_unsafe(self, input: HistoryStackCastableTypes) -> HistoryFrame:
         """Map the input :class:`MockState` forward.
 
         This
@@ -58,7 +65,7 @@ class MockOperation(Instruction):
 
         last_frame: HistoryFrame = input[-1]
 
-        old_state = last_frame["mock_state"]
+        old_state = MockState.cast(last_frame["mock_state"])
 
         try:
             new_state_str = self.state_map[old_state.state]

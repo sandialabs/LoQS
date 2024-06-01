@@ -5,41 +5,35 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from .classproperty import (
-    abstractroclassproperty,
-    ABCWithROClassProperties,
-)
 
 # Generic type variable to stand-in for derived class below
-T = TypeVar("T")
+T = TypeVar("T", bound="Castable")
 
 
-class Castable(ABCWithROClassProperties):
+class Castable:
     """Utility class for objects that are "castable".
 
     By default, a :class:`Castable` object is one that can be
     initialized from a single argument, i.e. the object
     can be passed as the first argument to the constructor and any
     remaining arguments have sensible defaults.
-
-    :class:`Castable` objects have a :attr:`CastableTypes` class property
-    which is a type for inputs that can be cast. This is
-    also handy for typing the first arg of :meth:`__init__`.
     They also have a :meth:`cast` function, which either does nothing
     if the object matches the correct type, or initializes it by calling
-    the constructor.
+    the constructor by passing the object as the first parameter.
     """
 
-    @abstractroclassproperty
-    def CastableTypes(cls) -> type:
-        """A type alias for the allowed inputs to cast().
+    def __init__(self, obj: object) -> None:
+        """Construct a :class:`Castable` object.
 
-        Typically a subset of allowed inputs to the derived class's constructor.
+        Parameters
+        ----------
+        obj:
+            Castable objects should take at least one positional argument
         """
         pass
 
     @classmethod
-    def cast(cls: T, obj: Castable) -> T:
+    def cast(cls: type[T], obj: object) -> T:
         """Cast to the derived class.
 
         This is the base implementation. Derived classes should

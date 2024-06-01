@@ -3,11 +3,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from typing import TypeAlias, overload
 
 from loqs.core.recordable import Recordable
 from loqs.internal.castable import Castable
-from loqs.internal.classproperty import roclassproperty
+
+
+HistoryFrameCastableTypes: TypeAlias = (
+    "HistoryFrame | Mapping[str, Recordable] | None"
+)
+"""Things that can be cast to :class:`HistoryFrame`."""
+
+HistoryStackCastableTypes: TypeAlias = (
+    "HistoryStack | Sequence[HistoryFrameCastableTypes] | None"
+)
+"""Things that can be cast to :class:`HistoryStack`."""
 
 
 class HistoryFrame(Mapping[str, Recordable], Castable):
@@ -20,21 +31,28 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
     prevent overriding data when the frame is intended to be immutable.
     """
 
-    def __init__(self, data: CastableTypes = None, log: str = "N/A"):
+    _data: dict
+    """Underlying dictionary to store data."""
+
+    log: str
+    """Log string for better printing."""
+
+    def __init__(
+        self, data: HistoryFrameCastableTypes = None, log: str = "N/A"
+    ):
         """TODO"""
-        if data is None:
-            data = {}
-
-        assert all(
-            [issubclass(v, Recordable) for v in data.items()]
-        ), "All values in data must be of type :class:`IsRecordable`"
-
         if isinstance(data, HistoryFrame):
             self._data = data._data.copy()
             self.log = data.log
-        else:
-            self._data = data
+        elif isinstance(data, Mapping):
+            assert all(
+                [isinstance(v, Recordable) for v in data.values()]
+            ), "All values in data must be of type :class:`IsRecordable`"
+
+            self._data = {k: v for k, v in data.items()}
             self.log = log
+        else:
+            data = {}
 
     def __getitem__(self, key: str) -> Recordable:
         return self._data[key]
@@ -42,12 +60,8 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
     def __len__(self) -> int:
         return len(self._data)
 
-    def __iter__(self) -> Iterator[Recordable]:
+    def __iter__(self) -> Iterator[str]:
         return iter(self._data)
-
-    @roclassproperty
-    def CastableTypes(self) -> type:
-        return HistoryFrame | Mapping[str, Recordable] | None
 
     @property
     def frame_spec(self):
@@ -78,32 +92,30 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
     """
 
     _history: list[HistoryFrame]
-    _std_spec: dict[str, type[Recordable]]
-    _nonstd_spec: dict[str, type[Recordable]]
+    _std_spec: dict[str, type]
+    _nonstd_spec: dict[str, type]
 
-    @roclassproperty
-    def CastableTypes(self):
-        return HistoryStack | Iterable[HistoryFrame.CastableTypes] | None
-
-    def __init__(self, history: HistoryStack.CastableTypes = None) -> None:
+    def __init__(self, history: HistoryStackCastableTypes = None) -> None:
         """Initialize a :class:`Trajectory`."""
-        if history is None:
-            history = []
-
         if isinstance(history, HistoryStack):
             self._history = history._history.copy()
-            self.std_spec = history.std_spec
-            self.nonstd_spec = history.nonstd_spec
+            self._std_spec = history._std_spec
+            self._nonstd_spec = history._nonstd_spec
         else:
             self._history = []
-            self.std_spec = {}
-            self.nonstd_spec = {}
+            self._std_spec = {}
+            self._nonstd_spec = {}
 
-            for frame in history:
-                frame = HistoryFrame.cast(frame)
-                self.append(frame)
+            if isinstance(history, Sequence):
+                for frame in history:
+                    frame = HistoryFrame.cast(frame)
+                    self.append(frame)
 
-    def __getitem__(self, i) -> HistoryFrame:
+    @overload
+    def __getitem__(self, i: int) -> HistoryFrame: ...  # noqa
+    @overload
+    def __getitem__(self, i: slice) -> Sequence[HistoryFrame]: ...  # noqa
+    def __getitem__(self, i):  # noqa
         return self._history[i]
 
     def __iter__(self) -> Iterator[HistoryFrame]:
@@ -112,7 +124,17 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
     def __len__(self) -> int:
         return len(self._history)
 
-    def append(self, item: HistoryFrame.CastableTypes) -> None:
+    @property
+    def std_frame_spec(self) -> dict[str, type]:
+        """The common specification for all frames in the stack."""
+        return self._std_spec
+
+    @property
+    def nonstd_frame_spec(self) -> dict[str, type]:
+        """Fields which are only included in some frames in the stack."""
+        return self._nonstd_spec
+
+    def append(self, item: HistoryFrameCastableTypes) -> None:
         item = HistoryFrame.cast(item)
 
         if self._std_spec is None:

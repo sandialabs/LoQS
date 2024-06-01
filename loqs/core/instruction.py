@@ -4,18 +4,25 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
+from typing import TypeAlias, TypeVar
 
-from loqs.core import HistoryFrame, HistoryStack
-from loqs.core import Recordable
+from loqs.core import HistoryFrame, HistoryStack, Recordable
+from loqs.core.history import HistoryStackCastableTypes
 from loqs.internal.castable import Castable
-from loqs.internal.classproperty import (
-    abstractroclassproperty,
-    roclassproperty,
+
+
+# Type aliases for static type checking
+CompositeInstructionCastableTypes: TypeAlias = (
+    "CompositeInstruction | Sequence[Instruction]"
+)
+
+InstructionStackCastableTypes: TypeAlias = (
+    "InstructionStack | Sequence[Instruction] | Instruction | None"
 )
 
 
-class Instruction(Castable, Recordable):
+class Instruction(Recordable):
 
     def __init__(
         self,
@@ -25,16 +32,13 @@ class Instruction(Castable, Recordable):
         self.name = name
         self.parent = parent
 
-    @abstractroclassproperty
-    def CastableTypes(cls) -> type:
-        """The types of objects that can be cast to an :class:`Instruction`."""
-        pass
-
-    @abstractroclassproperty
-    def input_frame_spec(self) -> dict[str, type[Recordable]]:
+    @property
+    @abstractmethod
+    def input_frame_spec(self) -> dict[str, type]:
         """Minimum specification of an input :class:`Trajectory`."""
         pass
 
+    @property
     def num_req_input_frames(self) -> int:
         """Minimum number of frames needed in the input :class:`Trajectory`.
 
@@ -45,14 +49,15 @@ class Instruction(Castable, Recordable):
         """
         return 1
 
-    @abstractroclassproperty
-    def output_frame_spec(self) -> dict[str, type[Recordable]]:
+    @property
+    @abstractmethod
+    def output_frame_spec(self) -> dict[str, type]:
         """Minimum specification of the returned :class:`TrajectoryFrame`."""
         pass
 
     def check_frame(
         self,
-        traj_obj: HistoryStack.Castable,
+        traj_obj: HistoryStackCastableTypes,
         check_input: bool = True,
         check_output: bool = False,
     ) -> bool:
@@ -108,7 +113,7 @@ class Instruction(Castable, Recordable):
         return True
 
     @abstractmethod
-    def apply_unsafe(self, input: HistoryStack.Castable) -> HistoryFrame:
+    def apply_unsafe(self, input: HistoryStackCastableTypes) -> HistoryFrame:
         """Workhorse function for generating a new :class:`TrajectoryFrame`.
 
         This is an application of the :class:`Instruction` with no safety checks.
@@ -127,7 +132,9 @@ class Instruction(Castable, Recordable):
         """
         pass
 
-    def apply(self, input: HistoryStack.Castable, **kwargs) -> HistoryFrame:
+    def apply(
+        self, input: HistoryStackCastableTypes, **kwargs
+    ) -> HistoryFrame:
         """Generate a new :class:`TrajectoryFrame` from the input :class:`Trajectory`.
 
         Parameters
@@ -148,7 +155,7 @@ class Instruction(Castable, Recordable):
             input, check_input=True, check_output=False
         ), "Input frame does not match required specification"
 
-        output_frame = self._apply(input, **kwargs)
+        output_frame = self.apply_unsafe(input, **kwargs)
 
         assert self.check_frame(
             input, check_input=True, check_output=False
@@ -159,9 +166,12 @@ class Instruction(Castable, Recordable):
 
 class CompositeInstruction(Instruction):
 
+    instructions: list[Instruction]
+    """Set of instructions in this :class:`CompositeInstruction`."""
+
     def __init__(
         self,
-        instructions: CastableTypes,
+        instructions: CompositeInstructionCastableTypes,
         name: str = "(Unnamed composite)",
         parent: Instruction | None = None,
     ) -> None:
@@ -172,13 +182,9 @@ class CompositeInstruction(Instruction):
             self.parent = instructions.parent if parent is None else parent
         else:
             # TODO: Type-check
-            self.instructions = instructions
+            self.instructions = list(instructions)
 
-    @roclassproperty
-    def CastableTypes(self) -> type:
-        return CompositeInstruction | Iterable[Instruction]
-
-    def apply_unsafe(self, input: HistoryStack.Castable) -> HistoryFrame:
+    def apply_unsafe(self, input: HistoryStackCastableTypes) -> HistoryFrame:
         """Workhorse function for generating a new :class:`TrajectoryFrame`.
 
         This is an application of the :class:`Instruction` with no safety checks.
@@ -197,33 +203,36 @@ class CompositeInstruction(Instruction):
         output_frame:
             The new output frame
         """
-        output = HistoryStack.cast(input)
+        stack = HistoryStack.cast(input)
         for instruction in self.instructions:
-            output.append(instruction.apply_unsafe(output))
-        return output
+            stack.append(instruction.apply_unsafe(stack))
+        return stack[-1]
 
 
-class InstructionStack(Sequence[Instruction], Castable, Recordable):
+class InstructionStack(Sequence[Instruction], Recordable):
 
-    def __init__(self, instructions: CastableTypes | None = None) -> None:
+    _instructions: list[Instruction]
+    """Internal list of instructions"""
+
+    def __init__(
+        self, instructions: InstructionStackCastableTypes = None
+    ) -> None:
         """Initialize an InstructionStack."""
         if isinstance(instructions, InstructionStack):
             self._instructions = instructions._instructions
         elif isinstance(instructions, Instruction):
             self._instructions = [instructions]
-        else:
+        elif isinstance(instructions, Sequence):
             assert all(
                 [isinstance(inst, Instruction) for inst in instructions]
             ), "InstructionStack can only hold Instructions"
 
-            self._instructions = instructions
+            self._instructions = list(instructions)
+        else:
+            self._instructions = []
 
         for inst in self._instructions:
             inst.parent = self
-
-    @roclassproperty
-    def CastableTypes(self) -> type:
-        return InstructionStack | Iterable[Instruction] | Instruction
 
     def __getitem__(self, i):
         return self._instructions[i]
