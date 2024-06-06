@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Sequence, Mapping
 from typing import Generic, Literal, MutableSequence, TypeAlias, TypeVar
 
-from loqs.backends.circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from loqs.backends.circuit import BasePhysicalCircuit
 
 
 # Generic physical circuit type for these containers
@@ -43,6 +43,11 @@ class TemplatedCircuit(Generic[PhysicalCircuit]):
 
     Examples
     --------
+
+    .. testsetup::
+
+        from loqs.backends import PyGSTiPhysicalCircuit
+        from loqs.core import TemplatedCircuit
 
     Example template dictionary for weight-4 X and weight-2 Z checks
     for Surface-17 [1]_.
