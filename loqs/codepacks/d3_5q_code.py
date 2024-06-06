@@ -19,6 +19,7 @@ from loqs.core.templatedcircuit import TemplatedCircuit
 def create_qeccode(
     circuit_backend: type[BasePhysicalCircuit] = PhysicalCircuit,
 ):
+    # TODO: Make this work for more than just the pygsti backend
 
     qec_operations = {}
 

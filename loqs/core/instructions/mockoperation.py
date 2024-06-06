@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TypeAlias
 
-from loqs.core import Instruction, Recordable, HistoryStack, HistoryFrame
+from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import MockState
 
