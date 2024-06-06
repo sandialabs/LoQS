@@ -80,7 +80,7 @@ class BasePhysicalCircuit(Castable):
         Parameters
         ----------
         Other Parameters:
-            Refer to :meth:`append_qubits_inplace`
+            Refer to :meth:`append_inplace`
 
         Returns
         -------
@@ -142,25 +142,6 @@ class BasePhysicalCircuit(Castable):
         # TODO: Check qubits available
         pass
 
-    def map_qubit_labels(self: T, qubit_mapping: Mapping) -> T:
-        """Substitute qubit labels in underlying circuit objects.
-
-        Parameters
-        ----------
-        Other Parameters:
-            Refer to :meth:`map_qubit_labels_inplace`
-
-        Returns
-        -------
-        modified_circuit:
-            A copy of the circuit with mapped qubits.
-        """
-        # Providing a default implementation for circuits
-        # that can be modified in-place
-        modified_circuit = self.copy()
-        modified_circuit.map_qubit_labels_inplace(qubit_mapping)
-        return modified_circuit
-
     def insert(self: T, circuit: BasePhysicalCircuit, idx: int) -> T:
         """Insert another circuit to a copy of this circuit.
 
@@ -192,6 +173,25 @@ class BasePhysicalCircuit(Castable):
         """
         pass
 
+    def map_qubit_labels(self: T, qubit_mapping: Mapping) -> T:
+        """Substitute qubit labels in underlying circuit objects.
+
+        Parameters
+        ----------
+        Other Parameters:
+            Refer to :meth:`map_qubit_labels_inplace`
+
+        Returns
+        -------
+        modified_circuit:
+            A copy of the circuit with mapped qubits.
+        """
+        # Providing a default implementation for circuits
+        # that can be modified in-place
+        modified_circuit = self.copy()
+        modified_circuit.map_qubit_labels_inplace(qubit_mapping)
+        return modified_circuit
+
     @abstractmethod
     def map_qubit_labels_inplace(self, qubit_mapping: Mapping) -> None:
         """Substitute qubit labels in underlying circuit objects.
@@ -202,7 +202,44 @@ class BasePhysicalCircuit(Castable):
             Mapping from old qubit labels to new qubit labels.
             If a qubit label is not provided, it remains unchanged.
         """
-        # TODO: Type check
+        pass
+
+    def merge(self: T, circuit: BasePhysicalCircuit, idx: int) -> T:
+        """Merge another circuit to a copy of this circuit.
+
+        While :meth:`insert` adds new layers, :meth:`merge`
+        will try to add operations to existing layers.
+
+        Parameters
+        ----------
+        Other Parameters:
+            Refer to :meth:`merge_inplace`
+
+        Returns
+        -------
+        modified_circuit:
+            A modified copy of the circuit.
+        """
+        modified_circuit = self.copy()
+        modified_circuit.merge_inplace(circuit, idx)
+        return modified_circuit
+
+    @abstractmethod
+    def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
+        """Merge another circuit to this circuit.
+
+        While :meth:`insert_inplace` adds new layers,
+        :meth:`merge_inplace` will try to add operations to
+        existing layers.
+
+        Parameters
+        ----------
+        circuit:
+            Circuit to merge
+
+        idx:
+            Layer index to start merge
+        """
         pass
 
     def set_qubit_labels(self: T, qubit_labels: Sequence) -> T:

@@ -74,11 +74,11 @@ class TemplatedCircuit(Generic[PhysicalCircuit]):
     ...     ],
     ... }
     >>> qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
-    >>> surface17_syndrome = TemplatedCircuit[PyGSTiPhysicalCircuit](templates, checks, qubits)
-    >>> c = surface17_syndrome.get_circuit()
+    >>> surface17_syndrome = TemplatedCircuit(templates, checks, qubits)
+    >>> c = surface17_syndrome.get_processed_circuit()
     >>> print(repr(c))
-    Physical circuit with pyGSTi backend:\
-Circuit([Gh:A9Gh:A11Gh:A14Gh:A16][Gcnot:A11:D1Gcnot:A14:D5Gcnot:A16:D7\
+    Physical pyGSTi circuit:
+    Circuit([Gh:A9Gh:A11Gh:A14Gh:A16][Gcnot:A11:D1Gcnot:A14:D5Gcnot:A16:D7\
 Gcnot:D0:A10Gcnot:D2:A12Gcnot:D4:A13][Gcnot:A11:D0Gcnot:A14:D4Gcnot:A16:D6\
 Gcnot:D1:A12Gcnot:D3:A13Gcnot:D5:A15][Gcnot:A9:D2Gcnot:A11:D4Gcnot:A14:D8\
 Gcnot:D3:A10Gcnot:D5:A12Gcnot:D7:A13][Gcnot:A9:D1Gcnot:A11:D3Gcnot:A14:D7\
@@ -91,14 +91,14 @@ Gcnot:D4:A12Gcnot:D6:A13Gcnot:D8:A15][Gh:A9Gh:A11Gh:A14Gh:A16]\
     syndrome preparation circuit (although not this necessarily does not obey
     the schedule provided in the stabilizer templates).
 
-    >>> c = surface17_syndrome.get_circuit(omit_gates='Iz', compress=True)
+    >>> c = surface17_syndrome.get_processed_circuit(omit_gates='Iz')
     >>> print(repr(c))
-    Physical circuit with pyGSTi backend:\
-Circuit([Gh:A9Gh:A11Gh:A14Gh:A16Gcnot:D0:A10Gcnot:D2:A12Gcnot:D4:A13]\
-[Gcnot:A11:D1Gcnot:A14:D5Gcnot:A16:D7Gcnot:D3:A13Gcnot:A9:D2][Gcnot:A11:D0\
-Gcnot:A14:D4Gcnot:A16:D6Gcnot:D1:A12Gcnot:D5:A15Gcnot:D3:A10Gcnot:D7:A13]\
-[Gcnot:A11:D4Gcnot:A14:D8Gcnot:D5:A12Gcnot:A9:D1Gcnot:D6:A13Gh:A16]\
-[Gcnot:A11:D3Gcnot:A14:D7Gcnot:D4:A12Gcnot:D8:A15Gh:A9][Gh:A11Gh:A14]\
+    Physical pyGSTi circuit:
+    Circuit([Gh:A9Gh:A11Gh:A14Gh:A16][Gcnot:A11:D1Gcnot:A14:D5Gcnot:A16:D7\
+Gcnot:D0:A10Gcnot:D2:A12Gcnot:D4:A13][Gcnot:A11:D0Gcnot:A14:D4Gcnot:A16:D6\
+Gcnot:D1:A12Gcnot:D3:A13Gcnot:D5:A15][Gcnot:A9:D2Gcnot:A11:D4Gcnot:A14:D8\
+Gcnot:D3:A10Gcnot:D5:A12Gcnot:D7:A13][Gcnot:A9:D1Gcnot:A11:D3Gcnot:A14:D7\
+Gcnot:D4:A12Gcnot:D6:A13Gcnot:D8:A15][Gh:A9Gh:A11Gh:A14Gh:A16][]\
 @(D0,D1,D2,D3,D4,D5,D6,D7,D8,A9,A10,A11,A12,A13,A14,A15,A16))
 
     .. [1] Y. Tomita and K.M. Svore, "Low-distance surface codes under
@@ -243,11 +243,11 @@ Gcnot:A14:D4Gcnot:A16:D6Gcnot:D1:A12Gcnot:D5:A15Gcnot:D3:A10Gcnot:D7:A13]\
             for key, qubit_list in stage.items():
                 for qubits in qubit_list:
                     plaq_circuit = self.get_processed_circuit_template(
-                        key, qubits
+                        key, qubits, **kwargs
                     )
 
                     try:
-                        stage_circuit.insert_inplace(plaq_circuit, 0)
+                        stage_circuit.merge_inplace(plaq_circuit, 0)
                     except Exception as e:
                         raise ValueError(
                             "Failed to merge template circuits. Ensure no collisions "

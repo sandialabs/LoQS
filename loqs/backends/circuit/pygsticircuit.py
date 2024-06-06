@@ -104,6 +104,21 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
         self.circuit.map_state_space_labels_inplace(complete_mapping)
 
+    def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
+        other_circuit: _Circuit = PyGSTiPhysicalCircuit.cast(circuit).circuit
+        end = idx + other_circuit.depth
+
+        # Ensure circuit is long enough for merge
+        for lidx in range(self._circuit.depth, end):
+            self._circuit.insert_layer_inplace([], lidx)
+
+        # Perform merge
+        for lidx in range(idx, end):
+            comps = self._circuit._layer_components(
+                lidx
+            ) + other_circuit._layer_components(lidx)
+            self._circuit.set_labels(comps, lidx)
+
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:
@@ -124,15 +139,19 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def process_circuit(
         self,
         qubit_mapping: Mapping[QubitTypes, QubitTypes] | None = None,
-        omit_gates: Sequence[OperationTypes] | None = None,
+        omit_gates: str | Sequence[str] | None = None,
         delete_idle_layers: bool = False,
     ) -> PyGSTiPhysicalCircuit:
+        """TODO"""
         processed = self.copy()
 
         if qubit_mapping is not None:
             processed.map_qubit_labels_inplace(qubit_mapping)
 
         if omit_gates is not None:
+            if isinstance(omit_gates, str):
+                omit_gates = [omit_gates]
+
             for og in omit_gates:
                 processed.circuit.replace_gatename_with_idle_inplace(og)
 
