@@ -7,7 +7,6 @@ from typing import TypeAlias
 from loqs.core import Recordable
 
 
-# TODO: increase this
 MeasurementOutcomesCastableTypes: TypeAlias = (
     "MeasurementOutcomes | Mapping[str, int | Sequence[int]]"
 )

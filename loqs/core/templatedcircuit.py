@@ -44,14 +44,10 @@ class TemplatedCircuit(Generic[PhysicalCircuit]):
     Examples
     --------
 
-    .. testsetup::
-
-        from loqs.backends import PyGSTiPhysicalCircuit
-        from loqs.core import TemplatedCircuit
-
     Example template dictionary for weight-4 X and weight-2 Z checks
     for Surface-17 [1]_.
 
+    >>> from loqs.backends import PyGSTiPhysicalCircuit
     >>> templates = {
     ...     # Fig 2a of [1]
     ...     "X": PyGSTiPhysicalCircuit([('Gh', 'aux'), ('Gcnot', 'aux', 'b'),

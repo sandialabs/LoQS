@@ -1,9 +1,12 @@
 """Class definition for StabilizerFrame
 """
 
+from __future__ import annotations
+
 from typing import Sequence, TypeAlias
 
 from loqs.core.recordable import Recordable
+from loqs.internal import Bit
 
 
 StabilizerFrameCastableTypes: TypeAlias = "StabilizerFrame | Sequence[str]"
@@ -12,11 +15,23 @@ StabilizerFrameCastableTypes: TypeAlias = "StabilizerFrame | Sequence[str]"
 class StabilizerFrame(Recordable):
     """TODO"""
 
+    qubit_labels: list[str]
+    """TODO"""
+
+    num_qubits: int
+    """TODO"""
+
+    x_bits: list[Bit]
+    """TODO"""
+
+    z_bits: list[Bit]
+    """TODO"""
+
     def __init__(
         self,
         frame_or_labels: StabilizerFrameCastableTypes,
-        x_bits: Sequence[int] | None = None,
-        z_bits: Sequence[int] | None = None,
+        x_bits: Sequence[Bit] | None = None,
+        z_bits: Sequence[Bit] | None = None,
     ) -> None:
         """TODO"""
         if isinstance(frame_or_labels, StabilizerFrame):
@@ -45,6 +60,9 @@ class StabilizerFrame(Recordable):
                 len(z_bits) == self.num_qubits
             ), "Must provide complete stabilizer frame"
             self.z_bits = list(z_bits)
+
+    def copy(self) -> StabilizerFrame:
+        return StabilizerFrame(self.qubit_labels, self.x_bits, self.z_bits)
 
     def flip_bit(self, type: str, qubit: str) -> None:
         type = type.upper()

@@ -1,19 +1,23 @@
-""":class:`MockOperations` definition.
+"""TODO
 """
 
 from __future__ import annotations
+from typing import TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.state import BaseQuantumState
-from loqs.core import Instruction, HistoryStack, HistoryFrame
+from loqs.core import Instruction, HistoryStack, HistoryFrame, TemplatedCircuit
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import MeasurementOutcomes
+
+
+LogicalOperationCastable: TypeAlias = BasePhysicalCircuit | TemplatedCircuit
 
 
 class QuantumLogicalOperation(Instruction):
     """TODO"""
 
-    def __init__(self, physical_circuit: BasePhysicalCircuit) -> None:
+    def __init__(self, physical_circuit: LogicalOperationCastable) -> None:
         """TODO
 
         Parameters
