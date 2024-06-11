@@ -8,6 +8,7 @@ from typing import TypeAlias
 
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
+from loqs.core.instruction import InstructionParentTypes
 from loqs.core.recordables import MockState
 
 
@@ -27,7 +28,12 @@ class MockOperation(Instruction):
     state_map: dict[str, str]
     """Underlying map from old states to new states"""
 
-    def __init__(self, state_map: MockOperationCastableTypes) -> None:
+    def __init__(
+        self,
+        state_map: MockOperationCastableTypes,
+        name: str = "(Unnamed mock operation)",
+        parent: InstructionParentTypes = None,
+    ) -> None:
         """Initialize a :class:`MockOperation`.
 
         Parameters
@@ -37,6 +43,8 @@ class MockOperation(Instruction):
             self.state_map = state_map.state_map
         else:
             self.state_map = {k: v for k, v in state_map.items()}
+
+        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:

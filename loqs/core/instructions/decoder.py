@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import TypeAlias
 
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
+from loqs.core.instruction import InstructionParentTypes
 from loqs.core.recordables import StabilizerFrame, Syndrome
 from loqs.internal import Bit, PauliStr
 
@@ -37,7 +38,12 @@ class Decoder(Instruction):
     """TODO
     """
 
-    def __init__(self, decoder: DecoderCastableTypes) -> None:
+    def __init__(
+        self,
+        decoder: DecoderCastableTypes,
+        name: str = "(Unnamed decoder)",
+        parent: InstructionParentTypes = None,
+    ) -> None:
         """TODO"""
         if isinstance(decoder, Decoder):
             self.decoder_fn = decoder.decoder_fn
@@ -52,6 +58,8 @@ class Decoder(Instruction):
             raise NotImplementedError(
                 f"Cannot create a decoder from {decoder}"
             )
+
+        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:

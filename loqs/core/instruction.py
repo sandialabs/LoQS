@@ -5,14 +5,16 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Sequence
-from typing import TypeAlias, TypeVar
+from typing import TypeAlias
 
 from loqs.core import HistoryFrame, HistoryStack, Recordable
 from loqs.core.history import HistoryStackCastableTypes
-from loqs.internal.castable import Castable
 
 
 # Type aliases for static type checking
+InstructionParentTypes: TypeAlias = "Instruction | InstructionStack | None"
+"""TODO"""
+
 CompositeInstructionCastableTypes: TypeAlias = (
     "CompositeInstruction | Sequence[Instruction]"
 )
@@ -27,7 +29,7 @@ class Instruction(Recordable):
     def __init__(
         self,
         name: str = "(Unnamed)",
-        parent: Instruction | InstructionStack | None = None,
+        parent: InstructionParentTypes = None,
     ) -> None:
         self.name = name
         self.parent = parent

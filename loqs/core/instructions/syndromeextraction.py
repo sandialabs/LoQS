@@ -10,6 +10,7 @@ from typing import TypeAlias
 from loqs.backends.state import BaseQuantumState
 from loqs.core import HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
+from loqs.core.instruction import InstructionParentTypes
 from loqs.core.instructions import QuantumClassicalLogicalOperation
 from loqs.core.instructions.logicaloperation import LogicalOperationCastable
 from loqs.core.recordables import MeasurementOutcomes, Syndrome
@@ -36,14 +37,14 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
         self,
         physical_circuit: LogicalOperationCastable,
         syndrome_measurements: SyndromeLabelsTypes,
+        name: str = "(Unnamed syndrome extraction)",
+        parent: InstructionParentTypes = None,
     ) -> None:
         """TODO
 
         Parameters
         ----------
         """
-        self.physical_circuit = physical_circuit
-
         if isinstance(syndrome_measurements, Mapping):
             self.stabilizers = list(syndrome_measurements.keys())
             syndrome_measurements = list(syndrome_measurements.values())
@@ -64,6 +65,49 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
 
                 # and increment counter
                 counter[syndrome_label] += 1
+
+        super().__init__(physical_circuit, name, parent)
+
+    # This is one of the cases where we do not have a nice single argument cast
+    # Override the cast method to accept a tuple of the first two args
+    @classmethod
+    def cast(cls, obj: object) -> SyndromeExtraction:
+        """Cast to a :class:`SyndromeExtraction` object.
+
+        Unlike most castable objects, :class:`SyndromeExtraction`
+        requires 2 inputs. This version of cast additionally allows
+        a tuple/list variant for the two arguments and disallows
+        a single object being passed in.
+
+        Parameters
+        ----------
+        obj:
+            A castable object that is either:
+            - Already a :class:`SyndromeExtraction` object,
+            in which case `obj` is returned
+            - A kwarg dict that is passed into the constructor
+            - A sequence of the first two arguments of the
+            :class:`SyndromeExtraction` constructor
+
+        Returns
+        -------
+            A :class:`SyndromeExtraction` object
+        """
+        if isinstance(obj, cls):
+            # We are already the correct class, perform no copy
+            return obj
+        elif isinstance(obj, dict):
+            # Assume this is a kwarg dict, pass in all kwargs
+            return cls(**obj)
+        elif isinstance(obj, Sequence) and len(obj) == 2:
+            # Assume this is a tuple/list of first two args
+            return cls(obj[0], obj[1])
+
+        # Else we can't handle this
+        raise ValueError(
+            "SyndromeExtraction requires two arguments to cast. "
+            + "Use a 2-tuple or kwarg dict when casting."
+        )
 
     @property
     def output_frame_spec(self) -> dict[str, type]:

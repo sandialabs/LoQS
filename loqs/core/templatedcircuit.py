@@ -107,7 +107,7 @@ Gcnot:D4:A12Gcnot:D6:A13Gcnot:D8:A15][Gh:A9Gh:A11Gh:A14Gh:A16][]\
         pp. 062320, 2014.
     """
 
-    circuit_templates: dict[str, PhysicalCircuit]
+    circuit_templates: dict[str, BasePhysicalCircuit]
     """Dictionary holding circuit templates with string keys."""
 
     template_stage_specs: list[Mapping[str, MutableSequence[MutableSequence]]]
@@ -264,7 +264,7 @@ Gcnot:D4:A12Gcnot:D6:A13Gcnot:D8:A15][Gh:A9Gh:A11Gh:A14Gh:A16][]\
         template_key: str,
         qubit_labels: Sequence,
         **kwargs,
-    ) -> PhysicalCircuit:
+    ) -> BasePhysicalCircuit:
         """Create a stabilizer check circuit from one of the templates.
 
         If removing a line or operation results in an empty layer,

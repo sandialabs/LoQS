@@ -7,6 +7,7 @@ from typing import TypeAlias
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, HistoryStack, HistoryFrame, TemplatedCircuit
+from loqs.core.instruction import InstructionParentTypes
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import MeasurementOutcomes
 
@@ -17,13 +18,19 @@ LogicalOperationCastable: TypeAlias = BasePhysicalCircuit | TemplatedCircuit
 class QuantumLogicalOperation(Instruction):
     """TODO"""
 
-    def __init__(self, physical_circuit: LogicalOperationCastable) -> None:
+    def __init__(
+        self,
+        physical_circuit: LogicalOperationCastable,
+        name: str = "(Unnamed quantum logical operation)",
+        parent: InstructionParentTypes = None,
+    ) -> None:
         """TODO
 
         Parameters
         ----------
         """
         self.physical_circuit = physical_circuit
+        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:
@@ -71,6 +78,14 @@ class QuantumLogicalOperation(Instruction):
 
 class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
     """TODO"""
+
+    def __init__(
+        self,
+        physical_circuit: LogicalOperationCastable,
+        name: str = "(Unnamed quantum-classical logical operation)",
+        parent: InstructionParentTypes = None,
+    ) -> None:
+        super().__init__(physical_circuit, name, parent)
 
     @property
     def output_frame_spec(self) -> dict[str, type]:
