@@ -10,13 +10,9 @@ from .recordable import Recordable
 # Second for import order reasons
 from .history import HistoryFrame, HistoryStack
 
-from .instruction import (
-    Instruction,
-    CompositeInstruction,
-    InstructionStack,
-)
+from .instruction import Instruction, InstructionStack
 
-from .qeccode import QECCode
+from .codepatch import CodePatch
 
 from .quantumprogram import QuantumProgram
 

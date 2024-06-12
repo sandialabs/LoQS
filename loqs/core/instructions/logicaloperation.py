@@ -84,8 +84,10 @@ class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
         physical_circuit: LogicalOperationCastable,
         name: str = "(Unnamed quantum-classical logical operation)",
         parent: InstructionParentTypes = None,
+        reset_mcms: bool = True,
     ) -> None:
         super().__init__(physical_circuit, name, parent)
+        self.reset_mcms = reset_mcms
 
     @property
     def output_frame_spec(self) -> dict[str, type]:

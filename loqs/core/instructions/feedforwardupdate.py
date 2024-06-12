@@ -9,8 +9,8 @@ from typing import TypeAlias
 from loqs.core import Instruction, InstructionStack, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.instruction import InstructionParentTypes
-from loqs.core.recordables import MeasurementOutcomes, StabilizerFrame
-from loqs.internal import Bit, PauliStr
+from loqs.core.recordables import MeasurementOutcomes, Syndrome
+from loqs.internal import Bit
 
 
 FeedForwardUpdateCallable: TypeAlias = Callable[
@@ -45,7 +45,7 @@ class FeedForwardUpdate(Instruction):
     def __init__(
         self,
         ffupdate: FeedForwardUpdateCastableTypes,
-        name: str = "(Unnamed decoder)",
+        name: str = "(Unnamed feed-forward update)",
         parent: InstructionParentTypes = None,
     ) -> None:
         """TODO"""
@@ -109,3 +109,33 @@ class FeedForwardUpdate(Instruction):
         # self.decoder_table[syn.bitstring]
 
         return new_stack
+
+
+class RepeatUntilSuccess(FeedForwardUpdate):
+    """TODO
+
+    A specific kind of FeedForwardUpdate where we add this instruction
+    back onto the stack if the expected measurement outcome is not
+    observed.
+    """
+
+    def update_fn(
+        self, outcomes: MeasurementOutcomes, stack: InstructionStack
+    ) -> InstructionStack:
+        """TODO"""
+        # Copy stack
+
+        # Check for all 0 outcome, and return unmodified stack
+        # Else, add this instruction back on the stack
+
+        return stack
+
+    def __init__(
+        self,
+        instruction_to_repeat: Instruction,
+        name: str = "(Unnamed repeat-until-success operation)",
+        parent: InstructionParentTypes = None,
+    ) -> None:
+        """TODO"""
+        self.instruction_to_repeat = instruction_to_repeat
+        super().__init__(self.update_fn, name, parent)
