@@ -7,14 +7,14 @@ from abc import abstractmethod
 from collections.abc import Sequence
 from typing import ClassVar, TypeVar
 
-from loqs.internal.castable import Castable
+from loqs.core import Recordable
 
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
 
 
-class BaseQuantumState(Castable):
+class BaseQuantumState(Recordable):
     """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str]

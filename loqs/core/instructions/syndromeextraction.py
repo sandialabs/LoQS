@@ -7,12 +7,14 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
-from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.state import BaseQuantumState
 from loqs.core import HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.instruction import InstructionParentTypes
 from loqs.core.instructions import QuantumClassicalLogicalOperation
+from loqs.core.instructions.logicaloperation import (
+    LogicalOperationCastableTypes,
+)
 from loqs.core.recordables import MeasurementOutcomes, Syndrome
 from loqs.internal import PauliStr
 
@@ -35,7 +37,7 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
 
     def __init__(
         self,
-        physical_circuit: BasePhysicalCircuit,
+        physical_circuit: LogicalOperationCastableTypes,
         syndrome_measurements: SyndromeLabelsTypes,
         name: str = "(Unnamed syndrome extraction)",
         parent: InstructionParentTypes = None,
@@ -45,6 +47,8 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
         Parameters
         ----------
         """
+        super().__init__(physical_circuit, name, parent)
+
         if isinstance(syndrome_measurements, Mapping):
             self.stabilizers = list(syndrome_measurements.keys())
             syndrome_measurements = list(syndrome_measurements.values())
@@ -65,8 +69,6 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
 
                 # and increment counter
                 counter[syndrome_label] += 1
-
-        super().__init__(physical_circuit, name, parent)
 
     # This is one of the cases where we do not have a nice single argument cast
     # Override the cast method to accept a tuple of the first two args

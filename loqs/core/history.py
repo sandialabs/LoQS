@@ -2,6 +2,7 @@
 """
 
 from __future__ import annotations
+import warnings
 
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias, overload
@@ -16,7 +17,7 @@ HistoryFrameCastableTypes: TypeAlias = (
 """Things that can be cast to :class:`HistoryFrame`."""
 
 HistoryStackCastableTypes: TypeAlias = (
-    "HistoryStack | Sequence[HistoryFrameCastableTypes] | None"
+    "HistoryStack | HistoryFrameCastableTypes | Sequence[HistoryFrameCastableTypes] | None"
 )
 """Things that can be cast to :class:`HistoryStack`."""
 
@@ -41,6 +42,9 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
         self, data: HistoryFrameCastableTypes = None, log: str = "N/A"
     ):
         """TODO"""
+        if data is None:
+            data = {}
+
         if isinstance(data, HistoryFrame):
             self._data = data._data.copy()
             self.log = data.log
@@ -52,9 +56,16 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
             self._data = {k: v for k, v in data.items()}
             self.log = log
         else:
-            data = {}
+            raise ValueError(f"Cannot cast {data} to a HistoryFrame")
+
+        self._expired_keys: list[str] = []
 
     def __getitem__(self, key: str) -> Recordable:
+        if key in self._expired_keys:
+            warnings.warn(
+                f"Accessing an expired recordable {key} from frame {self}. "
+                + "The returned object may actually belong to a future frame."
+            )
         return self._data[key]
 
     def __len__(self) -> int:
@@ -95,21 +106,42 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
     _std_spec: dict[str, type]
     _nonstd_spec: dict[str, type]
 
-    def __init__(self, history: HistoryStackCastableTypes = None) -> None:
-        """Initialize a :class:`Trajectory`."""
+    def __init__(
+        self,
+        history: HistoryStackCastableTypes = None,
+        expiring_keys: list[str] | None = None,
+    ) -> None:
+        """TODO"""
+        self._history = []
+        self._std_spec = {}
+        self._nonstd_spec = {}
+
+        if expiring_keys is None:
+            expiring_keys = []
+        self.expiring_keys = expiring_keys
+        self._expiring_key_locs: dict[str, int] = {}
+
         if isinstance(history, HistoryStack):
             self._history = history._history.copy()
             self._std_spec = history._std_spec
             self._nonstd_spec = history._nonstd_spec
-        else:
-            self._history = []
-            self._std_spec = {}
-            self._nonstd_spec = {}
+            # Take union of expiring keys
+            self.expiring_keys = list(
+                set(expiring_keys).union(set(history.expiring_keys))
+            )
+        elif isinstance(history, Sequence):
+            for frame in history:
+                frame = HistoryFrame.cast(frame)
+                self.append(frame)
+        else:  # Just a single HistoryFrame
+            try:
+                frame = HistoryFrame.cast(history)
+            except ValueError as e:
+                raise ValueError(
+                    f"Cannot create HistoryStack from {history}"
+                ) from e
 
-            if isinstance(history, Sequence):
-                for frame in history:
-                    frame = HistoryFrame.cast(frame)
-                    self.append(frame)
+            self.append(frame)
 
     @overload
     def __getitem__(self, i: int) -> HistoryFrame: ...  # noqa
@@ -137,6 +169,20 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
     def append(self, item: HistoryFrameCastableTypes) -> None:
         item = HistoryFrame.cast(item)
 
+        # Check for any expiring keys in previous frames
+        for exp_key in self.expiring_keys:
+            if exp_key in item:
+                # Expire old location
+                old_loc = self._expiring_key_locs.get(exp_key, None)
+
+                if old_loc is not None:
+                    # Expire old location
+                    self._history[old_loc]._expired_keys.append(exp_key)
+
+                # Update location of expiring key
+                self._expiring_key_locs[exp_key] = len(self._history)
+
+        # Update std/nonstd specs
         if self._std_spec is None:
             self._std_spec = item.frame_spec.copy()
         else:
@@ -149,4 +195,5 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
             difference = std_items.difference(new_items)
             self._nonstd_spec.update(difference)
 
+        # Finally append
         self._history.append(item)

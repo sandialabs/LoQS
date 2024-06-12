@@ -12,12 +12,17 @@ from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import MeasurementOutcomes
 
 
+LogicalOperationCastableTypes: TypeAlias = (
+    "QuantumLogicalOperation | BasePhysicalCircuit"
+)
+
+
 class QuantumLogicalOperation(Instruction):
     """TODO"""
 
     def __init__(
         self,
-        physical_circuit: BasePhysicalCircuit,
+        physical_circuit: LogicalOperationCastableTypes,
         name: str = "(Unnamed quantum logical operation)",
         parent: InstructionParentTypes = None,
     ) -> None:
@@ -26,7 +31,15 @@ class QuantumLogicalOperation(Instruction):
         Parameters
         ----------
         """
-        self.physical_circuit = physical_circuit
+        if isinstance(physical_circuit, QuantumLogicalOperation):
+            self.physical_circuit = physical_circuit.physical_circuit
+        elif isinstance(physical_circuit, BasePhysicalCircuit):
+            self.physical_circuit = physical_circuit
+        else:
+            raise ValueError(
+                f"Cannot create QuantumLogicalOperation from {physical_circuit}"
+            )
+
         super().__init__(name, parent)
 
     @property
@@ -84,7 +97,7 @@ class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
 
     def __init__(
         self,
-        physical_circuit: BasePhysicalCircuit,
+        physical_circuit: LogicalOperationCastableTypes,
         name: str = "(Unnamed quantum-classical logical operation)",
         parent: InstructionParentTypes = None,
         reset_mcms: bool = True,
