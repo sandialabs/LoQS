@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.core import HistoryFrame, HistoryStack, Recordable
@@ -27,9 +27,16 @@ class Instruction(Recordable):
         self,
         name: str = "(Unnamed)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool = True,
     ) -> None:
         self.name = name
         self.parent = parent
+        self._is_ft = fault_tolerant
+
+    @property
+    def fault_tolerant(self) -> bool:
+        """Whether this has been marked as fault-tolerant."""
+        return self._is_ft
 
     @property
     @abstractmethod
@@ -161,6 +168,10 @@ class Instruction(Recordable):
         ), "Output frame does not match required specification"
 
         return output_frame
+
+    def map_qubits(self, qubit_mapping: Mapping[str, str]) -> Instruction:
+        """TODO"""
+        return self
 
 
 class InstructionStack(Sequence[Instruction], Recordable):

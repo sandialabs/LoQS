@@ -12,7 +12,7 @@ from .history import HistoryFrame, HistoryStack
 
 from .instruction import Instruction, InstructionStack
 
-from .codepatch import CodePatch
+from .qeccode import QECCode, QECCodePatch
 
 from .quantumprogram import QuantumProgram
 
