@@ -7,12 +7,12 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
+from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.state import BaseQuantumState
 from loqs.core import HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.instruction import InstructionParentTypes
 from loqs.core.instructions import QuantumClassicalLogicalOperation
-from loqs.core.instructions.logicaloperation import LogicalOperationCastable
 from loqs.core.recordables import MeasurementOutcomes, Syndrome
 from loqs.internal import PauliStr
 
@@ -35,7 +35,7 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
 
     def __init__(
         self,
-        physical_circuit: LogicalOperationCastable,
+        physical_circuit: BasePhysicalCircuit,
         syndrome_measurements: SyndromeLabelsTypes,
         name: str = "(Unnamed syndrome extraction)",
         parent: InstructionParentTypes = None,
@@ -153,3 +153,14 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
             new_data=new_data, new_log=f"{self.name} result"
         )
         return output_frame
+
+    def map_qubits(
+        self, qubit_mapping: Mapping[str, str]
+    ) -> SyndromeExtraction:
+        mapped_circ = self.physical_circuit.map_qubit_labels(qubit_mapping)
+        mapped_syndrome_labels = [
+            (qubit_mapping[sl[0]], sl[1]) for sl in self.syndrome_labels
+        ]
+        return SyndromeExtraction(
+            mapped_circ, mapped_syndrome_labels, self.name, self.parent
+        )

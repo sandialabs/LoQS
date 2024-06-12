@@ -28,7 +28,15 @@ class PermutePatch(Instruction):
         Parameters
         ----------
         """
-        self.mapping = mapping
+        if isinstance(mapping, PermutePatch):
+            self.mapping = mapping.mapping
+        elif isinstance(mapping, Mapping):
+            self.mapping = {k: v for k, v in mapping.items()}
+        else:
+            raise NotImplementedError(
+                "Cannot create PermutePatch from given mapping"
+            )
+
         super().__init__(name, parent)
 
     @property
@@ -71,3 +79,9 @@ class PermutePatch(Instruction):
             new_data=new_data, new_log=f"{self.name} result"
         )
         return output_frame
+
+    def map_qubits(self, qubit_mapping: Mapping[str, str]) -> PermutePatch:
+        new_mapping = {
+            qubit_mapping[k]: qubit_mapping[v] for k, v in self.mapping.items()
+        }
+        return PermutePatch(new_mapping, self.name, self.parent)

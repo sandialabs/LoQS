@@ -110,6 +110,8 @@ class FeedForwardUpdate(Instruction):
 
         return new_stack
 
+    # TODO: Map qubits for table
+
 
 class RepeatUntilSuccess(FeedForwardUpdate):
     """TODO

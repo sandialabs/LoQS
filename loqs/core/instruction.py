@@ -5,11 +5,13 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
 from loqs.core import HistoryFrame, HistoryStack, Recordable
 from loqs.core.history import HistoryStackCastableTypes
 
+
+T = TypeVar("T", bound="Instruction")
 
 # Type aliases for static type checking
 InstructionParentTypes: TypeAlias = "Instruction | InstructionStack | None"
@@ -169,7 +171,7 @@ class Instruction(Recordable):
 
         return output_frame
 
-    def map_qubits(self, qubit_mapping: Mapping[str, str]) -> Instruction:
+    def map_qubits(self: T, qubit_mapping: Mapping[str, str]) -> T:
         """TODO"""
         return self
 

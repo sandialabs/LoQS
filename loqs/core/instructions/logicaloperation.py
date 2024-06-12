@@ -2,17 +2,14 @@
 """
 
 from __future__ import annotations
-from typing import TypeAlias
+from typing import Mapping, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.state import BaseQuantumState
-from loqs.core import Instruction, HistoryStack, HistoryFrame, TemplatedCircuit
+from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.instruction import InstructionParentTypes
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import MeasurementOutcomes
-
-
-LogicalOperationCastable: TypeAlias = BasePhysicalCircuit | TemplatedCircuit
 
 
 class QuantumLogicalOperation(Instruction):
@@ -20,7 +17,7 @@ class QuantumLogicalOperation(Instruction):
 
     def __init__(
         self,
-        physical_circuit: LogicalOperationCastable,
+        physical_circuit: BasePhysicalCircuit,
         name: str = "(Unnamed quantum logical operation)",
         parent: InstructionParentTypes = None,
     ) -> None:
@@ -75,13 +72,19 @@ class QuantumLogicalOperation(Instruction):
         )
         return output_frame
 
+    def map_qubits(
+        self, qubit_mapping: Mapping[str, str]
+    ) -> QuantumLogicalOperation:
+        mapped_circ = self.physical_circuit.map_qubit_labels(qubit_mapping)
+        return QuantumLogicalOperation(mapped_circ, self.name, self.parent)
+
 
 class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
     """TODO"""
 
     def __init__(
         self,
-        physical_circuit: LogicalOperationCastable,
+        physical_circuit: BasePhysicalCircuit,
         name: str = "(Unnamed quantum-classical logical operation)",
         parent: InstructionParentTypes = None,
         reset_mcms: bool = True,

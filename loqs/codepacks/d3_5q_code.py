@@ -134,22 +134,14 @@ def create_qec_code():
 
     # Eqn 8 of arxiv:1603.03948
     stabilizers = ["ZZXIX", "XZZXI", "IXZZX", "XIXZZ"]
-    templates = {k: _create_syndrome_check_circuit(k) for k in stabilizers}
+    syndrome_circuit = PhysicalCircuit([], qubit_labels=qubits)
+    syndrome_qubits = {}
+    for i, stab in enumerate(stabilizers):
+        stabilizer_circuit = _create_syndrome_check_circuit(stab)
+        syndrome_circuit.append_inplace(stabilizer_circuit)
+        syndrome_qubits[stab] = ("A0", i)
 
-    # In this case, we have one stage of stabilizer check per stabilizer
-    # since we are doing ancilla reuse
-    checks = [{k: ["A0"] + qubits[2:]} for k in stabilizers]
-
-    # This circuit template will be each syndrome subsequently onto the single auxiliary qubit
-    se_circuit = TemplatedCircuit(
-        templates,
-        checks,
-        qubit_labels=qubits,
-        default_circuit_backend=PhysicalCircuit,
-    )
-    syndrome = {k: "A0" for k in stabilizers}
-
-    operations["SE"] = SyndromeExtraction(se_circuit, syndrome)
+    operations["SE"] = SyndromeExtraction(syndrome_circuit, syndrome_qubits)
 
     # Decoder (computed from commutation relations to stabilizers)
     lookup_table = _create_decoder_lookup(stabilizers)
@@ -173,16 +165,18 @@ def _create_syndrome_check_circuit(stabilizer: str) -> PhysicalCircuit:
 
     # We can do Z-type checks by CNOT from target to aux
     for Zloc in np.where([p == "Z" for p in stabilizer])[0]:
-        layers.append(("Gcnot", f"Q{Zloc}", "Qaux"))
+        layers.append(("Gcnot", f"D{Zloc}", "A0"))
 
     # We can go X-type checks by H on aux, CNOT from aux to target,
     # and then undoing the H
-    layers.append(("Gh", "Qaux"))
+    layers.append(("Gh", "A0"))
     for Xloc in np.where([p == "X" for p in stabilizer])[0]:
-        layers.append(("Gcnot", "Qaux", f"Q{Xloc}"))
-    layers.append(("Gh", "Qaux"))
+        layers.append(("Gcnot", "A0", f"D{Xloc}"))
+    layers.append(("Gh", "A0"))
 
-    qubits = ["Qaux"] + [f"Q{i}" for i in range(len(stabilizer))]
+    layers.append(("Iz", "A0"))
+
+    qubits = ["A0"] + [f"D{i}" for i in range(len(stabilizer))]
 
     return PhysicalCircuit(layers, qubit_labels=qubits)
 
@@ -191,7 +185,7 @@ def _create_decoder_lookup(
     stabilizers: Sequence[str],
 ) -> dict[tuple[int], tuple[str, str]]:
     """TODO"""
-    qubits = [f"Q{i}" for i in range(len(stabilizers[0]))]
+    qubits = [f"D{i}" for i in range(len(stabilizers[0]))]
     reverse_lookup = {}
     for p, qi in itertools.product("XYZ", range(len(qubits))):
         syndrome = []

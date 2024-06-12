@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 from collections.abc import Sequence
-from typing import TypeAlias
+from typing import Mapping, TypeAlias
 
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
@@ -65,3 +65,13 @@ class CompositeInstruction(Instruction):
         for instruction in self.instructions:
             stack.append(instruction.apply_unsafe(stack))
         return stack[-1]
+
+    def map_qubits(
+        self, qubit_mapping: Mapping[str, str]
+    ) -> CompositeInstruction:
+        mapped_instructions = [
+            i.map_qubits(qubit_mapping) for i in self.instructions
+        ]
+        return CompositeInstruction(
+            mapped_instructions, self.name, self.parent
+        )

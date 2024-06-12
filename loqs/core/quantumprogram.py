@@ -37,3 +37,5 @@ class QuantumProgram:
         if qubit_labels is None:
             qubit_labels = self.patches.all_qubit_labels
         self.qubit_labels = qubit_labels
+
+        # TODO: Initialize quantum state
