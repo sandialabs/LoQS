@@ -8,7 +8,7 @@ import itertools
 import numpy as np
 
 from loqs.backends.circuit import PyGSTiPhysicalCircuit as PhysicalCircuit
-from loqs.core import Instruction, QECCode, TemplatedCircuit
+from loqs.core import Instruction, QECCode
 from loqs.core.instructions import (
     CompositeInstruction,
     Decoder,
@@ -46,6 +46,7 @@ def create_qec_code():
         qubit_labels=qubits,
     )
 
+    # TODO: Verify this is actually minus
     operations["Non-FT Minus Prep"] = QuantumLogicalOperation(
         nonft_state_prep_circ,
         name="Non-fault-tolerant |-> state prep",
@@ -96,34 +97,35 @@ def create_qec_code():
         name="Repeat-until-success fault-tolerant minus state prep",
     )
 
-    # Logical Z (transversal)
-    # We use the Gottesman/standard convention here
-    # Yoder convention only needed for CZ/CCZ
-    logical_Z_circ = PhysicalCircuit(
-        [[("Gzpi", q) for q in qubits[2:]]], qubit_labels=qubits
-    )
-    operations["Z"] = QuantumLogicalOperation(logical_Z_circ, name="Logical Z")
-
     # Logical X (transversal)
+    # Eqn B1 of arxiv:2208.01863
     logical_X_circ = PhysicalCircuit(
-        [[("Gxpi", q) for q in qubits[2:]]], qubit_labels=qubits
+        [[("Gypi", "D0"), ("Gxpi", "D2"), ("Gypi", "D4")]], qubit_labels=qubits
     )
     operations["X"] = QuantumLogicalOperation(logical_X_circ, name="Logical X")
 
+    # Logical Z (transversal)
+    # Eqn B3 of arxiv:2208.01863
+    logical_Z_circ = PhysicalCircuit(
+        [[("Gxpi", "D0"), ("Gzpi", "D2"), ("Gxpi", "D4")]], qubit_labels=qubits
+    )
+    operations["Z"] = QuantumLogicalOperation(logical_Z_circ, name="Logical Z")
+
     # Logical H (transversal + permute)
+    # Fig 2b of arxiv:1603.03948
     logical_H_circ = PhysicalCircuit(
-        [[("Gxpi", q) for q in qubits[2:]]], qubit_labels=qubits
+        [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
     )
     logical_H_circ_inst = QuantumLogicalOperation(
         logical_H_circ, name="Logical H circuit"
     )
-    # TODO: Double check this is the correct permutation in the Gottesman convention
     logical_H_permutation = PermutePatch(
-        {
-            "A0": "A1",
-            "A1": "D2",
-            "D1": "A1",
-            "D2": "D1",
+        {  # final: initial
+            "D0": "D1",
+            "D1": "D4",
+            # D2 is unpermuted
+            "D3": "D0",
+            "D4": "D3",
         },
         name="Logical H permutation",
     )
@@ -132,8 +134,8 @@ def create_qec_code():
         [logical_H_circ_inst, logical_H_permutation], name="Logical H"
     )
 
-    # Eqn 8 of arxiv:1603.03948
-    stabilizers = ["ZZXIX", "XZZXI", "IXZZX", "XIXZZ"]
+    # Eqn B4-B7 of arxiv:2208.01863
+    stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
     syndrome_circuit = PhysicalCircuit([], qubit_labels=qubits)
     syndrome_qubits = {}
     for i, stab in enumerate(stabilizers):
@@ -156,22 +158,26 @@ def create_qec_code():
 
 ## Helper functions
 def _create_syndrome_check_circuit(stabilizer: str) -> PhysicalCircuit:
-    """TODO"""
+    """TODO
+
+    Essentially the Wikipedia version of syndrome extraction.
+    TODO: Not FT to X errors on auxiliary?
+    Either use 2 qubits or use Las Vegas approach?
+    """
     assert all(
         [p in "IXZ" for p in stabilizer]
     ), "Stabilizer must be Pauli string with only I, X, or Z"
 
     layers = []
 
-    # We can do Z-type checks by CNOT from target to aux
-    for Zloc in np.where([p == "Z" for p in stabilizer])[0]:
-        layers.append(("Gcnot", f"D{Zloc}", "A0"))
-
-    # We can go X-type checks by H on aux, CNOT from aux to target,
-    # and then undoing the H
     layers.append(("Gh", "A0"))
+
+    for Zloc in np.where([p == "Z" for p in stabilizer])[0]:
+        layers.append(("Gcphase", "A0", f"D{Zloc}"))
+
     for Xloc in np.where([p == "X" for p in stabilizer])[0]:
         layers.append(("Gcnot", "A0", f"D{Xloc}"))
+
     layers.append(("Gh", "A0"))
 
     layers.append(("Iz", "A0"))

@@ -125,10 +125,14 @@ class RepeatUntilSuccess(FeedForwardUpdate):
         self, outcomes: MeasurementOutcomes, stack: InstructionStack
     ) -> InstructionStack:
         """TODO"""
-        # Copy stack
+        if self.repeat_counter == self.max_repeats - 1:
+            raise RuntimeError(f"Hit max repeats in {self}")
 
+        # TODO: implement
+        # Copy stack
         # Check for all 0 outcome, and return unmodified stack
         # Else, add this instruction back on the stack
+        # Increment repeat counter
 
         return stack
 
@@ -137,7 +141,11 @@ class RepeatUntilSuccess(FeedForwardUpdate):
         instruction_to_repeat: Instruction,
         name: str = "(Unnamed repeat-until-success operation)",
         parent: InstructionParentTypes = None,
+        max_repeats: int = 100,
+        repeat_counter: int = 0,
     ) -> None:
         """TODO"""
         self.instruction_to_repeat = instruction_to_repeat
+        self.max_repeats = max_repeats
+        self.repeat_counter = repeat_counter
         super().__init__(self.update_fn, name, parent)
