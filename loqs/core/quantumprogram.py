@@ -8,6 +8,7 @@ import warnings
 
 from loqs.core import Instruction, InstructionStack, HistoryStack
 from loqs.core.history import HistoryStackCastableTypes
+from loqs.core.instruction import InstructionLabel
 from loqs.core.recordables import PatchDict
 
 
@@ -65,12 +66,21 @@ class QuantumProgram:
         stack = InstructionStack.cast(self.history[-1][self.stack_key])
 
         while num_frames < max_frame_limit and len(stack):
-            # Resolve instruction
+            print(f"Working on frame {num_frames+1}")
 
-            # Perform instruction
+            inst, stack = stack.pop_instruction()
+            print(f"Working on {inst}")
 
-            # Update stack
+            inst = self._resolve_instruction(inst)
+            print(f"Resolved to {inst}")
 
+            applied_frame = inst.apply(self.history)
+            print(f"Applied frame: {applied_frame}")
+
+            new_frame = applied_frame.update({"stack": stack})
+            print(f"Updated stack frame: {new_frame}")
+
+            self.history.append(new_frame)
             num_frames += 1
 
         if len(stack):
@@ -79,3 +89,46 @@ class QuantumProgram:
             )
 
         return HistoryStack.cast(self.history[-num_frames:])
+
+    def _resolve_instruction(
+        self, inst_or_lbl: Instruction | InstructionLabel
+    ) -> Instruction:
+        if isinstance(inst_or_lbl, Instruction):
+            return inst_or_lbl
+
+        ilbl = InstructionLabel.cast(inst_or_lbl)
+
+        # First check global
+        if ilbl.patch_label is None:
+            try:
+                inst = self.global_instructions[ilbl.inst_label]
+            except KeyError:
+                raise RuntimeError(
+                    f"Could not resolve global instruction from {ilbl}"
+                )
+
+            return inst
+
+        # Otherwise, we must be a patch instruction
+        try:
+            patchdict = PatchDict.cast(self.history[-1][self.patch_key])
+        except KeyError:
+            raise RuntimeError(
+                f"{self.patch_key} not available in last frame for resolving {ilbl}"
+            )
+
+        try:
+            patch = patchdict.patches[ilbl.patch_label]
+        except KeyError:
+            raise RuntimeError(
+                f"Patch {ilbl.patch_label} not available for resolving {ilbl}"
+            )
+
+        try:
+            inst = patch[ilbl.inst_label]
+        except KeyError:
+            raise RuntimeError(
+                f"{ilbl.inst_label} not available in patch for resolving {ilbl}"
+            )
+
+        return inst

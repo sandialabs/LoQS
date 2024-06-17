@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
+import pprint
+import textwrap
 from typing import Literal, TypeAlias, TypeVar
 
 from loqs.core import HistoryFrame, HistoryStack, Recordable
@@ -191,22 +193,8 @@ class InstructionLabel(Castable):
     :attr:`QECCode.instructions`.
     """
 
-    patch_labels: list[str]
-    """Target patch labels."""
-
-    patch_type: Literal["global"] | str | None = None
-    """The type of instruction.
-
-    This can be "global" to look in
-    :attr:`InstructionSet.instructions`,
-    or be a key into :attr:`InstructionSet.codes`.
-    If not provided, the :class:`InstructionSet`
-    will attempt to search for `targets` in the
-    :attr:`InstructionSet.parent`.
-    If there is no parent, or the targets cannot be found,
-    it will result in a KeyError from
-    :meth:`InstructionSet.__getitem__`.
-    """
+    patch_label: str | None
+    """Target patch label."""
 
     inst_args: tuple
     """Additional arguments to pass on.
@@ -215,8 +203,7 @@ class InstructionLabel(Castable):
     def __init__(
         self,
         inst_label: str,
-        patch_labels: str | Sequence[str],
-        patch_type: Literal["global"] | str | None = None,
+        patch_label: str | None = None,
         inst_args: Sequence | None = None,
     ) -> None:
         """Initialize an :class:`InstructionLabel`.
@@ -224,25 +211,25 @@ class InstructionLabel(Castable):
         TODO
         """
         self.inst_label = inst_label
-
-        if isinstance(patch_labels, str):
-            patch_labels = [patch_labels]
-        assert all(
-            [isinstance(lbl, str) for lbl in patch_labels]
-        ), "Patch labels must all be strings"
-        self.patch_labels = list(patch_labels)
-
-        self.patch_type = patch_type
+        self.patch_label = patch_label
 
         if inst_args is None:
             inst_args = []
         self.inst_args = tuple(inst_args)
 
-    # This is one of the cases where we do not have a nice single argument cast
-    # Override the cast method to accept a tuple of 2/3 args
+    def __str__(self) -> str:
+        """TODO"""
+        return self.__repr__()
+
+    def __repr__(self) -> str:
+        """TODO"""
+        s = f"InstructionLabel({self.inst_label},"
+        s += f"{self.patch_label},{self.inst_args})\n"
+        return s
+
     @classmethod
     def cast(cls, obj: object) -> InstructionLabel:
-        """Cast to a :class:`SyndromeExtraction` object.
+        """Cast to a :class:`InstructionLabel` object.
 
         Unlike most castable objects, :class:`InstructionLabel`
         requires at least two inputs. This version of cast additionally
@@ -269,8 +256,8 @@ class InstructionLabel(Castable):
         elif isinstance(obj, dict):
             # Assume this is a kwarg dict, pass in all kwargs
             return cls(**obj)
-        elif isinstance(obj, Sequence) and not isinstance(obj, str):
-            # Assume this is a tuple, pass in arguments in order
+        elif isinstance(obj, tuple):
+            # Assume this is a tuple of arguments, pass all in
             return cls(*obj)
 
         # Else we can't handle this
@@ -315,6 +302,14 @@ class InstructionStack(Sequence[Instruction | InstructionLabel], Recordable):
 
     def __len__(self):
         return len(self._instructions)
+
+    def __str__(self):
+        s = f"InstructionStack with {len(self)} items:\n"
+        for i, inst in enumerate(self._instructions):
+            si = str(inst)
+            si = textwrap.indent(si, "  ")
+            s += si
+        return s
 
     def append_instruction(self, item) -> InstructionStack:
         return self.insert_instruction(len(self), item)

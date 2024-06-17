@@ -66,6 +66,9 @@ class Decoder(Instruction):
                 f"Cannot create a decoder from {decoder}"
             )
 
+    def __repr__(self):
+        return "TODO: DECODER"
+
     @property
     def input_frame_spec(self) -> dict[str, type]:
         return {

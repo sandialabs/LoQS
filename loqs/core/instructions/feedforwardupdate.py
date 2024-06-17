@@ -156,3 +156,6 @@ class RepeatUntilSuccess(FeedForwardUpdate):
         self.instruction_to_repeat = instruction_to_repeat
         self.max_repeats = max_repeats
         self.repeat_counter = repeat_counter
+
+    def __repr__(self):
+        return "REPEAT UNTIL SUCCESS"

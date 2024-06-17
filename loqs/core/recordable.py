@@ -2,6 +2,7 @@
 """
 
 from abc import ABC
+from pprint import pformat, saferepr
 
 from loqs.internal.castable import Castable
 
@@ -13,4 +14,10 @@ class Recordable(ABC, Castable):
     functionality at least.
     """
 
-    # TODO
+    def __str__(self):
+        """TODO"""
+        return pformat(vars(self), indent=2)
+
+    def __repr__(self):
+        """TODO"""
+        return saferepr(vars(self))

@@ -2,6 +2,7 @@
 """
 
 from __future__ import annotations
+import textwrap
 import warnings
 
 from collections.abc import Iterator, Mapping, Sequence
@@ -74,6 +75,14 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
     def __iter__(self) -> Iterator[str]:
         return iter(self._data)
 
+    def __str__(self) -> str:
+        s = f"HistoryFrame with {len(self)} Recordables:\n"
+        for k, v in self.items():
+            s += f"  '{k}' ({type(v)}):\n"
+            sv = str(v)
+            s += textwrap.indent(sv, "    ") + "\n"
+        return s
+
     @property
     def frame_spec(self):
         return {k: type(v) for k, v in self._data.items()}
@@ -91,7 +100,7 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
         if new_log is None:
             new_log = self.log
 
-        return HistoryFrame(new_data, new_log)
+        return HistoryFrame(data, new_log)
 
 
 class HistoryStack(Sequence[HistoryFrame], Castable):
@@ -155,6 +164,14 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
 
     def __len__(self) -> int:
         return len(self._history)
+
+    def __str__(self):
+        s = f"HistoryStack with {len(self)} items:\n"
+        for frame in self._history:
+            sf = str(frame)
+            sf = textwrap.indent(sf, "  ")
+            s += sf
+        return s
 
     @property
     def std_frame_spec(self) -> dict[str, type]:
