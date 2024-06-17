@@ -9,5 +9,6 @@ from .logicaloperation import (
     QuantumClassicalLogicalOperation,
 )
 from .mockoperation import MockOperation
-from .permutepatch import PermutePatch
+from .objbuilder import ObjectBuilder
+from .patchoperations import PermutePatch
 from .syndromeextraction import SyndromeExtraction

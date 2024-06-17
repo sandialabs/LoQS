@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+import warnings
 
-from loqs.core import InstructionStack, HistoryStack, QECCode
-from loqs.core.instruction import InstructionStackCastableTypes
+from loqs.core import Instruction, InstructionStack, HistoryStack
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.recordables import PatchDict
-from loqs.core.recordables.patchdict import PatchDictCastableTypes
 
 
 class QuantumProgram:
@@ -17,25 +16,66 @@ class QuantumProgram:
 
     def __init__(
         self,
-        input_stack: InstructionStackCastableTypes,
-        qec_codes: Mapping[str, QECCode],
-        initial_history: HistoryStackCastableTypes | None = None,
-        patches: PatchDictCastableTypes = None,
-        qubit_labels: Sequence[str] | None = None,
+        initial_history: HistoryStackCastableTypes,
+        patch_key: str = "patches",
+        stack_key: str = "stack",
+        global_instructions: Mapping[str, Instruction] | None = None,
     ) -> None:
         """Initialize a QuantumProgram from a list of operations."""
-        self.input_stack = InstructionStack.cast(input_stack)
-        self.qec_codes = {k: v for k, v in qec_codes.items()}
         self.history = HistoryStack.cast(initial_history)
+        self.patch_key = patch_key
+        self.stack_key = stack_key
+
+        # TODO: Add patch creation to global instruction if not available
+        if global_instructions is None:
+            global_instructions = {}
+        self.global_instructions = {
+            k: v for k, v in global_instructions.items()
+        }
+        assert all(
+            [
+                isinstance(v, Instruction)
+                for v in self.global_instructions.values()
+            ]
+        )
+
+        # Check that required keys are available
+        assert len(
+            self.history
+        ), "Must provide starting frame with at least initial stack"
+        last_frame = self.history[-1]
 
         assert (
-            qubit_labels is not None or patches is not None
-        ), "Must provide either complete list of physical qubits or code patches"
+            stack_key in last_frame
+        ), f"`stack_key` {stack_key} not available in initial history"
+        try:
+            InstructionStack.cast(last_frame[stack_key])
+        except Exception as e:
+            raise ValueError("Cannot create stack") from e
 
-        self.patches = PatchDict.cast(patches)
+        try:
+            PatchDict.cast(last_frame.get(patch_key, None))
+        except Exception as e:
+            raise ValueError("Cannot create patches") from e
 
-        if qubit_labels is None:
-            qubit_labels = self.patches.all_qubit_labels
-        self.qubit_labels = qubit_labels
+    def run(self, max_frame_limit: int = 100) -> HistoryStack:
+        """TODO"""
+        num_frames = 0
 
-        # TODO: Initialize quantum state
+        stack = InstructionStack.cast(self.history[-1][self.stack_key])
+
+        while num_frames < max_frame_limit and len(stack):
+            # Resolve instruction
+
+            # Perform instruction
+
+            # Update stack
+
+            num_frames += 1
+
+        if len(stack):
+            warnings.warn(
+                f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
+            )
+
+        return HistoryStack.cast(self.history[-num_frames:])

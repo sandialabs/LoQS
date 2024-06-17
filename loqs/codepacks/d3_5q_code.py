@@ -49,7 +49,8 @@ def create_qec_code():
     # TODO: Verify this is actually minus
     operations["Non-FT Minus Prep"] = QuantumLogicalOperation(
         nonft_state_prep_circ,
-        name="Non-fault-tolerant |-> state prep",
+        name="Non-fault-tolerant minus state prep",
+        fault_tolerant=False,
     )
 
     # Try-until-success FT |-> state prep
@@ -89,6 +90,7 @@ def create_qec_code():
     ft_state_prep = QuantumClassicalLogicalOperation(
         ft_state_prep_circ,
         name="Non-fault-tolerant minus state prep",
+        fault_tolerant=True,
         reset_mcms=True,
     )
 
@@ -102,14 +104,18 @@ def create_qec_code():
     logical_X_circ = PhysicalCircuit(
         [[("Gypi", "D0"), ("Gxpi", "D2"), ("Gypi", "D4")]], qubit_labels=qubits
     )
-    operations["X"] = QuantumLogicalOperation(logical_X_circ, name="Logical X")
+    operations["X"] = QuantumLogicalOperation(
+        logical_X_circ, name="Logical X", fault_tolerant=True
+    )
 
     # Logical Z (transversal)
     # Eqn B3 of arxiv:2208.01863
     logical_Z_circ = PhysicalCircuit(
         [[("Gxpi", "D0"), ("Gzpi", "D2"), ("Gxpi", "D4")]], qubit_labels=qubits
     )
-    operations["Z"] = QuantumLogicalOperation(logical_Z_circ, name="Logical Z")
+    operations["Z"] = QuantumLogicalOperation(
+        logical_Z_circ, name="Logical Z", fault_tolerant=True
+    )
 
     # Logical H (transversal + permute)
     # Fig 2b of arxiv:1603.03948
@@ -117,7 +123,7 @@ def create_qec_code():
         [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
     )
     logical_H_circ_inst = QuantumLogicalOperation(
-        logical_H_circ, name="Logical H circuit"
+        logical_H_circ, name="Logical H circuit", fault_tolerant=True
     )
     logical_H_permutation = PermutePatch(
         {  # final: initial
@@ -143,7 +149,10 @@ def create_qec_code():
         syndrome_circuit.append_inplace(stabilizer_circuit)
         syndrome_qubits[stab] = ("A0", i)
 
-    operations["SE"] = SyndromeExtraction(syndrome_circuit, syndrome_qubits)
+    # TODO: Current SE is not FT
+    operations["SE"] = SyndromeExtraction(
+        syndrome_circuit, syndrome_qubits, fault_tolerant=False
+    )
 
     # Decoder (computed from commutation relations to stabilizers)
     lookup_table = _create_decoder_lookup(stabilizers)

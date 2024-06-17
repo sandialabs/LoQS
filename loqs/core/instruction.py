@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import TypeAlias, TypeVar
+from typing import Literal, TypeAlias, TypeVar
 
 from loqs.core import HistoryFrame, HistoryStack, Recordable
 from loqs.core.history import HistoryStackCastableTypes
+from loqs.internal.castable import Castable
 
 
 T = TypeVar("T", bound="Instruction")
@@ -18,8 +19,14 @@ InstructionParentTypes: TypeAlias = "Instruction | InstructionStack | None"
 """TODO"""
 
 
+InstructionLabelCastableTypes: TypeAlias = (
+    "tuple[str, str | list[str]] | tuple[str, str | list[str], str | None] | InstructionLabel"
+)
+"""TODO"""
+
+
 InstructionStackCastableTypes: TypeAlias = (
-    "InstructionStack | Sequence[Instruction] | Instruction | None"
+    "InstructionStack | Instruction | InstructionLabelCastableTypes | Sequence[Instruction | InstructionLabelCastableTypes] | None"
 )
 
 
@@ -29,16 +36,11 @@ class Instruction(Recordable):
         self,
         name: str = "(Unnamed)",
         parent: InstructionParentTypes = None,
-        fault_tolerant: bool = True,
+        fault_tolerant: bool | None = None,
     ) -> None:
         self.name = name
         self.parent = parent
-        self._is_ft = fault_tolerant
-
-    @property
-    def fault_tolerant(self) -> bool:
-        """Whether this has been marked as fault-tolerant."""
-        return self._is_ft
+        self.fault_tolerant = fault_tolerant
 
     @property
     @abstractmethod
@@ -173,33 +175,140 @@ class Instruction(Recordable):
 
     def map_qubits(self: T, qubit_mapping: Mapping[str, str]) -> T:
         """TODO"""
+        # Many instructions don't have qubits that need to be mapped
+        # so default to just returning unmodified object
         return self
 
 
-class InstructionStack(Sequence[Instruction], Recordable):
+class InstructionLabel(Castable):
+    """Key type for an InstructionSet."""
 
-    _instructions: list[Instruction]
+    inst_label: str
+    """Instruction name.
+
+    This should be the key to look up either in the
+    :attr:`InstructionSet.instructions` or a
+    :attr:`QECCode.instructions`.
+    """
+
+    patch_labels: list[str]
+    """Target patch labels."""
+
+    patch_type: Literal["global"] | str | None = None
+    """The type of instruction.
+
+    This can be "global" to look in
+    :attr:`InstructionSet.instructions`,
+    or be a key into :attr:`InstructionSet.codes`.
+    If not provided, the :class:`InstructionSet`
+    will attempt to search for `targets` in the
+    :attr:`InstructionSet.parent`.
+    If there is no parent, or the targets cannot be found,
+    it will result in a KeyError from
+    :meth:`InstructionSet.__getitem__`.
+    """
+
+    inst_args: tuple
+    """Additional arguments to pass on.
+    """
+
+    def __init__(
+        self,
+        inst_label: str,
+        patch_labels: str | Sequence[str],
+        patch_type: Literal["global"] | str | None = None,
+        inst_args: Sequence | None = None,
+    ) -> None:
+        """Initialize an :class:`InstructionLabel`.
+
+        TODO
+        """
+        self.inst_label = inst_label
+
+        if isinstance(patch_labels, str):
+            patch_labels = [patch_labels]
+        assert all(
+            [isinstance(lbl, str) for lbl in patch_labels]
+        ), "Patch labels must all be strings"
+        self.patch_labels = list(patch_labels)
+
+        self.patch_type = patch_type
+
+        if inst_args is None:
+            inst_args = []
+        self.inst_args = tuple(inst_args)
+
+    # This is one of the cases where we do not have a nice single argument cast
+    # Override the cast method to accept a tuple of 2/3 args
+    @classmethod
+    def cast(cls, obj: object) -> InstructionLabel:
+        """Cast to a :class:`SyndromeExtraction` object.
+
+        Unlike most castable objects, :class:`InstructionLabel`
+        requires at least two inputs. This version of cast additionally
+        allows a tuple/list variant for the multiple arguments and
+        disallows a single object being passed in.
+
+        Parameters
+        ----------
+        obj:
+            A castable object that is either:
+            - Already a :class:`InstructionLabel` object,
+            in which case `obj` is returned
+            - A kwarg dict that is passed into the constructor
+            - A sequence of the arguments of the
+            :class:`InstructionLabel` constructor
+
+        Returns
+        -------
+            A :class:`SyndromeExtraction` object
+        """
+        if isinstance(obj, cls):
+            # We are already the correct class, perform no copy
+            return obj
+        elif isinstance(obj, dict):
+            # Assume this is a kwarg dict, pass in all kwargs
+            return cls(**obj)
+        elif isinstance(obj, Sequence) and not isinstance(obj, str):
+            # Assume this is a tuple, pass in arguments in order
+            return cls(*obj)
+
+        # Else we can't handle this
+        raise ValueError(
+            "InstructionLabel requires at least two arguments to cast. "
+            + "Use a tuple of arguments or kwarg dict when casting."
+        )
+
+
+class InstructionStack(Sequence[Instruction | InstructionLabel], Recordable):
+
+    _instructions: list[Instruction | InstructionLabel]
     """Internal list of instructions"""
 
     def __init__(
         self, instructions: InstructionStackCastableTypes = None
     ) -> None:
         """Initialize an InstructionStack."""
+        self._instructions = []
         if isinstance(instructions, InstructionStack):
             self._instructions = instructions._instructions
         elif isinstance(instructions, Instruction):
             self._instructions = [instructions]
         elif isinstance(instructions, Sequence):
-            assert all(
-                [isinstance(inst, Instruction) for inst in instructions]
-            ), "InstructionStack can only hold Instructions"
+            for inst in instructions:
+                if not isinstance(inst, Instruction):
+                    try:
+                        inst = InstructionLabel.cast(inst)
+                    except ValueError as e:
+                        raise ValueError(
+                            f"Failed to cast {inst} to InstructionLabel"
+                        ) from e
 
-            self._instructions = list(instructions)
-        else:
-            self._instructions = []
+                self._instructions.append(inst)
 
         for inst in self._instructions:
-            inst.parent = self
+            if isinstance(inst, Instruction):
+                inst.parent = self
 
     def __getitem__(self, i):
         return self._instructions[i]
@@ -207,15 +316,20 @@ class InstructionStack(Sequence[Instruction], Recordable):
     def __len__(self):
         return len(self._instructions)
 
-    def append_instruction(self, item):
+    def append_instruction(self, item) -> InstructionStack:
         return self.insert_instruction(len(self), item)
 
-    def delete_instruction(self, i):
+    def delete_instruction(self, i) -> InstructionStack:
         instructions = self._instructions.copy()
         del instructions[i]
         return InstructionStack(instructions)
 
-    def insert_instruction(self, i, item):
+    def insert_instruction(self, i, item) -> InstructionStack:
         instructions = self._instructions.copy()
         instructions.insert(i, item)
         return InstructionStack(instructions)
+
+    def pop_instruction(
+        self,
+    ) -> tuple[Instruction | InstructionLabel, InstructionStack]:
+        return self._instructions[0], InstructionStack(self._instructions[1:])

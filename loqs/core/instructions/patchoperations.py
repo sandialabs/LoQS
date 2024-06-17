@@ -22,22 +22,25 @@ class PermutePatch(Instruction):
         mapping: PermutePatchCastable,
         name: str = "(Unnamed patch permutation)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         """TODO
 
         Parameters
         ----------
         """
+        super().__init__(name, parent, fault_tolerant)
+
+        if self.fault_tolerant is None:
+            # Assume FT unless explicitly set to False
+            self.fault_tolerant = True
+
         if isinstance(mapping, PermutePatch):
             self.mapping = mapping.mapping
         elif isinstance(mapping, Mapping):
             self.mapping = {k: v for k, v in mapping.items()}
         else:
-            raise NotImplementedError(
-                "Cannot create PermutePatch from given mapping"
-            )
-
-        super().__init__(name, parent)
+            raise ValueError("Cannot create PermutePatch from given mapping")
 
     @property
     def input_frame_spec(self) -> dict[str, type]:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 from collections.abc import Sequence
 from typing import Mapping, TypeAlias
+import warnings
 
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
@@ -24,6 +25,7 @@ class CompositeInstruction(Instruction):
         instructions: CompositeInstructionCastableTypes,
         name: str = "(Unnamed composite)",
         parent: Instruction | None = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         super().__init__(name=name, parent=parent)
 
@@ -31,8 +33,19 @@ class CompositeInstruction(Instruction):
             self.instructions = instructions.instructions
             self.parent = instructions.parent if parent is None else parent
         else:
-            # TODO: Type-check
+            assert all([isinstance(i, Instruction) for i in instructions])
             self.instructions = list(instructions)
+
+        self.fault_tolerant = all(
+            [i.fault_tolerant for i in self.instructions]
+        )
+        if fault_tolerant is not None:
+            if self.fault_tolerant != fault_tolerant:
+                warnings.warn(
+                    f"Fault-tolerance of composite instruction set to {fault_tolerant}"
+                    + f", but underlying components have joint fault-tolerance of {self.fault_tolerant}"
+                )
+            self.fault_tolerant = fault_tolerant
 
     @property
     def input_frame_spec(self) -> dict[str, type]:

@@ -43,8 +43,15 @@ class Decoder(Instruction):
         decoder: DecoderCastableTypes,
         name: str = "(Unnamed decoder)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         """TODO"""
+        super().__init__(name, parent, fault_tolerant)
+
+        if self.fault_tolerant is None:
+            # Assume FT unless explicitly set to False
+            self.fault_tolerant = True
+
         if isinstance(decoder, Decoder):
             self.decoder_fn = decoder.decoder_fn
             self.decoder_table = decoder.decoder_table
@@ -58,8 +65,6 @@ class Decoder(Instruction):
             raise NotImplementedError(
                 f"Cannot create a decoder from {decoder}"
             )
-
-        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:

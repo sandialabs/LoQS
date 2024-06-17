@@ -41,13 +41,14 @@ class SyndromeExtraction(QuantumClassicalLogicalOperation):
         syndrome_measurements: SyndromeLabelsTypes,
         name: str = "(Unnamed syndrome extraction)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         """TODO
 
         Parameters
         ----------
         """
-        super().__init__(physical_circuit, name, parent)
+        super().__init__(physical_circuit, name, parent, fault_tolerant)
 
         if isinstance(syndrome_measurements, Mapping):
             self.stabilizers = list(syndrome_measurements.keys())

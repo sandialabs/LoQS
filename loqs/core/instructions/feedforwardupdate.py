@@ -47,8 +47,15 @@ class FeedForwardUpdate(Instruction):
         ffupdate: FeedForwardUpdateCastableTypes,
         name: str = "(Unnamed feed-forward update)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         """TODO"""
+        super().__init__(name, parent, fault_tolerant)
+
+        if self.fault_tolerant is None:
+            # Assume FT unless explicitly set to False
+            self.fault_tolerant = True
+
         if isinstance(ffupdate, FeedForwardUpdate):
             self.update_fn = ffupdate.update_fn
             self.update_table = ffupdate.update_table
@@ -62,8 +69,6 @@ class FeedForwardUpdate(Instruction):
             raise NotImplementedError(
                 f"Cannot create a feed-forward update from {ffupdate}"
             )
-
-        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:
@@ -141,11 +146,13 @@ class RepeatUntilSuccess(FeedForwardUpdate):
         instruction_to_repeat: Instruction,
         name: str = "(Unnamed repeat-until-success operation)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
         max_repeats: int = 100,
         repeat_counter: int = 0,
     ) -> None:
         """TODO"""
+        super().__init__(self.update_fn, name, parent, fault_tolerant)
+
         self.instruction_to_repeat = instruction_to_repeat
         self.max_repeats = max_repeats
         self.repeat_counter = repeat_counter
-        super().__init__(self.update_fn, name, parent)

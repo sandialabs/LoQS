@@ -33,18 +33,19 @@ class MockOperation(Instruction):
         state_map: MockOperationCastableTypes,
         name: str = "(Unnamed mock operation)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         """Initialize a :class:`MockOperation`.
 
         Parameters
         ----------
         """
+        super().__init__(name, parent, fault_tolerant)
+
         if isinstance(state_map, MockOperation):
             self.state_map = state_map.state_map
         else:
             self.state_map = {k: v for k, v in state_map.items()}
-
-        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:

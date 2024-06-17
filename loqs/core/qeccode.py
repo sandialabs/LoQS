@@ -11,11 +11,11 @@ class QECCode:
 
     def __init__(
         self,
-        logical_operations: Mapping[str, Instruction],
+        instructions: Mapping[str, Instruction],
         template_qubits: Sequence[str],
     ):
         """TODO"""
-        self.logical_operations = {k: v for k, v in logical_operations.items()}
+        self.instructions = {k: v for k, v in instructions.items()}
         self.template_qubits = list(template_qubits)
 
     def create_patch(self, qubits: Sequence[str]):
@@ -38,7 +38,7 @@ class QECCodePatch(Mapping[str, Instruction]):
 
     def __getitem__(self, key: str) -> Instruction:
         try:
-            template_op = self.code.logical_operations[key]
+            template_op = self.code.instructions[key]
         except KeyError:
             raise KeyError(
                 f"Operation {key} not available in code {self.code}"
@@ -50,7 +50,7 @@ class QECCodePatch(Mapping[str, Instruction]):
         return template_op.map_qubits(mapping)
 
     def __len__(self) -> int:
-        return len(self.code.logical_operations)
+        return len(self.code.instructions)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.code.logical_operations)
+        return iter(self.code.instructions)

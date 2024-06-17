@@ -25,12 +25,15 @@ class QuantumLogicalOperation(Instruction):
         physical_circuit: LogicalOperationCastableTypes,
         name: str = "(Unnamed quantum logical operation)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
     ) -> None:
         """TODO
 
         Parameters
         ----------
         """
+        super().__init__(name, parent, fault_tolerant)
+
         if isinstance(physical_circuit, QuantumLogicalOperation):
             self.physical_circuit = physical_circuit.physical_circuit
         elif isinstance(physical_circuit, BasePhysicalCircuit):
@@ -39,8 +42,6 @@ class QuantumLogicalOperation(Instruction):
             raise ValueError(
                 f"Cannot create QuantumLogicalOperation from {physical_circuit}"
             )
-
-        super().__init__(name, parent)
 
     @property
     def input_frame_spec(self) -> dict[str, type]:
@@ -100,9 +101,11 @@ class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
         physical_circuit: LogicalOperationCastableTypes,
         name: str = "(Unnamed quantum-classical logical operation)",
         parent: InstructionParentTypes = None,
+        fault_tolerant: bool | None = None,
         reset_mcms: bool = True,
     ) -> None:
-        super().__init__(physical_circuit, name, parent)
+        super().__init__(physical_circuit, name, parent, fault_tolerant)
+
         self.reset_mcms = reset_mcms
 
     @property
