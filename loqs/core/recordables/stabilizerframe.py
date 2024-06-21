@@ -5,8 +5,7 @@ from __future__ import annotations
 
 from typing import Sequence, TypeAlias
 
-from loqs.core.recordable import Recordable
-from loqs.internal import Bit
+from loqs.internal import Bit, Recordable
 
 
 StabilizerFrameCastableTypes: TypeAlias = "StabilizerFrame | Sequence[str]"

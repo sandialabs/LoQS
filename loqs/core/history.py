@@ -8,8 +8,7 @@ import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias, overload
 
-from loqs.core.recordable import Recordable
-from loqs.internal.castable import Castable
+from loqs.internal import Castable, Recordable
 
 
 HistoryFrameCastableTypes: TypeAlias = (
@@ -61,10 +60,14 @@ class HistoryFrame(Mapping[str, Recordable], Castable):
 
         self._expired_keys: list[str] = []
 
+    # We define this one to avoid __getitem__ warning until value is actually returned
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
+
     def __getitem__(self, key: str) -> Recordable:
         if key in self._expired_keys:
             warnings.warn(
-                f"Accessing an expired recordable {key} from frame {self}. "
+                f"Accessing an expired recordable {key}. "
                 + "The returned object may actually belong to a future frame."
             )
         return self._data[key]
@@ -118,7 +121,7 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
     def __init__(
         self,
         history: HistoryStackCastableTypes = None,
-        expiring_keys: list[str] | None = None,
+        expiring_keys: Sequence[str] | None = ("state",),
     ) -> None:
         """TODO"""
         self._history = []
@@ -127,7 +130,7 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
 
         if expiring_keys is None:
             expiring_keys = []
-        self.expiring_keys = expiring_keys
+        self.expiring_keys = set(expiring_keys)
         self._expiring_key_locs: dict[str, int] = {}
 
         if isinstance(history, HistoryStack):
@@ -135,8 +138,8 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
             self._std_spec = history._std_spec
             self._nonstd_spec = history._nonstd_spec
             # Take union of expiring keys
-            self.expiring_keys = list(
-                set(expiring_keys).union(set(history.expiring_keys))
+            self.expiring_keys = self.expiring_keys.union(
+                history.expiring_keys
             )
         elif isinstance(history, Sequence):
             for frame in history:

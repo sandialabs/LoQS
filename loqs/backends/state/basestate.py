@@ -7,7 +7,7 @@ from abc import abstractmethod
 from collections.abc import Sequence
 from typing import ClassVar, TypeVar
 
-from loqs.core import Recordable
+from loqs.internal.recordable import Recordable
 
 
 # Generic type variable to stand-in for derived class below

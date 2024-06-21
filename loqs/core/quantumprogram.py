@@ -6,9 +6,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 import warnings
 
+from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, HistoryStack
-from loqs.core.history import HistoryStackCastableTypes
-from loqs.core.instruction import InstructionLabel
+from loqs.core.history import HistoryFrame, HistoryStackCastableTypes
+from loqs.core.instruction import (
+    InstructionLabel,
+    InstructionStackCastableTypes,
+)
+from loqs.core.instructions import ObjectBuilder
+from loqs.core.instructions.patchoperations import PatchBuilder, PatchRemover
+from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
 
 
@@ -17,17 +24,52 @@ class QuantumProgram:
 
     def __init__(
         self,
-        initial_history: HistoryStackCastableTypes,
+        instruction_stack: InstructionStackCastableTypes = None,
+        initial_history: HistoryStackCastableTypes = None,
+        state_key: str = "state",
+        expiring_state: bool = True,
         patch_key: str = "patches",
         stack_key: str = "stack",
         global_instructions: Mapping[str, Instruction] | None = None,
+        state_type: type[BaseQuantumState] | None = None,
+        patch_types: Mapping[str, QECCode] | None = None,
     ) -> None:
-        """Initialize a QuantumProgram from a list of operations."""
+        """Initialize a QuantumProgram from a list of operations.
+
+        TODO
+        """
         self.history = HistoryStack.cast(initial_history)
+        if instruction_stack is None and (
+            initial_history is None
+            or len(self.history) < 1
+            or stack_key not in self.history[-1]
+        ):
+            raise ValueError(
+                "Must provide either initial instruction stack or history with a stack"
+            )
+
+        self.state_key = state_key
+        if expiring_state:
+            self.history.expiring_keys.add(self.state_key)
         self.patch_key = patch_key
         self.stack_key = stack_key
 
-        # TODO: Add patch creation to global instruction if not available
+        # Create the instruction stack and add it to the history
+        if instruction_stack is not None:
+            instruction_stack = InstructionStack.cast(instruction_stack)
+
+            if len(self.history):
+                last_frame = HistoryFrame.cast(self.history[-1])
+            else:
+                last_frame = HistoryFrame()
+
+            new_frame = last_frame.update(
+                {self.stack_key: instruction_stack},
+                new_log="Adding InstructionStack from new QuantumProgram",
+            )
+
+            self.history.append(new_frame)
+
         if global_instructions is None:
             global_instructions = {}
         self.global_instructions = {
@@ -40,24 +82,34 @@ class QuantumProgram:
             ]
         )
 
-        # Check that required keys are available
-        assert len(
-            self.history
-        ), "Must provide starting frame with at least initial stack"
-        last_frame = self.history[-1]
+        # Add state initialization, if requested
+        if (
+            "Init State" not in self.global_instructions
+            and state_type is not None
+        ):
+            builder = ObjectBuilder(
+                "state",
+                state_type,
+                name=f"{state_type.__qualname__} state builder",
+            )
+            self.global_instructions["Init State"] = builder
 
-        assert (
-            stack_key in last_frame
-        ), f"`stack_key` {stack_key} not available in initial history"
-        try:
-            InstructionStack.cast(last_frame[stack_key])
-        except Exception as e:
-            raise ValueError("Cannot create stack") from e
+        # Add patch initializations/removals, if requested
+        if (
+            "Init Patch" not in self.global_instructions
+            and patch_types is not None
+        ):
+            for patch_name, patch_code in patch_types.items():
+                builder = PatchBuilder(
+                    patch_code,
+                    self.patch_key,
+                    name=f"{patch_name} patch builder",
+                )
+                self.global_instructions[f"Init {patch_name} Patch"] = builder
 
-        try:
-            PatchDict.cast(last_frame.get(patch_key, None))
-        except Exception as e:
-            raise ValueError("Cannot create patches") from e
+            self.global_instructions["Remove Patch"] = PatchRemover(
+                self.patch_key
+            )
 
     def run(self, max_frame_limit: int = 100) -> HistoryStack:
         """TODO"""
@@ -69,12 +121,19 @@ class QuantumProgram:
             print(f"Working on frame {num_frames+1}")
 
             inst, stack = stack.pop_instruction()
+            if isinstance(inst, InstructionLabel):
+                args = inst.inst_args
+                kwargs = inst.inst_kwargs
+            else:
+                args = []
+                kwargs = {}
             print(f"Working on {inst}")
+            print(f"  with args {args} and kwargs {kwargs}\n")
 
             inst = self._resolve_instruction(inst)
             print(f"Resolved to {inst}")
 
-            applied_frame = inst.apply(self.history)
+            applied_frame = inst.apply(self.history, *args, **kwargs)
             print(f"Applied frame: {applied_frame}")
 
             new_frame = applied_frame.update({"stack": stack})

@@ -5,13 +5,12 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-import pprint
 import textwrap
-from typing import Literal, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 
-from loqs.core import HistoryFrame, HistoryStack, Recordable
+from loqs.core import HistoryFrame, HistoryStack
 from loqs.core.history import HistoryStackCastableTypes
-from loqs.internal.castable import Castable
+from loqs.internal import Castable, Recordable
 
 
 T = TypeVar("T", bound="Instruction")
@@ -44,18 +43,24 @@ class Instruction(Recordable):
         self.parent = parent
         self.fault_tolerant = fault_tolerant
 
+    def __str__(self) -> str:
+        s = f"Instruction {self.name}\n"
+        s += f"  Parent={self.parent}\n"
+        s += f"  Fault-tolerant={self.fault_tolerant}\n"
+        return s
+
     @property
     @abstractmethod
-    def input_frame_spec(self) -> dict[str, type]:
-        """Minimum specification of an input :class:`Trajectory`."""
+    def input_frame_spec(self) -> dict[str, type[Recordable]]:
+        """Minimum specification of an input :class:`HistoryStack`."""
         pass
 
     @property
     def num_req_input_frames(self) -> int:
-        """Minimum number of frames needed in the input :class:`Trajectory`.
+        """Minimum number of frames needed in the input :class:`HistoryStack`.
 
         Defaults to 1, which only looks at the previous frame and allows
-        a single :class:`TrajectoryFrame` to be passed in.
+        a single :class:`HistoryFrame` to be passed in.
         An :class:`Instruction` that requires more history should override
         this to specify the number of frames needed.
         """
@@ -63,8 +68,8 @@ class Instruction(Recordable):
 
     @property
     @abstractmethod
-    def output_frame_spec(self) -> dict[str, type]:
-        """Minimum specification of the returned :class:`TrajectoryFrame`."""
+    def output_frame_spec(self) -> dict[str, type[Recordable]]:
+        """Minimum specification of the returned :class:`HistoryFrame`."""
         pass
 
     def check_frame(
@@ -125,8 +130,10 @@ class Instruction(Recordable):
         return True
 
     @abstractmethod
-    def apply_unsafe(self, input: HistoryStackCastableTypes) -> HistoryFrame:
-        """Workhorse function for generating a new :class:`TrajectoryFrame`.
+    def apply_unsafe(
+        self, input: HistoryStackCastableTypes, *args, **kwargs
+    ) -> HistoryFrame:
+        """Workhorse function for generating a new :class:`HistoryFrame`.
 
         This is an application of the :class:`Instruction` with no safety checks.
         Derived classes should implement this method to enact whatever transformation
@@ -137,6 +144,12 @@ class Instruction(Recordable):
         input:
             The input frame/trajectory information
 
+        *args:
+            Any additional args needed for application
+
+        **kwargs:
+            Any additional kwargs needed for application
+
         Returns
         -------
         output_frame:
@@ -145,7 +158,7 @@ class Instruction(Recordable):
         pass
 
     def apply(
-        self, input: HistoryStackCastableTypes, **kwargs
+        self, input: HistoryStackCastableTypes, *args, **kwargs
     ) -> HistoryFrame:
         """Generate a new :class:`TrajectoryFrame` from the input :class:`Trajectory`.
 
@@ -167,7 +180,7 @@ class Instruction(Recordable):
             input, check_input=True, check_output=False
         ), "Input frame does not match required specification"
 
-        output_frame = self.apply_unsafe(input, **kwargs)
+        output_frame = self.apply_unsafe(input, *args, **kwargs)
 
         assert self.check_frame(
             input, check_input=True, check_output=False
@@ -197,7 +210,11 @@ class InstructionLabel(Castable):
     """Target patch label."""
 
     inst_args: tuple
-    """Additional arguments to pass on.
+    """Additional args to pass on.
+    """
+
+    inst_kwargs: dict[str, object]
+    """Additional kwargs to pass on.
     """
 
     def __init__(
@@ -205,6 +222,7 @@ class InstructionLabel(Castable):
         inst_label: str,
         patch_label: str | None = None,
         inst_args: Sequence | None = None,
+        inst_kwargs: Mapping[str, object] | None = None,
     ) -> None:
         """Initialize an :class:`InstructionLabel`.
 
@@ -217,14 +235,18 @@ class InstructionLabel(Castable):
             inst_args = []
         self.inst_args = tuple(inst_args)
 
+        if inst_kwargs is None:
+            inst_kwargs = {}
+        self.inst_kwargs = dict(inst_kwargs)
+
     def __str__(self) -> str:
         """TODO"""
         return self.__repr__()
 
     def __repr__(self) -> str:
         """TODO"""
-        s = f"InstructionLabel({self.inst_label},"
-        s += f"{self.patch_label},{self.inst_args})\n"
+        s = f"InstructionLabel({self.inst_label},{self.patch_label},"
+        s += f"{self.inst_args},{self.inst_kwargs})\n"
         return s
 
     @classmethod

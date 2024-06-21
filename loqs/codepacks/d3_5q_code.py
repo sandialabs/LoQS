@@ -23,6 +23,7 @@ from loqs.core.instructions import (
 def create_qec_code():
     """TODO"""
 
+    # Template qubits for defining one patch
     qubits = ["A0", "A1"] + [f"D{i}" for i in range(5)]
 
     operations: dict[str, Instruction] = {}

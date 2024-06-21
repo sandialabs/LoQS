@@ -10,5 +10,5 @@ from .logicaloperation import (
 )
 from .mockoperation import MockOperation
 from .objbuilder import ObjectBuilder
-from .patchoperations import PermutePatch
+from .patchoperations import PatchBuilder, PatchRemover, PermutePatch
 from .syndromeextraction import SyndromeExtraction

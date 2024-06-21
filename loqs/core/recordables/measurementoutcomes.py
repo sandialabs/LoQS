@@ -4,7 +4,7 @@
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
-from loqs.core import Recordable
+from loqs.internal import Recordable
 
 
 MeasurementOutcomesCastableTypes: TypeAlias = (
