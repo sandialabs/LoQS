@@ -36,3 +36,5 @@ class MeasurementOutcomes(Recordable):
             self.outcomes = {}
             for k, v in outcomes.items():
                 self.outcomes[k] = [v] if isinstance(v, int) else list(v)
+
+    # TODO: Cast is broken since dict is an allowable type

@@ -29,10 +29,10 @@ def create_qec_code():
 
     # Non-FT |-> state prep
     # First gray box of Fig 3 of arxiv:2208.01863
+
     nonft_state_prep_circ = PhysicalCircuit(
         [
             [
-                ("Gh", "A0"),
                 ("Gh", "D0"),
                 ("Gh", "D1"),
                 ("Gh", "D2"),
@@ -163,6 +163,61 @@ def create_qec_code():
     # TODO: Combined QEC instruction (and two round version)
 
     # TODO: Logical CZ and CCZ
+
+    # Z basis measurement for all qubits
+    Zbasis_measure_circ = PhysicalCircuit(
+        [
+            [
+                ("Iz", "A0"),
+                ("Iz", "A1"),
+                ("Iz", "D0"),
+                ("Iz", "D1"),
+                ("Iz", "D2"),
+                ("Iz", "D3"),
+                ("Iz", "D4"),
+            ],
+        ],
+        qubit_labels=qubits,
+    )
+    Zbasis_measure = QuantumClassicalLogicalOperation(
+        Zbasis_measure_circ,
+        name="Physical qubit Z-basis measurements",
+        fault_tolerant=True,
+        reset_mcms=False,
+    )
+    operations["Measure Z"] = Zbasis_measure
+
+    # X basis measurement for all qubits
+    Xbasis_measure_circ = PhysicalCircuit(
+        [
+            [
+                ("Gh", "A0"),
+                ("Gh", "A1"),
+                ("Gh", "D0"),
+                ("Gh", "D1"),
+                ("Gh", "D2"),
+                ("Gh", "D3"),
+                ("Gh", "D4"),
+            ],
+            [
+                ("Iz", "A0"),
+                ("Iz", "A1"),
+                ("Iz", "D0"),
+                ("Iz", "D1"),
+                ("Iz", "D2"),
+                ("Iz", "D3"),
+                ("Iz", "D4"),
+            ],
+        ],
+        qubit_labels=qubits,
+    )
+    Xbasis_measure = QuantumClassicalLogicalOperation(
+        Xbasis_measure_circ,
+        name="Physical qubit X-basis measurements",
+        fault_tolerant=True,
+        reset_mcms=False,
+    )
+    operations["Measure X"] = Xbasis_measure
 
     return QECCode(operations, qubits)
 

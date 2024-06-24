@@ -11,7 +11,6 @@ from loqs.backends.model.basemodel import (
     GateRep,
 )
 from loqs.backends.state import BaseQuantumState
-from loqs.backends.state.basestate import OutcomeDict
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.instruction import InstructionParentTypes
 from loqs.core.history import HistoryStackCastableTypes
@@ -109,7 +108,7 @@ class QuantumLogicalOperation(Instruction):
 
     def _propogate_state(
         self, state: BaseQuantumState, model: BaseNoiseModel, inplace: bool
-    ) -> tuple[BaseQuantumState, OutcomeDict]:
+    ) -> tuple[BaseQuantumState, MeasurementOutcomes]:
         # Find a compatible model/state oprep
         oprep: GateRep | None = None
         for rep in model.output_gate_reps:
@@ -136,7 +135,7 @@ class QuantumLogicalOperation(Instruction):
         else:
             state, outcomes = state.apply_reps(reps)
 
-        return state, outcomes
+        return state, MeasurementOutcomes(outcomes)
 
 
 class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
@@ -198,10 +197,18 @@ class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
         new_data = {
             "state": new_state,
             "instruction": self,
-            "measurement_outcomes": MeasurementOutcomes.cast(outcomes),
+            "measurement_outcomes": outcomes,
         }
 
         output_frame = last_frame.update(
             new_data=new_data, new_log=f"{self.name} result"
         )
         return output_frame
+
+    def map_qubits(
+        self, qubit_mapping: Mapping[str, str]
+    ) -> QuantumClassicalLogicalOperation:
+        mapped_circ = self.physical_circuit.map_qubit_labels(qubit_mapping)
+        return QuantumClassicalLogicalOperation(
+            mapped_circ, self.name, self.parent, self.reset_mcms
+        )

@@ -167,7 +167,7 @@ class QuantumProgram:
             print(f"  with args {args} and kwargs {kwargs}\n")
 
             inst = self._resolve_instruction(inst)
-            print(f"Resolved to {inst}")
+            print(f"Resolved to {type(inst)}: {inst}")
 
             # If we are a QuantumLogicalInstruction, we need a noise model
             # If one not provided as an arg, try to use the default

@@ -112,16 +112,21 @@ class QSimQuantumState(BaseQuantumState):
                     # results[a][0][qubit] = measurement value
                     # results[a][1]        = corresponding probability
                     # where a is in {0,1}
-                    assert len(results) == 2
+                    # (unless the bit is classical, in which case,
+                    # there is only one entry in results)
+
                     # TODO: At this point, we also have probabilities
                     # We could do also save that data, maybe helpful later
 
-                    m = random.random()
+                    m = (
+                        random.random()
+                    )  # TODO: Seed this for deterministic runs?
                     if m < results[0][1]:
                         cbit = results[0][0][qbit]
                     else:
                         cbit = results[1][0][qbit]
-                    self.state.project_measurement(qbit, cbit)
+                    if qbit in self.state.idx_in_full_dm:
+                        self.state.project_measurement(qbit, cbit)
                     if reset_mcms:
                         self.state.set_bit(qbit, 0)
                     self.state.renormalize()
