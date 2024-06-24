@@ -102,7 +102,8 @@ def create_qec_code():
     # Logical X (transversal)
     # Eqn B1 of arxiv:2208.01863
     logical_X_circ = PhysicalCircuit(
-        [[("Gypi", "D0"), ("Gxpi", "D2"), ("Gypi", "D4")]], qubit_labels=qubits
+        [[("Gypi2", "D0"), ("Gxpi2", "D2"), ("Gypi2", "D4")]],
+        qubit_labels=qubits,
     )
     operations["X"] = QuantumLogicalOperation(
         logical_X_circ, name="Logical X", fault_tolerant=True
@@ -111,7 +112,8 @@ def create_qec_code():
     # Logical Z (transversal)
     # Eqn B3 of arxiv:2208.01863
     logical_Z_circ = PhysicalCircuit(
-        [[("Gxpi", "D0"), ("Gzpi", "D2"), ("Gxpi", "D4")]], qubit_labels=qubits
+        [[("Gxpi2", "D0"), ("Gzpi2", "D2"), ("Gxpi2", "D4")]],
+        qubit_labels=qubits,
     )
     operations["Z"] = QuantumLogicalOperation(
         logical_Z_circ, name="Logical Z", fault_tolerant=True

@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import warnings
 
+from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, HistoryStack
 from loqs.core.history import HistoryFrame, HistoryStackCastableTypes
@@ -14,6 +15,7 @@ from loqs.core.instruction import (
     InstructionStackCastableTypes,
 )
 from loqs.core.instructions import ObjectBuilder
+from loqs.core.instructions.logicaloperation import QuantumLogicalOperation
 from loqs.core.instructions.patchoperations import PatchBuilder, PatchRemover
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
@@ -26,6 +28,7 @@ class QuantumProgram:
         self,
         instruction_stack: InstructionStackCastableTypes = None,
         initial_history: HistoryStackCastableTypes = None,
+        default_noise_model: BaseNoiseModel | None = None,
         state_key: str = "state",
         expiring_state: bool = True,
         patch_key: str = "patches",
@@ -39,6 +42,7 @@ class QuantumProgram:
 
         TODO
         """
+        # Do history before instruction stack in case it already has one
         self.history = HistoryStack.cast(initial_history)
         if instruction_stack is None and (
             initial_history is None
@@ -48,6 +52,8 @@ class QuantumProgram:
             raise ValueError(
                 "Must provide either initial instruction stack or history with a stack"
             )
+
+        self.default_noise_model = default_noise_model
 
         self.state_key = state_key
         if expiring_state:
@@ -127,7 +133,7 @@ class QuantumProgram:
                 self.global_instructions[label] = builder
 
             if (
-                "Remove Patch" not in self.global_instructions
+                "Remove Patch" in self.global_instructions
                 and not override_global_instructions
             ):
                 warnings.warn(
@@ -162,6 +168,15 @@ class QuantumProgram:
 
             inst = self._resolve_instruction(inst)
             print(f"Resolved to {inst}")
+
+            # If we are a QuantumLogicalInstruction, we need a noise model
+            # If one not provided as an arg, try to use the default
+            if isinstance(inst, QuantumLogicalOperation):
+                if len(args) < 1 or "model" not in kwargs:
+                    assert (
+                        self.default_noise_model is not None
+                    ), "No model provided as arg but also no default noise model."
+                    args = [self.default_noise_model]
 
             applied_frame = inst.apply(self.history, *args, **kwargs)
             print(f"Applied frame: {applied_frame}")
