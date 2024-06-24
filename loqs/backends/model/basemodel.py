@@ -1,4 +1,4 @@
-""":class:`OpRep` and :class:`ModelBackend` definitions.
+""":class:`GateRep`, :class:`InstrumentRep` and :class:`ModelBackend` definitions.
 """
 
 from __future__ import annotations
@@ -12,13 +12,20 @@ from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.internal.castable import Castable
 
 
-class OpRep(StrEnum):
+class GateRep(StrEnum):
     """TODO"""
 
     UNITARY = "Unitary"
     PTM = "Pauli transfer matrix"
     QSIM_SUPEROPERATOR = "QuantumSim superoperator"
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
+
+
+class InstrumentRep(StrEnum):
+    """TODO"""
+
+    ZBASISPROJECTION = "Z-basis projection"
+    # TODO: PyGSTi instruments as a dict?
 
 
 class BaseNoiseModel(Castable):
@@ -31,10 +38,31 @@ class BaseNoiseModel(Castable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
+    @property
     @abstractmethod
-    def get_operator_reps(
-        self, circuit: BasePhysicalCircuit, reptype: OpRep
-    ) -> Sequence:
+    def input_circuit_types(self) -> Sequence[type[BasePhysicalCircuit]]:
+        """Circuit types this model can take in."""
+        pass
+
+    @property
+    @abstractmethod
+    def output_gate_reps(self) -> Sequence[GateRep]:
+        """Gate reps this model can output."""
+        pass
+
+    @property
+    @abstractmethod
+    def output_instrument_reps(self) -> Sequence[InstrumentRep]:
+        """Instrument reps this model can output."""
+        pass
+
+    @abstractmethod
+    def get_reps(
+        self,
+        circuit: BasePhysicalCircuit,
+        gaterep: GateRep,
+        instrep: InstrumentRep,
+    ) -> list:
         """Get list of operator representations that can be applied.
 
         Parameters
@@ -42,13 +70,17 @@ class BaseNoiseModel(Castable):
         circuit:
             Physical circuit to get the representations for
 
-        reptype:
-            Output representation type. Determines the return type of each
-            operator. For more details, look at :class:`OpRep`.
+        gaterep:
+            Output representation for gate operations.
+            For more details, look at :class:`GateRep`.
+
+        instrep:
+            Output representation for instrument operations.
+            For more details, look at :class:`InstrumentRep`.
 
         Returns
         -------
         list
-            List of operator representations for the circuit
+            List of operation representations for the circuit
         """
         pass

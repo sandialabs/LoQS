@@ -6,11 +6,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 import functools
 import itertools
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 import numpy as np
 
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
-from loqs.backends.model import BaseNoiseModel, OpRep
+from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
+from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
 
 
 try:
@@ -21,24 +22,16 @@ except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
 
 # Type aliases for static type checking
-CastableTypes: TypeAlias = (
+PyGSTiModelCastableTypes: TypeAlias = (
     ExplicitOpModel | ImplicitOpModel
 )  # TODO: Take other LoQS models
 """Types of pyGSTi models this backend can handle"""
-
-CircuitBackendInputs: TypeAlias = PyGSTiPhysicalCircuit
-"""Types of LoQS circuits this backend can take as input"""
-
-OpRepOutputs: TypeAlias = Literal[
-    OpRep.UNITARY, OpRep.PTM, OpRep.QSIM_SUPEROPERATOR
-]
-"""Values of OpRep that this backend can output"""
 
 
 class PyGSTiNoiseModel(BaseNoiseModel):
     """Model backend for handling ``pygsti.model.OpModel`` objects."""
 
-    def __init__(self, model: CastableTypes) -> None:
+    def __init__(self, model: PyGSTiModelCastableTypes) -> None:
         """Initialize a PyGSTiModelBackend.
 
         Parameters
@@ -49,15 +42,32 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         self.model = model
         if isinstance(self.model, ExplicitOpModel):
             self.gate_dict = self.model.operations
+            self.inst_dict = self.model.instructions  # type: ignore
         elif isinstance(self.model, ImplicitOpModel):
             self.gate_dict = self.model.operation_blks["gates"]
+            self.inst_dict = self.model.instruction_blks["gates"]  # type: ignore
         else:
             raise TypeError("Can only take Explicit or Implicit OpModels")
 
         # TODO: Crosstalk specification?
 
+    @property
+    def input_circuit_types(self) -> Sequence[type[BasePhysicalCircuit]]:
+        return [PyGSTiPhysicalCircuit]
+
+    @property
+    def output_gate_reps(self) -> Sequence[GateRep]:
+        return [GateRep.UNITARY, GateRep.PTM, GateRep.QSIM_SUPEROPERATOR]
+
+    @property
+    def output_instrument_reps(self) -> Sequence[InstrumentRep]:
+        return [InstrumentRep.ZBASISPROJECTION]  # TODO: Can do more
+
     def get_operator_reps(
-        self, circuit: CircuitBackendInputs, reptype: OpRepOutputs  # type: ignore[override]
+        self,
+        circuit: BasePhysicalCircuit,
+        gaterep: GateRep,
+        instrep: InstrumentRep,
     ) -> Sequence:
         # Get bare circuit
         circuit = PyGSTiPhysicalCircuit.cast(circuit)
@@ -92,34 +102,52 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
         # Iterate through circuit and pull out representations
         # TODO: What to do about instruments
-        op_reps = []
+        reps = []
         for layer in pygsti_circuit:
             for comp in layer.components:  # type: ignore
                 qubits = comp.qubits
-                op = self.gate_dict[comp]
-                if reptype == OpRep.UNITARY:
-                    try:
-                        rep = op.to_dense(on_space="Hilbert")
-                    except ValueError as e:
-                        raise ValueError(
-                            "Failed to cast operation as a unitary. Consider ",
-                            "using process matrices instead.",
-                        ) from e
-                elif reptype == OpRep.PTM:
-                    rep = op.to_dense(on_space="HilbertSchmidt")
-                elif reptype == OpRep.QSIM_SUPEROPERATOR:
-                    rep = op.to_dense(on_space="HilbertSchmidt")
+                if comp.name.startswith("G"):
+                    op = self.gate_dict[comp]
+                    reptype = gaterep
+                    if gaterep == GateRep.UNITARY:
+                        try:
+                            rep = op.to_dense(on_space="Hilbert")
+                        except ValueError as e:
+                            raise ValueError(
+                                "Failed to cast gate as a unitary. Consider ",
+                                "using process matrices instead.",
+                            ) from e
+                    elif gaterep == GateRep.PTM:
+                        rep = op.to_dense(on_space="HilbertSchmidt")
+                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                        rep = op.to_dense(on_space="HilbertSchmidt")
 
-                    if comp.num_qubits == 1:
-                        rep = bt.change_basis(rep, self.model.basis, qsim1)
-                    elif comp.num_qubits == 2:
-                        rep = bt.change_basis(rep, self.model.basis, qsim2)
+                        if comp.num_qubits == 1:
+                            rep = bt.change_basis(rep, self.model.basis, qsim1)
+                        elif comp.num_qubits == 2:
+                            rep = bt.change_basis(rep, self.model.basis, qsim2)
+                        else:
+                            raise ValueError(
+                                "Cannot change more than a 2 qubit operation into",
+                                " the QuantumSim basis",
+                            )
                     else:
-                        raise ValueError(
-                            "Cannot change more than a 2 qubit operation into",
-                            " the QuantumSim basis",
+                        raise NotImplementedError(
+                            f"Cannot create gate rep for {gaterep}"
+                        )
+                elif comp.name.startswith("I"):
+                    # inst = self.inst_dict[comp]
+                    assert comp.name == "Iz", "Can only handle Z-basis MCMs"
+
+                    reptype = instrep
+
+                    # TODO: Do more for not just projections
+                    if instrep == InstrumentRep.ZBASISPROJECTION:
+                        rep = None
+                    else:
+                        raise NotImplementedError(
+                            f"Cannot create instrument rep for {instrep}"
                         )
 
-                op_reps.append((rep, qubits))
-
-        return op_reps
+                reps.append((rep, qubits, reptype))
+        return reps

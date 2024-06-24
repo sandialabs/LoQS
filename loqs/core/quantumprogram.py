@@ -33,6 +33,7 @@ class QuantumProgram:
         global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
         patch_types: Mapping[str, QECCode] | None = None,
+        override_global_instructions: bool = False,
     ) -> None:
         """Initialize a QuantumProgram from a list of operations.
 
@@ -83,33 +84,62 @@ class QuantumProgram:
         )
 
         # Add state initialization, if requested
-        if (
-            "Init State" not in self.global_instructions
-            and state_type is not None
-        ):
-            builder = ObjectBuilder(
-                "state",
-                state_type,
-                name=f"{state_type.__qualname__} state builder",
-            )
-            self.global_instructions["Init State"] = builder
+        if state_type is not None:
+            if (
+                "Init State" in self.global_instructions
+                and not override_global_instructions
+            ):
+                warnings.warn(
+                    "state_type provided, but 'Init State' already exists "
+                    + "and override_global_instructions is False. Consider "
+                    + "renaming the existing 'Init State' or "
+                    + "setting override_global_instruction to True."
+                )
+            else:
+                builder = ObjectBuilder(
+                    "state",
+                    state_type,
+                    name=f"{state_type.__qualname__} state builder",
+                )
+                self.global_instructions["Init State"] = builder
 
         # Add patch initializations/removals, if requested
-        if (
-            "Init Patch" not in self.global_instructions
-            and patch_types is not None
-        ):
+        if patch_types is not None:
             for patch_name, patch_code in patch_types.items():
+                label = f"Init Patch {patch_name}"
+
+                if (
+                    label in self.global_instructions
+                    and not override_global_instructions
+                ):
+                    warnings.warn(
+                        f"patch_types['{patch_name}'] provided, "
+                        + f"but '{label}' already exists "
+                        + "and override_global_instructions is False. Consider "
+                        + f"renaming the existing '{label}' or "
+                        + "setting override_global_instruction to True."
+                    )
                 builder = PatchBuilder(
                     patch_code,
                     self.patch_key,
                     name=f"{patch_name} patch builder",
                 )
-                self.global_instructions[f"Init {patch_name} Patch"] = builder
+                self.global_instructions[label] = builder
 
-            self.global_instructions["Remove Patch"] = PatchRemover(
-                self.patch_key
-            )
+            if (
+                "Remove Patch" not in self.global_instructions
+                and not override_global_instructions
+            ):
+                warnings.warn(
+                    "patch_types provided, but 'Remove Patch' already exists "
+                    + "and override_global_instructions is False. Consider "
+                    + "renaming the existing 'Remove Patch' or "
+                    + "setting override_global_instruction to True."
+                )
+            else:
+                self.global_instructions["Remove Patch"] = PatchRemover(
+                    self.patch_key
+                )
 
     def run(self, max_frame_limit: int = 100) -> HistoryStack:
         """TODO"""

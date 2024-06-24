@@ -4,6 +4,7 @@
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
+from loqs.backends.state.basestate import OutcomeDict
 from loqs.internal import Recordable
 
 
@@ -15,7 +16,7 @@ MeasurementOutcomesCastableTypes: TypeAlias = (
 class MeasurementOutcomes(Recordable):
     """TODO"""
 
-    outcomes: Mapping[str, list[int]]
+    outcomes: OutcomeDict
     """Dict with qubit label keys and list of 0/1 outcome values.
 
     Can be multiple outcomes if the qubit

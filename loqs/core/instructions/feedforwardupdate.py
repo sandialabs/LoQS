@@ -9,7 +9,7 @@ from typing import TypeAlias
 from loqs.core import Instruction, InstructionStack, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.instruction import InstructionParentTypes
-from loqs.core.recordables import MeasurementOutcomes, Syndrome
+from loqs.core.recordables import MeasurementOutcomes
 from loqs.internal import Bit
 
 

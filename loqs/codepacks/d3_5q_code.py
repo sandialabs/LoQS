@@ -16,7 +16,6 @@ from loqs.core.instructions import (
     QuantumClassicalLogicalOperation,
     QuantumLogicalOperation,
     RepeatUntilSuccess,
-    SyndromeExtraction,
 )
 
 
@@ -151,13 +150,13 @@ def create_qec_code():
         syndrome_qubits[stab] = ("A0", i)
 
     # TODO: Current SE is not FT
-    operations["SE"] = SyndromeExtraction(
-        syndrome_circuit, syndrome_qubits, fault_tolerant=False
-    )
+    # operations["SE"] = SyndromeExtraction(
+    #     syndrome_circuit, syndrome_qubits, fault_tolerant=False
+    # )
 
     # Decoder (computed from commutation relations to stabilizers)
-    lookup_table = _create_decoder_lookup(stabilizers)
-    operations["Decode"] = Decoder(lookup_table)
+    # lookup_table = _create_decoder_lookup(stabilizers)
+    # operations["Decode"] = Decoder(lookup_table)
 
     # TODO: Combined QEC instruction (and two round version)
 

@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Mapping, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends.model.basemodel import (
+    BaseNoiseModel,
+    InstrumentRep,
+    GateRep,
+)
 from loqs.backends.state import BaseQuantumState
+from loqs.backends.state.basestate import OutcomeDict
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.instruction import InstructionParentTypes
 from loqs.core.history import HistoryStackCastableTypes
@@ -51,7 +57,12 @@ class QuantumLogicalOperation(Instruction):
     def output_frame_spec(self) -> dict[str, type]:
         return {"state": BaseQuantumState}
 
-    def apply_unsafe(self, input: HistoryStackCastableTypes) -> HistoryFrame:
+    def apply_unsafe(
+        self,
+        input: HistoryStackCastableTypes,
+        model: BaseNoiseModel,
+        inplace: bool = True,
+    ) -> HistoryFrame:
         """Map the input :class:`MockState` forward.
 
         This
@@ -66,18 +77,22 @@ class QuantumLogicalOperation(Instruction):
         output_frame:
             The new output frame
         """
-        input = HistoryStack.cast(input)
+        # Check model can take our circuit
+        assert (
+            type(self.physical_circuit) in model.input_circuit_types
+        ), "Physical circuit type not allowed as model input"
 
+        input = HistoryStack.cast(input)
         last_frame: HistoryFrame = input[-1]
 
-        state = last_frame["state"]
+        # This will only work if state is already a BaseQuantumState-derived object
+        # But that should basically always be the case
+        state = BaseQuantumState.cast(last_frame["state"])
 
-        # TODO: apply operations to new state
-        # How do I know what kind of state?
-        # How do I invalidate previous states if singleton?
+        new_state, _ = self._propogate_state(state, model, inplace)
 
         new_data = {
-            "state": state,
+            "state": new_state,
             "instruction": self,
         }
 
@@ -91,6 +106,37 @@ class QuantumLogicalOperation(Instruction):
     ) -> QuantumLogicalOperation:
         mapped_circ = self.physical_circuit.map_qubit_labels(qubit_mapping)
         return QuantumLogicalOperation(mapped_circ, self.name, self.parent)
+
+    def _propogate_state(
+        self, state: BaseQuantumState, model: BaseNoiseModel, inplace: bool
+    ) -> tuple[BaseQuantumState, OutcomeDict]:
+        # Find a compatible model/state oprep
+        oprep: GateRep | None = None
+        for rep in model.output_gate_reps:
+            if rep in state.input_reps:
+                oprep = rep
+        assert (
+            oprep is not None
+        ), "Could not find matching gate rep between model output and state input"
+
+        instrep: InstrumentRep | None = None
+        for rep in model.output_instrument_reps:
+            if rep in state.input_reps:
+                instrep = rep
+        assert (
+            instrep is not None
+        ), "Could not find matching instrument rep between model output and state input"
+
+        # Look up reps from model
+        reps = model.get_reps(self.physical_circuit, oprep, instrep)
+
+        # Apply operator reps to state
+        if inplace:
+            outcomes = state.apply_reps_inplace(reps)
+        else:
+            state, outcomes = state.apply_reps(reps)
+
+        return state, outcomes
 
 
 class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
@@ -115,7 +161,12 @@ class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
             "measurement_outcomes": MeasurementOutcomes,
         }
 
-    def apply_unsafe(self, input: HistoryStackCastableTypes) -> HistoryFrame:
+    def apply_unsafe(
+        self,
+        input: HistoryStackCastableTypes,
+        model: BaseNoiseModel,
+        inplace: bool = True,
+    ) -> HistoryFrame:
         """Map the input :class:`MockState` forward.
 
         This
@@ -130,18 +181,24 @@ class QuantumClassicalLogicalOperation(QuantumLogicalOperation):
         output_frame:
             The new output frame
         """
-        input = HistoryStack.cast(input)
+        # Check model can take our circuit
+        assert (
+            type(self.physical_circuit) in model.input_circuit_types
+        ), "Physical circuit type not allowed as model input"
 
+        input = HistoryStack.cast(input)
         last_frame: HistoryFrame = input[-1]
 
-        state = last_frame["state"]
+        # This will only work if state is already a BaseQuantumState-derived object
+        # But that should basically always be the case
+        state = BaseQuantumState.cast(last_frame["state"])
 
-        # TODO: apply operations to new state
+        new_state, outcomes = self._propogate_state(state, model, inplace)
 
         new_data = {
-            "state": state,
-            "measurement_outcomes": None,  # TODO
+            "state": new_state,
             "instruction": self,
+            "measurement_outcomes": MeasurementOutcomes.cast(outcomes),
         }
 
         output_frame = last_frame.update(

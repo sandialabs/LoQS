@@ -9,12 +9,12 @@ from typing import TypeAlias
 from loqs.core import Instruction, HistoryStack, HistoryFrame
 from loqs.core.history import HistoryStackCastableTypes
 from loqs.core.instruction import InstructionParentTypes
-from loqs.core.recordables import StabilizerFrame, Syndrome
+from loqs.core.recordables import StabilizerFrame, MeasurementOutcomes
 from loqs.internal import Bit, PauliStr
 
 
 DecoderCallable: TypeAlias = Callable[
-    [Syndrome, StabilizerFrame], StabilizerFrame
+    [MeasurementOutcomes, StabilizerFrame], StabilizerFrame
 ]
 """Type alias for decoding functions :class:`Decoder` can take.
 """
@@ -72,7 +72,7 @@ class Decoder(Instruction):
     @property
     def input_frame_spec(self) -> dict[str, type]:
         return {
-            "syndrome": Syndrome,
+            "measurement_outcomes": MeasurementOutcomes,
             "stabilizer_frame": StabilizerFrame,
         }
 
@@ -86,7 +86,7 @@ class Decoder(Instruction):
 
         last_frame: HistoryFrame = input[-1]
 
-        syndrome = Syndrome.cast(last_frame["syndrome"])
+        syndrome = MeasurementOutcomes.cast(last_frame["measurement_outcomes"])
         old_stab_frame = StabilizerFrame.cast(last_frame["stabilizer_frame"])
 
         new_stab_frame = self.decoder_fn(syndrome, old_stab_frame)
@@ -102,7 +102,7 @@ class Decoder(Instruction):
         return output_frame
 
     def _lookup_table(
-        self, syn: Syndrome, sf: StabilizerFrame
+        self, mos: MeasurementOutcomes, sf: StabilizerFrame
     ) -> StabilizerFrame:
         """TODO"""
         assert self.decoder_table is not None
