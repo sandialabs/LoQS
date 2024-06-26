@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.backends.state.basestate import OutcomeDict
-from loqs.internal import Recordable
 
 
 MeasurementOutcomesCastableTypes: TypeAlias = (
@@ -13,7 +12,7 @@ MeasurementOutcomesCastableTypes: TypeAlias = (
 )
 
 
-class MeasurementOutcomes(Recordable):
+class MeasurementOutcomes:
     """TODO"""
 
     outcomes: OutcomeDict
@@ -36,5 +35,3 @@ class MeasurementOutcomes(Recordable):
             self.outcomes = {}
             for k, v in outcomes.items():
                 self.outcomes[k] = [v] if isinstance(v, int) else list(v)
-
-    # TODO: Cast is broken since dict is an allowable type

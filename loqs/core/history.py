@@ -4,11 +4,11 @@
 from __future__ import annotations
 import textwrap
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from typing import Literal, TypeAlias, overload
 
 from loqs.core.frame import Frame, FrameCastableTypes
-from loqs.internal import Castable, Recordable
+from loqs.internal import Castable
 
 
 HistoryCastableTypes: TypeAlias = (

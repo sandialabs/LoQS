@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.model.basemodel import GateRep, InstrumentRep
-from loqs.internal.recordable import Recordable
+from loqs.internal import Castable
 
 
 # Generic type variable to stand-in for derived class below
@@ -17,7 +17,7 @@ T = TypeVar("T", bound="BaseQuantumState")
 OutcomeDict: TypeAlias = dict[str, list[int]]
 
 
-class BaseQuantumState(Recordable):
+class BaseQuantumState(Castable):
     """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str]

@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from typing import TypeAlias
 
 from loqs.core import QECCodePatch
-from loqs.internal import Recordable
+from loqs.internal import Castable
 
 
 PatchDictCastableTypes: TypeAlias = (
@@ -13,7 +13,7 @@ PatchDictCastableTypes: TypeAlias = (
 )
 
 
-class PatchDict(MutableMapping[str, QECCodePatch], Recordable):
+class PatchDict(MutableMapping[str, QECCodePatch], Castable):
     """TODO"""
 
     patches: dict[str, QECCodePatch]

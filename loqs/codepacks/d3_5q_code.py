@@ -131,13 +131,7 @@ def create_qec_code():
         fault_tolerant=True,
     )
     logical_H_permutation = ic.build_patch_permute_instruction(
-        {  # final: initial
-            "D0": "D1",
-            "D1": "D4",
-            # D2 is unpermuted
-            "D3": "D0",
-            "D4": "D3",
-        },
+        {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
         name="Logical H permutation",
     )
 

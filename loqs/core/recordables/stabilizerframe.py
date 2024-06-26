@@ -5,13 +5,13 @@ from __future__ import annotations
 
 from typing import Sequence, TypeAlias
 
-from loqs.internal import Bit, Recordable
+from loqs.internal import Bit, Castable
 
 
 StabilizerFrameCastableTypes: TypeAlias = "StabilizerFrame | Sequence[str]"
 
 
-class StabilizerFrame(Recordable):
+class StabilizerFrame(Castable):
     """TODO"""
 
     qubit_labels: list[str]
@@ -80,7 +80,7 @@ class StabilizerFrame(Recordable):
 
         return bits[self.qubit_labels.index(qubit)]
 
-    def set_bit(self, type: str, qubit: str, bit: int) -> None:
+    def set_bit(self, type: str, qubit: str, bit: Bit) -> None:
         type = type.upper()
         assert type in ("X", "Z"), "Can only get X or Z type bits"
 
