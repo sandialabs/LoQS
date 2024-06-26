@@ -3,7 +3,7 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 
-from loqs.core.instruction import Instruction
+from loqs.core.instructions import Instruction
 
 
 class QECCode:

@@ -4,13 +4,18 @@ These are primarily objects used for high-level objects that store or
 orchestrate the execution of logical qubit simulation.
 """
 
-# Second for import order reasons
-from .history import HistoryFrame, HistoryStack
+# First for import reasons
+from .frame import Frame
+from .history import History
 
-from .instruction import Instruction, InstructionStack
+from .instructions import (
+    InputParam,
+    InputSpec,
+    Instruction,
+    InstructionLabel,
+    InstructionStack,
+)
 
 from .qeccode import QECCode, QECCodePatch
 
 from .quantumprogram import QuantumProgram
-
-from .templatedcircuit import TemplatedCircuit

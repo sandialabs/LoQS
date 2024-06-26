@@ -3,125 +3,37 @@
 
 from __future__ import annotations
 import textwrap
-import warnings
 
-from collections.abc import Iterator, Mapping, Sequence
-from typing import TypeAlias, overload
+from collections.abc import Iterable, Iterator, Sequence
+from typing import Literal, TypeAlias, overload
 
+from loqs.core.frame import Frame, FrameCastableTypes
 from loqs.internal import Castable, Recordable
 
 
-HistoryFrameCastableTypes: TypeAlias = (
-    "HistoryFrame | Mapping[str, Recordable] | None"
+HistoryCastableTypes: TypeAlias = (
+    "History | FrameCastableTypes | Sequence[FrameCastableTypes] | None"
 )
-"""Things that can be cast to :class:`HistoryFrame`."""
-
-HistoryStackCastableTypes: TypeAlias = (
-    "HistoryStack | HistoryFrameCastableTypes | Sequence[HistoryFrameCastableTypes] | None"
-)
-"""Things that can be cast to :class:`HistoryStack`."""
+"""Things that can be cast to :class:`History`."""
 
 
-class HistoryFrame(Mapping[str, Recordable], Castable):
-    """A record of the state of the simulation at a given time.
-
-    The core functionality is a dict that relates keys to
-    :class:`IsRecordable`-derived objects.
-    It is highly recommended that users not modify :attr:`_data` directly,
-    as this bypasses the checks to :meth:`finalized` that would otherwise
-    prevent overriding data when the frame is intended to be immutable.
-    """
-
-    _data: dict
-    """Underlying dictionary to store data."""
-
-    log: str
-    """Log string for better printing."""
-
-    def __init__(
-        self, data: HistoryFrameCastableTypes = None, log: str = "N/A"
-    ):
-        """TODO"""
-        if data is None:
-            data = {}
-
-        if isinstance(data, HistoryFrame):
-            self._data = data._data.copy()
-            self.log = data.log
-        elif isinstance(data, Mapping):
-            assert all(
-                [isinstance(v, Recordable) for v in data.values()]
-            ), "All values in data must be of type :class:`IsRecordable`"
-
-            self._data = {k: v for k, v in data.items()}
-            self.log = log
-        else:
-            raise ValueError(f"Cannot cast {data} to a HistoryFrame")
-
-        self._expired_keys: list[str] = []
-
-    # We define this one to avoid __getitem__ warning until value is actually returned
-    def __contains__(self, key: object) -> bool:
-        return key in self._data
-
-    def __getitem__(self, key: str) -> Recordable:
-        if key in self._expired_keys:
-            warnings.warn(
-                f"Accessing an expired recordable {key}. "
-                + "The returned object may actually belong to a future frame."
-            )
-        return self._data[key]
-
-    def __len__(self) -> int:
-        return len(self._data)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._data)
-
-    def __str__(self) -> str:
-        s = f"HistoryFrame with {len(self)} Recordables:\n"
-        for k, v in self.items():
-            s += f"  '{k}' ({type(v)}):\n"
-            sv = str(v)
-            s += textwrap.indent(sv, "    ") + "\n"
-        return s
-
-    @property
-    def frame_spec(self):
-        return {k: type(v) for k, v in self._data.items()}
-
-    def update(
-        self,
-        new_data: Mapping[str, Recordable] | None = None,
-        new_log: str | None = None,
-    ) -> HistoryFrame:
-        """TODO"""
-        data = self._data.copy()
-        if new_data is not None:
-            data.update(new_data)
-
-        if new_log is None:
-            new_log = self.log
-
-        return HistoryFrame(data, new_log)
-
-
-class HistoryStack(Sequence[HistoryFrame], Castable):
-    """A semi-mutable list of :class:`HistoryFrame` objects.
+class History(Sequence[Frame], Castable):
+    """A semi-mutable list of :class:`Frame` objects.
 
     The intention is to provide a list-like object where existing
-    :class:`HistoryFrame` objects cannot be changed or removed,
+    :class:`Frame` objects cannot be changed or removed,
     and insertion can only occur at the end of the list.
     """
 
-    _history: list[HistoryFrame]
+    _history: list[Frame]
     _std_spec: dict[str, type]
     _nonstd_spec: dict[str, type]
 
     def __init__(
         self,
-        history: HistoryStackCastableTypes = None,
+        history: HistoryCastableTypes = None,
         expiring_keys: Sequence[str] | None = ("state",),
+        propagating_keys: Sequence[str] | None = ("state", "patches", "stack"),
     ) -> None:
         """TODO"""
         self._history = []
@@ -133,21 +45,28 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
         self.expiring_keys = set(expiring_keys)
         self._expiring_key_locs: dict[str, int] = {}
 
-        if isinstance(history, HistoryStack):
+        if propagating_keys is None:
+            propagating_keys = []
+        self.propagating_keys = set(propagating_keys)
+
+        if isinstance(history, History):
             self._history = history._history.copy()
             self._std_spec = history._std_spec
             self._nonstd_spec = history._nonstd_spec
-            # Take union of expiring keys
+            # Take union of expiring/propagating keys
             self.expiring_keys = self.expiring_keys.union(
                 history.expiring_keys
             )
+            self.propagating_keys = self.propagating_keys.union(
+                history.propagating_keys
+            )
         elif isinstance(history, Sequence):
             for frame in history:
-                frame = HistoryFrame.cast(frame)
+                frame = Frame.cast(frame)
                 self.append(frame)
         else:  # Just a single HistoryFrame
             try:
-                frame = HistoryFrame.cast(history)
+                frame = Frame.cast(history)
             except ValueError as e:
                 raise ValueError(
                     f"Cannot create HistoryStack from {history}"
@@ -156,20 +75,20 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
             self.append(frame)
 
     @overload
-    def __getitem__(self, i: int) -> HistoryFrame: ...  # noqa
+    def __getitem__(self, i: int) -> Frame: ...  # noqa
     @overload
-    def __getitem__(self, i: slice) -> Sequence[HistoryFrame]: ...  # noqa
+    def __getitem__(self, i: slice) -> Sequence[Frame]: ...  # noqa
     def __getitem__(self, i):  # noqa
         return self._history[i]
 
-    def __iter__(self) -> Iterator[HistoryFrame]:
+    def __iter__(self) -> Iterator[Frame]:
         return iter(self._history)
 
     def __len__(self) -> int:
         return len(self._history)
 
     def __str__(self):
-        s = f"HistoryStack with {len(self)} items:\n"
+        s = f"History with {len(self)} items:\n"
         for frame in self._history:
             sf = str(frame)
             sf = textwrap.indent(sf, "  ")
@@ -186,8 +105,8 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
         """Fields which are only included in some frames in the stack."""
         return self._nonstd_spec
 
-    def append(self, item: HistoryFrameCastableTypes) -> None:
-        item = HistoryFrame.cast(item)
+    def append(self, item: FrameCastableTypes) -> None:
+        item = Frame.cast(item)
 
         # Check for any expiring keys in previous frames
         for exp_key in self.expiring_keys:
@@ -215,5 +134,27 @@ class HistoryStack(Sequence[HistoryFrame], Castable):
             difference = std_items.difference(new_items)
             self._nonstd_spec.update(difference)
 
+        # Propagate any keys that are not existing in new frame
+        if len(self._history):
+            last_frame = self._history[-1]
+            prop_data = {}
+            for prop_key in self.propagating_keys:
+                if prop_key not in item and prop_key in last_frame:
+                    prop_data[prop_key] = last_frame[prop_key]
+
+            item = item.update(prop_data)
+
         # Finally append
         self._history.append(item)
+
+    def collect_data(
+        self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
+    ) -> list:
+
+        if isinstance(indices, int):
+            indices = [indices]
+        elif indices == "all":
+            indices = slice(len(self._history))
+        assert isinstance(indices, Iterable)
+
+        return [self._history[i].get(key, None) for i in indices]

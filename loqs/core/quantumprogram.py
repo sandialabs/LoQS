@@ -8,15 +8,13 @@ import warnings
 
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
-from loqs.core import Instruction, InstructionStack, HistoryStack
-from loqs.core.history import HistoryFrame, HistoryStackCastableTypes
-from loqs.core.instruction import (
-    InstructionLabel,
+from loqs.core import Instruction, InstructionStack, History
+from loqs.core.history import Frame, HistoryCastableTypes
+from loqs.core.instructions import common as ic
+from loqs.core.instructions import InstructionLabel
+from loqs.core.instructions.instructionstack import (
     InstructionStackCastableTypes,
 )
-from loqs.core.instructions import ObjectBuilder
-from loqs.core.instructions.logicaloperation import QuantumLogicalOperation
-from loqs.core.instructions.patchoperations import PatchBuilder, PatchRemover
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
 
@@ -27,12 +25,9 @@ class QuantumProgram:
     def __init__(
         self,
         instruction_stack: InstructionStackCastableTypes = None,
-        initial_history: HistoryStackCastableTypes = None,
+        initial_history: HistoryCastableTypes = None,
         default_noise_model: BaseNoiseModel | None = None,
-        state_key: str = "state",
         expiring_state: bool = True,
-        patch_key: str = "patches",
-        stack_key: str = "stack",
         global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
         patch_types: Mapping[str, QECCode] | None = None,
@@ -43,11 +38,11 @@ class QuantumProgram:
         TODO
         """
         # Do history before instruction stack in case it already has one
-        self.history = HistoryStack.cast(initial_history)
+        self.history = History.cast(initial_history)
         if instruction_stack is None and (
             initial_history is None
             or len(self.history) < 1
-            or stack_key not in self.history[-1]
+            or "stack" not in self.history[-1]
         ):
             raise ValueError(
                 "Must provide either initial instruction stack or history with a stack"
@@ -55,23 +50,20 @@ class QuantumProgram:
 
         self.default_noise_model = default_noise_model
 
-        self.state_key = state_key
         if expiring_state:
-            self.history.expiring_keys.add(self.state_key)
-        self.patch_key = patch_key
-        self.stack_key = stack_key
+            self.history.expiring_keys.add("state")
 
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
             instruction_stack = InstructionStack.cast(instruction_stack)
 
             if len(self.history):
-                last_frame = HistoryFrame.cast(self.history[-1])
+                last_frame = Frame.cast(self.history[-1])
             else:
-                last_frame = HistoryFrame()
+                last_frame = Frame()
 
             new_frame = last_frame.update(
-                {self.stack_key: instruction_stack},
+                {"stack": instruction_stack},
                 new_log="Adding InstructionStack from new QuantumProgram",
             )
 
@@ -102,7 +94,7 @@ class QuantumProgram:
                     + "setting override_global_instruction to True."
                 )
             else:
-                builder = ObjectBuilder(
+                builder = ic.build_object_builder_instruction(
                     "state",
                     state_type,
                     name=f"{state_type.__qualname__} state builder",
@@ -125,9 +117,8 @@ class QuantumProgram:
                         + f"renaming the existing '{label}' or "
                         + "setting override_global_instruction to True."
                     )
-                builder = PatchBuilder(
+                builder = ic.build_patch_builder_instruction(
                     patch_code,
-                    self.patch_key,
                     name=f"{patch_name} patch builder",
                 )
                 self.global_instructions[label] = builder
@@ -143,42 +134,42 @@ class QuantumProgram:
                     + "setting override_global_instruction to True."
                 )
             else:
-                self.global_instructions["Remove Patch"] = PatchRemover(
-                    self.patch_key
+                self.global_instructions["Remove Patch"] = (
+                    ic.build_patch_remover_instruction(
+                        name="Global patch remover"
+                    )
                 )
 
-    def run(self, max_frame_limit: int = 100) -> HistoryStack:
+    def run(
+        self, dry_run: bool = False, max_frame_limit: int = 100
+    ) -> History:
         """TODO"""
         num_frames = 0
 
-        stack = InstructionStack.cast(self.history[-1][self.stack_key])
+        stack = InstructionStack.cast(self.history[-1]["stack"])
 
         while num_frames < max_frame_limit and len(stack):
             print(f"Working on frame {num_frames+1}")
 
             inst, stack = stack.pop_instruction()
             if isinstance(inst, InstructionLabel):
-                args = inst.inst_args
                 kwargs = inst.inst_kwargs
             else:
-                args = []
                 kwargs = {}
-            print(f"Working on {inst}")
-            print(f"  with args {args} and kwargs {kwargs}\n")
+            print(f"Working on {inst} with kwargs {kwargs}\n")
 
             inst = self._resolve_instruction(inst)
             print(f"Resolved to {type(inst)}: {inst}")
 
             # If we are a QuantumLogicalInstruction, we need a noise model
-            # If one not provided as an arg, try to use the default
-            if isinstance(inst, QuantumLogicalOperation):
-                if len(args) < 1 or "model" not in kwargs:
-                    assert (
-                        self.default_noise_model is not None
-                    ), "No model provided as arg but also no default noise model."
-                    args = [self.default_noise_model]
+            # If one not provided as an arg, try to use the program default
+            if "model" in inst.input_spec.kwarg_keys and "model" not in kwargs:
+                assert (
+                    self.default_noise_model is not None
+                ), "No model provided as arg but also no default noise model."
+                kwargs["model"] = self.default_noise_model
 
-            applied_frame = inst.apply(self.history, *args, **kwargs)
+            applied_frame = inst.apply(self.history, dry_run=dry_run, **kwargs)
             print(f"Applied frame: {applied_frame}")
 
             new_frame = applied_frame.update({"stack": stack})
@@ -192,7 +183,7 @@ class QuantumProgram:
                 f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
             )
 
-        return HistoryStack.cast(self.history[-num_frames:])
+        return History.cast(self.history[-num_frames:])
 
     def _resolve_instruction(
         self, inst_or_lbl: Instruction | InstructionLabel
@@ -215,10 +206,10 @@ class QuantumProgram:
 
         # Otherwise, we must be a patch instruction
         try:
-            patchdict = PatchDict.cast(self.history[-1][self.patch_key])
+            patchdict = PatchDict.cast(self.history[-1]["patches"])
         except KeyError:
             raise RuntimeError(
-                f"{self.patch_key} not available in last frame for resolving {ilbl}"
+                f"'patches' not available in last frame for resolving {ilbl}"
             )
 
         try:
