@@ -153,8 +153,10 @@ class QuantumProgram:
 
             inst, stack = stack.pop_instruction()
             if isinstance(inst, InstructionLabel):
+                args = inst.inst_args
                 kwargs = inst.inst_kwargs
             else:
+                args = []
                 kwargs = {}
             print(f"Working on {inst} with kwargs {kwargs}\n")
 
@@ -163,19 +165,23 @@ class QuantumProgram:
 
             # If we are a QuantumLogicalInstruction, we need a noise model
             # If one not provided as an arg, try to use the program default
-            if "model" in inst.input_spec.kwarg_keys and "model" not in kwargs:
+            if "model" in inst.input_spec.keys and (
+                "model" not in kwargs
+                or any([isinstance(arg, BaseNoiseModel) for arg in args])
+            ):
                 assert (
                     self.default_noise_model is not None
                 ), "No model provided as arg but also no default noise model."
                 kwargs["model"] = self.default_noise_model
 
-            applied_frame = inst.apply(self.history, dry_run=dry_run, **kwargs)
+            applied_frame = inst.apply(self.history, dry_run, *args, **kwargs)
             print(f"Applied frame: {applied_frame}")
 
             new_frame = applied_frame.update({"stack": stack})
-            print(f"Updated stack frame: {new_frame}")
 
             self.history.append(new_frame)
+            print(f"Final stored frame: {self.history[-1]}")
+
             num_frames += 1
 
         if len(stack):

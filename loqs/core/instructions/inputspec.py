@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 import textwrap
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 from loqs.internal.castable import Castable
 
@@ -14,8 +14,12 @@ IndexParamSources: TypeAlias = (
     Literal["history"] | Literal["default"] | Literal["label"]
 )
 
-InputParamCastableTypes: TypeAlias = (
-    "InputParam | Mapping[str, Any] | tuple[str, IndexParamSources, QueryIndicesTypes | None, str | None]"
+InputParamInSpecType: TypeAlias = tuple[
+    IndexParamSources, str | None, QueryIndicesTypes | None, str | None
+]
+
+InputSpecCastableTypes: TypeAlias = (
+    "InputSpec | Sequence[InputParamInSpecType | None]"
 )
 
 
@@ -24,8 +28,9 @@ class InputParam:
 
     def __init__(
         self,
-        kwargs_key: str,
+        position: int,
         sources: IndexParamSources | Sequence[IndexParamSources],
+        key: str | None = None,
         hist_idxs: QueryIndicesTypes | None = None,
         hist_key: str | None = None,
     ) -> None:
@@ -36,79 +41,47 @@ class InputParam:
             [s in ["history", "default", "label"] for s in sources]
         ), "Sources must be specified from ['history', 'default', 'label']."
 
-        self.kwargs_key = kwargs_key
+        self.position = position
+        self.key = key
         self.sources = sources
 
         if "history" in sources:
-            assert hist_idxs is not None
-            if isinstance(hist_idxs, int):
-                hist_idxs = [hist_idxs]
-            elif hist_idxs == "all":
+            assert (
+                hist_idxs is not None
+            ), "If history is a source, hist_idxs must be provided"
+
+            if hist_idxs == "all":
                 hist_idxs = slice(None)
-            else:
-                assert isinstance(
-                    hist_idxs, (Sequence, slice)
-                ), "hist_idxs must be int, slice, Sequence, or 'all'"
+            assert isinstance(
+                hist_idxs, (int, Sequence, slice)
+            ), "hist_idxs must be int, slice, Sequence, or 'all'"
 
             if hist_key is None:
-                hist_key = self.kwargs_key
+                assert self.key is not None, (
+                    "If history is a source and no default/kwarg key,"
+                    + " hist_key must be provided"
+                )
+                hist_key = self.key
 
             self.hist_key = hist_key
             self.hist_idxs = hist_idxs
 
     def __str__(self):
         s = "InputParam:\n"
-        s += f"  kwargs_key: {self.kwargs_key}"
-        s += f"  sources: {self.sources}"
-        s += f"  hist_idxs: {self.hist_idxs}"
-        s += f"  hist_key: {self.hist_key}"
+        s += f"  position: {self.position}\n"
+        s += f"  sources: {self.sources}\n"
+        if self.key is not None:
+            s += f"  key: {self.key}"
+        else:
+            s += "  (Cannot be provided via defaults or kwargs)"
+        s += "\n"
+        if "history" in self.sources:
+            s += f"  hist_idxs: {self.hist_idxs}"
+            s += f"  hist_key: {self.hist_key}"
+        else:
+            s += "  (Cannot be provided via history)"
+        s += "\n"
         return s
-
-    # This is one of the cases where we do not have a nice single argument cast
-    # Override the cast method to accept a tuple of the first several
-    @classmethod
-    def cast(cls, obj: InputParamCastableTypes) -> InputParam:
-        """Cast to a :class:`InputParam` object.
-
-        Unlike most castable objects, :class:`InputParam`
-        requires at least 2 inputs. This version of cast additionally allows
-        a tuple/list variant for the arguments and disallows
-        a single object being passed in.
-
-        Parameters
-        ----------
-        obj:
-            A castable object that is either:
-            - Already a :class:`InputParam` object,
-            in which case `obj` is returned
-            - A kwarg dict that is passed into the constructor
-            - A sequence of the first two to four arguments of the
-            :class:`InputParam` constructor
-
-        Returns
-        -------
-            A :class:`ObjectBuilder` object
-        """
-        if isinstance(obj, cls):
-            # We are already the correct class, perform no copy
-            return obj
-        elif isinstance(obj, dict):
-            # Assume this is a kwarg dict, pass in all kwargs
-            return cls(**obj)
-        elif isinstance(obj, tuple):
-            # Assume this is a tuple/list of first several args
-            return cls(*obj)
-
-        # Else we can't handle this
-        raise ValueError(
-            "InputParam requires multiple arguments to cast. "
-            + "Use a tuple or kwarg dict when casting."
-        )
-
-
-InputSpecCastableTypes: TypeAlias = (
-    "InputSpec | Sequence[InputParamCastableTypes]"
-)
 
 
 class InputSpec(Sequence[InputParam], Castable):
@@ -117,11 +90,29 @@ class InputSpec(Sequence[InputParam], Castable):
     _input_spec: Sequence[InputParam]
     """TODO"""
 
-    def __init__(self, input_spec: Sequence[InputParamCastableTypes]):
+    def __init__(self, input_spec: InputSpecCastableTypes):
         if isinstance(input_spec, InputSpec):
             self._input_spec = input_spec._input_spec
         elif isinstance(input_spec, Sequence):
-            self._input_spec = [InputParam.cast(ip) for ip in input_spec]
+            none_allowed = True
+            self._input_spec = []
+            for param in input_spec:
+                if param is None:
+                    assert none_allowed, (
+                        "None can only be used for sequential params "
+                        + "at the start of the InputSpec input list"
+                    )
+                    # Shorthand for label-only positional arg
+                    input_param = InputParam(len(self._input_spec), ["label"])
+                else:
+                    none_allowed = False
+
+                    if isinstance(param, InputParam):
+                        input_param = param
+                    else:
+                        input_param = InputParam(len(self._input_spec), *param)
+
+                self._input_spec.append(input_param)
 
     def __getitem__(self, i: int):
         return self._input_spec[i]
@@ -141,5 +132,9 @@ class InputSpec(Sequence[InputParam], Castable):
         return s
 
     @property
-    def kwarg_keys(self):
-        return [param.kwargs_key for param in self._input_spec]
+    def keys(self) -> list[str]:
+        keys = []
+        for param in self._input_spec:
+            if param.key is not None:
+                keys.append(param.key)
+        return keys

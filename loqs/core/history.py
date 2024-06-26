@@ -149,12 +149,23 @@ class History(Sequence[Frame], Castable):
 
     def collect_data(
         self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
-    ) -> list:
+    ) -> list | object:
 
         if isinstance(indices, int):
-            indices = [indices]
+            iter_indices = [indices]
         elif indices == "all":
-            indices = slice(len(self._history))
-        assert isinstance(indices, Iterable)
+            iter_indices = slice(len(self._history))
+        else:
+            iter_indices = indices
 
-        return [self._history[i].get(key, None) for i in indices]
+        if isinstance(iter_indices, slice):
+            iter_indices = range(len(self._history))[iter_indices]
+
+        data = [self._history[i].get(key, None) for i in iter_indices]
+
+        if isinstance(indices, int):
+            # If we only requested one entry, return bare object
+            return data[0]
+
+        # Otherwise, return the series of objects
+        return data

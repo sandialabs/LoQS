@@ -145,6 +145,17 @@ def create_qec_code():
         [logical_H_circ_inst, logical_H_permutation], name="Logical H"
     )
 
+    # Raw physical measurement
+    operations["Measure Physical Qubits"] = (
+        ic.build_physical_circuit_instruction(
+            PhysicalCircuit([("Iz", q) for q in qubits], qubit_labels=qubits),
+            include_outcomes=True,
+            reset_mcms=False,
+            name="Z-basis measurement for physical qubits",
+            fault_tolerant=False,
+        )
+    )
+
     # Eqn B4-B7 of arxiv:2208.01863
     # stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
     # syndrome_circuit = PhysicalCircuit([], qubit_labels=qubits)

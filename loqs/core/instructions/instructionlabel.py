@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.internal import Castable
@@ -27,29 +27,26 @@ class InstructionLabel(Castable):
     patch_label: str | None
     """Target patch label.
 
-    This could be None for global_instructions.
-    Otherwise, it should specify a key in the PatchDict
-    stored in the 'patches' value of the :class:`History`.
+    Can be None to use an entry in
+    :attr:`InstructionStack.global_instructions`.
+    Otherwise, should be a key into the
+    :class:`PatchDict` stored in 'patches' in the
+    last :class:`Frame` of the :class:`History`.
+    """
+
+    inst_args: tuple
+    """Additional args to pass on.
     """
 
     inst_kwargs: dict[str, object]
     """Additional kwargs to pass on.
-
-    Note that only kwargs are allowed, not args.
-    This is because information is being fed into
-    :meth:`Instruction.apply` from multiple sources,
-    including the :class:`History`,
-    :attr:`Instruction.default_kwargs`, and the
-    :class:`InstructionLabel` kwargs here.
-    For simplicity (for now), we require full kwarg
-    specification to ensure all parameters go where
-    they are supposed to.
     """
 
     def __init__(
         self,
         inst_label: str,
         patch_label: str | None = None,
+        inst_args: Sequence | None = None,
         inst_kwargs: Mapping[str, object] | None = None,
     ) -> None:
         """Initialize an :class:`InstructionLabel`.
@@ -58,6 +55,10 @@ class InstructionLabel(Castable):
         """
         self.inst_label = inst_label
         self.patch_label = patch_label
+
+        if inst_args is None:
+            inst_args = []
+        self.inst_args = tuple(inst_args)
 
         if inst_kwargs is None:
             inst_kwargs = {}
@@ -69,8 +70,8 @@ class InstructionLabel(Castable):
 
     def __repr__(self) -> str:
         """TODO"""
-        s = f"InstructionLabel({self.inst_label},"
-        s += f"{self.patch_label},{self.inst_kwargs})\n"
+        s = f"InstructionLabel({self.inst_label},{self.patch_label},"
+        s += f"{self.inst_args},{self.inst_kwargs})\n"
         return s
 
     @classmethod
