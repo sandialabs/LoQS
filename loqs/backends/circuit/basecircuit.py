@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Sequence, Mapping
+import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.internal.castable import Castable
@@ -44,10 +45,12 @@ class BasePhysicalCircuit(Castable):
             self.set_qubit_labels_inplace(qubit_labels)
 
     def __str__(self) -> str:
-        return f"Physical {self.name} circuit:\n{str(self.circuit)}"
+        s = f"Physical {self.name} circuit:\n"
+        s += textwrap.indent(str(self.circuit), "  ")
+        return s
 
     def __repr__(self) -> str:
-        return f"Physical {self.name} circuit:\n{repr(self.circuit)}"
+        return f"Physical {self.name} circuit: {repr(self.circuit)}"
 
     # Instance properties
     @property

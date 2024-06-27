@@ -66,12 +66,20 @@ class InstructionLabel(Castable):
 
     def __str__(self) -> str:
         """TODO"""
-        return self.__repr__()
+        return repr(self)
 
     def __repr__(self) -> str:
         """TODO"""
         s = f"InstructionLabel({self.inst_label},{self.patch_label},"
-        s += f"{self.inst_args},{self.inst_kwargs})\n"
+        s += f"{self.inst_args}," + "{"
+        for i, (k, v) in enumerate(self.inst_kwargs.items()):
+            vstr = str(v)
+            if vstr.endswith("\n"):
+                vstr = vstr[:-1]
+            s += f"{k}: {vstr}"
+            if i != len(self.inst_kwargs) - 1:
+                s += ","
+        s += "})\n"
         return s
 
     @classmethod

@@ -92,7 +92,7 @@ class History(Sequence[Frame], Castable):
         for frame in self._history:
             sf = str(frame)
             sf = textwrap.indent(sf, "  ")
-            s += sf
+            s += sf + "\n"
         return s
 
     @property
@@ -107,6 +107,16 @@ class History(Sequence[Frame], Castable):
 
     def append(self, item: FrameCastableTypes) -> None:
         item = Frame.cast(item)
+
+        # Propagate any keys that are not existing in new frame
+        if len(self._history):
+            last_frame = self._history[-1]
+            prop_data = {}
+            for prop_key in self.propagating_keys:
+                if prop_key not in item and prop_key in last_frame:
+                    prop_data[prop_key] = last_frame[prop_key]
+
+            item = item.update(prop_data)
 
         # Check for any expiring keys in previous frames
         for exp_key in self.expiring_keys:
@@ -133,16 +143,6 @@ class History(Sequence[Frame], Castable):
 
             difference = std_items.difference(new_items)
             self._nonstd_spec.update(difference)
-
-        # Propagate any keys that are not existing in new frame
-        if len(self._history):
-            last_frame = self._history[-1]
-            prop_data = {}
-            for prop_key in self.propagating_keys:
-                if prop_key not in item and prop_key in last_frame:
-                    prop_data[prop_key] = last_frame[prop_key]
-
-            item = item.update(prop_data)
 
         # Finally append
         self._history.append(item)

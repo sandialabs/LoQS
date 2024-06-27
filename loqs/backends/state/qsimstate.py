@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence, Collection
 import random
+import textwrap
 from typing import ClassVar, TypeAlias
 
 from loqs.backends import GateRep
@@ -86,6 +87,12 @@ class QSimQuantumState(BaseQuantumState):
             self.state.classical = {
                 name_map[k]: v for k, v in self.state.classical.items()
             }
+
+    def __str__(self) -> str:
+        s = f"Physical {self.name} state:\n"
+        s += f"  SparseDM state on {self.state.no_qubits} qubits"
+        s += f" ([{self.state.names[0]},...,{self.state.names[-1]}])\n"  # type: ignore
+        return s
 
     def apply_reps_inplace(
         self, reps: Sequence, reset_mcms: bool = True

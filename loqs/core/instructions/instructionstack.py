@@ -59,12 +59,15 @@ class InstructionStack(Sequence[Instruction | InstructionLabel], Castable):
         return len(self._instructions)
 
     def __str__(self):
-        s = f"InstructionStack with {len(self)} items:\n"
-        for i, inst in enumerate(self._instructions):
-            si = str(inst)
-            si = textwrap.indent(si, "  ")
-            s += si
-        return s
+        if len(self):
+            s = f"InstructionStack with {len(self)} items:\n"
+            for i, inst in enumerate(self._instructions):
+                si = str(inst)
+                si = textwrap.indent(si, "  ")
+                s += si
+            return s
+        else:
+            return "Empty InstructionStack"
 
     def append_instruction(self, item) -> InstructionStack:
         return self.insert_instruction(len(self), item)

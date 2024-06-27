@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Sequence
+import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.model.basemodel import GateRep, InstrumentRep
@@ -22,6 +23,11 @@ class BaseQuantumState(Castable):
 
     name: ClassVar[str]
     """Name of state backend"""
+
+    def __str__(self) -> str:
+        s = f"Physical {self.name} state:\n"
+        s += textwrap.indent(str(self.state), "  ")
+        return s
 
     @property
     @abstractmethod

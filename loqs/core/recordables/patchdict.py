@@ -47,6 +47,10 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable):
     def __delitem__(self, key: str) -> None:
         del self.patches[key]
 
+    def __str__(self) -> str:
+        str_dict = {k: str(v) for k, v in self.patches.items()}
+        return f"PatchDict({str_dict})"
+
     @property
     def all_qubit_labels(self) -> list[str]:
         """TODO"""

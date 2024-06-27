@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import functools
 import itertools
-from typing import TypeAlias
+from typing import ClassVar, TypeAlias
 import numpy as np
 
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
@@ -31,6 +31,8 @@ PyGSTiModelCastableTypes: TypeAlias = (
 
 class PyGSTiNoiseModel(BaseNoiseModel):
     """Model backend for handling ``pygsti.model.OpModel`` objects."""
+
+    name: ClassVar[str] = "pyGSTi"
 
     def __init__(self, model: PyGSTiModelCastableTypes) -> None:
         """Initialize a PyGSTiModelBackend.

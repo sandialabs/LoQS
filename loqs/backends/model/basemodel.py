@@ -6,6 +6,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Sequence
 from enum import StrEnum
+import textwrap
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -37,6 +38,9 @@ class BaseNoiseModel(Castable):
 
     name: ClassVar[str]
     """Name of circuit backend"""
+
+    def __str__(self) -> str:
+        return f"Physical {self.name} noise model\n"
 
     @property
     @abstractmethod

@@ -142,7 +142,9 @@ def create_qec_code():
     # Raw physical measurement
     operations["Measure Physical Qubits"] = (
         ic.build_physical_circuit_instruction(
-            PhysicalCircuit([("Iz", q) for q in qubits], qubit_labels=qubits),
+            PhysicalCircuit(
+                [[("Iz", q) for q in qubits]], qubit_labels=qubits
+            ),
             include_outcomes=True,
             reset_mcms=False,
             name="Z-basis measurement for physical qubits",
@@ -172,7 +174,7 @@ def create_qec_code():
 
     # TODO: Logical CZ and CCZ
 
-    return QECCode(operations, qubits)
+    return QECCode(operations, qubits, "Perfect [[5,1,3]] code")
 
 
 ## Helper functions

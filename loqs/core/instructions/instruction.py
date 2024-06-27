@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import textwrap
 from typing import ParamSpec, Protocol, TypeAlias
 
 from loqs.core import History, Frame
@@ -65,6 +66,21 @@ class Instruction:
         self.name = name
         self.parent = parent
         self.fault_tolerant = fault_tolerant
+
+    def __str__(self) -> str:
+        s = f"Instruction {self.name}\n"
+        s += "  Input parameter spec:\n"
+        sis = str(self.input_spec)
+        sis = textwrap.indent(sis, "    ")
+        s += sis
+        s += f"  Output frame keys: {self.output_spec}\n"
+        s += "  Defaults:\n"
+        for k, v in self.defaults.items():
+            s += textwrap.indent(f"{k}: {v}", "    ")
+            if not s.endswith("\n"):
+                s += "\n"
+        s += f"  Fault-tolerant: {self.fault_tolerant}\n"
+        return s
 
     def apply(
         self,
@@ -135,7 +151,12 @@ class Instruction:
         ), "apply_fn did not output all expected keys"
 
         output_frame = applied_frame.update(
-            {"instruction": self}, f"{self.name} result"
+            {
+                "instruction": self,
+                "instruction_args": args,
+                "instruction_kwargs": kwargs,
+            },
+            f"{self.name} result",
         )
         return output_frame
 

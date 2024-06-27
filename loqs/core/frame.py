@@ -70,11 +70,27 @@ class Frame(Mapping[str, object], Castable):
         return iter(self._data)
 
     def __str__(self) -> str:
-        s = f"HistoryFrame with {len(self)} Recordables:\n"
-        for k, v in self.items():
-            s += f"  '{k}' ({type(v)}):\n"
-            sv = str(v)
-            s += textwrap.indent(sv, "    ") + "\n"
+        s = f"Frame {self.log} ({len(self)} objects):\n"
+        for k in self:
+            s += f"  '{k}': "
+            if k in self._expired_keys:
+                s += "EXPIRED"
+            else:
+                item = self[k]
+                if isinstance(item, dict):
+                    sv = "\n"
+                    for k2, v in item.items():
+                        sv += f"{k2}: {str(v)}"
+                        if not sv.endswith("\n"):
+                            sv += "\n"
+                else:
+                    sv = "\n" + str(item)
+                    if not sv.endswith("\n"):
+                        sv += "\n"
+                s += textwrap.indent(sv, "    ")
+
+            if not s.endswith("\n"):
+                s += "\n"
         return s
 
     @property

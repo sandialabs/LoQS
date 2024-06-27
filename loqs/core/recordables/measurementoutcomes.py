@@ -35,3 +35,6 @@ class MeasurementOutcomes:
             self.outcomes = {}
             for k, v in outcomes.items():
                 self.outcomes[k] = [v] if isinstance(v, int) else list(v)
+
+    def __str__(self) -> str:
+        return f"MeasurementOutcomes({self.outcomes})"

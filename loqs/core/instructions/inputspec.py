@@ -45,6 +45,8 @@ class InputParam:
         self.key = key
         self.sources = sources
 
+        self.hist_key = None
+        self.hist_idxs = None
         if "history" in sources:
             assert (
                 hist_idxs is not None
@@ -67,20 +69,8 @@ class InputParam:
             self.hist_idxs = hist_idxs
 
     def __str__(self):
-        s = "InputParam:\n"
-        s += f"  position: {self.position}\n"
-        s += f"  sources: {self.sources}\n"
-        if self.key is not None:
-            s += f"  key: {self.key}"
-        else:
-            s += "  (Cannot be provided via defaults or kwargs)"
-        s += "\n"
-        if "history" in self.sources:
-            s += f"  hist_idxs: {self.hist_idxs}"
-            s += f"  hist_key: {self.hist_key}"
-        else:
-            s += "  (Cannot be provided via history)"
-        s += "\n"
+        s = f"InputParam({self.position},{self.sources},{self.key}"
+        s += f",{self.hist_idxs},{self.hist_key})\n"
         return s
 
 

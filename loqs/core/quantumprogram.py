@@ -32,6 +32,7 @@ class QuantumProgram:
         state_type: type[BaseQuantumState] | None = None,
         patch_types: Mapping[str, QECCode] | None = None,
         override_global_instructions: bool = False,
+        name: str = "(Unnamed quantum program)",
     ) -> None:
         """Initialize a QuantumProgram from a list of operations.
 
@@ -64,10 +65,16 @@ class QuantumProgram:
 
             new_frame = last_frame.update(
                 {"stack": instruction_stack},
-                new_log="Adding InstructionStack from new QuantumProgram",
+                new_log=f"Adding InstructionStack from new QuantumProgram {name}",
             )
 
-            self.history.append(new_frame)
+            if len(last_frame) == 0:
+                # This was an empty frame
+                # Let's just start with the new stack frame
+                self.history = History.cast(new_frame)
+            else:
+                # Let's append to the existing history
+                self.history.append(new_frame)
 
         if global_instructions is None:
             global_instructions = {}
@@ -158,10 +165,8 @@ class QuantumProgram:
             else:
                 args = []
                 kwargs = {}
-            print(f"Working on {inst} with kwargs {kwargs}\n")
 
             inst = self._resolve_instruction(inst)
-            print(f"Resolved to {type(inst)}: {inst}")
 
             # If we are a QuantumLogicalInstruction, we need a noise model
             # If one not provided as an arg, try to use the program default
@@ -175,12 +180,10 @@ class QuantumProgram:
                 kwargs["model"] = self.default_noise_model
 
             applied_frame = inst.apply(self.history, dry_run, *args, **kwargs)
-            print(f"Applied frame: {applied_frame}")
 
             new_frame = applied_frame.update({"stack": stack})
 
             self.history.append(new_frame)
-            print(f"Final stored frame: {self.history[-1]}")
 
             num_frames += 1
 

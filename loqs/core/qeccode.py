@@ -13,10 +13,15 @@ class QECCode:
         self,
         instructions: Mapping[str, Instruction],
         template_qubits: Sequence[str],
+        name: str = "(Unnamed QEC code)",
     ):
         """TODO"""
         self.instructions = {k: v for k, v in instructions.items()}
         self.template_qubits = list(template_qubits)
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"QECCode {self.name}"
 
     def create_patch(self, qubits: Sequence[str]):
         """TODO"""
@@ -54,3 +59,8 @@ class QECCodePatch(Mapping[str, Instruction]):
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.code.instructions)
+
+    def __str__(self) -> str:
+        s = f"QECCodePatch for {self.code.name} on qubits "
+        s += f"[{self.qubits[0]},...,{self.qubits[-1]}]"
+        return s
