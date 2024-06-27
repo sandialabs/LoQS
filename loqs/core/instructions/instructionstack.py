@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import textwrap
-from typing import TypeAlias, TypeVar
+from typing import TypeAlias
 
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
@@ -14,43 +14,50 @@ from loqs.core.instructions.instructionlabel import (
 from loqs.internal.castable import Castable
 
 
-T = TypeVar("T", bound="Instruction")
-
-
 InstructionStackCastableTypes: TypeAlias = (
-    "InstructionStack | Instruction | InstructionLabelCastableTypes | Sequence[Instruction | InstructionLabelCastableTypes] | None"
+    "InstructionStack | InstructionLabelCastableTypes | Sequence[InstructionLabelCastableTypes] | None"
 )
 
 
-class InstructionStack(Sequence[Instruction | InstructionLabel], Castable):
+class InstructionStack(Sequence[InstructionLabel], Castable):
 
-    _instructions: list[Instruction | InstructionLabel]
-    """Internal list of instructions"""
+    _instructions: list[InstructionLabel]
+    """Internal list of :class:`InstructionLabels`"""
 
     def __init__(
         self, instructions: InstructionStackCastableTypes = None
     ) -> None:
-        """Initialize an InstructionStack."""
+        """Initialize an InstructionStack.
+
+        TODO
+        """
         self._instructions = []
         if isinstance(instructions, InstructionStack):
             self._instructions = instructions._instructions
-        elif isinstance(instructions, Instruction):
-            self._instructions = [instructions]
-        elif isinstance(instructions, Sequence):
-            for inst in instructions:
-                if not isinstance(inst, Instruction):
-                    try:
-                        inst = InstructionLabel.cast(inst)
-                    except ValueError as e:
-                        raise ValueError(
-                            f"Failed to cast {inst} to InstructionLabel"
-                        ) from e
+            return
+        if instructions is None or (
+            isinstance(instructions, Sequence) and not len(instructions)
+        ):
+            self._instructions = []
+            return
+        if isinstance(instructions, (Instruction, str, InstructionLabel)):
+            self._instructions = [InstructionLabel.cast(instructions)]
+            return
 
-                self._instructions.append(inst)
+        # If we are here, we are a sequence of some kind
+        # If the first entry is an Instruction or str, this is an InstructionLabel cast
+        # Otherwise it is a list of InstructionLabel casts (probably)
+        if isinstance(instructions[0], (Instruction, str)):
+            self._instructions = [InstructionLabel.cast(instructions)]  # type: ignore
+            return
+
+        # Otherwise we must be a list of castable tuples
+        for inst in instructions:
+            self._instructions.append(InstructionLabel.cast(inst))  # type: ignore
 
         for inst in self._instructions:
-            if isinstance(inst, Instruction):
-                inst.parent = self
+            if inst.instruction is not None:
+                inst.instruction.parent = self
 
     def __getitem__(self, i):
         return self._instructions[i]
@@ -79,10 +86,10 @@ class InstructionStack(Sequence[Instruction | InstructionLabel], Castable):
 
     def insert_instruction(self, i, item) -> InstructionStack:
         instructions = self._instructions.copy()
-        instructions.insert(i, item)
+        instructions.insert(i, InstructionLabel.cast(item))
         return InstructionStack(instructions)
 
     def pop_instruction(
         self,
-    ) -> tuple[Instruction | InstructionLabel, InstructionStack]:
+    ) -> tuple[InstructionLabel, InstructionStack]:
         return self._instructions[0], InstructionStack(self._instructions[1:])

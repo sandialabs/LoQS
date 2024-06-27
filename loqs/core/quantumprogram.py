@@ -12,6 +12,9 @@ from loqs.core import Instruction, InstructionStack, History
 from loqs.core.history import Frame, HistoryCastableTypes
 from loqs.core.instructions import common as ic
 from loqs.core.instructions import InstructionLabel
+from loqs.core.instructions.instructionlabel import (
+    InstructionLabelCastableTypes,
+)
 from loqs.core.instructions.instructionstack import (
     InstructionStackCastableTypes,
 )
@@ -159,31 +162,51 @@ class QuantumProgram:
             print(f"Working on frame {num_frames+1}")
 
             inst, stack = stack.pop_instruction()
-            if isinstance(inst, InstructionLabel):
-                args = inst.inst_args
-                kwargs = inst.inst_kwargs
-            else:
-                args = []
-                kwargs = {}
+            patch_label = inst.patch_label
+            args = inst.inst_args
+            kwargs = inst.inst_kwargs
 
             inst = self._resolve_instruction(inst)
 
-            # If we are a QuantumLogicalInstruction, we need a noise model
-            # If one not provided as an arg, try to use the program default
-            if "model" in inst.input_spec.keys and (
-                "model" not in kwargs
-                or any([isinstance(arg, BaseNoiseModel) for arg in args])
-            ):
-                assert (
-                    self.default_noise_model is not None
-                ), "No model provided as arg but also no default noise model."
-                kwargs["model"] = self.default_noise_model
+            # Some label information we can actually provide
+            # Check to see if it is needed, and provide if not available
+            available_params = {
+                "model": self.default_noise_model,
+                "patch_label": patch_label,
+                "stack": stack,
+            }
+            for k, v in available_params.items():
+                try:
+                    param_spec = inst.input_spec.get_by_key(k)
+                except KeyError:
+                    # Not needed because not in input spec
+                    continue
+
+                # Check if in args or kwargs
+                if len(args) > param_spec.position or k in kwargs:
+                    continue
+
+                # For model specifically, if we are providing it, should not be None
+                if k == "model" and v is None:
+                    raise ValueError(
+                        "Model being requested and not provided. Either "
+                        + "provide it as label arg/kwarg or set default_noise_model."
+                    )
+
+                # If not otherwise provided, lets provide it in kwargs
+                kwargs[k] = v
 
             applied_frame = inst.apply(self.history, dry_run, *args, **kwargs)
 
-            new_frame = applied_frame.update({"stack": stack})
+            # Only update stack if the instruction did not
+            if "stack" not in inst.output_spec:
+                new_frame = applied_frame.update({"stack": stack})
+            else:
+                new_frame = applied_frame
 
             self.history.append(new_frame)
+
+            stack = InstructionStack.cast(new_frame["stack"])
 
             num_frames += 1
 
@@ -195,12 +218,15 @@ class QuantumProgram:
         return History.cast(self.history[-num_frames:])
 
     def _resolve_instruction(
-        self, inst_or_lbl: Instruction | InstructionLabel
+        self, inst_lbl: InstructionLabelCastableTypes
     ) -> Instruction:
-        if isinstance(inst_or_lbl, Instruction):
-            return inst_or_lbl
+        ilbl = InstructionLabel.cast(inst_lbl)
 
-        ilbl = InstructionLabel.cast(inst_or_lbl)
+        if ilbl.instruction is not None:
+            return ilbl.instruction
+
+        # If we are here, we need the inst_label to resolve
+        assert ilbl.inst_label is not None
 
         # First check global
         if ilbl.patch_label is None:

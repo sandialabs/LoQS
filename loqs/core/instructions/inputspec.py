@@ -128,3 +128,10 @@ class InputSpec(Sequence[InputParam], Castable):
             if param.key is not None:
                 keys.append(param.key)
         return keys
+
+    def get_by_key(self, key: str) -> InputParam:
+        for param in self._input_spec:
+            if param.key == key:
+                return param
+
+        raise KeyError(f"{key} not an available parameter")

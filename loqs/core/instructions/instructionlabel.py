@@ -6,18 +6,29 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
+from loqs.core.instructions.instruction import Instruction
 from loqs.internal import Castable
 
 InstructionLabelCastableTypes: TypeAlias = (
-    "tuple[str, str | list[str] | None, str | None] | InstructionLabel"
+    "Instruction | str | tuple[Instruction | str, str | None, str | None] | InstructionLabel"
 )
 
 
 class InstructionLabel(Castable):
     """TODO"""
 
-    inst_label: str
-    """Instruction name.
+    instruction: Instruction | None
+    """Instruction.
+
+    Either :attr:`instruction` or
+    :attr:`inst_label` must be defined.
+    """
+
+    inst_label: str | None
+    """Instruction name, if needs to be resolved.
+
+    Either :attr:`instruction` or
+    :attr:`inst_label` must be defined.
 
     This should be the key to look up either in the
     :attr:`InstructionSet.instructions` or a
@@ -25,7 +36,7 @@ class InstructionLabel(Castable):
     """
 
     patch_label: str | None
-    """Target patch label.
+    """Target patch label, if needs to be resolved.
 
     Can be None to use an entry in
     :attr:`InstructionStack.global_instructions`.
@@ -44,7 +55,7 @@ class InstructionLabel(Castable):
 
     def __init__(
         self,
-        inst_label: str,
+        inst_or_label: Instruction | str,
         patch_label: str | None = None,
         inst_args: Sequence | None = None,
         inst_kwargs: Mapping[str, object] | None = None,
@@ -53,7 +64,12 @@ class InstructionLabel(Castable):
 
         TODO
         """
-        self.inst_label = inst_label
+        self.instruction = None
+        self.inst_label = None
+        if isinstance(inst_or_label, Instruction):
+            self.instruction = inst_or_label
+        else:
+            self.inst_label = inst_or_label
         self.patch_label = patch_label
 
         if inst_args is None:
@@ -70,7 +86,13 @@ class InstructionLabel(Castable):
 
     def __repr__(self) -> str:
         """TODO"""
-        s = f"InstructionLabel({self.inst_label},{self.patch_label},"
+        if self.inst_label is None:
+            assert self.instruction is not None
+            inst_label = self.instruction.name
+        else:
+            inst_label = self.inst_label
+
+        s = f"InstructionLabel({inst_label},{self.patch_label},"
         s += f"{self.inst_args}," + "{"
         for i, (k, v) in enumerate(self.inst_kwargs.items()):
             vstr = str(v)
@@ -83,7 +105,9 @@ class InstructionLabel(Castable):
         return s
 
     @classmethod
-    def cast(cls, obj: object) -> InstructionLabel:
+    def cast(
+        cls, obj: InstructionLabelCastableTypes | Mapping
+    ) -> InstructionLabel:
         """Cast to a :class:`InstructionLabel` object.
 
         Unlike most castable objects, :class:`InstructionLabel`
@@ -105,18 +129,14 @@ class InstructionLabel(Castable):
         -------
             A :class:`SyndromeExtraction` object
         """
-        if isinstance(obj, cls):
+        if isinstance(obj, InstructionLabel):
             # We are already the correct class, perform no copy
             return obj
-        elif isinstance(obj, dict):
+        elif isinstance(obj, Mapping):
             # Assume this is a kwarg dict, pass in all kwargs
             return cls(**obj)
-        elif isinstance(obj, tuple):
-            # Assume this is a tuple of arguments, pass all in
-            return cls(*obj)
+        elif isinstance(obj, (Instruction, str)):
+            return cls(obj)
 
-        # Else we can't handle this
-        raise ValueError(
-            "InstructionLabel requires at least two arguments to cast. "
-            + "Use a tuple of arguments or kwarg dict when casting."
-        )
+        # Assume this is a tuple of arguments, pass all in
+        return cls(*obj)

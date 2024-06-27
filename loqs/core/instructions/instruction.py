@@ -11,6 +11,7 @@ from loqs.core import History, Frame
 from loqs.core.history import HistoryCastableTypes
 from loqs.core.instructions import InputSpec
 from loqs.core.instructions.inputspec import InputParam, InputSpecCastableTypes
+from loqs.internal.castable import Castable
 
 
 P = ParamSpec("P")

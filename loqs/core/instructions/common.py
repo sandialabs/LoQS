@@ -11,7 +11,9 @@ from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
+from loqs.core.instructions.inputspec import InputSpec
 from loqs.core.instructions.instruction import KwargDict
+from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
@@ -25,12 +27,27 @@ def build_composite_instruction(
     fault_tolerant: bool = True,
 ) -> Instruction:
     """TODO"""
+    # Anything that is needed from labels in subsequent instructions,
+    # we have to ask for now so that we can set the label properly
+    input_spec = []
+    for instruction in instructions:
+        for param in instruction.input_spec:
+            if "label" in param.sources:
+                new_label = (param.sources, param.key)
+                input_spec.append(new_label)
+
     # We'll just unfold our instruction into the stack
     # Order matters (should match apply_fn)
-    input_spec = [
-        ("history", "stack", -1),
-        ("default", "instructions"),
-    ]
+    # We want most up to date stack from QuantumProgram, i.e. with popped Instruction already
+    # Thus we ask for label and not history, -1 as you might expect
+    input_spec.extend(
+        [
+            ("label", "stack"),
+            ("default", "instructions"),
+        ]
+    )
+
+    input_spec = InputSpec.cast(input_spec)
 
     # We'll output a new stack to use
     output_spec = ["stack"]
@@ -38,11 +55,29 @@ def build_composite_instruction(
     # We need to store the instructions
     defaults = {"instructions": instructions}
 
-    def apply_fn(
-        stack: InstructionStack, instructions: Sequence[Instruction]
-    ) -> Frame:
-        for instruction in instructions:
-            stack.append_instruction(instruction)
+    # We do not know all the params for the underlying instructions
+    # We have ensured that all label sources are in the input_spec,
+    # so we assume they are all passed in and we can pull them out by
+    # position here to set the created labels properly
+    def apply_fn(*args) -> Frame:
+        # These will always be the last two
+        stack = InstructionStack.cast(args[-2])
+        instructions: list[Instruction] = list(args[-1])
+
+        for i, instruction in enumerate(instructions):
+            kwargs = {}
+            subspec = instruction.input_spec
+            for subparam in subspec:
+                if "label" in subparam.sources:
+                    # Check what position this mapped to in the full spec
+                    assert subparam.key is not None
+                    param = input_spec.get_by_key(subparam.key)
+                    kwargs[param.key] = args[param.position]
+
+            new_label = InstructionLabel(instruction, inst_kwargs=kwargs)
+
+            stack = stack.insert_instruction(i, new_label)
+
         return Frame({"stack": stack})
 
     def map_qubits_fn(
@@ -56,7 +91,7 @@ def build_composite_instruction(
         }
         return new_kwargs
 
-    return Instruction(
+    composite_instruction = Instruction(
         apply_fn=apply_fn,
         input_spec=input_spec,
         output_spec=output_spec,
@@ -66,6 +101,12 @@ def build_composite_instruction(
         parent=parent,
         fault_tolerant=fault_tolerant,
     )
+
+    # Set all instructions to have this composite as parent
+    for instruction in composite_instruction.defaults["instructions"]:
+        instruction.parent = composite_instruction
+
+    return composite_instruction
 
 
 def build_lookup_decoder_instruction() -> None:
@@ -140,7 +181,7 @@ def build_patch_builder_instruction(
     # Order matters (should match apply_fn)
     # Labels should be first to enable passing by args in InstrumentLabel
     input_spec = [
-        ("label", "patch_name"),
+        ("label", "patch_label"),
         ("label", "qubits"),
         ("default", "qec_code"),
         (["history", "default"], "patches", -1),
@@ -155,7 +196,7 @@ def build_patch_builder_instruction(
     defaults = {"qec_code": qec_code, "patches": PatchDict()}
 
     def apply_fn(
-        patch_name: str,
+        patch_label: str,
         qubits: Sequence[str],
         qec_code: QECCode,
         patches: PatchDict,
@@ -165,17 +206,17 @@ def build_patch_builder_instruction(
         # Disjoint patch checks
         assert all(
             [q not in all_patch_qubits for q in qubits]
-        ), f"Patch builder failed, requesting overlapping patches for {patch_name}"
+        ), f"Patch builder failed, requesting overlapping patches for {patch_label}"
         assert (
-            patch_name not in patches
-        ), f"Patch builder failed, already have existing patch {patch_name}"
+            patch_label not in patches
+        ), f"Patch builder failed, already have existing patch {patch_label}"
 
         try:
             patch = qec_code.create_patch(qubits)
         except Exception as e:
             raise ValueError("Failed to create patch in patch builder") from e
 
-        patches[patch_name] = patch
+        patches[patch_label] = patch
 
         return Frame({"patches": patches})
 
@@ -202,7 +243,7 @@ def build_patch_remover_instruction(
     # Order matters (should match apply_fn)
     # Labels should be first to enable passing by args in InstrumentLabel
     input_spec = [
-        ("label", "patch_name"),
+        ("label", "patch_label"),
         ("history", "patches", -1),
     ]
 
@@ -212,14 +253,14 @@ def build_patch_remover_instruction(
     # No defaults
 
     def apply_fn(
-        patch_name: str,
+        patch_label: str,
         patches: PatchDict,
     ) -> Frame:
         assert (
-            patch_name in patches
-        ), f"Patch remover failed, could not find patch {patch_name}"
+            patch_label in patches
+        ), f"Patch remover failed, could not find patch {patch_label}"
 
-        del patches[patch_name]
+        del patches[patch_label]
 
         return Frame({"patches": patches})
 
@@ -242,12 +283,10 @@ def build_patch_permute_instruction(
     fault_tolerant: bool = True,
 ) -> Instruction:
     """TODO"""
-    # We require the state from history, a passed-in model on apply,
-    # and everything else is stored as defaults from this constructor
     # Order matters (must match apply_fn)
     # Labels should be first to enable passing by args in InstrumentLabel
     input_spec = [
-        ("label", "patch_name"),
+        ("label", "patch_label"),
         ("default", "mapping"),
         ("history", "patches", -1),
     ]
@@ -259,24 +298,25 @@ def build_patch_permute_instruction(
     defaults = {"mapping": mapping}
 
     def apply_fn(
+        patch_label: str,
         mapping: Mapping[str, str],
         patches: PatchDict,
-        patch_name: str,
     ) -> Frame:
         assert (
-            patch_name in patches
-        ), f"Patch permute failed, could not find patch {patch_name}"
+            patch_label in patches
+        ), f"Patch permute failed, could not find patch {patch_label}"
 
-        patch = patches[patch_name]
+        patch = patches[patch_label]
 
         code = patch.code
         qubits = patch.qubits
 
-        mapped_qubits = [mapping[q] for q in qubits]
+        # get(q, q) ensures non-specified qubits are unchanged
+        mapped_qubits = [mapping.get(q, q) for q in qubits]
 
         permuted_patch = code.create_patch(mapped_qubits)
 
-        patches[patch_name] = permuted_patch
+        patches[patch_label] = permuted_patch
 
         return Frame({"patches": patches})
 
