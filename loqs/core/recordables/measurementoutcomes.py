@@ -1,7 +1,7 @@
 """:class:`MeasurementOutcomes` definition.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.backends.state.basestate import OutcomeDict
@@ -12,7 +12,7 @@ MeasurementOutcomesCastableTypes: TypeAlias = (
 )
 
 
-class MeasurementOutcomes:
+class MeasurementOutcomes(Mapping[str, list[int]]):
     """TODO"""
 
     outcomes: OutcomeDict
@@ -35,6 +35,15 @@ class MeasurementOutcomes:
             self.outcomes = {}
             for k, v in outcomes.items():
                 self.outcomes[k] = [v] if isinstance(v, int) else list(v)
+
+    def __getitem__(self, key: str) -> list[int]:
+        return self.outcomes[key]
+
+    def __len__(self) -> int:
+        return len(self.outcomes)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.outcomes)
 
     def __str__(self) -> str:
         return f"MeasurementOutcomes({self.outcomes})"

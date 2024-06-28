@@ -93,6 +93,7 @@ class QuantumProgram:
         )
 
         # Add state initialization, if requested
+        self.state_type = state_type
         if state_type is not None:
             if (
                 "Init State" in self.global_instructions
@@ -113,6 +114,7 @@ class QuantumProgram:
                 self.global_instructions["Init State"] = builder
 
         # Add patch initializations/removals, if requested
+        self.patch_types = patch_types
         if patch_types is not None:
             for patch_name, patch_code in patch_types.items():
                 label = f"Init Patch {patch_name}"
@@ -150,7 +152,43 @@ class QuantumProgram:
                 )
                 self.global_instructions["Remove Patch"] = builder
 
+        self.name = name
         self.run_histories = []
+
+    @classmethod
+    def from_quantum_program(
+        cls,
+        other: QuantumProgram,
+        instruction_stack: InstructionStackCastableTypes = None,
+        default_noise_model: BaseNoiseModel | None = None,
+        state_type: type[BaseQuantumState] | None = None,
+        patch_types: Mapping[str, QECCode] | None = None,
+        name: str | None = None,
+    ) -> QuantumProgram:
+        if instruction_stack is None:
+            instruction_stack = InstructionStack.cast(
+                other.initial_history[-1]["stack"]
+            )
+        if default_noise_model is None:
+            default_noise_model = other.default_noise_model
+        if name is None:
+            name = other.name
+        if state_type is None:
+            state_type = other.state_type
+        if patch_types is None:
+            patch_types = other.patch_types
+
+        return QuantumProgram(
+            instruction_stack,
+            other.initial_history,
+            default_noise_model,
+            "state" in other.initial_history.expiring_keys,
+            other.global_instructions,
+            state_type,
+            patch_types,
+            override_global_instructions=True,
+            name=name,
+        )
 
     def run(
         self, dry_run: bool = False, max_frame_limit: int = 100
@@ -165,9 +203,16 @@ class QuantumProgram:
         print(f"Executing program run {len(self.run_histories)}")
 
         while num_frames < max_frame_limit and len(stack):
-            print(f"Working on frame {num_frames+1}")
 
             inst, stack = stack.pop_instruction()
+
+            if inst.instruction is None:
+                name = inst.inst_label
+            else:
+                name = inst.instruction.name
+
+            print(f"Working on frame {num_frames+1} ({name})")
+
             patch_label = inst.patch_label
             args = inst.inst_args
             kwargs = inst.inst_kwargs
