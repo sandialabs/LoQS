@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import copy
 import textwrap
 from typing import ParamSpec, Protocol, TypeAlias
 
@@ -11,7 +12,6 @@ from loqs.core import History, Frame
 from loqs.core.history import HistoryCastableTypes
 from loqs.core.instructions import InputSpec
 from loqs.core.instructions.inputspec import InputParam, InputSpecCastableTypes
-from loqs.internal.castable import Castable
 
 
 P = ParamSpec("P")
@@ -52,6 +52,7 @@ class Instruction:
             object | None
         ) = None,  # TODO: Figure out how to allow InstructionStack without circ dep
         fault_tolerant: bool | None = None,
+        skip_in_dry_run: bool = True,  # ADVANCED
     ) -> None:
         """TODO"""
         self.apply_fn = apply_fn
@@ -67,6 +68,7 @@ class Instruction:
         self.name = name
         self.parent = parent
         self.fault_tolerant = fault_tolerant
+        self.skip_in_dry_run = skip_in_dry_run
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
@@ -118,7 +120,7 @@ class Instruction:
                         # Try next source
                         continue
 
-                    return self.defaults[param.key]
+                    return copy.deepcopy(self.defaults[param.key])
                 elif source == "label":
                     if param.position < len(args):
                         return args[param.position]
@@ -142,8 +144,8 @@ class Instruction:
         # Multiple can be specified, try in order with earlier getting precedence
         apply_args = [collect_arg(param) for param in self.input_spec]
 
-        if dry_run:
-            applied_frame = Frame({k: None for k in self.output_spec})
+        if dry_run and self.skip_in_dry_run:
+            applied_frame = Frame({k: "DRY_RUN" for k in self.output_spec})
         else:
             applied_frame = self.apply_fn(*apply_args)
 
@@ -171,6 +173,7 @@ class Instruction:
             self.name,
             self.parent,
             self.fault_tolerant,
+            self.skip_in_dry_run,
         )
 
     def map_qubits(

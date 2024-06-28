@@ -140,16 +140,14 @@ def create_qec_code():
     )
 
     # Raw physical measurement
-    operations["Measure Physical Qubits"] = (
-        ic.build_physical_circuit_instruction(
-            PhysicalCircuit(
-                [[("Iz", q) for q in qubits]], qubit_labels=qubits
-            ),
-            include_outcomes=True,
-            reset_mcms=False,
-            name="Z-basis measurement for physical qubits",
-            fault_tolerant=False,
-        )
+    operations["Non-FT Raw Z Measure"] = ic.build_physical_circuit_instruction(
+        PhysicalCircuit(
+            [[("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")]], qubit_labels=qubits
+        ),
+        include_outcomes=True,
+        reset_mcms=False,
+        name="Z-basis measurement for information-containing physical qubits",
+        fault_tolerant=False,
     )
 
     # Eqn B4-B7 of arxiv:2208.01863

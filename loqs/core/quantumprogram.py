@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import copy
 import warnings
 
 from loqs.backends.model import BaseNoiseModel
@@ -42,11 +43,11 @@ class QuantumProgram:
         TODO
         """
         # Do history before instruction stack in case it already has one
-        self.history = History.cast(initial_history)
+        self.initial_history = History.cast(initial_history)
         if instruction_stack is None and (
             initial_history is None
-            or len(self.history) < 1
-            or "stack" not in self.history[-1]
+            or len(self.initial_history) < 1
+            or "stack" not in self.initial_history[-1]
         ):
             raise ValueError(
                 "Must provide either initial instruction stack or history with a stack"
@@ -55,14 +56,14 @@ class QuantumProgram:
         self.default_noise_model = default_noise_model
 
         if expiring_state:
-            self.history.expiring_keys.add("state")
+            self.initial_history.expiring_keys.add("state")
 
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
             instruction_stack = InstructionStack.cast(instruction_stack)
 
-            if len(self.history):
-                last_frame = Frame.cast(self.history[-1])
+            if len(self.initial_history):
+                last_frame = Frame.cast(self.initial_history[-1])
             else:
                 last_frame = Frame()
 
@@ -74,10 +75,10 @@ class QuantumProgram:
             if len(last_frame) == 0:
                 # This was an empty frame
                 # Let's just start with the new stack frame
-                self.history = History.cast(new_frame)
+                self.initial_history = History.cast(new_frame)
             else:
                 # Let's append to the existing history
-                self.history.append(new_frame)
+                self.initial_history.append(new_frame)
 
         if global_instructions is None:
             global_instructions = {}
@@ -144,11 +145,12 @@ class QuantumProgram:
                     + "setting override_global_instruction to True."
                 )
             else:
-                self.global_instructions["Remove Patch"] = (
-                    ic.build_patch_remover_instruction(
-                        name="Global patch remover"
-                    )
+                builder = ic.build_patch_remover_instruction(
+                    name="Global patch remover"
                 )
+                self.global_instructions["Remove Patch"] = builder
+
+        self.run_histories = []
 
     def run(
         self, dry_run: bool = False, max_frame_limit: int = 100
@@ -156,7 +158,11 @@ class QuantumProgram:
         """TODO"""
         num_frames = 0
 
-        stack = InstructionStack.cast(self.history[-1]["stack"])
+        history = copy.deepcopy(self.initial_history)
+
+        stack = InstructionStack.cast(history[-1]["stack"])
+
+        print(f"Executing program run {len(self.run_histories)}")
 
         while num_frames < max_frame_limit and len(stack):
             print(f"Working on frame {num_frames+1}")
@@ -166,7 +172,7 @@ class QuantumProgram:
             args = inst.inst_args
             kwargs = inst.inst_kwargs
 
-            inst = self._resolve_instruction(inst)
+            inst = self._resolve_instruction(inst, history[-1])
 
             # Some label information we can actually provide
             # Check to see if it is needed, and provide if not available
@@ -196,7 +202,7 @@ class QuantumProgram:
                 # If not otherwise provided, lets provide it in kwargs
                 kwargs[k] = v
 
-            applied_frame = inst.apply(self.history, dry_run, *args, **kwargs)
+            applied_frame = inst.apply(history, dry_run, *args, **kwargs)
 
             # Only update stack if the instruction did not
             if "stack" not in inst.output_spec:
@@ -204,7 +210,7 @@ class QuantumProgram:
             else:
                 new_frame = applied_frame
 
-            self.history.append(new_frame)
+            history.append(new_frame)
 
             stack = InstructionStack.cast(new_frame["stack"])
 
@@ -215,10 +221,15 @@ class QuantumProgram:
                 f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
             )
 
-        return History.cast(self.history[-num_frames:])
+        if dry_run:
+            print("Dry run completed successfully!")
+
+        self.run_histories.append(history)
+
+        return History.cast(history[-num_frames:])
 
     def _resolve_instruction(
-        self, inst_lbl: InstructionLabelCastableTypes
+        self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
     ) -> Instruction:
         ilbl = InstructionLabel.cast(inst_lbl)
 
@@ -241,7 +252,7 @@ class QuantumProgram:
 
         # Otherwise, we must be a patch instruction
         try:
-            patchdict = PatchDict.cast(self.history[-1]["patches"])
+            patchdict = PatchDict.cast(frame["patches"])
         except KeyError:
             raise RuntimeError(
                 f"'patches' not available in last frame for resolving {ilbl}"

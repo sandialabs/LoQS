@@ -91,6 +91,9 @@ def build_composite_instruction(
         }
         return new_kwargs
 
+    # Composite instructions are only stack updates
+    # These are one of the things that must run in dry runs
+    # to verify the correct codepath is followed
     composite_instruction = Instruction(
         apply_fn=apply_fn,
         input_spec=input_spec,
@@ -100,6 +103,7 @@ def build_composite_instruction(
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
+        skip_in_dry_run=False,
     )
 
     # Set all instructions to have this composite as parent
@@ -159,6 +163,9 @@ def build_object_builder_instruction(
 
     # No need for map_qubits
 
+    # Object builders are only metadata updates
+    # These are one of the things that must run in dry runs
+    # to verify the correct codepath is followed
     return Instruction(
         apply_fn=apply_fn,
         input_spec=input_spec,
@@ -167,6 +174,7 @@ def build_object_builder_instruction(
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
+        skip_in_dry_run=False,
     )
 
 
@@ -222,6 +230,9 @@ def build_patch_builder_instruction(
 
     # No need for map_qubits
 
+    # Patch builders are only patch metadata operations
+    # These are one of the things that must run in dry runs
+    # to verify the correct codepath is followed
     return Instruction(
         apply_fn=apply_fn,
         input_spec=input_spec,
@@ -230,6 +241,7 @@ def build_patch_builder_instruction(
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
+        skip_in_dry_run=False,
     )
 
 
@@ -266,6 +278,9 @@ def build_patch_remover_instruction(
 
     # No need for map_qubits
 
+    # Patch removal are only patch metadata operations
+    # These are one of the things that must run in dry runs
+    # to verify the correct codepath is followed
     return Instruction(
         apply_fn=apply_fn,
         input_spec=input_spec,
@@ -273,6 +288,7 @@ def build_patch_remover_instruction(
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
+        skip_in_dry_run=False,
     )
 
 
@@ -329,6 +345,9 @@ def build_patch_permute_instruction(
         }
         return {"mapping": new_mapping}
 
+    # Patch permutations are only patch metadata operations
+    # These are one of the things that must run in dry runs
+    # to verify the correct codepath is followed
     return Instruction(
         apply_fn=apply_fn,
         input_spec=input_spec,
@@ -338,6 +357,7 @@ def build_patch_permute_instruction(
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
+        skip_in_dry_run=False,
     )
 
 
