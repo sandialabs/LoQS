@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import copy
+from copy import deepcopy
 import textwrap
 from typing import ParamSpec, Protocol, TypeAlias
 
 from loqs.core import History, Frame
 from loqs.core.history import HistoryCastableTypes
-from loqs.core.instructions import InputSpec
-from loqs.core.instructions.inputspec import InputParam, InputSpecCastableTypes
 
 
 P = ParamSpec("P")
@@ -43,42 +41,51 @@ class Instruction:
     def __init__(
         self,
         apply_fn: ApplyCallable,
-        input_spec: InputSpecCastableTypes,
-        output_spec: Sequence[str],
-        defaults: Mapping | None = None,
+        dry_run_apply_fn: ApplyCallable | Sequence[str] | None = None,
         map_qubits_fn: MapQubitsCallable = default_map_qubits,
+        data: Mapping[str, object] | None = None,
         name: str = "(Unnamed instruction)",
         parent: (
             object | None
-        ) = None,  # TODO: Figure out how to allow InstructionStack without circ dep
+        ) = None,  # TODO: Let be Instruction or InstructionStack
         fault_tolerant: bool | None = None,
-        skip_in_dry_run: bool = True,  # ADVANCED
     ) -> None:
         """TODO"""
         self.apply_fn = apply_fn
-        self.input_spec = InputSpec.cast(input_spec)
-        self.output_spec = list(output_spec)
 
-        if defaults is None:
-            defaults = {}
-        self.defaults = dict(defaults)
+        if dry_run_apply_fn is None:
+            dry_run_apply_fn = apply_fn
+        if isinstance(dry_run_apply_fn, Sequence):
+            assert all([isinstance(k, str) for k in dry_run_apply_fn])
+
+            frame = Frame({k: "DRY_RUN" for k in dry_run_apply_fn})
+
+            # TODO: Get signature from apply_fn
+            def dummy_dry_run_fn() -> Frame:
+                return frame
+
+            dry_run_apply_fn = dummy_dry_run_fn
+        self.dry_run_apply_fn = dry_run_apply_fn
 
         self.map_qubits_fn = map_qubits_fn
+
+        if data is None:
+            data = {}
+        self.data = dict(data)
 
         self.name = name
         self.parent = parent
         self.fault_tolerant = fault_tolerant
-        self.skip_in_dry_run = skip_in_dry_run
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
         s += "  Input parameter spec:\n"
-        sis = str(self.input_spec)
-        sis = textwrap.indent(sis, "    ")
-        s += sis
-        s += f"  Output frame keys: {self.output_spec}\n"
-        s += "  Defaults:\n"
-        for k, v in self.defaults.items():
+        # sis = str(self.input_spec)
+        # sis = textwrap.indent(sis, "    ")
+        # s += sis
+        # s += f"  Output frame keys: {self.output_spec}\n"
+        s += "  Data:\n"
+        for k, v in self.data.items():
             s += textwrap.indent(f"{k}: {v}", "    ")
             if not s.endswith("\n"):
                 s += "\n"
@@ -86,78 +93,69 @@ class Instruction:
         return s
 
     def apply(
-        self,
-        input: HistoryCastableTypes,
-        dry_run: bool = False,
-        *args,
-        **kwargs,
+        self, input: HistoryCastableTypes, dry_run: bool = False, *args
     ) -> Frame:
         """TODO"""
-        history = History.cast(input)
+        # history = History.cast(input)
 
-        def collect_arg(param: InputParam):
-            for source in param.sources:
-                if source == "history":
-                    assert param.hist_key is not None
-                    assert param.hist_idxs is not None
-                    data = history.collect_data(
-                        param.hist_key, param.hist_idxs
-                    )
+        # def collect_arg(param: InputParam):
+        #     for source in param.sources:
+        #         if source == "history":
+        #             assert param.hist_key is not None
+        #             assert param.hist_idxs is not None
+        #             data = history.collect_data(
+        #                 param.hist_key, param.hist_idxs
+        #             )
 
-                    if (
-                        isinstance(data, list)
-                        and all([d is None for d in data])
-                        or data is None
-                    ):
-                        # We've failed to get anything
-                        # Try next source
-                        continue
+        #             if (
+        #                 isinstance(data, list)
+        #                 and all([d is None for d in data])
+        #                 or data is None
+        #             ):
+        #                 # We've failed to get anything
+        #                 # Try next source
+        #                 continue
 
-                    return data
-                elif source == "default":
-                    if param.key not in self.defaults:
-                        # We won't be able to retrieve
-                        # Try next source
-                        continue
+        #             return data
+        #         elif source == "default":
+        #             if param.key not in self.defaults:
+        #                 # We won't be able to retrieve
+        #                 # Try next source
+        #                 continue
 
-                    return copy.deepcopy(self.defaults[param.key])
-                elif source == "label":
-                    if param.position < len(args):
-                        return args[param.position]
+        #             return copy.deepcopy(self.defaults[param.key])
+        #         elif source == "label":
+        #             if param.position < len(args):
+        #                 return args[param.position]
 
-                    if param.key not in kwargs:
-                        # We won't be able to retrieve
-                        # Try next source
-                        continue
+        #             if param.key not in kwargs:
+        #                 # We won't be able to retrieve
+        #                 # Try next source
+        #                 continue
 
-                    return kwargs[param.key]
-                else:
-                    raise ValueError("Invalid InputParam source")
+        #             return kwargs[param.key]
+        #         else:
+        #             raise ValueError("Invalid InputParam source")
 
-            # If we get here, we've failed to get any data
-            raise ValueError(f"Failed to collect {param}")
+        #     # If we get here, we've failed to get any data
+        #     raise ValueError(f"Failed to collect {param}")
 
         # Pull necessary data from input spec
         # If "history", pull from history generated by input
         # If "default", pull from Instruction.default_kwargs
         # If "label", pull from passed in kwargs (i.e. from InstructionLabel)
         # Multiple can be specified, try in order with earlier getting precedence
-        apply_args = [collect_arg(param) for param in self.input_spec]
+        # apply_args = [collect_arg(param) for param in self.input_spec]
 
-        if dry_run and self.skip_in_dry_run:
-            applied_frame = Frame({k: "DRY_RUN" for k in self.output_spec})
+        if dry_run:
+            applied_frame = self.dry_run_apply_fn(*args)
         else:
-            applied_frame = self.apply_fn(*apply_args)
-
-        assert all(
-            [k in applied_frame for k in self.output_spec]
-        ), "apply_fn did not output all expected keys"
+            applied_frame = self.apply_fn(*args)
 
         output_frame = applied_frame.update(
             {
                 "instruction": self,
                 "instruction_args": args,
-                "instruction_kwargs": kwargs,
             },
             f"{self.name} result",
         )
@@ -166,14 +164,14 @@ class Instruction:
     def copy(self) -> Instruction:
         return Instruction(
             self.apply_fn,
-            self.input_spec,
-            self.output_spec,
-            self.defaults.copy(),
+            # self.input_spec,
+            # self.output_spec,
+            self.dry_run_apply_fn,
             self.map_qubits_fn,
+            self.data.copy(),
             self.name,
             self.parent,
             self.fault_tolerant,
-            self.skip_in_dry_run,
         )
 
     def map_qubits(
@@ -182,9 +180,9 @@ class Instruction:
         """TODO"""
         new_instruction = self.copy()
         # Map qubits on all data
-        new_kwargs = self.map_qubits_fn(qubit_mapping, **self.defaults)
+        new_kwargs = self.map_qubits_fn(qubit_mapping, **self.data)
         assert all(
-            [k in new_kwargs for k in self.defaults]
+            [k in new_kwargs for k in self.data]
         ), "map_qubits_fn did not output all expected keys"
-        new_instruction.defaults = new_kwargs
+        new_instruction.data = new_kwargs
         return new_instruction

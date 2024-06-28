@@ -437,13 +437,124 @@ def build_physical_circuit_instruction(
     )
 
 
+def _default_success_fn(outcomes: MeasurementOutcomes) -> bool:
+    """Default all-0 success function for repeat-until-success.
+
+    Parameters
+    ----------
+    outcomes:
+        Measurement outcomes from previous frame
+
+    Returns
+    -------
+        True if all measures bits are 0, False otherwise
+    """
+    for _, v in outcomes:
+        if any([bit != 0 for bit in v]):
+            return False
+
+    return True
+
+
 def build_repeat_until_success_instruction(
-    instruction_to_repeat: Instruction,
-    success_fn: Callable[[MeasurementOutcomes], bool],
+    instruction: Instruction,
+    success_fn: Callable[[MeasurementOutcomes], bool] = _default_success_fn,
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
     parent: object | None = None,
     fault_tolerant: bool | None = None,
-) -> None:
+) -> Instruction:
     """TODO"""
-    raise NotImplementedError("TODO")
+    # Anything that is needed from labels in the repeated instruction,
+    # we have to ask for now so that we can set the label properly
+    input_spec = []
+    for param in instruction.input_spec:
+        if "label" in param.sources:
+            new_label = (param.sources, param.key)
+            input_spec.append(new_label)
+
+    # We'll just unfold our instruction into the stack
+    # Order matters (should match apply_fn)
+    # We want most up to date stack from QuantumProgram, i.e. with popped Instruction already
+    input_spec.extend(
+        [
+            ("label", "stack"),
+            ("default", "instruction"),
+            ("default", "success_fn"),
+        ]
+    )
+
+    input_spec = InputSpec.cast(input_spec)
+
+    # We'll output a new stack, as well as anything the instruction outputs
+    output_spec = ["stack"] + instruction.output_spec
+
+    # We need to store the instruction and success function
+    defaults = {
+        "instruction": instruction,
+        "success_fn": success_fn,
+        "max_repeats": max_repeats,
+    }
+
+    # We do not know all the params for the underlying instruction
+    # We have ensured that all label sources are in the input_spec,
+    # so we assume they are all passed in and we can pull them out by
+    # position here to set the created labels properly
+    def apply_fn(*args) -> Frame:
+        # This will always be the last
+        stack = InstructionStack.cast(args[-1])
+
+        current_args = []
+        kwargs = {}
+        subspec = instruction.input_spec
+        for subparam in subspec:
+            # Check what position this mapped to in the full spec
+            assert subparam.key is not None
+            param = input_spec.get_by_key(subparam.key)
+
+            # Add to args so we can apply now
+            current_args.append(args[param.position])
+
+            # Add labels to kwargs so we can feed forward
+            if "label" in subparam.sources:
+                kwargs[param.key] = args[param.position]
+
+        new_label = InstructionLabel(instruction, inst_kwargs=kwargs)
+
+        stack = stack.insert_instruction(0, new_label)
+
+        raise NotImplementedError("TODO")
+
+        return Frame({"stack": stack})
+
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str], instructions: Sequence[Instruction]
+    ) -> KwargDict:
+        new_kwargs: dict[str, object] = {
+            "instructions": [
+                instruction.map_qubits(qubit_mapping)
+                for instruction in instructions
+            ]
+        }
+        return new_kwargs
+
+    # Composite instructions are only stack updates
+    # These are one of the things that must run in dry runs
+    # to verify the correct codepath is followed
+    composite_instruction = Instruction(
+        apply_fn=apply_fn,
+        input_spec=input_spec,
+        output_spec=output_spec,
+        map_qubits_fn=map_qubits_fn,
+        defaults=defaults,
+        name=name,
+        parent=parent,
+        fault_tolerant=fault_tolerant,
+        skip_in_dry_run=False,
+    )
+
+    # Set all instructions to have this composite as parent
+    for instruction in composite_instruction.defaults["instructions"]:
+        instruction.parent = composite_instruction
+
+    return composite_instruction
