@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import copy
 import warnings
 
@@ -204,60 +204,58 @@ class QuantumProgram:
 
         while num_frames < max_frame_limit and len(stack):
 
-            inst, stack = stack.pop_instruction()
+            inst_label, stack = stack.pop_instruction()
 
-            if inst.instruction is None:
-                name = inst.inst_label
+            if inst_label.instruction is None:
+                name = inst_label.inst_label
             else:
-                name = inst.instruction.name
+                name = inst_label.instruction.name
 
             print(f"Working on frame {num_frames+1} ({name})")
 
-            patch_label = inst.patch_label
-            args = inst.inst_args
-            kwargs = inst.inst_kwargs
+            # Collect data the label can give
+            patch_label = inst_label.patch_label
+            label_args = inst_label.inst_args
+            label_kwargs = inst_label.inst_kwargs
+            if "patch_label" not in label_kwargs:
+                label_kwargs["patch_label"] = patch_label
 
-            inst = self._resolve_instruction(inst, history[-1])
+            inst = self._resolve_instruction(inst_label, history[-1])
 
-            # Some label information we can actually provide
-            # Check to see if it is needed, and provide if not available
-            available_params = {
-                "model": self.default_noise_model,
+            # Collect data that the QuantumProgram can get
+            program_data = {
+                "history": history,
                 "patch_label": patch_label,
                 "stack": stack,
             }
-            for k, v in available_params.items():
-                try:
-                    param_spec = inst.input_spec.get_by_key(k)
-                except KeyError:
-                    # Not needed because not in input spec
-                    continue
+            if self.default_noise_model is not None:
+                program_data["model"] = self.default_noise_model
 
-                # Check if in args or kwargs
-                if len(args) > param_spec.position or k in kwargs:
-                    continue
+            # Collect all arguments needed by apply_fn
+            apply_kwargs = {}
+            for i, (key, priorities) in enumerate(
+                inst.param_priorities.items()
+            ):
+                apply_kwargs[key] = self._collect_kwarg(
+                    position=i,
+                    key=key,
+                    priorities=priorities,
+                    label_args=label_args,
+                    label_kwargs=label_kwargs,
+                    instruction_data=inst.data,
+                    program_data=program_data,
+                    history=history,
+                )
 
-                # For model specifically, if we are providing it, should not be None
-                if k == "model" and v is None:
-                    raise ValueError(
-                        "Model being requested and not provided. Either "
-                        + "provide it as label arg/kwarg or set default_noise_model."
-                    )
-
-                # If not otherwise provided, lets provide it in kwargs
-                kwargs[k] = v
-
-            applied_frame = inst.apply(history, dry_run, *args, **kwargs)
+            applied_frame = inst.apply(dry_run, **apply_kwargs)
 
             # Only update stack if the instruction did not
-            if "stack" not in inst.output_spec:
-                new_frame = applied_frame.update({"stack": stack})
-            else:
-                new_frame = applied_frame
+            if "stack" not in applied_frame:
+                applied_frame = applied_frame.update({"stack": stack})
 
-            history.append(new_frame)
+            history.append(applied_frame)
 
-            stack = InstructionStack.cast(new_frame["stack"])
+            stack = InstructionStack.cast(applied_frame["stack"])
 
             num_frames += 1
 
@@ -318,3 +316,65 @@ class QuantumProgram:
             )
 
         return inst
+
+    def _collect_kwarg(
+        self,
+        position: int,
+        key: str,
+        priorities: Sequence[str],
+        label_args: tuple[object],
+        label_kwargs: Mapping[str, object],
+        instruction_data: Mapping[str, object],
+        program_data: Mapping[str, object],
+        history: History,
+    ) -> object:
+        """TODO"""
+        for priority in priorities:
+            if priority == "label":
+                # Check label args and kwargs
+                # Args first
+                if position < len(label_args):
+                    return label_args[position]
+
+                # Now kwargs
+                if key in label_kwargs:
+                    return label_kwargs[key]
+            elif priority == "instruction":
+                # Check instruction data dict
+                if key in instruction_data:
+                    return instruction_data[key]
+            elif priority == "program":
+                # Check provided program data dict
+                if key in program_data:
+                    return program_data[key]
+            elif priority.startswith("history"):
+                # Do string processing to figure out what values we need
+                idx_str = priority.split("[")[1][:-1]
+                if idx_str == "all":
+                    idxs = "all"
+                elif ":" in idx_str:
+                    slice_args = [int(el) for el in idx_str.split(":")]
+                    idxs = slice(*slice_args)
+                elif "," in idx_str:
+                    idxs = [int(el) for el in idx_str.split(":")]
+                else:
+                    try:
+                        idxs = [int(idx_str)]
+                    except ValueError:
+                        raise ValueError(
+                            "Invalid index spec for history priority"
+                        )
+
+                # Collect the requested data
+                data = history.collect_data(key, idxs)
+                if isinstance(data, list) and any(
+                    [d is not None for d in data]
+                ):
+                    return data
+                if data is not None:
+                    return data
+            else:
+                raise ValueError(f"Invalid priority {priority} for key {key}")
+
+        # If we've made it here, nothing returned so we failed to collect
+        raise RuntimeError(f"Failed to collect parameter {key}")

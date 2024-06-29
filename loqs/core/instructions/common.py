@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
-import inspect
+import inspect as ins
 
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -11,8 +11,7 @@ from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
-from loqs.core.instructions.inputspec import InputSpec
-from loqs.core.instructions.instruction import KwargDict
+from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.qeccode import QECCode
@@ -22,63 +21,42 @@ from loqs.core.recordables.patchdict import PatchDict
 
 def build_composite_instruction(
     instructions: Sequence[Instruction],
+    param_priorities: Sequence[str] | Mapping[str, Sequence[str]],
     name: str = "(Unnamed composite instruction)",
     parent: object | None = None,
     fault_tolerant: bool = True,
 ) -> Instruction:
     """TODO"""
-    # Anything that is needed from labels in subsequent instructions,
-    # we have to ask for now so that we can set the label properly
-    input_spec = []
-    for instruction in instructions:
-        for param in instruction.input_spec:
-            if "label" in param.sources:
-                new_label = (param.sources, param.key)
-                input_spec.append(new_label)
 
-    # We'll just unfold our instruction into the stack
-    # Order matters (should match apply_fn)
-    # We want most up to date stack from QuantumProgram, i.e. with popped Instruction already
-    # Thus we ask for label and not history, -1 as you might expect
-    input_spec.extend(
-        [
-            ("label", "stack"),
-            ("default", "instructions"),
-        ]
-    )
-
-    input_spec = InputSpec.cast(input_spec)
-
-    # We'll output a new stack to use
-    output_spec = ["stack"]
-
-    # We need to store the instructions
-    defaults = {"instructions": instructions}
-
-    # We do not know all the params for the underlying instructions
-    # We have ensured that all label sources are in the input_spec,
-    # so we assume they are all passed in and we can pull them out by
-    # position here to set the created labels properly
-    def apply_fn(*args) -> Frame:
+    # We don't know what args we need, so let's take variadic kwargs
+    def apply_fn(**kwargs) -> Frame:
         # These will always be the last two
-        stack = InstructionStack.cast(args[-2])
-        instructions: list[Instruction] = list(args[-1])
+        assert "stack" in kwargs
+        assert "instructions" in kwargs
+        stack = InstructionStack.cast(kwargs["stack"])
+        instructions: list[Instruction] = list(kwargs["instructions"])
 
         for i, instruction in enumerate(instructions):
-            kwargs = {}
-            subspec = instruction.input_spec
-            for subparam in subspec:
-                if "label" in subparam.sources:
-                    # Check what position this mapped to in the full spec
-                    assert subparam.key is not None
-                    param = input_spec.get_by_key(subparam.key)
-                    kwargs[param.key] = args[param.position]
+            patch_label = None
+            label_kwargs = {}
+            for k, v in kwargs.items():
+                if k in param_priorities:
+                    # We want to forward this via the label
+                    if k == "patch_label":
+                        patch_label = v
+                    else:
+                        label_kwargs[k] = v
 
-            new_label = InstructionLabel(instruction, inst_kwargs=kwargs)
+            new_label = InstructionLabel(
+                instruction, patch_label, inst_kwargs=kwargs
+            )
 
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
+
+    # We will need to store the instructions
+    data = {"instructions": instructions}
 
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str], instructions: Sequence[Instruction]
@@ -91,23 +69,27 @@ def build_composite_instruction(
         }
         return new_kwargs
 
-    # Composite instructions are only stack updates
-    # These are one of the things that must run in dry runs
-    # to verify the correct codepath is followed
+    # Because we don't have a fixed function signature above,
+    # we need to pass in priorities. For convenience,
+    # we allow a Sequence of keys that we will turn into default priorities here
+    if not isinstance(param_priorities, Mapping):
+        param_priorities = {k: DEFAULT_PRIORITIES for k in param_priorities}
+
     composite_instruction = Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
+        dry_run_apply_fn=apply_fn,  # Just stack updates, can run in dry_run
         map_qubits_fn=map_qubits_fn,
-        defaults=defaults,
+        data=data,
+        param_priorities=param_priorities,
+        param_error_behavior="continue",  # Suppress the warning for variadic kwargs
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
-        skip_in_dry_run=False,
     )
 
     # Set all instructions to have this composite as parent
-    for instruction in composite_instruction.defaults["instructions"]:
+    data_instructions = composite_instruction.data["instructions"]
+    for instruction in data_instructions:  # type: ignore
         instruction.parent = composite_instruction
 
     return composite_instruction
@@ -125,56 +107,36 @@ def build_object_builder_instruction(
     parent: object | None = None,
     fault_tolerant: bool = True,
 ) -> Instruction:
-
-    # This is sort of a special input_spec because we don't know
-    # all the args a priori.
-    # First, we use inspect to introspect the __init__ signature
-    input_spec = []
-    init_sig = inspect.signature(obj_class)
-    for param in init_sig.parameters.values():
-        input_spec.append(("label", param.name))
-
-    # Then we set the defaults for the metadata we need
-    input_spec.extend([("default", "frame_key"), ("default", "obj_class")])
-
-    # Output includes the new object
-    output_spec = [frame_key]
-
-    # Defaults include the frame key and object class
-    defaults = {"frame_key": frame_key, "obj_class": obj_class}
-
-    # This apply_fn is a bit of an oddity. Normally I like to full specify
-    # the args needed. However, in this case, we have no idea what the kwargs
-    # needed by the object constructor are. So in this case, we let them
-    # pass through without enforcement
-    def apply_fn(*args) -> Frame:
-
-        frame_key = args[-2]
-        obj_class = args[-1]
-        obj_args = args[:-2]
+    # This is also an odd apply_fn because we do not know the args a priori
+    # Here we define the generic apply_fn using variadic kwargs
+    def apply_fn(**kwargs) -> Frame:
+        frame_key = kwargs.pop("frame_key")
+        obj_class = kwargs.pop("obj_class")
         try:
-            obj = obj_class(*obj_args)
+            obj = obj_class(**kwargs)
         except Exception as e:
             raise ValueError(
                 "Failed to create object in object builder"
             ) from e
-
         return Frame({frame_key: obj})
 
-    # No need for map_qubits
+    # Because we don't know the signature, let's set the priorities ourselves
+    param_priorities = {"frame_key": ["default"], "obj_class": ["default"]}
+    sig = ins.signature(obj_class.__init__)
+    for param in sig.parameters:
+        param_priorities[param] = ["label"]
 
-    # Object builders are only metadata updates
-    # These are one of the things that must run in dry runs
-    # to verify the correct codepath is followed
+    data = {"frame_key": frame_key, "obj_class": obj_class}
+
     return Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
-        defaults=defaults,
+        dry_run_apply_fn=apply_fn,  # Object creation can be done in dry runs
+        data=data,
+        param_priorities=param_priorities,
+        param_error_behavior="continue",  # Suppress variadic kwargs warning
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
-        skip_in_dry_run=False,
     )
 
 
@@ -184,25 +146,7 @@ def build_patch_builder_instruction(
     parent: object | None = None,
     fault_tolerant: bool = True,
 ) -> Instruction:
-
-    # We require patch name and qubits to be passed in
-    # Order matters (should match apply_fn)
-    # Labels should be first to enable passing by args in InstrumentLabel
-    input_spec = [
-        ("label", "patch_label"),
-        ("label", "qubits"),
-        ("default", "qec_code"),
-        (["history", "default"], "patches", -1),
-    ]
-
-    # Output includes a PatchDict
-    output_spec = ["patches"]
-
-    # Default is the QECCode and an empty PatchDict
-    # This should only be used if one does not exist in history,
-    # since our load order is ["history", "default"]
-    defaults = {"qec_code": qec_code, "patches": PatchDict()}
-
+    # Standard apply_fn construction
     def apply_fn(
         patch_label: str,
         qubits: Sequence[str],
@@ -228,20 +172,20 @@ def build_patch_builder_instruction(
 
         return Frame({"patches": patches})
 
-    # No need for map_qubits
+    data = {"qec_code": qec_code, "patches": PatchDict()}
 
-    # Patch builders are only patch metadata operations
-    # These are one of the things that must run in dry runs
-    # to verify the correct codepath is followed
+    # We are providing a default patches dict here in the instruction
+    # However, we would like it to be loaded from History first if possible
+    param_priorities = {"patches": ["history[-1]", "instruction"]}
+
     return Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
-        defaults=defaults,
+        dry_run_apply_fn=apply_fn,  # Patch manip is dry-run safe
+        data=data,
+        param_priorities=param_priorities,
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
-        skip_in_dry_run=False,
     )
 
 
@@ -250,20 +194,6 @@ def build_patch_remover_instruction(
     parent: object | None = None,
     fault_tolerant: bool = True,
 ) -> Instruction:
-
-    # We require patch name and qubits to be passed in
-    # Order matters (should match apply_fn)
-    # Labels should be first to enable passing by args in InstrumentLabel
-    input_spec = [
-        ("label", "patch_label"),
-        ("history", "patches", -1),
-    ]
-
-    # Output includes a PatchDict
-    output_spec = ["patches"]
-
-    # No defaults
-
     def apply_fn(
         patch_label: str,
         patches: PatchDict,
@@ -276,19 +206,12 @@ def build_patch_remover_instruction(
 
         return Frame({"patches": patches})
 
-    # No need for map_qubits
-
-    # Patch removal are only patch metadata operations
-    # These are one of the things that must run in dry runs
-    # to verify the correct codepath is followed
     return Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
+        dry_run_apply_fn=apply_fn,  # Patch manip is dry-run safe
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
-        skip_in_dry_run=False,
     )
 
 
@@ -299,20 +222,8 @@ def build_patch_permute_instruction(
     fault_tolerant: bool = True,
 ) -> Instruction:
     """TODO"""
-    # Order matters (must match apply_fn)
-    # Labels should be first to enable passing by args in InstrumentLabel
-    input_spec = [
-        ("label", "patch_label"),
-        ("default", "mapping"),
-        ("history", "patches", -1),
-    ]
 
-    # Output includes a PatchDict
-    output_spec = ["patches"]
-
-    # We store the mapping
-    defaults = {"mapping": mapping}
-
+    # Standard apply_fn construction
     def apply_fn(
         patch_label: str,
         mapping: Mapping[str, str],
@@ -336,6 +247,10 @@ def build_patch_permute_instruction(
 
         return Frame({"patches": patches})
 
+    # We store the mapping
+    data = {"mapping": mapping}
+
+    # In this case, we do need to be able to update the mapping if qubits change
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str],
         mapping: Mapping[str, str],
@@ -345,19 +260,14 @@ def build_patch_permute_instruction(
         }
         return {"mapping": new_mapping}
 
-    # Patch permutations are only patch metadata operations
-    # These are one of the things that must run in dry runs
-    # to verify the correct codepath is followed
     return Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
-        defaults=defaults,
+        dry_run_apply_fn=apply_fn,  # Patch manip is dry-run safe
         map_qubits_fn=map_qubits_fn,
+        data=data,
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
-        skip_in_dry_run=False,
     )
 
 
@@ -371,32 +281,8 @@ def build_physical_circuit_instruction(
     fault_tolerant: bool | None = None,
 ) -> Instruction:
     """TODO"""
-    # We require the state from history, a passed-in model on apply,
-    # and everything else is stored as defaults from this constructor
-    # Order matters (must match apply_fn)
-    # Labels should be first to enable passing by args in InstrumentLabel
-    input_spec = [
-        ("label", "model"),
-        ("default", "circuit"),
-        ("history", "state", -1),
-        ("default", "include_outcomes"),
-        ("default", "inplace"),
-        ("default", "reset_mcms"),
-    ]
 
-    # We output state and optionally outcomes
-    output_spec = ["state"]
-    if include_outcomes:
-        output_spec.append("measurement_outcomes")
-
-    # We store circuit and flags as defaults
-    defaults = {
-        "circuit": circuit,
-        "include_outcomes": include_outcomes,
-        "inplace": inplace,
-        "reset_mcms": reset_mcms,
-    }
-
+    # Standard apply_fn construction
     def apply_fn(
         model: BaseNoiseModel,
         circuit: BasePhysicalCircuit,
@@ -416,6 +302,15 @@ def build_physical_circuit_instruction(
 
         return Frame(data)
 
+    # We store circuit and flags as defaults
+    data = {
+        "circuit": circuit,
+        "include_outcomes": include_outcomes,
+        "inplace": inplace,
+        "reset_mcms": reset_mcms,
+    }
+
+    # We need to be able to map the circuit if qubits change
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str],
         circuit: BasePhysicalCircuit,
@@ -425,12 +320,16 @@ def build_physical_circuit_instruction(
         new_kwargs["circuit"] = circuit.map_qubit_labels(qubit_mapping)
         return new_kwargs
 
+    # Get our expected output frame keys for use in dry run
+    frame_keys = ["state"]
+    if include_outcomes:
+        frame_keys.append("measurement_outcomes")
+
     return Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
-        defaults=defaults,
+        dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
         map_qubits_fn=map_qubits_fn,
+        data=data,
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
@@ -465,96 +364,105 @@ def build_repeat_until_success_instruction(
     fault_tolerant: bool | None = None,
 ) -> Instruction:
     """TODO"""
-    # Anything that is needed from labels in the repeated instruction,
-    # we have to ask for now so that we can set the label properly
-    input_spec = []
-    for param in instruction.input_spec:
-        if "label" in param.sources:
-            new_label = (param.sources, param.key)
-            input_spec.append(new_label)
+    if fault_tolerant is None:
+        fault_tolerant = instruction.fault_tolerant
 
-    # We'll just unfold our instruction into the stack
-    # Order matters (should match apply_fn)
-    # We want most up to date stack from QuantumProgram, i.e. with popped Instruction already
-    input_spec.extend(
-        [
-            ("label", "stack"),
-            ("default", "instruction"),
-            ("default", "success_fn"),
-        ]
-    )
+    # We do not know all the params for the underlying instruction,
+    # so take variadic kwargs here
+    def apply_fn(**kwargs) -> Frame:
+        # Pull some args out of kwargs
+        instruction = kwargs.pop("instruction")
+        assert isinstance(instruction, Instruction)
 
-    input_spec = InputSpec.cast(input_spec)
+        self = kwargs.pop("self")
+        assert isinstance(self, Instruction)
 
-    # We'll output a new stack, as well as anything the instruction outputs
-    output_spec = ["stack"] + instruction.output_spec
+        success_fn = kwargs.pop("success_fn")
+        max_repeats = int(kwargs.pop("max_repeats"))
+        repeat_count = int(kwargs.pop("repeat_count"))
 
-    # We need to store the instruction and success function
-    defaults = {
+        stack = InstructionStack.cast(kwargs.pop("stack"))
+
+        # All the remaining kwargs should go straight into the instruction
+        applied_frame = instruction.apply(**kwargs)
+
+        # Run success function to see if we are terminated
+        try:
+            success = success_fn(applied_frame["measurement_outcomes"])
+        except KeyError:
+            raise RuntimeError(
+                "Try-until-success instruction does not output outcomes"
+            )
+
+        if not success:  # We have failed, need to add this back again
+            # Check if we have hit limit
+            repeat_count += 1
+            if repeat_count >= max_repeats:
+                raise RuntimeError(
+                    "Try-until-success instruction hit max repeats"
+                )
+
+            # Otherwise, let's add another copy onto the stack
+            # We need to at least put repeat_counts into label args
+            new_label = InstructionLabel(
+                self, inst_kwargs={"repeat_count": repeat_count}
+            )
+
+            stack = stack.insert_instruction(0, new_label)
+
+        # Return frame with the stack update
+        return applied_frame.update({"stack": stack})
+
+    # We need to store the instruction, success fn, and repeat information
+    # One weird note: I want to store self in this, but we need the object first...
+    # So we will have some post-processing
+    data = {
         "instruction": instruction,
         "success_fn": success_fn,
         "max_repeats": max_repeats,
+        "repeat_count": 1,
     }
 
-    # We do not know all the params for the underlying instruction
-    # We have ensured that all label sources are in the input_spec,
-    # so we assume they are all passed in and we can pull them out by
-    # position here to set the created labels properly
-    def apply_fn(*args) -> Frame:
-        # This will always be the last
-        stack = InstructionStack.cast(args[-1])
+    # We need to map the instruction
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str], instruction: Instruction, **kwargs
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["instruction"] = instruction.map_qubits(qubit_mapping)
+        return new_kwargs
 
-        current_args = []
-        kwargs = {}
-        subspec = instruction.input_spec
-        for subparam in subspec:
-            # Check what position this mapped to in the full spec
-            assert subparam.key is not None
-            param = input_spec.get_by_key(subparam.key)
+    # Since we have variadic kwargs, we'll set the param priority ourselves
+    # Default order is OK for new params. We'll pick up most of what we need
+    # from instruction, but repeat count will be from label arg after first iteration
+    param_priorities = instruction.param_priorities
+    for k in data:
+        param_priorities[k] = DEFAULT_PRIORITIES
 
-            # Add to args so we can apply now
-            current_args.append(args[param.position])
+    def dry_run_fn(**kwargs) -> Frame:
+        # Just put the instruction on the stack so that it can deal with it
+        # Pull some args out of kwargs
+        instruction = kwargs.pop("instruction")
+        assert isinstance(instruction, Instruction)
 
-            # Add labels to kwargs so we can feed forward
-            if "label" in subparam.sources:
-                kwargs[param.key] = args[param.position]
+        stack = InstructionStack.cast(kwargs.pop("stack"))
+
+        del kwargs["self"]
+        del kwargs["success_fn"]
+        del kwargs["max_repeats"]
+        del kwargs["repeat_count"]
 
         new_label = InstructionLabel(instruction, inst_kwargs=kwargs)
-
         stack = stack.insert_instruction(0, new_label)
-
-        raise NotImplementedError("TODO")
 
         return Frame({"stack": stack})
 
-    def map_qubits_fn(
-        qubit_mapping: Mapping[str, str], instructions: Sequence[Instruction]
-    ) -> KwargDict:
-        new_kwargs: dict[str, object] = {
-            "instructions": [
-                instruction.map_qubits(qubit_mapping)
-                for instruction in instructions
-            ]
-        }
-        return new_kwargs
-
-    # Composite instructions are only stack updates
-    # These are one of the things that must run in dry runs
-    # to verify the correct codepath is followed
-    composite_instruction = Instruction(
+    return Instruction(
         apply_fn=apply_fn,
-        input_spec=input_spec,
-        output_spec=output_spec,
+        dry_run_apply_fn=dry_run_fn,
         map_qubits_fn=map_qubits_fn,
-        defaults=defaults,
+        data=data,
+        param_priorities=param_priorities,
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
-        skip_in_dry_run=False,
     )
-
-    # Set all instructions to have this composite as parent
-    for instruction in composite_instruction.defaults["instructions"]:
-        instruction.parent = composite_instruction
-
-    return composite_instruction

@@ -9,8 +9,6 @@ from .frame import Frame
 from .history import History
 
 from .instructions import (
-    InputParam,
-    InputSpec,
     Instruction,
     InstructionLabel,
     InstructionStack,
