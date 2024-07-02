@@ -470,6 +470,7 @@ def build_repeat_until_success_instruction(
         map_qubits_fn=map_qubits_fn,
         data=data,
         param_priorities=param_priorities,
+        param_error_behavior="continue",  # Skip warning for variadic kwargs
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
