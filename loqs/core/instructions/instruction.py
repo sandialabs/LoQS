@@ -79,14 +79,14 @@ class Instruction:
 
         if data is None:
             data = {}
-        self.data = dict(deepcopy(data))
+        self.data = deepcopy(dict(data))
 
         # Introspect to ensure we set priorities for every arg needed
         if param_priorities is None:
             param_priorities = {}
-        self._param_priorities = dict(param_priorities)
-
         assert param_error_behavior in ["continue", "warn", "raise"]
+
+        self._param_priorities = {}
         sig = ins.signature(self.apply_fn)
         for key, param in sig.parameters.items():
             if param.kind != param.POSITIONAL_OR_KEYWORD:
@@ -98,17 +98,21 @@ class Instruction:
                     )
                 continue
 
-            if key in self._param_priorities:
-                # We have already set this
-                continue
+            self._param_priorities[key] = param_priorities.get(
+                key, DEFAULT_PRIORITIES
+            )
 
-            # We have been provided no info, but this is a required parameter
-            # Use the default parameter priority
-            self._param_priorities[key] = DEFAULT_PRIORITIES
+        # Go through and add any missing keys also
+        for key, priorities in param_priorities.items():
+            if key not in self._param_priorities:
+                self._param_priorities[key] = priorities
 
         if param_aliases is None:
             param_aliases = {}
         self._param_aliases = dict(param_aliases)
+        self._rev_param_aliases = {
+            v: k for k, v in self._param_aliases.items()
+        }
 
         self.name = name
         self.parent = parent
@@ -137,15 +141,20 @@ class Instruction:
 
     def apply(self, dry_run: bool = False, **kwargs) -> Frame:
         """TODO"""
+        # Adjust aliases
+        aliased_kwargs = {
+            self._rev_param_aliases.get(k, k): v for k, v in kwargs.items()
+        }
+
         if dry_run:
-            applied_frame = self.dry_run_apply_fn(**kwargs)
+            applied_frame = self.dry_run_apply_fn(**aliased_kwargs)
         else:
-            applied_frame = self.apply_fn(**kwargs)
+            applied_frame = self.apply_fn(**aliased_kwargs)
 
         output_frame = applied_frame.update(
             {
                 "instruction": self,
-                "instruction_kwargs": kwargs,
+                # "instruction_kwargs": aliased_kwargs,
             },
             f"{self.name} result",
         )

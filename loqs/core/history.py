@@ -64,6 +64,9 @@ class History(Sequence[Frame], Castable):
             for frame in history:
                 frame = Frame.cast(frame)
                 self.append(frame)
+        elif history is None:
+            # Stick with empty list
+            pass
         else:  # Just a single HistoryFrame
             try:
                 frame = Frame.cast(history)

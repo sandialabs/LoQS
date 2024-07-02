@@ -97,6 +97,7 @@ def create_qec_code():
     instructions["FT Minus Prep"] = ic.build_repeat_until_success_instruction(
         ft_state_prep,
         name="Repeat-until-success FT Minus Prep",
+        fault_tolerant=True,
     )
 
     # Logical X (transversal)

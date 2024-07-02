@@ -60,25 +60,11 @@ class QuantumProgram:
 
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
-            instruction_stack = InstructionStack.cast(instruction_stack)
-
-            if len(self.initial_history):
-                last_frame = Frame.cast(self.initial_history[-1])
-            else:
-                last_frame = Frame()
-
-            new_frame = last_frame.update(
-                {"stack": instruction_stack},
-                new_log=f"Adding InstructionStack from new QuantumProgram {name}",
+            self.instruction_stack = InstructionStack.cast(instruction_stack)
+        else:
+            self.instruction_stack = InstructionStack.cast(
+                self.initial_history[-1]["stack"]
             )
-
-            if len(last_frame) == 0:
-                # This was an empty frame
-                # Let's just start with the new stack frame
-                self.initial_history = History.cast(new_frame)
-            else:
-                # Let's append to the existing history
-                self.initial_history.append(new_frame)
 
         if global_instructions is None:
             global_instructions = {}
@@ -166,9 +152,7 @@ class QuantumProgram:
         name: str | None = None,
     ) -> QuantumProgram:
         if instruction_stack is None:
-            instruction_stack = InstructionStack.cast(
-                other.initial_history[-1]["stack"]
-            )
+            instruction_stack = other.instruction_stack
         if default_noise_model is None:
             default_noise_model = other.default_noise_model
         if name is None:
@@ -198,9 +182,9 @@ class QuantumProgram:
 
         history = copy.deepcopy(self.initial_history)
 
-        stack = InstructionStack.cast(history[-1]["stack"])
+        stack = self.instruction_stack
 
-        print(f"Executing program run {len(self.run_histories)}")
+        print(f"Executing program run {len(self.run_histories)+1}")
 
         while num_frames < max_frame_limit and len(stack):
 
@@ -217,12 +201,14 @@ class QuantumProgram:
             patch_label = inst_label.patch_label
             label_args = inst_label.inst_args
             label_kwargs = inst_label.inst_kwargs
-            if "patch_label" not in label_kwargs:
-                label_kwargs["patch_label"] = patch_label
 
-            inst = self._resolve_instruction(inst_label, history[-1])
+            try:
+                last_frame = history[-1]
+            except IndexError:
+                last_frame = Frame()
+            inst = self._resolve_instruction(inst_label, last_frame)
 
-            # Collect data that the QuantumProgram can get
+            # Collect data that the QuantumProgram can give
             program_data = {
                 "history": history,
                 "patch_label": patch_label,
@@ -285,7 +271,7 @@ class QuantumProgram:
         # First check global
         if ilbl.patch_label is None:
             try:
-                inst = self.global_instructions[ilbl.inst_label]
+                inst = copy.deepcopy(self.global_instructions[ilbl.inst_label])
             except KeyError:
                 raise RuntimeError(
                     f"Could not resolve global instruction from {ilbl}"
@@ -356,10 +342,10 @@ class QuantumProgram:
                     slice_args = [int(el) for el in idx_str.split(":")]
                     idxs = slice(*slice_args)
                 elif "," in idx_str:
-                    idxs = [int(el) for el in idx_str.split(":")]
+                    idxs = [int(el) for el in idx_str.split(",")]
                 else:
                     try:
-                        idxs = [int(idx_str)]
+                        idxs = int(idx_str)
                     except ValueError:
                         raise ValueError(
                             "Invalid index spec for history priority"
@@ -367,12 +353,12 @@ class QuantumProgram:
 
                 # Collect the requested data
                 data = history.collect_data(key, idxs)
-                if isinstance(data, list) and any(
-                    [d is not None for d in data]
-                ):
-                    return data
-                if data is not None:
-                    return data
+                if isinstance(data, list):
+                    if any([d is not None for d in data]):
+                        return data
+                else:
+                    if data is not None:
+                        return data
             else:
                 raise ValueError(f"Invalid priority {priority} for key {key}")
 

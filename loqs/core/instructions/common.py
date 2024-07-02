@@ -74,6 +74,10 @@ def build_composite_instruction(
     # we allow a Sequence of keys that we will turn into default priorities here
     if not isinstance(param_priorities, Mapping):
         param_priorities = {k: DEFAULT_PRIORITIES for k in param_priorities}
+    # We also need the stack and instructions
+    param_priorities = dict(param_priorities)
+    param_priorities["stack"] = DEFAULT_PRIORITIES
+    param_priorities["instructions"] = DEFAULT_PRIORITIES
 
     composite_instruction = Instruction(
         apply_fn=apply_fn,
@@ -120,13 +124,17 @@ def build_object_builder_instruction(
             ) from e
         return Frame({frame_key: obj})
 
-    # Because we don't know the signature, let's set the priorities ourselves
-    param_priorities = {"frame_key": ["default"], "obj_class": ["default"]}
-    sig = ins.signature(obj_class.__init__)
-    for param in sig.parameters:
-        param_priorities[param] = ["label"]
-
     data = {"frame_key": frame_key, "obj_class": obj_class}
+
+    # Because we don't know the signature, let's set the priorities ourselves
+    # Let's grab all the args from the constructor, excluding self
+    param_priorities = {}
+    sig = ins.signature(obj_class.__init__)
+    for param in list(sig.parameters)[1:]:  # Skipping self
+        param_priorities[param] = ["label"]
+    # And add on our instruction data information
+    for k in data:
+        param_priorities[k] = ["instruction"]
 
     return Instruction(
         apply_fn=apply_fn,
@@ -456,7 +464,7 @@ def build_repeat_until_success_instruction(
 
         return Frame({"stack": stack})
 
-    return Instruction(
+    rus_instruction = Instruction(
         apply_fn=apply_fn,
         dry_run_apply_fn=dry_run_fn,
         map_qubits_fn=map_qubits_fn,
@@ -466,3 +474,9 @@ def build_repeat_until_success_instruction(
         parent=parent,
         fault_tolerant=fault_tolerant,
     )
+
+    # Add self and set up collection from rus_instruction.data
+    rus_instruction.data["self"] = rus_instruction
+    rus_instruction.param_priorities["self"] = ["instruction"]
+
+    return rus_instruction
