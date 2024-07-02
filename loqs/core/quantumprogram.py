@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+from typing import Literal
 import warnings
 
 from loqs.backends.model import BaseNoiseModel
@@ -139,7 +140,7 @@ class QuantumProgram:
                 self.global_instructions["Remove Patch"] = builder
 
         self.name = name
-        self.run_histories = []
+        self.shot_histories = []
 
     @classmethod
     def from_quantum_program(
@@ -175,8 +176,15 @@ class QuantumProgram:
         )
 
     def run(
-        self, dry_run: bool = False, max_frame_limit: int = 100
-    ) -> History:
+        self, shots: int = 1, dry_run: bool = False, max_frame_limit: int = 100
+    ):
+        """TODO"""
+        for _ in range(shots):
+            self._run_shot(dry_run=dry_run, max_frame_limit=max_frame_limit)
+
+    def _run_shot(
+        self, dry_run: bool = False, max_frame_limit: int = 100, verbose=False
+    ):
         """TODO"""
         num_frames = 0
 
@@ -184,7 +192,8 @@ class QuantumProgram:
 
         stack = self.instruction_stack
 
-        print(f"Executing program run {len(self.run_histories)+1}")
+        if verbose:
+            print(f"Executing program shot {len(self.shot_histories)+1}")
 
         while num_frames < max_frame_limit and len(stack):
 
@@ -195,7 +204,8 @@ class QuantumProgram:
             else:
                 name = inst_label.instruction.name
 
-            print(f"Working on frame {num_frames+1} ({name})")
+            if verbose:
+                print(f"Working on frame {num_frames+1} ({name})")
 
             # Collect data the label can give
             patch_label = inst_label.patch_label
@@ -253,9 +263,7 @@ class QuantumProgram:
         if dry_run:
             print("Dry run completed successfully!")
 
-        self.run_histories.append(history)
-
-        return History.cast(history[-num_frames:])
+        self.shot_histories.append(history)
 
     def _resolve_instruction(
         self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
@@ -364,3 +372,11 @@ class QuantumProgram:
 
         # If we've made it here, nothing returned so we failed to collect
         raise RuntimeError(f"Failed to collect parameter {key}")
+
+    def collect_shot_data(
+        self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
+    ) -> list:
+        data = []
+        for history in self.shot_histories:
+            data.append(history.collect_data(key, indices))
+        return data

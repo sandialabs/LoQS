@@ -148,17 +148,98 @@ def create_qec_code():
         name="Logical H",
     )
 
-    # Raw physical measurement
-    instructions["Non-FT Physical Z Measure"] = (
+    # Rotations to and from the "prime" basis
+    # "Local Clifford rotation" gray boxes from Fig 3 of arxiv:2208.01863
+    to_prime_basis_circ = PhysicalCircuit(
+        [
+            [("Gh", "D0"), ("Gypi", "D2"), ("Gh", "D4")],
+            [("Gzpi2", "D0"), ("Gzpi2", "D4")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Logical Prime Basis Transform"] = (
         ic.build_physical_circuit_instruction(
-            PhysicalCircuit(
-                [[("Iz", q) for q in qubits]], qubit_labels=qubits
-            ),
-            include_outcomes=True,
-            reset_mcms=False,
-            name="Z-basis measurement for physical qubits",
-            fault_tolerant=False,
+            to_prime_basis_circ,
+            include_outcomes=False,
+            name="Local Clifford rotation to prime basis",
         )
+    )
+
+    from_prime_basis_circ = PhysicalCircuit(
+        [
+            [("Gzmpi2", "D0"), ("Gypi", "D2"), ("Gzmpi2", "D4")],
+            [("Gh", "D0"), ("Gh", "D4")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Logical Prime Basis Inverse Transform"] = (
+        ic.build_physical_circuit_instruction(
+            from_prime_basis_circ,
+            include_outcomes=False,
+            name="Local Clifford rotation out of prime basis",
+        )
+    )
+
+    # In the prime basis, Zbar = ZIZIZ and Xbar = XIXIX
+    # So we can do physical Z/X measurements and it makes sense to do so
+    raw_Z_meas_circ = PhysicalCircuit(
+        [[("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")]], qubit_labels=qubits
+    )
+    raw_X_meas_circ = PhysicalCircuit(
+        [
+            [("Gh", "D0"), ("Gh", "D2"), ("Gh", "D4")],
+            [("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")],
+            [("Gh", "D0"), ("Gh", "D2"), ("Gh", "D4")],
+        ],
+        qubit_labels=qubits,
+    )
+
+    prime_basis_Z_meas = ic.build_physical_circuit_instruction(
+        to_prime_basis_circ.append(raw_Z_meas_circ),
+        include_outcomes=True,
+        reset_mcms=False,
+        name="Raw logical Z-basis measurement",
+        fault_tolerant=False,
+    )
+
+    prime_basis_X_meas = ic.build_physical_circuit_instruction(
+        to_prime_basis_circ.append(raw_X_meas_circ),
+        include_outcomes=True,
+        reset_mcms=False,
+        name="Raw logical X-basis measurement",
+        fault_tolerant=False,
+    )
+
+    # We can also compute the logical measurement based on the raw logical output
+    # In the prime basis, an odd number of 0s is 0 and an odd number of 1s is 1
+    # This is because our logical operations are ZIZIZ and XIXIX in the prime basis
+    # E.g. all 0s is 0 for ZIZIZ, but so is one 0 and two 1s because the phase on the ones cancels
+    # We can define a new operation here which post processes the measurement outcomes of Raw Logical * Measure
+    def nonft_logical_meas_apply_fn(
+        measurement_outcomes: MeasurementOutcomes,
+    ) -> Frame:
+        logical_value = sum([v[0] for v in measurement_outcomes.values()]) % 2
+        return Frame({"logical_measurement": logical_value})
+
+    nonft_logical_meas = Instruction(
+        nonft_logical_meas_apply_fn,
+        ["logical_measurement"],
+        name="Non-FT Logical Measurement",
+        fault_tolerant=False,
+    )
+
+    instructions["Non-FT Logical Z Measure"] = ic.build_composite_instruction(
+        [prime_basis_Z_meas, nonft_logical_meas],
+        [],
+        name="Non-FT logical Z measurement (via prime basis measurement)",
+        fault_tolerant=False,
+    )
+
+    instructions["Non-FT Logical X Measure"] = ic.build_composite_instruction(
+        [prime_basis_X_meas, nonft_logical_meas],
+        [],
+        name="Non-FT logical X measurement (via prime basis measurement)",
+        fault_tolerant=False,
     )
 
     ### DECODING CIRCUIT
@@ -478,4 +559,9 @@ def _create_adaptive_measure_instruction(instructions, qubits):
     # For now, this is just part I
     # TODO: Once we have stabilizer frame, this should be composite
     # with part I and then a final operation to do decoding
-    instructions["Adaptive Measure"] = instructions["Adaptive Measure Part I"]
+    instructions["Adaptive Measure"] = ic.build_composite_instruction(
+        [instructions["Adaptive Measure Part I"]],
+        ["patch_label"],
+        name="Adaptive measure out",
+        fault_tolerant=True,
+    )
