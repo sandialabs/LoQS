@@ -27,29 +27,28 @@ Run code formatting and linting:
     - black --fast loqs
     - flake8 loqs
 
-# Run unit tests:
-#   stage: test
-#   image: quay.sandia.gov/dice/rhel8-minimal-python
-#   before_script:
-#     - python --version; pip --version # For debugging
-#     - pip install ".[pygsti,quantumsim,test]"
-#   script:
-#     - pytest loqs # This should run doctests in docstrings
-#     - pytest test # This should run unit tests
+Run unit tests:
+  stage: test
+  image: quay.sandia.gov/dice/rhel8-minimal-python
+  before_script:
+    - python --version; pip --version # For debugging
+    - pip install ".[pygsti,quantumsim,test]"
+  script:
+    - tox run
 
 # Something is being blocked on Sandia's runners
 # Return to this when using different runners
-# Build documentation:
-#   stage: docs
-#   image: quay.sandia.gov/dice/rhel8-minimal-python
-#   before_script:
-#     - pip install ".[docs]"
-#   script:
-#     - jupyter-book build docs
-#     - mv docs/_build/html/ ../public/
-#   artifacts:
-#     paths:
-#       - public
-#     expire_in: never
-#   rules:
-#     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+Build documentation:
+  stage: docs
+  image: quay.sandia.gov/dice/rhel8-minimal-python
+  before_script:
+    - pip install ".[docs]"
+  script:
+    - jupyter-book build docs
+    - mv docs/_build/html/ ../public/
+  artifacts:
+    paths:
+      - public
+    expire_in: never
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
