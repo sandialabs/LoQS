@@ -25,20 +25,18 @@ Run unit tests:
   allow_failure: true
   before_script:
     - python --version; pip --version # For debugging
-    - pip install ".[pygsti,quantumsim,test]"
+    - pip install ".[test]"
   script:
     - tox run
 
-# Something is being blocked on Sandia's runners
-# Return to this when using different runners
 Build documentation:
   stage: docs
   image: quay.sandia.gov/dice/rhel8-minimal-python
   before_script:
-    - pip install ".[docs,pygsti,quantumsim]"
+    - pip install -e ".[docs,pygsti,quantumsim]"
   script:
     - jupyter-book build docs
-    - mv docs/_build/html/ ../public/
+    - mv docs/_build/html public
   artifacts:
     paths:
       - public
