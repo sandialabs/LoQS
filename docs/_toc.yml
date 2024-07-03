@@ -3,24 +3,35 @@
 
 format: jb-book
 root: intro.md
-chapters:
-- file: ch1overview/1_intro.md
-  sections:
-  - file: ch1overview/2_quantumprogram.md
-  - file: ch1overview/3_trajectory.md
-  - file: ch1overview/4_instruction.md
-  - file: ch1overview/5_example.md
-- file: ch2backends/1_backends.md
-  sections:
-  - file: ch2backends/2_circuits.md
-  - file: ch2backends/3_models.md
-  - file: ch2backends/4_states.md
-- file: ch3core/1_coreobjects.md
-  sections:
-  - file: ch3core/2_recordables.md
-  - file: ch3core/3_instructions.md
-- file: ch4codes/1_qeccodes.md
-  sections:
-  - file: ch4codes/2_codepacks.md
-  - file: ch4codes/3_surfacecode.md
-- file: api.md
+parts:
+- caption: Getting Started
+  chapters:
+  - file: gettingstarted/install.md
+  - file: gettingstarted/overview.md
+- caption: Core Objects in LoQS
+  chapters:
+  - file: coreobjs/quantumprogram.md
+  - file: coreobjs/history.md
+  - file: coreobjs/instructions.md
+    sections:
+    - file: coreobjs/instructions/labelsandstacks.md
+    - file: coreobjs/instructions/builders.md
+  - file: coreobjs/recordables.md
+  - file: coreobjs/qeccodes.md
+  - file: coreobjs/codepacks.md
+  - file: coreobjs/backends.md
+    sections:
+    - file: coreobjs/backends/circuits.md
+    - file: coreobjs/backends/models.md
+    - file: coreobjs/backends/states.md
+- caption: Tutorials
+  chapters:
+  - file: tutorials/buildinstruction.md
+  - file: tutorials/buildcodepack.md
+# TODO: Examples
+- caption: Developer Zone
+  maxdepth: 1
+  chapters:
+  - file: devguide/devguide.md
+  - file: devguide/api.rst
+  # TODO: Changelog

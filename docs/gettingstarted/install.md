@@ -1,12 +1,4 @@
-# LoQS (Public Release)
-
-This repository is intended to be a sanitized version of the Logical Qubit Simulator (LoQS)
-for eventual public release. Note that this repo is currently on CEE-GitLab only out of an
-abundance of caution while porting things from LoQS. It is eventually intended to be public
-on GitHub in the SandiaLabs organization.
-
-## User Guide
-### Installation
+# Install
 
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
 
@@ -47,15 +39,3 @@ pip install -e ".[all]"
 ```
 
 (where the quotes are only needed if using zsh instead of bash).
-
-For developers who may want an editable version of `pyGSTi`, you can run:
-
-```
-pip install -e git+https://github.com/sandialabs/pyGSTi.git@v0.9.12#egg=pyGSTi
-```
-
-to get the 0.9.12 release of pyGSTi, which will be located in `src`.
-Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
-if you are working off of a feature branch.
-
-
