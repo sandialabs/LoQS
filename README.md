@@ -197,6 +197,8 @@ jb build docs
 ```
 
 where `jb` is a built-in alias for `jupyter-book`.
+If significant code changes has occurred, it may also be worth removing the `_autosummary` directory
+to force a full regeneration of the automated documentation.
 
 ### Jupytext Notebooks
 
