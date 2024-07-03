@@ -12,7 +12,7 @@ from loqs.backends.model.basemodel import BaseNoiseModel
 from loqs.backends.state.basestate import BaseQuantumState
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
-from loqs.core.instructions import common as ic
+from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
@@ -44,13 +44,13 @@ def create_qec_code():
         ],
         qubit_labels=qubits,
     )
-
-    # TODO: Verify this is actually minus
-    instructions["Non-FT Minus Prep"] = ic.build_physical_circuit_instruction(
-        nonft_state_prep_circ,
-        include_outcomes=False,
-        name="Non-FT minus state prep",
-        fault_tolerant=False,
+    instructions["Non-FT Minus Prep"] = (
+        builders.build_physical_circuit_instruction(
+            nonft_state_prep_circ,
+            include_outcomes=False,
+            name="Non-FT minus state prep",
+            fault_tolerant=False,
+        )
     )
 
     # Try-until-success FT |-> state prep
@@ -87,17 +87,19 @@ def create_qec_code():
     ft_state_prep_circ = nonft_state_prep_circ.append(
         ft_state_prep_checks_circ
     )
-    ft_state_prep = ic.build_physical_circuit_instruction(
+    ft_state_prep = builders.build_physical_circuit_instruction(
         ft_state_prep_circ,
         include_outcomes=True,
         reset_mcms=True,
         name="Non-FT Minus Prep + Checks",
         fault_tolerant=False,
     )
-    instructions["FT Minus Prep"] = ic.build_repeat_until_success_instruction(
-        ft_state_prep,
-        name="Repeat-until-success FT Minus Prep",
-        fault_tolerant=True,
+    instructions["FT Minus Prep"] = (
+        builders.build_repeat_until_success_instruction(
+            ft_state_prep,
+            name="Repeat-until-success FT Minus Prep",
+            fault_tolerant=True,
+        )
     )
 
     # Logical X (transversal)
@@ -106,7 +108,7 @@ def create_qec_code():
         [[("Gypi", "D0"), ("Gxpi", "D2"), ("Gypi", "D4")]],
         qubit_labels=qubits,
     )
-    instructions["X"] = ic.build_physical_circuit_instruction(
+    instructions["X"] = builders.build_physical_circuit_instruction(
         logical_X_circ,
         include_outcomes=False,
         name="Logical X",
@@ -119,7 +121,7 @@ def create_qec_code():
         [[("Gxpi", "D0"), ("Gzpi", "D2"), ("Gxpi", "D4")]],
         qubit_labels=qubits,
     )
-    instructions["Z"] = ic.build_physical_circuit_instruction(
+    instructions["Z"] = builders.build_physical_circuit_instruction(
         logical_Z_circ,
         include_outcomes=False,
         name="Logical Z",
@@ -131,18 +133,18 @@ def create_qec_code():
     logical_H_circ = PhysicalCircuit(
         [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
     )
-    logical_H_circ_inst = ic.build_physical_circuit_instruction(
+    logical_H_circ_inst = builders.build_physical_circuit_instruction(
         logical_H_circ,
         include_outcomes=False,
         name="Logical H circuit",
         fault_tolerant=True,
     )
-    logical_H_permutation = ic.build_patch_permute_instruction(
+    logical_H_permutation = builders.build_patch_permute_instruction(
         {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
         name="Logical H permutation",
     )
 
-    instructions["H"] = ic.build_composite_instruction(
+    instructions["H"] = builders.build_composite_instruction(
         [logical_H_circ_inst, logical_H_permutation],
         param_priorities=["patch_label"],
         name="Logical H",
@@ -158,7 +160,7 @@ def create_qec_code():
         qubit_labels=qubits,
     )
     instructions["Logical Prime Basis Transform"] = (
-        ic.build_physical_circuit_instruction(
+        builders.build_physical_circuit_instruction(
             to_prime_basis_circ,
             include_outcomes=False,
             name="Local Clifford rotation to prime basis",
@@ -173,7 +175,7 @@ def create_qec_code():
         qubit_labels=qubits,
     )
     instructions["Logical Prime Basis Inverse Transform"] = (
-        ic.build_physical_circuit_instruction(
+        builders.build_physical_circuit_instruction(
             from_prime_basis_circ,
             include_outcomes=False,
             name="Local Clifford rotation out of prime basis",
@@ -194,7 +196,7 @@ def create_qec_code():
         qubit_labels=qubits,
     )
 
-    prime_basis_Z_meas = ic.build_physical_circuit_instruction(
+    prime_basis_Z_meas = builders.build_physical_circuit_instruction(
         to_prime_basis_circ.append(raw_Z_meas_circ),
         include_outcomes=True,
         reset_mcms=False,
@@ -202,7 +204,7 @@ def create_qec_code():
         fault_tolerant=False,
     )
 
-    prime_basis_X_meas = ic.build_physical_circuit_instruction(
+    prime_basis_X_meas = builders.build_physical_circuit_instruction(
         to_prime_basis_circ.append(raw_X_meas_circ),
         include_outcomes=True,
         reset_mcms=False,
@@ -228,18 +230,22 @@ def create_qec_code():
         fault_tolerant=False,
     )
 
-    instructions["Non-FT Logical Z Measure"] = ic.build_composite_instruction(
-        [prime_basis_Z_meas, nonft_logical_meas],
-        [],
-        name="Non-FT logical Z measurement (via prime basis measurement)",
-        fault_tolerant=False,
+    instructions["Non-FT Logical Z Measure"] = (
+        builders.build_composite_instruction(
+            [prime_basis_Z_meas, nonft_logical_meas],
+            [],
+            name="Non-FT logical Z measurement (via prime basis measurement)",
+            fault_tolerant=False,
+        )
     )
 
-    instructions["Non-FT Logical X Measure"] = ic.build_composite_instruction(
-        [prime_basis_X_meas, nonft_logical_meas],
-        [],
-        name="Non-FT logical X measurement (via prime basis measurement)",
-        fault_tolerant=False,
+    instructions["Non-FT Logical X Measure"] = (
+        builders.build_composite_instruction(
+            [prime_basis_X_meas, nonft_logical_meas],
+            [],
+            name="Non-FT logical X measurement (via prime basis measurement)",
+            fault_tolerant=False,
+        )
     )
 
     ### DECODING CIRCUIT
@@ -267,7 +273,7 @@ def create_qec_code():
         qubit_labels=qubits,
     )
     instructions["Non-FT Minus Unprep"] = (
-        ic.build_physical_circuit_instruction(
+        builders.build_physical_circuit_instruction(
             state_decoder_circ,
             name="Non-FT state decoder circuit",
             reset_mcms=False,
@@ -559,9 +565,9 @@ def _create_adaptive_measure_instruction(instructions, qubits):
     # For now, this is just part I
     # TODO: Once we have stabilizer frame, this should be composite
     # with part I and then a final operation to do decoding
-    instructions["Adaptive Measure"] = ic.build_composite_instruction(
+    instructions["Adaptive Measure"] = builders.build_composite_instruction(
         [instructions["Adaptive Measure Part I"]],
         ["patch_label"],
-        name="Adaptive measure out",
+        name="FT adaptive measure",
         fault_tolerant=True,
     )

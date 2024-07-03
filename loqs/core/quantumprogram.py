@@ -14,8 +14,7 @@ from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, History
 from loqs.core.history import Frame, HistoryCastableTypes
-from loqs.core.instructions import common as ic
-from loqs.core.instructions import InstructionLabel
+from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
@@ -97,7 +96,7 @@ class QuantumProgram:
                     + "setting override_global_instruction to True."
                 )
             else:
-                builder = ic.build_object_builder_instruction(
+                builder = builders.build_object_builder_instruction(
                     "state",
                     state_type,
                     name=f"{state_type.__qualname__} state builder",
@@ -121,7 +120,7 @@ class QuantumProgram:
                         + f"renaming the existing '{label}' or "
                         + "setting override_global_instruction to True."
                     )
-                builder = ic.build_patch_builder_instruction(
+                builder = builders.build_patch_builder_instruction(
                     patch_code,
                     name=f"{patch_name} patch builder",
                 )
@@ -138,7 +137,7 @@ class QuantumProgram:
                     + "setting override_global_instruction to True."
                 )
             else:
-                builder = ic.build_patch_remover_instruction(
+                builder = builders.build_patch_remover_instruction(
                     name="Global patch remover"
                 )
                 self.global_instructions["Remove Patch"] = builder
@@ -187,12 +186,10 @@ class QuantumProgram:
         self, shots: int = 1, dry_run: bool = False, max_frame_limit: int = 100
     ):
         """TODO"""
-        for _ in tqdm(range(shots), f"Program {self.name}"):
+        for _ in tqdm(range(shots), f"Program {self.name}", disable=dry_run):
             self._run_shot(dry_run=dry_run, max_frame_limit=max_frame_limit)
 
-    def _run_shot(
-        self, dry_run: bool = False, max_frame_limit: int = 100, verbose=False
-    ):
+    def _run_shot(self, dry_run: bool = False, max_frame_limit: int = 100):
         """TODO"""
         num_frames = 0
 
@@ -200,20 +197,9 @@ class QuantumProgram:
 
         stack = self.instruction_stack
 
-        if verbose:
-            print(f"Executing program shot {len(self.shot_histories)+1}")
-
         while num_frames < max_frame_limit and len(stack):
 
             inst_label, stack = stack.pop_instruction()
-
-            if inst_label.instruction is None:
-                name = inst_label.inst_label
-            else:
-                name = inst_label.instruction.name
-
-            if verbose:
-                print(f"Working on frame {num_frames+1} ({name})")
 
             # Collect data the label can give
             patch_label = inst_label.patch_label
@@ -227,7 +213,6 @@ class QuantumProgram:
             inst = self._resolve_instruction(inst_label, last_frame)
 
             # Collect data that the QuantumProgram can give
-
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             if self.default_base_seed is None:
                 seed_for_shot = None
@@ -280,7 +265,8 @@ class QuantumProgram:
         if dry_run:
             print("Dry run completed successfully!")
 
-        self.shot_histories.append(history)
+        if not dry_run:
+            self.shot_histories.append(history)
 
     def _resolve_instruction(
         self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
