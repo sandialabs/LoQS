@@ -3,7 +3,8 @@ name = "loqs"
 version = "1.0-alpha"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy"
+    "numpy",
+    "tqdm>=4"
 ]
 authors = [
     {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},

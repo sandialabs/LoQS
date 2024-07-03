@@ -8,6 +8,8 @@ import copy
 from typing import Literal
 import warnings
 
+from tqdm import tqdm
+
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, History
@@ -32,6 +34,7 @@ class QuantumProgram:
         instruction_stack: InstructionStackCastableTypes = None,
         initial_history: HistoryCastableTypes = None,
         default_noise_model: BaseNoiseModel | None = None,
+        default_base_seed: int | None = None,
         expiring_state: bool = True,
         global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
@@ -55,6 +58,7 @@ class QuantumProgram:
             )
 
         self.default_noise_model = default_noise_model
+        self.default_base_seed = default_base_seed
 
         if expiring_state:
             self.initial_history.expiring_keys.add("state")
@@ -148,6 +152,7 @@ class QuantumProgram:
         other: QuantumProgram,
         instruction_stack: InstructionStackCastableTypes = None,
         default_noise_model: BaseNoiseModel | None = None,
+        default_base_seed: int | None = None,
         state_type: type[BaseQuantumState] | None = None,
         patch_types: Mapping[str, QECCode] | None = None,
         name: str | None = None,
@@ -156,6 +161,8 @@ class QuantumProgram:
             instruction_stack = other.instruction_stack
         if default_noise_model is None:
             default_noise_model = other.default_noise_model
+        if default_base_seed is None:
+            default_base_seed = other.default_base_seed
         if name is None:
             name = other.name
         if state_type is None:
@@ -164,13 +171,14 @@ class QuantumProgram:
             patch_types = other.patch_types
 
         return QuantumProgram(
-            instruction_stack,
-            other.initial_history,
-            default_noise_model,
-            "state" in other.initial_history.expiring_keys,
-            other.global_instructions,
-            state_type,
-            patch_types,
+            instruction_stack=instruction_stack,
+            initial_history=other.initial_history,
+            default_noise_model=default_noise_model,
+            default_base_seed=default_base_seed,
+            expiring_state="state" in other.initial_history.expiring_keys,
+            global_instructions=other.global_instructions,
+            state_type=state_type,
+            patch_types=patch_types,
             override_global_instructions=True,
             name=name,
         )
@@ -179,7 +187,7 @@ class QuantumProgram:
         self, shots: int = 1, dry_run: bool = False, max_frame_limit: int = 100
     ):
         """TODO"""
-        for _ in range(shots):
+        for _ in tqdm(range(shots), f"Program {self.name}"):
             self._run_shot(dry_run=dry_run, max_frame_limit=max_frame_limit)
 
     def _run_shot(
@@ -219,10 +227,19 @@ class QuantumProgram:
             inst = self._resolve_instruction(inst_label, last_frame)
 
             # Collect data that the QuantumProgram can give
+
+            # For RNG seeding, increment the base seed +1 for every shot (if seeded)
+            if self.default_base_seed is None:
+                seed_for_shot = None
+            else:
+                seed_for_shot = self.default_base_seed + len(
+                    self.shot_histories
+                )
             program_data = {
                 "history": history,
                 "patch_label": patch_label,
                 "stack": stack,
+                "seed": seed_for_shot,
             }
             if self.default_noise_model is not None:
                 program_data["model"] = self.default_noise_model

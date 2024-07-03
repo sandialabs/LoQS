@@ -6,8 +6,9 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence, Collection
 import random
-import textwrap
 from typing import ClassVar, TypeAlias
+
+import numpy as np
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
@@ -51,6 +52,7 @@ class QSimQuantumState(BaseQuantumState):
         self,
         state: CastableTypes,
         qubit_labels: Collection[QubitTypes] | None = None,
+        seed: int | None = None,
     ) -> None:
         """Initialize a BaseQuantumState.
 
@@ -87,6 +89,9 @@ class QSimQuantumState(BaseQuantumState):
             self.state.classical = {
                 name_map[k]: v for k, v in self.state.classical.items()
             }
+
+        self.seed = seed
+        self._rng = np.random.default_rng(seed)
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -125,9 +130,7 @@ class QSimQuantumState(BaseQuantumState):
                     # TODO: At this point, we also have probabilities
                     # We could do also save that data, maybe helpful later
 
-                    m = (
-                        random.random()
-                    )  # TODO: Seed this for deterministic runs?
+                    m = self._rng.random()
                     if m < results[0][1]:
                         cbit = results[0][0][qbit]
                     else:
