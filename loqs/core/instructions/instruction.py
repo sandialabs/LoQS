@@ -85,14 +85,15 @@ class Instruction:
         if param_priorities is None:
             param_priorities = {}
         assert param_error_behavior in ["continue", "warn", "raise"]
+        self.param_error_behavior = param_error_behavior
 
         self._param_priorities = {}
         sig = ins.signature(self.apply_fn)
         for key, param in sig.parameters.items():
             if param.kind != param.POSITIONAL_OR_KEYWORD:
-                if param_error_behavior == "warn":
+                if self.param_error_behavior == "warn":
                     warnings.warn(f"Skipping param priority for {key}")
-                elif param_error_behavior == "raise":
+                elif self.param_error_behavior == "raise":
                     raise NotImplementedError(
                         f"Cannot handle param priority for {key}"
                     )
@@ -162,16 +163,16 @@ class Instruction:
 
     def copy(self) -> Instruction:
         return Instruction(
-            self.apply_fn,
-            self.dry_run_apply_fn,
-            self.map_qubits_fn,
-            deepcopy(self.data),
-            self._param_priorities,
-            "warn",  # Should not warn unless something weird happens
-            self._param_aliases,
-            self.name,
-            self.parent,
-            self.fault_tolerant,
+            apply_fn=self.apply_fn,
+            dry_run_apply_fn=self.dry_run_apply_fn,
+            map_qubits_fn=self.map_qubits_fn,
+            data=deepcopy(self.data),
+            param_priorities=self._param_priorities,
+            param_error_behavior=self.param_error_behavior,  # type: ignore
+            param_aliases=self._param_aliases,
+            name=self.name,
+            parent=self.parent,
+            fault_tolerant=self.fault_tolerant,
         )
 
     def map_qubits(
