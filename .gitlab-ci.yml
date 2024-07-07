@@ -1,21 +1,11 @@
 stages:
-  - lint
   - test
   - docs
 
 include:
   - template: Security/SAST.gitlab-ci.yml
 
-# Change pip's cache directory to be inside the project directory since we can
-# only cache local items.
-variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-
 default:
-  # https://pip.pypa.io/en/stable/topics/caching/
-  cache:
-    paths:
-      - .cache/pip
   tags:
     - do.small
 
@@ -35,11 +25,10 @@ Build documentation:
   before_script:
     - pip install -e ".[docs,pygsti,quantumsim]"
   script:
-    - jupyter-book build docs
+    - PYTHONPATH=. jupyter-book build docs
     - mv docs/_build/html public
   artifacts:
     paths:
       - public
-    expire_in: never
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH

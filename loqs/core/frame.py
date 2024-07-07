@@ -1,7 +1,8 @@
-"""TODO
+""":class:`Frame` documentation.
 """
 
 from __future__ import annotations
+from copy import deepcopy
 import textwrap
 import warnings
 
@@ -37,14 +38,14 @@ class Frame(Mapping[str, object], Castable):
             data = {}
 
         if isinstance(data, Frame):
-            self._data = data._data.copy()
+            self._data = deepcopy(data._data)
             self.log = data.log
         elif isinstance(data, Mapping):
             # assert all(
             #     [isinstance(v, Recordable) for v in data.values()]
             # ), "All values in data must be of type :class:`IsRecordable`"
 
-            self._data = {k: v for k, v in data.items()}
+            self._data = dict(data)
             self.log = log
         else:
             raise ValueError(f"Cannot cast {data} to a HistoryFrame")
@@ -93,9 +94,10 @@ class Frame(Mapping[str, object], Castable):
                 s += "\n"
         return s
 
-    @property
-    def frame_spec(self):
-        return {k: type(v) for k, v in self._data.items()}
+    def expire(self, key: str) -> None:
+        """TODO"""
+        if key in self and key not in self._expired_keys:
+            self._expired_keys.append(key)
 
     def update(
         self,

@@ -8,8 +8,8 @@ coverage.xml
 htmlcov
 
 docs/_build
-docs/*/_autosummary
-docs/*.ipynb
+docs/**/_autosummary
+docs/**/*.ipynb
 
 .vscode
 venv*/

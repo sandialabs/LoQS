@@ -26,8 +26,6 @@ class History(Sequence[Frame], Castable):
     """
 
     _history: list[Frame]
-    _std_spec: dict[str, type]
-    _nonstd_spec: dict[str, type]
 
     def __init__(
         self,
@@ -37,8 +35,6 @@ class History(Sequence[Frame], Castable):
     ) -> None:
         """TODO"""
         self._history = []
-        self._std_spec = {}
-        self._nonstd_spec = {}
 
         if expiring_keys is None:
             expiring_keys = []
@@ -51,8 +47,6 @@ class History(Sequence[Frame], Castable):
 
         if isinstance(history, History):
             self._history = history._history.copy()
-            self._std_spec = history._std_spec
-            self._nonstd_spec = history._nonstd_spec
             # Take union of expiring/propagating keys
             self.expiring_keys = self.expiring_keys.union(
                 history.expiring_keys
@@ -98,16 +92,6 @@ class History(Sequence[Frame], Castable):
             s += sf + "\n"
         return s
 
-    @property
-    def std_frame_spec(self) -> dict[str, type]:
-        """The common specification for all frames in the stack."""
-        return self._std_spec
-
-    @property
-    def nonstd_frame_spec(self) -> dict[str, type]:
-        """Fields which are only included in some frames in the stack."""
-        return self._nonstd_spec
-
     def append(self, item: FrameCastableTypes) -> None:
         item = Frame.cast(item)
 
@@ -133,19 +117,6 @@ class History(Sequence[Frame], Castable):
 
                 # Update location of expiring key
                 self._expiring_key_locs[exp_key] = len(self._history)
-
-        # Update std/nonstd specs
-        if self._std_spec is None:
-            self._std_spec = item.frame_spec.copy()
-        else:
-            std_items = set(self._std_spec.items())
-            new_items = set(item.frame_spec.items())
-
-            intersection = std_items.intersection(new_items)
-            self._std_spec = dict(intersection)
-
-            difference = std_items.difference(new_items)
-            self._nonstd_spec.update(difference)
 
         # Finally append
         self._history.append(item)

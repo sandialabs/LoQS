@@ -8,22 +8,23 @@ parts:
   chapters:
   - file: gettingstarted/install.md
   - file: gettingstarted/overview.md
-- caption: Core Objects in LoQS
+    sections:
+      - file: gettingstarted/workflow.md
+- caption: Object Quickstart
   chapters:
-  - file: coreobjs/quantumprogram.md
-  - file: coreobjs/history.md
-  - file: coreobjs/instructions.md
+  - file: objguide/history.md
     sections:
-    - file: coreobjs/instructions/labelsandstacks.md
-    - file: coreobjs/instructions/builders.md
-  - file: coreobjs/recordables.md
-  - file: coreobjs/qeccodes.md
-  - file: coreobjs/codepacks.md
-  - file: coreobjs/backends.md
+    - file: objguide/frame.md
+    - file: objguide/recordables.md
+  - file: objguide/instructions.md
     sections:
-    - file: coreobjs/backends/circuits.md
-    - file: coreobjs/backends/models.md
-    - file: coreobjs/backends/states.md
+    - file: objguide/builders.md
+    - file: objguide/stack.md
+  - file: objguide/codes.md
+    sections:
+    - file: objguide/codepacks.md
+  - file: objguide/program.md
+  - file: objguide/backends.md
 - caption: Tutorials
   chapters:
   - file: tutorials/buildinstruction.md

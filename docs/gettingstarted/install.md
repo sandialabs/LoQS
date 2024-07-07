@@ -1,18 +1,14 @@
-# Install
+# Installing LoQS
 
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
+
+By default, `LoQS` will install without any backends present.
+In order to have feature parity with previous `LoQS`, users can install with the `pygsti,quantumsim` optional dependencies.
+Also note that `LoQS` requires Python 3.10 or higher.
 
 ```
 conda create -p ./venv python=3.11
 conda activate ./venv
-pip install -e .
-```
-
-By default, this will not install any of the backends.
-In order to install PyGSTi and QuantumSim (i.e. previous LoQS backends),
-you can alter the last line to 
-
-```
 pip install -e ".[pygsti,quantumsim]"
 ```
 
@@ -32,10 +28,7 @@ There are several helper "categories" for optional dependencies, including:
 (useful for testing)
 - `all`: All optional dependencies
 
-To use these, simply modify the last line of the installation instructions. For example:
 
-```
-pip install -e ".[all]"
-```
+`LoQS` should now be installed and ready to go!
 
-(where the quotes are only needed if using zsh instead of bash).
+Next, we will show how to create and run a basic `QuantumProgram` in `LoQS`.
