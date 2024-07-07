@@ -113,6 +113,25 @@ for tf in test_frames:
 print(propagating_history)
 ```
 
+(history-collecting-data)=
+## Collecting Data
+
+Organizing the data by `Frame` makes a lot of sense during program execution;
+however, for post-run analysis, we often want to pull out certain pieces of data from a `Frame` (or all of them).
+One can use `History.collect_data()` for this purpose, which takes a frame key and frame index/set of indices (including the special argument `"all"`) and returns the object/list of objects, respectively.
+
+```{code-cell} ipython3
+# We can pull an entry from the last frame
+last_index = propagating_history.collect_data("index", -1)
+print(last_index)
+```
+
+```{code-cell} ipython3
+# We can also pull an entry from all frames (or any subset)
+all_data = propagating_history.collect_data("data", "all")
+print(all_data)
+```
+
 ## What's next?
 
 See the [API Reference](/devguide/_autosummary/loqs.core.history.History) for more in-depth documentation of `History` objects.

@@ -314,8 +314,8 @@ class QuantumProgram:
 
         return inst
 
+    @staticmethod
     def _collect_kwarg(
-        self,
         position: int,
         key: str,
         priorities: Sequence[str],
