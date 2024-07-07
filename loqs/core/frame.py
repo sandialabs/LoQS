@@ -41,10 +41,6 @@ class Frame(Mapping[str, object], Castable):
             self._data = deepcopy(data._data)
             self.log = data.log
         elif isinstance(data, Mapping):
-            # assert all(
-            #     [isinstance(v, Recordable) for v in data.values()]
-            # ), "All values in data must be of type :class:`IsRecordable`"
-
             self._data = dict(data)
             self.log = log
         else:

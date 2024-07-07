@@ -17,7 +17,7 @@ At its core, a `History` is simply an list of `Frame` objects.
 
 It is designed such that existing `Frame` objects cannot be overwritten, and a new `Frame` can only be added using the `append` operation.
 
-## Basic Operation
+## History Basics
 
 You can initialize a `History` from a list of `Frame` objects, including an empty list.
 
@@ -65,6 +65,7 @@ instead, we care about the larger context of the simulation so far.
 This means that sometimes the `History` needs to adjust either the existing `Frame` objects or an incoming `Frame` to ensure the state of the simulation is recorded faithfully.
 In particular, there are two mechanisms for this: expiring keys and propagating keys.
 
+(history-expiring-keys)=
 ### Expiring Keys
 
 As we cover in the next section, the data for each `Frame` is intended to be immutable and therefore updates are mostly done via copies.
