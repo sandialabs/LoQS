@@ -18,8 +18,8 @@ parts:
     - file: objguide/recordables.md
   - file: objguide/instructions.md
     sections:
-    - file: objguide/builders.md
     - file: objguide/stack.md
+    - file: objguide/builders.md
   - file: objguide/codes.md
     sections:
     - file: objguide/codepacks.md
@@ -29,7 +29,10 @@ parts:
   chapters:
   - file: tutorials/buildinstruction.md
   - file: tutorials/buildcodepack.md
-# TODO: Examples
+- caption: Examples
+  chapters:
+  - file: examples/todo.md
+  # TODO
 - caption: Developer Zone
   maxdepth: 1
   chapters:

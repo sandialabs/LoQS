@@ -81,9 +81,8 @@ def build_composite_instruction(
 
     composite_instruction = Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=apply_fn,  # Just stack updates, can run in dry_run
-        map_qubits_fn=map_qubits_fn,
         data=data,
+        map_qubits_fn=map_qubits_fn,
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Suppress the warning for variadic kwargs
         name=name,
@@ -138,7 +137,6 @@ def build_object_builder_instruction(
 
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=apply_fn,  # Object creation can be done in dry runs
         data=data,
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Suppress variadic kwargs warning
@@ -188,7 +186,6 @@ def build_patch_builder_instruction(
 
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=apply_fn,  # Patch manip is dry-run safe
         data=data,
         param_priorities=param_priorities,
         name=name,
@@ -216,7 +213,6 @@ def build_patch_remover_instruction(
 
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=apply_fn,  # Patch manip is dry-run safe
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
@@ -270,9 +266,8 @@ def build_patch_permute_instruction(
 
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=apply_fn,  # Patch manip is dry-run safe
-        map_qubits_fn=map_qubits_fn,
         data=data,
+        map_qubits_fn=map_qubits_fn,
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
@@ -336,8 +331,8 @@ def build_physical_circuit_instruction(
     return Instruction(
         apply_fn=apply_fn,
         dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
-        map_qubits_fn=map_qubits_fn,
         data=data,
+        map_qubits_fn=map_qubits_fn,
         name=name,
         parent=parent,
         fault_tolerant=fault_tolerant,
@@ -467,8 +462,8 @@ def build_repeat_until_success_instruction(
     rus_instruction = Instruction(
         apply_fn=apply_fn,
         dry_run_apply_fn=dry_run_fn,
-        map_qubits_fn=map_qubits_fn,
         data=data,
+        map_qubits_fn=map_qubits_fn,
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Skip warning for variadic kwargs
         name=name,

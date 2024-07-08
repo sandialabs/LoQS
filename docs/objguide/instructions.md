@@ -16,23 +16,22 @@ kernelspec:
 The `Instruction` is arguably the core (and most complex) object in `LoQS`.
 This is because the goal is provide the user with ultimate flexibility in manipulating the state of the simulation, while simultaneously encapsulating the effects of arbitrary user-defined functions so that it plays nicely with the rest of the `LoQS` framework.
 
-At its heart, an `Instruction` is defined by a single user-defined function called `apply_fn` that takes any state it needs as arguments and outputs a single new `Frame`.
-
-However, there are several other things that may need to be defined in order for an `Instruction` to work properly, which will be covered here.
+The role of the `Instruction` is to logical qubit simulation as the unitary or superoperator matrix is to physical qubit simulation -- it takes in the current simulation state and outputs the new simulation state
+More concretely, an `Instruction` is primarily defined by a single user-defined function called `apply_fn` that takes any state it needs as arguments and outputs a single new `Frame`. However, there are several other things that may need to be defined in order for an `Instruction` to work properly, which will be covered here.
 
 ## The Apply Functions
 
 As mentioned above, the `apply_fn` is at the core of an `Instruction`.
 It takes in any state it requires as arguments and outputs a new `Frame`.
 In the context of a `QuantumProgram` execution, the `QuantumProgram` will collect all the required arguments, call `Instruction.apply()` (which wraps `apply_fn`), and then appends the output `Frame` to the current `History`.
-Note that `apply_fn` does not take `self` or `cls` as the first argument - it is best to think of this as a static function.
-
-```{note}
-Please note that the examples shown here are designed to show basic `Instruction` functionality and are missing context from the `QuantumProgram`.
-Users are not intended to call `Instruction.apply()` directly like this.
-```
+Note that `apply_fn` does not take `self` or `cls` as the first argument - it is best to think of this as a static function that needs all stateful information passed in explicitly.
 
 ### Basic Example: An Adder
+
+```{note}
+Please note that the examples shown here are designed to show basic `Instruction` functionality and are missing important context from the `QuantumProgram`.
+Users are not intended to call `Instruction.apply()` directly like this.
+```
 
 For the remainder of this section, we will be using an adder as an example `Instruction`.
 This will take an integer `data_val`(which would normally be provided from the last frame) and increment it by `add_val`.
@@ -170,6 +169,7 @@ Throughout the previous examples, we have ignored how the `Instruction` gets fed
 The exact details of this are described in the [argument collection section of the QuantumProgram tutorial](quantumprogram-parameter-collection),
 but it relies on two parameter-related attributes in the `Instruction`: priority and aliases.
 
+(instruction-parameter-priorities)=
 ### Parameter Priorities
 
 Arguments can generally come from four sources during `QuantumProgram` execution:
@@ -258,8 +258,8 @@ print(frame5)
 
 ## What's next?
 
-While this covered many of the main points in creating an `Instruction`, it may also be useful to see a more complex example in the [Building an Instruction tutorial](/tutorials/buildinstruction).
+While this covered many of the main points in creating an `Instruction`, it may also be useful to see a more complex example in the ["Building a Multi-Stage Feed-Forward Instruction" tutorial](/tutorials/buildinstruction).
 
 See the [API Reference](/devguide/_autosummary/loqs.core.instructions.instruction.Instruction) for more in-depth documentation of `Instruction` objects.
 
-Next, we will cover the `loqs.core.instructions.builder` module and see how several commonly used types of `Instructions` can be quickly built.
+Next, we will cover how to tell the `QuantumProgram` which instructions to run during execution using the `InstructionLabel` and `InstructionStack`.
