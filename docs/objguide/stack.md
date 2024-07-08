@@ -26,7 +26,7 @@ The `InstructionLabel` object is fairly straightforward: it takes either an `Ins
 The latter inputs are just ways to pass in extra information that may not be available from other sources, so are not that interesting;
 however, one may notice that you can pass in an "arbitrary" instruction label here, which is both convenient *and* mysterious.
 
-The short version is that any instruction label passed in here will automatically "resolved" into an `Instruction` at runtime by the `QuantumProgram`.
+The short version is that any instruction label passed in here will automatically "resolved" into an `Instruction` at runtime by the `QuantumProgram` (for more information, see the [this part of the `QuantumProgram` section](quantumprogram-instruction-resolution)).
 This is both convenient for the user (it allows for entries of an `InstructionStack` to have human-readable strings instead of pointing to random Python objects) and useful for passing in data that is only known at runtime (e.g. physical circuits can be mapped onto the proper qubits based on the state of code patches).
 
 An `InstructionLabel` can be initialized as a standalone object;
