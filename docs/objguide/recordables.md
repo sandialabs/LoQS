@@ -11,12 +11,11 @@ It is not a single outcome because a qubit may have multiple measurements during
 
 This object is typically used as input for feed-forward instructions or decoding.
 
-```{note}
 The default `MeasurementOutcomes` object is typically associated with the `"measurement_outcomes"` frame key.
-```
 
 See the [API Reference](/devguide/_autosummary/loqs.core.recordables.measurementoutcomes.MeasurementOutcomes) for more in-depth documentation.
 
+(recordables-patchdict)=
 ## PatchDict
 
 The `PatchDict` objeect is a dict with patch label keys and `QECCodePatch` objects.
@@ -25,9 +24,7 @@ This object serves as the main way to store information about the code patches (
 Additionally, the default `PatchDict` is heavily used by the `QuantumProgram` during `Instruction` resolution;
 for more information on this, see the [QuantumProgram tutorial section on instruction resolution](quantumprogram-instruction-resolution).
 
-```{note}
 The default `PatchDict` object is typically associated with the `"patches"` frame key.
-```
 
 See the [API Reference](/devguide/_autosummary/loqs.core.recordables.patchdict.PatchDict) for more in-depth documentation.
 
@@ -39,9 +36,7 @@ The `StabilizerFrame` is currently under construction, but is intended to store 
 This section is incomplete and will be filled out as the `StabilizerFrame` implementation is solidified.
 ```
 
-```{note}
 The default `StabilizerFrame` object is typically associated with the `"stabilizer_frame"` frame key.
-```
 
 See the [API Reference](/devguide/_autosummary/loqs.core.recordables.stabilizerframe.StabilizerFrame) for more in-depth documentation.
 

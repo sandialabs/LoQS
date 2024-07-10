@@ -16,7 +16,7 @@ class QECCode:
         name: str = "(Unnamed QEC code)",
     ):
         """TODO"""
-        self.instructions = {k: v for k, v in instructions.items()}
+        self.instructions = dict(instructions)
         self.template_qubits = list(template_qubits)
         self.name = name
 

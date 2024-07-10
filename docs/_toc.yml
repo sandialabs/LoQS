@@ -28,7 +28,7 @@ parts:
 - caption: Tutorials
   chapters:
   - file: tutorials/buildinstruction.md
-  - file: tutorials/buildcodepack.md
+  - file: tutorials/buildqeccode.md
 - caption: Examples
   chapters:
   - file: examples/todo.md

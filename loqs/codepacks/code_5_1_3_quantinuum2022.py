@@ -317,8 +317,8 @@ def _create_adaptive_measure_instruction(instructions, qubits):
     instructions["Adaptive Measure Termination"] = Instruction(
         term_apply_fn,
         ["logical_measurement"],  # Can output dummy frame for DRY_RUN
-        term_map_qubits_fn,
         term_data,
+        term_map_qubits_fn,
         name="Termination for adaptive logical measurement",
         fault_tolerant=True,
     )
@@ -409,8 +409,8 @@ def _create_adaptive_measure_instruction(instructions, qubits):
     instructions["Adaptive Measure Part III"] = Instruction(
         partIII_apply_fn,
         ["state", "measurement_outcomes"],  # Can use dummy frame for dry run
-        map_qubits_fn,
         partIII_data,
+        map_qubits_fn,
         param_priorities=paramIII_priorities,
         param_aliases=paramIII_aliases,
         name="Part III of adaptive logical measurement",
@@ -489,8 +489,8 @@ def _create_adaptive_measure_instruction(instructions, qubits):
     instructions["Adaptive Measure Part II"] = Instruction(
         partII_apply_fn,
         ["state", "measurement_outcomes"],  # Dummy frame is fine for dry run
-        map_qubits_fn,
         partII_data,
+        map_qubits_fn,
         param_aliases=paramII_aliases,
         name="Part II of adaptive logical measurement",
         fault_tolerant=True,
@@ -555,8 +555,8 @@ def _create_adaptive_measure_instruction(instructions, qubits):
     instructions["Adaptive Measure Part I"] = Instruction(
         partI_apply_fn,
         ["state", "measurement_outcomes"],  # Dummy frame is ok for dry run
-        map_qubits_fn,
         partI_data,
+        map_qubits_fn,
         name="Part I of adaptive logical measurement",
         fault_tolerant=True,
     )
