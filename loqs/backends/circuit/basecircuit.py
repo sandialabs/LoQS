@@ -280,34 +280,3 @@ class BasePhysicalCircuit(Castable):
         """
         # TODO: Type check
         pass
-
-    @abstractmethod
-    def process_circuit(
-        self: T,
-        qubit_mapping: Mapping | None = None,
-        omit_gates: Sequence | None = None,
-        delete_idle_layers: bool = False,
-    ) -> T:
-        """Helper function to provide consistent circuit processing.
-
-        Parameters
-        ----------
-        qubit_mapping:
-            Mapping from old qubit labels to new qubit labels.
-            If a qubit label is not provided, it remains unchanged.
-
-        omit_gates:
-            If provided, an operation (or list of operations) to replace with
-            idles in the final circuit.
-
-        delete_idle_layers:
-            If True, drop any layers with no operations.
-            Defaults to False, maintaining idle layers which may be used for
-            scheduling later in circuit composition pipeline.
-
-        Returns
-        -------
-        processed_circuit:
-            The processed circuit
-        """
-        pass

@@ -88,6 +88,7 @@ for tf in test_frames:
 print(expiring_history)
 ```
 
+(history-propagating-keys)=
 ### Propagating Keys
 
 The counterpart to expiring keys is propagating keys.

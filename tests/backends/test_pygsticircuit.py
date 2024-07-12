@@ -108,33 +108,6 @@ class TestPyGSTiPhysicalCircuit:
 
         pc5.map_qubit_labels_inplace({"Q0": 0, "Q1": 1})
         self._check(pc5, self.test_circ_intlbls)
-    
-    def test_processing(self):
-        pc = PhysCirc(self.test_circ)
-        pc = pc.process_circuit()
-        self._check(pc, self.test_circ)
-        
-        pc2 = pc.process_circuit(
-            qubit_mapping={'Q0': 0, 'Q1': 1},
-            omit_gates=["Gidle"],
-            delete_idle_layers=False
-        )
-        test_circ2 = Circuit([
-            [], ('Gxpi2', 0), ('Gypi2', 1), ('Gcnot', 0, 1),
-            [('Gxpi2', 0), ('Gypi2', 1)], Label('Gxpi2', (0,))],
-            line_labels=[0, 1]) # type: ignore
-        self._check(pc2, test_circ2)
-
-        pc3 = pc.process_circuit(
-            qubit_mapping={'Q0': 0, 'Q1': 1},
-            omit_gates=["Gidle", "Gcnot"],
-            delete_idle_layers=True
-        )
-        test_circ3 = Circuit([
-            ('Gxpi2', 0), ('Gypi2', 1),
-            [('Gxpi2', 0), ('Gypi2', 1)], Label('Gxpi2', (0,))],
-            line_labels=[0, 1]) # type: ignore
-        self._check(pc3, test_circ3)
 
 
 class TestPyGSTiPhysicalCircuitFailedImport:

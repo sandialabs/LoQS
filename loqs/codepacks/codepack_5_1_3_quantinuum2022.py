@@ -1,14 +1,26 @@
 """A LoQS QEC codepack for the 5-qubit code.
 
-TODO
+This implementation is based on the 2022 implementation from
+Quantinuum in :cite:`ryananderson_implementing_2022`, which is in turn
+based on piecewise fault-tolerance from :cite:`yoder_universal_2016`
+and flag fault-tolerance from :cite:`chao_quantum_2018`.
+
+As we are using flag fault-tolerance, we require two auxiliary qubits:
+a measurement qubit for stabilizer checks, and an additional flag qubit.
+Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
+
+.. bibliography:: ../../docs/references.bib
+    :filter: docname in docnames
 """
 
+from collections.abc import Sequence
 from typing import Mapping
 
 from loqs.backends import propagate_state
-from loqs.backends.circuit import PyGSTiPhysicalCircuit as PhysicalCircuit
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model.basemodel import BaseNoiseModel
+from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.state.basestate import BaseQuantumState
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
@@ -19,8 +31,21 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 
 
-def create_qec_code():
-    """TODO"""
+def create_qec_code(
+    circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+):
+    """Create a QECCode implementing the [[5,1,3]] code.
+
+    Parameters
+    ----------
+    circuit_backend:
+        The circuit backend to use when generating physical circuits.
+        Currently, only :class:`PyGSTiPhysicalCircuit` is allowed.
+
+    Returns
+    -------
+        A :class:`QECCode` implementing the [[5,1,3]] code.
+    """
 
     # Template qubits for defining one patch
     qubits = ["A0", "A1"] + [f"D{i}" for i in range(5)]
@@ -29,7 +54,7 @@ def create_qec_code():
 
     # Non-FT |-> state prep
     # First gray box of Fig 3 of arxiv:2208.01863
-    nonft_state_prep_circ = PhysicalCircuit(
+    nonft_state_prep_circ = circuit_backend(
         [
             [
                 ("Gh", "D0"),
@@ -55,7 +80,7 @@ def create_qec_code():
 
     # Try-until-success FT |-> state prep
     # First green box of Fig 3 of arxiv:2208.01863
-    ft_state_prep_checks_circ = PhysicalCircuit(
+    ft_state_prep_checks_circ = circuit_backend(
         [
             # FT check 1
             ("Gcnot", "A0", "D0"),
@@ -104,7 +129,7 @@ def create_qec_code():
 
     # Logical X (transversal)
     # Eqn B1 of arxiv:2208.01863
-    logical_X_circ = PhysicalCircuit(
+    logical_X_circ = circuit_backend(
         [[("Gypi", "D0"), ("Gxpi", "D2"), ("Gypi", "D4")]],
         qubit_labels=qubits,
     )
@@ -117,7 +142,7 @@ def create_qec_code():
 
     # Logical Z (transversal)
     # Eqn B3 of arxiv:2208.01863
-    logical_Z_circ = PhysicalCircuit(
+    logical_Z_circ = circuit_backend(
         [[("Gxpi", "D0"), ("Gzpi", "D2"), ("Gxpi", "D4")]],
         qubit_labels=qubits,
     )
@@ -130,7 +155,7 @@ def create_qec_code():
 
     # Logical H (transversal + permute)
     # Fig 2b of arxiv:1603.03948
-    logical_H_circ = PhysicalCircuit(
+    logical_H_circ = circuit_backend(
         [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
     )
     logical_H_circ_inst = builders.build_physical_circuit_instruction(
@@ -152,7 +177,7 @@ def create_qec_code():
 
     # Rotations to and from the "prime" basis
     # "Local Clifford rotation" gray boxes from Fig 3 of arxiv:2208.01863
-    to_prime_basis_circ = PhysicalCircuit(
+    to_prime_basis_circ = circuit_backend(
         [
             [("Gh", "D0"), ("Gypi", "D2"), ("Gh", "D4")],
             [("Gzpi2", "D0"), ("Gzpi2", "D4")],
@@ -167,7 +192,7 @@ def create_qec_code():
         )
     )
 
-    from_prime_basis_circ = PhysicalCircuit(
+    from_prime_basis_circ = circuit_backend(
         [
             [("Gzmpi2", "D0"), ("Gypi", "D2"), ("Gzmpi2", "D4")],
             [("Gh", "D0"), ("Gh", "D4")],
@@ -184,10 +209,10 @@ def create_qec_code():
 
     # In the prime basis, Zbar = ZIZIZ and Xbar = XIXIX
     # So we can do physical Z/X measurements and it makes sense to do so
-    raw_Z_meas_circ = PhysicalCircuit(
+    raw_Z_meas_circ = circuit_backend(
         [[("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")]], qubit_labels=qubits
     )
-    raw_X_meas_circ = PhysicalCircuit(
+    raw_X_meas_circ = circuit_backend(
         [
             [("Gh", "D0"), ("Gh", "D2"), ("Gh", "D4")],
             [("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")],
@@ -250,7 +275,7 @@ def create_qec_code():
 
     ### DECODING CIRCUIT
     # TODO: Really this is the nonft state prep reversed. Reuse?
-    state_decoder_circ = PhysicalCircuit(
+    state_decoder_circ = circuit_backend(
         [
             [("Gcphase", "D0", "D4")],
             [("Gcphase", "D1", "D2"), ("Gcphase", "D3", "D4")],
@@ -283,17 +308,80 @@ def create_qec_code():
 
     # Fig 13 of arxiv:2208.01863
     # Adds the instructions in-place
-    _create_adaptive_measure_instruction(instructions, qubits)
+    _create_adaptive_measure_instruction(instructions, qubits, circuit_backend)
 
     # TODO: QEC instruction
 
-    # TODO: Logical CZ and CCZ
+    code = QECCode(instructions, qubits, "Perfect [[5,1,3]] code")
+    return code
 
-    return QECCode(instructions, qubits, "Perfect [[5,1,3]] code")
+
+def create_ideal_model(
+    qubits: Sequence[str],
+    model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
+):
+    """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
+
+    This model will contain all the instructions needed to run the
+    physical circuits in the :class:`QECCode` returned by :meth:`create_qec_code()`.
+
+
+    Parameters
+    ----------
+    qubits:
+        List of qubit labels to use. It should be have 7 entries,
+        and the first two qubits should be the auxiliary qubits.
+
+    model_backend:
+        The model backend to use when generating operations.
+        Currently, only :class:`PyGSTiNoiseModel` is allowed.
+
+    Returns
+    -------
+        A :class:`QECCode` implementing the [[5,1,3]] code.
+    """
+    assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
+    assert issubclass(
+        model_backend, PyGSTiNoiseModel
+    ), "Only pyGSTi models can be output by the codepack"
+
+    gate_names = [
+        "Gxpi",
+        "Gypi",
+        "Gzpi",
+        "Gzpi2",
+        "Gzmpi2",
+        "Gh",
+        "Gcnot",
+        "Gcphase",
+    ]
+
+    try:
+        import pygsti
+    except ImportError:
+        raise RuntimeError(
+            "pyGSTi not found, cannot construct pyGSTi noise model"
+        )
+    # TODO: Currently Iz does not need to be set here
+    # This is because QSimQuantumState actually does not try to pull the rep
+    # Otherwise, this would result in a KeyError in PyGSTiNoiseModel.get_reps(),
+    # since it technically should be provided
+    pspec = pygsti.processors.QubitProcessorSpec(
+        len(qubits),
+        gate_names=gate_names,
+        qubit_labels=qubits,
+        availability={k: "all-permutations" for k in gate_names},
+    )
+
+    ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(pspec)
+
+    return model_backend(ideal_model_pygsti)
 
 
 ## Helper functions
-def _create_adaptive_measure_instruction(instructions, qubits):
+def _create_adaptive_measure_instruction(
+    instructions, qubits, circuit_backend
+):
     # FT Adaptive Measurement Scheme
     # Fig 13 of arxiv:2208.01863
     # Easiest to go from right to left when building up instructions
@@ -337,7 +425,7 @@ def _create_adaptive_measure_instruction(instructions, qubits):
 
     ### PART III
     # Part III circuit
-    measIII_circ = PhysicalCircuit(
+    measIII_circ = circuit_backend(
         [
             ("Gh", "A0"),
             ("Gcphase", "A0", "D2"),
@@ -419,7 +507,7 @@ def _create_adaptive_measure_instruction(instructions, qubits):
 
     ### PART II
     # This follows part III closely
-    measII_circ = PhysicalCircuit(
+    measII_circ = circuit_backend(
         [
             ("Gh", "A0"),
             ("Gcphase", "A0", "D0"),
@@ -498,7 +586,7 @@ def _create_adaptive_measure_instruction(instructions, qubits):
 
     ### PART I
     # Finally we have the first circuit
-    measI_circ = PhysicalCircuit(
+    measI_circ = circuit_backend(
         [
             ("Gh", "A0"),
             ("Gcphase", "A0", "D4"),

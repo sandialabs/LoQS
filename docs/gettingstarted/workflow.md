@@ -22,19 +22,21 @@ In this example, we are using `pyGSTi` for our circuits and noise model, and `qu
 We also import the relevant codepack, in this case a [[5,1,3]] (a.k.a. 5-qubit) code.
 
 ```{code-cell} ipython3
-from loqs.backends import QSimQuantumState, PyGSTiNoiseModel
+from loqs.backends import QSimQuantumState, PyGSTiNoiseModel, PyGSTiPhysicalCircuit
 from loqs.core import QuantumProgram
-
-from loqs.codepacks import code_5_1_3_quantinuum2022 as code_5_1_3
+from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 ```
 
 Creating the `QECCode` from the codepack is as simple as calling the `create_qec_code()` function.
 More complex codepacks could take additional arguments here to customize the resulting `QECCode`;
 for example, options could include auxiliary qubit reuse (e.g. Surface-13 vs Surface-17), different syndrome extraction schedules, etc.
+
 In this case, we call the default configuration of the 5-qubit code.
+Note that there is a single argument called `circuit_backend`- this determines what circuit backend is used for any physical circuits that are needed.
+Currently, the default (and only allowed option) is `PyGSTiPhysicalCircuit`.
 
 ```{code-cell} ipython3
-code_5q = code_5_1_3.create_qec_code()
+code_5q = codepack_5_1_3.create_qec_code(circuit_backend=PyGSTiPhysicalCircuit)
 ```
 
 One of the main features of a `QECCode` is the list of `Instruction` objects that are available.
@@ -48,34 +50,17 @@ list(code_5q.instructions.keys())
 ## Defining a Noise Model
 
 In order to do simulation, we will also need a noise model.
-**Note that this is one place where the backend package must be called directly**.
-In this case, we just generate an ideal model that can run all the physical circuits in our codepack.
-Currently, this requires a bit of introspection into the codepack operations (or the use of the `dry_run` feature described below).
-Improving this is a low-priority TODO, since this is one place where user customization is most desired.
+For convenience, the codepack also provides an ideal (i.e. noiseless) model with all the operations needed to run the physical circuits in `code_5q` created above.
+Users will almost certainly want to provide their own (noisy) models, but this ideal model can serve as a good starting point to check what connectivity/gate set is needed.
+
+Note that as with the `create_qec_code()` function above, we take a `model_backend` parameter that in the future will allow users to quickly change out the model backend.
+Currently, the default (and only allowed option) is `PyGSTiNoiseModel`.
 
 ```{code-cell} ipython3
-import pygsti
-
-# Define a pyGSTi processor spec and noise model
-# This is the only pyGSTi required here,
-# and could eventually be traded out for something else
+# Define the physical qubit labels for our system here
 qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
-gate_names = ["Gxpi", "Gypi", "Gzpi", "Gzpi2", "Gzmpi2", "Gh", "Gcnot", "Gcphase"]
 
-# TODO: Currently Iz does not need to be set here
-# This is because QSimQuantumState actually does not try to pull the rep
-# Otherwise, this would result in a KeyError in PyGSTiNoiseModel.get_reps(),
-# since it technically should be provided
-pspec = pygsti.processors.QubitProcessorSpec(
-    len(qubits), 
-    gate_names=gate_names,
-    qubit_labels=qubits,
-    availability={k: "all-permutations" for k in gate_names}
-)
-
-ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(pspec)
-
-ideal_model = PyGSTiNoiseModel(ideal_model_pygsti)
+ideal_model = codepack_5_1_3.create_ideal_model(qubits, model_backend=PyGSTiNoiseModel)
 ```
 
 ## Creating an `InstructionStack`

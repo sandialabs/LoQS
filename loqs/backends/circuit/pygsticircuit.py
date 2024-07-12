@@ -135,27 +135,3 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             Qubit labels to assign to circuit.
         """
         self.circuit.line_labels = qubit_labels
-
-    def process_circuit(
-        self,
-        qubit_mapping: Mapping[QubitTypes, QubitTypes] | None = None,
-        omit_gates: str | Sequence[str] | None = None,
-        delete_idle_layers: bool = False,
-    ) -> PyGSTiPhysicalCircuit:
-        """TODO"""
-        processed = self.copy()
-
-        if qubit_mapping is not None:
-            processed.map_qubit_labels_inplace(qubit_mapping)
-
-        if omit_gates is not None:
-            if isinstance(omit_gates, str):
-                omit_gates = [omit_gates]
-
-            for og in omit_gates:
-                processed.circuit.replace_gatename_with_idle_inplace(og)
-
-        if delete_idle_layers:
-            processed.circuit.delete_idle_layers_inplace()
-
-        return processed
