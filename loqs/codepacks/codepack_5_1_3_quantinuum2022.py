@@ -338,7 +338,8 @@ def create_ideal_model(
 
     Returns
     -------
-        A :class:`QECCode` implementing the [[5,1,3]] code.
+        A noiseless model for the `QECCode` returned by
+        :meth:`create_qec_code`
     """
     assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
     assert issubclass(
@@ -384,36 +385,78 @@ def _create_adaptive_measure_instruction(
 ):
     # FT Adaptive Measurement Scheme
     # Fig 13 of arxiv:2208.01863
-    # Easiest to go from right to left when building up instructions
 
-    # There are two end cases
-    # Either we hit the decoding circuit (already defined above), or we terminate
+    # For an in-depth documentation of this function, check out
+    # the Building a Complex Feed-Forward Instruction tutorial
 
-    ### TERMINATION
-    # This is a simple operation that returns the previous auxiliary outcome
-    def term_apply_fn(outcomes: MeasurementOutcomes, meas_qubit: str) -> Frame:
-        return Frame({"logical_measurement": outcomes[meas_qubit][0]})
+    ## PART I
+    def partI_apply_fn(
+        circuit: BasePhysicalCircuit,
+        model: BaseNoiseModel,
+        state: BaseQuantumState,
+        inplace: bool,
+        stack: InstructionStack,
+        patch_label: str,
+    ) -> Frame:
+        # Run circuit
+        new_state, outcomes = propagate_state(circuit, model, state, inplace)
 
-    term_data = {"meas_qubit": "A0"}
+        # Do classical feed forward
+        flag_qubit = circuit.qubit_labels[1]
+        F1 = outcomes[flag_qubit][0]
+        if F1 == 0:
+            # We go to part II (forward reference, must match key later)
+            next_instruction = "Adaptive Measure Part II"
+        else:
+            # We go to decoding circuit  (forward reference, must match key later)
+            next_instruction = "Non-FT Minus Unprep"
 
-    # Need to map our measure qubit to the patch
-    def term_map_qubits_fn(
-        qubit_mapping: Mapping[str, str], meas_qubit: str, **kwargs
-    ) -> KwargDict:
-        return {"meas_qubit": qubit_mapping[meas_qubit]}
+        # We need to make sure and feed the patch label forward
+        new_label = InstructionLabel(next_instruction, patch_label)
+        new_stack = stack.insert_instruction(0, new_label)
 
-    instructions["Adaptive Measure Termination"] = Instruction(
-        term_apply_fn,
-        ["logical_measurement"],  # Can output dummy frame for DRY_RUN
-        term_data,
-        term_map_qubits_fn,
-        name="Termination for adaptive logical measurement",
-        fault_tolerant=True,
+        # Return new frame
+        frame_data = {
+            "stack": new_stack,
+            "state": new_state,
+            "measurement_outcomes": MeasurementOutcomes(outcomes),
+        }
+        return Frame(frame_data)
+
+    def partI_dry_run_apply_fn(
+        stack: InstructionStack, patch_label: str, **kwargs
+    ) -> Frame:
+        # Shortcut apply to go straight to part II feed forward
+        new_label = InstructionLabel("Adaptive Measure Part II", patch_label)
+        new_stack = stack.insert_instruction(0, new_label)
+
+        frame_data = {
+            "stack": new_stack,
+            "state": "DRY_RUN",
+            "measurement_outcomes": "DRY_RUN",
+        }
+        return Frame(frame_data)
+
+    measI_circ = circuit_backend(
+        [
+            ("Gh", "A0"),
+            ("Gcphase", "A0", "D4"),
+            ("Gcnot", "A0", "A1"),
+            ("Gcnot", "A0", "D0"),
+            ("Gcnot", "A0", "A1"),
+            ("Gcphase", "A0", "D1"),
+            ("Gh", "A0"),
+            [("Iz", "A0"), ("Iz", "A1")],
+        ],
+        qubit_labels=qubits,
     )
 
-    ### Helper functions
-    # This is the mapping function used by physical circuit instructions
-    # We can use this for all circuit-based instructions
+    partI_data = {
+        "circuit": measI_circ,
+        "inplace": True,
+    }
+
+    # Will be good for all three parts
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str],
         circuit: BasePhysicalCircuit,
@@ -423,31 +466,110 @@ def _create_adaptive_measure_instruction(
         new_kwargs["circuit"] = circuit.map_qubit_labels(qubit_mapping)
         return new_kwargs
 
-    ### PART III
-    # Part III circuit
-    measIII_circ = circuit_backend(
+    # We are not calling this Part I because it will actually perform the whole operation
+    instructions["Adaptive Measure"] = Instruction(
+        partI_apply_fn,
+        partI_dry_run_apply_fn,
+        partI_data,
+        map_qubits_fn,
+        name="Part I of adaptive logical measurement",
+        fault_tolerant=True,
+    )
+
+    ## PART II
+    def partII_apply_fn(
+        circuit: BasePhysicalCircuit,
+        model: BaseNoiseModel,
+        state: BaseQuantumState,
+        inplace: bool,
+        previous_outcome: MeasurementOutcomes,
+        stack: InstructionStack,
+        patch_label: str,
+    ) -> Frame:
+        # Run circuit
+        new_state, outcomes = propagate_state(circuit, model, state, inplace)
+
+        # Pull measurements/flags
+        meas_qubit = circuit.qubit_labels[0]
+        flag_qubit = circuit.qubit_labels[1]
+        F2 = outcomes[flag_qubit][0]
+        M1 = previous_outcome[meas_qubit][0]
+        M2 = outcomes[meas_qubit][0]
+
+        # Do classical feed forward
+        if F2 != 0:
+            # We go to termination (forward reference, must match key later)
+            next_instruction = "Adaptive Measure Termination"
+        elif M1 == M2:
+            # We go to part III (forward reference, must match key later)
+            next_instruction = "Adaptive Measure Part III"
+        else:
+            # We go to decoding circuit (forward reference, must match key later)
+            next_instruction = "Non-FT Minus Unprep"
+
+        # We need to make sure and feed the patch label forward
+        new_label = InstructionLabel(next_instruction, patch_label)
+        new_stack = stack.insert_instruction(0, new_label)
+
+        # Return new frame
+        frame_data = {
+            "stack": new_stack,
+            "state": new_state,
+            "measurement_outcomes": MeasurementOutcomes(outcomes),
+        }
+        return Frame(frame_data)
+
+    def partII_dry_run_apply_fn(
+        stack: InstructionStack, patch_label: str, **kwargs
+    ) -> Frame:
+        # Shortcut apply to go straight to part III feed forward
+        new_label = InstructionLabel("Adaptive Measure Part III", patch_label)
+        new_stack = stack.insert_instruction(0, new_label)
+
+        frame_data = {
+            "stack": new_stack,
+            "state": "DRY_RUN",
+            "measurement_outcomes": "DRY_RUN",
+        }
+        return Frame(frame_data)
+
+    measII_circ = circuit_backend(
         [
             ("Gh", "A0"),
+            ("Gcphase", "A0", "D0"),
+            ("Gcnot", "A0", "A1"),
+            ("Gcnot", "A0", "D1"),
+            ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D2"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcnot", "A0", "D3"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcphase", "A0", "D4"),
             ("Gh", "A0"),
             [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
     )
 
-    # Heart of part III, with two outcomes
+    partII_data = {"circuit": measII_circ, "inplace": True}
+
+    paramII_aliases = {"previous_outcome": "measurement_outcomes"}
+
+    instructions["Adaptive Measure Part II"] = Instruction(
+        partII_apply_fn,
+        partII_dry_run_apply_fn,
+        partII_data,
+        map_qubits_fn,
+        param_aliases=paramII_aliases,
+        name="Part II of adaptive logical measurement",
+        fault_tolerant=True,
+    )
+
+    ## PART III
     def partIII_apply_fn(
+        circuit: BasePhysicalCircuit,
         model: BaseNoiseModel,
+        state: BaseQuantumState,
+        inplace: bool,
+        previous_outcomes: list[MeasurementOutcomes],
         stack: InstructionStack,
         patch_label: str,
-        circuit: BasePhysicalCircuit,
-        inplace: bool,
-        state: BaseQuantumState,
-        previous_outcomes: list[MeasurementOutcomes],
     ) -> Frame:
         # Run circuit
         new_state, outcomes = propagate_state(circuit, model, state, inplace)
@@ -464,10 +586,10 @@ def _create_adaptive_measure_instruction(
 
         # Do feed forward
         if F3 == 0 and M1 == M2 and M1 != M3:
-            # If F3 = 0 and M1 = M2 != M3, go to decoding circuit
+            # Go to decoding circuit (forward reference, must match key later)
             next_instruction = "Non-FT Minus Unprep"
         else:
-            # Otherwise, we terminate
+            # Otherwise, we terminate (forward reference, must match key later)
             next_instruction = "Adaptive Measure Termination"
 
         # We need to make sure and feed the patch label forward
@@ -482,21 +604,48 @@ def _create_adaptive_measure_instruction(
         }
         return Frame(frame_data)
 
+    def partIII_dry_run_apply_fn(
+        stack: InstructionStack, patch_label: str, **kwargs
+    ) -> Frame:
+        # Shortcut apply to go straight to termination instruction
+        new_label = InstructionLabel(
+            "Adaptive Measure Termination", patch_label
+        )
+        new_stack = stack.insert_instruction(0, new_label)
+
+        frame_data = {
+            "stack": new_stack,
+            "state": "DRY_RUN",
+            "measurement_outcomes": "DRY_RUN",
+        }
+        return Frame(frame_data)
+
+    measIII_circ = circuit_backend(
+        [
+            ("Gh", "A0"),
+            ("Gcphase", "A0", "D2"),
+            ("Gcnot", "A0", "A1"),
+            ("Gcnot", "A0", "D3"),
+            ("Gcnot", "A0", "A1"),
+            ("Gcphase", "A0", "D4"),
+            ("Gh", "A0"),
+            [("Iz", "A0"), ("Iz", "A1")],
+        ],
+        qubit_labels=qubits,
+    )
+
     partIII_data = {
         "circuit": measIII_circ,
-        "inplace": True,  # TODO: Not hardcode this,
+        "inplace": True,
     }
 
-    # The param collection code will mostly work for this instruction
-    # The one exception is previous_outcomes, which needs to go back 2 frames
-    # and also must be aliased
-    paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
     paramIII_aliases = {"previous_outcomes": "measurement_outcomes"}
 
-    # We can now define the whole instruction
+    paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
+
     instructions["Adaptive Measure Part III"] = Instruction(
         partIII_apply_fn,
-        ["state", "measurement_outcomes"],  # Can use dummy frame for dry run
+        partIII_dry_run_apply_fn,
         partIII_data,
         map_qubits_fn,
         param_priorities=paramIII_priorities,
@@ -505,157 +654,28 @@ def _create_adaptive_measure_instruction(
         fault_tolerant=True,
     )
 
-    ### PART II
-    # This follows part III closely
-    measII_circ = circuit_backend(
-        [
-            ("Gh", "A0"),
-            ("Gcphase", "A0", "D0"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcnot", "A0", "D1"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcphase", "A0", "D2"),
-            ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
-        ],
-        qubit_labels=qubits,
-    )
-
-    # Heart of part II, with three outcomes
-    def partII_apply_fn(
-        model: BaseNoiseModel,
-        stack: InstructionStack,
-        patch_label: str,
-        circuit: BasePhysicalCircuit,
-        inplace: bool,
-        state: BaseQuantumState,
-        previous_outcome: MeasurementOutcomes,
+    ## TERMINATION
+    def term_apply_fn(
+        measurement_outcomes: MeasurementOutcomes, meas_qubit: str
     ) -> Frame:
-        # Run circuit
-        new_state, outcomes = propagate_state(circuit, model, state, inplace)
+        return Frame(
+            {"logical_measurement": measurement_outcomes[meas_qubit][0]}
+        )
 
-        # Pull measurements/flags
-        meas_qubit = circuit.qubit_labels[0]
-        flag_qubit = circuit.qubit_labels[1]
-        F2 = outcomes[flag_qubit][0]
-        M1 = previous_outcome[meas_qubit][0]
-        M2 = outcomes[meas_qubit][0]
+    term_dry_run = ["logical_measurement"]
 
-        # Do classical feed forward
-        if F2 != 0:
-            # We go to termination
-            next_instruction = "Adaptive Measure Termination"
-        elif M1 == M2:
-            # We go to part III
-            next_instruction = "Adaptive Measure Part III"
-        else:
-            # We go to decoding circuit
-            next_instruction = "Non-FT Minus Unprep"
+    term_data = {"meas_qubit": "A0"}
 
-        # We need to make sure and feed the patch label forward
-        new_label = InstructionLabel(next_instruction, patch_label)
-        new_stack = stack.insert_instruction(0, new_label)
+    def term_map_qubits_fn(
+        qubit_mapping: Mapping[str, str], meas_qubit: str, **kwargs
+    ) -> KwargDict:
+        return {"meas_qubit": qubit_mapping[meas_qubit]}
 
-        # Return new frame
-        frame_data = {
-            "stack": new_stack,
-            "state": new_state,
-            "measurement_outcomes": MeasurementOutcomes(outcomes),
-        }
-        return Frame(frame_data)
-
-    partII_data = {
-        "circuit": measII_circ,
-        "inplace": True,  # TODO: Not hardcode this
-    }
-
-    # We don't need more than one frame back in history,
-    # but we still need the alias
-    paramII_aliases = {"previous_outcome": "measurement_outcomes"}
-
-    # We can now define the whole instruction
-    instructions["Adaptive Measure Part II"] = Instruction(
-        partII_apply_fn,
-        ["state", "measurement_outcomes"],  # Dummy frame is fine for dry run
-        partII_data,
-        map_qubits_fn,
-        param_aliases=paramII_aliases,
-        name="Part II of adaptive logical measurement",
-        fault_tolerant=True,
-    )
-
-    ### PART I
-    # Finally we have the first circuit
-    measI_circ = circuit_backend(
-        [
-            ("Gh", "A0"),
-            ("Gcphase", "A0", "D4"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcnot", "A0", "D0"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcphase", "A0", "D1"),
-            ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
-        ],
-        qubit_labels=qubits,
-    )
-
-    # Heart of part I, with two outcomes
-    def partI_apply_fn(
-        model: BaseNoiseModel,
-        stack: InstructionStack,
-        patch_label: str,
-        circuit: BasePhysicalCircuit,
-        inplace: bool,
-        state: BaseQuantumState,
-    ) -> Frame:
-        # Run circuit
-        new_state, outcomes = propagate_state(circuit, model, state, inplace)
-
-        # Do classical feed forward
-        flag_qubit = circuit.qubit_labels[1]
-        F1 = outcomes[flag_qubit][0]
-        if F1 == 0:
-            # We go to part II
-            next_instruction = "Adaptive Measure Part II"
-        else:
-            # We go to decoding circuit
-            next_instruction = "Non-FT Minus Unprep"
-
-        # We need to make sure and feed the patch label forward
-        new_label = InstructionLabel(next_instruction, patch_label)
-        new_stack = stack.insert_instruction(0, new_label)
-
-        # Return new frame
-        frame_data = {
-            "stack": new_stack,
-            "state": new_state,
-            "measurement_outcomes": MeasurementOutcomes(outcomes),
-        }
-        return Frame(frame_data)
-
-    partI_data = {
-        "circuit": measI_circ,
-        "inplace": True,  # TODO: Not hardcode this
-    }
-
-    # We can now define the whole instruction
-    instructions["Adaptive Measure Part I"] = Instruction(
-        partI_apply_fn,
-        ["state", "measurement_outcomes"],  # Dummy frame is ok for dry run
-        partI_data,
-        map_qubits_fn,
-        name="Part I of adaptive logical measurement",
-        fault_tolerant=True,
-    )
-
-    # For convenience, let's also add an entry for the whole operation
-    # For now, this is just part I
-    # TODO: Once we have stabilizer frame, this should be composite
-    # with part I and then a final operation to do decoding
-    instructions["Adaptive Measure"] = builders.build_composite_instruction(
-        [instructions["Adaptive Measure Part I"]],
-        ["patch_label"],
-        name="FT adaptive measure",
+    instructions["Adaptive Measure Termination"] = Instruction(
+        term_apply_fn,
+        term_dry_run,
+        term_data,
+        term_map_qubits_fn,
+        name="Termination for adaptive logical measurement",
         fault_tolerant=True,
     )

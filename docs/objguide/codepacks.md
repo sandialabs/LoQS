@@ -13,6 +13,7 @@ This function may take arguments that influence the returned `QECCode`;
 for example, codepacks for scalable QEC codes may take a distance argument, QEC codes that have multiple auxiliary qubit reuse patterns or syndrome extraction schedules may provide those as options, etc.
 These options should be documented in the docstring of the relevant `create_qec_code()` functions.
 
+(codepacks-5qubit)=
 ## The 5-Qubit Code
 
 Currently the only codepack provided is for the [[5,1,3]] perfect code, colloquially known as the [5-qubit code](https://errorcorrectionzoo.org/c/stab_5_1_3).

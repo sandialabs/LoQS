@@ -258,7 +258,7 @@ print(frame5)
 
 ## What's next?
 
-While this covered many of the main points in creating an `Instruction`, it may also be useful to see a more complex example in the ["Building a Multi-Stage Feed-Forward Instruction" tutorial](/tutorials/buildinstruction).
+While this covered many of the main points in creating an `Instruction`, it may also be useful to see a more complex example in the ["Building a Complex Instruction" tutorial](/tutorials/buildinstruction).
 
 See the [API Reference](/devguide/_autosummary/loqs.core.instructions.instruction.Instruction) for more in-depth documentation of `Instruction` objects.
 
