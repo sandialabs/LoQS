@@ -29,6 +29,7 @@ parts:
   chapters:
   - file: tutorials/buildinstruction.md
   - file: tutorials/buildqeccode.md
+  - file: tutorials/runlogst.md
 - caption: Examples
   chapters:
   - file: examples/todo.md

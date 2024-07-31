@@ -15,6 +15,7 @@ Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
 
 from collections.abc import Sequence
 from typing import Mapping
+import numpy as np
 
 from loqs.backends import propagate_state
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
@@ -74,6 +75,32 @@ def create_qec_code(
             nonft_state_prep_circ,
             include_outcomes=False,
             name="Non-FT minus state prep",
+            fault_tolerant=False,
+        )
+    )
+
+    # Non-FT |0> state prep
+    # Fig 3a of arxiv:1509.01239
+    # TODO Figure this out in Yoder convention
+    nonft_zero_state_prep_circ = circuit_backend(
+        [
+            [
+                ("Gh", "D0"),
+                ("Gh", "D1"),
+                ("Gh", "D2"),
+                ("Gh", "D3"),
+            ],
+            [("Gcphase", "D0", "D1"), ("Gcphase", "D2", "D3")],
+            [("Gcphase", "D1", "D2"), ("Gcphase", "D3", "D4")],
+            [("Gcphase", "D0", "D4")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Non-FT Zero Prep"] = (
+        builders.build_physical_circuit_instruction(
+            nonft_zero_state_prep_circ,
+            include_outcomes=False,
+            name="Non-FT zero state prep",
             fault_tolerant=False,
         )
     )
@@ -150,6 +177,18 @@ def create_qec_code(
         logical_Z_circ,
         include_outcomes=False,
         name="Logical Z",
+        fault_tolerant=True,
+    )
+
+    # Logical K (transversal)
+    # Fig 2a of arxiv:1603.03948
+    logical_K_circ = circuit_backend(
+        [[("Gk", q) for q in qubits[2:]]], qubit_labels=qubits
+    )
+    instructions["K"] = builders.build_physical_circuit_instruction(
+        logical_K_circ,
+        include_outcomes=False,
+        name="Logical K",
         fault_tolerant=True,
     )
 
@@ -353,6 +392,7 @@ def create_ideal_model(
         "Gzpi2",
         "Gzmpi2",
         "Gh",
+        "Gk",
         "Gcnot",
         "Gcphase",
     ]
@@ -371,6 +411,14 @@ def create_ideal_model(
         len(qubits),
         gate_names=gate_names,
         qubit_labels=qubits,
+        nonstd_gate_unitaries={
+            "Gk": np.array(
+                [
+                    [1 / np.sqrt(2), 1 / np.sqrt(2)],
+                    [1j / np.sqrt(2), -1j / np.sqrt(2)],
+                ]
+            )
+        },
         availability={k: "all-permutations" for k in gate_names},
     )
 

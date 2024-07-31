@@ -12,5 +12,7 @@ from . import backends
 
 from . import core
 
-# Import last
+# Import after core
 from . import codepacks
+
+from . import extensions
