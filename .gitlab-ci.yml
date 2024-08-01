@@ -29,7 +29,7 @@ Build documentation:
   stage: docs
   image: quay.sandia.gov/dice/rhel8-minimal-python
   before_script:
-    - pip install -e ".[docs,pygsti,quantumsim]"
+    - pip install ".[docs,pygsti,quantumsim]"
   script:
     - jupyter-book build docs
     - mv docs/_build/html public
