@@ -5,8 +5,9 @@ stages:
 include:
   - template: Security/SAST.gitlab-ci.yml
 
-tags:
-  - do.small
+default:
+  tags:
+    - do.small
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
