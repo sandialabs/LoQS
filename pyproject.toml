@@ -37,7 +37,7 @@ docs = [
     "jupytext"
 ]
 quantumsim = ["quantumsim==0.2.0"]
-pygsti = ["pygsti[extensions]>=0.9.12"]
+pygsti = ["pygsti[extensions]>=0.9.12", "numpy<2"]
 test = [
     "loqs[dev]",
     "mock>=5",
