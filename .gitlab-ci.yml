@@ -5,28 +5,36 @@ stages:
 include:
   - template: Security/SAST.gitlab-ci.yml
 
-default:
-  tags:
-    - do.small
+tags:
+  - do.small
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+before_script:
+    - python --version; pip --version # For debugging
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip install cython
+    - pip install -e ".[all]"
 
 Run unit tests:
   stage: test
   image: quay.sandia.gov/dice/rhel8-minimal-python
   allow_failure: true
-  before_script:
-    - python --version; pip --version # For debugging
-    - pip install ".[test]"
   script:
     - tox run
 
 Build documentation:
   stage: docs
   image: quay.sandia.gov/dice/rhel8-minimal-python
-  before_script:
-    - pip install cython
-    - pip install ".[docs,pygsti,quantumsim]"
   script:
-    - PYTHONPATH=. jupyter-book build docs
+    - jupyter-book build docs
     - mv docs/_build/html public
   artifacts:
     paths:
