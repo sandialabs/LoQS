@@ -9,7 +9,7 @@ As we are using flag fault-tolerance, we require two auxiliary qubits:
 a measurement qubit for stabilizer checks, and an additional flag qubit.
 Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
 
-.. bibliography:: ../../docs/references.bib
+.. bibliography::
     :filter: docname in docnames
 """
 

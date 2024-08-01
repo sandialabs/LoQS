@@ -16,17 +16,11 @@ cache:
   paths:
     - .cache/pip
 
-before_script:
-    - python --version; pip --version # For debugging
-    - pip install virtualenv
-    - virtualenv venv
-    - source venv/bin/activate
-    - pip install cython
-    - pip install -e ".[all]"
-
 Run unit tests:
   stage: test
   image: quay.sandia.gov/dice/rhel8-minimal-python
+  before_script:
+    - pip install ".[test]"
   allow_failure: true
   script:
     - tox run
@@ -34,6 +28,8 @@ Run unit tests:
 Build documentation:
   stage: docs
   image: quay.sandia.gov/dice/rhel8-minimal-python
+  before_script:
+    - pip install -e ".[docs,pygsti,quantumsim]"
   script:
     - jupyter-book build docs
     - mv docs/_build/html public

@@ -24,7 +24,7 @@ We will assume general familiarity with almost all `Instrument` functionality.
 
 ## Adaptive Measure Out in the [[5,1,3]] Code
 
-We will show how to take the adaptive measure out scheme from Figure 13 of {cite}`ryananderson_implementing_2022`, which is reproduced here for convenience.
+We will show how to take the adaptive measure out scheme from Figure 13 of {cite}`buildinstruction-ryananderson_implementing_2022`, which is reproduced here for convenience.
 
 TODO: Picture
 
@@ -470,6 +470,8 @@ The natural next step after defining your own instructions is to store them in a
 ## References
 
 ```{bibliography}
+:labelprefix: buildinstruction
+:keyprefix: buildinstruction-
 :filter: docname in docnames
 :style: unsrt
 ```
