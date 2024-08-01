@@ -25,7 +25,7 @@ Build documentation:
   before_script:
     - pip install -e ".[docs,pygsti,quantumsim]"
   script:
-    - PYTHONPATH=. jupyter-book build docs
+    - jupyter-book build docs
     - mv docs/_build/html public
   artifacts:
     paths:
