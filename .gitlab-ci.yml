@@ -23,9 +23,10 @@ Build documentation:
   stage: docs
   image: quay.sandia.gov/dice/rhel8-minimal-python
   before_script:
+    - pip install cython
     - pip install ".[docs,pygsti,quantumsim]"
   script:
-    - jupyter-book build docs
+    - PYTHONPATH=. jupyter-book build docs
     - mv docs/_build/html public
   artifacts:
     paths:
