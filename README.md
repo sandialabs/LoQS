@@ -93,25 +93,28 @@ Eventually, this will be available at http://sserita.cee-gitlab.lan/loqs-public,
 
 However, one can still access the built artifact directly by following these steps:
 
-- Go to Build > Artifacts in the left hand menu.
-- Select "Browse" on the latest succeeding Build Documentation job.
-- Navigate to `public/index.html`, and allow GitLab to redirect you.
-
-You are now viewing the most up-to-date version of the documentation!
-Due to a CEE GitLab restriction, the notebook cells are not run;
-however, this is still hopefully pretty useful.
-
-This process is shown step-by-step in the following images:
+1. Go to Build > Artifacts in the left hand menu.
 
 ![image info](./docs/images/BuildArtifacts.png)
 
+2. Select "Browse" on the latest succeeding Build Documentation job.
+
 ![image info](./docs/images/LatestPassingDocument.png)
+
+3. Navigate to `public/index.html`.
 
 ![image info](./docs/images/BrowseArtifact.png)
 
 ![image info](./docs/images/PublicFolder.png)
 
+4. Allow GitLab to redirect you to the CEE-Gitlab Pages domain (`cee-gitlab.lan`).
+
 ![image info](./docs/images/Redirect.png)
 
+5. You are now viewing the most up-to-date version of the documentation!
+
 ![image info](./docs/images/DocsProfit.png)
+
+Due to a CEE GitLab restriction, the notebook cells are not run;
+however, this is still hopefully pretty useful for accessing the most up-to-date docs in your browser.
 
