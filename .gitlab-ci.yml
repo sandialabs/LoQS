@@ -12,11 +12,13 @@ cache:
   paths:
     - .cache/pip
 
+before_script:
+  - conda activate gitlab-runner-loqs
+  - pip install ".[all]"
+
 Run unit tests:
   stage: test
   image: quay.sandia.gov/dice/rhel8-minimal-python
-  before_script:
-    - pip install ".[test]"
   allow_failure: true
   script:
     - tox run
@@ -24,9 +26,6 @@ Run unit tests:
 Build documentation:
   stage: docs
   image: quay.sandia.gov/dice/rhel8-minimal-python
-  before_script:
-    - pip install ".[docs,pygsti,quantumsim]"
-    #- sed -i 's/cache$/off/' docs/_config.yml # Turn off notebook running for now, broken in pipeline
   script:
     - jupyter-book build docs
     - mv docs/_build/html public
