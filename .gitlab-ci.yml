@@ -5,10 +5,6 @@ stages:
 include:
   - template: Security/SAST.gitlab-ci.yml
 
-default:
-  tags:
-    - do.small
-
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
 
@@ -30,7 +26,7 @@ Build documentation:
   image: quay.sandia.gov/dice/rhel8-minimal-python
   before_script:
     - pip install ".[docs,pygsti,quantumsim]"
-    - sed -i 's/cache$/off/' docs/_config.yml # Turn off notebook running for now, broken in pipeline
+    #- sed -i 's/cache$/off/' docs/_config.yml # Turn off notebook running for now, broken in pipeline
   script:
     - jupyter-book build docs
     - mv docs/_build/html public
