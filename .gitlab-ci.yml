@@ -23,6 +23,7 @@ Build documentation:
   stage: docs
   image: python:3.11
   script:
+    - source ~/.bashrc
     - conda activate gitlab-runner-loqs
     - pip install ".[docs,pygsti,quantumsim]"
     - jupyter-book build docs
