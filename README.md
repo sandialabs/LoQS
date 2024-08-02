@@ -5,8 +5,7 @@ for eventual public release. Note that this repo is currently on CEE-GitLab only
 abundance of caution while porting things from LoQS. It is eventually intended to be public
 on GitHub in the SandiaLabs organization.
 
-## User Guide
-### Installation
+## Installation
 
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
 
@@ -58,4 +57,61 @@ to get the 0.9.12 release of pyGSTi, which will be located in `src`.
 Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
 if you are working off of a feature branch.
 
+## Documentation
+
+This project uses JupyterBook for documentation.
+Assuming the `docs` requirements have been installed, the documentation can be generated via:
+
+```
+jupyterbook build docs
+```
+
+and then viewed by opening `docs/_build/html/index.html` in a browser.
+
+### Jupytext Notebooks
+
+For users who want executable versions of the MyST Markdown can use Jupytext to turn them into IPython/Jupyter notebooks.
+For example,
+
+```
+jupytext --to ipynb docs/gettingstarted/workflow.md
+```
+
+will generate a corresponding `docs/gettingstarted/workflow.ipynb` file.
+The Jupyter notebook and Markdown file can be synced up via
+
+```
+jupytext --sync docs/gettingstarted/workflow.md
+```
+
+for those who are maybe updating documentation and going back and forth between notebook and Markdown.
+
+### GitLab Autobuilt Documentation
+
+The documentation is built as part of the GitLab CI/CD Pipeline on every commit.
+Eventually, this will be available at http://sserita.cee-gitlab.lan/loqs-public, but this link is currently broken due to unknown reasons.
+
+However, one can still access the built artifact directly by following these steps:
+
+- Go to Build > Artifacts in the left hand menu.
+- Select "Browse" on the latest succeeding Build Documentation job.
+- Navigate to `public/index.html`, and allow GitLab to redirect you.
+
+You are now viewing the most up-to-date version of the documentation!
+Due to a CEE GitLab restriction, the notebook cells are not run;
+however, this is still hopefully pretty useful.
+
+This process is shown step-by-step in the following images:
+
+![image info](./docs/images/BuildArtifacts.png)
+
+![image info](./docs/images/LatestPassingDocument.png)
+
+![image info](./docs/images/BrowseArtifact.png)
+
+![image info](./docs/images/PublicFolder.png)
+
+![image info](./docs/images/Redirect.png)
+
+![image info](./docs/images/DocsProfit.png)
 
