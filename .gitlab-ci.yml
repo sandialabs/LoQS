@@ -9,22 +9,21 @@ cache:
   paths:
     - .cache/pip
 
-before_script:
-  - source /home/gitlab-runner/.bashrc
-  - conda activate gitlab-runner-loqs
-  - pip install ".[all]"
-
 Run unit tests:
   stage: test
   image: python:3.11
   allow_failure: true
   script:
+    - conda activate gitlab-runner-loqs
+    - pip install ".[test]"
     - tox run
 
 Build documentation:
   stage: docs
   image: python:3.11
   script:
+    - conda activate gitlab-runner-loqs
+    - pip install ".[docs,pygsti,quantumsim]"
     - jupyter-book build docs
     - mv docs/_build/html public
   artifacts:
