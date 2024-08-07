@@ -28,17 +28,17 @@ The default `PatchDict` object is typically associated with the `"patches"` fram
 
 See the [API Reference](/devguide/_autosummary/loqs.core.recordables.patchdict.PatchDict) for more in-depth documentation.
 
-## StabilizerFrame
+## PauliFrame
 
-The `StabilizerFrame` is currently under construction, but is intended to store the current stabilizer frame of the simulation.
+The `PauliFrame` is currently under construction, but is intended to store the current stabilizer frame of the simulation.
 
 ```{warning}
-This section is incomplete and will be filled out as the `StabilizerFrame` implementation is solidified.
+This section is incomplete and will be filled out as the `PauliFrame` implementation is solidified.
 ```
 
-The default `StabilizerFrame` object is typically associated with the `"stabilizer_frame"` frame key.
+The default `PauliFrame` object is typically associated with the `"pauli_frame"` frame key.
 
-See the [API Reference](/devguide/_autosummary/loqs.core.recordables.stabilizerframe.StabilizerFrame) for more in-depth documentation.
+See the [API Reference](/devguide/_autosummary/loqs.core.recordables.pauliframe.PauliFrame) for more in-depth documentation.
 
 ## What's next?
 

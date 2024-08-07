@@ -34,7 +34,6 @@ class History(Sequence[Frame], Castable):
         propagating_keys: Sequence[str] | None = (
             "state",
             "patches",
-            "stabilizer_frame",
         ),
     ) -> None:
         """TODO"""

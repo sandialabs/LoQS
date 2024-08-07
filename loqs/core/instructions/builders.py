@@ -14,10 +14,9 @@ from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.qeccode import QECCode
+from loqs.core.qeccode import QECCode, QECCodePatch, PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
-from loqs.core.recordables.stabilizerframe import StabilizerFrame
 
 
 def build_composite_instruction(
@@ -114,13 +113,17 @@ def build_lookup_decoder_instruction(
 
     # Standard apply_fn construction
     def apply_fn(
+        patch_label: str,
         lookup_table: dict[str, str],
         qubit_labels: list[tuple[str, int]],
+        patches: PatchDict,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
-        stabilizer_frame: StabilizerFrame,
     ) -> Frame:
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
             syndrome_outcomes = [syndrome_outcomes]
+
+        # Look up PauliFrame in patch
+        patch = patches[patch_label]
 
         # Extract our syndrome measurements based on the qubit labels
         syndrome_bits = []
@@ -130,9 +133,18 @@ def build_lookup_decoder_instruction(
         # Look up data error
         data_error_str = lookup_table["".join(syndrome_bits)]
 
-        new_stab_frame = stabilizer_frame.update_from_pauli_str(data_error_str)
+        # Update pauli frame
+        new_pauli_frame = patch.pauli_frame.update_from_pauli_str(
+            data_error_str
+        )
 
-        return Frame({"stabilizer_frame": new_stab_frame})
+        # Update patches
+        new_patches = patches.copy()
+        new_patches[patch_label] = QECCodePatch(
+            patch.code, patch.qubits, new_pauli_frame
+        )
+
+        return Frame({"patches": new_patches})
 
     # We store lookup table and qubit labels
     # Ensure that both are in the expected format (including adding default 0 index
@@ -158,7 +170,7 @@ def build_lookup_decoder_instruction(
         return new_kwargs
 
     # Get our expected output frame keys for use in dry run
-    frame_keys = ["stabilizer_frame"]
+    frame_keys = ["patches"]
 
     # We also need param priorities and aliases
     # For priorities, we need as many measurement outcomes as requested by qubit labels
@@ -469,6 +481,7 @@ def build_repeat_until_success_instruction(
         applied_frame = instruction.apply(**kwargs)
 
         # Run success function to see if we are terminated
+        # TODO: Use PauliFrame here to get inferred measurement outcomes
         try:
             success = success_fn(applied_frame["measurement_outcomes"])
         except KeyError:

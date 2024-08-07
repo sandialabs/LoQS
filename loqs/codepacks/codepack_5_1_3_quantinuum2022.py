@@ -30,6 +30,7 @@ from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
+from loqs.core.recordables.patchdict import PatchDict
 
 
 def create_qec_code(
@@ -50,6 +51,7 @@ def create_qec_code(
 
     # Template qubits for defining one patch
     qubits = ["A0", "A1"] + [f"D{i}" for i in range(5)]
+    data_qubits = qubits[2:]
 
     instructions: dict[str, Instruction] = {}
 
@@ -256,9 +258,22 @@ def create_qec_code(
     # E.g. all 0s is 0 for ZIZIZ, but so is one 0 and two 1s because the phase on the ones cancels
     # We can define a new operation here which post processes the measurement outcomes of Raw Logical * Measure
     def nonft_logical_meas_apply_fn(
+        patch_label: str,
+        patches: PatchDict,
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
-        logical_value = sum([v[0] for v in measurement_outcomes.values()]) % 2
+        # Get pauli frame
+        pauli_frame = patches[patch_label].pauli_frame
+
+        inferred_outcomes = []
+        for qubit, outcome in measurement_outcomes.items():
+            # We need to flip outcome if we observed an X error
+            inferred_outcome = (
+                outcome[0] + pauli_frame.get_bit("X", qubit)
+            ) % 2
+            inferred_outcomes.append(inferred_outcome)
+
+        logical_value = sum(inferred_outcomes) % 2
         return Frame({"logical_measurement": logical_value})
 
     nonft_logical_meas = Instruction(
@@ -271,7 +286,7 @@ def create_qec_code(
     instructions["Non-FT Logical Z Measure"] = (
         builders.build_composite_instruction(
             [prime_basis_Z_meas, nonft_logical_meas],
-            [],
+            ["patch_label"],
             name="Non-FT logical Z measurement (via prime basis measurement)",
             fault_tolerant=False,
         )
@@ -280,7 +295,7 @@ def create_qec_code(
     instructions["Non-FT Logical X Measure"] = (
         builders.build_composite_instruction(
             [prime_basis_X_meas, nonft_logical_meas],
-            [],
+            ["patch_label"],
             name="Non-FT logical X measurement (via prime basis measurement)",
             fault_tolerant=False,
         )
@@ -326,7 +341,7 @@ def create_qec_code(
     ## QEC
     _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend)
 
-    code = QECCode(instructions, qubits, "Perfect [[5,1,3]] code")
+    code = QECCode(instructions, qubits, data_qubits, "Perfect [[5,1,3]] code")
     return code
 
 
@@ -678,6 +693,7 @@ def _create_adaptive_measure_instruction(
     )
 
     ## TERMINATION
+    # TODO: Use Pauli frame to infer correct measurements
     def term_apply_fn(
         measurement_outcomes: MeasurementOutcomes, meas_qubit: str
     ) -> Frame:

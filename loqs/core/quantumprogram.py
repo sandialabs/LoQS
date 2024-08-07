@@ -21,9 +21,8 @@ from loqs.core.instructions.instructionlabel import (
 from loqs.core.instructions.instructionstack import (
     InstructionStackCastableTypes,
 )
-from loqs.core.qeccode import QECCode
+from loqs.core.qeccode import QECCode, PauliFrame
 from loqs.core.recordables import PatchDict
-from loqs.core.recordables.stabilizerframe import StabilizerFrame
 
 
 class QuantumProgram:
@@ -143,17 +142,6 @@ class QuantumProgram:
                 )
                 self.global_instructions["Remove Patch"] = builder
 
-        # Add global stabilizer frame initialization
-        builder = builders.build_object_builder_instruction(
-            "stabilizer_frame",
-            StabilizerFrame,
-            name="StabilizerFrame builder",
-        )
-        # Set defaults
-        builder.data["x_bits"] = None
-        builder.data["z_bits"] = None
-        self.global_instructions["Init StabilizerFrame"] = builder
-
         self.name = name
         self.shot_histories = []
 
@@ -219,7 +207,7 @@ class QuantumProgram:
             label_kwargs = inst_label.inst_kwargs
 
             try:
-                last_frame = history[-1]
+                last_frame: Frame = history[-1]
             except IndexError:
                 last_frame = Frame()
             inst = self._resolve_instruction(inst_label, last_frame)
