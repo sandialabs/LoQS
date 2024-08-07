@@ -79,32 +79,6 @@ def create_qec_code(
         )
     )
 
-    # Non-FT |0> state prep
-    # Fig 3a of arxiv:1509.01239
-    # TODO Figure this out in Yoder convention
-    nonft_zero_state_prep_circ = circuit_backend(
-        [
-            [
-                ("Gh", "D0"),
-                ("Gh", "D1"),
-                ("Gh", "D2"),
-                ("Gh", "D3"),
-            ],
-            [("Gcphase", "D0", "D1"), ("Gcphase", "D2", "D3")],
-            [("Gcphase", "D1", "D2"), ("Gcphase", "D3", "D4")],
-            [("Gcphase", "D0", "D4")],
-        ],
-        qubit_labels=qubits,
-    )
-    instructions["Non-FT Zero Prep"] = (
-        builders.build_physical_circuit_instruction(
-            nonft_zero_state_prep_circ,
-            include_outcomes=False,
-            name="Non-FT zero state prep",
-            fault_tolerant=False,
-        )
-    )
-
     # Try-until-success FT |-> state prep
     # First green box of Fig 3 of arxiv:2208.01863
     ft_state_prep_checks_circ = circuit_backend(
@@ -349,7 +323,8 @@ def create_qec_code(
     # Adds the instructions in-place
     _create_adaptive_measure_instruction(instructions, qubits, circuit_backend)
 
-    # TODO: QEC instruction
+    ## QEC
+    _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend)
 
     code = QECCode(instructions, qubits, "Perfect [[5,1,3]] code")
     return code
@@ -726,4 +701,147 @@ def _create_adaptive_measure_instruction(
         term_map_qubits_fn,
         name="Termination for adaptive logical measurement",
         fault_tolerant=True,
+    )
+
+
+def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
+    # These circuits are not explicitly stated in arxiv:2208.01863
+    # However, they can be inferred from the Hadamard-test-like circuits of Fig 12
+    # and the stabilizer definitions from Eqns B4-B7
+
+    # XZZXI check
+    # This actually matches Fig 2b of arXiv:1705.02329 as well
+    XZZXI_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D0")],
+            [("Gcphase", "A0", "D1")],
+            [("Gcphase", "A0", "D2")],
+            [("Gcnot", "A0", "D3")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged XZZXI Check"] = (
+        builders.build_physical_circuit_instruction(
+            XZZXI_circ,
+            include_outcomes=True,
+            name="Unflagged XZZXI stabilizer check",
+            reset_mcms=True,
+            fault_tolerant=False,
+        )
+    )
+
+    # IXZZX check
+    IXZZX_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D1")],
+            [("Gcphase", "A0", "D2")],
+            [("Gcphase", "A0", "D3")],
+            [("Gcnot", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged IXZZX Check"] = (
+        builders.build_physical_circuit_instruction(
+            IXZZX_circ,
+            include_outcomes=True,
+            name="Unflagged IXZZX stabilizer check",
+            reset_mcms=True,
+            fault_tolerant=False,
+        )
+    )
+
+    # XIXZZ check
+    XIXZZ_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D0")],
+            [("Gcnot", "A0", "D2")],
+            [("Gcphase", "A0", "D3")],
+            [("Gcphase", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged XIXZZ Check"] = (
+        builders.build_physical_circuit_instruction(
+            XIXZZ_circ,
+            include_outcomes=True,
+            name="Unflagged XIXZZ stabilizer check",
+            reset_mcms=True,
+            fault_tolerant=False,
+        )
+    )
+
+    # ZXIXZ check
+    ZXIXZ_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcphase", "A0", "D0")],
+            [("Gcnot", "A0", "D1")],
+            [("Gcnot", "A0", "D3")],
+            [("Gcphase", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged ZXIXZ Check"] = (
+        builders.build_physical_circuit_instruction(
+            ZXIXZ_circ,
+            include_outcomes=True,
+            name="Unflagged ZXIXZ stabilizer check",
+            reset_mcms=True,
+            fault_tolerant=False,
+        )
+    )
+
+    # Unflagged decoder
+    # This is not written out in the references but can be quickly derived from the stabilizers
+    # XZZXI  IXZZX  XIXZZ  ZXIXZ: Data Error
+    unflagged_lookup_table = {
+        "0000": "IIIII",
+        "0001": "XIIII",
+        "1011": "YIIII",
+        "1010": "ZIIII",
+        "1000": "IXIII",
+        "1101": "IYIII",
+        "0101": "IZIII",
+        "1100": "IIXII",
+        "1110": "IIYII",
+        "0010": "IIZII",
+        "0110": "IIIXI",
+        "1111": "IIIYI",
+        "1001": "IIIZI",
+        "0011": "IIIIX",
+        "0111": "IIIIY",
+        "0100": "IIIIZ",
+    }
+    # Take the first measurement from A0 qubit for last 4 instructions as syndrome
+    qubit_labels = ["A0"] * 4
+    instructions["Unflagged Decoder"] = (
+        builders.build_lookup_decoder_instruction(
+            lookup_table=unflagged_lookup_table,
+            qubit_labels=qubit_labels,
+            name="Unflagged decoder",
+        )
+    )
+
+    # QEC is now just the 4 unflagged checks + decoding
+    instructions["Unflagged QEC"] = builders.build_composite_instruction(
+        [
+            instructions["Unflagged XZZXI Check"],
+            instructions["Unflagged IXZZX Check"],
+            instructions["Unflagged XIXZZ Check"],
+            instructions["Unflagged ZXIXZ Check"],
+            instructions["Unflagged Decoder"],
+        ],
+        param_priorities=["patch_label"],
+        name="Unflagged QEC",
     )

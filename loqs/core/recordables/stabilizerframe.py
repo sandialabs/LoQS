@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Sequence, TypeAlias
 
-from loqs.internal import Bit, Castable
+from loqs.internal import Castable
 
 
 StabilizerFrameCastableTypes: TypeAlias = "StabilizerFrame | Sequence[str]"
@@ -20,17 +20,17 @@ class StabilizerFrame(Castable):
     num_qubits: int
     """TODO"""
 
-    x_bits: list[Bit]
+    x_bits: list[int]
     """TODO"""
 
-    z_bits: list[Bit]
+    z_bits: list[int]
     """TODO"""
 
     def __init__(
         self,
         frame_or_labels: StabilizerFrameCastableTypes,
-        x_bits: Sequence[Bit] | None = None,
-        z_bits: Sequence[Bit] | None = None,
+        x_bits: Sequence[int] | None = None,
+        z_bits: Sequence[int] | None = None,
     ) -> None:
         """TODO"""
         if isinstance(frame_or_labels, StabilizerFrame):
@@ -52,25 +52,22 @@ class StabilizerFrame(Castable):
             assert (
                 len(x_bits) == self.num_qubits
             ), "Must provide complete stabilizer frame"
+            assert all(
+                [x in [0, 1] for x in x_bits]
+            ), "Bitvalues must be 0 or 1"
             self.x_bits = list(x_bits)
 
         if z_bits is not None:
             assert (
                 len(z_bits) == self.num_qubits
             ), "Must provide complete stabilizer frame"
+            assert all(
+                [z in [0, 1] for z in z_bits]
+            ), "Bitvalues must be 0 or 1"
             self.z_bits = list(z_bits)
 
     def copy(self) -> StabilizerFrame:
         return StabilizerFrame(self.qubit_labels, self.x_bits, self.z_bits)
-
-    def flip_bit(self, type: str, qubit: str) -> None:
-        type = type.upper()
-        assert type in ("X", "Z"), "Can only get X or Z type bits"
-
-        bits = self.x_bits if type == "X" else self.z_bits
-
-        new_val = (bits[self.qubit_labels.index(qubit)] + 1) % 2
-        bits[self.qubit_labels.index(qubit)] = new_val
 
     def get_bit(self, type: str, qubit: str) -> int:
         type = type.upper()
@@ -80,10 +77,24 @@ class StabilizerFrame(Castable):
 
         return bits[self.qubit_labels.index(qubit)]
 
-    def set_bit(self, type: str, qubit: str, bit: Bit) -> None:
-        type = type.upper()
-        assert type in ("X", "Z"), "Can only get X or Z type bits"
+    def update_from_pauli_str(self, pstr: str) -> StabilizerFrame:
+        assert len(pstr) == self.num_qubits
 
-        bits = self.x_bits if type == "X" else self.z_bits
+        new_frame = self.copy()
+        for i, P in enumerate(pstr):
+            if P == "X":
+                new_val = (new_frame.x_bits[i] + 1) % 2
+                new_frame.x_bits[i] = new_val
+            elif P == "Y":
+                new_val = (new_frame.x_bits[i] + 1) % 2
+                new_frame.x_bits[i] = new_val
 
-        bits[self.qubit_labels.index(qubit)] = bit
+                new_val = (new_frame.z_bits[i] + 1) % 2
+                new_frame.z_bits[i] = new_val
+            elif P == "Z":
+                new_val = (new_frame.z_bits[i] + 1) % 2
+                new_frame.z_bits[i] = new_val
+
+            # Otherwise we must be I, no action needed
+
+        return new_frame

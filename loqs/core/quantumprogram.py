@@ -23,6 +23,7 @@ from loqs.core.instructions.instructionstack import (
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
+from loqs.core.recordables.stabilizerframe import StabilizerFrame
 
 
 class QuantumProgram:
@@ -141,6 +142,17 @@ class QuantumProgram:
                     name="Global patch remover"
                 )
                 self.global_instructions["Remove Patch"] = builder
+
+        # Add global stabilizer frame initialization
+        builder = builders.build_object_builder_instruction(
+            "stabilizer_frame",
+            StabilizerFrame,
+            name="StabilizerFrame builder",
+        )
+        # Set defaults
+        builder.data["x_bits"] = None
+        builder.data["z_bits"] = None
+        self.global_instructions["Init StabilizerFrame"] = builder
 
         self.name = name
         self.shot_histories = []

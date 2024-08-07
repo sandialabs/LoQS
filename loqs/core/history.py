@@ -31,7 +31,11 @@ class History(Sequence[Frame], Castable):
         self,
         history: HistoryCastableTypes = None,
         expiring_keys: Sequence[str] | None = ("state",),
-        propagating_keys: Sequence[str] | None = ("state", "patches"),
+        propagating_keys: Sequence[str] | None = (
+            "state",
+            "patches",
+            "stabilizer_frame",
+        ),
     ) -> None:
         """TODO"""
         self._history = []

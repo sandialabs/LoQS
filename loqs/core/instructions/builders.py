@@ -17,6 +17,7 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.stabilizerframe import StabilizerFrame
 
 
 def build_composite_instruction(
@@ -98,9 +99,87 @@ def build_composite_instruction(
     return composite_instruction
 
 
-def build_lookup_decoder_instruction() -> None:
+def build_lookup_decoder_instruction(
+    lookup_table: Mapping[str, str],
+    qubit_labels: Sequence[tuple[str, int] | str],
+    name: str = "(Unnamed lookup decoder)",
+    parent: object | None = None,
+    fault_tolerant: bool = True,
+) -> Instruction:
     """TODO"""
-    raise NotImplementedError("TODO")
+    # Sanity check: Have specified a syndrome qubit label for each element of lookup_table keys
+    assert all(
+        [len(k) == len(qubit_labels) for k in lookup_table]
+    ), "Lookup table syndromes must match number of syndrome qubit labels"
+
+    # Standard apply_fn construction
+    def apply_fn(
+        lookup_table: dict[str, str],
+        qubit_labels: list[tuple[str, int]],
+        syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
+        stabilizer_frame: StabilizerFrame,
+    ) -> Frame:
+        if isinstance(syndrome_outcomes, MeasurementOutcomes):
+            syndrome_outcomes = [syndrome_outcomes]
+
+        # Extract our syndrome measurements based on the qubit labels
+        syndrome_bits = []
+        for (qlabel, idx), outcome in zip(qubit_labels, syndrome_outcomes):
+            syndrome_bits.append(outcome[qlabel][idx])
+
+        # Look up data error
+        data_error_str = lookup_table["".join(syndrome_bits)]
+
+        new_stab_frame = stabilizer_frame.update_from_pauli_str(data_error_str)
+
+        return Frame({"stabilizer_frame": new_stab_frame})
+
+    # We store lookup table and qubit labels
+    # Ensure that both are in the expected format (including adding default 0 index
+    # to qubit_labels if only strings were passed in)
+    idxed_qubit_labels = [
+        (ql, 0) if isinstance(ql, str) else ql for ql in qubit_labels
+    ]
+    data = {
+        "lookup_table": dict(lookup_table),
+        "qubit_labels": idxed_qubit_labels,
+    }
+
+    # We need to be able to map the qubit_labels
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str],
+        qubit_labels: list[tuple[str, int]],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["qubit_labels"] = [
+            (qubit_mapping[el[0]], el[1]) for el in qubit_labels
+        ]
+        return new_kwargs
+
+    # Get our expected output frame keys for use in dry run
+    frame_keys = ["stabilizer_frame"]
+
+    # We also need param priorities and aliases
+    # For priorities, we need as many measurement outcomes as requested by qubit labels
+    param_priorities = {
+        "syndrome_outcomes": [f"history[-{len(qubit_labels)}:]"]
+    }
+
+    # For aliases, we just have syndrome -> measurement
+    param_aliases = {"syndrome_outcomes": "measurement_outcomes"}
+
+    return Instruction(
+        apply_fn=apply_fn,
+        dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
+        data=data,
+        map_qubits_fn=map_qubits_fn,
+        param_priorities=param_priorities,
+        param_aliases=param_aliases,
+        name=name,
+        parent=parent,
+        fault_tolerant=fault_tolerant,
+    )
 
 
 def build_object_builder_instruction(
