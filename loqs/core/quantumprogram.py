@@ -152,6 +152,7 @@ class QuantumProgram:
         instruction_stack: InstructionStackCastableTypes = None,
         default_noise_model: BaseNoiseModel | None = None,
         default_base_seed: int | None = None,
+        global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
         patch_types: Mapping[str, QECCode] | None = None,
         name: str | None = None,
@@ -164,6 +165,10 @@ class QuantumProgram:
             default_base_seed = other.default_base_seed
         if name is None:
             name = other.name
+        combined_global_instructions = other.global_instructions.copy()
+        if global_instructions is not None:
+            for k, v in global_instructions.items():
+                combined_global_instructions[k] = v
         if state_type is None:
             state_type = other.state_type
         if patch_types is None:
@@ -175,7 +180,7 @@ class QuantumProgram:
             default_noise_model=default_noise_model,
             default_base_seed=default_base_seed,
             expiring_state="state" in other.initial_history.expiring_keys,
-            global_instructions=other.global_instructions,
+            global_instructions=combined_global_instructions,
             state_type=state_type,
             patch_types=patch_types,
             override_global_instructions=True,
@@ -350,7 +355,10 @@ class QuantumProgram:
                 if idx_str == "all":
                     idxs = "all"
                 elif ":" in idx_str:
-                    slice_args = [int(el) for el in idx_str.split(":")]
+                    slice_args = [
+                        int(el) if el != "" else None
+                        for el in idx_str.split(":")
+                    ]
                     idxs = slice(*slice_args)
                 elif "," in idx_str:
                     idxs = [int(el) for el in idx_str.split(",")]

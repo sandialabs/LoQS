@@ -168,7 +168,6 @@ instructions["Adaptive Measure Part I"] = Instruction(
     partI_data,
     map_qubits_fn,
     name="Part I of adaptive logical measurement",
-    fault_tolerant=True,
 )
 ```
 
@@ -271,7 +270,6 @@ instructions["Adaptive Measure Part II"] = Instruction(
     map_qubits_fn,
     param_aliases=paramII_aliases,
     name="Part II of adaptive logical measurement",
-    fault_tolerant=True,
 )
 ```
 
@@ -377,7 +375,6 @@ instructions["Adaptive Measure Part III"] = Instruction(
     param_priorities=paramIII_priorities,
     param_aliases=paramIII_aliases,
     name="Part III of adaptive logical measurement",
-    fault_tolerant=True,
 )
 ```
 
@@ -416,7 +413,6 @@ instructions["Non-FT Minus Unprep"] = (
         state_unprep_circ,
         name="Non-FT minus unprep circuit",
         reset_mcms=False,
-        fault_tolerant=False,
     )
 )
 ```
@@ -457,7 +453,6 @@ instructions["Adaptive Measure Termination"] = Instruction(
     term_data,
     term_map_qubits_fn,
     name="Termination for adaptive logical measurement",
-    fault_tolerant=True,
 )
 ```
 

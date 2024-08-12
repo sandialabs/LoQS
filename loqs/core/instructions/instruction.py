@@ -58,10 +58,6 @@ class Instruction:
         param_error_behavior: Literal["continue", "warn", "raise"] = "warn",
         param_aliases: Mapping[str, str] | None = None,
         name: str = "(Unnamed instruction)",
-        parent: (
-            object | None
-        ) = None,  # TODO: Let be Instruction or InstructionStack
-        fault_tolerant: bool | None = None,
     ) -> None:
         """TODO
 
@@ -141,8 +137,6 @@ class Instruction:
         }
 
         self.name = name
-        self.parent = parent
-        self.fault_tolerant = fault_tolerant
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
@@ -156,7 +150,6 @@ class Instruction:
             s += textwrap.indent(f"{k}: {v}", "    ")
             if not s.endswith("\n"):
                 s += "\n"
-        s += f"  Fault-tolerant: {self.fault_tolerant}\n"
         s += "  Non-default parameter priorities:"
         have_non_default = False
         for k, v in self.param_priorities.items():
@@ -222,8 +215,6 @@ class Instruction:
             param_error_behavior=self.param_error_behavior,  # type: ignore
             param_aliases=self._param_aliases,
             name=self.name,
-            parent=self.parent,
-            fault_tolerant=self.fault_tolerant,
         )
 
     def map_qubits(

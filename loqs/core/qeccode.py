@@ -152,6 +152,12 @@ class PauliFrame(Castable):
             ), "Bitvalues must be 0 or 1"
             self.z_bits = list(z_bits)
 
+    def __str__(self) -> str:
+        s = f"PauliFrame on [{self.qubit_labels[0]},...,{self.qubit_labels[-1]}] qubits:\n"
+        s += f"  X bits: {self.x_bits}"
+        s += f"  Z bits: {self.z_bits}"
+        return s
+
     def copy(self) -> PauliFrame:
         return PauliFrame(self.qubit_labels, self.x_bits, self.z_bits)
 

@@ -77,7 +77,6 @@ def create_qec_code(
             nonft_state_prep_circ,
             include_outcomes=False,
             name="Non-FT minus state prep",
-            fault_tolerant=False,
         )
     )
 
@@ -120,13 +119,10 @@ def create_qec_code(
         include_outcomes=True,
         reset_mcms=True,
         name="Non-FT Minus Prep + Checks",
-        fault_tolerant=False,
     )
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
-            ft_state_prep,
-            name="Repeat-until-success FT Minus Prep",
-            fault_tolerant=True,
+            ft_state_prep, name="Repeat-until-success FT Minus Prep"
         )
     )
 
@@ -140,7 +136,6 @@ def create_qec_code(
         logical_X_circ,
         include_outcomes=False,
         name="Logical X",
-        fault_tolerant=True,
     )
 
     # Logical Z (transversal)
@@ -153,7 +148,6 @@ def create_qec_code(
         logical_Z_circ,
         include_outcomes=False,
         name="Logical Z",
-        fault_tolerant=True,
     )
 
     # Logical K (transversal)
@@ -165,7 +159,6 @@ def create_qec_code(
         logical_K_circ,
         include_outcomes=False,
         name="Logical K",
-        fault_tolerant=True,
     )
 
     # Logical H (transversal + permute)
@@ -177,7 +170,6 @@ def create_qec_code(
         logical_H_circ,
         include_outcomes=False,
         name="Logical H circuit",
-        fault_tolerant=True,
     )
     logical_H_permutation = builders.build_patch_permute_instruction(
         {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
@@ -241,7 +233,6 @@ def create_qec_code(
         include_outcomes=True,
         reset_mcms=False,
         name="Raw logical Z-basis measurement",
-        fault_tolerant=False,
     )
 
     prime_basis_X_meas = builders.build_physical_circuit_instruction(
@@ -249,7 +240,6 @@ def create_qec_code(
         include_outcomes=True,
         reset_mcms=False,
         name="Raw logical X-basis measurement",
-        fault_tolerant=False,
     )
 
     # We can also compute the logical measurement based on the raw logical output
@@ -280,7 +270,6 @@ def create_qec_code(
         nonft_logical_meas_apply_fn,
         ["logical_measurement"],
         name="Non-FT Logical Measurement",
-        fault_tolerant=False,
     )
 
     instructions["Non-FT Logical Z Measure"] = (
@@ -288,7 +277,6 @@ def create_qec_code(
             [prime_basis_Z_meas, nonft_logical_meas],
             ["patch_label"],
             name="Non-FT logical Z measurement (via prime basis measurement)",
-            fault_tolerant=False,
         )
     )
 
@@ -297,7 +285,6 @@ def create_qec_code(
             [prime_basis_X_meas, nonft_logical_meas],
             ["patch_label"],
             name="Non-FT logical X measurement (via prime basis measurement)",
-            fault_tolerant=False,
         )
     )
 
@@ -330,7 +317,6 @@ def create_qec_code(
             state_decoder_circ,
             name="Non-FT state decoder circuit",
             reset_mcms=False,
-            fault_tolerant=False,
         )
     )
 
@@ -511,7 +497,6 @@ def _create_adaptive_measure_instruction(
         partI_data,
         map_qubits_fn,
         name="Part I of adaptive logical measurement",
-        fault_tolerant=True,
     )
 
     ## PART II
@@ -596,7 +581,6 @@ def _create_adaptive_measure_instruction(
         map_qubits_fn,
         param_aliases=paramII_aliases,
         name="Part II of adaptive logical measurement",
-        fault_tolerant=True,
     )
 
     ## PART III
@@ -689,7 +673,6 @@ def _create_adaptive_measure_instruction(
         param_priorities=paramIII_priorities,
         param_aliases=paramIII_aliases,
         name="Part III of adaptive logical measurement",
-        fault_tolerant=True,
     )
 
     ## TERMINATION
@@ -716,7 +699,6 @@ def _create_adaptive_measure_instruction(
         term_data,
         term_map_qubits_fn,
         name="Termination for adaptive logical measurement",
-        fault_tolerant=True,
     )
 
 
@@ -745,7 +727,6 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
             include_outcomes=True,
             name="Unflagged XZZXI stabilizer check",
             reset_mcms=True,
-            fault_tolerant=False,
         )
     )
 
@@ -768,7 +749,6 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
             include_outcomes=True,
             name="Unflagged IXZZX stabilizer check",
             reset_mcms=True,
-            fault_tolerant=False,
         )
     )
 
@@ -791,7 +771,6 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
             include_outcomes=True,
             name="Unflagged XIXZZ stabilizer check",
             reset_mcms=True,
-            fault_tolerant=False,
         )
     )
 
@@ -814,7 +793,6 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
             include_outcomes=True,
             name="Unflagged ZXIXZ stabilizer check",
             reset_mcms=True,
-            fault_tolerant=False,
         )
     )
 
