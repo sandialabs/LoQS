@@ -18,7 +18,7 @@ See the [API Reference](/devguide/_autosummary/loqs.core.recordables.measurement
 (recordables-patchdict)=
 ## PatchDict
 
-The `PatchDict` objeect is a dict with patch label keys and `QECCodePatch` objects.
+The `PatchDict` object is a dict with patch label keys and `QECCodePatch` objects.
 
 This object serves as the main way to store information about the code patches (i.e. which QEC code is being run on which physical qubits), so is the main target for any operations that affect patch metadata (e.g. permutations, split, merge).
 Additionally, the default `PatchDict` is heavily used by the `QuantumProgram` during `Instruction` resolution;
