@@ -1,6 +1,8 @@
 """:class:`MeasurementOutcomes` definition.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator, Mapping, MutableMapping
 from typing import TypeAlias
 
@@ -58,3 +60,6 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable):
         for patch in self.patches.values():
             qubits.extend(patch.qubits)
         return qubits
+
+    def copy(self) -> PatchDict:
+        return PatchDict(self.patches.copy())

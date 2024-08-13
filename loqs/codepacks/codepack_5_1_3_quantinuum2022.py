@@ -30,6 +30,7 @@ from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
+from loqs.core.recordables.patchdict import PatchDict
 
 
 def create_qec_code(
@@ -50,6 +51,7 @@ def create_qec_code(
 
     # Template qubits for defining one patch
     qubits = ["A0", "A1"] + [f"D{i}" for i in range(5)]
+    data_qubits = qubits[2:]
 
     instructions: dict[str, Instruction] = {}
 
@@ -75,33 +77,6 @@ def create_qec_code(
             nonft_state_prep_circ,
             include_outcomes=False,
             name="Non-FT minus state prep",
-            fault_tolerant=False,
-        )
-    )
-
-    # Non-FT |0> state prep
-    # Fig 3a of arxiv:1509.01239
-    # TODO Figure this out in Yoder convention
-    nonft_zero_state_prep_circ = circuit_backend(
-        [
-            [
-                ("Gh", "D0"),
-                ("Gh", "D1"),
-                ("Gh", "D2"),
-                ("Gh", "D3"),
-            ],
-            [("Gcphase", "D0", "D1"), ("Gcphase", "D2", "D3")],
-            [("Gcphase", "D1", "D2"), ("Gcphase", "D3", "D4")],
-            [("Gcphase", "D0", "D4")],
-        ],
-        qubit_labels=qubits,
-    )
-    instructions["Non-FT Zero Prep"] = (
-        builders.build_physical_circuit_instruction(
-            nonft_zero_state_prep_circ,
-            include_outcomes=False,
-            name="Non-FT zero state prep",
-            fault_tolerant=False,
         )
     )
 
@@ -144,13 +119,10 @@ def create_qec_code(
         include_outcomes=True,
         reset_mcms=True,
         name="Non-FT Minus Prep + Checks",
-        fault_tolerant=False,
     )
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
-            ft_state_prep,
-            name="Repeat-until-success FT Minus Prep",
-            fault_tolerant=True,
+            ft_state_prep, name="Repeat-until-success FT Minus Prep"
         )
     )
 
@@ -164,7 +136,6 @@ def create_qec_code(
         logical_X_circ,
         include_outcomes=False,
         name="Logical X",
-        fault_tolerant=True,
     )
 
     # Logical Z (transversal)
@@ -177,7 +148,6 @@ def create_qec_code(
         logical_Z_circ,
         include_outcomes=False,
         name="Logical Z",
-        fault_tolerant=True,
     )
 
     # Logical K (transversal)
@@ -189,7 +159,6 @@ def create_qec_code(
         logical_K_circ,
         include_outcomes=False,
         name="Logical K",
-        fault_tolerant=True,
     )
 
     # Logical H (transversal + permute)
@@ -201,7 +170,6 @@ def create_qec_code(
         logical_H_circ,
         include_outcomes=False,
         name="Logical H circuit",
-        fault_tolerant=True,
     )
     logical_H_permutation = builders.build_patch_permute_instruction(
         {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
@@ -265,7 +233,6 @@ def create_qec_code(
         include_outcomes=True,
         reset_mcms=False,
         name="Raw logical Z-basis measurement",
-        fault_tolerant=False,
     )
 
     prime_basis_X_meas = builders.build_physical_circuit_instruction(
@@ -273,7 +240,6 @@ def create_qec_code(
         include_outcomes=True,
         reset_mcms=False,
         name="Raw logical X-basis measurement",
-        fault_tolerant=False,
     )
 
     # We can also compute the logical measurement based on the raw logical output
@@ -282,33 +248,43 @@ def create_qec_code(
     # E.g. all 0s is 0 for ZIZIZ, but so is one 0 and two 1s because the phase on the ones cancels
     # We can define a new operation here which post processes the measurement outcomes of Raw Logical * Measure
     def nonft_logical_meas_apply_fn(
+        patch_label: str,
+        patches: PatchDict,
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
-        logical_value = sum([v[0] for v in measurement_outcomes.values()]) % 2
+        # Get pauli frame
+        pauli_frame = patches[patch_label].pauli_frame
+
+        inferred_outcomes = []
+        for qubit, outcome in measurement_outcomes.items():
+            # We need to flip outcome if we observed an X error
+            inferred_outcome = (
+                outcome[0] + pauli_frame.get_bit("X", qubit)
+            ) % 2
+            inferred_outcomes.append(inferred_outcome)
+
+        logical_value = sum(inferred_outcomes) % 2
         return Frame({"logical_measurement": logical_value})
 
     nonft_logical_meas = Instruction(
         nonft_logical_meas_apply_fn,
         ["logical_measurement"],
         name="Non-FT Logical Measurement",
-        fault_tolerant=False,
     )
 
     instructions["Non-FT Logical Z Measure"] = (
         builders.build_composite_instruction(
             [prime_basis_Z_meas, nonft_logical_meas],
-            [],
+            ["patch_label"],
             name="Non-FT logical Z measurement (via prime basis measurement)",
-            fault_tolerant=False,
         )
     )
 
     instructions["Non-FT Logical X Measure"] = (
         builders.build_composite_instruction(
             [prime_basis_X_meas, nonft_logical_meas],
-            [],
+            ["patch_label"],
             name="Non-FT logical X measurement (via prime basis measurement)",
-            fault_tolerant=False,
         )
     )
 
@@ -341,7 +317,6 @@ def create_qec_code(
             state_decoder_circ,
             name="Non-FT state decoder circuit",
             reset_mcms=False,
-            fault_tolerant=False,
         )
     )
 
@@ -349,9 +324,10 @@ def create_qec_code(
     # Adds the instructions in-place
     _create_adaptive_measure_instruction(instructions, qubits, circuit_backend)
 
-    # TODO: QEC instruction
+    ## QEC
+    _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend)
 
-    code = QECCode(instructions, qubits, "Perfect [[5,1,3]] code")
+    code = QECCode(instructions, qubits, data_qubits, "Perfect [[5,1,3]] code")
     return code
 
 
@@ -521,7 +497,6 @@ def _create_adaptive_measure_instruction(
         partI_data,
         map_qubits_fn,
         name="Part I of adaptive logical measurement",
-        fault_tolerant=True,
     )
 
     ## PART II
@@ -606,7 +581,6 @@ def _create_adaptive_measure_instruction(
         map_qubits_fn,
         param_aliases=paramII_aliases,
         name="Part II of adaptive logical measurement",
-        fault_tolerant=True,
     )
 
     ## PART III
@@ -699,10 +673,10 @@ def _create_adaptive_measure_instruction(
         param_priorities=paramIII_priorities,
         param_aliases=paramIII_aliases,
         name="Part III of adaptive logical measurement",
-        fault_tolerant=True,
     )
 
     ## TERMINATION
+    # TODO: Use Pauli frame to infer correct measurements
     def term_apply_fn(
         measurement_outcomes: MeasurementOutcomes, meas_qubit: str
     ) -> Frame:
@@ -725,5 +699,143 @@ def _create_adaptive_measure_instruction(
         term_data,
         term_map_qubits_fn,
         name="Termination for adaptive logical measurement",
-        fault_tolerant=True,
+    )
+
+
+def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
+    # These circuits are not explicitly stated in arxiv:2208.01863
+    # However, they can be inferred from the Hadamard-test-like circuits of Fig 12
+    # and the stabilizer definitions from Eqns B4-B7
+
+    # XZZXI check
+    # This actually matches Fig 2b of arXiv:1705.02329 as well
+    XZZXI_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D0")],
+            [("Gcphase", "A0", "D1")],
+            [("Gcphase", "A0", "D2")],
+            [("Gcnot", "A0", "D3")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged XZZXI Check"] = (
+        builders.build_physical_circuit_instruction(
+            XZZXI_circ,
+            include_outcomes=True,
+            name="Unflagged XZZXI stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # IXZZX check
+    IXZZX_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D1")],
+            [("Gcphase", "A0", "D2")],
+            [("Gcphase", "A0", "D3")],
+            [("Gcnot", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged IXZZX Check"] = (
+        builders.build_physical_circuit_instruction(
+            IXZZX_circ,
+            include_outcomes=True,
+            name="Unflagged IXZZX stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # XIXZZ check
+    XIXZZ_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D0")],
+            [("Gcnot", "A0", "D2")],
+            [("Gcphase", "A0", "D3")],
+            [("Gcphase", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged XIXZZ Check"] = (
+        builders.build_physical_circuit_instruction(
+            XIXZZ_circ,
+            include_outcomes=True,
+            name="Unflagged XIXZZ stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # ZXIXZ check
+    ZXIXZ_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcphase", "A0", "D0")],
+            [("Gcnot", "A0", "D1")],
+            [("Gcnot", "A0", "D3")],
+            [("Gcphase", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Unflagged ZXIXZ Check"] = (
+        builders.build_physical_circuit_instruction(
+            ZXIXZ_circ,
+            include_outcomes=True,
+            name="Unflagged ZXIXZ stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # Unflagged decoder
+    # This is not written out in the references but can be quickly derived from the stabilizers
+    # XZZXI  IXZZX  XIXZZ  ZXIXZ: Data Error
+    unflagged_lookup_table = {
+        "0000": "IIIII",
+        "0001": "XIIII",
+        "1011": "YIIII",
+        "1010": "ZIIII",
+        "1000": "IXIII",
+        "1101": "IYIII",
+        "0101": "IZIII",
+        "1100": "IIXII",
+        "1110": "IIYII",
+        "0010": "IIZII",
+        "0110": "IIIXI",
+        "1111": "IIIYI",
+        "1001": "IIIZI",
+        "0011": "IIIIX",
+        "0111": "IIIIY",
+        "0100": "IIIIZ",
+    }
+    # Take the first measurement from A0 qubit for last 4 instructions as syndrome
+    qubit_labels = ["A0"] * 4
+    instructions["Unflagged Decoder"] = (
+        builders.build_lookup_decoder_instruction(
+            lookup_table=unflagged_lookup_table,
+            qubit_labels=qubit_labels,
+            name="Unflagged decoder",
+        )
+    )
+
+    # QEC is now just the 4 unflagged checks + decoding
+    instructions["Unflagged QEC"] = builders.build_composite_instruction(
+        [
+            instructions["Unflagged XZZXI Check"],
+            instructions["Unflagged IXZZX Check"],
+            instructions["Unflagged XIXZZ Check"],
+            instructions["Unflagged ZXIXZ Check"],
+            instructions["Unflagged Decoder"],
+        ],
+        param_priorities=["patch_label"],
+        name="Unflagged QEC",
     )

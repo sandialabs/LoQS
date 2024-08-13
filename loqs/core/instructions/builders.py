@@ -14,7 +14,7 @@ from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.qeccode import QECCode
+from loqs.core.qeccode import QECCode, QECCodePatch, PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 
@@ -23,8 +23,6 @@ def build_composite_instruction(
     instructions: Sequence[Instruction],
     param_priorities: Sequence[str] | Mapping[str, Sequence[str]],
     name: str = "(Unnamed composite instruction)",
-    parent: object | None = None,
-    fault_tolerant: bool = True,
 ) -> Instruction:
     """TODO"""
 
@@ -86,8 +84,6 @@ def build_composite_instruction(
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Suppress the warning for variadic kwargs
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
     # Set all instructions to have this composite as parent
@@ -98,17 +94,108 @@ def build_composite_instruction(
     return composite_instruction
 
 
-def build_lookup_decoder_instruction() -> None:
+def build_lookup_decoder_instruction(
+    lookup_table: Mapping[str, str],
+    qubit_labels: Sequence[tuple[str, int] | str],
+    name: str = "(Unnamed lookup decoder)",
+) -> Instruction:
     """TODO"""
-    raise NotImplementedError("TODO")
+    # Sanity check: Have specified a syndrome qubit label for each element of lookup_table keys
+    assert all(
+        [len(k) == len(qubit_labels) for k in lookup_table]
+    ), "Lookup table syndromes must match number of syndrome qubit labels"
+
+    # Standard apply_fn construction
+    def apply_fn(
+        patch_label: str,
+        lookup_table: dict[str, str],
+        qubit_labels: list[tuple[str, int]],
+        patches: PatchDict,
+        syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
+    ) -> Frame:
+        if isinstance(syndrome_outcomes, MeasurementOutcomes):
+            syndrome_outcomes = [syndrome_outcomes]
+
+        # Look up PauliFrame in patch
+        patch = patches[patch_label]
+
+        # Extract our syndrome measurements based on the qubit labels
+        syndrome = ""
+        for (qlabel, idx), outcome in zip(qubit_labels, syndrome_outcomes):
+            syndrome += str(outcome[qlabel][idx])
+
+        # Look up data error
+        data_error_str = lookup_table[syndrome]
+
+        # Update pauli frame
+        new_pauli_frame = patch.pauli_frame.update_from_pauli_str(
+            data_error_str
+        )
+
+        # Update patches
+        new_patches = patches.copy()
+        new_patches[patch_label] = QECCodePatch(
+            patch.code, patch.qubits, new_pauli_frame
+        )
+
+        return Frame(
+            {
+                "patches": new_patches,
+                "syndrome": syndrome,
+                "decoded_error": data_error_str,
+            }
+        )
+
+    # We store lookup table and qubit labels
+    # Ensure that both are in the expected format (including adding default 0 index
+    # to qubit_labels if only strings were passed in)
+    idxed_qubit_labels = [
+        (ql, 0) if isinstance(ql, str) else ql for ql in qubit_labels
+    ]
+    data = {
+        "lookup_table": dict(lookup_table),
+        "qubit_labels": idxed_qubit_labels,
+    }
+
+    # We need to be able to map the qubit_labels
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str],
+        qubit_labels: list[tuple[str, int]],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["qubit_labels"] = [
+            (qubit_mapping[el[0]], el[1]) for el in qubit_labels
+        ]
+        return new_kwargs
+
+    # Get our expected output frame keys for use in dry run
+    frame_keys = ["patches"]
+
+    # We also need param priorities and aliases
+    # For priorities, we need as many measurement outcomes as requested by qubit labels
+    param_priorities = {
+        "syndrome_outcomes": [f"history[-{len(qubit_labels)}:]"]
+    }
+
+    # For aliases, we just have syndrome -> measurement
+    param_aliases = {"syndrome_outcomes": "measurement_outcomes"}
+
+    return Instruction(
+        apply_fn=apply_fn,
+        dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
+        data=data,
+        map_qubits_fn=map_qubits_fn,
+        param_priorities=param_priorities,
+        param_aliases=param_aliases,
+        name=name,
+    )
 
 
 def build_object_builder_instruction(
     frame_key: str,
     obj_class: type,
     name: str = "(Unnamed object builder)",
-    parent: object | None = None,
-    fault_tolerant: bool = True,
 ) -> Instruction:
     # This is also an odd apply_fn because we do not know the args a priori
     # Here we define the generic apply_fn using variadic kwargs
@@ -141,16 +228,12 @@ def build_object_builder_instruction(
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Suppress variadic kwargs warning
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
 
 def build_patch_builder_instruction(
     qec_code: QECCode,
     name: str = "(Unnamed patch builder)",
-    parent: object | None = None,
-    fault_tolerant: bool = True,
 ) -> Instruction:
     # Standard apply_fn construction
     def apply_fn(
@@ -189,15 +272,11 @@ def build_patch_builder_instruction(
         data=data,
         param_priorities=param_priorities,
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
 
 def build_patch_remover_instruction(
     name: str = "(Unnamed patch builder)",
-    parent: object | None = None,
-    fault_tolerant: bool = True,
 ) -> Instruction:
     def apply_fn(
         patch_label: str,
@@ -214,16 +293,12 @@ def build_patch_remover_instruction(
     return Instruction(
         apply_fn=apply_fn,
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
 
 def build_patch_permute_instruction(
     mapping: Mapping[str, str],
     name: str = "(Unnamed patch permutation)",
-    parent: object | None = None,
-    fault_tolerant: bool = True,
 ) -> Instruction:
     """TODO"""
 
@@ -269,8 +344,6 @@ def build_patch_permute_instruction(
         data=data,
         map_qubits_fn=map_qubits_fn,
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
 
@@ -280,8 +353,6 @@ def build_physical_circuit_instruction(
     inplace: bool = True,
     reset_mcms: bool = True,
     name: str = "(Unnamed physical circuit)",
-    parent: object | None = None,
-    fault_tolerant: bool | None = None,
 ) -> Instruction:
     """TODO"""
 
@@ -334,8 +405,6 @@ def build_physical_circuit_instruction(
         data=data,
         map_qubits_fn=map_qubits_fn,
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
 
@@ -363,12 +432,8 @@ def build_repeat_until_success_instruction(
     success_fn: Callable[[MeasurementOutcomes], bool] = _default_success_fn,
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
-    parent: object | None = None,
-    fault_tolerant: bool | None = None,
 ) -> Instruction:
     """TODO"""
-    if fault_tolerant is None:
-        fault_tolerant = instruction.fault_tolerant
 
     # We do not know all the params for the underlying instruction,
     # so take variadic kwargs here
@@ -390,6 +455,7 @@ def build_repeat_until_success_instruction(
         applied_frame = instruction.apply(**kwargs)
 
         # Run success function to see if we are terminated
+        # TODO: Use PauliFrame here to get inferred measurement outcomes
         try:
             success = success_fn(applied_frame["measurement_outcomes"])
         except KeyError:
@@ -467,8 +533,6 @@ def build_repeat_until_success_instruction(
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Skip warning for variadic kwargs
         name=name,
-        parent=parent,
-        fault_tolerant=fault_tolerant,
     )
 
     # Add self and set up collection from rus_instruction.data

@@ -2,11 +2,9 @@ stages:
   - test
   - docs
 
-include:
-  - template: Security/SAST.gitlab-ci.yml
-
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  CI_DEBUG_TRACE: "true"
 
 cache:
   paths:
@@ -14,20 +12,20 @@ cache:
 
 Run unit tests:
   stage: test
-  image: quay.sandia.gov/dice/rhel8-minimal-python
-  before_script:
-    - pip install ".[test]"
+  image: python:3.11
   allow_failure: true
   script:
+    - conda activate gitlab-runner-loqs
+    - pip install ".[test]"
     - tox run
 
 Build documentation:
   stage: docs
-  image: quay.sandia.gov/dice/rhel8-minimal-python
-  before_script:
-    - pip install ".[docs,pygsti,quantumsim]"
-    #- sed -i 's/cache$/off/' docs/_config.yml # Turn off notebook running for now, broken in pipeline
+  image: python:3.11
   script:
+    - source ~/.bashrc
+    - conda activate gitlab-runner-loqs
+    - pip install ".[docs,pygsti,quantumsim]"
     - jupyter-book build docs
     - mv docs/_build/html public
   artifacts:
