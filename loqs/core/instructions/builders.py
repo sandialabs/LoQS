@@ -428,8 +428,8 @@ def _default_success_fn(outcomes: MeasurementOutcomes) -> bool:
     -------
         True if all measures bits are 0, False otherwise
     """
-    for _, v in outcomes:
-        if any([bit != 0 for bit in v]):
+    for _, v in outcomes.items():
+        if any([bit for bit in v]):
             return False
 
     return True
@@ -437,6 +437,7 @@ def _default_success_fn(outcomes: MeasurementOutcomes) -> bool:
 
 def build_repeat_until_success_instruction(
     instruction: Instruction,
+    reset_label_key: Instruction | str,
     rus_key: str,
     success_fn: Callable[[MeasurementOutcomes], bool] = _default_success_fn,
     max_repeats: int = 100,
@@ -454,6 +455,7 @@ def build_repeat_until_success_instruction(
         max_repeats = int(kwargs.pop("max_repeats"))
         repeat_count = int(kwargs.pop("repeat_count"))
         rus_key = kwargs.pop("rus_key")
+        reset_key = kwargs.pop("reset_key")
 
         patch_label = kwargs.pop("patch_label")
         stack = InstructionStack.cast(kwargs.pop("stack"))
@@ -462,9 +464,13 @@ def build_repeat_until_success_instruction(
         applied_frame = instruction.apply(**kwargs)
 
         # Run success function to see if we are terminated
-        # TODO: Use PauliFrame here to get inferred measurement outcomes
         try:
-            success = success_fn(applied_frame["measurement_outcomes"])
+            pauli_frame = applied_frame.get("pauli_frame", None)
+            outcomes = MeasurementOutcomes.cast(
+                applied_frame["measurement_outcomes"]
+            )
+            inferred_outcomes = outcomes.get_inferred_outcomes(pauli_frame)
+            success = success_fn(inferred_outcomes)
         except KeyError:
             raise RuntimeError(
                 "Try-until-success instruction does not output outcomes"
@@ -478,18 +484,21 @@ def build_repeat_until_success_instruction(
                     "Try-until-success instruction hit max repeats"
                 )
 
-            # Otherwise, let's add another copy onto the stack
+            # Otherwise, we need to reset and redo the RUS instruction
+            reset_label = InstructionLabel(reset_key, patch_label)
+
             # We need to at least put repeat_counts into label args
-            new_label = InstructionLabel(
+            rus_label = InstructionLabel(
                 rus_key,
                 patch_label,
                 inst_kwargs={"repeat_count": repeat_count},
             )
 
-            stack = stack.insert_instruction(0, new_label)
+            stack = stack.insert_instruction(0, rus_label)
+            stack = stack.insert_instruction(0, reset_label)
 
         # Return frame with the stack update
-        return applied_frame.update({"stack": stack})
+        return applied_frame.update({"stack": stack, "rus_success": success})
 
     # We need to store the instruction, success fn, and repeat information
     # To avoid recursion, we also store the key for the RUS instruction
@@ -499,6 +508,7 @@ def build_repeat_until_success_instruction(
         "max_repeats": max_repeats,
         "repeat_count": 0,
         "rus_key": rus_key,
+        "reset_key": reset_label_key,
     }
     # We also need to pull out any data from the instruction
     for k, v in instruction.data.items():
@@ -516,6 +526,10 @@ def build_repeat_until_success_instruction(
         # Reset any data we pulled from instruction
         for k, v in new_kwargs["instruction"].data.items():
             new_kwargs[k] = v
+        if isinstance(new_kwargs["reset_key"], Instruction):
+            new_kwargs["reset_key"] = new_kwargs["reset_key"].map_qubits(
+                qubit_mapping
+            )
         return new_kwargs
 
     # Since we have variadic kwargs, we'll set the param priority ourselves

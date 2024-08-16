@@ -29,6 +29,7 @@ from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
+from loqs.core.qeccode import PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 
@@ -85,6 +86,7 @@ def create_qec_code(
     ft_state_prep_checks_circ = circuit_backend(
         [
             # FT check 1
+            ("Gh", "A0"),
             ("Gcnot", "A0", "D0"),
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D1"),
@@ -93,6 +95,7 @@ def create_qec_code(
             ("Gh", "A0"),
             [("Iz", "A0"), ("Iz", "A1")],
             # FT check 2
+            ("Gh", "A0"),
             ("Gcphase", "A0", "D0"),
             ("Gcnot", "A0", "A1"),
             ("Gcnot", "A0", "D1"),
@@ -101,11 +104,12 @@ def create_qec_code(
             ("Gh", "A0"),
             [("Iz", "A0"), ("Iz", "A1")],
             # FT check 3
-            ("Gcphase", "A0", "D0"),
-            ("Gcnot", "A0", "A1"),
-            ("Gcnot", "A0", "D1"),
+            ("Gh", "A0"),
+            ("Gcnot", "A0", "D3"),
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D2"),
+            ("Gcnot", "A0", "A1"),
+            ("Gcphase", "A0", "D4"),
             ("Gh", "A0"),
             [("Iz", "A0"), ("Iz", "A1")],
         ],
@@ -120,9 +124,18 @@ def create_qec_code(
         reset_mcms=True,
         name="Non-FT Minus Prep + Checks",
     )
+    reset = builders.build_physical_circuit_instruction(
+        circuit_backend(
+            [[("Iz", q) for q in qubits[2:]]], qubit_labels=qubits
+        ),
+        include_outcomes=False,
+        reset_mcms=True,
+        name="Reset to all 0 state",
+    )
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
             ft_state_prep,
+            reset_label_key=reset,
             rus_key="FT Minus Prep",
             name="Repeat-until-success FT Minus Prep",
         )
@@ -255,15 +268,13 @@ def create_qec_code(
         # Get pauli frame
         pauli_frame = patches[patch_label].pauli_frame
 
-        inferred_outcomes = []
-        for qubit, outcome in measurement_outcomes.items():
-            # We need to flip outcome if we observed an X error
-            inferred_outcome = (
-                outcome[0] + pauli_frame.get_bit("X", qubit)
-            ) % 2
-            inferred_outcomes.append(inferred_outcome)
+        # Compute inferred bitstring
+        inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
+            pauli_frame
+        )
+        inferred_bitstring = [v[0] for v in inferred_outcomes.values()]
 
-        logical_value = sum(inferred_outcomes) % 2
+        logical_value = sum(inferred_bitstring) % 2
         return Frame({"logical_measurement": logical_value})
 
     nonft_logical_meas = Instruction(
@@ -287,7 +298,7 @@ def create_qec_code(
     )
 
     ### DECODING CIRCUIT
-    # TODO: Really this is the nonft state prep reversed. Reuse?
+    # TODO: Split into decoding + raw Z measure?
     state_decoder_circ = circuit_backend(
         [
             [("Gcphase", "D0", "D4")],
@@ -408,7 +419,7 @@ def create_ideal_model(
 def _create_adaptive_measure_instruction(
     instructions, qubits, circuit_backend
 ):
-    # FT Adaptive Measurement Scheme
+    # FT Adaptive X Measurement Scheme
     # Fig 13 of arxiv:2208.01863
 
     # For an in-depth documentation of this function, check out
@@ -431,7 +442,7 @@ def _create_adaptive_measure_instruction(
         F1 = outcomes[flag_qubit][0]
         if F1 == 0:
             # We go to part II (forward reference, must match key later)
-            next_instruction = "Adaptive Measure Part II"
+            next_instruction = "FT Logical X Measure Part II"
         else:
             # We go to decoding circuit  (forward reference, must match key later)
             next_instruction = "Non-FT Minus Unprep"
@@ -452,7 +463,9 @@ def _create_adaptive_measure_instruction(
         stack: InstructionStack, patch_label: str, **kwargs
     ) -> Frame:
         # Shortcut apply to go straight to part II feed forward
-        new_label = InstructionLabel("Adaptive Measure Part II", patch_label)
+        new_label = InstructionLabel(
+            "FT Logical X Measure Part II", patch_label
+        )
         new_stack = stack.insert_instruction(0, new_label)
 
         frame_data = {
@@ -492,7 +505,7 @@ def _create_adaptive_measure_instruction(
         return new_kwargs
 
     # We are not calling this Part I because it will actually perform the whole operation
-    instructions["Adaptive Measure"] = Instruction(
+    instructions["FT Logical X Measure"] = Instruction(
         partI_apply_fn,
         partI_dry_run_apply_fn,
         partI_data,
@@ -523,10 +536,10 @@ def _create_adaptive_measure_instruction(
         # Do classical feed forward
         if F2 != 0:
             # We go to termination (forward reference, must match key later)
-            next_instruction = "Adaptive Measure Termination"
+            next_instruction = "FT Logical X Measure Termination"
         elif M1 == M2:
             # We go to part III (forward reference, must match key later)
-            next_instruction = "Adaptive Measure Part III"
+            next_instruction = "FT Logical X Measure Part III"
         else:
             # We go to decoding circuit (forward reference, must match key later)
             next_instruction = "Non-FT Minus Unprep"
@@ -547,7 +560,9 @@ def _create_adaptive_measure_instruction(
         stack: InstructionStack, patch_label: str, **kwargs
     ) -> Frame:
         # Shortcut apply to go straight to part III feed forward
-        new_label = InstructionLabel("Adaptive Measure Part III", patch_label)
+        new_label = InstructionLabel(
+            "FT Logical X Measure Part III", patch_label
+        )
         new_stack = stack.insert_instruction(0, new_label)
 
         frame_data = {
@@ -575,7 +590,7 @@ def _create_adaptive_measure_instruction(
 
     paramII_aliases = {"previous_outcome": "measurement_outcomes"}
 
-    instructions["Adaptive Measure Part II"] = Instruction(
+    instructions["FT Logical X Measure Part II"] = Instruction(
         partII_apply_fn,
         partII_dry_run_apply_fn,
         partII_data,
@@ -613,7 +628,7 @@ def _create_adaptive_measure_instruction(
             next_instruction = "Non-FT Minus Unprep"
         else:
             # Otherwise, we terminate (forward reference, must match key later)
-            next_instruction = "Adaptive Measure Termination"
+            next_instruction = "FT Logical X Measure Termination"
 
         # We need to make sure and feed the patch label forward
         new_label = InstructionLabel(next_instruction, patch_label)
@@ -632,7 +647,7 @@ def _create_adaptive_measure_instruction(
     ) -> Frame:
         # Shortcut apply to go straight to termination instruction
         new_label = InstructionLabel(
-            "Adaptive Measure Termination", patch_label
+            "FT Logical X Measure Termination", patch_label
         )
         new_stack = stack.insert_instruction(0, new_label)
 
@@ -666,7 +681,7 @@ def _create_adaptive_measure_instruction(
 
     paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
 
-    instructions["Adaptive Measure Part III"] = Instruction(
+    instructions["FT Logical X Measure Part III"] = Instruction(
         partIII_apply_fn,
         partIII_dry_run_apply_fn,
         partIII_data,
@@ -677,13 +692,15 @@ def _create_adaptive_measure_instruction(
     )
 
     ## TERMINATION
-    # TODO: Use Pauli frame to infer correct measurements
     def term_apply_fn(
-        measurement_outcomes: MeasurementOutcomes, meas_qubit: str
+        measurement_outcomes: MeasurementOutcomes,
+        meas_qubit: str,
+        pauli_frame: PauliFrame | None,
     ) -> Frame:
-        return Frame(
-            {"logical_measurement": measurement_outcomes[meas_qubit][0]}
+        inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
+            pauli_frame
         )
+        return Frame({"logical_measurement": inferred_outcomes[meas_qubit][0]})
 
     term_dry_run = ["logical_measurement"]
 
@@ -694,7 +711,7 @@ def _create_adaptive_measure_instruction(
     ) -> KwargDict:
         return {"meas_qubit": qubit_mapping[meas_qubit]}
 
-    instructions["Adaptive Measure Termination"] = Instruction(
+    instructions["FT Logical X Measure Termination"] = Instruction(
         term_apply_fn,
         term_dry_run,
         term_data,

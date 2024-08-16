@@ -1,10 +1,13 @@
 """:class:`MeasurementOutcomes` definition.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.backends.state.basestate import OutcomeDict
+from loqs.core.qeccode import PauliFrame, PauliFrameCastableTypes
 from loqs.internal.castable import Castable
 
 
@@ -48,3 +51,18 @@ class MeasurementOutcomes(Castable, Mapping[str, list[int]]):
 
     def __str__(self) -> str:
         return f"MeasurementOutcomes({self.outcomes})"
+
+    def get_inferred_outcomes(
+        self, pauli_frame: object | None = None
+    ) -> MeasurementOutcomes:
+        """TODO"""
+        if pauli_frame is None:
+            return MeasurementOutcomes(self.outcomes.copy())
+
+        pauli_frame = PauliFrame.cast(pauli_frame)
+
+        inferred_outcomes = {}
+        for qubit, outs in self.outcomes.items():
+            bitflip = pauli_frame.get_bit("X", qubit)
+            inferred_outcomes[qubit] = [(o + bitflip) % 2 for o in outs]
+        return MeasurementOutcomes(inferred_outcomes)
