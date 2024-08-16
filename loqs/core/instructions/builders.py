@@ -10,6 +10,7 @@ from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
+from loqs.core.history import History
 from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
@@ -21,7 +22,9 @@ from loqs.core.recordables.patchdict import PatchDict
 
 def build_composite_instruction(
     instructions: Sequence[Instruction],
-    param_priorities: Sequence[str] | Mapping[str, Sequence[str]],
+    param_priorities: (
+        Sequence[str] | Mapping[str, Sequence[str]] | None
+    ) = None,
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
     """TODO"""
@@ -33,6 +36,8 @@ def build_composite_instruction(
         assert "instructions" in kwargs
         stack = InstructionStack.cast(kwargs["stack"])
         instructions: list[Instruction] = list(kwargs["instructions"])
+
+        assert param_priorities is not None
 
         for i, instruction in enumerate(instructions):
             patch_label = None
@@ -70,14 +75,24 @@ def build_composite_instruction(
     # Because we don't have a fixed function signature above,
     # we need to pass in priorities. For convenience,
     # we allow a Sequence of keys that we will turn into default priorities here
+    if param_priorities is None:
+        param_priorities = []
     if not isinstance(param_priorities, Mapping):
         param_priorities = {k: DEFAULT_PRIORITIES for k in param_priorities}
-    # We also need the stack and instructions
     param_priorities = dict(param_priorities)
-    param_priorities["stack"] = DEFAULT_PRIORITIES
-    param_priorities["instructions"] = DEFAULT_PRIORITIES
+    # Also get the patch label and pass it forward if needed
+    param_priorities["patch_label"] = param_priorities.get(
+        "patch_label", DEFAULT_PRIORITIES
+    )
+    # We also need the stack and instructions
+    param_priorities["stack"] = param_priorities.get(
+        "stack", DEFAULT_PRIORITIES
+    )
+    param_priorities["instructions"] = param_priorities.get(
+        "instructions", DEFAULT_PRIORITIES
+    )
 
-    composite_instruction = Instruction(
+    return Instruction(
         apply_fn=apply_fn,
         data=data,
         map_qubits_fn=map_qubits_fn,
@@ -85,13 +100,6 @@ def build_composite_instruction(
         param_error_behavior="continue",  # Suppress the warning for variadic kwargs
         name=name,
     )
-
-    # Set all instructions to have this composite as parent
-    data_instructions = composite_instruction.data["instructions"]
-    for instruction in data_instructions:  # type: ignore
-        instruction.parent = composite_instruction
-
-    return composite_instruction
 
 
 def build_lookup_decoder_instruction(
@@ -429,6 +437,7 @@ def _default_success_fn(outcomes: MeasurementOutcomes) -> bool:
 
 def build_repeat_until_success_instruction(
     instruction: Instruction,
+    rus_key: str,
     success_fn: Callable[[MeasurementOutcomes], bool] = _default_success_fn,
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
@@ -441,14 +450,12 @@ def build_repeat_until_success_instruction(
         # Pull some args out of kwargs
         instruction = kwargs.pop("instruction")
         assert isinstance(instruction, Instruction)
-
-        self = kwargs.pop("self")
-        assert isinstance(self, Instruction)
-
         success_fn = kwargs.pop("success_fn")
         max_repeats = int(kwargs.pop("max_repeats"))
         repeat_count = int(kwargs.pop("repeat_count"))
+        rus_key = kwargs.pop("rus_key")
 
+        patch_label = kwargs.pop("patch_label")
         stack = InstructionStack.cast(kwargs.pop("stack"))
 
         # All the remaining kwargs should go straight into the instruction
@@ -474,7 +481,9 @@ def build_repeat_until_success_instruction(
             # Otherwise, let's add another copy onto the stack
             # We need to at least put repeat_counts into label args
             new_label = InstructionLabel(
-                self, inst_kwargs={"repeat_count": repeat_count}
+                rus_key,
+                patch_label,
+                inst_kwargs={"repeat_count": repeat_count},
             )
 
             stack = stack.insert_instruction(0, new_label)
@@ -483,14 +492,20 @@ def build_repeat_until_success_instruction(
         return applied_frame.update({"stack": stack})
 
     # We need to store the instruction, success fn, and repeat information
-    # One weird note: I want to store self in this, but we need the object first...
-    # So we will have some post-processing
+    # To avoid recursion, we also store the key for the RUS instruction
     data = {
         "instruction": instruction,
         "success_fn": success_fn,
         "max_repeats": max_repeats,
-        "repeat_count": 1,
+        "repeat_count": 0,
+        "rus_key": rus_key,
     }
+    # We also need to pull out any data from the instruction
+    for k, v in instruction.data.items():
+        assert (
+            k not in data
+        ), "Have key collision between RUS and underlying instructions"
+        data[k] = v
 
     # We need to map the instruction
     def map_qubits_fn(
@@ -498,6 +513,9 @@ def build_repeat_until_success_instruction(
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
         new_kwargs["instruction"] = instruction.map_qubits(qubit_mapping)
+        # Reset any data we pulled from instruction
+        for k, v in new_kwargs["instruction"].data.items():
+            new_kwargs[k] = v
         return new_kwargs
 
     # Since we have variadic kwargs, we'll set the param priority ourselves
@@ -506,6 +524,13 @@ def build_repeat_until_success_instruction(
     param_priorities = instruction.param_priorities
     for k in data:
         param_priorities[k] = DEFAULT_PRIORITIES
+    # We also need the patch_label for new labels, and the stack to update it
+    param_priorities["patch_label"] = param_priorities.get(
+        "patch_label", DEFAULT_PRIORITIES
+    )
+    param_priorities["stack"] = param_priorities.get(
+        "stack", DEFAULT_PRIORITIES
+    )
 
     def dry_run_fn(**kwargs) -> Frame:
         # Just put the instruction on the stack so that it can deal with it
@@ -515,7 +540,7 @@ def build_repeat_until_success_instruction(
 
         stack = InstructionStack.cast(kwargs.pop("stack"))
 
-        del kwargs["self"]
+        del kwargs["rus_key"]
         del kwargs["success_fn"]
         del kwargs["max_repeats"]
         del kwargs["repeat_count"]
@@ -525,7 +550,7 @@ def build_repeat_until_success_instruction(
 
         return Frame({"stack": stack})
 
-    rus_instruction = Instruction(
+    return Instruction(
         apply_fn=apply_fn,
         dry_run_apply_fn=dry_run_fn,
         data=data,
@@ -534,9 +559,3 @@ def build_repeat_until_success_instruction(
         param_error_behavior="continue",  # Skip warning for variadic kwargs
         name=name,
     )
-
-    # Add self and set up collection from rus_instruction.data
-    rus_instruction.data["self"] = rus_instruction
-    rus_instruction.param_priorities["self"] = ["instruction"]
-
-    return rus_instruction

@@ -32,8 +32,7 @@ parts:
   - file: tutorials/runlogst.md
 - caption: Examples
   chapters:
-  - file: examples/todo.md
-  # TODO
+  - file: examples/fttests.md
 - caption: Developer Zone
   maxdepth: 1
   chapters:

@@ -28,7 +28,7 @@ Rather than have constant forward references, we will only talk about the builde
 
 Even with a high-level overview, there can still be a lot going on in each builder.
 We will start with the inputs to the function to provide context for the rest of the discussion.
-All builder functions take `name`, `parent`, and `fault_tolerant` as flags to pass on to the `Instruction` constructor.
+All builder functions take `name` as flags to pass on to the `Instruction` constructor.
 We will ignore talking about those here and focus on the other unique parameters for each builder.
 Then we will use subsections mirroring the [Instruction guide](/objguide/instructions) to present the information: the apply functions, instruction data and data qubit mapping, and parameter priority/alias specifications.
 
@@ -69,7 +69,7 @@ instead, we only need to define any parameters that any underlying `Instruction`
 These parameters will then be added to the generated `InstructionLabel` objects.
 All other parameters can use the other sources at runtime like normal.
 
-In addition to any user-defined parameters, the composite instruction `apply_fn` also requires `"stack"` (typically taken from the `QuantumProgram` source) and `"instructions"` (typically taken from the `Instruction.data` source).
+In addition to any user-defined parameters, the composite instruction `apply_fn` also requires `"patch_label"` (typically taken from the `InstructionLabel` source), `"stack"` (typically taken from the `QuantumProgram` source), and `"instructions"` (typically taken from the `Instruction.data` source).
 These are automatically added by the builder after processing the user's supplied parameter priorities.
 
 

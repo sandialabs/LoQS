@@ -109,7 +109,8 @@ class QSimQuantumState(BaseQuantumState):
                 if len(qubits) == 1:
                     self.state.apply_ptm(qubits[0], rep)
                 elif len(qubits) == 2:
-                    self.state.apply_two_ptm(qubits[0], qubits[1], rep)
+                    # The qubits are flipped here, and this is a known QuantumSim bug
+                    self.state.apply_two_ptm(qubits[1], qubits[0], rep)
                 else:
                     raise ValueError(
                         "Cannot apply more than a 2 qubit operation"

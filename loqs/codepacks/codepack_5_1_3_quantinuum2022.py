@@ -122,7 +122,9 @@ def create_qec_code(
     )
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
-            ft_state_prep, name="Repeat-until-success FT Minus Prep"
+            ft_state_prep,
+            rus_key="FT Minus Prep",
+            name="Repeat-until-success FT Minus Prep",
         )
     )
 
@@ -178,7 +180,6 @@ def create_qec_code(
 
     instructions["H"] = builders.build_composite_instruction(
         [logical_H_circ_inst, logical_H_permutation],
-        param_priorities=["patch_label"],
         name="Logical H",
     )
 
@@ -223,7 +224,6 @@ def create_qec_code(
         [
             [("Gh", "D0"), ("Gh", "D2"), ("Gh", "D4")],
             [("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")],
-            [("Gh", "D0"), ("Gh", "D2"), ("Gh", "D4")],
         ],
         qubit_labels=qubits,
     )
@@ -275,7 +275,6 @@ def create_qec_code(
     instructions["Non-FT Logical Z Measure"] = (
         builders.build_composite_instruction(
             [prime_basis_Z_meas, nonft_logical_meas],
-            ["patch_label"],
             name="Non-FT logical Z measurement (via prime basis measurement)",
         )
     )
@@ -283,7 +282,6 @@ def create_qec_code(
     instructions["Non-FT Logical X Measure"] = (
         builders.build_composite_instruction(
             [prime_basis_X_meas, nonft_logical_meas],
-            ["patch_label"],
             name="Non-FT logical X measurement (via prime basis measurement)",
         )
     )
@@ -323,6 +321,9 @@ def create_qec_code(
     # Fig 13 of arxiv:2208.01863
     # Adds the instructions in-place
     _create_adaptive_measure_instruction(instructions, qubits, circuit_backend)
+
+    ## Stabilizer circuits (for debugging)
+    _create_stabilizer_instructions(instructions, qubits, circuit_backend)
 
     ## QEC
     _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend)
@@ -702,6 +703,56 @@ def _create_adaptive_measure_instruction(
     )
 
 
+def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
+    XZZXI_circ = circuit_backend(
+        [[("Gxpi", "D0"), ("Gzpi", "D1"), ("Gzpi", "D2"), ("Gxpi", "D3")]],
+        qubit_labels=qubits,
+    )
+    instructions["XZZXI Stabilizer"] = (
+        builders.build_physical_circuit_instruction(
+            XZZXI_circ,
+            include_outcomes=False,
+            name="XZZXI stabilizer",
+        )
+    )
+
+    IXZZX_circ = circuit_backend(
+        [[("Gxpi", "D1"), ("Gzpi", "D2"), ("Gzpi", "D3"), ("Gxpi", "D4")]],
+        qubit_labels=qubits,
+    )
+    instructions["IXZZX Stabilizer"] = (
+        builders.build_physical_circuit_instruction(
+            IXZZX_circ,
+            include_outcomes=False,
+            name="IXZZX stabilizer",
+        )
+    )
+
+    XIXZZ_circ = circuit_backend(
+        [[("Gxpi", "D0"), ("Gxpi", "D2"), ("Gzpi", "D3"), ("Gzpi", "D4")]],
+        qubit_labels=qubits,
+    )
+    instructions["XIXZZ Stabilizer"] = (
+        builders.build_physical_circuit_instruction(
+            XIXZZ_circ,
+            include_outcomes=False,
+            name="XIXZZ stabilizer",
+        )
+    )
+
+    ZXIXZ_circ = circuit_backend(
+        [[("Gzpi", "D0"), ("Gxpi", "D1"), ("Gxpi", "D3"), ("Gzpi", "D4")]],
+        qubit_labels=qubits,
+    )
+    instructions["ZXIXZ Stabilizer"] = (
+        builders.build_physical_circuit_instruction(
+            ZXIXZ_circ,
+            include_outcomes=False,
+            name="ZXIXZ stabilizer",
+        )
+    )
+
+
 def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     # These circuits are not explicitly stated in arxiv:2208.01863
     # However, they can be inferred from the Hadamard-test-like circuits of Fig 12
@@ -836,6 +887,5 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
             instructions["Unflagged ZXIXZ Check"],
             instructions["Unflagged Decoder"],
         ],
-        param_priorities=["patch_label"],
         name="Unflagged QEC",
     )

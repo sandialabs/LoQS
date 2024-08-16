@@ -5,6 +5,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.backends.state.basestate import OutcomeDict
+from loqs.internal.castable import Castable
 
 
 MeasurementOutcomesCastableTypes: TypeAlias = (
@@ -12,7 +13,7 @@ MeasurementOutcomesCastableTypes: TypeAlias = (
 )
 
 
-class MeasurementOutcomes(Mapping[str, list[int]]):
+class MeasurementOutcomes(Castable, Mapping[str, list[int]]):
     """TODO"""
 
     outcomes: OutcomeDict
