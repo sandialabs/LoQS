@@ -6,7 +6,6 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Sequence
 from enum import StrEnum
-import textwrap
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -44,19 +43,31 @@ class BaseNoiseModel(Castable):
 
     @property
     @abstractmethod
-    def input_circuit_types(self) -> Sequence[type[BasePhysicalCircuit]]:
+    def gate_keys(self) -> list:
+        """Gate keys this model can take in circuits."""
+        pass
+
+    @property
+    @abstractmethod
+    def instrument_keys(self) -> list:
+        """Instrument keys this model can take in circuits."""
+        pass
+
+    @property
+    @abstractmethod
+    def input_circuit_types(self) -> list[type[BasePhysicalCircuit]]:
         """Circuit types this model can take in."""
         pass
 
     @property
     @abstractmethod
-    def output_gate_reps(self) -> Sequence[GateRep]:
+    def output_gate_reps(self) -> list[GateRep]:
         """Gate reps this model can output."""
         pass
 
     @property
     @abstractmethod
-    def output_instrument_reps(self) -> Sequence[InstrumentRep]:
+    def output_instrument_reps(self) -> list[InstrumentRep]:
         """Instrument reps this model can output."""
         pass
 

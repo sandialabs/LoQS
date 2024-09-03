@@ -57,15 +57,23 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         # TODO: Crosstalk specification?
 
     @property
-    def input_circuit_types(self) -> Sequence[type[BasePhysicalCircuit]]:
+    def gate_keys(self) -> list:
+        return list(self.gate_dict.keys())
+
+    @property
+    def instrument_keys(self) -> list:
+        return list(self.inst_dict.keys())
+
+    @property
+    def input_circuit_types(self) -> list[type[BasePhysicalCircuit]]:
         return [PyGSTiPhysicalCircuit]
 
     @property
-    def output_gate_reps(self) -> Sequence[GateRep]:
+    def output_gate_reps(self) -> list[GateRep]:
         return [GateRep.UNITARY, GateRep.PTM, GateRep.QSIM_SUPEROPERATOR]
 
     @property
-    def output_instrument_reps(self) -> Sequence[InstrumentRep]:
+    def output_instrument_reps(self) -> list[InstrumentRep]:
         return [InstrumentRep.ZBASISPROJECTION]  # TODO: Can do more
 
     def get_reps(

@@ -7,6 +7,7 @@ from collections.abc import Sequence, Mapping
 from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends.circuit.builtincircuit import BuiltinPhysicalCircuit
 
 
 try:
@@ -17,7 +18,7 @@ except ImportError as e:
 
 ## Type aliases for static type checking
 CastableTypes: TypeAlias = (
-    "PyGSTiPhysicalCircuit | _Circuit | str | Sequence[OperationTypes]"
+    "BasePhysicalCircuit | _Circuit | str | Sequence[OperationTypes]"
 )
 """Types we can cast to a pyGSTi circuit.
 
@@ -56,6 +57,13 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     ) -> None:
         if isinstance(circuit, PyGSTiPhysicalCircuit):
             self._circuit = circuit.circuit
+        elif isinstance(circuit, BuiltinPhysicalCircuit):
+            try:
+                self._circuit = _Circuit.cast(circuit.circuit)
+            except Exception as e:
+                raise ValueError(
+                    "Failed to cast BuiltinCircuit to pyGSTi circuit"
+                ) from e
         else:
             try:
                 self._circuit = _Circuit.cast(circuit)
