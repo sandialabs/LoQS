@@ -24,8 +24,8 @@ except ImportError as e:
 
 # Type aliases for static type checking
 PyGSTiModelCastableTypes: TypeAlias = (
-    ExplicitOpModel | ImplicitOpModel
-)  # TODO: Take other LoQS models
+    ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
+)
 """Types of pyGSTi models this backend can handle"""
 
 
@@ -42,17 +42,27 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         model:
             A pyGSTi model to use when looking up operations
         """
-        self.model = model
+        from loqs.backends.model import DictNoiseModel
+
         self.use_embedded_op = False
-        if isinstance(self.model, ExplicitOpModel):
+        if isinstance(model, ExplicitOpModel):
+            self.model = model
             self.gate_dict = self.model.operations
             self.inst_dict = self.model.instruments
-        elif isinstance(self.model, ImplicitOpModel):
+        elif isinstance(model, ImplicitOpModel):
+            self.model = model
             self.gate_dict = self.model.operation_blks.get("layers", {})
             self.inst_dict = self.model.instrument_blks.get("layers", {})
             self.use_embedded_op = True
+        elif isinstance(model, PyGSTiNoiseModel):
+            self.model = model.model
+            self.gate_dict = model.gate_dict
+            self.inst_dict = model.inst_dict
+            self.use_embedded_op = model.use_embedded_op
+        elif isinstance(model, DictNoiseModel):
+            raise NotImplementedError("TODO: Build explicit op model")
         else:
-            raise TypeError("Can only take Explicit or Implicit OpModels")
+            raise TypeError(f"Cannot cast {type(model)} to PyGSTiNoiseModel")
 
         # TODO: Crosstalk specification?
 
@@ -63,10 +73,6 @@ class PyGSTiNoiseModel(BaseNoiseModel):
     @property
     def instrument_keys(self) -> list:
         return list(self.inst_dict.keys())
-
-    @property
-    def input_circuit_types(self) -> list[type[BasePhysicalCircuit]]:
-        return [PyGSTiPhysicalCircuit]
 
     @property
     def output_gate_reps(self) -> list[GateRep]:

@@ -55,12 +55,6 @@ class BaseNoiseModel(Castable):
 
     @property
     @abstractmethod
-    def input_circuit_types(self) -> list[type[BasePhysicalCircuit]]:
-        """Circuit types this model can take in."""
-        pass
-
-    @property
-    @abstractmethod
     def output_gate_reps(self) -> list[GateRep]:
         """Gate reps this model can output."""
         pass

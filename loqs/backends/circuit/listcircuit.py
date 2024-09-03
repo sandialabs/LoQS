@@ -25,7 +25,7 @@ OperationTypes: TypeAlias = LabelType | Sequence[LabelType]
 """
 
 
-class BuiltinPhysicalCircuit(BasePhysicalCircuit):
+class ListPhysicalCircuit(BasePhysicalCircuit):
     """Circuit backend using built-in Python objects."""
 
     CastableTypes: ClassVar[TypeAlias] = CastableTypes
@@ -99,7 +99,7 @@ class BuiltinPhysicalCircuit(BasePhysicalCircuit):
 
         super().__init__(circuit, qubit_labels)
 
-    name: ClassVar[str] = "Built-in object"
+    name: ClassVar[str] = "Built-in list"
 
     @property
     def circuit(self) -> list[list[tuple[str, list[QubitTypes]]]]:
@@ -113,8 +113,8 @@ class BuiltinPhysicalCircuit(BasePhysicalCircuit):
     def qubit_labels(self) -> list[QubitTypes]:
         return self._qubit_labels
 
-    def copy(self) -> BuiltinPhysicalCircuit:
-        return BuiltinPhysicalCircuit(self._circuit)
+    def copy(self) -> ListPhysicalCircuit:
+        return ListPhysicalCircuit(self._circuit)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
@@ -135,7 +135,7 @@ class BuiltinPhysicalCircuit(BasePhysicalCircuit):
         self._qubit_labels = qubits_to_keep
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit = BuiltinPhysicalCircuit.cast(circuit)
+        other_circuit = ListPhysicalCircuit.cast(circuit)
         self._circuit = (
             self._circuit[:idx] + other_circuit._circuit + self._circuit[idx:]
         )
@@ -160,7 +160,7 @@ class BuiltinPhysicalCircuit(BasePhysicalCircuit):
         self._qubit_labels = [complete_mapping[q] for q in self.qubit_labels]
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit = BuiltinPhysicalCircuit.cast(circuit)
+        other_circuit = ListPhysicalCircuit.cast(circuit)
 
         # Ensure circuit is long enough for merge
         end = idx + other_circuit.depth

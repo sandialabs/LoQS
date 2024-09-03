@@ -7,8 +7,7 @@ from collections.abc import Mapping
 from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.circuit.builtincircuit import BuiltinPhysicalCircuit
-from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
+from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
 
 
@@ -26,7 +25,7 @@ class DictNoiseModel(BaseNoiseModel):
 
     def __init__(
         self,
-        model: GateDictModelCastableTypes,
+        model_or_dicts: GateDictModelCastableTypes,
         gaterep: GateRep = GateRep.PTM,
         instrep: InstrumentRep = InstrumentRep.ZBASISPROJECTION,
     ) -> None:
@@ -34,26 +33,32 @@ class DictNoiseModel(BaseNoiseModel):
 
         Parameters
         ----------
-        model:
-            A pyGSTi model to use when looking up operations
+        model_or_dicts:
+            A model to convert or pair of dictionaries to use
+
+        gaterep:
+            Gate representation this model will return
+
+        instrep:
+            Instrument representation this model will return
         """
         self.gate_dict = {}
         self.inst_dict = {}
-        if isinstance(model, BaseNoiseModel):
-            for gate_key in model.gate_keys:
-                circ = BuiltinPhysicalCircuit([gate_key])
-                self.gate_dict[gate_key] = model.get_reps(
+        if isinstance(model_or_dicts, BaseNoiseModel):
+            for gate_key in model_or_dicts.gate_keys:
+                circ = ListPhysicalCircuit([gate_key])
+                self.gate_dict[gate_key] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
                 )
 
-            for inst_key in model.instrument_keys:
-                circ = BuiltinPhysicalCircuit([inst_key])
-                self.inst_dict[inst_key] = model.get_reps(
+            for inst_key in model_or_dicts.instrument_keys:
+                circ = ListPhysicalCircuit([inst_key])
+                self.inst_dict[inst_key] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
                 )
-        elif isinstance(model, tuple) and len(model) == 2:
-            self.gate_dict = dict(model[0])
-            self.inst_dict = dict(model[1])
+        elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
+            self.gate_dict = dict(model_or_dicts[0])
+            self.inst_dict = dict(model_or_dicts[1])
         else:
             raise TypeError(
                 "Can only other NoiseModels or a 2-tuple of gate/inst dicts"
@@ -63,10 +68,6 @@ class DictNoiseModel(BaseNoiseModel):
         self._instrep = instrep
 
         # TODO: Crosstalk specification?
-
-    @property
-    def input_circuit_types(self) -> list[type[BasePhysicalCircuit]]:
-        return [BuiltinPhysicalCircuit, PyGSTiPhysicalCircuit]
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
@@ -90,7 +91,7 @@ class DictNoiseModel(BaseNoiseModel):
         ), f"Dict model only has {self._instrep} instruments"
 
         # Get builtin circuit for easy processing
-        circuit = BuiltinPhysicalCircuit.cast(circuit)
+        circuit = ListPhysicalCircuit.cast(circuit)
 
         # Iterate through circuit and pull out representations
         reps = []

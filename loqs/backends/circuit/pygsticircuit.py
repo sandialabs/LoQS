@@ -7,7 +7,7 @@ from collections.abc import Sequence, Mapping
 from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.circuit.builtincircuit import BuiltinPhysicalCircuit
+from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 
 
 try:
@@ -57,7 +57,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     ) -> None:
         if isinstance(circuit, PyGSTiPhysicalCircuit):
             self._circuit = circuit.circuit
-        elif isinstance(circuit, BuiltinPhysicalCircuit):
+        elif isinstance(circuit, ListPhysicalCircuit):
             try:
                 self._circuit = _Circuit.cast(circuit.circuit)
             except Exception as e:
