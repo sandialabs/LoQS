@@ -14,5 +14,6 @@ docs/**/*.ipynb
 .vscode
 venv*/
 loqs.egg-info/
+build/
 
 .DS_Store
