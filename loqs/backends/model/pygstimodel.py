@@ -12,10 +12,11 @@ import numpy as np
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
+from loqs.tools.pygstitools import PYGSTI_QSIM_BASES
 
 
 try:
-    from pygsti.baseobjs import ExplicitBasis, TensorProdBasis
+    from pygsti.baseobjs import TensorProdBasis
     from pygsti.modelmembers.operations import EmbeddedOp
     from pygsti.models import ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt
@@ -92,27 +93,6 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         circuit = PyGSTiPhysicalCircuit.cast(circuit)
         pygsti_circuit = circuit.circuit
 
-        # Prep QuantumSim bases
-        sig0q = np.array([[1.0, 0], [0, 0]], dtype="complex")
-        sigXq = np.array([[0, 1], [1, 0]], dtype="complex") / np.sqrt(2)
-        sigYq = (
-            np.array([[0, -1], [1, 0]], dtype="complex") * 1.0j / np.sqrt(2.0)
-        )
-        sig1q = np.array([[0, 0], [0, 1]], dtype="complex")
-
-        qsim_bases = {}
-        for n_qubits in [1, 2]:
-            qbasis = itertools.product(
-                [sig0q, sigXq, sigYq, sig1q], repeat=n_qubits
-            )
-            qbasis = [functools.reduce(np.kron, x) for x in qbasis]
-            qsim_bases[n_qubits] = ExplicitBasis(
-                qbasis,
-                ["myEl%d" % i for i in range(4**n_qubits)],
-                name=f"qsim_{n_qubits}q",
-                longname=f"QuantumSim_{n_qubits}qubit",
-            )
-
         # Iterate through circuit and pull out representations
         # TODO: What to do about instruments
         reps = []
@@ -154,7 +134,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
                         if comp.num_qubits in [1, 2]:
                             rep = bt.change_basis(
-                                rep, basis, qsim_bases[comp.num_qubits]
+                                rep, basis, PYGSTI_QSIM_BASES[comp.num_qubits]
                             )
                         else:
                             raise ValueError(

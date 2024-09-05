@@ -44,6 +44,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
     ) -> None:
         from loqs.backends.circuit import PyGSTiPhysicalCircuit
 
+        self._circuit = []
         if isinstance(circuit, PyGSTiPhysicalCircuit):
             try:
                 circuit = PyGSTiPhysicalCircuit.cast(circuit)
@@ -59,7 +60,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
                 if qubit_labels is None:
                     qubit_labels = circuit.circuit.line_labels
             except ImportError as e:
-                raise ValueError("Could not ") from e
+                raise ValueError("Could not cast pyGSTi circuit") from e
         else:
             assert isinstance(circuit, Sequence), "Expecting a list of layers"
             seen_qubits = set()
@@ -67,7 +68,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
             def process_label(label) -> tuple[str, list[QubitTypes]]:
                 new_label = (
                     (label[0], [label[1]])
-                    if not isinstance(label[1], Sequence)
+                    if not isinstance(label[1], (list, tuple))
                     else label
                 )
 
