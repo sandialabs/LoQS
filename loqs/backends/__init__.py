@@ -4,7 +4,13 @@
 from .circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
 
 # Needs to be after circuit import but before state so that we have OpRep
-from .model import BaseNoiseModel, GateRep, InstrumentRep, PyGSTiNoiseModel
+from .model import (
+    BaseNoiseModel,
+    GateRep,
+    InstrumentRep,
+    PyGSTiNoiseModel,
+    DictNoiseModel,
+)
 
 from .state import BaseQuantumState, OutcomeDict, QSimQuantumState
 

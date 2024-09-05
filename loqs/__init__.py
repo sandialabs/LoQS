@@ -14,5 +14,4 @@ from . import core
 
 # Import after core
 from . import codepacks
-
-from . import extensions
+from . import tools

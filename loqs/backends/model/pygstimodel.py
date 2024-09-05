@@ -12,16 +12,38 @@ import numpy as np
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
-from loqs.tools.pygstitools import PYGSTI_QSIM_BASES
-
 
 try:
-    from pygsti.baseobjs import TensorProdBasis
+    from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
     from pygsti.modelmembers.operations import EmbeddedOp
     from pygsti.models import ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+
+
+def compute_qsim_bases(num_qubits: int):
+    """TODO"""
+    # Prep QuantumSim bases
+    sig0q = np.array([[1.0, 0], [0, 0]], dtype="complex")
+    sigXq = np.array([[0, 1], [1, 0]], dtype="complex") / np.sqrt(2)
+    sigYq = np.array([[0, -1], [1, 0]], dtype="complex") * 1.0j / np.sqrt(2.0)
+    sig1q = np.array([[0, 0], [0, 1]], dtype="complex")
+
+    qbasis = itertools.product([sig0q, sigXq, sigYq, sig1q], repeat=num_qubits)
+    qbasis = [functools.reduce(np.kron, x) for x in qbasis]
+
+    return ExplicitBasis(
+        qbasis,
+        ["myEl%d" % i for i in range(4**num_qubits)],
+        name=f"qsim_{num_qubits}q",
+        longname=f"QuantumSim_{num_qubits}qubit",
+    )
+
+
+PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
+"""Precomputed 1- and 2-qubit basis for QSim PTMs"""
+
 
 # Type aliases for static type checking
 PyGSTiModelCastableTypes: TypeAlias = (
