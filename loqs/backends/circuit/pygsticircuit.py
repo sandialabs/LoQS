@@ -127,6 +127,29 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             ) + other_circuit._layer_components(lidx)
             self._circuit.set_labels(comps, lidx)
 
+    def pad_single_qubit_idles_inplace(self, op_name: str) -> None:
+        for lidx in range(self._circuit.depth):
+            comps = self._circuit._layer_components(lidx)
+
+            # Check with qubits are not idling
+            seen_qubits = set()
+            for comp in comps:
+                if comp.qubits is None:
+                    # This has no qubit labels, assume it is a whole layer instruction
+                    seen_qubits = set(self._circuit.line_labels)
+                    continue
+
+                for qubit in comp.qubits:
+                    seen_qubits.add(qubit)
+
+            # Add idling operations
+            missing_qubits = set(self._circuit.line_labels) - seen_qubits
+            for qubit in missing_qubits:
+                comps.append(_Label(op_name, (qubit,)))
+
+            # Substitute new padded layer
+            self._circuit.set_labels(comps, lidx)
+
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:

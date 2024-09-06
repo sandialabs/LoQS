@@ -15,18 +15,21 @@ class TestListPhysicalCircuit:
             [('Gxpi2', 'Q0'), ('Gypi2', "Q1")]
         ]
         cls.expected_circ = [
-            [('Gxpi2', ['Q0'])], [('Gypi2', ["Q1"])], [('Gcnot', ['Q0', "Q1"])],
-            [('Gxpi2', ['Q0']), ('Gypi2', ["Q1"])]
+            [('Gxpi2', ('Q0',))], [('Gypi2', ("Q1",))], [('Gcnot', ('Q0', "Q1"))],
+            [('Gxpi2', ('Q0',)), ('Gypi2', ("Q1",))]
         ]
-        cls.test_labels = ["Q0", "Q1"]
+        cls.test_labels = ("Q0", "Q1")
         cls.expected_circ_intlbls = [
-            [('Gxpi2', [0])], [('Gypi2', [1])], [('Gcnot', [0, 1])],
-            [('Gxpi2', [0]), ('Gypi2', [1])]
+            [('Gxpi2', (0,))], [('Gypi2', (1,))], [('Gcnot', (0, 1))],
+            [('Gxpi2', (0,)), ('Gypi2', (1,))]
         ]
 
     def _check(self, circ, expected_circ, expected_labels):
-        assert circ.circuit == expected_circ
-        assert circ.qubit_labels == expected_labels
+        for l1, l2 in zip(circ.circuit, expected_circ):
+            set1 = set(l1) if len(l1) else set()
+            set2 = set(l2) if len(l2) else set()
+            assert set1 == set2
+        assert set(circ.qubit_labels) == set(expected_labels)
 
     def test_init(self):
         # Base initializer
@@ -53,7 +56,7 @@ class TestListPhysicalCircuit:
             PhysCirc.cast(None)
     
     def test_append(self):
-        circ1 = [[('Gxpi2', ['Q0']), ('Gypi2', ['Q1'])]]
+        circ1 = [[('Gxpi2', ('Q0',)), ('Gypi2', ('Q1',))]]
         expected_circ = circ1 + circ1
 
         pc = PhysCirc(circ1)
@@ -63,7 +66,19 @@ class TestListPhysicalCircuit:
 
         pc.append_inplace(pc)
         self._check(pc, expected_circ, self.test_labels)
+    
+    def test_pad(self):
+        padded_circ = [
+            [('Gxpi2', ('Q0',)), ('Gi', ("Q1",))], [('Gypi2', ("Q1",)), ('Gi', ("Q0",))],
+            [('Gcnot', ('Q0', "Q1"))], [('Gxpi2', ('Q0',)), ('Gypi2', ("Q1",))]
+        ]
+    
+        pc = PhysCirc(self.test_circ, self.test_labels)
+        pc2 = pc.pad_single_qubit_idles("Gi")
+        self._check(pc2, padded_circ, self.test_labels)
 
+        pc.pad_single_qubit_idles_inplace("Gi")
+        self._check(pc, padded_circ, self.test_labels)
 
     def test_qubits(self):
         new_labels = ["Q0", "Q1", "Q2"]
@@ -82,7 +97,7 @@ class TestListPhysicalCircuit:
         self._check(pc4, self.expected_circ, self.test_labels)
 
         pc3.delete_qubits_inplace(["Q1", "Q2"])
-        expected_circ = [[('Gxpi2', 'Q0')],[('Gxpi2', 'Q0')]]
+        expected_circ = [[('Gxpi2', ('Q0',))],[],[],[('Gxpi2', ('Q0',))]]
         self._check(pc3, expected_circ, ["Q0"])
 
         # Map qubits

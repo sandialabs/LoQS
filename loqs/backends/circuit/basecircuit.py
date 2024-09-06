@@ -245,6 +245,34 @@ class BasePhysicalCircuit(Castable):
         """
         pass
 
+    def pad_single_qubit_idles(self: T, op_name: str) -> T:
+        """Replace empty spaces in layers with an idle operation.
+
+        Parameters
+        ----------
+        Other Parameters:
+            Refer to :meth:`pad_single_qubit_idles`
+
+        Returns
+        -------
+        modified_circuit:
+            A modified copy of the circuit.
+        """
+        modified_circuit = self.copy()
+        modified_circuit.pad_single_qubit_idles_inplace(op_name)
+        return modified_circuit
+
+    @abstractmethod
+    def pad_single_qubit_idles_inplace(self, op_name: str) -> None:
+        """Replace empty spaces in layers with an idle operation.
+
+        Parameters
+        ----------
+        op_name:
+            Label name to use when inserting idles.
+        """
+        pass
+
     def set_qubit_labels(self: T, qubit_labels: Sequence) -> T:
         """Set the qubit labels of an underlying circuit.
 

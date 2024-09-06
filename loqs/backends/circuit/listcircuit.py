@@ -30,7 +30,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
     CastableTypes: ClassVar[TypeAlias] = CastableTypes
 
-    _circuit: list[list[tuple[str, list[QubitTypes]]]]
+    _circuit: list[list[tuple[str, tuple[QubitTypes, ...]]]]
     """List of layers (which are lists of 2-tuples with (name, qubits))
     """
 
@@ -45,7 +45,10 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         from loqs.backends.circuit import PyGSTiPhysicalCircuit
 
         self._circuit = []
-        if isinstance(circuit, PyGSTiPhysicalCircuit):
+        if isinstance(circuit, ListPhysicalCircuit):
+            self._circuit = circuit.circuit.copy()
+            self._qubit_labels = circuit.qubit_labels
+        elif isinstance(circuit, PyGSTiPhysicalCircuit):
             try:
                 circuit = PyGSTiPhysicalCircuit.cast(circuit)
 
@@ -61,15 +64,14 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
                     qubit_labels = circuit.circuit.line_labels
             except ImportError as e:
                 raise ValueError("Could not cast pyGSTi circuit") from e
-        else:
-            assert isinstance(circuit, Sequence), "Expecting a list of layers"
+        elif isinstance(circuit, Sequence):
             seen_qubits = set()
 
-            def process_label(label) -> tuple[str, list[QubitTypes]]:
+            def process_label(label) -> tuple[str, tuple[QubitTypes, ...]]:
                 new_label = (
-                    (label[0], [label[1]])
+                    (label[0], (label[1],))
                     if not isinstance(label[1], (list, tuple))
-                    else label
+                    else (label[0], tuple(label[1]))
                 )
 
                 assert len(new_label) == 2, "Labels must be 2-tuples"
@@ -97,13 +99,15 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
             if qubit_labels is None:
                 qubit_labels = list(seen_qubits)
+        else:
+            raise ValueError("Expected BasePhysicalCircuit or list of layers")
 
         super().__init__(circuit, qubit_labels)
 
     name: ClassVar[str] = "Built-in list"
 
     @property
-    def circuit(self) -> list[list[tuple[str, list[QubitTypes]]]]:
+    def circuit(self) -> list[list[tuple[str, tuple[QubitTypes, ...]]]]:
         return self._circuit
 
     @property
@@ -153,7 +157,10 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         for layer in self._circuit:
             new_layer = []
             for label in layer:
-                new_label = (label[0], [complete_mapping[q] for q in label[1]])
+                new_label = (
+                    label[0],
+                    tuple([complete_mapping[q] for q in label[1]]),
+                )
                 new_layer.append(new_label)
             new_layers.append(new_layer)
         self._circuit = new_layers
@@ -177,19 +184,20 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
             if other_qubit not in self.qubit_labels:
                 self._qubit_labels.append(other_qubit)
 
+    def pad_single_qubit_idles_inplace(self, op_name: str) -> None:
+        for lidx in range(self.depth):
+            # Check with qubits are not idling
+            seen_qubits = set()
+            for comp in self._circuit[lidx]:
+                for qubit in comp[1]:
+                    seen_qubits.add(qubit)
+
+            # Add idling operations
+            missing_qubits = set(self._qubit_labels) - seen_qubits
+            for qubit in missing_qubits:
+                self._circuit[lidx].append((op_name, (qubit,)))
+
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:
-        """Set the qubit labels of an underlying circuit.
-
-        This only adds or deletes qubits from the circuit,
-        but does not modify the qubit labels of operations.
-        For a complete change of qubit labels, see
-        :meth:`map_qubit_labels_inplace` instead.
-
-        Parameters
-        ----------
-        qubit_labels:
-            Qubit labels to assign to circuit.
-        """
         self._qubit_labels = list(qubit_labels)

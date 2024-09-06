@@ -78,7 +78,20 @@ class TestPyGSTiPhysicalCircuit:
 
         pc.append_inplace(pc)
         self._check(pc, expected_circ)
+    
+    def test_pad(self):
+        padded_circ = Circuit([
+            "Gidle", [('Gxpi2', 'Q0'), ('Gi', 'Q1')], [('Gypi2', "Q1"), ('Gi', "Q0")],
+            ('Gcnot', 'Q0', "Q1"),
+            [('Gxpi2', 'Q0'), ('Gypi2', "Q1")], [Label('Gxpi2', ("Q0",)), ('Gi', "Q1")]],
+            line_labels=["Q0", "Q1"]) #type: ignore
+    
+        pc = PhysCirc(self.test_circ)
+        pc2 = pc.pad_single_qubit_idles("Gi")
+        self._check(pc2, padded_circ)
 
+        pc.pad_single_qubit_idles_inplace("Gi")
+        self._check(pc, padded_circ)
 
     def test_qubits(self):
         test_circ2 = self.test_circ.copy(editable=True) # type: ignore
