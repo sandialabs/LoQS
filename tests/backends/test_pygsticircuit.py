@@ -67,6 +67,9 @@ class TestPyGSTiPhysicalCircuit:
         with pytest.raises(ValueError):
             PhysCirc.cast(None)
     
+    def test_from_tiling(self):
+        pass
+    
     def test_append(self):
         circ1 = Circuit([('Gxpi2', 'Q0'), ('Gypi2', 'Q1')])
         expected_circ = circ1.append_circuit(circ1)
