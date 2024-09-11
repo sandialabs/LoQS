@@ -8,7 +8,10 @@ import copy
 from typing import Literal
 import warnings
 
+import dask
+from dask.distributed import Client
 from tqdm import tqdm
+from tqdm.dask import TqdmCallback
 
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
@@ -188,13 +191,45 @@ class QuantumProgram:
         )
 
     def run(
-        self, shots: int = 1, dry_run: bool = False, max_frame_limit: int = 100
+        self,
+        shots: int = 1,
+        dry_run: bool = False,
+        max_frame_limit: int = 100,
+        dask_client: Client | None = None,
     ):
         """TODO"""
-        for _ in tqdm(range(shots), f"Program {self.name}", disable=dry_run):
-            self._run_shot(dry_run=dry_run, max_frame_limit=max_frame_limit)
+        # Set up tasks
+        tasks = []
+        for i in range(shots):
+            # For RNG seeding, increment the base seed +1 for every shot (if seeded)
+            seed_for_shot = None
+            if self.default_base_seed is not None:
+                seed_for_shot = self.default_base_seed + i
 
-    def _run_shot(self, dry_run: bool = False, max_frame_limit: int = 100):
+            tasks.append((dry_run, max_frame_limit, seed_for_shot))
+
+        if dask_client is None:
+            # Execute serially
+            shot_results = []
+            for task in tqdm(tasks, f"Program {self.name}", disable=dry_run):
+                result = self._run_shot(*task)
+                shot_results.append(result)
+        else:
+            # Execute in parallel
+            results = [dask.delayed(self._run_shot)(*task) for task in tasks]  # type: ignore
+
+            with TqdmCallback(desc=f"Program {self.name}", disable=dry_run):
+                shot_results = dask.compute(*results)  # type: ignore
+
+        # Save results
+        self.shot_histories.extend(shot_results)
+
+    def _run_shot(
+        self,
+        dry_run: bool = False,
+        max_frame_limit: int = 100,
+        seed: int | None = None,
+    ):
         """TODO"""
         num_frames = 0
 
@@ -218,18 +253,11 @@ class QuantumProgram:
             inst = self._resolve_instruction(inst_label, last_frame)
 
             # Collect data that the QuantumProgram can give
-            # For RNG seeding, increment the base seed +1 for every shot (if seeded)
-            if self.default_base_seed is None:
-                seed_for_shot = None
-            else:
-                seed_for_shot = self.default_base_seed + len(
-                    self.shot_histories
-                )
             program_data = {
                 "history": history,
                 "patch_label": patch_label,
                 "stack": stack,
-                "seed": seed_for_shot,
+                "seed": seed,
             }
             if self.default_noise_model is not None:
                 program_data["model"] = self.default_noise_model
@@ -270,8 +298,7 @@ class QuantumProgram:
         if dry_run:
             print("Dry run completed successfully!")
 
-        if not dry_run:
-            self.shot_histories.append(history)
+        return history
 
     def _resolve_instruction(
         self, inst_lbl: InstructionLabelCastableTypes, frame: Frame

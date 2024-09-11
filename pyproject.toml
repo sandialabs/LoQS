@@ -3,12 +3,14 @@ name = "loqs"
 version = "1.0-alpha"
 requires-python = ">=3.10"
 dependencies = [
+    "dask[distributed]",
     "numpy",
-    "tqdm>=4"
+    "tqdm>=4",
 ]
 authors = [
-    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
+    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
+    {name = "Daniel Hothem", email = "dhothem@sandia.gov"},
     {name = "Megan Dahlhauser"},
     {name = "Julie Campos"},
     {name = "Mario Morford-Oberst"},
