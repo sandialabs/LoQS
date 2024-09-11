@@ -50,18 +50,16 @@ class DictNoiseModel(BaseNoiseModel):
             self.inst_dict = model_or_dicts.inst_dict.copy()
         elif isinstance(model_or_dicts, PyGSTiNoiseModel):
             for gate_key in model_or_dicts.gate_keys:
-                circ = ListPhysicalCircuit(
-                    [[(gate_key.name, gate_key.qubits)]]
-                )
-                self.gate_dict[gate_key] = model_or_dicts.get_reps(
+                label = (gate_key.name, gate_key.qubits)
+                circ = ListPhysicalCircuit([[label]])
+                self.gate_dict[label] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
                 )
 
             for inst_key in model_or_dicts.instrument_keys:
-                circ = ListPhysicalCircuit(
-                    [[(gate_key.name, gate_key.qubits)]]
-                )
-                self.inst_dict[inst_key] = model_or_dicts.get_reps(
+                label = (gate_key.name, gate_key.qubits)
+                circ = ListPhysicalCircuit([[label]])
+                self.inst_dict[label] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
                 )
         elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
