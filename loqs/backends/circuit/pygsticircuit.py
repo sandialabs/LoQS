@@ -59,10 +59,13 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             self._circuit = circuit.circuit
         elif isinstance(circuit, ListPhysicalCircuit):
             try:
-                self._circuit = _Circuit.cast(circuit.circuit)
+                expanded_circuit = [
+                    [(t[0], *t[1]) for t in layer] for layer in circuit.circuit
+                ]
+                self._circuit = _Circuit.cast(expanded_circuit)
             except Exception as e:
                 raise ValueError(
-                    "Failed to cast BuiltinCircuit to pyGSTi circuit"
+                    "Failed to cast list circuit to pyGSTi circuit"
                 ) from e
         else:
             try:

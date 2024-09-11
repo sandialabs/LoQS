@@ -9,6 +9,7 @@ from typing import ClassVar, TypeAlias
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
+from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 
 
 # Type aliases for static type checking
@@ -44,15 +45,22 @@ class DictNoiseModel(BaseNoiseModel):
         """
         self.gate_dict = {}
         self.inst_dict = {}
-        if isinstance(model_or_dicts, BaseNoiseModel):
+        if isinstance(model_or_dicts, DictNoiseModel):
+            self.gate_dict = model_or_dicts.gate_dict.copy()
+            self.inst_dict = model_or_dicts.inst_dict.copy()
+        elif isinstance(model_or_dicts, PyGSTiNoiseModel):
             for gate_key in model_or_dicts.gate_keys:
-                circ = ListPhysicalCircuit([gate_key])
+                circ = ListPhysicalCircuit(
+                    [[(gate_key.name, gate_key.qubits)]]
+                )
                 self.gate_dict[gate_key] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
                 )
 
             for inst_key in model_or_dicts.instrument_keys:
-                circ = ListPhysicalCircuit([inst_key])
+                circ = ListPhysicalCircuit(
+                    [[(gate_key.name, gate_key.qubits)]]
+                )
                 self.inst_dict[inst_key] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
                 )
