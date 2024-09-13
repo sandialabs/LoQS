@@ -9,7 +9,6 @@ from typing import ClassVar, TypeAlias
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 
-
 try:
     from pygsti.circuits import Circuit as _Circuit
     from pygsti.baseobjs import Label as _Label

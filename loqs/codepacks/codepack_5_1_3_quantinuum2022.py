@@ -14,13 +14,19 @@ Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
 """
 
 from collections.abc import Sequence
+import itertools
 from typing import Mapping
 import numpy as np
 
 from loqs.backends import propagate_state
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.backends.model.basemodel import BaseNoiseModel
+from loqs.backends.model.basemodel import (
+    BaseNoiseModel,
+    GateRep,
+    InstrumentRep,
+)
+from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.state.basestate import BaseQuantumState
 from loqs.core import Instruction, QECCode
@@ -32,6 +38,7 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.qeccode import PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
+import loqs.tools.pygstitools as pt
 
 
 def create_qec_code(
@@ -346,6 +353,8 @@ def create_qec_code(
 def create_ideal_model(
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
+    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
+    instrep: InstrumentRep = InstrumentRep.ZBASISPROJECTION,
 ):
     """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
 
@@ -369,9 +378,6 @@ def create_ideal_model(
         :meth:`create_qec_code`
     """
     assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
-    assert issubclass(
-        model_backend, PyGSTiNoiseModel
-    ), "Only pyGSTi models can be output by the codepack"
 
     gate_names = [
         "Gxpi",
@@ -385,34 +391,88 @@ def create_ideal_model(
         "Gcphase",
     ]
 
-    try:
-        import pygsti
-    except ImportError:
-        raise RuntimeError(
-            "pyGSTi not found, cannot construct pyGSTi noise model"
+    nonstd_unitaries = {
+        "Gk": np.array(
+            [
+                [1 / np.sqrt(2), 1 / np.sqrt(2)],
+                [1j / np.sqrt(2), -1j / np.sqrt(2)],
+            ]
         )
-    # TODO: Currently Iz does not need to be set here
-    # This is because QSimQuantumState actually does not try to pull the rep
-    # Otherwise, this would result in a KeyError in PyGSTiNoiseModel.get_reps(),
-    # since it technically should be provided
-    pspec = pygsti.processors.QubitProcessorSpec(
-        len(qubits),
-        gate_names=gate_names,
-        qubit_labels=qubits,
-        nonstd_gate_unitaries={
-            "Gk": np.array(
-                [
-                    [1 / np.sqrt(2), 1 / np.sqrt(2)],
-                    [1j / np.sqrt(2), -1j / np.sqrt(2)],
-                ]
+    }
+
+    if model_backend == PyGSTiNoiseModel:
+        try:
+            import pygsti
+        except ImportError:
+            raise ImportError(
+                "pyGSTi not found, cannot construct pyGSTi noise model"
             )
-        },
-        availability={k: "all-permutations" for k in gate_names},
-    )
 
-    ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(pspec)
+        # TODO: Instrument not specified here
+        pspec = pygsti.processors.QubitProcessorSpec(
+            len(qubits),
+            gate_names=gate_names,
+            qubit_labels=qubits,
+            nonstd_gate_unitaries=nonstd_unitaries,
+            availability={k: "all-permutations" for k in gate_names},
+        )
 
-    return model_backend(ideal_model_pygsti)
+        ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(pspec)
+
+        model = PyGSTiNoiseModel(ideal_model_pygsti)
+    elif model_backend == DictNoiseModel:
+        # Currently we use pyGSTi to look up definitions
+        # TODO: Remove if needed
+        try:
+            import pygsti
+        except ImportError:
+            raise ImportError(
+                "pyGSTi not found, cannot construct dict noise model"
+            )
+
+        std_unitaries = (
+            pygsti.tools.internalgates.standard_gatename_unitaries()
+        )
+
+        gate_dict = {}
+        for gate in gate_names:
+            U = std_unitaries.get(gate, None)
+            if U is None:
+                U = nonstd_unitaries[gate]
+
+            num_qubits = int(np.log2(U.shape[0]))
+            qubit_perms = itertools.permutations(qubits, r=num_qubits)
+            for qs in qubit_perms:
+                if gaterep == GateRep.UNITARY:
+                    gate_dict[(gate, qs)] = U
+                elif gaterep == GateRep.PTM:
+                    gate_dict[(gate, qs)] = pygsti.tools.unitary_to_pauligate(
+                        U
+                    )
+                elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                    gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
+                else:
+                    raise NotImplementedError(
+                        "Conversion to this rep is not implemented yet."
+                    )
+
+        inst_dict = {("Iz", (q,)): "TODO" for q in qubits}
+
+        return DictNoiseModel(
+            (gate_dict, inst_dict), gaterep=gaterep, instrep=instrep
+        )
+
+    elif issubclass(model_backend, BaseNoiseModel):
+        raise NotImplementedError(
+            "Cannot generate ideal model for this backend"
+        )
+    else:
+        raise ValueError("Must pass a noise model class")
+
+    assert gaterep in model.output_gate_reps
+    assert instrep in model.output_instrument_reps
+
+    return model
 
 
 ## Helper functions

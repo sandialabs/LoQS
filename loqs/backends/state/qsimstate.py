@@ -148,9 +148,9 @@ class QSimQuantumState(BaseQuantumState):
         return outcomes
 
     def apply_reps(
-        self, reps: Sequence
+        self, reps: Sequence, reset_mcms: bool = True
     ) -> tuple[QSimQuantumState, OutcomeDict]:
-        return super().apply_reps(reps)
+        return super().apply_reps(reps, reset_mcms)
 
     def copy(self) -> QSimQuantumState:
         return QSimQuantumState(self.state.copy())

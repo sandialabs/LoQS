@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -14,7 +14,7 @@ from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 
 # Type aliases for static type checking
 GateDictModelCastableTypes: TypeAlias = (
-    BaseNoiseModel | tuple[Mapping[object, object], Mapping[object, object]]
+    BaseNoiseModel | tuple[Mapping, Mapping]
 )
 """Types of objects this backend can cast to dict models"""
 
@@ -54,14 +54,15 @@ class DictNoiseModel(BaseNoiseModel):
                 circ = ListPhysicalCircuit([[label]])
                 self.gate_dict[label] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
-                )
+                )[0][0]
 
             for inst_key in model_or_dicts.instrument_keys:
-                label = (gate_key.name, gate_key.qubits)
+                label = (inst_key.name, inst_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
                 self.inst_dict[label] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
-                )
+                )[0][0]
+
         elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
             self.gate_dict = dict(model_or_dicts[0])
             self.inst_dict = dict(model_or_dicts[1])

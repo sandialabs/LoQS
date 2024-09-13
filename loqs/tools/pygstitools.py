@@ -13,6 +13,7 @@ from loqs.core.instructions.instructionlabel import (
 try:
     import pygsti
     from pygsti.baseobjs import Label, ExplicitBasis
+    from pygsti.circuits import Circuit
     from pygsti.data import DataSet
     from pygsti.protocols import ExperimentDesign
     from pygsti.models import ExplicitOpModel
@@ -56,7 +57,7 @@ def convert_edesign_to_programs(
 
     programs = []
     for circ in edesign.all_circuits_needing_data:
-        completed_circ = model.complete_circuit(circ)
+        completed_circ: Circuit = model.complete_circuit(circ)
 
         stack = []
         for label in completed_circ._labels:

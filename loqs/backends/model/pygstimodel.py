@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import functools
 import itertools
-from typing import ClassVar, TypeAlias
 import numpy as np
+from typing import ClassVar, TypeAlias
+
 
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
@@ -110,7 +110,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         circuit: BasePhysicalCircuit,
         gaterep: GateRep,
         instrep: InstrumentRep,
-    ) -> Sequence:
+    ) -> list:
         # Get bare circuit
         circuit = PyGSTiPhysicalCircuit.cast(circuit)
         pygsti_circuit = circuit.circuit

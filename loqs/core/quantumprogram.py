@@ -5,15 +5,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import os
 from typing import Literal
 import warnings
 
-import dask
 from dask.distributed import Client
 from tqdm import tqdm
 from tqdm.dask import TqdmCallback
 
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
+from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, History
 from loqs.core.history import Frame, HistoryCastableTypes
@@ -196,8 +198,18 @@ class QuantumProgram:
         dry_run: bool = False,
         max_frame_limit: int = 100,
         dask_client: Client | None = None,
+        dask_timeout: int | None = None,
     ):
         """TODO"""
+        # Take out shot histories, not needed to copy
+        old_shot_histories = self.shot_histories
+        self.shot_histories = []
+        if dask_client is None:
+            program = self
+        else:
+            # Scatter the quantum program to all workers (expensive to copy and unchanging)
+            program = dask_client.scatter(self)
+
         # Set up tasks
         tasks = []
         for i in range(shots):
@@ -206,26 +218,34 @@ class QuantumProgram:
             if self.default_base_seed is not None:
                 seed_for_shot = self.default_base_seed + i
 
-            tasks.append((dry_run, max_frame_limit, seed_for_shot))
+            tasks.append((program, dry_run, max_frame_limit, seed_for_shot))
 
         if dask_client is None:
             # Execute serially
             shot_results = []
             for task in tqdm(tasks, f"Program {self.name}", disable=dry_run):
-                result = self._run_shot(*task)
+                result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
         else:
-            # Execute in parallel
-            results = [dask.delayed(self._run_shot)(*task) for task in tasks]  # type: ignore
+            with TqdmCallback():
+                # Launch parallel jobs
+                future_results = [
+                    dask_client.submit(QuantumProgram._run_shot, *task)
+                    for task in tasks
+                ]
 
-            with TqdmCallback(desc=f"Program {self.name}", disable=dry_run):
-                shot_results = dask.compute(*results)  # type: ignore
+                # Block until complete
+                shot_results = [
+                    fr.result(dask_timeout) for fr in future_results
+                ]
 
         # Save results
-        self.shot_histories.extend(shot_results)
+        self.shot_histories = old_shot_histories + shot_results
 
+    # Static for more efficient parallel data movement
+    @staticmethod
     def _run_shot(
-        self,
+        program,
         dry_run: bool = False,
         max_frame_limit: int = 100,
         seed: int | None = None,
@@ -233,9 +253,9 @@ class QuantumProgram:
         """TODO"""
         num_frames = 0
 
-        history = copy.deepcopy(self.initial_history)
+        history = copy.deepcopy(program.initial_history)
 
-        stack = self.instruction_stack
+        stack = program.instruction_stack
 
         while num_frames < max_frame_limit and len(stack):
 
@@ -250,7 +270,7 @@ class QuantumProgram:
                 last_frame: Frame = history[-1]
             except IndexError:
                 last_frame = Frame()
-            inst = self._resolve_instruction(inst_label, last_frame)
+            inst = program._resolve_instruction(inst_label, last_frame)
 
             # Collect data that the QuantumProgram can give
             program_data = {
@@ -259,15 +279,15 @@ class QuantumProgram:
                 "stack": stack,
                 "seed": seed,
             }
-            if self.default_noise_model is not None:
-                program_data["model"] = self.default_noise_model
+            if program.default_noise_model is not None:
+                program_data["model"] = program.default_noise_model
 
             # Collect all arguments needed by apply_fn
             apply_kwargs = {}
             for i, (key, priorities) in enumerate(
                 inst.param_priorities.items()
             ):
-                apply_kwargs[key] = self._collect_kwarg(
+                apply_kwargs[key] = program._collect_kwarg(
                     position=i,
                     key=key,
                     priorities=priorities,

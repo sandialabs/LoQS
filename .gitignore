@@ -15,5 +15,6 @@ docs/**/*.ipynb
 venv*/
 loqs.egg-info/
 build/
+src/
 
 .DS_Store

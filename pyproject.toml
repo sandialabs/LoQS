@@ -3,7 +3,6 @@ name = "loqs"
 version = "1.0-alpha"
 requires-python = ">=3.10"
 dependencies = [
-    "dask[distributed]",
     "numpy",
     "tqdm>=4",
 ]
@@ -37,6 +36,11 @@ docs = [
     "sphinx",
     "jupyter-book",
     "jupytext"
+]
+dask = [
+    "bokeh!=3.0.*,>=2.4.2",
+    "dask[distributed]",
+    "ipywidgets"
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti[extensions]>=0.9.12", "numpy<2"]

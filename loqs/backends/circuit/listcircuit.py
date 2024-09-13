@@ -68,11 +68,12 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
             seen_qubits = set()
 
             def process_label(label) -> tuple[str, tuple[QubitTypes, ...]]:
-                new_label = (
-                    (label[0], (label[1],))
-                    if not isinstance(label[1], (list, tuple))
-                    else (label[0], tuple(label[1]))
-                )
+                if len(label) == 2 and isinstance(label[1], (list, tuple)):
+                    new_label = (label[0], tuple(label[1]))
+                elif len(label) == 2:
+                    new_label = (label[0], (label[1],))
+                else:
+                    new_label = (label[0], tuple(label[1:]))
 
                 assert len(new_label) == 2, "Labels must be 2-tuples"
                 assert isinstance(
