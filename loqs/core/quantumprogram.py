@@ -9,13 +9,10 @@ import os
 from typing import Literal
 import warnings
 
-from dask.distributed import Client
+from dask.distributed import Client, progress
 from tqdm import tqdm
-from tqdm.dask import TqdmCallback
 
-from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
-from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, History
 from loqs.core.history import Frame, HistoryCastableTypes
@@ -201,13 +198,14 @@ class QuantumProgram:
         dask_timeout: int | None = None,
     ):
         """TODO"""
-        # Take out shot histories, not needed to copy
+        # Take out shot histories to avoid unnecessary copies during dask.delayed
         old_shot_histories = self.shot_histories
         self.shot_histories = []
+
         if dask_client is None:
             program = self
         else:
-            # Scatter the quantum program to all workers (expensive to copy and unchanging)
+            # Delay program data to avoid copies every time
             program = dask_client.scatter(self)
 
         # Set up tasks
@@ -216,7 +214,9 @@ class QuantumProgram:
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             seed_for_shot = None
             if self.default_base_seed is not None:
-                seed_for_shot = self.default_base_seed + i
+                seed_for_shot = (
+                    self.default_base_seed + len(old_shot_histories) + i
+                )
 
             tasks.append((program, dry_run, max_frame_limit, seed_for_shot))
 
@@ -227,19 +227,18 @@ class QuantumProgram:
                 result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
         else:
-            with TqdmCallback():
-                # Launch parallel jobs
-                future_results = [
-                    dask_client.submit(QuantumProgram._run_shot, *task)
-                    for task in tasks
-                ]
+            # Launch jobs
+            # Not pure because RNG for shots underneath
+            futures = dask_client.map(
+                QuantumProgram._run_shot, tasks, pure=False
+            )
 
-                # Block until complete
-                shot_results = [
-                    fr.result(dask_timeout) for fr in future_results
-                ]
+            # Create progress bar
+            progress(futures)
 
-        # Save results
+            # Block for results
+            shot_results = [f.result() for f in futures]
+
         self.shot_histories = old_shot_histories + shot_results
 
     # Static for more efficient parallel data movement
