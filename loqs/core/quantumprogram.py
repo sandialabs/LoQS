@@ -227,10 +227,13 @@ class QuantumProgram:
                 result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
         else:
+            # Reshape to tuple of arglists instead of list of argtuples
+            tasks_arg_lists = zip(*tasks)
+
             # Launch jobs
             # Not pure because RNG for shots underneath
             futures = dask_client.map(
-                QuantumProgram._run_shot, tasks, pure=False
+                QuantumProgram._run_shot, *tasks_arg_lists, pure=False
             )
 
             # Create progress bar
