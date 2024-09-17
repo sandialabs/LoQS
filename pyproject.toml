@@ -30,7 +30,8 @@ dev = [
     "pre-commit",
     "black>=24",
     "flake8>=7",
-    "mypy>=1"
+    "mypy>=1",
+    "snakeviz"
 ]
 docs = [
     "sphinx",

@@ -229,7 +229,8 @@ class QuantumProgram:
                 shot_results.append(result)
         else:
             # Launch jobs
-            if dask_batch_size == 1: #Each task by itself, map directly
+            if dask_batch_size == 1:
+                # Each task by itself, just map directly
                 # Reshape to tuple of arglists instead of list of argtuples
                 tasks_arg_lists = zip(*tasks)
 
@@ -242,23 +243,25 @@ class QuantumProgram:
                 shot_results = dask_client.gather(futures)
             else:
                 # Split tasks into appropriate number of batches
-                batched_tasks = [tasks[i:i+dask_batch_size] for i in range(0, shots, dask_batch_size)]
+                batched_tasks = [
+                    tasks[i : i + dask_batch_size]
+                    for i in range(0, shots, dask_batch_size)
+                ]
 
                 # Not pure because RNG for shots underneath
                 futures = dask_client.map(
                     QuantumProgram._run_shot_batch, batched_tasks, pure=False
                 )
-                
+
                 # Retrive results (blocks until all tasks are finished)
                 batched_results = dask_client.gather(futures)
 
                 shot_results = []
-                for batch_results in batched_results:
+                for batch_results in batched_results:  # type: ignore
                     shot_results.extend(batch_results)
 
         # Restore shot history and add new results
-        self.shot_histories = old_shot_histories + shot_results
-
+        self.shot_histories = old_shot_histories + shot_results  # type: ignore
 
     # Helper function to run a chunk of shots at once
     @staticmethod
