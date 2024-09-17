@@ -9,7 +9,7 @@ import os
 from typing import Literal
 import warnings
 
-from dask.distributed import Client, progress
+from dask.distributed import Client, as_completed
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -236,12 +236,18 @@ class QuantumProgram:
                 QuantumProgram._run_shot, *tasks_arg_lists, pure=False
             )
 
-            # Create progress bar
-            progress(futures)
+            # Keep track of order of jobs (to match serial order)
+            future_indices = {f: i for i,f in enumerate(futures)}
 
-            # Block for results
-            shot_results = [f.result() for f in futures]
+            print("Use Dask dashboard to track progress")
 
+            # Slot results in as we get them (keeping serial order)
+            shot_results = [None,]*shots
+            for future, result in as_completed(futures, with_results=True):
+                idx = future_indices[future]
+                shot_results[idx] = result
+
+        # Restore shot history and add new results
         self.shot_histories = old_shot_histories + shot_results
 
     # Static for more efficient parallel data movement
