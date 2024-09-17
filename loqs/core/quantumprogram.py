@@ -9,6 +9,7 @@ import os
 from typing import Literal
 import warnings
 
+import dask.bag as db
 from dask.distributed import Client, as_completed
 from tqdm import tqdm
 
@@ -195,7 +196,7 @@ class QuantumProgram:
         dry_run: bool = False,
         max_frame_limit: int = 100,
         dask_client: Client | None = None,
-        dask_timeout: int | None = None,
+        dask_batch_size: int = 1,
     ):
         """TODO"""
         # Take out shot histories to avoid unnecessary copies during dask.delayed
@@ -227,28 +228,42 @@ class QuantumProgram:
                 result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
         else:
-            # Reshape to tuple of arglists instead of list of argtuples
-            tasks_arg_lists = zip(*tasks)
-
             # Launch jobs
-            # Not pure because RNG for shots underneath
-            futures = dask_client.map(
-                QuantumProgram._run_shot, *tasks_arg_lists, pure=False
-            )
+            if dask_batch_size == 1: #Each task by itself, map directly
+                # Reshape to tuple of arglists instead of list of argtuples
+                tasks_arg_lists = zip(*tasks)
 
-            # Keep track of order of jobs (to match serial order)
-            future_indices = {f: i for i,f in enumerate(futures)}
+                # Not pure because RNG for shots underneath
+                futures = dask_client.map(
+                    QuantumProgram._run_shot, *tasks_arg_lists, pure=False
+                )
 
-            print("Use Dask dashboard to track progress")
+                # Retrive results (blocks until all tasks are finished)
+                shot_results = dask_client.gather(futures)
+            else:
+                # Split tasks into appropriate number of batches
+                batched_tasks = [tasks[i:i+dask_batch_size] for i in range(0, shots, dask_batch_size)]
 
-            # Slot results in as we get them (keeping serial order)
-            shot_results = [None,]*shots
-            for future, result in as_completed(futures, with_results=True):
-                idx = future_indices[future]
-                shot_results[idx] = result
+                # Not pure because RNG for shots underneath
+                futures = dask_client.map(
+                    QuantumProgram._run_shot_batch, batched_tasks, pure=False
+                )
+                
+                # Retrive results (blocks until all tasks are finished)
+                batched_results = dask_client.gather(futures)
+
+                shot_results = []
+                for batch_results in batched_results:
+                    shot_results.extend(batch_results)
 
         # Restore shot history and add new results
         self.shot_histories = old_shot_histories + shot_results
+
+
+    # Helper function to run a chunk of shots at once
+    @staticmethod
+    def _run_shot_batch(tasks: Sequence[tuple]):
+        return [QuantumProgram._run_shot(*task) for task in tasks]
 
     # Static for more efficient parallel data movement
     @staticmethod
