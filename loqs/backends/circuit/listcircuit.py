@@ -185,18 +185,32 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
             if other_qubit not in self.qubit_labels:
                 self._qubit_labels.append(other_qubit)
 
-    def pad_single_qubit_idles_inplace(self, op_name: str) -> None:
+    def pad_single_qubit_idles_by_duration_inplace(
+        self,
+        idle_names: Mapping[int | float, str],
+        durations: Mapping[str, int | float],
+        default_duration: int | float | None = None,
+    ) -> None:
         for lidx in range(self.depth):
-            # Check with qubits are not idling
+            # Check with qubits are not idling and compute duration
             seen_qubits = set()
+            layer_duration = 0
             for comp in self._circuit[lidx]:
+                duration = durations.get(comp[0], default_duration)
+                if duration is None:
+                    raise KeyError(
+                        f"No duration for {comp[0]} or default specified"
+                    )
+                layer_duration = max(layer_duration, duration)
+
                 for qubit in comp[1]:
                     seen_qubits.add(qubit)
 
             # Add idling operations
+            layer_idle = idle_names[layer_duration]
             missing_qubits = set(self._qubit_labels) - seen_qubits
             for qubit in missing_qubits:
-                self._circuit[lidx].append((op_name, (qubit,)))
+                self._circuit[lidx].append((layer_idle, (qubit,)))
 
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]

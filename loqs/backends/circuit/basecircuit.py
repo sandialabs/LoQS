@@ -335,13 +335,13 @@ class BasePhysicalCircuit(Castable):
         """
         pass
 
-    def pad_single_qubit_idles(self: T, op_name: str) -> T:
+    def pad_single_qubit_idles(self: T, idle_name: str) -> T:
         """Replace empty spaces in layers with an idle operation.
 
         Parameters
         ----------
         Other Parameters:
-            Refer to :meth:`pad_single_qubit_idles`
+            Refer to :meth:`pad_single_qubit_idles_inplace`
 
         Returns
         -------
@@ -349,17 +349,68 @@ class BasePhysicalCircuit(Castable):
             A modified copy of the circuit.
         """
         modified_circuit = self.copy()
-        modified_circuit.pad_single_qubit_idles_inplace(op_name)
+        modified_circuit.pad_single_qubit_idles_inplace(idle_name)
         return modified_circuit
 
-    @abstractmethod
-    def pad_single_qubit_idles_inplace(self, op_name: str) -> None:
+    def pad_single_qubit_idles_inplace(self, idle_name: str) -> None:
         """Replace empty spaces in layers with an idle operation.
 
         Parameters
         ----------
-        op_name:
+        idle_name:
             Label name to use when inserting idles.
+        """
+        # Shortcut for pad by durations
+        self.pad_single_qubit_idles_by_duration_inplace(
+            {0: idle_name}, {}, default_duration=0
+        )
+
+    def pad_single_qubit_idles_by_duration(
+        self: T,
+        idle_names: Mapping[int | float, str],
+        durations: Mapping[str, int | float],
+    ) -> T:
+        """Replace empty spaces in layers with duration-specific idles.
+
+        Parameters
+        ----------
+        Other Parameters:
+            Refer to :meth:`pad_single_qubit_idles_by_duration_inplace`
+
+        Returns
+        -------
+        modified_circuit:
+            A modified copy of the circuit.
+        """
+        modified_circuit = self.copy()
+        modified_circuit.pad_single_qubit_idles_by_duration_inplace(
+            idle_names, durations
+        )
+        return modified_circuit
+
+    @abstractmethod
+    def pad_single_qubit_idles_by_duration_inplace(
+        self,
+        idle_names: Mapping[int | float, str],
+        durations: Mapping[str, int | float],
+        default_duration: int | float | None = None,
+    ) -> None:
+        """Replace empty spaces in layers with duration-specific idles.
+
+        This computes the max duration of all other operations in
+        the layer, and then inserts the appropriate idle.
+
+        Parameters
+        ----------
+        idle_names:
+            A mapping from layer duration to idle operation name.
+
+        durations:
+            A mapping from operation names to durations.
+
+        default_duration:
+            Default duration to use if not provided in `durations`.
+            Defaults to None, which will cause a KeyError to be thrown.
         """
         pass
 
