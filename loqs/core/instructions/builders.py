@@ -15,9 +15,14 @@ from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.qeccode import QECCode, QECCodePatch, PauliFrame
+from loqs.core.qeccode import QECCode, QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.syndrome import (
+    PauliFrame,
+    SyndromeLabel,
+    SyndromeLabelCastableTypes,
+)
 
 
 def build_composite_instruction(
@@ -102,22 +107,153 @@ def build_composite_instruction(
     )
 
 
+def build_pauli_frame_from_outcomes_instruction(
+    Z_syndrome_labels: Sequence[SyndromeLabelCastableTypes | None] | None,
+    X_syndrome_labels: Sequence[SyndromeLabelCastableTypes | None] | None,
+    name: str = "(Unnamed pauli frame builder)",
+) -> Instruction:
+    """TODO"""
+    assert Z_syndrome_labels is not None or X_syndrome_labels is not None
+    if Z_syndrome_labels is None:
+        Z_syndrome_labels = [
+            None,
+        ] * len(X_syndrome_labels)
+    if X_syndrome_labels is None:
+        X_syndrome_labels = [
+            None,
+        ] * len(Z_syndrome_labels)
+    assert len(Z_syndrome_labels) == len(X_syndrome_labels)
+
+    # Cast to syndrome_labels
+    Z_syndrome_labels = [
+        SyndromeLabel.cast(sl) for sl in Z_syndrome_labels if sl is not None
+    ]
+    X_syndrome_labels = [
+        SyndromeLabel.cast(sl) for sl in X_syndrome_labels if sl is not None
+    ]
+
+    # Standard apply_fn construction
+    def apply_fn(
+        patch_label: str,
+        Z_syndrome_labels: Sequence[SyndromeLabel | None],
+        X_syndrome_labels: Sequence[SyndromeLabel | None],
+        patches: PatchDict,
+        syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
+    ) -> Frame:
+        if isinstance(syndrome_outcomes, MeasurementOutcomes):
+            syndrome_outcomes = [syndrome_outcomes]
+
+        # Look up PauliFrame in patch
+        patch = patches[patch_label]
+
+        # Extract our initial pauli frame based on the syndrome_labels
+        def extract_frame_bits(syn_labels):
+            bits = []
+            for synlbl in syn_labels:
+                if synlbl is None:
+                    # Default to 0
+                    bits.append(0)
+                    continue
+
+                frame_outcomes = syndrome_outcomes[synlbl.frame_idx]
+                outcome = frame_outcomes[synlbl.qubit_label][
+                    synlbl.outcome_idx
+                ]
+                bits.append(outcome)
+
+        Z_bits = extract_frame_bits(Z_syndrome_labels)
+        X_bits = extract_frame_bits(X_syndrome_labels)
+
+        # Compute initial frame
+        paulis = []
+        for Zbit, Xbit in zip(Z_bits, X_bits):
+            if Zbit == 0 and Xbit == 0:
+                paulis.append("I")
+            elif Zbit == 0:
+                paulis.append("X")
+            elif Xbit == 0:
+                paulis.append("Z")
+            else:
+                paulis.append("Y")
+        pauli_frame = PauliFrame(patch.qubits, paulis)
+
+        # Update patches
+        new_patches = patches.copy()
+        new_patches[patch_label] = QECCodePatch(
+            patch.code, patch.qubits, pauli_frame
+        )
+
+        return Frame({"patches": new_patches})
+
+    data = {
+        "Z_syndrome_labels": Z_syndrome_labels,
+        "X_syndrome_labels": X_syndrome_labels,
+    }
+
+    # We need to be able to map the qubit_labels
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str],
+        Z_syndrome_labels: Sequence[SyndromeLabel],
+        X_syndrome_labels: Sequence[SyndromeLabel],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_Z_labels = [
+            SyndromeLabel(
+                qubit_mapping[sl.qubit_label], sl.frame_idx, sl.outcome_idx
+            )
+            for sl in Z_syndrome_labels
+        ]
+        new_X_labels = [
+            SyndromeLabel(
+                qubit_mapping[sl.qubit_label], sl.frame_idx, sl.outcome_idx
+            )
+            for sl in X_syndrome_labels
+        ]
+        new_kwargs["Z_syndrome_labels"] = new_Z_labels
+        new_kwargs["X_syndrome_labels"] = new_X_labels
+        return new_kwargs
+
+    # Get our expected output frame keys for use in dry run
+    frame_keys = ["patches"]
+
+    # We also need param priorities and aliases
+    # For priorities, we need as many measurement outcomes as requested by syndrome labels
+    frame_idxes = [
+        sl.frame_idx for sl in Z_syndrome_labels + X_syndrome_labels
+    ]
+    param_priorities = {"syndrome_outcomes": [f"history[{min(frame_idxes)}:]"]}
+
+    # For aliases, we just have syndrome -> measurement
+    param_aliases = {"syndrome_outcomes": "measurement_outcomes"}
+
+    return Instruction(
+        apply_fn=apply_fn,
+        dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
+        data=data,
+        map_qubits_fn=map_qubits_fn,
+        param_priorities=param_priorities,
+        param_aliases=param_aliases,
+        name=name,
+    )
+
+
 def build_lookup_decoder_instruction(
     lookup_table: Mapping[str, str],
-    qubit_labels: Sequence[tuple[str, int] | str],
+    syndrome_labels: Sequence[SyndromeLabelCastableTypes],
     name: str = "(Unnamed lookup decoder)",
 ) -> Instruction:
     """TODO"""
-    # Sanity check: Have specified a syndrome qubit label for each element of lookup_table keys
+    # Sanity check: Have specified a syndrome label for each element of lookup_table
     assert all(
-        [len(k) == len(qubit_labels) for k in lookup_table]
-    ), "Lookup table syndromes must match number of syndrome qubit labels"
+        [len(k) == len(syndrome_labels) for k in lookup_table]
+    ), "Lookup table syndromes must match number of syndrome labels"
 
     # Standard apply_fn construction
     def apply_fn(
         patch_label: str,
         lookup_table: dict[str, str],
-        qubit_labels: list[tuple[str, int]],
+        syndrome_labels: list[SyndromeLabel],
         patches: PatchDict,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
     ) -> Frame:
@@ -129,8 +265,10 @@ def build_lookup_decoder_instruction(
 
         # Extract our syndrome measurements based on the qubit labels
         syndrome = ""
-        for (qlabel, idx), outcome in zip(qubit_labels, syndrome_outcomes):
-            syndrome += str(outcome[qlabel][idx])
+        for synlbl in syndrome_labels:
+            frame_outcomes = syndrome_outcomes[synlbl.frame_idx]
+            outcome = frame_outcomes[synlbl.qubit_label][synlbl.outcome_idx]
+            syndrome += str(outcome)
 
         # Look up data error
         data_error_str = lookup_table[syndrome]
@@ -154,15 +292,10 @@ def build_lookup_decoder_instruction(
             }
         )
 
-    # We store lookup table and qubit labels
-    # Ensure that both are in the expected format (including adding default 0 index
-    # to qubit_labels if only strings were passed in)
-    idxed_qubit_labels = [
-        (ql, 0) if isinstance(ql, str) else ql for ql in qubit_labels
-    ]
+    # We store lookup table and syndrome labels
     data = {
         "lookup_table": dict(lookup_table),
-        "qubit_labels": idxed_qubit_labels,
+        "syndrome_labels": [SyndromeLabel.cast(sl) for sl in syndrome_labels],
     }
 
     # We need to be able to map the qubit_labels
@@ -172,8 +305,11 @@ def build_lookup_decoder_instruction(
         **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
-        new_kwargs["qubit_labels"] = [
-            (qubit_mapping[el[0]], el[1]) for el in qubit_labels
+        new_kwargs["sydrome_labels"] = [
+            SyndromeLabel(
+                qubit_mapping[sl.qubit_label], sl.frame_idx, sl.outcome_idx
+            )
+            for sl in syndrome_labels
         ]
         return new_kwargs
 
@@ -181,10 +317,9 @@ def build_lookup_decoder_instruction(
     frame_keys = ["patches"]
 
     # We also need param priorities and aliases
-    # For priorities, we need as many measurement outcomes as requested by qubit labels
-    param_priorities = {
-        "syndrome_outcomes": [f"history[-{len(qubit_labels)}:]"]
-    }
+    # For priorities, we need as many measurement outcomes as requested by syndrome labels
+    frame_idxes = [sl.frame_idx for sl in data["syndrome_labels"]]
+    param_priorities = {"syndrome_outcomes": [f"history[{min(frame_idxes)}:]"]}
 
     # For aliases, we just have syndrome -> measurement
     param_aliases = {"syndrome_outcomes": "measurement_outcomes"}

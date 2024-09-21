@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.backends.state.basestate import OutcomeDict
-from loqs.core.qeccode import PauliFrame, PauliFrameCastableTypes
+from loqs.core.syndrome import PauliFrame, PauliFrameCastableTypes
 from loqs.internal.castable import Castable
 
 

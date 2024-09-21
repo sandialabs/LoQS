@@ -126,7 +126,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         for lidx in range(idx, end):
             comps = self._circuit._layer_components(
                 lidx
-            ) + other_circuit._layer_components(lidx)
+            ) + other_circuit._layer_components(lidx - idx)
             self._circuit.set_labels(comps, lidx)
 
     def pad_single_qubit_idles_by_duration_inplace(
@@ -134,13 +134,14 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         idle_names: Mapping[int | float, str],
         durations: Mapping[str, int | float],
         default_duration: int | float | None = None,
+        empty_layer_idle: str | None = None,
     ) -> None:
         for lidx in range(self._circuit.depth):
             comps = self._circuit._layer_components(lidx)
 
             # Check with qubits are not idling
             seen_qubits = set()
-            layer_duration = 0
+            layer_duration = None
             for comp in comps:
                 if comp.qubits is None:
                     # This has no qubit labels, assume it is a whole layer instruction
@@ -152,13 +153,23 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                     raise KeyError(
                         f"No duration for {comp.name} or default specified"
                     )
-                layer_duration = max(layer_duration, duration)
+                if layer_duration is None:
+                    layer_duration = duration
+                else:
+                    layer_duration = max(layer_duration, duration)
 
                 for qubit in comp.qubits:
                     seen_qubits.add(qubit)
 
-            # Add idling operations
-            layer_idle = idle_names[layer_duration]
+            # Get idling operation (or skip for empty layers with no idles)
+            if layer_duration is None and empty_layer_idle is None:
+                continue
+            elif layer_duration is None:
+                layer_idle = empty_layer_idle
+            else:
+                layer_idle = idle_names[layer_duration]
+
+            # Insert idling operations
             missing_qubits = set(self._circuit.line_labels) - seen_qubits
             for qubit in missing_qubits:
                 comps.append(_Label(layer_idle, (qubit,)))

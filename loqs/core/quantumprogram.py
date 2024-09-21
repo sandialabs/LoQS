@@ -24,8 +24,9 @@ from loqs.core.instructions.instructionlabel import (
 from loqs.core.instructions.instructionstack import (
     InstructionStackCastableTypes,
 )
-from loqs.core.qeccode import QECCode, PauliFrame
+from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
+from loqs.core.syndrome import PauliFrame
 
 
 class QuantumProgram:

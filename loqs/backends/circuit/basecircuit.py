@@ -394,6 +394,7 @@ class BasePhysicalCircuit(Castable):
         idle_names: Mapping[int | float, str],
         durations: Mapping[str, int | float],
         default_duration: int | float | None = None,
+        empty_layer_idle: str | None = None,
     ) -> None:
         """Replace empty spaces in layers with duration-specific idles.
 
@@ -411,6 +412,10 @@ class BasePhysicalCircuit(Castable):
         default_duration:
             Default duration to use if not provided in `durations`.
             Defaults to None, which will cause a KeyError to be thrown.
+
+        empty_layer_idle:
+            Label to use for qubits in a completely empty label.
+            Defaults to None, which inserts no idles.
         """
         pass
 
