@@ -301,11 +301,11 @@ def build_lookup_decoder_instruction(
     # We need to be able to map the qubit_labels
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str],
-        qubit_labels: list[tuple[str, int]],
+        syndrome_labels: list[tuple[str, int]],
         **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
-        new_kwargs["sydrome_labels"] = [
+        new_kwargs["syndrome_labels"] = [
             SyndromeLabel(
                 qubit_mapping[sl.qubit_label], sl.frame_idx, sl.outcome_idx
             )
