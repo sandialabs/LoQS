@@ -323,6 +323,7 @@ class QuantumProgram:
                     instruction_data=inst.data,
                     program_data=program_data,
                     history=history,
+                    name=inst.name,
                 )
 
             applied_frame = inst.apply(dry_run, **apply_kwargs)
@@ -403,6 +404,7 @@ class QuantumProgram:
         instruction_data: Mapping[str, object],
         program_data: Mapping[str, object],
         history: History,
+        name: str,
     ) -> object:
         """TODO"""
         for priority in priorities:
@@ -441,7 +443,7 @@ class QuantumProgram:
                         idxs = int(idx_str)
                     except ValueError:
                         raise ValueError(
-                            "Invalid index spec for history priority"
+                            "Invalid index spec for history priority for {name}"
                         )
 
                 # Collect the requested data
@@ -453,10 +455,12 @@ class QuantumProgram:
                     if data is not None:
                         return data
             else:
-                raise ValueError(f"Invalid priority {priority} for key {key}")
+                raise ValueError(
+                    f"Invalid priority {priority} for key {key} for {name}"
+                )
 
         # If we've made it here, nothing returned so we failed to collect
-        raise RuntimeError(f"Failed to collect parameter {key}")
+        raise RuntimeError(f"Failed to collect parameter {key} for {name}")
 
     def collect_shot_data(
         self, key: str, indices: int | slice | Sequence[int] | Literal["all"]

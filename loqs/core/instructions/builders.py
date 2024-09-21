@@ -52,11 +52,14 @@ def build_composite_instruction(
                     # We want to forward this via the label
                     if k == "patch_label":
                         patch_label = v
+                    elif k in ["stack", "patches", "instructions"]:
+                        # We want these from the program or not at all
+                        pass
                     else:
                         label_kwargs[k] = v
 
             new_label = InstructionLabel(
-                instruction, patch_label, inst_kwargs=kwargs
+                instruction, patch_label, inst_kwargs=label_kwargs
             )
 
             stack = stack.insert_instruction(i, new_label)
