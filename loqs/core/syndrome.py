@@ -114,7 +114,7 @@ class PauliFrame(Castable):
         assert len(pstr) == self.num_qubits
 
         new_frame = self.copy()
-        for i, (Pold, P) in enumerate(self.pauli_frame, pstr):
+        for i, (Pold, P) in enumerate(zip(self.pauli_frame, pstr)):
             if P == "X":
                 old_to_new = {"I": "X", "X": "I", "Y": "Z", "Z": "Y"}
             elif P == "Y":
