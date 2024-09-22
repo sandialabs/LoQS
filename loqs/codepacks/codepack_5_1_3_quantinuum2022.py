@@ -951,6 +951,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         builders.build_lookup_decoder_instruction(
             lookup_table=unflagged_lookup_table,
             syndrome_labels=syndrome_labels,
+            syndrome_tag="XYZ",
             name="Unflagged decoder",
         )
     )

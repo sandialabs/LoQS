@@ -4,6 +4,7 @@
 from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 import inspect as ins
+import numpy as np
 
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -113,6 +114,7 @@ def build_composite_instruction(
 def build_lookup_decoder_instruction(
     lookup_table: Mapping[str, str],
     syndrome_labels: Sequence[SyndromeLabelCastableTypes],
+    raw_syndrome_frame_key: str,
     name: str = "(Unnamed lookup decoder)",
 ) -> Instruction:
     """TODO"""
@@ -126,8 +128,10 @@ def build_lookup_decoder_instruction(
         patch_label: str,
         lookup_table: dict[str, str],
         syndrome_labels: list[SyndromeLabel],
+        raw_syndrome_frame_key: str,
         patches: PatchDict,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
+        history: History,
     ) -> Frame:
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
             syndrome_outcomes = [syndrome_outcomes]
@@ -136,14 +140,39 @@ def build_lookup_decoder_instruction(
         patch = patches[patch_label]
 
         # Extract our syndrome measurements based on the qubit labels
-        syndrome = ""
+        syndrome = []
         for synlbl in syndrome_labels:
             frame_outcomes = syndrome_outcomes[synlbl.frame_idx]
             outcome = frame_outcomes[synlbl.qubit_label][synlbl.outcome_idx]
-            syndrome += str(outcome)
+            syndrome.append(outcome)
 
-        # Look up data error
-        data_error_str = lookup_table[syndrome]
+        # We need to diff against the last measured syndrome to see if anything has flipped
+        # First, find the last time we measured a syndrome with this tag
+        # TODO: This will not distinguish tags between patches. We have the history,
+        # so can figure it out by comparing patch_labels and patch objects
+        # but punting on this for now. Need to fix before production 2Q runs
+        prev_syndrome = None
+        prev_frame_info = None
+        for i, frame in enumerate(history[::-1]):
+            prev_syndrome = frame.get(raw_syndrome_frame_key, None)
+            if prev_syndrome is None:
+                continue
+
+            # If we got one, record logging info and break
+            prev_frame_info = (frame.log, -i - 1)
+            break
+
+        # If we have a previous syndrome, XOR it to get the diff
+        if prev_syndrome is None:
+            syndrome_diff = syndrome
+        else:
+            syndrome_diff = [
+                int(b) for b in np.logical_xor(syndrome, prev_syndrome)
+            ]
+
+        # Look up data error based on changed syndromes
+        syndrome_str = "".join([str(s) for s in syndrome_diff])
+        data_error_str = lookup_table[syndrome_str]
 
         # Update pauli frame
         new_pauli_frame = patch.pauli_frame.update_from_pauli_str(
@@ -159,8 +188,12 @@ def build_lookup_decoder_instruction(
         return Frame(
             {
                 "patches": new_patches,
-                "syndrome": syndrome,
+                raw_syndrome_frame_key: syndrome,
+                "prev_syndrome_frame": prev_frame_info,
+                "syndrome_diff": syndrome_diff,
                 "decoded_error": data_error_str,
+                "prev_pauli_frame": "".join(patch.pauli_frame.pauli_frame),
+                "new_pauli_frame": "".join(new_pauli_frame.pauli_frame),
             }
         )
 
@@ -168,6 +201,7 @@ def build_lookup_decoder_instruction(
     data = {
         "lookup_table": dict(lookup_table),
         "syndrome_labels": [SyndromeLabel.cast(sl) for sl in syndrome_labels],
+        "raw_syndrome_frame_key": raw_syndrome_frame_key,
     }
 
     # We need to be able to map the qubit_labels
@@ -186,7 +220,15 @@ def build_lookup_decoder_instruction(
         return new_kwargs
 
     # Get our expected output frame keys for use in dry run
-    frame_keys = ["patches"]
+    frame_keys = [
+        "patches",
+        raw_syndrome_frame_key,
+        "syndrome_diff",
+        "prev_syndrome_frame",
+        "decoded_error",
+        "prev_pauli_frame",
+        "new_pauli_frame",
+    ]
 
     # We also need param priorities and aliases
     # For priorities, we need as many measurement outcomes as requested by syndrome labels
@@ -476,7 +518,9 @@ def build_repeat_until_success_instruction(
             outcomes = MeasurementOutcomes.cast(
                 applied_frame["measurement_outcomes"]
             )
-            inferred_outcomes = outcomes.get_inferred_outcomes(pauli_frame)
+            inferred_outcomes = outcomes.get_inferred_outcomes(
+                "Z", pauli_frame
+            )
             success = success_fn(inferred_outcomes)
         except KeyError:
             raise RuntimeError(

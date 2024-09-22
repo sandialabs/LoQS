@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from loqs.backends.state.basestate import OutcomeDict
 from loqs.core.syndrome import PauliFrame, PauliFrameCastableTypes
@@ -53,16 +53,21 @@ class MeasurementOutcomes(Castable, Mapping[str, list[int]]):
         return f"MeasurementOutcomes({self.outcomes})"
 
     def get_inferred_outcomes(
-        self, pauli_frame: object | None = None
+        self,
+        basis: Literal["Z"] | Literal["X"],
+        pauli_frame: object | None = None,
     ) -> MeasurementOutcomes:
         """TODO"""
         if pauli_frame is None:
             return MeasurementOutcomes(self.outcomes.copy())
 
+        assert basis in "XZ"
+        bitflip_basis = "Z" if basis == "X" else "X"
+
         pauli_frame = PauliFrame.cast(pauli_frame)
 
         inferred_outcomes = {}
         for qubit, outs in self.outcomes.items():
-            bitflip = pauli_frame.get_bit("X", qubit)
+            bitflip = pauli_frame.get_bit(bitflip_basis, qubit)
             inferred_outcomes[qubit] = [(o + bitflip) % 2 for o in outs]
         return MeasurementOutcomes(inferred_outcomes)

@@ -108,6 +108,16 @@ class PauliFrame(Castable):
 
         return 0
 
+    def get_type_str(self, type: str) -> str:
+        type = type.upper()
+        assert type in ("X", "Z"), "Can only get X or Z type bits"
+
+        bits = [
+            "X" if self.get_bit(i) else "I" for i in range(self.num_qubits)
+        ]
+
+        return "".join(bits)
+
     def update_from_pauli_str(
         self, pstr: Sequence[PauliLiterals]
     ) -> PauliFrame:
