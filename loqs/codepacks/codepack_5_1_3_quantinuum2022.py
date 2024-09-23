@@ -946,11 +946,12 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         "0100": "IIIIZ",
     }
     # Take the first measurement from A0 qubit for last 4 instructions as syndrome
-    qubit_labels = ["A0"] * 4
+    syndrome_labels = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
     instructions["Unflagged Decoder"] = (
         builders.build_lookup_decoder_instruction(
             lookup_table=unflagged_lookup_table,
-            qubit_labels=qubit_labels,
+            syndrome_labels=syndrome_labels,
+            syndrome_tag="XYZ",
             name="Unflagged decoder",
         )
     )

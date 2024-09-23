@@ -14,6 +14,11 @@ from .instructions import (
     InstructionStack,
 )
 
+# After Instruction
+from .syndrome import PauliFrame, SyndromeLabel
+
+# After PauliFrame
 from .qeccode import QECCode, QECCodePatch
 
+# After QECCodePatch
 from .quantumprogram import QuantumProgram
