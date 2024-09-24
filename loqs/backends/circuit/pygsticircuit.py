@@ -131,7 +131,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         for lidx in range(self._circuit.depth):
             comps = self._circuit._layer_components(lidx)
 
-            # Check with qubits are not idling
+            # Check which qubits are not idling
             seen_qubits = set()
             for comp in comps:
                 if comp.qubits is None:
