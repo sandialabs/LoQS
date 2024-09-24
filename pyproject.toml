@@ -4,11 +4,12 @@ version = "1.0-alpha"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
-    "tqdm>=4"
+    "tqdm>=4",
 ]
 authors = [
-    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
+    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
+    {name = "Daniel Hothem", email = "dhothem@sandia.gov"},
     {name = "Megan Dahlhauser"},
     {name = "Julie Campos"},
     {name = "Mario Morford-Oberst"},
@@ -29,12 +30,18 @@ dev = [
     "pre-commit",
     "black>=24",
     "flake8>=7",
-    "mypy>=1"
+    "mypy>=1",
+    "snakeviz"
 ]
 docs = [
     "sphinx",
     "jupyter-book",
     "jupytext"
+]
+dask = [
+    "bokeh!=3.0.*,>=2.4.2",
+    "dask[distributed]",
+    "ipywidgets"
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti[extensions]>=0.9.12", "numpy<2"]

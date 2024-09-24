@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import TypeAlias
 
 from loqs.core.instructions import Instruction
+from loqs.core.syndrome import PauliFrame, PauliFrameCastableTypes
 from loqs.internal import Castable
 
 
@@ -91,102 +92,3 @@ class QECCodePatch(Mapping[str, Instruction]):
         s = f"QECCodePatch for {self.code.name} on qubits "
         s += f"[{self.qubits[0]},...,{self.qubits[-1]}]"
         return s
-
-
-PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
-
-
-# TODO: Find long-term place for this
-class PauliFrame(Castable):
-    """TODO"""
-
-    qubit_labels: list[str]
-    """TODO"""
-
-    num_qubits: int
-    """TODO"""
-
-    x_bits: list[int]
-    """TODO"""
-
-    z_bits: list[int]
-    """TODO"""
-
-    def __init__(
-        self,
-        frame_or_labels: PauliFrameCastableTypes,
-        x_bits: Sequence[int] | None = None,
-        z_bits: Sequence[int] | None = None,
-    ) -> None:
-        """TODO"""
-        if isinstance(frame_or_labels, PauliFrame):
-            self.qubit_labels = frame_or_labels.qubit_labels
-            self.num_qubits = frame_or_labels.num_qubits
-            self.x_bits = frame_or_labels.x_bits
-            self.z_bits = frame_or_labels.z_bits
-        else:
-            self.qubit_labels = list(frame_or_labels)
-            self.num_qubits = len(frame_or_labels)
-            self.x_bits = [
-                0,
-            ] * self.num_qubits
-            self.z_bits = [
-                0,
-            ] * self.num_qubits
-
-        if x_bits is not None:
-            assert (
-                len(x_bits) == self.num_qubits
-            ), "Must provide complete stabilizer frame"
-            assert all(
-                [x in [0, 1] for x in x_bits]
-            ), "Bitvalues must be 0 or 1"
-            self.x_bits = list(x_bits)
-
-        if z_bits is not None:
-            assert (
-                len(z_bits) == self.num_qubits
-            ), "Must provide complete stabilizer frame"
-            assert all(
-                [z in [0, 1] for z in z_bits]
-            ), "Bitvalues must be 0 or 1"
-            self.z_bits = list(z_bits)
-
-    def __str__(self) -> str:
-        s = f"PauliFrame on [{self.qubit_labels[0]},...,{self.qubit_labels[-1]}] qubits:\n"
-        s += f"  X bits: {self.x_bits}"
-        s += f"  Z bits: {self.z_bits}"
-        return s
-
-    def copy(self) -> PauliFrame:
-        return PauliFrame(self.qubit_labels, self.x_bits, self.z_bits)
-
-    def get_bit(self, type: str, qubit: str) -> int:
-        type = type.upper()
-        assert type in ("X", "Z"), "Can only get X or Z type bits"
-
-        bits = self.x_bits if type == "X" else self.z_bits
-
-        return bits[self.qubit_labels.index(qubit)]
-
-    def update_from_pauli_str(self, pstr: str) -> PauliFrame:
-        assert len(pstr) == self.num_qubits
-
-        new_frame = self.copy()
-        for i, P in enumerate(pstr):
-            if P == "X":
-                new_val = (new_frame.x_bits[i] + 1) % 2
-                new_frame.x_bits[i] = new_val
-            elif P == "Y":
-                new_val = (new_frame.x_bits[i] + 1) % 2
-                new_frame.x_bits[i] = new_val
-
-                new_val = (new_frame.z_bits[i] + 1) % 2
-                new_frame.z_bits[i] = new_val
-            elif P == "Z":
-                new_val = (new_frame.z_bits[i] + 1) % 2
-                new_frame.z_bits[i] = new_val
-
-            # Otherwise we must be I, no action needed
-
-        return new_frame

@@ -5,9 +5,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import os
 from typing import Literal
 import warnings
 
+import dask.bag as db
+from dask.distributed import Client, as_completed
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -21,8 +24,9 @@ from loqs.core.instructions.instructionlabel import (
 from loqs.core.instructions.instructionstack import (
     InstructionStackCastableTypes,
 )
-from loqs.core.qeccode import QECCode, PauliFrame
+from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
+from loqs.core.syndrome import PauliFrame
 
 
 class QuantumProgram:
@@ -188,19 +192,97 @@ class QuantumProgram:
         )
 
     def run(
-        self, shots: int = 1, dry_run: bool = False, max_frame_limit: int = 100
+        self,
+        shots: int = 1,
+        dry_run: bool = False,
+        max_frame_limit: int = 100,
+        dask_client: Client | None = None,
+        dask_batch_size: int = 1,
     ):
         """TODO"""
-        for _ in tqdm(range(shots), f"Program {self.name}", disable=dry_run):
-            self._run_shot(dry_run=dry_run, max_frame_limit=max_frame_limit)
+        # Take out shot histories to avoid unnecessary copies during dask.delayed
+        old_shot_histories = self.shot_histories
+        self.shot_histories = []
 
-    def _run_shot(self, dry_run: bool = False, max_frame_limit: int = 100):
+        if dask_client is None:
+            program = self
+        else:
+            # Delay program data to avoid copies every time
+            program = dask_client.scatter(self)
+
+        # Set up tasks
+        tasks = []
+        for i in range(shots):
+            # For RNG seeding, increment the base seed +1 for every shot (if seeded)
+            seed_for_shot = None
+            if self.default_base_seed is not None:
+                seed_for_shot = (
+                    self.default_base_seed + len(old_shot_histories) + i
+                )
+
+            tasks.append((program, dry_run, max_frame_limit, seed_for_shot))
+
+        if dask_client is None:
+            # Execute serially
+            shot_results = []
+            for task in tqdm(tasks, f"Program {self.name}", disable=dry_run):
+                result = QuantumProgram._run_shot(*task)
+                shot_results.append(result)
+        else:
+            # Launch jobs
+            if dask_batch_size == 1:
+                # Each task by itself, just map directly
+                # Reshape to tuple of arglists instead of list of argtuples
+                tasks_arg_lists = zip(*tasks)
+
+                # Not pure because RNG for shots underneath
+                futures = dask_client.map(
+                    QuantumProgram._run_shot, *tasks_arg_lists, pure=False
+                )
+
+                # Retrive results (blocks until all tasks are finished)
+                shot_results = dask_client.gather(futures)
+            else:
+                # Split tasks into appropriate number of batches
+                batched_tasks = [
+                    tasks[i : i + dask_batch_size]
+                    for i in range(0, shots, dask_batch_size)
+                ]
+
+                # Not pure because RNG for shots underneath
+                futures = dask_client.map(
+                    QuantumProgram._run_shot_batch, batched_tasks, pure=False
+                )
+
+                # Retrive results (blocks until all tasks are finished)
+                batched_results = dask_client.gather(futures)
+
+                shot_results = []
+                for batch_results in batched_results:  # type: ignore
+                    shot_results.extend(batch_results)
+
+        # Restore shot history and add new results
+        self.shot_histories = old_shot_histories + shot_results  # type: ignore
+
+    # Helper function to run a chunk of shots at once
+    @staticmethod
+    def _run_shot_batch(tasks: Sequence[tuple]):
+        return [QuantumProgram._run_shot(*task) for task in tasks]
+
+    # Static for more efficient parallel data movement
+    @staticmethod
+    def _run_shot(
+        program,
+        dry_run: bool = False,
+        max_frame_limit: int = 100,
+        seed: int | None = None,
+    ):
         """TODO"""
         num_frames = 0
 
-        history = copy.deepcopy(self.initial_history)
+        history = copy.deepcopy(program.initial_history)
 
-        stack = self.instruction_stack
+        stack = program.instruction_stack
 
         while num_frames < max_frame_limit and len(stack):
 
@@ -215,31 +297,24 @@ class QuantumProgram:
                 last_frame: Frame = history[-1]
             except IndexError:
                 last_frame = Frame()
-            inst = self._resolve_instruction(inst_label, last_frame)
+            inst = program._resolve_instruction(inst_label, last_frame)
 
             # Collect data that the QuantumProgram can give
-            # For RNG seeding, increment the base seed +1 for every shot (if seeded)
-            if self.default_base_seed is None:
-                seed_for_shot = None
-            else:
-                seed_for_shot = self.default_base_seed + len(
-                    self.shot_histories
-                )
             program_data = {
                 "history": history,
                 "patch_label": patch_label,
                 "stack": stack,
-                "seed": seed_for_shot,
+                "seed": seed,
             }
-            if self.default_noise_model is not None:
-                program_data["model"] = self.default_noise_model
+            if program.default_noise_model is not None:
+                program_data["model"] = program.default_noise_model
 
             # Collect all arguments needed by apply_fn
             apply_kwargs = {}
             for i, (key, priorities) in enumerate(
                 inst.param_priorities.items()
             ):
-                apply_kwargs[key] = self._collect_kwarg(
+                apply_kwargs[key] = program._collect_kwarg(
                     position=i,
                     key=key,
                     priorities=priorities,
@@ -248,6 +323,7 @@ class QuantumProgram:
                     instruction_data=inst.data,
                     program_data=program_data,
                     history=history,
+                    name=inst.name,
                 )
 
             applied_frame = inst.apply(dry_run, **apply_kwargs)
@@ -270,8 +346,7 @@ class QuantumProgram:
         if dry_run:
             print("Dry run completed successfully!")
 
-        if not dry_run:
-            self.shot_histories.append(history)
+        return history
 
     def _resolve_instruction(
         self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
@@ -329,6 +404,7 @@ class QuantumProgram:
         instruction_data: Mapping[str, object],
         program_data: Mapping[str, object],
         history: History,
+        name: str,
     ) -> object:
         """TODO"""
         for priority in priorities:
@@ -367,7 +443,7 @@ class QuantumProgram:
                         idxs = int(idx_str)
                     except ValueError:
                         raise ValueError(
-                            "Invalid index spec for history priority"
+                            "Invalid index spec for history priority for {name}"
                         )
 
                 # Collect the requested data
@@ -379,10 +455,12 @@ class QuantumProgram:
                     if data is not None:
                         return data
             else:
-                raise ValueError(f"Invalid priority {priority} for key {key}")
+                raise ValueError(
+                    f"Invalid priority {priority} for key {key} for {name}"
+                )
 
         # If we've made it here, nothing returned so we failed to collect
-        raise RuntimeError(f"Failed to collect parameter {key}")
+        raise RuntimeError(f"Failed to collect parameter {key} for {name}")
 
     def collect_shot_data(
         self, key: str, indices: int | slice | Sequence[int] | Literal["all"]

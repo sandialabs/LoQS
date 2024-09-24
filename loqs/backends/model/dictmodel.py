@@ -3,17 +3,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
+from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 
 
 # Type aliases for static type checking
 GateDictModelCastableTypes: TypeAlias = (
-    BaseNoiseModel | tuple[Mapping[object, object], Mapping[object, object]]
+    BaseNoiseModel | tuple[Mapping, Mapping]
 )
 """Types of objects this backend can cast to dict models"""
 
@@ -44,18 +45,24 @@ class DictNoiseModel(BaseNoiseModel):
         """
         self.gate_dict = {}
         self.inst_dict = {}
-        if isinstance(model_or_dicts, BaseNoiseModel):
+        if isinstance(model_or_dicts, DictNoiseModel):
+            self.gate_dict = model_or_dicts.gate_dict.copy()
+            self.inst_dict = model_or_dicts.inst_dict.copy()
+        elif isinstance(model_or_dicts, PyGSTiNoiseModel):
             for gate_key in model_or_dicts.gate_keys:
-                circ = ListPhysicalCircuit([gate_key])
-                self.gate_dict[gate_key] = model_or_dicts.get_reps(
+                label = (gate_key.name, gate_key.qubits)
+                circ = ListPhysicalCircuit([[label]])
+                self.gate_dict[label] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
-                )
+                )[0][0]
 
             for inst_key in model_or_dicts.instrument_keys:
-                circ = ListPhysicalCircuit([inst_key])
-                self.inst_dict[inst_key] = model_or_dicts.get_reps(
+                label = (inst_key.name, inst_key.qubits)
+                circ = ListPhysicalCircuit([[label]])
+                self.inst_dict[label] = model_or_dicts.get_reps(
                     circ, gaterep=gaterep, instrep=instrep
-                )
+                )[0][0]
+
         elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
             self.gate_dict = dict(model_or_dicts[0])
             self.inst_dict = dict(model_or_dicts[1])
