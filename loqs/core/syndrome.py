@@ -135,3 +135,27 @@ class PauliFrame(Castable):
             new_frame.pauli_frame[i] = old_to_new[Pold]
 
         return new_frame
+    
+    def map_frame(self, map: dict) -> PauliFrame:
+        new_frame = self.copy()
+
+        for i, Pold in enumerate(self.pauli_frame):
+            new_frame.pauli_frame[i] = map[Pold]
+
+        return new_frame
+    
+    def update_from_transversal_clifford(
+        self, clifford: str
+    ) -> PauliFrame:
+        assert clifford in ['X', 'H', 'S', 'Sdag'], print(f'{clifford} is not implemented')
+
+        if clifford == 'X':
+            old_to_new = {"I": "X", "X": "I", "Y": "Z", "Z": "Y"}
+        elif clifford == 'H':
+            old_to_new = {'I': 'I', 'X': 'Z', 'Y': 'Y', 'Z': 'X'}
+        elif clifford == 'S' or clifford == 'Sdag':
+            old_to_new = {'I': 'I', 'X': 'Y', 'Y': 'X', 'Z': 'Z'}
+
+        new_frame = map_frame(old_to_new)
+ 
+        return new_frame
