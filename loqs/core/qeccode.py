@@ -90,5 +90,6 @@ class QECCodePatch(Mapping[str, Instruction]):
 
     def __str__(self) -> str:
         s = f"QECCodePatch for {self.code.name} on qubits "
-        s += f"[{self.qubits[0]},...,{self.qubits[-1]}]"
+        s += f"[{self.qubits[0]},...,{self.qubits[-1]}]" + "\n"
+        s += f"  Current frame: {self.pauli_frame.pauli_frame}"
         return s

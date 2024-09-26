@@ -82,6 +82,9 @@ class PauliFrame(Castable):
             assert (
                 len(initial_paulis) == self.num_qubits
             ), "Must provide complete initial pauli frame"
+            assert all([ip in "IXYZ" for ip in initial_paulis])
+
+            self.pauli_frame = initial_paulis
 
     def __str__(self) -> str:
         s = f"PauliFrame on [{self.qubit_labels[0]},...,{self.qubit_labels[-1]}] qubits:\n"

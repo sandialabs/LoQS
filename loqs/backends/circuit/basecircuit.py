@@ -369,6 +369,8 @@ class BasePhysicalCircuit(Castable):
         self: T,
         idle_names: Mapping[int | float, str],
         durations: Mapping[str, int | float],
+        default_duration: int | float | None = None,
+        empty_layer_idle: str | None = None,
     ) -> T:
         """Replace empty spaces in layers with duration-specific idles.
 
@@ -384,7 +386,10 @@ class BasePhysicalCircuit(Castable):
         """
         modified_circuit = self.copy()
         modified_circuit.pad_single_qubit_idles_by_duration_inplace(
-            idle_names, durations
+            idle_names,
+            durations,
+            default_duration,
+            empty_layer_idle,
         )
         return modified_circuit
 
