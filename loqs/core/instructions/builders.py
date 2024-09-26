@@ -157,6 +157,8 @@ def build_lookup_decoder_instruction(
             prev_syndrome = frame.get(raw_syndrome_frame_key, None)
             if prev_syndrome is None:
                 continue
+            assert isinstance(prev_syndrome, list)
+            assert all([isinstance(i, int) for i in prev_syndrome])
 
             # If we got one, record logging info and break
             prev_frame_info = (frame.log, -i - 1)
@@ -166,9 +168,7 @@ def build_lookup_decoder_instruction(
         if prev_syndrome is None:
             syndrome_diff = syndrome
         else:
-            syndrome_diff = [
-                int(b) for b in np.logical_xor(syndrome, prev_syndrome)
-            ]
+            syndrome_diff = np.bitwise_xor(syndrome, prev_syndrome)
 
         # Look up data error based on changed syndromes
         syndrome_str = "".join([str(s) for s in syndrome_diff])
@@ -207,7 +207,7 @@ def build_lookup_decoder_instruction(
     # We need to be able to map the qubit_labels
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str],
-        syndrome_labels: list[tuple[str, int]],
+        syndrome_labels: list[SyndromeLabel],
         **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
@@ -219,17 +219,6 @@ def build_lookup_decoder_instruction(
         ]
         return new_kwargs
 
-    # Get our expected output frame keys for use in dry run
-    frame_keys = [
-        "patches",
-        raw_syndrome_frame_key,
-        "syndrome_diff",
-        "prev_syndrome_frame",
-        "decoded_error",
-        "prev_pauli_frame",
-        "new_pauli_frame",
-    ]
-
     # We also need param priorities and aliases
     # For priorities, we need as many measurement outcomes as requested by syndrome labels
     frame_idxes = [sl.frame_idx for sl in data["syndrome_labels"]]
@@ -240,7 +229,6 @@ def build_lookup_decoder_instruction(
 
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
         data=data,
         map_qubits_fn=map_qubits_fn,
         param_priorities=param_priorities,
@@ -458,7 +446,6 @@ def build_physical_circuit_instruction(
 
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=frame_keys,  # Skip apply and just return DRY_RUN for these
         data=data,
         map_qubits_fn=map_qubits_fn,
         name=name,
@@ -597,27 +584,8 @@ def build_repeat_until_success_instruction(
         "stack", DEFAULT_PRIORITIES
     )
 
-    def dry_run_fn(**kwargs) -> Frame:
-        # Just put the instruction on the stack so that it can deal with it
-        # Pull some args out of kwargs
-        instruction = kwargs.pop("instruction")
-        assert isinstance(instruction, Instruction)
-
-        stack = InstructionStack.cast(kwargs.pop("stack"))
-
-        del kwargs["rus_key"]
-        del kwargs["success_fn"]
-        del kwargs["max_repeats"]
-        del kwargs["repeat_count"]
-
-        new_label = InstructionLabel(instruction, inst_kwargs=kwargs)
-        stack = stack.insert_instruction(0, new_label)
-
-        return Frame({"stack": stack})
-
     return Instruction(
         apply_fn=apply_fn,
-        dry_run_apply_fn=dry_run_fn,
         data=data,
         map_qubits_fn=map_qubits_fn,
         param_priorities=param_priorities,

@@ -12,7 +12,6 @@ def run_program_list(
     dask_client: Client,
     shots_per_program: int,
     shots_per_program_per_batch: int,
-    dry_run: bool = False,
     max_frame_limit: int = 100,
 ) -> None:
     """TODO"""
@@ -28,9 +27,11 @@ def run_program_list(
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             seed_for_shot = None
             if program.default_base_seed is not None:
-                seed_for_shot = program.default_base_seed + len(histories_list[-1]) + i
+                seed_for_shot = (
+                    program.default_base_seed + len(histories_list[-1]) + i
+                )
 
-            tasks.append((dry_run, max_frame_limit, seed_for_shot))
+            tasks.append((max_frame_limit, seed_for_shot))
 
         tasks_by_program.append(tasks)
 
@@ -76,5 +77,3 @@ def run_program_list(
 
     for i, program in enumerate(programs):
         program.shot_histories = histories_list[i] + results_per_program[i]
-
-

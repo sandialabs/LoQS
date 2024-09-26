@@ -49,9 +49,6 @@ class Instruction:
     def __init__(
         self,
         apply_fn: ApplyCallable,
-        dry_run_apply_fn: (
-            ApplyCallable | Sequence[str] | FrameCastableTypes | None
-        ) = None,
         data: Mapping[str, object] | None = None,
         map_qubits_fn: MapQubitsCallable = default_map_qubits,
         param_priorities: Mapping[str, Sequence[str]] | None = None,
@@ -65,37 +62,6 @@ class Instruction:
         supply param_priorities.
         """
         self.apply_fn = apply_fn
-
-        if dry_run_apply_fn is None:
-            # Use the apply function
-            dry_run_apply_fn = apply_fn
-        elif isinstance(dry_run_apply_fn, ApplyCallable):
-            # This is already a good function
-            pass
-        elif isinstance(dry_run_apply_fn, Sequence):
-            # Assume these are frame keys and build a dummy frame
-            frame_keys = list(dry_run_apply_fn)
-            assert all([isinstance(k, str) for k in frame_keys])
-
-            def default_dry_run_apply_fn(**kwargs):
-                return Frame({k: "DRY_RUN" for k in frame_keys})
-
-            dry_run_apply_fn = default_dry_run_apply_fn
-        else:
-            # Assume this is a Frame castable object
-            try:
-                frame = Frame.cast(dry_run_apply_fn)
-            except ValueError as e:
-                raise ValueError(
-                    "Failed to cast dummy Frame for dry run"
-                ) from e
-
-            def default_dry_run_apply_fn(**kwargs):
-                return frame
-
-            dry_run_apply_fn = default_dry_run_apply_fn
-        self.dry_run_apply_fn = dry_run_apply_fn
-
         self.map_qubits_fn = map_qubits_fn
 
         if data is None:
@@ -184,17 +150,14 @@ class Instruction:
         }
         return aliased_priorities
 
-    def apply(self, dry_run: bool = False, **kwargs) -> Frame:
+    def apply(self, **kwargs) -> Frame:
         """TODO"""
         # Adjust aliases
         aliased_kwargs = {
             self._rev_param_aliases.get(k, k): v for k, v in kwargs.items()
         }
 
-        if dry_run:
-            applied_frame = self.dry_run_apply_fn(**aliased_kwargs)
-        else:
-            applied_frame = self.apply_fn(**aliased_kwargs)
+        applied_frame = self.apply_fn(**aliased_kwargs)
 
         output_frame = applied_frame.update(
             {
@@ -208,7 +171,6 @@ class Instruction:
     def copy(self) -> Instruction:
         return Instruction(
             apply_fn=self.apply_fn,
-            dry_run_apply_fn=self.dry_run_apply_fn,
             data=deepcopy(self.data),
             map_qubits_fn=self.map_qubits_fn,
             param_priorities=self._param_priorities,
