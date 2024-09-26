@@ -62,16 +62,7 @@ program = QuantumProgram(
 
 ## Executing a Program
 
-Programs can run in two modes.
-In "dry run" mode, the program skips any expensive numerical operations but otherwise runs the codepath needed to execute.
-This is a good way to check that all needed objects and frame keys will be available for each `Instruction`, as well as instruction resolution and parameter collection work (covered below).
-
-```{code-cell} ipython3
-program.run(dry_run=True)
-```
-
-Alternatively, the program can be executed in full.
-A number of shots can be provided to run the program multiple times for better statistics.
+The program can be executed with the `run()` function. A number of shots can be provided to run the program multiple times for better statistics.
 
 ```{code-cell} ipython3
 program.run(shots=100)

@@ -105,22 +105,6 @@ def partI_apply_fn(
     return Frame(frame_data)
 ```
 
-For dry runs, we obviously won't have measurement outcomes to switch on. In that case, let's pretend that we did not flag so that we avoid early termination.
-
-```{code-cell} ipython3
-def partI_dry_run_apply_fn(stack: InstructionStack, patch_label: str, **kwargs) -> Frame:
-    # Shortcut apply to go straight to part II feed forward
-    new_label = InstructionLabel("Adaptive Measure Part II", patch_label)
-    new_stack = stack.insert_instruction(0, new_label)
-
-    frame_data = {
-        "stack": new_stack,
-        "state": "DRY_RUN",
-        "measurement_outcomes": "DRY_RUN"
-    }
-    return Frame(frame_data)
-```
-
 Now we consider what data we want to store with this `Instruction`. 
 Similar to other physical circuit instructions, we will store the physical circuit as well as any flags we pass in (just `inplace` in this case).
 
@@ -164,7 +148,6 @@ Finally we have all the components to define the entire instruction!
 ```{code-cell} ipython3
 instructions["Adaptive Measure Part I"] = Instruction(
     partI_apply_fn,
-    partI_dry_run_apply_fn,
     partI_data,
     map_qubits_fn,
     name="Part I of adaptive logical measurement",
@@ -222,20 +205,6 @@ def partII_apply_fn(
 ```
 
 ```{code-cell} ipython3
-def partII_dry_run_apply_fn(stack: InstructionStack, patch_label: str, **kwargs) -> Frame:
-    # Shortcut apply to go straight to part III feed forward
-    new_label = InstructionLabel("Adaptive Measure Part III", patch_label)
-    new_stack = stack.insert_instruction(0, new_label)
-
-    frame_data = {
-        "stack": new_stack,
-        "state": "DRY_RUN",
-        "measurement_outcomes": "DRY_RUN"
-    }
-    return Frame(frame_data)
-```
-
-```{code-cell} ipython3
 measII_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -265,7 +234,6 @@ paramII_aliases = {"previous_outcome": "measurement_outcomes"}
 # Remember that this key must match what Part I put for instruction label
 instructions["Adaptive Measure Part II"] = Instruction(
     partII_apply_fn,
-    partII_dry_run_apply_fn,
     partII_data,
     map_qubits_fn,
     param_aliases=paramII_aliases,
@@ -324,20 +292,6 @@ def partIII_apply_fn(
 ```
 
 ```{code-cell} ipython3
-def partIII_dry_run_apply_fn(stack: InstructionStack, patch_label: str, **kwargs) -> Frame:
-    # Shortcut apply to go straight to termination instruction
-    new_label = InstructionLabel("Adaptive Measure Termination", patch_label)
-    new_stack = stack.insert_instruction(0, new_label)
-
-    frame_data = {
-        "stack": new_stack,
-        "state": "DRY_RUN",
-        "measurement_outcomes": "DRY_RUN"
-    }
-    return Frame(frame_data)
-```
-
-```{code-cell} ipython3
 measIII_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -369,7 +323,6 @@ paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
 # Make sure our key matches the forward reference in part II
 instructions["Adaptive Measure Part III"] = Instruction(
     partIII_apply_fn,
-    partIII_dry_run_apply_fn,
     partIII_data,
     map_qubits_fn,
     param_priorities=paramIII_priorities,
@@ -426,12 +379,6 @@ def term_apply_fn(measurement_outcomes: MeasurementOutcomes, meas_qubit: str) ->
     return Frame({"logical_measurement": measurement_outcomes[meas_qubit][0]})
 ```
 
-For our dry run, it is sufficient to use the convenience behavior of specifying frame keys to fill in with `"DRY_RUN"`.
-
-```{code-cell} ipython3
-term_dry_run = ["logical_measurement"]
-```
-
 The caveat is that which qubit of the measured outcomes to return is dependent on the template qubits, so we need to store this as data.
 
 ```{code-cell} ipython3
@@ -449,7 +396,6 @@ We can keep the default parameter prioirities and have assigned no aliases, so c
 # Make sure this key matches forward references from previous parts
 instructions["Adaptive Measure Termination"] = Instruction(
     term_apply_fn,
-    term_dry_run,
     term_data,
     term_map_qubits_fn,
     name="Termination for adaptive logical measurement",

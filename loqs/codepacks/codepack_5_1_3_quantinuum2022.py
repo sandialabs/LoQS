@@ -15,7 +15,7 @@ Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
 
 from collections.abc import Sequence
 import itertools
-from typing import Mapping
+from typing import Literal, Mapping
 import numpy as np
 
 from loqs.backends import propagate_state
@@ -271,35 +271,42 @@ def create_qec_code(
         patch_label: str,
         patches: PatchDict,
         measurement_outcomes: MeasurementOutcomes,
+        measurement_type: Literal["X"] | Literal["Z"],
     ) -> Frame:
         # Get pauli frame
         pauli_frame = patches[patch_label].pauli_frame
 
         # Compute inferred bitstring
         inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            pauli_frame
+            measurement_type, pauli_frame
         )
         inferred_bitstring = [v[0] for v in inferred_outcomes.values()]
 
         logical_value = sum(inferred_bitstring) % 2
         return Frame({"logical_measurement": logical_value})
 
-    nonft_logical_meas = Instruction(
+    nonft_Z_logical_meas = Instruction(
         nonft_logical_meas_apply_fn,
-        ["logical_measurement"],
+        data={"measurement_type": "Z"},
+        name="Non-FT Logical Measurement",
+    )
+
+    nonft_X_logical_meas = Instruction(
+        nonft_logical_meas_apply_fn,
+        data={"measurement_type": "X"},
         name="Non-FT Logical Measurement",
     )
 
     instructions["Non-FT Logical Z Measure"] = (
         builders.build_composite_instruction(
-            [prime_basis_Z_meas, nonft_logical_meas],
+            [prime_basis_Z_meas, nonft_Z_logical_meas],
             name="Non-FT logical Z measurement (via prime basis measurement)",
         )
     )
 
     instructions["Non-FT Logical X Measure"] = (
         builders.build_composite_instruction(
-            [prime_basis_X_meas, nonft_logical_meas],
+            [prime_basis_X_meas, nonft_X_logical_meas],
             name="Non-FT logical X measurement (via prime basis measurement)",
         )
     )
@@ -519,22 +526,6 @@ def _create_adaptive_measure_instruction(
         }
         return Frame(frame_data)
 
-    def partI_dry_run_apply_fn(
-        stack: InstructionStack, patch_label: str, **kwargs
-    ) -> Frame:
-        # Shortcut apply to go straight to part II feed forward
-        new_label = InstructionLabel(
-            "FT Logical X Measure Part II", patch_label
-        )
-        new_stack = stack.insert_instruction(0, new_label)
-
-        frame_data = {
-            "stack": new_stack,
-            "state": "DRY_RUN",
-            "measurement_outcomes": "DRY_RUN",
-        }
-        return Frame(frame_data)
-
     measI_circ = circuit_backend(
         [
             ("Gh", "A0"),
@@ -567,7 +558,6 @@ def _create_adaptive_measure_instruction(
     # We are not calling this Part I because it will actually perform the whole operation
     instructions["FT Logical X Measure"] = Instruction(
         partI_apply_fn,
-        partI_dry_run_apply_fn,
         partI_data,
         map_qubits_fn,
         name="Part I of adaptive logical measurement",
@@ -616,22 +606,6 @@ def _create_adaptive_measure_instruction(
         }
         return Frame(frame_data)
 
-    def partII_dry_run_apply_fn(
-        stack: InstructionStack, patch_label: str, **kwargs
-    ) -> Frame:
-        # Shortcut apply to go straight to part III feed forward
-        new_label = InstructionLabel(
-            "FT Logical X Measure Part III", patch_label
-        )
-        new_stack = stack.insert_instruction(0, new_label)
-
-        frame_data = {
-            "stack": new_stack,
-            "state": "DRY_RUN",
-            "measurement_outcomes": "DRY_RUN",
-        }
-        return Frame(frame_data)
-
     measII_circ = circuit_backend(
         [
             ("Gh", "A0"),
@@ -652,7 +626,6 @@ def _create_adaptive_measure_instruction(
 
     instructions["FT Logical X Measure Part II"] = Instruction(
         partII_apply_fn,
-        partII_dry_run_apply_fn,
         partII_data,
         map_qubits_fn,
         param_aliases=paramII_aliases,
@@ -702,22 +675,6 @@ def _create_adaptive_measure_instruction(
         }
         return Frame(frame_data)
 
-    def partIII_dry_run_apply_fn(
-        stack: InstructionStack, patch_label: str, **kwargs
-    ) -> Frame:
-        # Shortcut apply to go straight to termination instruction
-        new_label = InstructionLabel(
-            "FT Logical X Measure Termination", patch_label
-        )
-        new_stack = stack.insert_instruction(0, new_label)
-
-        frame_data = {
-            "stack": new_stack,
-            "state": "DRY_RUN",
-            "measurement_outcomes": "DRY_RUN",
-        }
-        return Frame(frame_data)
-
     measIII_circ = circuit_backend(
         [
             ("Gh", "A0"),
@@ -743,7 +700,6 @@ def _create_adaptive_measure_instruction(
 
     instructions["FT Logical X Measure Part III"] = Instruction(
         partIII_apply_fn,
-        partIII_dry_run_apply_fn,
         partIII_data,
         map_qubits_fn,
         param_priorities=paramIII_priorities,
@@ -754,17 +710,16 @@ def _create_adaptive_measure_instruction(
     ## TERMINATION
     def term_apply_fn(
         measurement_outcomes: MeasurementOutcomes,
+        measurement_type: Literal["X"] | Literal["Z"],
         meas_qubit: str,
         pauli_frame: PauliFrame | None,
     ) -> Frame:
         inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            pauli_frame
+            measurement_type, pauli_frame
         )
         return Frame({"logical_measurement": inferred_outcomes[meas_qubit][0]})
 
-    term_dry_run = ["logical_measurement"]
-
-    term_data = {"meas_qubit": "A0"}
+    term_data = {"meas_qubit": "A0", "measurement_type": "X"}
 
     def term_map_qubits_fn(
         qubit_mapping: Mapping[str, str], meas_qubit: str, **kwargs
@@ -773,7 +728,6 @@ def _create_adaptive_measure_instruction(
 
     instructions["FT Logical X Measure Termination"] = Instruction(
         term_apply_fn,
-        term_dry_run,
         term_data,
         term_map_qubits_fn,
         name="Termination for adaptive logical measurement",
@@ -951,7 +905,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         builders.build_lookup_decoder_instruction(
             lookup_table=unflagged_lookup_table,
             syndrome_labels=syndrome_labels,
-            syndrome_tag="XYZ",
+            raw_syndrome_frame_key="unflagged",
             name="Unflagged decoder",
         )
     )

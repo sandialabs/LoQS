@@ -52,45 +52,6 @@ frame1 = adder1.apply(data_val=2, add_val=1)
 print(frame1)
 ```
 
-### Dry Runs
-
-As mentioned in [the example workflow](/gettingstarted/workflow), it is possible to execute an `Instruction` in "dry run" mode.
-This is toggled by the `dry_run` kwarg to `Instruction.apply()`, so we can show that here as well.
-
-The behavior of an `Instruction` during a dry run is determined by the `dry_run_apply_fn`.
-By default, if not provided, it falls back to the `apply_fn`.
-This is typically good behavior for an `Instruction` that only modifies metadata or does not perform difficult computation.
-
-This fallback is being used by our `adder1` instruction, so performing a dry run has the same effect as a real run.
-
-```{code-cell} ipython3
-# Apply it!
-dry_run_frame1 = adder1.apply(dry_run=True, data_val=2, add_val=1)
-print(dry_run_frame1)
-```
-
-However, let us pretend that our addition was actually some expensive operation. In this case, we have a few options for `dry_run_apply_fn`:
-
-- We can define a function that has the same signature as `apply_fn`.
-- We can pass in a default frame to be returned.
-- We can pass a list of strings, which are assumed to be frame keys and given the placeholder value of "DRY_RUN".
-
-Of these options, the last is probably the easiest in most cases and what we will showcase here.
-More complex operations may need to use one of the first two options instead.
-
-```{code-cell} ipython3
-# Define our Instruction based on apply_fn and a placeholder for dry run
-adder2 = Instruction(
-    apply_fn=my_apply_fn1,
-    # dry_run_apply_fn here is converted to a function that returns a dummy Frame with these keys
-    dry_run_apply_fn=["data_val"],
-    name="Adder test 2")
-
-# Now the dry run has a placeholder instead
-frame2 = adder2.apply(dry_run=True, data_val=2, add_val=1)
-print(frame2)
-```
-
 ## Instruction Data
 
 Sometimes it make sense for the `Instruction` to store some data that is used.
@@ -102,7 +63,6 @@ In the case of our example, maybe we want to set the `add_val` to be part of the
 # Define our Instruction with add_val as part of the data
 adder3 = Instruction(
     apply_fn=my_apply_fn1,
-    dry_run_apply_fn=["data_val"],
     data={"add_val": 1},
     name="Adder test 3")
 
@@ -137,7 +97,6 @@ def my_map_qubit_fn(qubit_mapping: Mapping[str, str], qubit_label: str, **kwargs
 # Define our Instruction with qubit_label as part of the data and a map_qubits_fn
 adder4 = Instruction(
     apply_fn=my_apply_fn2,
-    dry_run_apply_fn=["data_val"],
     data={"add_val": 1, "qubit_label": "Q0"},
     map_qubits_fn=my_map_qubit_fn,
     name="Adder test 4")
@@ -234,7 +193,6 @@ param_aliases = {"dval": "data_val", "aval": "add_val"}
 # Define our Instruction with custom priorities and aliases
 adder5 = Instruction(
     apply_fn=my_apply_fn3,
-    dry_run_apply_fn=["data_val"],
     data={"add_val": 1, "qubit_label": "Q0"},
     map_qubits_fn=my_map_qubit_fn,
     param_priorities=param_priorities,

@@ -119,17 +119,8 @@ program = QuantumProgram(
 
 ## Running a `QuantumProgram`
 
-Before we run the program for real, we can do a "dry run".
-The exact implementation details of the "dry run" will be explained in the [Instruction tutorial](/objguide/instructions.md), but this will essentially follow the codepath to perform the simulation without doing any of the physical state propagation.
-While this obviously doesn't provide any useful results, this *is* a useful way to check that each `Instruction` will have all the information necessary from the `History` before doing any hard numerical simulation.
 
-```{code-cell} ipython3
-program.run(dry_run=True)
-```
-
-With our `QuantumProgram` "verified" by the dry run, we can now run it!
-
-In this case, let's run it more than once - we can run it 100 times by specifying `shots=100` to the `run()` function.
+We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 100 times by specifying `shots=100` to the `run()` function.
 
 ```{code-cell} ipython3
 # And now we can run it for real!

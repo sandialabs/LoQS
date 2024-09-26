@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
-from loqs.core.instructions import Instruction
 from loqs.internal import Castable
 
 SyndromeLabelCastableTypes: TypeAlias = (
@@ -36,7 +35,7 @@ class SyndromeLabel(Castable):
     """
 
     @classmethod
-    def cast(cls: SyndromeLabel, obj: object) -> SyndromeLabel:
+    def cast(cls: type[SyndromeLabel], obj: object) -> SyndromeLabel:
         if isinstance(obj, cls):
             # We are already the correct class, perform no copy
             return obj
@@ -46,16 +45,14 @@ class SyndromeLabel(Castable):
         elif isinstance(obj, (tuple, list)):
             assert len(obj) < 4
             return cls(*obj)
+        elif isinstance(obj, str):
+            return cls(obj)
 
-        # Otherwise, assume this is the first __init__ argument
-        return cls(obj)
+        raise ValueError(f"Cannot cast {obj} to a SyndromeLabel")
 
 
 # TODO: Long term location?
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
-PauliLiterals: TypeAlias = (
-    Literal["I"] | Literal["X"] | Literal["Y"] | Literal["Z"]
-)
 
 
 class PauliFrame(Castable):
@@ -64,13 +61,13 @@ class PauliFrame(Castable):
     qubit_labels: list[str]
     """TODO"""
 
-    pauli_frame: list[PauliLiterals]
+    pauli_frame: list[str]
     """TODO"""
 
     def __init__(
         self,
         frame_or_labels: PauliFrameCastableTypes,
-        initial_paulis: Sequence[PauliLiterals] | None = None,
+        initial_paulis: Sequence[str] | None = None,
     ) -> None:
         """TODO"""
         if isinstance(frame_or_labels, PauliFrame):
@@ -113,14 +110,12 @@ class PauliFrame(Castable):
         assert type in ("X", "Z"), "Can only get X or Z type bits"
 
         bits = [
-            "X" if self.get_bit(i) else "I" for i in range(self.num_qubits)
+            "X" if self.get_bit(type, q) else "I" for q in self.qubit_labels
         ]
 
         return "".join(bits)
 
-    def update_from_pauli_str(
-        self, pstr: Sequence[PauliLiterals]
-    ) -> PauliFrame:
+    def update_from_pauli_str(self, pstr: str) -> PauliFrame:
         assert len(pstr) == self.num_qubits
 
         new_frame = self.copy()

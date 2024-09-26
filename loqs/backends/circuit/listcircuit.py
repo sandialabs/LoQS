@@ -211,15 +211,14 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
                     seen_qubits.add(qubit)
 
             # Get idling operation (or skip for empty layers with no idles)
-            if layer_duration is None and empty_layer_idle is None:
-                continue
-            elif layer_duration is None:
+            if layer_duration is None:
+                if empty_layer_idle is None:
+                    continue
                 layer_idle = empty_layer_idle
             else:
                 layer_idle = idle_names[layer_duration]
 
             # Insert idling operations
-            layer_idle = idle_names[layer_duration]
             missing_qubits = set(self._qubit_labels) - seen_qubits
             for qubit in missing_qubits:
                 self._circuit[lidx].append((layer_idle, (qubit,)))
