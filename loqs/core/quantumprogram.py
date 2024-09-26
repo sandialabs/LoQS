@@ -194,7 +194,6 @@ class QuantumProgram:
     def run(
         self,
         shots: int = 1,
-        dry_run: bool = False,
         max_frame_limit: int = 100,
         dask_client: Client | None = None,
         dask_batch_size: int = 1,
@@ -220,12 +219,12 @@ class QuantumProgram:
                     self.default_base_seed + len(old_shot_histories) + i
                 )
 
-            tasks.append((program, dry_run, max_frame_limit, seed_for_shot))
+            tasks.append((program, max_frame_limit, seed_for_shot))
 
         if dask_client is None:
             # Execute serially
             shot_results = []
-            for task in tqdm(tasks, f"Program {self.name}", disable=dry_run):
+            for task in tqdm(tasks, f"Program {self.name}"):
                 result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
         else:
@@ -273,7 +272,6 @@ class QuantumProgram:
     @staticmethod
     def _run_shot(
         program,
-        dry_run: bool = False,
         max_frame_limit: int = 100,
         seed: int | None = None,
     ):
@@ -326,7 +324,7 @@ class QuantumProgram:
                     name=inst.name,
                 )
 
-            applied_frame = inst.apply(dry_run, **apply_kwargs)
+            applied_frame = inst.apply(**apply_kwargs)
 
             # Only update stack if the instruction did not
             if "stack" not in applied_frame:
@@ -342,9 +340,6 @@ class QuantumProgram:
             warnings.warn(
                 f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
             )
-
-        if dry_run:
-            print("Dry run completed successfully!")
 
         return history
 

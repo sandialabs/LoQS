@@ -52,8 +52,6 @@ Unfortunately, the `apply_fn` for the composite instruction is one of the least 
 
 Since this is just a stack update, the output `Frame` contains the new stack with the `"stack"` frame key.
 
-Similarly, because this is just a stack update and no heavy simulation is performed, we do not need to specify a separate `dry_run_apply_fn`.
-
 ### Data and Qubit Mapping
 
 The only data we need to store is the list of `Instruction` objects to insert into the stack.
@@ -104,9 +102,6 @@ Unlike the composite instruction, we are just directly passing all the kwargs in
 
 The created object is then stored in the output `Frame` with the given frame key.
 
-As with composite instruction, this is a metadata operation and not usually considered an expensive operation (and may be required for further instructions to work properly).
-As such, we use the fallback behavior of not specifying a separate `dry_run_apply_fn`.
-
 ### Data and Qubit Mapping
 
 We store the frame key and object class in data.
@@ -146,8 +141,6 @@ The `apply_fn` is straightforward in this case. We take the following arguments:
 
 It returns a `Frame` with an updated `PatchDict` assigned to the `"patches"` key.
 
-Since this only affects metadata, it is safe to have the default fallback behavior of `dry_run_apply_fn`.
-
 ### Data and Qubit Mapping
 
 We store the passed-in `qec_code` in the data.
@@ -182,8 +175,6 @@ The `apply_fn` is straightforward in this case. We take the following arguments:
 
 It returns a `Frame` with an updated `PatchDict` assigned to the `"patches"` key.
 
-Since this only affects metadata, it is safe to have the default fallback behavior of `dry_run_apply_fn`.
-
 ### Data and Qubit Mapping
 
 We store no data, and thus we can use the default passthrough `map_qubits_fn`.
@@ -216,8 +207,6 @@ The `apply_fn` is straightforward in this case. We take the following arguments:
 - `patches`: A `PatchDict` containing the `QECCodePatch` to modify
 
 It returns a `Frame` with an updated `PatchDict` assigned to the `"patches"` key.
-
-Since this only affects metadata, it is safe to have the default fallback behavior of `dry_run_apply_fn`.
 
 ### Data and Qubit Mapping
 
@@ -260,9 +249,6 @@ The `apply_fn` is straightforward in this case. We take the following arguments:
 
 It performs the state propagation and then returns a `Frame` with the updated state assigned to the `"state"` key.
 If `include_outcomes=True`, then the `Frame` will also contain a `MeasurementOutcomes` object assigned to the `"measurement_outcomes"` key.
-
-This `Instruction` is one of the key objects where we do *not* want to do this operation during a dry run.
-Instead, we determine what our output frame keys should be (depending on the `include_outcomes` flag) and use the list of keys approach to generate a `dry_run_apply_fn` that will return the correct dummy `Frame`.
 
 ### Data and Qubit Mapping
 
@@ -311,9 +297,6 @@ The `"measurement_outcomes"` are pulled out of the `Frame` and passed to `succes
 
 - On a success, we simply return the output `Frame`.
 - On a failure, we increment `repeat_count`, check against `max_repeats`, add the RUS `Instruction` back onto the `stack`, and add the updated stack to the output `Frame` before returning
-
-Since this nominally requires a valid `"measurement_outcomes"` to be generated, it is not suitable for the default `dry_run_apply_fn` behavior.
-Instead, we use a function that essentially assumes the underlying `instruction` will succeed on the first try and add the bare `instruction` to the `stack`.
 
 ### Data and Qubit Mapping
 
