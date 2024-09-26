@@ -439,11 +439,6 @@ def build_physical_circuit_instruction(
         new_kwargs["circuit"] = circuit.map_qubit_labels(qubit_mapping)
         return new_kwargs
 
-    # Get our expected output frame keys for use in dry run
-    frame_keys = ["state"]
-    if include_outcomes:
-        frame_keys.append("measurement_outcomes")
-
     return Instruction(
         apply_fn=apply_fn,
         data=data,
