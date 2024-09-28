@@ -123,7 +123,7 @@ def convert_circuit_to_quantikz(  # noqa: C901
         seen_idxs = set()
         reset_layer_idxs = set()
         for comp in comps:
-            conversion = gatename_conversion[comp.name]
+            conversion = gatename_conversion.get(comp.name, comp.name)
             idxs = [circuit.line_labels.index(q) for q in comp.qubits]
             seen_idxs.update(idxs)
 
