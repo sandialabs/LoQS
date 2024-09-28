@@ -26,6 +26,11 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+dask = [
+    "bokeh!=3.0.*,>=2.4.2",
+    "dask[distributed]",
+    "ipywidgets"
+]
 dev = [
     "pre-commit",
     "black>=24",
@@ -38,11 +43,6 @@ docs = [
     "jupyter-book",
     "jupytext"
 ]
-dask = [
-    "bokeh!=3.0.*,>=2.4.2",
-    "dask[distributed]",
-    "ipywidgets"
-]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti[extensions]>=0.9.12", "numpy<2"]
 test = [
@@ -52,8 +52,13 @@ test = [
     "pytest-cov>=5",
     "tox>=4"
 ]
+visualization = [
+    "pdf2image",
+    "pillow",
+    "qiskit[visualization]",
+]
 backends = ["loqs[quantumsim,pygsti]"]
-nobackends = ["loqs[dev,docs,test]"]
+nobackends = ["loqs[dask,dev,docs,test,visualization]"]
 all = ["loqs[backends,nobackends]"]
 
 [build-system]

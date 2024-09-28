@@ -57,6 +57,17 @@ to get the 0.9.12 release of pyGSTi, which will be located in `src`.
 Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
 if you are working off of a feature branch.
 
+### Visualization
+
+LoQS now has some capability to turn circuit diagrams into LaTeX via the quantikz package.
+This requires several non-`pip` installable system packages:
+
+- `pdflatex`, commonly from the a TeX installation
+- `poppler`, which is used 
+
+For Mac, consider install TeX and `poppler` through Homebrew.
+On Linux, install through your package manager.
+
 ## Documentation
 
 This project uses JupyterBook for documentation.
