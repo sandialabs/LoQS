@@ -146,6 +146,28 @@ class Serializable:
         with open(str(path), "r") as f:
             return cls.load(f, format)
 
+    @staticmethod
+    def deserialize(obj):
+        """Helper function to recursively unserialize objects."""
+        if isinstance(obj, dict):
+            if "module" in obj and "class" in obj:
+                # This is a serialized object, try to deserialize
+                cls = Serializable._state_class(obj)
+                return cls.from_serialization(obj)
+
+            # Otherwise, assume just a dict and recursively unserialize
+            deserialized = {}
+            for k, v in obj.items():
+                if isinstance(k, list):
+                    k = tuple(k)
+                deserialized[k] = Serializable.deserialize(v)
+            return deserialized
+        elif isinstance(obj, (list, tuple)):
+            return [Serializable.deserialize(e) for e in obj]
+
+        # Otherwise, assume we are a built-in deserializable object
+        return obj
+
     def dump(self, f, format="json", **format_kwargs):
         """
         Serializes and writes this object to a given output stream.
@@ -195,13 +217,12 @@ class Serializable:
         """Helper function to recursively serialize objects."""
         if isinstance(obj, dict):
             return {k: Serializable.serialize(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
+        elif isinstance(obj, (list, tuple, set)):
             return [Serializable.serialize(e) for e in obj]
         elif isinstance(obj, Serializable):
             return obj.to_serialization()
 
         # Otherwise, assume we are a built-in serializable object
-        # If not, we will probably error downstream
         return obj
 
     def to_serialization(self):
@@ -337,10 +358,10 @@ class Serializable:
         except (ModuleNotFoundError, AttributeError) as e:
             raise ImportError(
                 (
-                    "Class or module not found when instantiating a NicelySerializable"
+                    "Class or module not found when instantiating a Serializable"
                     f" {state['module']}.{state['class']} object!  If this class has"
                     " moved, consider adding (module, classname) mapping to"
-                    " pygsti.baseobjs.nicelyserializable.class_location_changes dict"
+                    " the loqs.internal.serializable.class_location_changes dict"
                 )
             ) from e
 
@@ -355,44 +376,12 @@ class Serializable:
         return c
 
     @classmethod
-    def _check_compatible_nice_state(cls, state):
+    def _check_compatible_state(cls, state):
         if state["module"] != cls.__module__ or state["class"] != cls.__name__:
             raise ValueError(
-                "Nice serialization type mismatch: %s != %s"
+                "Serialization type mismatch: %s != %s"
                 % (
                     state["module"] + "." + state["class"],
                     cls.__module__ + "." + cls.__name__,
                 )
             )
-
-    @classmethod
-    def _encodemx(cls, mx):
-        if mx is None:
-            return None
-        else:
-            enc = (
-                str
-                if np.iscomplexobj(mx)
-                else (
-                    (lambda x: int(x))
-                    if (mx.dtype == np.int64)
-                    else (lambda x: x)
-                )
-            )
-            encoded = np.array([enc(x) for x in mx.flat])
-            return encoded.reshape(mx.shape).tolist()
-
-    @classmethod
-    def _decodemx(cls, mx):
-        if mx is None:
-            decoded = None
-        else:
-            basemx = np.array(mx)
-            if (
-                basemx.dtype.kind == "U"
-            ):  # character type array => complex numbers as strings
-                decoded = np.array([complex(x) for x in basemx.flat])
-                decoded = decoded.reshape(basemx.shape)
-            else:
-                decoded = basemx
-        return decoded

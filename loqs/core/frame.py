@@ -7,10 +7,12 @@ import textwrap
 import warnings
 
 from collections.abc import Iterator, Mapping
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
 from loqs.internal import Castable, Serializable
 
+
+T = TypeVar("T", bound="Frame")
 
 FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
 """Things that can be cast to :class:`Frame`."""
@@ -110,11 +112,27 @@ class Frame(Mapping[str, object], Castable, Serializable):
 
         return Frame(data, new_log)
 
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        # Note that expired keys will come back as None after deserialization
+        data = cls.deserialize(state["_data"])
+        assert isinstance(data, dict)
+        log: str = state["log"]
+
+        obj = cls(data, log)
+        obj._expired_keys = state["_expired_keys"]
+
+        return obj
+
     def _to_serialization(self) -> dict:
         state = super()._to_serialization()
+        # Do not spend effort saving expired data
+        unexpired_data = {}
+        for k, v in self._data.items():
+            unexpired_data[k] = v if k not in self._expired_keys else None
         state.update(
             {
-                "_data": self.serialize(self._data),
+                "_data": self.serialize(unexpired_data),
                 "_expired_keys": self._expired_keys,
                 "log": self.log,
             }
