@@ -9,14 +9,14 @@ import warnings
 from collections.abc import Iterator, Mapping
 from typing import TypeAlias
 
-from loqs.internal import Castable
+from loqs.internal import Castable, Serializable
 
 
 FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
 """Things that can be cast to :class:`Frame`."""
 
 
-class Frame(Mapping[str, object], Castable):
+class Frame(Mapping[str, object], Castable, Serializable):
     """A record of the state of the simulation at a given time.
 
     The core functionality is a dict that relates keys to
@@ -109,3 +109,14 @@ class Frame(Mapping[str, object], Castable):
             new_log = self.log
 
         return Frame(data, new_log)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "_data": self.serialize(self._data),
+                "_expired_keys": self._expired_keys,
+                "log": self.log,
+            }
+        )
+        return state
