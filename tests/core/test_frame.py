@@ -1,108 +1,84 @@
-"""Tester for loqs.backends.circuit.pygsti.PyGSTiPhysicalCircuit"""
+"""Tester for loqs.core.frame"""
 
+from tempfile import NamedTemporaryFile
 import pytest
 
 from loqs.core.frame import Frame
 
 class TestFrame:
 
-    @classmethod
-    def setup_class(cls):
-        # Testing all possibilities in LayerTypes
-        cls.test_circ = [
-            ('Gxpi2', 'Q0'), ('Gypi2', "Q1"), ('Gcnot', ['Q0', "Q1"]),
-            [('Gxpi2', 'Q0'), ('Gypi2', "Q1")]
-        ]
-        cls.expected_circ = [
-            [('Gxpi2', ('Q0',))], [('Gypi2', ("Q1",))], [('Gcnot', ('Q0', "Q1"))],
-            [('Gxpi2', ('Q0',)), ('Gypi2', ("Q1",))]
-        ]
-        cls.test_labels = ("Q0", "Q1")
-        cls.expected_circ_intlbls = [
-            [('Gxpi2', (0,))], [('Gypi2', (1,))], [('Gcnot', (0, 1))],
-            [('Gxpi2', (0,)), ('Gypi2', (1,))]
-        ]
-
-    def _check(self, circ, expected_circ, expected_labels):
-        for l1, l2 in zip(circ.circuit, expected_circ):
-            set1 = set(l1) if len(l1) else set()
-            set2 = set(l2) if len(l2) else set()
-            assert set1 == set2
-        assert set(circ.qubit_labels) == set(expected_labels)
-
     def test_init(self):
-        # Base initializer
-        pc = PhysCirc(self.test_circ, self.test_labels)
-        self._check(pc, self.expected_circ, self.test_labels)
+        data = {"a": 1, "b": 2}
 
-        # Test implicit qubit label logic
-        pc = PhysCirc(self.test_circ)
-        self._check(pc, self.expected_circ, self.test_labels)
+        f0 = Frame()
+        assert f0._data == {}
+        assert f0.log == "N/A"
 
-        # Test copy
-        pc2 = PhysCirc(pc)
-        self._check(pc2, self.expected_circ, self.test_labels)
+        f1 = Frame(data, "test")
+        assert f1._data == data
+        assert f1.log == "test"
 
-        # We can also test our casting function since this IsCastable
-        pc = PhysCirc.cast(self.test_circ)
-        self._check(pc, self.expected_circ, self.test_labels)
+        f2 = Frame(f1)
+        assert f2._data == data
+        assert f2.log == "test"
 
-        pc2 = PhysCirc.cast(pc)
-        self._check(pc2, self.expected_circ, self.test_labels)
+        f3 = Frame(f1, "test 2")
+        assert f3._data == data
+        assert f3.log == "test 2"
+
+        f4 = Frame.cast(f1)
+        assert f4._data == data
+        assert f4.log == "test"
+
+        f5 = Frame.cast(data)
+        assert f5._data == data
+        assert f5.log == "N/A"
 
         # Test failure raises error
         with pytest.raises(ValueError):
-            PhysCirc.cast(None)
+            Frame("abc") # type: ignore
+        with pytest.raises(ValueError):
+            Frame([1, 2, 3]) # type: ignore
     
-    def test_append(self):
-        circ1 = [[('Gxpi2', ('Q0',)), ('Gypi2', ('Q1',))]]
-        expected_circ = circ1 + circ1
+    def test_expire(self):
+        f = Frame({"a": 1, "b": 2})
+        f.expire("b")
 
-        pc = PhysCirc(circ1)
+        assert f["a"] == 1
+        with pytest.warns(UserWarning):
+            assert f["b"] == 2
 
-        pc2 = pc.append(pc)
-        self._check(pc2, expected_circ, self.test_labels)
+    def test_update(self):
+        f = Frame({"a": 1, "b": 2}, "test")
 
-        pc.append_inplace(pc)
-        self._check(pc, expected_circ, self.test_labels)
+        f2 = f.update({'c': 3})
+        assert f2._data == {"a": 1, "b": 2, "c": 3}
+        assert f2.log == "test"
+
+        f3 = f.update({'a': 3}, "test 2")
+        assert f3._data == {"a": 3, "b": 2}
+        assert f3.log == "test 2"
+
+        f.expire('b')
+        f4 = f.update({'c': 3})
+        assert f4._data == {"a": 1, "b": 2, "c": 3}
+        assert f4.log == "test"
+        assert f4._expired_keys == ["b"]
     
-    def test_pad(self):
-        padded_circ = [
-            [('Gxpi2', ('Q0',)), ('Gi', ("Q1",))], [('Gypi2', ("Q1",)), ('Gi', ("Q0",))],
-            [('Gcnot', ('Q0', "Q1"))], [('Gxpi2', ('Q0',)), ('Gypi2', ("Q1",))]
-        ]
-    
-        pc = PhysCirc(self.test_circ, self.test_labels)
-        pc2 = pc.pad_single_qubit_idles("Gi")
-        self._check(pc2, padded_circ, self.test_labels)
-
-        pc.pad_single_qubit_idles_inplace("Gi")
-        self._check(pc, padded_circ, self.test_labels)
-
-    def test_qubits(self):
-        new_labels = ["Q0", "Q1", "Q2"]
-
-        # Set qubits
-        pc = PhysCirc(self.test_circ)
-        pc2 = pc.set_qubit_labels(new_labels)
-        self._check(pc2, self.expected_circ, new_labels)
-
-        pc.set_qubit_labels_inplace(new_labels)
-        self._check(pc2, self.expected_circ, new_labels)
+    def test_serialization(self):
+        f1 = Frame({"a": 1, "b": 2})
+        f1.expire("b")
         
-        # Delete qubits
-        pc3 = PhysCirc(self.test_circ, new_labels)
-        pc4 = pc3.delete_qubits(["Q2"])
-        self._check(pc4, self.expected_circ, self.test_labels)
+        # Test recursive functionality
+        f2 = Frame({"c": 3, "other": f1}, "test")
 
-        pc3.delete_qubits_inplace(["Q1", "Q2"])
-        expected_circ = [[('Gxpi2', ('Q0',))],[],[],[('Gxpi2', ('Q0',))]]
-        self._check(pc3, expected_circ, ["Q0"])
+        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+            f2.write(tempf.name)
 
-        # Map qubits
-        pc5 = PhysCirc(self.test_circ)
-        pc6 = pc5.map_qubit_labels({"Q0": 0, "Q1": 1})
-        self._check(pc6, self.expected_circ_intlbls,[0,1])
-
-        pc5.map_qubit_labels_inplace({"Q0": 0, "Q1": 1})
-        self._check(pc5, self.expected_circ_intlbls, [0,1])
+            f3 = Frame.read(tempf.name)
+        
+        # TODO: Expired key behavior may change soon
+        assert f3["c"] == 3
+        assert f3["other"]._data == {'a': 1, 'b': None}
+        assert f3["other"]._expired_keys == ["b"]
+        assert f3.log == "test"

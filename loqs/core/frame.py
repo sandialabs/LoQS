@@ -34,6 +34,37 @@ class Frame(Mapping[str, object], Castable, Serializable):
     log: str
     """Log string for better printing."""
 
+    @classmethod
+    def cast(cls: type[T], obj: object) -> T:
+        """Cast to the derived class.
+
+        For Frame objects, a dict is an allowed first argument,
+        so we add a check for expected constructor kwarg names.
+
+        Parameters
+        ----------
+        obj:
+            A castable object that is either:
+            - Already the derived class type, in which case `obj`
+            is returned
+            - A kwarg dict that is passed into the derived class
+            constructor
+            - The first argument of the derived class constructor
+
+        Returns
+        -------
+            An object with type T (matching the derived class)
+        """
+        if isinstance(obj, cls):
+            # We are already the correct class, perform no copy
+            return obj
+        elif isinstance(obj, dict) and ("data" in obj or "log" in obj):
+            # Assume this is a kwarg dict, pass in all kwargs
+            return cls(**obj)
+
+        # Otherwise, assume this is the first __init__ argument
+        return cls(obj)  # type: ignore
+
     def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
         """TODO"""
         if data is None:
@@ -41,7 +72,7 @@ class Frame(Mapping[str, object], Castable, Serializable):
 
         if isinstance(data, Frame):
             self._data = deepcopy(data._data)
-            self.log = data.log
+            self.log = data.log if log == "N/A" else log
         elif isinstance(data, Mapping):
             self._data = dict(data)
             self.log = log
@@ -110,7 +141,10 @@ class Frame(Mapping[str, object], Castable, Serializable):
         if new_log is None:
             new_log = self.log
 
-        return Frame(data, new_log)
+        f = Frame(data, new_log)
+        f._expired_keys = self._expired_keys.copy()
+
+        return f
 
     @classmethod
     def _from_serialization(cls: type[T], state: Mapping) -> T:
@@ -127,6 +161,7 @@ class Frame(Mapping[str, object], Castable, Serializable):
     def _to_serialization(self) -> dict:
         state = super()._to_serialization()
         # Do not spend effort saving expired data
+        # TODO: Maybe remove this after memoizing serialization?
         unexpired_data = {}
         for k, v in self._data.items():
             unexpired_data[k] = v if k not in self._expired_keys else None
