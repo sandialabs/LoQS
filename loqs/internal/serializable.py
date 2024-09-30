@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from abc import abstractmethod
 import importlib
+import inspect
 import json
-import numpy as np
+import textwrap
+from typing import Callable
 
 class_location_changes = (
     {}
@@ -385,3 +387,66 @@ class Serializable:
                     cls.__module__ + "." + cls.__name__,
                 )
             )
+
+    @staticmethod
+    def _serialize_function(func) -> str:
+        # Get source code
+        src = textwrap.dedent(inspect.getsource(func))
+
+        # Also try to get imports
+        srcfile = inspect.getsourcefile(func)
+        if srcfile is None:
+            # We'll fail to get imports, just return source
+            return src
+
+        # Get all import lines
+        with open(srcfile, "r") as f:
+            import_lines = []
+            multiline = False
+            for line in f.readlines():
+                if multiline:
+                    import_lines[-1] += line
+                    if ")" in line:
+                        multiline = False
+                elif "import" in line:
+                    import_lines.append(line)
+                    if line.endswith("(\n"):
+                        multiline = True
+
+        # Get all things that are imported
+        needed_import_lines = []
+        for line in import_lines:
+            if " as " in line:
+                entries = line.split(" as ")[1]
+            else:
+                entries = line.split("import ")[1]
+            # Remove parentheses from multiline imports
+            entries = [
+                e.replace("(", "").replace(")", "") for e in entries.split(",")
+            ]
+
+            # Get rid of newline and whitespace for better searching
+            entries = [e.strip() for e in entries if len(e.strip())]
+
+            # If the imported thing is in our source code, we need this import
+            if any([e in src for e in entries]):
+                needed_import_lines.append(line)
+
+        imports = "".join(needed_import_lines)
+        return imports + src
+
+    @staticmethod
+    def _deserialize_function(src: str) -> Callable:
+        # Execute the imports and function definition
+        env = {}
+        exec(src, env)
+
+        # We need to find the function name
+        # Search for first def, then first paren after it
+        # Trim "def " and that should be the function name
+        start = src.find("def ")
+        end = src.find("(", start)
+        key = src[start + 4 : end]
+
+        # Pull the function out of the executed environment
+        return env[key]

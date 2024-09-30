@@ -203,14 +203,20 @@ class Instruction(Serializable):
 
     @classmethod
     def _from_serialization(cls: type[T], state: Mapping) -> T:
-        apply_fn = None
-        map_qubit_fn = None
+        apply_fn = cls._deserialize_function(state["apply_fn"])
+        map_qubit_fn = cls._deserialize_function(state["map_qubits_fn"])
         data = cls.deserialize(state["data"])
         assert isinstance(data, dict)
         param_error_behavior = state["param_error_behavior"]
         name = state["name"]
 
-        obj = cls(apply_fn, data, map_qubit_fn, param_error_behavior, name)
+        obj = cls(
+            apply_fn,
+            data,
+            map_qubit_fn,
+            param_error_behavior=param_error_behavior,
+            name=name,
+        )
         obj._param_priorities = state["_param_priorities"]
         obj._param_aliases = state["_param_aliases"]
         obj._rev_param_aliases = {v: k for k, v in obj._param_aliases.items()}
@@ -221,10 +227,8 @@ class Instruction(Serializable):
         state = super()._to_serialization()
         state.update(
             {
-                "apply_fn": textwrap.dedent(ins.getsource(self.apply_fn)),
-                "map_qubits_fn": textwrap.dedent(
-                    ins.getsource(self.map_qubits_fn)
-                ),
+                "apply_fn": self._serialize_function(self.apply_fn),
+                "map_qubits_fn": self._serialize_function(self.map_qubits_fn),
                 "data": self.serialize(self.data),
                 "param_error_behavior": self.param_error_behavior,
                 "_param_priorities": self._param_priorities,

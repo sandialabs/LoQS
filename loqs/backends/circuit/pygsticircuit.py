@@ -212,8 +212,8 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return _Circuit(
             layer_labels=None,
             stringrep=serial_circuit[8:-1],
-            line_labels=qubit_labels,
-        )  # type: ignore
+            line_labels=qubit_labels,  # type: ignore
+        )
 
     def _serialize_circuit(self) -> str | list | dict:
         """Helper function to serialize a circuit.
@@ -222,4 +222,4 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         serialization to work.
         """
         # For pyGSTi circuit, we use the string rep
-        return str(self.circuit)
+        return repr(self.circuit)
