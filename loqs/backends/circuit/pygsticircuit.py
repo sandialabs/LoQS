@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
@@ -14,6 +14,8 @@ try:
     from pygsti.baseobjs import Label as _Label
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+
+T = TypeVar("T", bound="PyGSTiPhysicalCircuit")
 
 ## Type aliases for static type checking
 CastableTypes: TypeAlias = (
@@ -193,3 +195,31 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             Qubit labels to assign to circuit.
         """
         self.circuit.line_labels = qubit_labels
+
+    @classmethod
+    def _deserialize_circuit(
+        cls,
+        serial_circuit: str | list | dict,
+        qubit_labels: Sequence | None = None,
+    ) -> _Circuit:
+        """Helper function to deserialize a circuit.
+
+        Derived classes should implement this for
+        deserialization to work.
+        """
+        # For pyGSTi circuit, we can load from string rep
+        # (minus leading "Circuit(" and trailing ")" )
+        return _Circuit(
+            layer_labels=None,
+            stringrep=serial_circuit[8:-1],
+            line_labels=qubit_labels,
+        )  # type: ignore
+
+    def _serialize_circuit(self) -> str | list | dict:
+        """Helper function to serialize a circuit.
+
+        Derived classes should implement this for
+        serialization to work.
+        """
+        # For pyGSTi circuit, we use the string rep
+        return str(self.circuit)

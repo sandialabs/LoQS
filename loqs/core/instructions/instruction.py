@@ -7,13 +7,22 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import inspect as ins
 import textwrap
-from typing import Literal, ParamSpec, Protocol, TypeAlias, runtime_checkable
+from typing import (
+    Literal,
+    ParamSpec,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    runtime_checkable,
+)
 import warnings
 
 from loqs.core import Frame
 from loqs.core.frame import FrameCastableTypes
+from loqs.internal.serializable import Serializable
 
 
+T = TypeVar("T", bound="Instruction")
 P = ParamSpec("P")
 
 KwargDict: TypeAlias = dict[str, object]
@@ -43,7 +52,7 @@ DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
 """
 
 
-class Instruction:
+class Instruction(Serializable):
     """TODO"""
 
     def __init__(
@@ -191,3 +200,36 @@ class Instruction:
         ), "map_qubits_fn did not output all expected keys"
         new_instruction.data = new_kwargs
         return new_instruction
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        apply_fn = None
+        map_qubit_fn = None
+        data = cls.deserialize(state["data"])
+        assert isinstance(data, dict)
+        param_error_behavior = state["param_error_behavior"]
+        name = state["name"]
+
+        obj = cls(apply_fn, data, map_qubit_fn, param_error_behavior, name)
+        obj._param_priorities = state["_param_priorities"]
+        obj._param_aliases = state["_param_aliases"]
+        obj._rev_param_aliases = {v: k for k, v in obj._param_aliases.items()}
+
+        return obj
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "apply_fn": textwrap.dedent(ins.getsource(self.apply_fn)),
+                "map_qubits_fn": textwrap.dedent(
+                    ins.getsource(self.map_qubits_fn)
+                ),
+                "data": self.serialize(self.data),
+                "param_error_behavior": self.param_error_behavior,
+                "_param_priorities": self._param_priorities,
+                "_param_aliases": self._param_aliases,
+                "name": self.name,
+            }
+        )
+        return state

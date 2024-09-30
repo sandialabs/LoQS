@@ -8,14 +8,14 @@ from collections.abc import Sequence, Mapping
 import textwrap
 from typing import ClassVar, Type, TypeAlias, TypeVar
 
-from loqs.internal.castable import Castable
+from loqs.internal import Castable, Serializable
 
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BasePhysicalCircuit")
 
 
-class BasePhysicalCircuit(Castable):
+class BasePhysicalCircuit(Castable, Serializable):
     """Base class for an object that can holds a physical quantum circuit."""
 
     # Class attributes
@@ -456,5 +456,44 @@ class BasePhysicalCircuit(Castable):
         ----------
         qubit_labels:
             Qubit labels to assign to circuit.
+        """
+        pass
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        qubit_labels = state["qubit_labels"]
+        circuit = cls._deserialize_circuit(state["circuit"], qubit_labels)
+        return cls(circuit, qubit_labels)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "circuit": self._serialize_circuit(),
+                "qubit_labels": self.qubit_labels,
+            }
+        )
+        return state
+
+    @classmethod
+    @abstractmethod
+    def _deserialize_circuit(
+        cls,
+        serial_circuit: str | list | dict,
+        qubit_labels: Sequence | None = None,
+    ) -> object:
+        """Helper function to deserialize a circuit.
+
+        Derived classes should implement this for
+        deserialization to work.
+        """
+        pass
+
+    @abstractmethod
+    def _serialize_circuit(self) -> str | list | dict:
+        """Helper function to serialize a circuit.
+
+        Derived classes should implement this for
+        serialization to work.
         """
         pass

@@ -227,3 +227,28 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:
         self._qubit_labels = list(qubit_labels)
+
+    @classmethod
+    def _deserialize_circuit(
+        cls,
+        serial_circuit: str | list | dict,
+        qubit_labels: Sequence | None = None,
+    ) -> list[list[tuple[str, tuple[QubitTypes, ...]]]]:
+        """Helper function to deserialize a circuit.
+
+        Derived classes should implement this for
+        deserialization to work.
+        """
+        # For list circuit, it is already serializable
+        # qubit_labels not needed
+        assert isinstance(serial_circuit, list)
+        return serial_circuit
+
+    def _serialize_circuit(self) -> str | list | dict:
+        """Helper function to serialize a circuit.
+
+        Derived classes should implement this for
+        serialization to work.
+        """
+        # For list circuit, it is already serializable
+        return self.circuit
