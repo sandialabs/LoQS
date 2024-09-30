@@ -21,11 +21,8 @@ FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
 class Frame(Mapping[str, object], Castable, Serializable):
     """A record of the state of the simulation at a given time.
 
-    The core functionality is a dict that relates keys to
-    :class:`IsRecordable`-derived objects.
+    The core functionality is a dict that relates keys to stateful objects.
     It is highly recommended that users not modify :attr:`_data` directly,
-    as this bypasses the checks to :meth:`finalized` that would otherwise
-    prevent overriding data when the frame is intended to be immutable.
     """
 
     _data: dict
