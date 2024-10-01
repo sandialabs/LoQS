@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
-from loqs.internal import Castable
+from loqs.internal import Castable, Serializable
+
+T = TypeVar("T", bound="SyndromeLabel")
+U = TypeVar("U", bound="PauliFrame")
+
 
 SyndromeLabelCastableTypes: TypeAlias = (
     "str | tuple[str] | tuple[str, int] | tuple[str, int, int] | SyndromeLabel"
@@ -15,7 +19,7 @@ SyndromeLabelCastableTypes: TypeAlias = (
 
 
 @dataclass
-class SyndromeLabel(Castable):
+class SyndromeLabel(Castable, Serializable):
     """Label that indicates which past outcome was a syndrome bit."""
 
     qubit_label: str
@@ -50,12 +54,30 @@ class SyndromeLabel(Castable):
 
         raise ValueError(f"Cannot cast {obj} to a SyndromeLabel")
 
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        qubit_label = state["qubit_label"]
+        frame_idx = state["frame_idx"]
+        outcome_idx = state["outcome_idx"]
+        return cls(qubit_label, frame_idx, outcome_idx)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "qubit_label": self.qubit_label,
+                "frame_idx": self.frame_idx,
+                "outcome_idx": self.outcome_idx,
+            }
+        )
+        return state
+
 
 # TODO: Long term location?
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
 
 
-class PauliFrame(Castable):
+class PauliFrame(Castable, Serializable):
     """TODO"""
 
     qubit_labels: list[str]
@@ -67,7 +89,7 @@ class PauliFrame(Castable):
     def __init__(
         self,
         frame_or_labels: PauliFrameCastableTypes,
-        initial_paulis: Sequence[str] | None = None,
+        initial_paulis: Sequence[str] | str | None = None,
     ) -> None:
         """TODO"""
         if isinstance(frame_or_labels, PauliFrame):
@@ -84,7 +106,7 @@ class PauliFrame(Castable):
             ), "Must provide complete initial pauli frame"
             assert all([ip in "IXYZ" for ip in initial_paulis])
 
-            self.pauli_frame = initial_paulis
+            self.pauli_frame = list(initial_paulis)
 
     def __str__(self) -> str:
         s = f"PauliFrame on [{self.qubit_labels[0]},...,{self.qubit_labels[-1]}] qubits:\n"
@@ -135,27 +157,35 @@ class PauliFrame(Castable):
             new_frame.pauli_frame[i] = old_to_new[Pold]
 
         return new_frame
-    
+
     def map_frame(self, map: dict) -> PauliFrame:
-        new_frame = self.copy()
+        new_paulis = [map[P] for P in self.pauli_frame]
+        return PauliFrame(self.qubit_labels, new_paulis)
 
-        for i, Pold in enumerate(self.pauli_frame):
-            new_frame.pauli_frame[i] = map[Pold]
-
-        return new_frame
-    
-    def update_from_transversal_clifford(
-        self, clifford: str
-    ) -> PauliFrame:
-        assert clifford in ['X', 'H', 'S', 'Sdag'], print(f'{clifford} is not implemented')
-
-        if clifford == 'X':
+    def update_from_transversal_clifford(self, clifford: str) -> PauliFrame:
+        if clifford == "X":
             old_to_new = {"I": "X", "X": "I", "Y": "Z", "Z": "Y"}
-        elif clifford == 'H':
-            old_to_new = {'I': 'I', 'X': 'Z', 'Y': 'Y', 'Z': 'X'}
-        elif clifford == 'S' or clifford == 'Sdag':
-            old_to_new = {'I': 'I', 'X': 'Y', 'Y': 'X', 'Z': 'Z'}
+        elif clifford == "H":
+            old_to_new = {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
+        elif clifford in ["S", "Sdag"]:
+            old_to_new = {"I": "I", "X": "Y", "Y": "X", "Z": "Z"}
+        else:
+            raise NotImplementedError(f"{clifford} is not implemented")
 
-        new_frame = map_frame(old_to_new)
- 
-        return new_frame
+        return self.map_frame(old_to_new)
+
+    @classmethod
+    def _from_serialization(cls: type[U], state: Mapping) -> U:
+        qubit_labels = state["qubit_labels"]
+        pauli_frame = list(state["pauli_frame"])
+        return cls(qubit_labels, pauli_frame)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "qubit_labels": self.qubit_labels,
+                "pauli_frame": "".join(self.pauli_frame),
+            }
+        )
+        return state

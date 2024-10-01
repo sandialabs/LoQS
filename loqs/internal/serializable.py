@@ -166,6 +166,9 @@ class Serializable:
             return deserialized
         elif isinstance(obj, (list, tuple)):
             return [Serializable.deserialize(e) for e in obj]
+        elif isinstance(obj, str) and "def " in obj:
+            # Assume this is a function definition
+            return Serializable._deserialize_function(obj)
 
         # Otherwise, assume we are a built-in deserializable object
         return obj
@@ -221,6 +224,8 @@ class Serializable:
             return {k: Serializable.serialize(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple, set)):
             return [Serializable.serialize(e) for e in obj]
+        elif isinstance(obj, Callable):
+            return Serializable._serialize_function(obj)
         elif isinstance(obj, Serializable):
             return obj.to_serialization()
 
