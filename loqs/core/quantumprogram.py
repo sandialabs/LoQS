@@ -5,12 +5,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
-import os
 from typing import Literal
 import warnings
 
-import dask.bag as db
-from dask.distributed import Client, as_completed
+try:
+    from dask.distributed import Client
+except ImportError:
+    Client = None
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -195,7 +196,7 @@ class QuantumProgram:
         self,
         shots: int = 1,
         max_frame_limit: int = 100,
-        dask_client: Client | None = None,
+        dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
     ):
         """TODO"""

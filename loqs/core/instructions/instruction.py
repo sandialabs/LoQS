@@ -197,6 +197,8 @@ class Instruction(Serializable):
             param_priorities=self._param_priorities,
             param_error_behavior=self.param_error_behavior,  # type: ignore
             param_aliases=self._param_aliases,
+            serialized_apply_fn=self._serialized_apply_fn,
+            serialized_map_qubits_fn=self._serialized_map_qubits_fn,
             name=self.name,
         )
 
