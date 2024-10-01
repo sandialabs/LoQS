@@ -4,18 +4,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, MutableMapping
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
 from loqs.core import QECCodePatch
-from loqs.internal import Castable
+from loqs.internal import Castable, Serializable
 
+
+T = TypeVar("T", bound="PatchDict")
 
 PatchDictCastableTypes: TypeAlias = (
     "PatchDict | Mapping[str, QECCodePatch] | None"
 )
 
 
-class PatchDict(MutableMapping[str, QECCodePatch], Castable):
+class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
     """TODO"""
 
     patches: dict[str, QECCodePatch]
@@ -63,3 +65,14 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable):
 
     def copy(self) -> PatchDict:
         return PatchDict(self.patches.copy())
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        patches = cls.deserialize(state["patches"])
+        assert isinstance(patches, dict)
+        return cls(patches)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update({"patches": self.serialize(self.patches)})
+        return state
