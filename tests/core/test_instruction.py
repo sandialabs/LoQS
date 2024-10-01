@@ -75,4 +75,20 @@ class TestInstruction:
                 'instruction': ins2
             }
             assert result.log == "test result"
+
+        # We should be able to do it a second time also
+        # This is because we cache the serialization the first time,
+        # so even though the second time we don't have access to the source code, it works
+        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+            ins2.write(tempf.name)
+
+            ins3 = Frame.read(tempf.name)
+        
+            result2 = ins3.apply(state=0, qubits=ins3.data["qubits"])
+            assert result2._data == {
+                'state': 1,
+                'qubits': ["Q0", "Q1"],
+                'instruction': ins3
+            }
+            assert result2.log == "test result"
             

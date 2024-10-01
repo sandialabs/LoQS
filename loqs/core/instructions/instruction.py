@@ -63,6 +63,8 @@ class Instruction(Serializable):
         param_priorities: Mapping[str, Sequence[str]] | None = None,
         param_error_behavior: Literal["continue", "warn", "raise"] = "warn",
         param_aliases: Mapping[str, str] | None = None,
+        serialized_apply_fn: str | None = None,
+        serialized_map_qubits_fn: str | None = None,
         name: str = "(Unnamed instruction)",
     ) -> None:
         """TODO
@@ -72,6 +74,16 @@ class Instruction(Serializable):
         """
         self.apply_fn = apply_fn
         self.map_qubits_fn = map_qubits_fn
+
+        # Let's serialize the functions now, when we know we have access to source code
+        self._serialized_apply_fn = serialized_apply_fn
+        if serialized_apply_fn is None:
+            self._serialized_apply_fn = self._serialize_function(apply_fn)
+        self._serialized_map_qubits_fn = serialized_map_qubits_fn
+        if serialized_map_qubits_fn is None:
+            self._serialized_map_qubits_fn = self._serialize_function(
+                map_qubits_fn
+            )
 
         if data is None:
             data = {}
@@ -203,8 +215,10 @@ class Instruction(Serializable):
 
     @classmethod
     def _from_serialization(cls: type[T], state: Mapping) -> T:
-        apply_fn = cls._deserialize_function(state["apply_fn"])
-        map_qubit_fn = cls._deserialize_function(state["map_qubits_fn"])
+        serialized_apply_fn = state["_serialized_apply_fn"]
+        serialized_map_qubits_fn = state["_serialized_map_qubits_fn"]
+        apply_fn = cls._deserialize_function(serialized_apply_fn)
+        map_qubits_fn = cls._deserialize_function(serialized_map_qubits_fn)
         data = cls.deserialize(state["data"])
         assert isinstance(data, dict)
         param_error_behavior = state["param_error_behavior"]
@@ -213,8 +227,10 @@ class Instruction(Serializable):
         obj = cls(
             apply_fn,
             data,
-            map_qubit_fn,
+            map_qubits_fn,
             param_error_behavior=param_error_behavior,
+            serialized_apply_fn=serialized_apply_fn,
+            serialized_map_qubits_fn=serialized_map_qubits_fn,
             name=name,
         )
         obj._param_priorities = state["_param_priorities"]
@@ -227,8 +243,8 @@ class Instruction(Serializable):
         state = super()._to_serialization()
         state.update(
             {
-                "apply_fn": self._serialize_function(self.apply_fn),
-                "map_qubits_fn": self._serialize_function(self.map_qubits_fn),
+                "_serialized_apply_fn": self._serialized_apply_fn,
+                "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
                 "data": self.serialize(self.data),
                 "param_error_behavior": self.param_error_behavior,
                 "_param_priorities": self._param_priorities,
