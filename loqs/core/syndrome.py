@@ -94,8 +94,7 @@ class PauliFrame(Castable, Serializable):
         """TODO"""
         if isinstance(frame_or_labels, PauliFrame):
             self.qubit_labels = frame_or_labels.qubit_labels
-            self.x_bits = frame_or_labels.x_bits
-            self.z_bits = frame_or_labels.z_bits
+            self.pauli_frame = frame_or_labels.pauli_frame
         else:
             self.qubit_labels = list(frame_or_labels)
             self.pauli_frame = ["I"] * self.num_qubits
@@ -130,41 +129,33 @@ class PauliFrame(Castable, Serializable):
 
         return 0
 
-    def get_type_str(self, type: str) -> str:
-        type = type.upper()
-        assert type in ("X", "Z"), "Can only get X or Z type bits"
-
-        bits = [
-            "X" if self.get_bit(type, q) else "I" for q in self.qubit_labels
-        ]
-
-        return "".join(bits)
+    def map_frame(self, map: dict) -> PauliFrame:
+        new_paulis = [map[P] for P in self.pauli_frame]
+        return PauliFrame(self.qubit_labels, new_paulis)
 
     def update_from_pauli_str(self, pstr: str) -> PauliFrame:
         assert len(pstr) == self.num_qubits
 
         new_frame = self.copy()
         for i, (Pold, P) in enumerate(zip(self.pauli_frame, pstr)):
-            if P == "X":
-                old_to_new = {"I": "X", "X": "I", "Y": "Z", "Z": "Y"}
-            elif P == "Y":
-                old_to_new = {"I": "Y", "X": "Z", "Y": "I", "Z": "X"}
-            elif P == "Z":
-                old_to_new = {"I": "Z", "X": "Y", "Y": "X", "Z": "I"}
-            else:
-                old_to_new = {k: k for k in "IXYZ"}
-
+            old_to_new = self._clifford_mapping_dict(P)
             new_frame.pauli_frame[i] = old_to_new[Pold]
 
         return new_frame
 
-    def map_frame(self, map: dict) -> PauliFrame:
-        new_paulis = [map[P] for P in self.pauli_frame]
-        return PauliFrame(self.qubit_labels, new_paulis)
-
     def update_from_transversal_clifford(self, clifford: str) -> PauliFrame:
-        if clifford == "X":
+        old_to_new = self._clifford_mapping_dict(clifford)
+        return self.map_frame(old_to_new)
+
+    def _clifford_mapping_dict(self, clifford: str) -> dict[str, str]:
+        if clifford == "I":
+            old_to_new = {k: k for k in "IXYZ"}
+        elif clifford == "X":
             old_to_new = {"I": "X", "X": "I", "Y": "Z", "Z": "Y"}
+        elif clifford == "Y":
+            old_to_new = {"I": "Y", "X": "Z", "Y": "I", "Z": "X"}
+        elif clifford == "Z":
+            old_to_new = {"I": "Z", "X": "Y", "Y": "X", "Z": "I"}
         elif clifford == "H":
             old_to_new = {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
         elif clifford in ["S", "Sdag"]:
@@ -172,7 +163,7 @@ class PauliFrame(Castable, Serializable):
         else:
             raise NotImplementedError(f"{clifford} is not implemented")
 
-        return self.map_frame(old_to_new)
+        return old_to_new
 
     @classmethod
     def _from_serialization(cls: type[U], state: Mapping) -> U:
