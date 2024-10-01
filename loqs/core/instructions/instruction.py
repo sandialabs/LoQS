@@ -13,12 +13,10 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    runtime_checkable,
 )
 import warnings
 
 from loqs.core import Frame
-from loqs.core.frame import FrameCastableTypes
 from loqs.internal.serializable import Serializable
 
 
@@ -28,7 +26,6 @@ P = ParamSpec("P")
 KwargDict: TypeAlias = dict[str, object]
 
 
-@runtime_checkable
 class ApplyCallable(Protocol[P]):
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Frame: ...  # noqa
 

@@ -4,7 +4,7 @@ from tempfile import NamedTemporaryFile
 
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
-from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
+from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 
 class TestInstruction:
 
@@ -50,6 +50,7 @@ class TestInstruction:
             "state_name_in_program": DEFAULT_PRIORITIES,
             "qubits": ["instruction"]
         }
+
     
     def test_serialization(self):
         def apply_fn(state, qubits):

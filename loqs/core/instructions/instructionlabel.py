@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions.instruction import Instruction
-from loqs.internal import Castable
+from loqs.internal import Castable, Serializable
+
+
+T = TypeVar("T", bound="InstructionLabel")
 
 InstructionLabelCastableTypes: TypeAlias = (
     "Instruction | str | tuple[Instruction | str, str | None, str | None] | InstructionLabel"
 )
 
 
-class InstructionLabel(Castable):
+class InstructionLabel(Castable, Serializable):
     """TODO"""
 
     instruction: Instruction | None
@@ -105,9 +108,7 @@ class InstructionLabel(Castable):
         return s
 
     @classmethod
-    def cast(
-        cls, obj: InstructionLabelCastableTypes | Mapping
-    ) -> InstructionLabel:
+    def cast(cls, obj: object) -> InstructionLabel:
         """Cast to a :class:`InstructionLabel` object.
 
         Unlike most castable objects, :class:`InstructionLabel`
@@ -139,4 +140,31 @@ class InstructionLabel(Castable):
             return cls(obj)
 
         # Assume this is a tuple of arguments, pass all in
-        return cls(*obj)
+        return cls(*obj)  # type: ignore
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        inst_label = cls.deserialize(state["instruction"])
+        assert isinstance(inst_label, Instruction | None)
+        if inst_label is None:
+            inst_label = state["inst_label"]
+
+        patch_label = state["patch_label"]
+        inst_args = cls.deserialize(state["inst_args"])
+        assert isinstance(inst_args, list)
+        inst_kwargs = cls.deserialize(state["inst_kwargs"])
+        assert isinstance(inst_kwargs, dict)
+        return cls(inst_label, patch_label, inst_args, inst_kwargs)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "instruction": self.serialize(self.instruction),
+                "inst_label": self.inst_label,
+                "patch_label": self.patch_label,
+                "inst_args": self.serialize(self.inst_args),
+                "inst_kwargs": self.serialize(self.inst_kwargs),
+            }
+        )
+        return state

@@ -54,21 +54,27 @@ class Serializable:
         -------
         object
         """
-        # Implementation note:
-        # This method is similar to _from_serialization, but will defer to the method of a derived class
-        # when once is specified in the state dictionary.  This method should thus be used when de-serializing
-        # using a potential base class, i.e.  BaseClass._from_serialization_base(state).
-        # (This method should rarely need to be overridden in derived (sub) classes.)
-        if (
-            isinstance(state, dict)
-            and state["module"] == cls.__module__
-            and state["class"] == cls.__name__
-        ):
-            # then the state is actually for this class and we should call its _from_serialization method:
-            ret = cls._from_serialization(state)
-        else:
-            # otherwise, this call functions as a base class call that defers to the correct derived class
-            ret = Serializable._from_serialization(state)
+        try:
+            # Implementation note:
+            # This method is similar to _from_serialization, but will defer to the method of a derived class
+            # when once is specified in the state dictionary.  This method should thus be used when de-serializing
+            # using a potential base class, i.e.  BaseClass._from_serialization_base(state).
+            # (This method should rarely need to be overridden in derived (sub) classes.)
+            if (
+                isinstance(state, dict)
+                and state["module"] == cls.__module__
+                and state["class"] == cls.__name__
+            ):
+                # then the state is actually for this class and we should call its _from_serialization method:
+                ret = cls._from_serialization(state)
+            else:
+                # otherwise, this call functions as a base class call that defers to the correct derived class
+                ret = Serializable._from_serialization(state)
+        except RecursionError as e:
+            raise NotImplementedError(
+                "Hit recursion limit while deserializing, usually indicating "
+                + "from_serialization was not implemented in a derived class."
+            ) from e
 
         return ret
 

@@ -4,7 +4,7 @@ from tempfile import NamedTemporaryFile
 import pytest
 
 from loqs.core.recordables import PatchDict
-from loqs.core.qeccode import QECCode, QECCodePatch
+from loqs.core.qeccode import QECCode
 
 
 class TestMeasurementOutcomes:

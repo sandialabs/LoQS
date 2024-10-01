@@ -133,5 +133,5 @@ class TestPauliFrame:
         with NamedTemporaryFile("w+", suffix='.json') as tempf:
             pf.write(tempf.name)
 
-            pf2 = SyndromeLabel.read(tempf.name)
+            pf2 = PauliFrame.read(tempf.name)
             self._check(pf2, "IXYZ")
