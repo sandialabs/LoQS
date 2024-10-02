@@ -7,19 +7,25 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import inspect as ins
 import textwrap
-from typing import Literal, ParamSpec, Protocol, TypeAlias, runtime_checkable
+from typing import (
+    Literal,
+    ParamSpec,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+)
 import warnings
 
 from loqs.core import Frame
-from loqs.core.frame import FrameCastableTypes
+from loqs.internal.serializable import Serializable
 
 
+T = TypeVar("T", bound="Instruction")
 P = ParamSpec("P")
 
 KwargDict: TypeAlias = dict[str, object]
 
 
-@runtime_checkable
 class ApplyCallable(Protocol[P]):
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Frame: ...  # noqa
 
@@ -43,7 +49,7 @@ DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
 """
 
 
-class Instruction:
+class Instruction(Serializable):
     """TODO"""
 
     def __init__(
@@ -54,6 +60,8 @@ class Instruction:
         param_priorities: Mapping[str, Sequence[str]] | None = None,
         param_error_behavior: Literal["continue", "warn", "raise"] = "warn",
         param_aliases: Mapping[str, str] | None = None,
+        serialized_apply_fn: str | None = None,
+        serialized_map_qubits_fn: str | None = None,
         name: str = "(Unnamed instruction)",
     ) -> None:
         """TODO
@@ -63,6 +71,16 @@ class Instruction:
         """
         self.apply_fn = apply_fn
         self.map_qubits_fn = map_qubits_fn
+
+        # Let's serialize the functions now, when we know we have access to source code
+        self._serialized_apply_fn = serialized_apply_fn
+        if serialized_apply_fn is None:
+            self._serialized_apply_fn = self._serialize_function(apply_fn)
+        self._serialized_map_qubits_fn = serialized_map_qubits_fn
+        if serialized_map_qubits_fn is None:
+            self._serialized_map_qubits_fn = self._serialize_function(
+                map_qubits_fn
+            )
 
         if data is None:
             data = {}
@@ -176,6 +194,8 @@ class Instruction:
             param_priorities=self._param_priorities,
             param_error_behavior=self.param_error_behavior,  # type: ignore
             param_aliases=self._param_aliases,
+            serialized_apply_fn=self._serialized_apply_fn,
+            serialized_map_qubits_fn=self._serialized_map_qubits_fn,
             name=self.name,
         )
 
@@ -191,3 +211,44 @@ class Instruction:
         ), "map_qubits_fn did not output all expected keys"
         new_instruction.data = new_kwargs
         return new_instruction
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        serialized_apply_fn = state["_serialized_apply_fn"]
+        serialized_map_qubits_fn = state["_serialized_map_qubits_fn"]
+        apply_fn = cls._deserialize_function(serialized_apply_fn)
+        map_qubits_fn = cls._deserialize_function(serialized_map_qubits_fn)
+        data = cls.deserialize(state["data"])
+        assert isinstance(data, dict)
+        param_error_behavior = state["param_error_behavior"]
+        name = state["name"]
+
+        obj = cls(
+            apply_fn,
+            data,
+            map_qubits_fn,
+            param_error_behavior=param_error_behavior,
+            serialized_apply_fn=serialized_apply_fn,
+            serialized_map_qubits_fn=serialized_map_qubits_fn,
+            name=name,
+        )
+        obj._param_priorities = state["_param_priorities"]
+        obj._param_aliases = state["_param_aliases"]
+        obj._rev_param_aliases = {v: k for k, v in obj._param_aliases.items()}
+
+        return obj
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "_serialized_apply_fn": self._serialized_apply_fn,
+                "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
+                "data": self.serialize(self.data),
+                "param_error_behavior": self.param_error_behavior,
+                "_param_priorities": self._param_priorities,
+                "_param_aliases": self._param_aliases,
+                "name": self.name,
+            }
+        )
+        return state

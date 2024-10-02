@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
@@ -14,6 +14,8 @@ try:
     from pygsti.baseobjs import Label as _Label
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+
+T = TypeVar("T", bound="PyGSTiPhysicalCircuit")
 
 ## Type aliases for static type checking
 CastableTypes: TypeAlias = (
@@ -193,3 +195,65 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             Qubit labels to assign to circuit.
         """
         self.circuit.line_labels = qubit_labels
+
+    @classmethod
+    def _deserialize_circuit(
+        cls,
+        serial_circuit: str | list | dict,
+        qubit_labels: Sequence | None = None,
+    ) -> _Circuit:
+        """Helper function to deserialize a circuit.
+
+        Derived classes should implement this for
+        deserialization to work.
+        """
+        # For pyGSTi circuit, we can load from string rep
+        # (minus leading "Circuit(" and trailing ")" )
+        assert isinstance(serial_circuit, str)
+        cstr = serial_circuit[8:-1]
+        line_labels = cstr.split("@")[1][1:-1].split(",")
+
+        if qubit_labels is None:
+            qubit_labels = line_labels
+        else:
+            assert set(line_labels) == set(qubit_labels)
+
+        # However, qubit labels must be ints or start with "Q"
+        # First, lets map our string to have Q labels
+        # Do this through temp in case some of them already have Q labels
+        # (common convention)
+        old_to_temp = {lbl: f"TEMP{i}" for i, lbl in enumerate(qubit_labels)}
+        temp_to_new = {f"TEMP{i}": f"Q{i}" for i in range(len(qubit_labels))}
+
+        for k, v in old_to_temp.items():
+            cstr = cstr.replace(k, v)
+        for k, v in temp_to_new.items():
+            cstr = cstr.replace(k, v)
+
+        # Now let the parser at it
+        try:
+            circ = _Circuit(cstr, editable=True)
+        except ValueError as e:
+            raise ValueError(
+                f"Failed to parse circuit string {serial_circuit}"
+            ) from e
+
+        # And convert state space labels back
+        circ.map_state_space_labels_inplace(
+            {v: k for k, v in temp_to_new.items()}
+        )
+        circ.map_state_space_labels_inplace(
+            {v: k for k, v in old_to_temp.items()}
+        )
+        circ.line_labels = qubit_labels
+
+        return circ
+
+    def _serialize_circuit(self) -> str | list | dict:
+        """Helper function to serialize a circuit.
+
+        Derived classes should implement this for
+        serialization to work.
+        """
+        # For pyGSTi circuit, we use the string rep
+        return repr(self.circuit)

@@ -5,12 +5,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
-import os
-from typing import Literal
+from typing import Literal, TypeVar
 import warnings
 
-import dask.bag as db
-from dask.distributed import Client, as_completed
+try:
+    from dask.distributed import Client
+except ImportError:
+    Client = None
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -26,10 +27,13 @@ from loqs.core.instructions.instructionstack import (
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
-from loqs.core.syndrome import PauliFrame
+from loqs.internal import Serializable
 
 
-class QuantumProgram:
+T = TypeVar("T", bound="QuantumProgram")
+
+
+class QuantumProgram(Serializable):
     """A container for the main quantum program to be executed."""
 
     def __init__(
@@ -195,7 +199,7 @@ class QuantumProgram:
         self,
         shots: int = 1,
         max_frame_limit: int = 100,
-        dask_client: Client | None = None,
+        dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
     ):
         """TODO"""
@@ -464,3 +468,65 @@ class QuantumProgram:
         for history in self.shot_histories:
             data.append(history.collect_data(key, indices))
         return data
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        initial_history = cls.deserialize(state["initial_history"])
+        assert isinstance(initial_history, History | None)
+        default_noise_model = cls.deserialize(state["default_noise_model"])
+        assert isinstance(default_noise_model, BaseNoiseModel | None)
+        default_base_seed = state["default_base_seed"]
+        stack = cls.deserialize(state["instruction_stack"])
+        assert isinstance(stack, InstructionStack)
+        global_instructions = cls.deserialize(state["global_instructions"])
+        assert isinstance(global_instructions, dict)
+        state_type = cls.deserialize(state["state_type"])
+        assert isinstance(state_type, type)
+        assert issubclass(state_type, BaseQuantumState)
+        patch_types = cls.deserialize(state["patch_types"])
+        assert isinstance(patch_types, dict)
+        assert all([isinstance(v, QECCode) for v in patch_types.values()])
+        name = state["name"]
+        shot_histories = cls.deserialize(state["shot_histories"])
+        assert isinstance(shot_histories, list)
+        assert all([isinstance(h, History) for h in shot_histories])
+
+        # Catch warnings about overriding globals
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            obj = cls(
+                stack,
+                initial_history,
+                default_noise_model,
+                default_base_seed,
+                False,  # expiring keys should already be set in initial history
+                global_instructions,
+                state_type,
+                patch_types,
+                False,  # Don't override globals, was already processed
+                name,
+            )
+        obj.shot_histories = shot_histories
+
+        return obj
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "initial_history": self.serialize(self.initial_history),
+                "default_noise_model": self.serialize(
+                    self.default_noise_model
+                ),
+                "default_base_seed": self.default_base_seed,
+                "instruction_stack": self.serialize(self.instruction_stack),
+                "global_instructions": self.serialize(
+                    self.global_instructions
+                ),
+                "state_type": self.serialize(self.state_type),
+                "patch_types": self.serialize(self.patch_types),
+                "name": self.name,
+                "shot_histories": self.serialize(self.shot_histories),
+            }
+        )
+        return state

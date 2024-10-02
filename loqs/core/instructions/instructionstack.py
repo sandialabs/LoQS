@@ -3,23 +3,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import textwrap
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
-from loqs.internal.castable import Castable
+from loqs.internal import Castable, Serializable
 
+
+T = TypeVar("T", bound="InstructionStack")
 
 InstructionStackCastableTypes: TypeAlias = (
     "InstructionStack | InstructionLabelCastableTypes | Sequence[InstructionLabelCastableTypes] | None"
 )
 
 
-class InstructionStack(Sequence[InstructionLabel], Castable):
+class InstructionStack(Sequence[InstructionLabel], Castable, Serializable):
 
     _instructions: list[InstructionLabel]
     """Internal list of :class:`InstructionLabels`"""
@@ -53,11 +55,7 @@ class InstructionStack(Sequence[InstructionLabel], Castable):
 
         # Otherwise we must be a list of castable tuples
         for inst in instructions:
-            self._instructions.append(InstructionLabel.cast(inst))  # type: ignore
-
-        for inst in self._instructions:
-            if inst.instruction is not None:
-                inst.instruction.parent = self
+            self._instructions.append(InstructionLabel.cast(inst))
 
     def __getitem__(self, i):
         return self._instructions[i]
@@ -76,15 +74,19 @@ class InstructionStack(Sequence[InstructionLabel], Castable):
         else:
             return "Empty InstructionStack"
 
-    def append_instruction(self, item) -> InstructionStack:
+    def append_instruction(
+        self, item: InstructionLabelCastableTypes
+    ) -> InstructionStack:
         return self.insert_instruction(len(self), item)
 
-    def delete_instruction(self, i) -> InstructionStack:
+    def delete_instruction(self, i: int) -> InstructionStack:
         instructions = self._instructions.copy()
         del instructions[i]
         return InstructionStack(instructions)
 
-    def insert_instruction(self, i, item) -> InstructionStack:
+    def insert_instruction(
+        self, i: int, item: InstructionLabelCastableTypes
+    ) -> InstructionStack:
         instructions = self._instructions.copy()
         instructions.insert(i, InstructionLabel.cast(item))
         return InstructionStack(instructions)
@@ -93,3 +95,14 @@ class InstructionStack(Sequence[InstructionLabel], Castable):
         self,
     ) -> tuple[InstructionLabel, InstructionStack]:
         return self._instructions[0], InstructionStack(self._instructions[1:])
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        instructions = cls.deserialize(state["_instructions"])
+        assert isinstance(instructions, list)
+        return cls(instructions)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update({"_instructions": self.serialize(self._instructions)})
+        return state

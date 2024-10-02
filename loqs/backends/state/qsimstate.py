@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence, Collection
+from collections.abc import Mapping, Sequence, Collection
 import random
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TypeVar
 
 import numpy as np
 
@@ -19,6 +19,9 @@ try:
     from quantumsim.sparsedm import SparseDM as _SparseDM
 except ImportError as e:
     raise ImportError("Failed import, cannot use QuantumSim as backend") from e
+
+
+T = TypeVar("T", bound="QSimQuantumState")
 
 # Type aliases for static type checking
 CastableTypes: TypeAlias = "QSimQuantumState | int | _SparseDM"
@@ -154,3 +157,61 @@ class QSimQuantumState(BaseQuantumState):
 
     def copy(self) -> QSimQuantumState:
         return QSimQuantumState(self.state.copy())
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        qubit_labels = ["qubit_labels"]
+        obj = cls(len(qubit_labels), qubit_labels)
+
+        # Restore internal QuantumSim state
+        obj.state.classical = state["_qsim_classical"]
+        obj.state.idx_in_full_dm = state["_qsim_idx_in_full_dm"]
+
+        dm_class = cls._deserialize_class(
+            state["_qsim_dm_class"], check_is_subclass=False
+        )
+        dm_no_qubits = state["_qsim_dm_no_qubits"]
+        dm_data = cls._deserialize_mx(state["_qsim_dm_data"])
+        obj.state.full_dm = dm_class(dm_no_qubits, data=dm_data)
+
+        obj.state.max_bits_in_full_dm = state["_qsim_max_bits_in_full_dm"]
+        obj.state.classical_probability = state["_qsim_classical_probability"]
+        ptm_data = cls.deserialize(state["_qsim_single_ptms_to_do"])
+        assert isinstance(ptm_data, dict)
+        single_ptms_to_do = defaultdict(list)
+        for k, v in ptm_data.items():
+            single_ptms_to_do[k] = v
+        obj.state.single_ptms_to_do = single_ptms_to_do
+
+        obj.state._last_majority_vote_mask = state["_qsim_maj_vot_mask"]
+        obj.state._last_majority_vote_array = cls._deserialize_mx(
+            state["_qsim_maj_vot_array"]
+        )
+        return obj
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "qubit_labels": self.state.names,
+                "_qsim_classical": self.state.classical,
+                "_qsim_idx_in_full_dm": self.state.idx_in_full_dm,
+                "_qsim_dm_class": self._serialize_class(
+                    type(self.state.full_dm)
+                ),
+                "_qsim_dm_no_qubits": self.state.full_dm.no_qubits,
+                "_qsim_dm_data": self._serialize_mx(
+                    self.state.full_dm.to_array()
+                ),
+                "_qsim_max_bits_in_full_dm": self.state.max_bits_in_full_dm,
+                "_qsim_classical_probability": self.state.classical_probability,
+                "_qsim_single_ptms_to_do": self.serialize(
+                    self.state.single_ptms_to_do
+                ),
+                "_qsim_maj_vot_mask": self.state._last_majority_vote_mask,
+                "_qsim_maj_vot_array": self._serialize_mx(
+                    self.state._last_majority_vote_array
+                ),
+            }
+        )
+        return state

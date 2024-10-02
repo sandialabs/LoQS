@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import functools
 import itertools
 import numpy as np
-from typing import ClassVar, TypeAlias
-
+from typing import ClassVar, Sequence, TypeAlias, TypeVar
 
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
@@ -16,10 +16,13 @@ from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
 try:
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
     from pygsti.modelmembers.operations import EmbeddedOp
-    from pygsti.models import ExplicitOpModel, ImplicitOpModel
+    from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+
+
+T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
 def compute_qsim_bases(num_qubits: int):
@@ -57,7 +60,11 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
     name: ClassVar[str] = "pyGSTi"
 
-    def __init__(self, model: PyGSTiModelCastableTypes) -> None:
+    def __init__(
+        self,
+        model: PyGSTiModelCastableTypes,
+        qubit_aliases: Mapping | Sequence | None = None,
+    ) -> None:
         """Initialize a PyGSTiModelBackend.
 
         Parameters
@@ -66,6 +73,37 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             A pyGSTi model to use when looking up operations
         """
         from loqs.backends.model import DictNoiseModel
+
+        # Currently there is a pyGSTi bug deserializing models that have
+        # non-int or strs that do not start with "Q"
+        # We will enforce this upon the user here for the model itself,
+        # but allow qubit label aliasing
+        model_qubits = model.state_space.qubit_labels  # type: ignore
+        assert all(
+            [
+                isinstance(q, int)
+                or (isinstance(q, str) and q.startswith("Q"))
+                for q in model_qubits
+            ]
+        ), (
+            "Model must use int or str starting with Q labels for qubits. ",
+            "For qubit labels outside of these restrictions, use `qubit_aliases` "
+            "to map from model qubits to your desired qubit labels.",
+        )
+
+        if qubit_aliases is None:
+            self.qubit_aliases = {k: k for k in model_qubits}
+        elif isinstance(qubit_aliases, Mapping):
+            assert all([q in qubit_aliases for q in model_qubits])
+            self.qubit_aliases = dict(qubit_aliases)
+        elif isinstance(qubit_aliases, Sequence):
+            assert len(qubit_aliases) == len(model_qubits)
+            self.qubit_aliases = {
+                k: v for k, v in zip(model_qubits, qubit_aliases)
+            }
+        else:
+            raise TypeError("Invalid type for qubit aliases")
+        self._rev_qubit_aliases = {v: k for k, v in self.qubit_aliases.items()}
 
         self.use_embedded_op = False
         if isinstance(model, ExplicitOpModel):
@@ -91,11 +129,21 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
     @property
     def gate_keys(self) -> list:
-        return list(self.gate_dict.keys())
+        keys = []
+        for key in self.gate_dict.keys():
+            name = key.name
+            aliased_qubits = [self.qubit_aliases[q] for q in key.qubits]
+            keys.append((name, aliased_qubits))
+        return keys
 
     @property
     def instrument_keys(self) -> list:
-        return list(self.inst_dict.keys())
+        keys = []
+        for key in self.inst_dict.keys():
+            name = key.name
+            aliased_qubits = [self.qubit_aliases[q] for q in key.qubits]
+            keys.append((name, aliased_qubits))
+        return keys
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
@@ -120,9 +168,13 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         reps = []
         for layer in pygsti_circuit.layertup:  # type: ignore
             for comp in layer.components:  # type: ignore
-                qubits = comp.qubits
-                if comp.name.startswith("G"):
-                    op = self.gate_dict[comp]
+                name = comp.name
+                aliased_qubits = comp.qubits  # The circuit is already aliased
+                qubits = [self._rev_qubit_aliases[q] for q in aliased_qubits]
+                if name.startswith("G"):
+                    op = self.gate_dict[
+                        name, *qubits
+                    ]  # Look up using unaliased qubits
                     basis = self.model.basis
 
                     if self.use_embedded_op and isinstance(op, EmbeddedOp):
@@ -183,5 +235,22 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
 
-                reps.append((rep, qubits, reptype))
+                # We need to save with original (aliased) qubits
+                reps.append((rep, aliased_qubits, reptype))
         return reps
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        model = Model.from_nice_serialization(state["model"])
+        qubit_aliases = state["qubit_aliases"]
+        return cls(model, qubit_aliases)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "model": self.model.to_nice_serialization(),
+                "qubit_aliases": self.qubit_aliases,
+            }
+        )
+        return state

@@ -4,12 +4,14 @@
 from __future__ import annotations
 import textwrap
 
-from collections.abc import Iterator, Sequence
-from typing import Literal, TypeAlias, overload
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Literal, TypeAlias, TypeVar, overload
 
 from loqs.core.frame import Frame, FrameCastableTypes
-from loqs.internal import Castable
+from loqs.internal import Castable, Serializable
 
+
+T = TypeVar("T", bound="History")
 
 HistoryCastableTypes: TypeAlias = (
     "History | FrameCastableTypes | Sequence[FrameCastableTypes] | None"
@@ -17,7 +19,7 @@ HistoryCastableTypes: TypeAlias = (
 """Things that can be cast to :class:`History`."""
 
 
-class History(Sequence[Frame], Castable):
+class History(Sequence[Frame], Castable, Serializable):
     """A semi-mutable list of :class:`Frame` objects.
 
     The intention is to provide a list-like object where existing
@@ -146,3 +148,28 @@ class History(Sequence[Frame], Castable):
 
         # Otherwise, return the series of objects
         return data
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        history = cls.deserialize(state["_history"])
+        assert isinstance(history, list)
+        assert all([isinstance(f, Frame) for f in history])
+        expiring_keys = state["expiring_keys"]
+        propagating_keys = state["propagating_keys"]
+
+        obj = cls(history, expiring_keys, propagating_keys)
+        obj._expiring_key_locs = state["_expiring_key_locs"]
+
+        return obj
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "_history": self.serialize(self._history),
+                "expiring_keys": list(self.expiring_keys),
+                "_expiring_key_locs": self._expiring_key_locs,
+                "propagating_keys": list(self.propagating_keys),
+            }
+        )
+        return state

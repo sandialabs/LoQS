@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 
+
+T = TypeVar("T", bound="DictNoiseModel")
 
 # Type aliases for static type checking
 GateDictModelCastableTypes: TypeAlias = (
@@ -117,3 +119,25 @@ class DictNoiseModel(BaseNoiseModel):
 
                 reps.append((rep, label[1], reptype))
         return reps
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        gate_dict = cls.deserialize(state["gate_dict"])
+        assert isinstance(gate_dict, dict)
+        inst_dict = cls.deserialize(state["inst_dict"])
+        assert isinstance(inst_dict, dict)
+        gaterep = GateRep(state["_gaterep"])
+        instrep = InstrumentRep(state["_instrep"])
+        return cls((gate_dict, inst_dict), gaterep, instrep)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update(
+            {
+                "gate_dict": self.serialize(self.gate_dict),
+                "inst_dict": self.serialize(self.inst_dict),
+                "_gaterep": self._gaterep.value,
+                "_instrep": self._instrep.value,
+            }
+        )
+        return state

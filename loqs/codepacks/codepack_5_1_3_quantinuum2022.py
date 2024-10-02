@@ -385,6 +385,7 @@ def create_ideal_model(
         :meth:`create_qec_code`
     """
     assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
+    model_qubits = [f"Q{i}" for i in range(7)]
 
     gate_names = [
         "Gxpi",
@@ -417,16 +418,16 @@ def create_ideal_model(
 
         # TODO: Instrument not specified here
         pspec = pygsti.processors.QubitProcessorSpec(
-            len(qubits),
+            len(model_qubits),
             gate_names=gate_names,
-            qubit_labels=qubits,
+            qubit_labels=model_qubits,
             nonstd_gate_unitaries=nonstd_unitaries,
             availability={k: "all-permutations" for k in gate_names},
         )
 
         ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(pspec)
 
-        model = PyGSTiNoiseModel(ideal_model_pygsti)
+        model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
     elif model_backend == DictNoiseModel:
         # Currently we use pyGSTi to look up definitions
         # TODO: Remove if needed
