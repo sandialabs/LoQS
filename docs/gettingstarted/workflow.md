@@ -219,6 +219,33 @@ program4.run(shots=1000) # Let's also collect more statistics!
 Counter(program4.collect_shot_data("logical_measurement", -1))
 ```
 
+## Saving a QuantumProgram
+
+Any object that is derived from `loqs.internal.Serializable` can be easily serialized with the following API:
+
+- `to_serialization`: This usually returns a `dict` that is JSON-able.
+- `dumps`: Similar to `json.dumps`, it is a string version of the output of `to_serializable`.
+- `dump`: Similar to `json.dump`, this writes the output of `to_serializable` to a file pointer.
+- `write`: Similar to `dump`, but it takes a filename/path instead. This is likely to be the most commonly used serialization function.
+
+Deserialization is just as simple, and follows a similar API with reverse functions: `from_serialization` creates the object from a JSON-able dict, `loads` creates the object from the string version of the dict, `load` creates the object from a file pointer, and `read` creates the object from a filename/path.
+
+```{code-cell} ipython3
+# Note that this can take some time.
+# Currently ~20 seconds for 1000 shots, and 1.6 GB uncompressed
+program4.write('test.json')
+```
+
+```{code-cell} ipython3
+# Currently this takes ~20 seconds to reload
+program5 = QuantumProgram.read('test.json')
+```
+
+```{code-cell} ipython3
+# And we still have all our shot histories
+Counter(program5.collect_shot_data("logical_measurement", -1))
+```
+
 ```{code-cell} ipython3
 
 ```

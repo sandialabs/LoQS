@@ -485,29 +485,27 @@ class QuantumProgram(Serializable):
         assert issubclass(state_type, BaseQuantumState)
         patch_types = cls.deserialize(state["patch_types"])
         assert isinstance(patch_types, dict)
-        assert all(
-            [
-                isinstance(v, type) and issubclass(v, QECCode)
-                for v in patch_types.values()
-            ]
-        )
+        assert all([isinstance(v, QECCode) for v in patch_types.values()])
         name = state["name"]
         shot_histories = cls.deserialize(state["shot_histories"])
         assert isinstance(shot_histories, list)
         assert all([isinstance(h, History) for h in shot_histories])
 
-        obj = cls(
-            stack,
-            initial_history,
-            default_noise_model,
-            default_base_seed,
-            False,  # expiring keys should already be set in initial history
-            global_instructions,
-            state_type,
-            patch_types,
-            False,  # Don't override globals, was already processed
-            name,
-        )
+        # Catch warnings about overriding globals
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            obj = cls(
+                stack,
+                initial_history,
+                default_noise_model,
+                default_base_seed,
+                False,  # expiring keys should already be set in initial history
+                global_instructions,
+                state_type,
+                patch_types,
+                False,  # Don't override globals, was already processed
+                name,
+            )
         obj.shot_histories = shot_histories
 
         return obj

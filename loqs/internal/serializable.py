@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from ast import literal_eval as make_tuple
 import importlib
 import inspect
 import json
@@ -179,6 +180,13 @@ class Serializable:
             for k, v in obj.items():
                 if isinstance(k, list):
                     k = tuple(k)
+                elif (
+                    isinstance(k, str)
+                    and k.startswith("(")
+                    and k.endswith(")")
+                ):
+                    # This was a tuple
+                    k = make_tuple(k)
                 deserialized[k] = Serializable.deserialize(v)
             return deserialized
         elif isinstance(obj, (list, tuple)):
@@ -238,7 +246,12 @@ class Serializable:
     def serialize(obj):
         """Helper function to recursively serialize objects."""
         if isinstance(obj, dict):
-            return {k: Serializable.serialize(v) for k, v in obj.items()}
+            serial_dict = {}
+            for k, v in obj.items():
+                if isinstance(k, tuple):
+                    k = str(k)
+                serial_dict[k] = Serializable.serialize(v)
+            return serial_dict
         elif isinstance(obj, np.ndarray) or sps.issparse(obj):
             return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
         elif isinstance(obj, (list, tuple, set)):

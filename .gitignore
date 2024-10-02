@@ -12,6 +12,7 @@ htmlcov
 docs/_build
 docs/**/_autosummary
 docs/**/*.ipynb
+docs/gettingstarted/test.json
 
 .vscode
 venv*/
