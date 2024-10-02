@@ -6,7 +6,7 @@ stages:
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   # Don't wipe cache or tox (cuts down on test runtime)
-  GIT_CLEAN_FLAGS: -ffdx -e .cache/ .tox/
+  GIT_CLEAN_FLAGS: -ffdx -e .cache/ -e .tox/
 
 cache:
   paths:
