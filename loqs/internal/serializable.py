@@ -159,7 +159,12 @@ class Serializable:
         """Helper function to recursively unserialize objects."""
         if isinstance(obj, dict):
             if "module" in obj and "class" in obj:
-                # This is a serialized object, try to deserialize
+                # This is a serialized class or object, try to deserialize
+                if obj.get("as_type", False):
+                    # If this is just the class, return it
+                    return Serializable._deserialize_class(obj)
+
+                # Otherwise, get the class and call its deserialization
                 cls = Serializable._state_class(obj)
                 return cls.from_serialization(obj)
 
@@ -230,6 +235,11 @@ class Serializable:
             return {k: Serializable.serialize(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple, set)):
             return [Serializable.serialize(e) for e in obj]
+        elif isinstance(obj, type):
+            # This should be before function serialization,
+            # so that we do not accidentally grab the class constructor
+            # Constructor could still be initialized by explicitly serializing __init__
+            return Serializable._serialize_class(obj)
         elif isinstance(obj, Callable):
             return Serializable._serialize_function(obj)
         elif isinstance(obj, Serializable):
@@ -400,6 +410,16 @@ class Serializable:
             )
 
     @staticmethod
+    def _serialize_class(class_type) -> dict:
+        state = {
+            "module": class_type.__module__,
+            "class": class_type.__name__,
+            "version": 0,
+            "as_type": True,
+        }
+        return state
+
+    @staticmethod
     def _serialize_function(func) -> str:
         # Get source code
         src = textwrap.dedent(inspect.getsource(func))
@@ -447,15 +467,27 @@ class Serializable:
         return imports + src
 
     @staticmethod
+    def _deserialize_class(state: dict) -> type:
+        if state.get("as_type", False):
+            return Serializable._state_class(state)
+
+        raise ValueError(
+            "State does not correspond to a standalone class serialization,"
+            + "i.e. does not have as_type: True in it. To get the class of "
+            + "a serialized instance, use Serialized._state_class() instead."
+        )
+
+    # WARNING: This is inherently unsafe
+    @staticmethod
     def _deserialize_function(src: str) -> Callable:
         # Execute the imports and function definition
         env = {}
         exec(src, env)
 
         # We need to find the function name
-        # Search for first def, then first paren after it
+        # Search for last def, then first paren after it
         # Trim "def " and that should be the function name
-        start = src.find("def ")
+        start = src.rfind("def ")
         end = src.find("(", start)
         key = src[start + 4 : end]
 

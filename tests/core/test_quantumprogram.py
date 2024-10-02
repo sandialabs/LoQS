@@ -1,4 +1,4 @@
-"""Tester for loqs.core.qeccode"""
+"""Tester for loqs.core.quantumprogram"""
 
 from tempfile import NamedTemporaryFile
 
@@ -6,7 +6,7 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
 from loqs.core.qeccode import QECCode
 
-class TestQECCodeAndPatch:
+class TestQuantumProgram:
 
     @classmethod
     def setup_class(cls):
