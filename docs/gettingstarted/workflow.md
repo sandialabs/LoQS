@@ -237,7 +237,7 @@ program4.write('test.json')
 ```
 
 ```{code-cell} ipython3
-# Currently this takes ~20 seconds to reload
+# Currently this takes ~1min20 seconds to reload
 program5 = QuantumProgram.read('test.json')
 ```
 
