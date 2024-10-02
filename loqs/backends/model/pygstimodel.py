@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import functools
 import itertools
 import numpy as np
-from typing import ClassVar, TypeAlias
-
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
@@ -16,10 +16,13 @@ from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
 try:
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
     from pygsti.modelmembers.operations import EmbeddedOp
-    from pygsti.models import ExplicitOpModel, ImplicitOpModel
+    from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+
+
+T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
 def compute_qsim_bases(num_qubits: int):
@@ -185,3 +188,13 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
                 reps.append((rep, qubits, reptype))
         return reps
+
+    @classmethod
+    def _from_serialization(cls: type[T], state: Mapping) -> T:
+        model = Model.from_nice_serialization(state["model"])
+        return cls(model)
+
+    def _to_serialization(self) -> dict:
+        state = super()._to_serialization()
+        state.update({"model": self.model.to_nice_serialization()})
+        return state

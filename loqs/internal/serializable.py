@@ -7,6 +7,8 @@ from abc import abstractmethod
 import importlib
 import inspect
 import json
+import numpy as np
+import scipy.sparse as sps
 import textwrap
 from typing import Callable
 
@@ -164,6 +166,10 @@ class Serializable:
                     # If this is just the class, return it
                     return Serializable._deserialize_class(obj)
 
+                if obj.get("type", None) == "matrix":
+                    # This is a matrix, deserialize
+                    return Serializable._deserialize_mx(obj["data"])
+
                 # Otherwise, get the class and call its deserialization
                 cls = Serializable._state_class(obj)
                 return cls.from_serialization(obj)
@@ -233,6 +239,8 @@ class Serializable:
         """Helper function to recursively serialize objects."""
         if isinstance(obj, dict):
             return {k: Serializable.serialize(v) for k, v in obj.items()}
+        elif isinstance(obj, np.ndarray) or sps.issparse(obj):
+            return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
         elif isinstance(obj, (list, tuple, set)):
             return [Serializable.serialize(e) for e in obj]
         elif isinstance(obj, type):
@@ -410,6 +418,57 @@ class Serializable:
             )
 
     @staticmethod
+    def _deserialize_class(state: dict, **kwargs) -> type:
+        if state.get("as_type", False):
+            return Serializable._state_class(state, **kwargs)
+
+        raise ValueError(
+            "State does not correspond to a standalone class serialization,"
+            + "i.e. does not have as_type: True in it. To get the class of "
+            + "a serialized instance, use Serialized._state_class() instead."
+        )
+
+    # WARNING: This is inherently unsafe
+    @staticmethod
+    def _deserialize_function(src: str) -> Callable:
+        # Execute the imports and function definition
+        env = {}
+        exec(src, env)
+
+        # We need to find the function name
+        # Search for last def, then first paren after it
+        # Trim "def " and that should be the function name
+        start = src.rfind("def ")
+        end = src.find("(", start)
+        key = src[start + 4 : end]
+
+        # Pull the function out of the executed environment
+        return env[key]
+
+    @staticmethod
+    def _deserialize_mx(mx):
+        if mx is None:
+            decoded = None
+        elif isinstance(mx, dict):  # then a sparse mx
+            assert mx["sparse_matrix_type"] == "csr"
+            data = Serializable._deserialize_mx(mx["data"])
+            indices = Serializable._deserialize_mx(mx["indices"])
+            indptr = Serializable._deserialize_mx(mx["indptr"])
+            decoded = sps.csr_matrix(
+                (data, indices, indptr), shape=mx["shape"]
+            )
+        else:
+            basemx = np.array(mx)
+            if (
+                basemx.dtype.kind == "U"
+            ):  # character type array => complex numbers as strings
+                decoded = np.array([complex(x) for x in basemx.flat])
+                decoded = decoded.reshape(basemx.shape)
+            else:
+                decoded = basemx
+        return decoded
+
+    @staticmethod
     def _serialize_class(class_type) -> dict:
         state = {
             "module": class_type.__module__,
@@ -467,29 +526,29 @@ class Serializable:
         return imports + src
 
     @staticmethod
-    def _deserialize_class(state: dict) -> type:
-        if state.get("as_type", False):
-            return Serializable._state_class(state)
-
-        raise ValueError(
-            "State does not correspond to a standalone class serialization,"
-            + "i.e. does not have as_type: True in it. To get the class of "
-            + "a serialized instance, use Serialized._state_class() instead."
-        )
-
-    # WARNING: This is inherently unsafe
-    @staticmethod
-    def _deserialize_function(src: str) -> Callable:
-        # Execute the imports and function definition
-        env = {}
-        exec(src, env)
-
-        # We need to find the function name
-        # Search for last def, then first paren after it
-        # Trim "def " and that should be the function name
-        start = src.rfind("def ")
-        end = src.find("(", start)
-        key = src[start + 4 : end]
-
-        # Pull the function out of the executed environment
-        return env[key]
+    def _serialize_mx(mx):
+        if mx is None:
+            return None
+        elif sps.issparse(mx):
+            csr_mx = sps.csr_matrix(
+                mx
+            )  # convert to CSR and save in this format
+            return {
+                "sparse_matrix_type": "csr",
+                "data": Serializable._serialize_mx(csr_mx.data),
+                "indices": Serializable._serialize_mx(csr_mx.indices),
+                "indptr": Serializable._serialize_mx(csr_mx.indptr),
+                "shape": csr_mx.shape,
+            }
+        else:
+            enc = (
+                str
+                if np.iscomplexobj(mx)
+                else (
+                    (lambda x: int(x))
+                    if (mx.dtype == np.int64)
+                    else (lambda x: x)
+                )
+            )
+            encoded = np.array([enc(x) for x in mx.flat])
+            return encoded.reshape(mx.shape).tolist()
