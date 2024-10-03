@@ -37,6 +37,16 @@ class QECCode(Serializable):
     def __str__(self) -> str:
         return f"QECCode {self.name}"
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self.instructions),
+                tuple(self.template_qubits),
+                tuple(self.template_data_qubits),
+                self.name,
+            )
+        )
+
     def create_patch(
         self,
         qubits: Sequence[str],
@@ -67,16 +77,43 @@ class QECCode(Serializable):
             name=name,
         )
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+
+        # QECCode is also a thing we want to cache a lot
+        if (
+            hash_to_serial_id_cache is not None
+            and hash(self) in hash_to_serial_id_cache
+        ):
+            state.update(
+                {
+                    "type": "cached_object_reference",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+            return state
+
         state.update(
             {
-                "instructions": self.serialize(self.instructions),
+                "instructions": self.serialize(
+                    self.instructions, hash_to_serial_id_cache
+                ),
                 "template_qubits": self.template_qubits,
                 "template_data_qubits": self.template_data_qubits,
                 "name": self.name,
             }
         )
+
+        # If we have a cache, add this to the cache
+        if hash_to_serial_id_cache is not None:
+            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
+            state.update(
+                {
+                    "type": "cached_object_source",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+
         return state
 
 
@@ -124,6 +161,15 @@ class QECCodePatch(Mapping[str, Instruction], Serializable):
         s += f"  Current frame: {self.pauli_frame.pauli_frame}"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                hash(self.code),
+                tuple(self.qubits),
+                hash(self.pauli_frame),
+            )
+        )
+
     @classmethod
     def _from_serialization(cls: type[U], state: Mapping) -> U:
         code = cls.deserialize(state["code"])
@@ -133,13 +179,41 @@ class QECCodePatch(Mapping[str, Instruction], Serializable):
         assert isinstance(pauli_frame, PauliFrame)
         return cls(code, qubits, pauli_frame)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+
+        # Probably less impactful than the QECCode itself,
+        # but could see some use in caching a QECCodePatch also
+        if (
+            hash_to_serial_id_cache is not None
+            and hash(self) in hash_to_serial_id_cache
+        ):
+            state.update(
+                {
+                    "type": "cached_object_reference",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+            return state
+
         state.update(
             {
-                "code": self.serialize(self.code),
+                "code": self.serialize(self.code, hash_to_serial_id_cache),
                 "qubits": self.qubits,
-                "pauli_frame": self.serialize(self.pauli_frame),
+                "pauli_frame": self.serialize(
+                    self.pauli_frame, hash_to_serial_id_cache
+                ),
             }
         )
+
+        # If we have a cache, add this to the cache
+        if hash_to_serial_id_cache is not None:
+            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
+            state.update(
+                {
+                    "type": "cached_object_source",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+
         return state

@@ -158,6 +158,18 @@ class Instruction(Serializable):
             s += " None\n"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._serialized_apply_fn,
+                self._serialized_map_qubits_fn,
+                self.hash(self.data),
+                self.hash(self._param_priorities),
+                self.hash(self._param_aliases),
+                self.name,
+            )
+        )
+
     @property
     def param_priorities(self) -> dict[str, Sequence[str]]:
         """TODO"""
@@ -177,14 +189,7 @@ class Instruction(Serializable):
 
         applied_frame = self.apply_fn(**aliased_kwargs)
 
-        output_frame = applied_frame.update(
-            {
-                "instruction": self,
-                # "instruction_kwargs": aliased_kwargs,
-            },
-            f"{self.name} result",
-        )
-        return output_frame
+        return applied_frame.update(new_log=f"{self.name} result")
 
     def copy(self) -> Instruction:
         return Instruction(
@@ -238,17 +243,42 @@ class Instruction(Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+
+        # Instructions are one of the main things we want to cache
+        if (
+            hash_to_serial_id_cache is not None
+            and hash(self) in hash_to_serial_id_cache
+        ):
+            state.update(
+                {
+                    "type": "cached_object_reference",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+            return state
+
         state.update(
             {
                 "_serialized_apply_fn": self._serialized_apply_fn,
                 "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
-                "data": self.serialize(self.data),
+                "data": self.serialize(self.data, hash_to_serial_id_cache),
                 "param_error_behavior": self.param_error_behavior,
                 "_param_priorities": self._param_priorities,
                 "_param_aliases": self._param_aliases,
                 "name": self.name,
             }
         )
+
+        # If we have a cache, add this to the cache
+        if hash_to_serial_id_cache is not None:
+            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
+            state.update(
+                {
+                    "type": "cached_object_source",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+
         return state

@@ -78,6 +78,16 @@ class DictNoiseModel(BaseNoiseModel):
 
         # TODO: Crosstalk specification?
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self.gate_dict),
+                self.hash(self.inst_dict),
+                self._gaterep.value,
+                self._instrep.value,
+            )
+        )
+
     @property
     def output_gate_reps(self) -> list[GateRep]:
         return [self._gaterep]
@@ -130,7 +140,7 @@ class DictNoiseModel(BaseNoiseModel):
         instrep = InstrumentRep(state["_instrep"])
         return cls((gate_dict, inst_dict), gaterep, instrep)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {

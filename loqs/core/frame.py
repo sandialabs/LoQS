@@ -120,6 +120,11 @@ class Frame(Mapping[str, object], Castable, Serializable):
                 s += "\n"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (self.hash(self._data), self.log, tuple(self._expired_keys))
+        )
+
     def expire(self, key: str) -> None:
         """TODO"""
         if key in self and key not in self._expired_keys:
@@ -155,7 +160,7 @@ class Frame(Mapping[str, object], Castable, Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         # Do not spend effort saving expired data
         # TODO: Maybe remove this after memoizing serialization?
@@ -164,7 +169,9 @@ class Frame(Mapping[str, object], Castable, Serializable):
             unexpired_data[k] = v if k not in self._expired_keys else None
         state.update(
             {
-                "_data": self.serialize(unexpired_data),
+                "_data": self.serialize(
+                    unexpired_data, hash_to_serial_id_cache
+                ),
                 "_expired_keys": self._expired_keys,
                 "log": self.log,
             }

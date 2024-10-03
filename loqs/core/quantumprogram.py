@@ -153,6 +153,21 @@ class QuantumProgram(Serializable):
         self.name = name
         self.shot_histories = []
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self.initial_history),
+                hash(self.default_noise_model),
+                self.default_base_seed,
+                self.hash(self.instruction_stack),
+                self.hash(self.global_instructions),
+                hash(self.state_type),
+                self.hash(self.patch_types),
+                self.name,
+                self.hash(self.shot_histories),
+            )
+        )
+
     @classmethod
     def from_quantum_program(
         cls,
@@ -510,23 +525,34 @@ class QuantumProgram(Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "initial_history": self.serialize(self.initial_history),
+                # Patch types and global instructions first to cache QEC code and instructions
+                "patch_types": self.serialize(
+                    self.patch_types, hash_to_serial_id_cache
+                ),
+                "global_instructions": self.serialize(
+                    self.global_instructions, hash_to_serial_id_cache
+                ),
+                "initial_history": self.serialize(
+                    self.initial_history, hash_to_serial_id_cache
+                ),
                 "default_noise_model": self.serialize(
-                    self.default_noise_model
+                    self.default_noise_model, hash_to_serial_id_cache
                 ),
                 "default_base_seed": self.default_base_seed,
-                "instruction_stack": self.serialize(self.instruction_stack),
-                "global_instructions": self.serialize(
-                    self.global_instructions
+                "instruction_stack": self.serialize(
+                    self.instruction_stack, hash_to_serial_id_cache
                 ),
-                "state_type": self.serialize(self.state_type),
-                "patch_types": self.serialize(self.patch_types),
+                "state_type": self.serialize(
+                    self.state_type, hash_to_serial_id_cache
+                ),
                 "name": self.name,
-                "shot_histories": self.serialize(self.shot_histories),
+                "shot_histories": self.serialize(
+                    self.shot_histories, hash_to_serial_id_cache
+                ),
             }
         )
         return state

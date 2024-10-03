@@ -97,6 +97,16 @@ class History(Sequence[Frame], Castable, Serializable):
             s += sf + "\n"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self._history),
+                tuple(self.expiring_keys),
+                self.hash(self._expiring_key_locs),
+                tuple(self.propagating_keys),
+            )
+        )
+
     def append(self, item: FrameCastableTypes) -> None:
         item = Frame.cast(item)
 
@@ -162,11 +172,13 @@ class History(Sequence[Frame], Castable, Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "_history": self.serialize(self._history),
+                "_history": self.serialize(
+                    self._history, hash_to_serial_id_cache
+                ),
                 "expiring_keys": list(self.expiring_keys),
                 "_expiring_key_locs": self._expiring_key_locs,
                 "propagating_keys": list(self.propagating_keys),

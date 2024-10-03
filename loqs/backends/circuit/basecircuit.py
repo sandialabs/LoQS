@@ -52,6 +52,9 @@ class BasePhysicalCircuit(Castable, Serializable):
     def __repr__(self) -> str:
         return f"Physical {self.name} circuit: {repr(self.circuit)}"
 
+    def __hash__(self) -> int:
+        return hash(repr(self))
+
     # Class methods
     @classmethod
     def from_circuit_tiling(
@@ -465,14 +468,39 @@ class BasePhysicalCircuit(Castable, Serializable):
         circuit = cls._deserialize_circuit(state["circuit"], qubit_labels)
         return cls(circuit, qubit_labels)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+
+        # Not saved often, but definitely worth caching when they are
+        if (
+            hash_to_serial_id_cache is not None
+            and hash(self) in hash_to_serial_id_cache
+        ):
+            state.update(
+                {
+                    "type": "cached_object_reference",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+            return state
+
         state.update(
             {
                 "circuit": self._serialize_circuit(),
                 "qubit_labels": self.qubit_labels,
             }
         )
+
+        # If we have a cache, add this to the cache
+        if hash_to_serial_id_cache is not None:
+            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
+            state.update(
+                {
+                    "type": "cached_object_source",
+                    "cache_id": hash_to_serial_id_cache[hash(self)],
+                }
+            )
+
         return state
 
     @classmethod

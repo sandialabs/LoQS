@@ -58,6 +58,9 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Serializable):
     def __str__(self) -> str:
         return f"MeasurementOutcomes({self.outcomes})"
 
+    def __hash__(self) -> int:
+        return self.hash(self.outcomes)
+
     @classmethod
     def cast(cls: type[T], obj: object) -> T:
         """Cast to the derived class.
@@ -112,7 +115,7 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Serializable):
         outcomes = state["outcomes"]
         return cls(outcomes)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update({"outcomes": self.outcomes})
         return state
