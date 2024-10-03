@@ -100,31 +100,14 @@ for those who are maybe updating documentation and going back and forth between 
 ### GitLab Autobuilt Documentation
 
 The documentation is built as part of the GitLab CI/CD Pipeline on every commit.
-Eventually, this will be available at http://sserita.cee-gitlab.lan/loqs-public, but this link is currently broken due to unknown reasons.
+Unfortunately, GitLab-EX does not have Pages it seems, so we can't view this by URL easily.
+However, it is straightforward to download the latest documentation.
 
-However, one can still access the built artifact directly by following these steps:
+1. Navigate to Build > Pipelines.
+2. Find the latest Pipeline that has a green checkmark in the third circle (first is linting, second is unit tests, and third is building docs).
+3. Go over to the arrow in a tray icon, which lets you download artifacts.
+4. There should only be one artifact, which is for "Build documentation".
+5. Click on it to download the file. Unzip it to a `public` folder, and then open `index.html` in your favorite web browser.
+6. Profit! You now have the up-to-date docs.
 
-1. Go to Build > Artifacts in the left hand menu.
-
-![image info](./docs/images/BuildArtifacts.png)
-
-2. Select "Browse" on the latest succeeding Build Documentation job.
-
-![image info](./docs/images/LatestPassingDocument.png)
-
-3. Navigate to `public/index.html`.
-
-![image info](./docs/images/BrowseArtifact.png)
-
-![image info](./docs/images/PublicFolder.png)
-
-4. Allow GitLab to redirect you to the CEE-Gitlab Pages domain (`cee-gitlab.lan`).
-
-![image info](./docs/images/Redirect.png)
-
-5. You are now viewing the most up-to-date version of the documentation!
-
-![image info](./docs/images/DocsProfit.png)
-
-Due to a CEE GitLab restriction, the notebook cells are not run;
-however, this is still hopefully pretty useful for accessing the most up-to-date docs in your browser.
+![image info](./docs/images/PipelineArtifact.png)
