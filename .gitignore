@@ -12,8 +12,8 @@ htmlcov
 docs/_build
 docs/**/_autosummary
 docs/**/*.ipynb
-docs/**/test.json
-docs/**/test.json.gz
+docs/**/*.json
+docs/**/*.json.gz
 
 .vscode
 venv*/

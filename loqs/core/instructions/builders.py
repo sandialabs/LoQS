@@ -449,30 +449,11 @@ def build_physical_circuit_instruction(
     )
 
 
-def _default_success_fn(outcomes: MeasurementOutcomes) -> bool:
-    """Default all-0 success function for repeat-until-success.
-
-    Parameters
-    ----------
-    outcomes:
-        Measurement outcomes from previous frame
-
-    Returns
-    -------
-        True if all measures bits are 0, False otherwise
-    """
-    for _, v in outcomes.items():
-        if any([bit for bit in v]):
-            return False
-
-    return True
-
-
 def build_repeat_until_success_instruction(
     instruction: Instruction,
     reset_label_key: Instruction | str,
     rus_key: str,
-    success_fn: Callable[[MeasurementOutcomes], bool] = _default_success_fn,
+    target_outcomes: MeasurementOutcomes | None = None,
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
 ) -> Instruction:
@@ -484,7 +465,9 @@ def build_repeat_until_success_instruction(
         # Pull some args out of kwargs
         instruction = kwargs.pop("instruction")
         assert isinstance(instruction, Instruction)
-        success_fn = kwargs.pop("success_fn")
+        target_outcomes = kwargs.pop("target_outcomes")
+        if target_outcomes is not None:
+            target_outcomes = MeasurementOutcomes.cast(target_outcomes)
         max_repeats = int(kwargs.pop("max_repeats"))
         repeat_count = int(kwargs.pop("repeat_count"))
         rus_key = kwargs.pop("rus_key")
@@ -507,7 +490,15 @@ def build_repeat_until_success_instruction(
             inferred_outcomes = outcomes.get_inferred_outcomes(
                 "Z", pauli_frame
             )
-            success = success_fn(inferred_outcomes)
+            if target_outcomes is None:
+                # If target outcomes not provided, use all 0s
+                for _, v in outcomes.items():
+                    if any([bit for bit in v]):
+                        success = False
+                        break
+                success = True
+            else:
+                success = target_outcomes == inferred_outcomes
         except KeyError:
             raise RuntimeError(
                 "Try-until-success instruction does not output outcomes"
@@ -535,13 +526,19 @@ def build_repeat_until_success_instruction(
             stack = stack.insert_instruction(0, reset_label)
 
         # Return frame with the stack update
-        return applied_frame.update({"stack": stack, "rus_success": success})
+        return applied_frame.update(
+            {
+                "stack": stack,
+                "inferred_outcomes": inferred_outcomes,
+                "rus_success": success,
+            }
+        )
 
-    # We need to store the instruction, success fn, and repeat information
+    # We need to store the instruction, target outcomes, and repeat information
     # To avoid recursion, we also store the key for the RUS instruction
     data = {
         "instruction": instruction,
-        "success_fn": success_fn,
+        "target_outcomes": target_outcomes,
         "max_repeats": max_repeats,
         "repeat_count": 0,
         "rus_key": rus_key,

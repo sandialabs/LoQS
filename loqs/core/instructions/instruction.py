@@ -85,6 +85,8 @@ class Instruction(Serializable):
                 map_qubits_fn
             )
 
+        # TODO: Document limitation: Data cannot have functions in it right now
+        # due to serialization issues.
         if data is None:
             data = {}
         self.data = deepcopy(dict(data))
