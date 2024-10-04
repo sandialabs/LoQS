@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import TypeVar
+from typing import ClassVar, TypeVar
 
 from loqs.core.instructions import Instruction
 from loqs.core.syndrome import PauliFrame, PauliFrameCastableTypes
@@ -17,6 +17,8 @@ U = TypeVar("U", bound="QECCodePatch")
 
 class QECCode(Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -64,8 +66,12 @@ class QECCode(Serializable):
         return QECCodePatch(self, qubits, pauli_frame)
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        instructions = cls.deserialize(state["instructions"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        instructions = cls.deserialize(
+            state["instructions"], serial_id_to_obj_cache
+        )
         assert isinstance(instructions, dict)
         template_qubits = state["template_qubits"]
         template_data_qubits = state["template_data_qubits"]
@@ -79,20 +85,6 @@ class QECCode(Serializable):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-
-        # QECCode is also a thing we want to cache a lot
-        if (
-            hash_to_serial_id_cache is not None
-            and hash(self) in hash_to_serial_id_cache
-        ):
-            state.update(
-                {
-                    "type": "cached_object_reference",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-            return state
-
         state.update(
             {
                 "instructions": self.serialize(
@@ -103,22 +95,13 @@ class QECCode(Serializable):
                 "name": self.name,
             }
         )
-
-        # If we have a cache, add this to the cache
-        if hash_to_serial_id_cache is not None:
-            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-
         return state
 
 
 class QECCodePatch(Mapping[str, Instruction], Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -171,31 +154,20 @@ class QECCodePatch(Mapping[str, Instruction], Serializable):
         )
 
     @classmethod
-    def _from_serialization(cls: type[U], state: Mapping) -> U:
-        code = cls.deserialize(state["code"])
+    def _from_serialization(
+        cls: type[U], state: Mapping, serial_id_to_obj_cache=None
+    ) -> U:
+        code = cls.deserialize(state["code"], serial_id_to_obj_cache)
         assert isinstance(code, QECCode)
         qubits = state["qubits"]
-        pauli_frame = cls.deserialize(state["pauli_frame"])
+        pauli_frame = cls.deserialize(
+            state["pauli_frame"], serial_id_to_obj_cache
+        )
         assert isinstance(pauli_frame, PauliFrame)
         return cls(code, qubits, pauli_frame)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-
-        # Probably less impactful than the QECCode itself,
-        # but could see some use in caching a QECCodePatch also
-        if (
-            hash_to_serial_id_cache is not None
-            and hash(self) in hash_to_serial_id_cache
-        ):
-            state.update(
-                {
-                    "type": "cached_object_reference",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-            return state
-
         state.update(
             {
                 "code": self.serialize(self.code, hash_to_serial_id_cache),
@@ -205,15 +177,4 @@ class QECCodePatch(Mapping[str, Instruction], Serializable):
                 ),
             }
         )
-
-        # If we have a cache, add this to the cache
-        if hash_to_serial_id_cache is not None:
-            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-
         return state

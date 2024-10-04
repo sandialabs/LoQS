@@ -485,24 +485,42 @@ class QuantumProgram(Serializable):
         return data
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        initial_history = cls.deserialize(state["initial_history"])
-        assert isinstance(initial_history, History | None)
-        default_noise_model = cls.deserialize(state["default_noise_model"])
-        assert isinstance(default_noise_model, BaseNoiseModel | None)
-        default_base_seed = state["default_base_seed"]
-        stack = cls.deserialize(state["instruction_stack"])
-        assert isinstance(stack, InstructionStack)
-        global_instructions = cls.deserialize(state["global_instructions"])
-        assert isinstance(global_instructions, dict)
-        state_type = cls.deserialize(state["state_type"])
-        assert isinstance(state_type, type)
-        assert issubclass(state_type, BaseQuantumState)
-        patch_types = cls.deserialize(state["patch_types"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        # ORDER MATTERS
+        # Must match to serialization for caching to work properly
+        patch_types = cls.deserialize(
+            state["patch_types"], serial_id_to_obj_cache
+        )
         assert isinstance(patch_types, dict)
         assert all([isinstance(v, QECCode) for v in patch_types.values()])
+        global_instructions = cls.deserialize(
+            state["global_instructions"], serial_id_to_obj_cache
+        )
+        assert isinstance(global_instructions, dict)
+        initial_history = cls.deserialize(
+            state["initial_history"], serial_id_to_obj_cache
+        )
+        assert isinstance(initial_history, History | None)
+        default_noise_model = cls.deserialize(
+            state["default_noise_model"], serial_id_to_obj_cache
+        )
+        assert isinstance(default_noise_model, BaseNoiseModel | None)
+        default_base_seed = state["default_base_seed"]
+        stack = cls.deserialize(
+            state["instruction_stack"], serial_id_to_obj_cache
+        )
+        assert isinstance(stack, InstructionStack)
+        state_type = cls.deserialize(
+            state["state_type"], serial_id_to_obj_cache
+        )
+        assert isinstance(state_type, type)
+        assert issubclass(state_type, BaseQuantumState)
         name = state["name"]
-        shot_histories = cls.deserialize(state["shot_histories"])
+        shot_histories = cls.deserialize(
+            state["shot_histories"], serial_id_to_obj_cache
+        )
         assert isinstance(shot_histories, list)
         assert all([isinstance(h, History) for h in shot_histories])
 

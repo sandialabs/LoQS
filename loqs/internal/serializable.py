@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from ast import literal_eval as make_tuple
+from collections.abc import Mapping
 import gzip
 import importlib
 import inspect
@@ -12,7 +13,7 @@ import json
 import numpy as np
 import scipy.sparse as sps
 import textwrap
-from typing import Callable
+from typing import Callable, ClassVar
 
 class_location_changes = (
     {}
@@ -37,6 +38,20 @@ class Serializable:
     distinction cannot be assumed to be preserved during serialization.
     """
 
+    # Class attributes
+    CACHE_ON_SERIALIZE: ClassVar[bool] = False
+    """Flag to indicate whether this class should be cached.
+
+    Every Serializable object _can_ be cached, but caching does
+    introduce some overhead. For cases where the serialized object
+    is small or not frequently references, we can save time for very
+    little filesize by not caching (the default behavior).
+
+    Some large objects that are heavily referenced *should* use caching,
+    however. Some examples: Instruction, InstructionStack, QECCode,
+    QECCodePatch, any backend objects, etc.
+    """
+
     ## ABSTRACT METHODS
     # Implement these in derived classes
 
@@ -59,7 +74,7 @@ class Serializable:
 
     @classmethod
     @abstractmethod
-    def _from_serialization(cls, state):
+    def _from_serialization(cls, state, serial_id_to_obj_cache=None):
         c = cls._state_class(state)
         if not issubclass(c, cls):
             raise ValueError(
@@ -83,13 +98,13 @@ class Serializable:
                 % str(state["module"] + "." + state["class"])
             )
         else:
-            return c._from_serialization(state)
+            return c._from_serialization(state, serial_id_to_obj_cache)
 
     ## PUBLIC CLASS METHODS
     # Primarily for deserialization
 
     @classmethod
-    def from_serialization(cls, state):
+    def from_serialization(cls, state, serial_id_to_obj_cache=None):
         """
         Create and initialize an object from a "nice" serialization.
 
@@ -109,6 +124,30 @@ class Serializable:
         -------
         object
         """
+        if serial_id_to_obj_cache is None:
+            serial_id_to_obj_cache = {}
+
+        # Try to deserialize from cache first
+        if state.get("type", "") == "cached_object_reference":
+            if serial_id_to_obj_cache is None:
+                raise RuntimeError(
+                    "Object reference found but no object cache provided."
+                )
+
+            try:
+                serial_id = state["cache_id"]
+            except KeyError:
+                raise RuntimeError(
+                    "Object reference found but no id provided."
+                )
+
+            try:
+                return serial_id_to_obj_cache[serial_id]
+            except KeyError:
+                raise RuntimeError(
+                    f"Object reference found but source {serial_id} not available."
+                )
+
         try:
             # Implementation note:
             # This method is similar to _from_serialization, but will defer to the method of a derived class
@@ -121,15 +160,26 @@ class Serializable:
                 and state["class"] == cls.__name__
             ):
                 # then the state is actually for this class and we should call its _from_serialization method:
-                ret = cls._from_serialization(state)
+                ret = cls._from_serialization(state, serial_id_to_obj_cache)
             else:
                 # otherwise, this call functions as a base class call that defers to the correct derived class
-                ret = Serializable._from_serialization(state)
+                ret = Serializable._from_serialization(
+                    state, serial_id_to_obj_cache
+                )
         except RecursionError as e:
             raise NotImplementedError(
                 "Hit recursion limit while deserializing, usually indicating "
                 + "from_serialization was not implemented in a derived class."
             ) from e
+
+        # Save new object in cache if it is a source
+        if state.get("type", "") == "cached_object_source":
+            try:
+                serial_id = state["cache_id"]
+            except KeyError:
+                raise RuntimeError("Object source found but no id provided.")
+
+            serial_id_to_obj_cache[serial_id] = ret
 
         return ret
 
@@ -282,7 +332,33 @@ class Serializable:
         if hash_to_serial_id_cache is None:
             hash_to_serial_id_cache = {}
 
-        return self._to_serialization(hash_to_serial_id_cache)
+        try:
+            cache_id = hash_to_serial_id_cache[hash(self)]
+            return {
+                "module": self.__class__.__module__,
+                "class": self.__class__.__name__,
+                "version": 0,
+                "type": "cached_object_reference",
+                "cache_id": cache_id,
+            }
+        except KeyError:
+            # Cache miss
+            pass
+
+        state = self._to_serialization(hash_to_serial_id_cache)
+
+        # Add this to the cache, if class marked as should be cached
+        if self.CACHE_ON_SERIALIZE:
+            cache_id = len(hash_to_serial_id_cache)
+            hash_to_serial_id_cache[hash(self)] = cache_id
+            state.update(
+                {
+                    "type": "cached_object_source",
+                    "cache_id": cache_id,
+                }
+            )
+
+        return state
 
     def write(self, path, format=None, **format_kwargs):
         """
@@ -409,11 +485,12 @@ class Serializable:
                 )
             )
 
-    ## STATIC METHODS
+    ## PUBLIC STATIC METHODS
     # Primarily helper functions kept in the Serializable namespace
+    # This are all basically recursive functions that act on collections
 
     @staticmethod
-    def deserialize(obj):
+    def deserialize(obj, serial_id_to_obj_cache=None):
         """Helper function to recursively unserialize objects."""
         if isinstance(obj, dict):
             if "module" in obj and "class" in obj:
@@ -428,7 +505,7 @@ class Serializable:
 
                 # Otherwise, get the class and call its deserialization
                 cls = Serializable._state_class(obj)
-                return cls.from_serialization(obj)
+                return cls.from_serialization(obj, serial_id_to_obj_cache)
 
             # Otherwise, assume just a dict and recursively unserialize
             deserialized = {}
@@ -442,10 +519,15 @@ class Serializable:
                 ):
                     # This was a tuple
                     k = make_tuple(k)
-                deserialized[k] = Serializable.deserialize(v)
+                deserialized[k] = Serializable.deserialize(
+                    v, serial_id_to_obj_cache
+                )
             return deserialized
         elif isinstance(obj, (list, tuple)):
-            return [Serializable.deserialize(e) for e in obj]
+            return [
+                Serializable.deserialize(e, serial_id_to_obj_cache)
+                for e in obj
+            ]
         elif isinstance(obj, str) and "def " in obj:
             # Assume this is a function definition
             return Serializable._deserialize_function(obj)
@@ -454,7 +536,55 @@ class Serializable:
         return obj
 
     @staticmethod
-    def _deserialize_class(state: dict, **kwargs) -> type:
+    def hash(obj) -> int:
+        """Helper function to recursively hash objects"""
+        if isinstance(obj, dict):
+            return hash(
+                (
+                    Serializable.hash(tuple(obj.keys())),
+                    Serializable.hash(tuple(obj.values())),
+                )
+            )
+        elif isinstance(obj, (tuple, list)):
+            return hash(tuple(Serializable.hash(v) for v in obj))
+        return hash(obj)
+
+    @staticmethod
+    def serialize(obj, hash_to_serial_id_cache=None):
+        """Helper function to recursively serialize objects."""
+        if isinstance(obj, dict):
+            serial_dict = {}
+            for k, v in obj.items():
+                if isinstance(k, tuple):
+                    k = str(k)
+                serial_dict[k] = Serializable.serialize(
+                    v, hash_to_serial_id_cache
+                )
+            return serial_dict
+        elif isinstance(obj, np.ndarray) or sps.issparse(obj):
+            return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
+        elif isinstance(obj, (list, tuple, set)):
+            return [
+                Serializable.serialize(e, hash_to_serial_id_cache) for e in obj
+            ]
+        elif isinstance(obj, type):
+            # This should be before function serialization,
+            # so that we do not accidentally grab the class constructor
+            # Constructor could still be initialized by explicitly serializing __init__
+            return Serializable._serialize_class(obj)
+        elif isinstance(obj, Callable):
+            return Serializable._serialize_function(obj)
+        elif isinstance(obj, Serializable):
+            return obj.to_serialization(hash_to_serial_id_cache)
+
+        # Otherwise, assume we are a built-in serializable object
+        return obj
+
+    ## PRIVATE STATIC FUNCTIONS
+    # Helper functions for serializing/deserializing specific types or cache management
+
+    @staticmethod
+    def _deserialize_class(state: Mapping, **kwargs) -> type:
         if state.get("as_type", False):
             return Serializable._state_class(state, **kwargs)
 
@@ -503,51 +633,6 @@ class Serializable:
             else:
                 decoded = basemx
         return decoded
-
-    @staticmethod
-    def hash(obj) -> int:
-        """Helper function to recursively hash objects"""
-        if isinstance(obj, dict):
-            return hash(
-                (
-                    Serializable.hash(tuple(obj.keys())),
-                    Serializable.hash(tuple(obj.values())),
-                )
-            )
-        elif isinstance(obj, (tuple, list)):
-            return hash(tuple(Serializable.hash(v) for v in obj))
-        return hash(obj)
-
-    @staticmethod
-    def serialize(obj, hash_to_serial_id_cache=None):
-        """Helper function to recursively serialize objects."""
-        if isinstance(obj, dict):
-            serial_dict = {}
-            for k, v in obj.items():
-                if isinstance(k, tuple):
-                    k = str(k)
-                serial_dict[k] = Serializable.serialize(
-                    v, hash_to_serial_id_cache
-                )
-            return serial_dict
-        elif isinstance(obj, np.ndarray) or sps.issparse(obj):
-            return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
-        elif isinstance(obj, (list, tuple, set)):
-            return [
-                Serializable.serialize(e, hash_to_serial_id_cache) for e in obj
-            ]
-        elif isinstance(obj, type):
-            # This should be before function serialization,
-            # so that we do not accidentally grab the class constructor
-            # Constructor could still be initialized by explicitly serializing __init__
-            return Serializable._serialize_class(obj)
-        elif isinstance(obj, Callable):
-            return Serializable._serialize_function(obj)
-        elif isinstance(obj, Serializable):
-            return obj.to_serialization(hash_to_serial_id_cache)
-
-        # Otherwise, assume we are a built-in serializable object
-        return obj
 
     @staticmethod
     def _serialize_class(class_type) -> dict:

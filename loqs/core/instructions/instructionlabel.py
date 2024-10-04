@@ -154,16 +154,22 @@ class InstructionLabel(Castable, Serializable):
         return cls(*obj)  # type: ignore
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        inst_label = cls.deserialize(state["instruction"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        inst_label = cls.deserialize(
+            state["instruction"], serial_id_to_obj_cache
+        )
         assert isinstance(inst_label, Instruction | None)
         if inst_label is None:
             inst_label = state["inst_label"]
 
         patch_label = state["patch_label"]
-        inst_args = cls.deserialize(state["inst_args"])
+        inst_args = cls.deserialize(state["inst_args"], serial_id_to_obj_cache)
         assert isinstance(inst_args, list)
-        inst_kwargs = cls.deserialize(state["inst_kwargs"])
+        inst_kwargs = cls.deserialize(
+            state["inst_kwargs"], serial_id_to_obj_cache
+        )
         assert isinstance(inst_kwargs, dict)
         return cls(inst_label, patch_label, inst_args, inst_kwargs)
 

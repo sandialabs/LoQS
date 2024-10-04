@@ -38,6 +38,8 @@ class BaseNoiseModel(Castable, Serializable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
     def __str__(self) -> str:
         return f"Physical {self.name} noise model\n"
 

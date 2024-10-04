@@ -111,7 +111,9 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Serializable):
         return MeasurementOutcomes(inferred_outcomes)
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         outcomes = state["outcomes"]
         return cls(outcomes)
 

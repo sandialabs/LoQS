@@ -24,6 +24,8 @@ class BaseQuantumState(Castable, Serializable):
     name: ClassVar[str]
     """Name of state backend"""
 
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
         s += textwrap.indent(str(self.state), "  ")

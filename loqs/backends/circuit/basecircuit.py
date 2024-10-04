@@ -22,6 +22,8 @@ class BasePhysicalCircuit(Castable, Serializable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
     CastableTypes: ClassVar[TypeAlias]
 
     ## Dunder methods
@@ -463,44 +465,21 @@ class BasePhysicalCircuit(Castable, Serializable):
         pass
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         qubit_labels = state["qubit_labels"]
         circuit = cls._deserialize_circuit(state["circuit"], qubit_labels)
         return cls(circuit, qubit_labels)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-
-        # Not saved often, but definitely worth caching when they are
-        if (
-            hash_to_serial_id_cache is not None
-            and hash(self) in hash_to_serial_id_cache
-        ):
-            state.update(
-                {
-                    "type": "cached_object_reference",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-            return state
-
         state.update(
             {
                 "circuit": self._serialize_circuit(),
                 "qubit_labels": self.qubit_labels,
             }
         )
-
-        # If we have a cache, add this to the cache
-        if hash_to_serial_id_cache is not None:
-            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-
         return state
 
     @classmethod

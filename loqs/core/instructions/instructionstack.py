@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import textwrap
-from typing import TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
@@ -22,6 +22,8 @@ InstructionStackCastableTypes: TypeAlias = (
 
 
 class InstructionStack(Sequence[InstructionLabel], Castable, Serializable):
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     _instructions: list[InstructionLabel]
     """Internal list of :class:`InstructionLabels`"""
@@ -100,27 +102,17 @@ class InstructionStack(Sequence[InstructionLabel], Castable, Serializable):
         return self._instructions[0], InstructionStack(self._instructions[1:])
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        instructions = cls.deserialize(state["_instructions"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        instructions = cls.deserialize(
+            state["_instructions"], serial_id_to_obj_cache
+        )
         assert isinstance(instructions, list)
         return cls(instructions)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-
-        # Can gain minor benefits by caching instruction stacks as well
-        if (
-            hash_to_serial_id_cache is not None
-            and hash(self) in hash_to_serial_id_cache
-        ):
-            state.update(
-                {
-                    "type": "cached_object_reference",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-            return state
-
         state.update(
             {
                 "_instructions": self.serialize(
@@ -128,15 +120,4 @@ class InstructionStack(Sequence[InstructionLabel], Castable, Serializable):
                 )
             }
         )
-
-        # If we have a cache, add this to the cache
-        if hash_to_serial_id_cache is not None:
-            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-
         return state

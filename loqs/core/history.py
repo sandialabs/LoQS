@@ -160,8 +160,10 @@ class History(Sequence[Frame], Castable, Serializable):
         return data
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        history = cls.deserialize(state["_history"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        history = cls.deserialize(state["_history"], serial_id_to_obj_cache)
         assert isinstance(history, list)
         assert all([isinstance(f, Frame) for f in history])
         expiring_keys = state["expiring_keys"]

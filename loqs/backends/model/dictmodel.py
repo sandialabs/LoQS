@@ -131,7 +131,10 @@ class DictNoiseModel(BaseNoiseModel):
         return reps
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        # Not worth caching below this object (i.e. don't pass cache on)
         gate_dict = cls.deserialize(state["gate_dict"])
         assert isinstance(gate_dict, dict)
         inst_dict = cls.deserialize(state["inst_dict"])
@@ -141,6 +144,7 @@ class DictNoiseModel(BaseNoiseModel):
         return cls((gate_dict, inst_dict), gaterep, instrep)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+        # Not worth caching below this object (i.e. don't pass cache on)
         state = super()._to_serialization()
         state.update(
             {

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, MutableMapping
-from typing import TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core import QECCodePatch
 from loqs.internal import Castable, Serializable
@@ -19,6 +19,8 @@ PatchDictCastableTypes: TypeAlias = (
 
 class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     patches: dict[str, QECCodePatch]
     """TODO
@@ -75,8 +77,10 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
         return PatchDict(self.patches.copy())
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        patches = cls.deserialize(state["patches"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        patches = cls.deserialize(state["patches"], serial_id_to_obj_cache)
         assert isinstance(patches, dict)
         return cls(patches)
 

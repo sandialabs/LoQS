@@ -243,7 +243,9 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         return reps
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         model = Model.from_nice_serialization(state["model"])
         qubit_aliases = state["qubit_aliases"]
         return cls(model, qubit_aliases)

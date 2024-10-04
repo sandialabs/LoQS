@@ -8,6 +8,7 @@ from copy import deepcopy
 import inspect as ins
 import textwrap
 from typing import (
+    ClassVar,
     Literal,
     ParamSpec,
     Protocol,
@@ -51,6 +52,8 @@ DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
 
 class Instruction(Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -218,12 +221,16 @@ class Instruction(Serializable):
         return new_instruction
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         serialized_apply_fn = state["_serialized_apply_fn"]
         serialized_map_qubits_fn = state["_serialized_map_qubits_fn"]
-        apply_fn = cls._deserialize_function(serialized_apply_fn)
+        apply_fn = cls._deserialize_function(
+            serialized_apply_fn,
+        )
         map_qubits_fn = cls._deserialize_function(serialized_map_qubits_fn)
-        data = cls.deserialize(state["data"])
+        data = cls.deserialize(state["data"], serial_id_to_obj_cache)
         assert isinstance(data, dict)
         param_error_behavior = state["param_error_behavior"]
         name = state["name"]
@@ -245,20 +252,6 @@ class Instruction(Serializable):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-
-        # Instructions are one of the main things we want to cache
-        if (
-            hash_to_serial_id_cache is not None
-            and hash(self) in hash_to_serial_id_cache
-        ):
-            state.update(
-                {
-                    "type": "cached_object_reference",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-            return state
-
         state.update(
             {
                 "_serialized_apply_fn": self._serialized_apply_fn,
@@ -270,15 +263,4 @@ class Instruction(Serializable):
                 "name": self.name,
             }
         )
-
-        # If we have a cache, add this to the cache
-        if hash_to_serial_id_cache is not None:
-            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-
         return state

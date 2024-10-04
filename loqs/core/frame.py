@@ -149,11 +149,13 @@ class Frame(Mapping[str, object], Castable, Serializable):
         return f
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         # Note that expired keys will come back as None after deserialization
-        data = cls.deserialize(state["_data"])
+        data = cls.deserialize(state["_data"], serial_id_to_obj_cache)
         assert isinstance(data, dict)
-        log: str = state["log"]
+        log = state["log"]
 
         obj = cls(data, log)
         obj._expired_keys = state["_expired_keys"]

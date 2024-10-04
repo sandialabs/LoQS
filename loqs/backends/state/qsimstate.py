@@ -162,7 +162,9 @@ class QSimQuantumState(BaseQuantumState):
         return QSimQuantumState(self.state.copy())
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         qubit_labels = ["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
 
@@ -179,7 +181,9 @@ class QSimQuantumState(BaseQuantumState):
 
         obj.state.max_bits_in_full_dm = state["_qsim_max_bits_in_full_dm"]
         obj.state.classical_probability = state["_qsim_classical_probability"]
-        ptm_data = cls.deserialize(state["_qsim_single_ptms_to_do"])
+        ptm_data = cls.deserialize(
+            state["_qsim_single_ptms_to_do"]
+        )  # Not worth caching here
         assert isinstance(ptm_data, dict)
         single_ptms_to_do = defaultdict(list)
         for k, v in ptm_data.items():
@@ -194,20 +198,6 @@ class QSimQuantumState(BaseQuantumState):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-
-        # Not saved often, but definitely worth caching when they are
-        if (
-            hash_to_serial_id_cache is not None
-            and hash(self) in hash_to_serial_id_cache
-        ):
-            state.update(
-                {
-                    "type": "cached_object_reference",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-            return state
-
         state.update(
             {
                 "qubit_labels": self.state.names,
@@ -222,7 +212,7 @@ class QSimQuantumState(BaseQuantumState):
                 ),
                 "_qsim_max_bits_in_full_dm": self.state.max_bits_in_full_dm,
                 "_qsim_classical_probability": self.state.classical_probability,
-                "_qsim_single_ptms_to_do": self.serialize(
+                "_qsim_single_ptms_to_do": self.serialize(  # Not worth caching here
                     self.state.single_ptms_to_do
                 ),
                 "_qsim_maj_vot_mask": self.state._last_majority_vote_mask,
@@ -231,15 +221,4 @@ class QSimQuantumState(BaseQuantumState):
                 ),
             }
         )
-
-        # If we have a cache, add this to the cache
-        if hash_to_serial_id_cache is not None:
-            hash_to_serial_id_cache[hash(self)] = len(hash_to_serial_id_cache)
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": hash_to_serial_id_cache[hash(self)],
-                }
-            )
-
         return state

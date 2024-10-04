@@ -40,16 +40,16 @@ def build_composite_instruction(
         # These will always be the last two
         assert "stack" in kwargs
         assert "instructions" in kwargs
+        assert "priorities" in kwargs
         stack = InstructionStack.cast(kwargs["stack"])
         instructions: list[Instruction] = list(kwargs["instructions"])
-
-        assert param_priorities is not None
+        priorities = list(kwargs["priorities"])
 
         for i, instruction in enumerate(instructions):
             patch_label = None
             label_kwargs = {}
             for k, v in kwargs.items():
-                if k in param_priorities:
+                if k in priorities:
                     # We want to forward this via the label
                     if k == "patch_label":
                         patch_label = v
@@ -67,18 +67,16 @@ def build_composite_instruction(
 
         return Frame({"stack": stack})
 
-    # We will need to store the instructions
-    data = {"instructions": instructions}
-
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str], instructions: Sequence[Instruction]
+        qubit_mapping: Mapping[str, str],
+        instructions: Sequence[Instruction],
+        **kwargs,
     ) -> KwargDict:
-        new_kwargs: dict[str, object] = {
-            "instructions": [
-                instruction.map_qubits(qubit_mapping)
-                for instruction in instructions
-            ]
-        }
+        new_kwargs = kwargs.copy()
+        new_kwargs["instructions"] = [
+            instruction.map_qubits(qubit_mapping)
+            for instruction in instructions
+        ]
         return new_kwargs
 
     # Because we don't have a fixed function signature above,
@@ -93,13 +91,17 @@ def build_composite_instruction(
     param_priorities["patch_label"] = param_priorities.get(
         "patch_label", DEFAULT_PRIORITIES
     )
-    # We also need the stack and instructions
+    # We also need the stack, instructions, and (ironically) these priorities
     param_priorities["stack"] = param_priorities.get(
         "stack", DEFAULT_PRIORITIES
     )
     param_priorities["instructions"] = param_priorities.get(
         "instructions", DEFAULT_PRIORITIES
     )
+    param_priorities["priorities"] = DEFAULT_PRIORITIES
+
+    # We will need to store the instructions and param priorities
+    data = {"instructions": instructions, "priorities": param_priorities}
 
     return Instruction(
         apply_fn=apply_fn,
@@ -496,7 +498,9 @@ def build_repeat_until_success_instruction(
 
         # Run success function to see if we are terminated
         try:
-            pauli_frame = applied_frame.get("pauli_frame", None)
+            pauli_frame = PauliFrame.cast(
+                applied_frame.get("pauli_frame", None)
+            )
             outcomes = MeasurementOutcomes.cast(
                 applied_frame["measurement_outcomes"]
             )
