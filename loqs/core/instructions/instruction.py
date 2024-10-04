@@ -8,6 +8,7 @@ from copy import deepcopy
 import inspect as ins
 import textwrap
 from typing import (
+    ClassVar,
     Literal,
     ParamSpec,
     Protocol,
@@ -52,6 +53,8 @@ DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
 class Instruction(Serializable):
     """TODO"""
 
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
     def __init__(
         self,
         apply_fn: ApplyCallable,
@@ -82,6 +85,8 @@ class Instruction(Serializable):
                 map_qubits_fn
             )
 
+        # TODO: Document limitation: Data cannot have functions in it right now
+        # due to serialization issues.
         if data is None:
             data = {}
         self.data = deepcopy(dict(data))
@@ -158,6 +163,18 @@ class Instruction(Serializable):
             s += " None\n"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self._serialized_apply_fn,
+                self._serialized_map_qubits_fn,
+                self.hash(self.data),
+                self.hash(self._param_priorities),
+                self.hash(self._param_aliases),
+                self.name,
+            )
+        )
+
     @property
     def param_priorities(self) -> dict[str, Sequence[str]]:
         """TODO"""
@@ -180,10 +197,10 @@ class Instruction(Serializable):
         output_frame = applied_frame.update(
             {
                 "instruction": self,
-                # "instruction_kwargs": aliased_kwargs,
             },
-            f"{self.name} result",
+            new_log=f"{self.name} result",
         )
+
         return output_frame
 
     def copy(self) -> Instruction:
@@ -213,12 +230,16 @@ class Instruction(Serializable):
         return new_instruction
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         serialized_apply_fn = state["_serialized_apply_fn"]
         serialized_map_qubits_fn = state["_serialized_map_qubits_fn"]
-        apply_fn = cls._deserialize_function(serialized_apply_fn)
+        apply_fn = cls._deserialize_function(
+            serialized_apply_fn,
+        )
         map_qubits_fn = cls._deserialize_function(serialized_map_qubits_fn)
-        data = cls.deserialize(state["data"])
+        data = cls.deserialize(state["data"], serial_id_to_obj_cache)
         assert isinstance(data, dict)
         param_error_behavior = state["param_error_behavior"]
         name = state["name"]
@@ -238,13 +259,13 @@ class Instruction(Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
                 "_serialized_apply_fn": self._serialized_apply_fn,
                 "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
-                "data": self.serialize(self.data),
+                "data": self.serialize(self.data, hash_to_serial_id_cache),
                 "param_error_behavior": self.param_error_behavior,
                 "_param_priorities": self._param_priorities,
                 "_param_aliases": self._param_aliases,

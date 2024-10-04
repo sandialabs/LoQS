@@ -5,13 +5,15 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from ast import literal_eval as make_tuple
+from collections.abc import Mapping
+import gzip
 import importlib
 import inspect
 import json
 import numpy as np
 import scipy.sparse as sps
 import textwrap
-from typing import Callable
+from typing import Callable, ClassVar
 
 class_location_changes = (
     {}
@@ -36,8 +38,73 @@ class Serializable:
     distinction cannot be assumed to be preserved during serialization.
     """
 
+    # Class attributes
+    CACHE_ON_SERIALIZE: ClassVar[bool] = False
+    """Flag to indicate whether this class should be cached.
+
+    Every Serializable object _can_ be cached, but caching does
+    introduce some overhead. For cases where the serialized object
+    is small or not frequently references, we can save time for very
+    little filesize by not caching (the default behavior).
+
+    Some large objects that are heavily referenced *should* use caching,
+    however. Some examples: Instruction, InstructionStack, QECCode,
+    QECCodePatch, any backend objects, etc.
+    """
+
+    ## ABSTRACT METHODS
+    # Implement these in derived classes
+
+    @abstractmethod
+    def __hash__(self) -> int:
+        """Hash for serializable object.
+
+        This is required to enable caching while serializing.
+        """
+        pass
+
+    @abstractmethod
+    def _to_serialization(self, hash_to_serial_id_cache=None):
+        state = {
+            "module": self.__class__.__module__,
+            "class": self.__class__.__name__,
+            "version": 0,
+        }
+        return state
+
     @classmethod
-    def from_serialization(cls, state):
+    @abstractmethod
+    def _from_serialization(cls, state, serial_id_to_obj_cache=None):
+        c = cls._state_class(state)
+        if not issubclass(c, cls):
+            raise ValueError(
+                "Class '%s' is trying to load a serialized '%s' object (not a subclass)!"
+                % (
+                    cls.__module__ + "." + cls.__name__,
+                    state["module"] + "." + state["class"],
+                )
+            )
+        implementing_cls = cls
+        for candidate_cls in c.__mro__:
+            if "_from_serialization" in candidate_cls.__dict__:
+                implementing_cls = candidate_cls
+                break
+
+        if (
+            implementing_cls == cls
+        ):  # then there's no actual derived-class implementation to call!
+            raise NotImplementedError(
+                "Class '%s' doesn't implement _from_serialization!"
+                % str(state["module"] + "." + state["class"])
+            )
+        else:
+            return c._from_serialization(state, serial_id_to_obj_cache)
+
+    ## PUBLIC CLASS METHODS
+    # Primarily for deserialization
+
+    @classmethod
+    def from_serialization(cls, state, serial_id_to_obj_cache=None):
         """
         Create and initialize an object from a "nice" serialization.
 
@@ -57,6 +124,30 @@ class Serializable:
         -------
         object
         """
+        if serial_id_to_obj_cache is None:
+            serial_id_to_obj_cache = {}
+
+        # Try to deserialize from cache first
+        if state.get("type", "") == "cached_object_reference":
+            if serial_id_to_obj_cache is None:
+                raise RuntimeError(
+                    "Object reference found but no object cache provided."
+                )
+
+            try:
+                serial_id = state["cache_id"]
+            except KeyError:
+                raise RuntimeError(
+                    "Object reference found but no id provided."
+                )
+
+            try:
+                return serial_id_to_obj_cache[serial_id]
+            except KeyError:
+                raise RuntimeError(
+                    f"Object reference found but source {serial_id} not available."
+                )
+
         try:
             # Implementation note:
             # This method is similar to _from_serialization, but will defer to the method of a derived class
@@ -69,15 +160,26 @@ class Serializable:
                 and state["class"] == cls.__name__
             ):
                 # then the state is actually for this class and we should call its _from_serialization method:
-                ret = cls._from_serialization(state)
+                ret = cls._from_serialization(state, serial_id_to_obj_cache)
             else:
                 # otherwise, this call functions as a base class call that defers to the correct derived class
-                ret = Serializable._from_serialization(state)
+                ret = Serializable._from_serialization(
+                    state, serial_id_to_obj_cache
+                )
         except RecursionError as e:
             raise NotImplementedError(
                 "Hit recursion limit while deserializing, usually indicating "
                 + "from_serialization was not implemented in a derived class."
             ) from e
+
+        # Save new object in cache if it is a source
+        if state.get("type", "") == "cached_object_source":
+            try:
+                serial_id = state["cache_id"]
+            except KeyError:
+                raise RuntimeError("Object source found but no id provided.")
+
+            serial_id_to_obj_cache[serial_id] = ret
 
         return ret
 
@@ -137,7 +239,7 @@ class Serializable:
         path : str or Path or file-like
             The filename to open or an already open input stream.
 
-        format : {'json', None}
+        format : {'json', 'json.gz', None}
             The format of the file.  If `None` this is determined automatically
             by the filename extension of a given path.
 
@@ -148,55 +250,25 @@ class Serializable:
         if format is None:
             if str(path).endswith(".json"):
                 format = "json"
+            elif str(path).endswith(".json.gz"):
+                format = "json.gz"
             else:
                 raise ValueError(
                     "Cannot determine format from extension of filename: %s"
                     % str(path)
                 )
 
+        if format.endswith(".gz"):
+            with gzip.open(str(path), "rt") as f:
+                # Pass in format without .gz suffix
+                return cls.load(f, format[:-3])
+
+        # If no compression, open file normally
         with open(str(path), "r") as f:
             return cls.load(f, format)
 
-    @staticmethod
-    def deserialize(obj):
-        """Helper function to recursively unserialize objects."""
-        if isinstance(obj, dict):
-            if "module" in obj and "class" in obj:
-                # This is a serialized class or object, try to deserialize
-                if obj.get("as_type", False):
-                    # If this is just the class, return it
-                    return Serializable._deserialize_class(obj)
-
-                if obj.get("type", None) == "matrix":
-                    # This is a matrix, deserialize
-                    return Serializable._deserialize_mx(obj["data"])
-
-                # Otherwise, get the class and call its deserialization
-                cls = Serializable._state_class(obj)
-                return cls.from_serialization(obj)
-
-            # Otherwise, assume just a dict and recursively unserialize
-            deserialized = {}
-            for k, v in obj.items():
-                if isinstance(k, list):
-                    k = tuple(k)
-                elif (
-                    isinstance(k, str)
-                    and k.startswith("(")
-                    and k.endswith(")")
-                ):
-                    # This was a tuple
-                    k = make_tuple(k)
-                deserialized[k] = Serializable.deserialize(v)
-            return deserialized
-        elif isinstance(obj, (list, tuple)):
-            return [Serializable.deserialize(e) for e in obj]
-        elif isinstance(obj, str) and "def " in obj:
-            # Assume this is a function definition
-            return Serializable._deserialize_function(obj)
-
-        # Otherwise, assume we are a built-in deserializable object
-        return obj
+    ## PUBLIC INSTANCE FUNCTIONS
+    # Primarily for serializing
 
     def dump(self, f, format="json", **format_kwargs):
         """
@@ -242,36 +314,14 @@ class Serializable:
         """
         return self._dump_or_dumps(None, format, **format_kwargs)
 
-    @staticmethod
-    def serialize(obj):
-        """Helper function to recursively serialize objects."""
-        if isinstance(obj, dict):
-            serial_dict = {}
-            for k, v in obj.items():
-                if isinstance(k, tuple):
-                    k = str(k)
-                serial_dict[k] = Serializable.serialize(v)
-            return serial_dict
-        elif isinstance(obj, np.ndarray) or sps.issparse(obj):
-            return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
-        elif isinstance(obj, (list, tuple, set)):
-            return [Serializable.serialize(e) for e in obj]
-        elif isinstance(obj, type):
-            # This should be before function serialization,
-            # so that we do not accidentally grab the class constructor
-            # Constructor could still be initialized by explicitly serializing __init__
-            return Serializable._serialize_class(obj)
-        elif isinstance(obj, Callable):
-            return Serializable._serialize_function(obj)
-        elif isinstance(obj, Serializable):
-            return obj.to_serialization()
-
-        # Otherwise, assume we are a built-in serializable object
-        return obj
-
-    def to_serialization(self):
+    def to_serialization(self, hash_to_serial_id_cache=None):
         """
         Serialize this object in a way that adheres to "niceness" rules of common text file formats.
+
+        Parameters
+        ----------
+        hash_to_serial_id_cache:
+            A dictionary of already serialized id keys with their corresponding object values
 
         Returns
         -------
@@ -279,10 +329,38 @@ class Serializable:
             Usually a dictionary representing the serialized object, but may also be another native
             Python type, e.g. a string or list.
         """
-        # This method is here to provide a space for us to insert some global serialization logic, if needed
-        return self._to_serialization()
+        if hash_to_serial_id_cache is None:
+            hash_to_serial_id_cache = {}
 
-    def write(self, path, **format_kwargs):
+        try:
+            cache_id = hash_to_serial_id_cache[hash(self)]
+            return {
+                "module": self.__class__.__module__,
+                "class": self.__class__.__name__,
+                "version": 0,
+                "type": "cached_object_reference",
+                "cache_id": cache_id,
+            }
+        except KeyError:
+            # Cache miss
+            pass
+
+        state = self._to_serialization(hash_to_serial_id_cache)
+
+        # Add this to the cache, if class marked as should be cached
+        if self.CACHE_ON_SERIALIZE:
+            cache_id = len(hash_to_serial_id_cache)
+            hash_to_serial_id_cache[hash(self)] = cache_id
+            state.update(
+                {
+                    "type": "cached_object_source",
+                    "cache_id": cache_id,
+                }
+            )
+
+        return state
+
+    def write(self, path, format=None, **format_kwargs):
         """
         Writes this object to a file.
 
@@ -300,16 +378,30 @@ class Serializable:
         -------
         None
         """
-        if str(path).endswith(".json"):
-            format = "json"
-        else:
-            raise ValueError(
-                "Cannot determine format from extension of filename: %s"
-                % str(path)
-            )
+        if format is None:
+            if str(path).endswith(".json"):
+                format = "json"
+            elif str(path).endswith(".json.gz"):
+                format = "json.gz"
+            else:
+                raise ValueError(
+                    "Cannot determine format from extension of filename: %s"
+                    % str(path)
+                )
+
+        if format.endswith(".gz"):
+            with gzip.open(str(path), "wt") as f:
+                # Pass in format without .gz suffix
+                return self.dump(f, format[:-3], **format_kwargs)
 
         with open(str(path), "w") as f:
             self.dump(f, format, **format_kwargs)
+
+    ## INTERNAL FUNCTIONS
+
+    # With hash implemented, we get a (maybe not efficient) equality check
+    def __eq__(self, other) -> bool:
+        return hash(self) == hash(other)
 
     def _dump_or_dumps(self, f, format="json", **format_kwargs):
         """
@@ -349,43 +441,6 @@ class Serializable:
                 return json.dumps(json_dict, **format_kwargs)
         else:
             raise ValueError("Invalid `format` argument: %s" % str(format))
-
-    @abstractmethod
-    def _to_serialization(self):
-        state = {
-            "module": self.__class__.__module__,
-            "class": self.__class__.__name__,
-            "version": 0,
-        }
-        return state
-
-    @classmethod
-    @abstractmethod
-    def _from_serialization(cls, state):
-        c = cls._state_class(state)
-        if not issubclass(c, cls):
-            raise ValueError(
-                "Class '%s' is trying to load a serialized '%s' object (not a subclass)!"
-                % (
-                    cls.__module__ + "." + cls.__name__,
-                    state["module"] + "." + state["class"],
-                )
-            )
-        implementing_cls = cls
-        for candidate_cls in c.__mro__:
-            if "_from_serialization" in candidate_cls.__dict__:
-                implementing_cls = candidate_cls
-                break
-
-        if (
-            implementing_cls == cls
-        ):  # then there's no actual derived-class implementation to call!
-            raise NotImplementedError(
-                "Class '%s' doesn't implement _from_serialization!"
-                % str(state["module"] + "." + state["class"])
-            )
-        else:
-            return c._from_serialization(state)
 
     @classmethod
     def _state_class(cls, state, check_is_subclass=True):
@@ -430,8 +485,108 @@ class Serializable:
                 )
             )
 
+    ## PUBLIC STATIC METHODS
+    # Primarily helper functions kept in the Serializable namespace
+    # This are all basically recursive functions that act on collections
+
     @staticmethod
-    def _deserialize_class(state: dict, **kwargs) -> type:
+    def deserialize(obj, serial_id_to_obj_cache=None):
+        """Helper function to recursively unserialize objects."""
+        if isinstance(obj, dict):
+            if "module" in obj and "class" in obj:
+                # This is a serialized class or object, try to deserialize
+                if obj.get("as_type", False):
+                    # If this is just the class, return it
+                    return Serializable._deserialize_class(obj)
+
+                if obj.get("type", None) == "matrix":
+                    # This is a matrix, deserialize
+                    return Serializable._deserialize_mx(obj["data"])
+
+                # Otherwise, get the class and call its deserialization
+                cls = Serializable._state_class(obj)
+                return cls.from_serialization(obj, serial_id_to_obj_cache)
+
+            # Otherwise, assume just a dict and recursively unserialize
+            deserialized = {}
+            for k, v in obj.items():
+                if isinstance(k, list):
+                    k = tuple(k)
+                elif (
+                    isinstance(k, str)
+                    and k.startswith("(")
+                    and k.endswith(")")
+                ):
+                    # This was a tuple
+                    k = make_tuple(k)
+                deserialized[k] = Serializable.deserialize(
+                    v, serial_id_to_obj_cache
+                )
+            return deserialized
+        elif isinstance(obj, (list, tuple)):
+            return [
+                Serializable.deserialize(e, serial_id_to_obj_cache)
+                for e in obj
+            ]
+        elif isinstance(obj, str) and "def " in obj:
+            # Assume this is a function definition
+            return Serializable._deserialize_function(obj)
+
+        # Otherwise, assume we are a built-in deserializable object
+        return obj
+
+    @staticmethod
+    def hash(obj) -> int:
+        """Helper function to recursively hash objects"""
+        if isinstance(obj, dict):
+            return hash(
+                (
+                    Serializable.hash(tuple(obj.keys())),
+                    Serializable.hash(tuple(obj.values())),
+                )
+            )
+        elif isinstance(obj, (tuple, list)):
+            return hash(tuple(Serializable.hash(v) for v in obj))
+        elif isinstance(obj, np.ndarray):
+            return hash((tuple(obj.shape), tuple(obj.flatten().tolist())))
+        return hash(obj)
+
+    @staticmethod
+    def serialize(obj, hash_to_serial_id_cache=None):
+        """Helper function to recursively serialize objects."""
+        if isinstance(obj, dict):
+            serial_dict = {}
+            for k, v in obj.items():
+                if isinstance(k, tuple):
+                    k = str(k)
+                serial_dict[k] = Serializable.serialize(
+                    v, hash_to_serial_id_cache
+                )
+            return serial_dict
+        elif isinstance(obj, np.ndarray) or sps.issparse(obj):
+            return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
+        elif isinstance(obj, (list, tuple, set)):
+            return [
+                Serializable.serialize(e, hash_to_serial_id_cache) for e in obj
+            ]
+        elif isinstance(obj, type):
+            # This should be before function serialization,
+            # so that we do not accidentally grab the class constructor
+            # Constructor could still be initialized by explicitly serializing __init__
+            return Serializable._serialize_class(obj)
+        elif isinstance(obj, Callable):
+            return Serializable._serialize_function(obj)
+        elif isinstance(obj, Serializable):
+            return obj.to_serialization(hash_to_serial_id_cache)
+
+        # Otherwise, assume we are a built-in serializable object
+        return obj
+
+    ## PRIVATE STATIC FUNCTIONS
+    # Helper functions for serializing/deserializing specific types or cache management
+
+    @staticmethod
+    def _deserialize_class(state: Mapping, **kwargs) -> type:
         if state.get("as_type", False):
             return Serializable._state_class(state, **kwargs)
 

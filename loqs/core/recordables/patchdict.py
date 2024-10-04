@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, MutableMapping
-from typing import TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core import QECCodePatch
 from loqs.internal import Castable, Serializable
@@ -19,6 +19,8 @@ PatchDictCastableTypes: TypeAlias = (
 
 class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     patches: dict[str, QECCodePatch]
     """TODO
@@ -55,6 +57,14 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
         str_dict = {k: str(v) for k, v in self.patches.items()}
         return f"PatchDict({str_dict})"
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                tuple(self.patches.keys()),
+                tuple(hash(p) for p in self.patches.values()),
+            )
+        )
+
     @property
     def all_qubit_labels(self) -> list[str]:
         """TODO"""
@@ -67,12 +77,16 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
         return PatchDict(self.patches.copy())
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        patches = cls.deserialize(state["patches"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        patches = cls.deserialize(state["patches"], serial_id_to_obj_cache)
         assert isinstance(patches, dict)
         return cls(patches)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-        state.update({"patches": self.serialize(self.patches)})
+        state.update(
+            {"patches": self.serialize(self.patches, hash_to_serial_id_cache)}
+        )
         return state

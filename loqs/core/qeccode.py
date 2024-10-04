@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import TypeVar
+from typing import ClassVar, TypeVar
 
 from loqs.core.instructions import Instruction
 from loqs.core.syndrome import PauliFrame, PauliFrameCastableTypes
@@ -17,6 +17,8 @@ U = TypeVar("U", bound="QECCodePatch")
 
 class QECCode(Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -37,6 +39,16 @@ class QECCode(Serializable):
     def __str__(self) -> str:
         return f"QECCode {self.name}"
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self.instructions),
+                tuple(self.template_qubits),
+                tuple(self.template_data_qubits),
+                self.name,
+            )
+        )
+
     def create_patch(
         self,
         qubits: Sequence[str],
@@ -54,8 +66,12 @@ class QECCode(Serializable):
         return QECCodePatch(self, qubits, pauli_frame)
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        instructions = cls.deserialize(state["instructions"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        instructions = cls.deserialize(
+            state["instructions"], serial_id_to_obj_cache
+        )
         assert isinstance(instructions, dict)
         template_qubits = state["template_qubits"]
         template_data_qubits = state["template_data_qubits"]
@@ -67,11 +83,13 @@ class QECCode(Serializable):
             name=name,
         )
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "instructions": self.serialize(self.instructions),
+                "instructions": self.serialize(
+                    self.instructions, hash_to_serial_id_cache
+                ),
                 "template_qubits": self.template_qubits,
                 "template_data_qubits": self.template_data_qubits,
                 "name": self.name,
@@ -82,6 +100,8 @@ class QECCode(Serializable):
 
 class QECCodePatch(Mapping[str, Instruction], Serializable):
     """TODO"""
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -124,22 +144,37 @@ class QECCodePatch(Mapping[str, Instruction], Serializable):
         s += f"  Current frame: {self.pauli_frame.pauli_frame}"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                hash(self.code),
+                tuple(self.qubits),
+                hash(self.pauli_frame),
+            )
+        )
+
     @classmethod
-    def _from_serialization(cls: type[U], state: Mapping) -> U:
-        code = cls.deserialize(state["code"])
+    def _from_serialization(
+        cls: type[U], state: Mapping, serial_id_to_obj_cache=None
+    ) -> U:
+        code = cls.deserialize(state["code"], serial_id_to_obj_cache)
         assert isinstance(code, QECCode)
         qubits = state["qubits"]
-        pauli_frame = cls.deserialize(state["pauli_frame"])
+        pauli_frame = cls.deserialize(
+            state["pauli_frame"], serial_id_to_obj_cache
+        )
         assert isinstance(pauli_frame, PauliFrame)
         return cls(code, qubits, pauli_frame)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "code": self.serialize(self.code),
+                "code": self.serialize(self.code, hash_to_serial_id_cache),
                 "qubits": self.qubits,
-                "pauli_frame": self.serialize(self.pauli_frame),
+                "pauli_frame": self.serialize(
+                    self.pauli_frame, hash_to_serial_id_cache
+                ),
             }
         )
         return state

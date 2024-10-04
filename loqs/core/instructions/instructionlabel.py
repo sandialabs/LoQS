@@ -107,6 +107,17 @@ class InstructionLabel(Castable, Serializable):
         s += "})\n"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                hash(self.instruction),
+                hash(self.inst_label),
+                self.patch_label,
+                self.hash(self.inst_args),
+                self.hash(self.inst_kwargs),
+            )
+        )
+
     @classmethod
     def cast(cls, obj: object) -> InstructionLabel:
         """Cast to a :class:`InstructionLabel` object.
@@ -143,28 +154,40 @@ class InstructionLabel(Castable, Serializable):
         return cls(*obj)  # type: ignore
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        inst_label = cls.deserialize(state["instruction"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        inst_label = cls.deserialize(
+            state["instruction"], serial_id_to_obj_cache
+        )
         assert isinstance(inst_label, Instruction | None)
         if inst_label is None:
             inst_label = state["inst_label"]
 
         patch_label = state["patch_label"]
-        inst_args = cls.deserialize(state["inst_args"])
+        inst_args = cls.deserialize(state["inst_args"], serial_id_to_obj_cache)
         assert isinstance(inst_args, list)
-        inst_kwargs = cls.deserialize(state["inst_kwargs"])
+        inst_kwargs = cls.deserialize(
+            state["inst_kwargs"], serial_id_to_obj_cache
+        )
         assert isinstance(inst_kwargs, dict)
         return cls(inst_label, patch_label, inst_args, inst_kwargs)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "instruction": self.serialize(self.instruction),
+                "instruction": self.serialize(
+                    self.instruction, hash_to_serial_id_cache
+                ),
                 "inst_label": self.inst_label,
                 "patch_label": self.patch_label,
-                "inst_args": self.serialize(self.inst_args),
-                "inst_kwargs": self.serialize(self.inst_kwargs),
+                "inst_args": self.serialize(
+                    self.inst_args, hash_to_serial_id_cache
+                ),
+                "inst_kwargs": self.serialize(
+                    self.inst_kwargs, hash_to_serial_id_cache
+                ),
             }
         )
         return state

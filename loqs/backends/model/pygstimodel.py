@@ -127,6 +127,9 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
         # TODO: Crosstalk specification?
 
+    def __hash__(self) -> int:
+        return hash((hash(self.model), self.hash(self.qubit_aliases)))
+
     @property
     def gate_keys(self) -> list:
         keys = []
@@ -240,12 +243,14 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         return reps
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         model = Model.from_nice_serialization(state["model"])
         qubit_aliases = state["qubit_aliases"]
         return cls(model, qubit_aliases)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {

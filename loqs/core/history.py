@@ -97,6 +97,16 @@ class History(Sequence[Frame], Castable, Serializable):
             s += sf + "\n"
         return s
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self._history),
+                tuple(self.expiring_keys),
+                self.hash(self._expiring_key_locs),
+                tuple(self.propagating_keys),
+            )
+        )
+
     def append(self, item: FrameCastableTypes) -> None:
         item = Frame.cast(item)
 
@@ -150,8 +160,10 @@ class History(Sequence[Frame], Castable, Serializable):
         return data
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        history = cls.deserialize(state["_history"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        history = cls.deserialize(state["_history"], serial_id_to_obj_cache)
         assert isinstance(history, list)
         assert all([isinstance(f, Frame) for f in history])
         expiring_keys = state["expiring_keys"]
@@ -162,11 +174,13 @@ class History(Sequence[Frame], Castable, Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "_history": self.serialize(self._history),
+                "_history": self.serialize(
+                    self._history, hash_to_serial_id_cache
+                ),
                 "expiring_keys": list(self.expiring_keys),
                 "_expiring_key_locs": self._expiring_key_locs,
                 "propagating_keys": list(self.propagating_keys),

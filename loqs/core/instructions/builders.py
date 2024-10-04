@@ -40,16 +40,16 @@ def build_composite_instruction(
         # These will always be the last two
         assert "stack" in kwargs
         assert "instructions" in kwargs
+        assert "priorities" in kwargs
         stack = InstructionStack.cast(kwargs["stack"])
         instructions: list[Instruction] = list(kwargs["instructions"])
-
-        assert param_priorities is not None
+        priorities = list(kwargs["priorities"])
 
         for i, instruction in enumerate(instructions):
             patch_label = None
             label_kwargs = {}
             for k, v in kwargs.items():
-                if k in param_priorities:
+                if k in priorities:
                     # We want to forward this via the label
                     if k == "patch_label":
                         patch_label = v
@@ -67,18 +67,16 @@ def build_composite_instruction(
 
         return Frame({"stack": stack})
 
-    # We will need to store the instructions
-    data = {"instructions": instructions}
-
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str], instructions: Sequence[Instruction]
+        qubit_mapping: Mapping[str, str],
+        instructions: Sequence[Instruction],
+        **kwargs,
     ) -> KwargDict:
-        new_kwargs: dict[str, object] = {
-            "instructions": [
-                instruction.map_qubits(qubit_mapping)
-                for instruction in instructions
-            ]
-        }
+        new_kwargs = kwargs.copy()
+        new_kwargs["instructions"] = [
+            instruction.map_qubits(qubit_mapping)
+            for instruction in instructions
+        ]
         return new_kwargs
 
     # Because we don't have a fixed function signature above,
@@ -93,13 +91,17 @@ def build_composite_instruction(
     param_priorities["patch_label"] = param_priorities.get(
         "patch_label", DEFAULT_PRIORITIES
     )
-    # We also need the stack and instructions
+    # We also need the stack, instructions, and (ironically) these priorities
     param_priorities["stack"] = param_priorities.get(
         "stack", DEFAULT_PRIORITIES
     )
     param_priorities["instructions"] = param_priorities.get(
         "instructions", DEFAULT_PRIORITIES
     )
+    param_priorities["priorities"] = DEFAULT_PRIORITIES
+
+    # We will need to store the instructions and param priorities
+    data = {"instructions": instructions, "priorities": param_priorities}
 
     return Instruction(
         apply_fn=apply_fn,
@@ -447,30 +449,11 @@ def build_physical_circuit_instruction(
     )
 
 
-def _default_success_fn(outcomes: MeasurementOutcomes) -> bool:
-    """Default all-0 success function for repeat-until-success.
-
-    Parameters
-    ----------
-    outcomes:
-        Measurement outcomes from previous frame
-
-    Returns
-    -------
-        True if all measures bits are 0, False otherwise
-    """
-    for _, v in outcomes.items():
-        if any([bit for bit in v]):
-            return False
-
-    return True
-
-
 def build_repeat_until_success_instruction(
     instruction: Instruction,
     reset_label_key: Instruction | str,
     rus_key: str,
-    success_fn: Callable[[MeasurementOutcomes], bool] = _default_success_fn,
+    target_outcomes: MeasurementOutcomes | None = None,
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
 ) -> Instruction:
@@ -482,7 +465,9 @@ def build_repeat_until_success_instruction(
         # Pull some args out of kwargs
         instruction = kwargs.pop("instruction")
         assert isinstance(instruction, Instruction)
-        success_fn = kwargs.pop("success_fn")
+        target_outcomes = kwargs.pop("target_outcomes")
+        if target_outcomes is not None:
+            target_outcomes = MeasurementOutcomes.cast(target_outcomes)
         max_repeats = int(kwargs.pop("max_repeats"))
         repeat_count = int(kwargs.pop("repeat_count"))
         rus_key = kwargs.pop("rus_key")
@@ -496,14 +481,24 @@ def build_repeat_until_success_instruction(
 
         # Run success function to see if we are terminated
         try:
-            pauli_frame = applied_frame.get("pauli_frame", None)
+            pauli_frame = PauliFrame.cast(
+                applied_frame.get("pauli_frame", None)
+            )
             outcomes = MeasurementOutcomes.cast(
                 applied_frame["measurement_outcomes"]
             )
             inferred_outcomes = outcomes.get_inferred_outcomes(
                 "Z", pauli_frame
             )
-            success = success_fn(inferred_outcomes)
+            if target_outcomes is None:
+                # If target outcomes not provided, use all 0s
+                for _, v in outcomes.items():
+                    if any([bit for bit in v]):
+                        success = False
+                        break
+                success = True
+            else:
+                success = target_outcomes == inferred_outcomes
         except KeyError:
             raise RuntimeError(
                 "Try-until-success instruction does not output outcomes"
@@ -531,13 +526,19 @@ def build_repeat_until_success_instruction(
             stack = stack.insert_instruction(0, reset_label)
 
         # Return frame with the stack update
-        return applied_frame.update({"stack": stack, "rus_success": success})
+        return applied_frame.update(
+            {
+                "stack": stack,
+                "inferred_outcomes": inferred_outcomes,
+                "rus_success": success,
+            }
+        )
 
-    # We need to store the instruction, success fn, and repeat information
+    # We need to store the instruction, target outcomes, and repeat information
     # To avoid recursion, we also store the key for the RUS instruction
     data = {
         "instruction": instruction,
-        "success_fn": success_fn,
+        "target_outcomes": target_outcomes,
         "max_repeats": max_repeats,
         "repeat_count": 0,
         "rus_key": rus_key,

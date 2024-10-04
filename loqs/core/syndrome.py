@@ -38,6 +38,9 @@ class SyndromeLabel(Castable, Serializable):
     Could be >0 if multiple checks were measured on `qubit_label`.
     """
 
+    def __hash__(self) -> int:
+        return hash((self.qubit_label, self.frame_idx, self.outcome_idx))
+
     @classmethod
     def cast(cls: type[SyndromeLabel], obj: object) -> SyndromeLabel:
         if isinstance(obj, cls):
@@ -55,13 +58,15 @@ class SyndromeLabel(Castable, Serializable):
         raise ValueError(f"Cannot cast {obj} to a SyndromeLabel")
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         qubit_label = state["qubit_label"]
         frame_idx = state["frame_idx"]
         outcome_idx = state["outcome_idx"]
         return cls(qubit_label, frame_idx, outcome_idx)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {
@@ -111,6 +116,9 @@ class PauliFrame(Castable, Serializable):
         s = f"PauliFrame on [{self.qubit_labels[0]},...,{self.qubit_labels[-1]}] qubits:\n"
         s += f"  Paulis: {self.pauli_frame}"
         return s
+
+    def __hash__(self) -> int:
+        return hash((tuple(self.qubit_labels), "".join(self.pauli_frame)))
 
     @property
     def num_qubits(self) -> int:
@@ -166,12 +174,14 @@ class PauliFrame(Castable, Serializable):
         return old_to_new
 
     @classmethod
-    def _from_serialization(cls: type[U], state: Mapping) -> U:
+    def _from_serialization(
+        cls: type[U], state: Mapping, serial_id_to_obj_cache=None
+    ) -> U:
         qubit_labels = state["qubit_labels"]
         pauli_frame = list(state["pauli_frame"])
         return cls(qubit_labels, pauli_frame)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {

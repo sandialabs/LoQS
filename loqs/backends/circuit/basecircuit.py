@@ -22,6 +22,8 @@ class BasePhysicalCircuit(Castable, Serializable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
     CastableTypes: ClassVar[TypeAlias]
 
     ## Dunder methods
@@ -51,6 +53,9 @@ class BasePhysicalCircuit(Castable, Serializable):
 
     def __repr__(self) -> str:
         return f"Physical {self.name} circuit: {repr(self.circuit)}"
+
+    def __hash__(self) -> int:
+        return hash(repr(self))
 
     # Class methods
     @classmethod
@@ -460,12 +465,14 @@ class BasePhysicalCircuit(Castable, Serializable):
         pass
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
         qubit_labels = state["qubit_labels"]
         circuit = cls._deserialize_circuit(state["circuit"], qubit_labels)
         return cls(circuit, qubit_labels)
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         state.update(
             {

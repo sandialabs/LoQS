@@ -40,7 +40,7 @@ class QuantumProgram(Serializable):
         self,
         instruction_stack: InstructionStackCastableTypes = None,
         initial_history: HistoryCastableTypes = None,
-        default_noise_model: BaseNoiseModel | None = None,
+        default_noise_model: BaseNoiseModel | str | None = None,
         default_base_seed: int | None = None,
         expiring_state: bool = True,
         global_instructions: Mapping[str, Instruction] | None = None,
@@ -65,6 +65,11 @@ class QuantumProgram(Serializable):
             )
 
         self.default_noise_model = default_noise_model
+        self._noise_model_filename = None
+        if isinstance(default_noise_model, str):
+            # Likely passed a filename, try to load
+            self.default_noise_model = BaseNoiseModel.read(default_noise_model)
+            self._noise_model_filename = default_noise_model
         self.default_base_seed = default_base_seed
 
         if expiring_state:
@@ -153,12 +158,27 @@ class QuantumProgram(Serializable):
         self.name = name
         self.shot_histories = []
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self.initial_history),
+                hash(self.default_noise_model),
+                self.default_base_seed,
+                self.hash(self.instruction_stack),
+                self.hash(self.global_instructions),
+                hash(self.state_type),
+                self.hash(self.patch_types),
+                self.name,
+                self.hash(self.shot_histories),
+            )
+        )
+
     @classmethod
     def from_quantum_program(
         cls,
         other: QuantumProgram,
         instruction_stack: InstructionStackCastableTypes = None,
-        default_noise_model: BaseNoiseModel | None = None,
+        default_noise_model: BaseNoiseModel | str | None = None,
         default_base_seed: int | None = None,
         global_instructions: Mapping[str, Instruction] | None = None,
         state_type: type[BaseQuantumState] | None = None,
@@ -168,7 +188,10 @@ class QuantumProgram(Serializable):
         if instruction_stack is None:
             instruction_stack = other.instruction_stack
         if default_noise_model is None:
-            default_noise_model = other.default_noise_model
+            if other._noise_model_filename is not None:
+                default_noise_model = other._noise_model_filename
+            else:
+                default_noise_model = other.default_noise_model
         if default_base_seed is None:
             default_base_seed = other.default_base_seed
         if name is None:
@@ -470,24 +493,42 @@ class QuantumProgram(Serializable):
         return data
 
     @classmethod
-    def _from_serialization(cls: type[T], state: Mapping) -> T:
-        initial_history = cls.deserialize(state["initial_history"])
-        assert isinstance(initial_history, History | None)
-        default_noise_model = cls.deserialize(state["default_noise_model"])
-        assert isinstance(default_noise_model, BaseNoiseModel | None)
-        default_base_seed = state["default_base_seed"]
-        stack = cls.deserialize(state["instruction_stack"])
-        assert isinstance(stack, InstructionStack)
-        global_instructions = cls.deserialize(state["global_instructions"])
-        assert isinstance(global_instructions, dict)
-        state_type = cls.deserialize(state["state_type"])
-        assert isinstance(state_type, type)
-        assert issubclass(state_type, BaseQuantumState)
-        patch_types = cls.deserialize(state["patch_types"])
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        # ORDER MATTERS
+        # Must match serialization order for caching to work properly
+        patch_types = cls.deserialize(
+            state["patch_types"], serial_id_to_obj_cache
+        )
         assert isinstance(patch_types, dict)
         assert all([isinstance(v, QECCode) for v in patch_types.values()])
+        global_instructions = cls.deserialize(
+            state["global_instructions"], serial_id_to_obj_cache
+        )
+        assert isinstance(global_instructions, dict)
+        initial_history = cls.deserialize(
+            state["initial_history"], serial_id_to_obj_cache
+        )
+        assert isinstance(initial_history, History | None)
+        default_noise_model = cls.deserialize(
+            state["default_noise_model"], serial_id_to_obj_cache
+        )
+        assert isinstance(default_noise_model, BaseNoiseModel | None)
+        default_base_seed = state["default_base_seed"]
+        stack = cls.deserialize(
+            state["instruction_stack"], serial_id_to_obj_cache
+        )
+        assert isinstance(stack, InstructionStack)
+        state_type = cls.deserialize(
+            state["state_type"], serial_id_to_obj_cache
+        )
+        assert isinstance(state_type, type)
+        assert issubclass(state_type, BaseQuantumState)
         name = state["name"]
-        shot_histories = cls.deserialize(state["shot_histories"])
+        shot_histories = cls.deserialize(
+            state["shot_histories"], serial_id_to_obj_cache
+        )
         assert isinstance(shot_histories, list)
         assert all([isinstance(h, History) for h in shot_histories])
 
@@ -510,23 +551,41 @@ class QuantumProgram(Serializable):
 
         return obj
 
-    def _to_serialization(self) -> dict:
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+
+        # Avoid serializing noise model if loaded from file
+        if self._noise_model_filename is not None:
+            serial_noise_model = self._noise_model_filename
+        else:
+            serial_noise_model = self.serialize(
+                self.default_noise_model, hash_to_serial_id_cache
+            )
+
         state.update(
             {
-                "initial_history": self.serialize(self.initial_history),
-                "default_noise_model": self.serialize(
-                    self.default_noise_model
+                # Patch types and global instructions first to cache QEC code and instructions
+                "patch_types": self.serialize(
+                    self.patch_types, hash_to_serial_id_cache
                 ),
-                "default_base_seed": self.default_base_seed,
-                "instruction_stack": self.serialize(self.instruction_stack),
                 "global_instructions": self.serialize(
-                    self.global_instructions
+                    self.global_instructions, hash_to_serial_id_cache
                 ),
-                "state_type": self.serialize(self.state_type),
-                "patch_types": self.serialize(self.patch_types),
+                "initial_history": self.serialize(
+                    self.initial_history, hash_to_serial_id_cache
+                ),
+                "default_noise_model": serial_noise_model,
+                "default_base_seed": self.default_base_seed,
+                "instruction_stack": self.serialize(
+                    self.instruction_stack, hash_to_serial_id_cache
+                ),
+                "state_type": self.serialize(
+                    self.state_type, hash_to_serial_id_cache
+                ),
                 "name": self.name,
-                "shot_histories": self.serialize(self.shot_histories),
+                "shot_histories": self.serialize(
+                    self.shot_histories, hash_to_serial_id_cache
+                ),
             }
         )
         return state
