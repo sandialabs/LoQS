@@ -89,6 +89,16 @@ class DictNoiseModel(BaseNoiseModel):
         )
 
     @property
+    def gate_keys(self) -> list:
+        """Gate keys this model can take in circuits."""
+        return list(self.gate_dict.keys())
+
+    @property
+    def instrument_keys(self) -> list:
+        """Instrument keys this model can take in circuits."""
+        return list(self.inst_dict.keys())
+
+    @property
     def output_gate_reps(self) -> list[GateRep]:
         return [self._gaterep]
 

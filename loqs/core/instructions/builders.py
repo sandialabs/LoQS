@@ -28,41 +28,17 @@ from loqs.core.syndrome import (
 
 def build_composite_instruction(
     instructions: Sequence[Instruction],
-    param_priorities: (
-        Sequence[str] | Mapping[str, Sequence[str]] | None
-    ) = None,
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
     """TODO"""
 
-    # We don't know what args we need, so let's take variadic kwargs
-    def apply_fn(**kwargs) -> Frame:
-        # These will always be the last two
-        assert "stack" in kwargs
-        assert "instructions" in kwargs
-        assert "priorities" in kwargs
-        stack = InstructionStack.cast(kwargs["stack"])
-        instructions: list[Instruction] = list(kwargs["instructions"])
-        priorities = list(kwargs["priorities"])
-
+    def apply_fn(
+        patch_label: str | None,
+        stack: InstructionStack,
+        instructions: Sequence[Instruction],
+    ) -> Frame:
         for i, instruction in enumerate(instructions):
-            patch_label = None
-            label_kwargs = {}
-            for k, v in kwargs.items():
-                if k in priorities:
-                    # We want to forward this via the label
-                    if k == "patch_label":
-                        patch_label = v
-                    elif k in ["stack", "patches", "instructions"]:
-                        # We want these from the program or not at all
-                        pass
-                    else:
-                        label_kwargs[k] = v
-
-            new_label = InstructionLabel(
-                instruction, patch_label, inst_kwargs=label_kwargs
-            )
-
+            new_label = InstructionLabel(instruction, patch_label)
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
@@ -79,36 +55,13 @@ def build_composite_instruction(
         ]
         return new_kwargs
 
-    # Because we don't have a fixed function signature above,
-    # we need to pass in priorities. For convenience,
-    # we allow a Sequence of keys that we will turn into default priorities here
-    if param_priorities is None:
-        param_priorities = []
-    if not isinstance(param_priorities, Mapping):
-        param_priorities = {k: DEFAULT_PRIORITIES for k in param_priorities}
-    param_priorities = dict(param_priorities)
-    # Also get the patch label and pass it forward if needed
-    param_priorities["patch_label"] = param_priorities.get(
-        "patch_label", DEFAULT_PRIORITIES
-    )
-    # We also need the stack, instructions, and (ironically) these priorities
-    param_priorities["stack"] = param_priorities.get(
-        "stack", DEFAULT_PRIORITIES
-    )
-    param_priorities["instructions"] = param_priorities.get(
-        "instructions", DEFAULT_PRIORITIES
-    )
-    param_priorities["priorities"] = DEFAULT_PRIORITIES
-
     # We will need to store the instructions and param priorities
-    data = {"instructions": instructions, "priorities": param_priorities}
+    data = {"instructions": instructions}
 
     return Instruction(
         apply_fn=apply_fn,
         data=data,
         map_qubits_fn=map_qubits_fn,
-        param_priorities=param_priorities,
-        param_error_behavior="continue",  # Suppress the warning for variadic kwargs
         name=name,
     )
 
@@ -399,6 +352,7 @@ def build_physical_circuit_instruction(
     include_outcomes: bool = False,
     inplace: bool = True,
     reset_mcms: bool = True,
+    model: BaseNoiseModel | None = None,
     name: str = "(Unnamed physical circuit)",
 ) -> Instruction:
     """TODO"""
@@ -430,6 +384,8 @@ def build_physical_circuit_instruction(
         "inplace": inplace,
         "reset_mcms": reset_mcms,
     }
+    if model is not None:
+        data["model"] = model
 
     # We need to be able to map the circuit if qubits change
     def map_qubits_fn(
