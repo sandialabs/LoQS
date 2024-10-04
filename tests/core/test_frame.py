@@ -77,8 +77,8 @@ class TestFrame:
 
             f3 = Frame.read(tempf.name)
         
-        # TODO: Expired key behavior may change soon
         assert f3["c"] == 3
-        assert f3["other"]._data == {'a': 1, 'b': None}
+        # Real data should come back, even for expired keys
+        assert f3["other"]._data == {'a': 1, 'b': 2}
         assert f3["other"]._expired_keys == ["b"]
         assert f3.log == "test"

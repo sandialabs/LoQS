@@ -192,7 +192,14 @@ class Instruction(Serializable):
 
         applied_frame = self.apply_fn(**aliased_kwargs)
 
-        return applied_frame.update(new_log=f"{self.name} result")
+        output_frame = applied_frame.update(
+            {
+                "instruction": self,
+            },
+            new_log=f"{self.name} result",
+        )
+
+        return output_frame
 
     def copy(self) -> Instruction:
         return Instruction(

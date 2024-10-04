@@ -547,6 +547,8 @@ class Serializable:
             )
         elif isinstance(obj, (tuple, list)):
             return hash(tuple(Serializable.hash(v) for v in obj))
+        elif isinstance(obj, np.ndarray):
+            return hash((tuple(obj.shape), tuple(obj.flatten().tolist())))
         return hash(obj)
 
     @staticmethod

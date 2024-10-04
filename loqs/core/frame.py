@@ -152,28 +152,18 @@ class Frame(Mapping[str, object], Castable, Serializable):
     def _from_serialization(
         cls: type[T], state: Mapping, serial_id_to_obj_cache=None
     ) -> T:
-        # Note that expired keys will come back as None after deserialization
         data = cls.deserialize(state["_data"], serial_id_to_obj_cache)
         assert isinstance(data, dict)
         log = state["log"]
-
         obj = cls(data, log)
         obj._expired_keys = state["_expired_keys"]
-
         return obj
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
-        # Do not spend effort saving expired data
-        # TODO: Maybe remove this after memoizing serialization?
-        unexpired_data = {}
-        for k, v in self._data.items():
-            unexpired_data[k] = v if k not in self._expired_keys else None
         state.update(
             {
-                "_data": self.serialize(
-                    unexpired_data, hash_to_serial_id_cache
-                ),
+                "_data": self.serialize(self._data, hash_to_serial_id_cache),
                 "_expired_keys": self._expired_keys,
                 "log": self.log,
             }
