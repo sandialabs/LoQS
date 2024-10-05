@@ -90,7 +90,7 @@ def convert_run_programs_to_dataset(
     return ds
 
 
-def convert_circuit_to_quantikz(  # noqa: C901
+def convert_circuit_to_quantikz(
     circuit: Circuit,
     gatename_conversion: Mapping[str, str | Sequence[str]],
     lstick_values: Sequence[str | None] | None = None,
@@ -116,93 +116,44 @@ def convert_circuit_to_quantikz(  # noqa: C901
             quantikz_lines[i] += str(val)
         quantikz_lines[i] += "} & "
 
-    # Line processing
-    for lidx in range(circuit.depth):
-        comps = circuit._layer_components(lidx)
+    # Layer processing
+    parallel_layers = _process_layers(circuit, gatename_conversion)
 
-        seen_idxs = set()
-        reset_layer_idxs = set()
-        for comp in comps:
-            conversion = gatename_conversion.get(comp.name, comp.name)
-            idxs = [circuit.line_labels.index(q) for q in comp.qubits]
-            seen_idxs.update(idxs)
+    # String processing
+    for layer_cache in parallel_layers:
+        ggline = (
+            r"\gategroup["
+            + str(num_lines)
+            + ",steps="
+            + str(len(layer_cache))
+            + ",style={dashed,rounded"
+            + r" corners,inner xsep=0pt}]{} & "
+        )
 
-            if isinstance(conversion, str):
-                # Single qubit gate
-                if conversion == "X":
-                    quantikz_lines[idxs[0]] += r"\targ{} & "
-                elif conversion.startswith("meter"):
-                    entries = conversion.split()
+        for lidx, layer in enumerate(layer_cache):
+            if lidx == 1:
+                # Strip ending "& " and add gategroup to first line
+                quantikz_lines[0] = quantikz_lines[0][:-2] + ggline
 
-                    if entries[1] != "reset":
-                        quantikz_lines[idxs[0]] += (
-                            r"\meter{" + entries[1] + "}"
-                        )
-                        next_entry = 2
-                    else:
-                        quantikz_lines[idxs[0]] += r"\meter{}"
-                        next_entry = 1
-
-                    try:
-                        if entries[next_entry] == "reset":
-                            reset = entries[next_entry + 1]
-                            quantikz_lines[idxs[0]] += r"& \midstick{"
-                            quantikz_lines[idxs[0]] += reset + "}"
-                            reset_layer_idxs.add(idxs[0])
-                    except IndexError:
-                        pass
-
-                    quantikz_lines[idxs[0]] += " & "
+            for i, line in enumerate(layer["lines"]):
+                if len(line) == 0:
+                    # Emtpy line
+                    quantikz_lines[i] += r"\qw & "
+                elif "RESET" in line:
+                    # Reset line, should be two empty layers
+                    quantikz_lines[i] += r"\qw & "
+                    quantikz_lines[i] += line.replace("RESET", r"\qw & ")
                 else:
-                    quantikz_lines[idxs[0]] += (
-                        r"\gate{" + str(conversion) + r"} & "
-                    )
-            elif isinstance(conversion, list):
-                # Multiqubit gate
-                sorted_entries = sorted(
-                    zip(idxs, conversion), key=lambda x: x[0]
-                )
-                for i, (idx, entry) in enumerate(sorted_entries):
-                    try:
-                        target = str(sorted_entries[i + 1][0] - idx)
-                    except IndexError:
-                        target = (
-                            "0"  # Last line doesn't need to connect anywhere
-                        )
+                    # Some gate, add it
+                    quantikz_lines[i] += line
 
-                    if entry == "ctrl":
-                        quantikz_lines[idx] += r"\ctrl{" + target + "} & "
-                    elif entry == "octrl":
-                        quantikz_lines[idx] += r"\octrl{" + target + "} & "
-                    elif entry == "targ":
-                        quantikz_lines[idx] += (
-                            r"\targ{} \vqw{" + target + "} & "
-                        )
-                    else:
-                        quantikz_lines[idx] += (
-                            r"\gate{" + entry + r"} \vqw{" + target + "} & "
-                        )
-
-        # Add idles
-        for i in range(num_lines):
-            if i in seen_idxs:
-                continue
-            quantikz_lines[i] += r"\qw & "
-
-        # Check to see if we need to add a layer of idles for reset
-        if len(reset_layer_idxs):
-            for i in range(num_lines):
-                if i in reset_layer_idxs:
-                    continue
-                quantikz_lines[i] += r"\qw & "
-
-    # End with an extra layer (looks better IMO)
+    # Add one extra layer of wires (I think it looks better)
     for i in range(num_lines):
         quantikz_lines[i] += r"\qw & "
 
     now = datetime.now()
     quantikz = f'% Generated by loqs.tools.pygstitools.convert_circuit_to_quantikz on {now.strftime("%Y-%m-%d %H:%M:%S")}\n'
-    quantikz += r"\begin{quantikz}[row sep=0.25cm,column sep=0.15cm]" + "\n"
+    quantikz += r"\begin{quantikz}[row sep=0.3cm,column sep=0.5cm]" + "\n"
     quantikz += "\\\\\n".join(quantikz_lines)
     quantikz += "\n" + r"\end{quantikz}"
 
@@ -228,6 +179,159 @@ def convert_circuit_to_quantikz(  # noqa: C901
         return tex
 
     return quantikz
+
+
+def _process_layers(circuit, gatename_conversion):
+    num_lines = circuit.width
+
+    # Helper to check whether we have space in an existing layer
+    def can_place_in_layer(layer_idx, new_interval):
+        if any(
+            [
+                ni in layer_caches[layer_idx]["used_qubits"]
+                for ni in new_interval
+            ]
+        ):
+            # We have an overlap, need to go to next layer
+            # First, check to see if we need to add a new layer
+            if layer_idx + 1 == len(layer_caches):
+                new_layer = {
+                    "lines": ["" for _ in range(num_lines)],
+                    "used_qubits": [],
+                }
+                layer_caches.append(new_layer)
+            return False
+        return True
+
+    parallel_layers = []
+    for lidx in range(circuit.depth):
+        layer_caches = [
+            {
+                "lines": [
+                    "",
+                ]
+                * num_lines,
+                "used_qubits": [],
+            }
+        ]
+        comps = circuit._layer_components(lidx)
+
+        # Run through once and add all single qubit gates
+        # This ensures they are all in a layer at the beginning
+        remaining_comps = []
+        for comp in comps:
+            idxs = [circuit.line_labels.index(q) for q in comp.qubits]
+            if len(idxs) > 1:
+                # Skip 2Q gates here
+                remaining_comps.append(comp)
+                continue
+
+            # Find the layer index where we can insert this
+            curr_layer_idx = 0
+            while not can_place_in_layer(curr_layer_idx, idxs):
+                curr_layer_idx += 1
+
+            # Insert into layer
+            _add_component_to_layer(
+                comp,
+                gatename_conversion,
+                layer_caches,
+                curr_layer_idx,
+                idxs,
+            )
+
+        # Now run through the 2Q gates
+        for comp in remaining_comps:
+            idxs = [circuit.line_labels.index(q) for q in comp.qubits]
+
+            # Find the layer index where we can insert this
+            curr_layer_idx = 0
+            interval = list(range(min(idxs), max(idxs) + 1))
+            while not can_place_in_layer(curr_layer_idx, interval):
+                curr_layer_idx += 1
+
+            # Insert into layer
+            _add_component_to_layer(
+                comp,
+                gatename_conversion,
+                layer_caches,
+                curr_layer_idx,
+                idxs,
+            )
+
+        # Run through lines and extra empty layer for non_resets
+        for layer_cache in layer_caches:
+            reset_idxs = [
+                i
+                for i, line in enumerate(layer_cache["lines"])
+                if "midstick" in line
+            ]
+            if len(reset_idxs):
+                # Add an extra empty layer to any line that doesn't have reset
+                for i in range(num_lines):
+                    if i not in reset_idxs:
+                        layer_cache["lines"][i] += "RESET"
+
+        parallel_layers.append(layer_caches)
+    return parallel_layers
+
+
+def _add_component_to_layer(
+    comp, gatename_conversion, layer_caches, layer_idx, line_idxs
+):
+    """TODO"""
+    # Convert to quantikz symbol
+    gate_names = gatename_conversion.get(comp.name, comp.name)
+
+    # Add interval to layer
+    interval = range(min(line_idxs), max(line_idxs) + 1)
+    layer_caches[layer_idx]["used_qubits"].extend(interval)
+
+    # Add gate to lines
+    layer_lines = layer_caches[layer_idx]["lines"]
+    if isinstance(gate_names, str):
+        # Single qubit gate
+        if gate_names == "X":
+            layer_lines[line_idxs[0]] += r"\targ{} & "
+        elif gate_names.startswith("meter"):
+            entries = gate_names.split()
+
+            # Add measure symbol
+            if entries[1] != "reset":
+                layer_lines[line_idxs[0]] += r"\meter{" + entries[1] + "} & "
+                next_entry = 2
+            else:
+                layer_lines[line_idxs[0]] += r"\meter{} & "
+                next_entry = 1
+
+            # Add reset
+            try:
+                if entries[next_entry] == "reset":
+                    reset = entries[next_entry + 1]
+                    layer_lines[line_idxs[0]] += r"\midstick{" + reset + "} & "
+            except IndexError:
+                pass
+        else:
+            layer_lines[line_idxs[0]] += r"\gate{" + str(gate_names) + r"} & "
+    elif isinstance(gate_names, list):
+        # Multiqubit gate, add from top to bottom
+        sorted_entries = sorted(zip(line_idxs, gate_names), key=lambda x: x[0])
+        for i, (idx, entry) in enumerate(sorted_entries):
+            try:
+                target = str(sorted_entries[i + 1][0] - idx)
+            except IndexError:
+                target = "0"  # Last line doesn't need to connect anywhere
+
+            if entry == "ctrl":
+                layer_lines[idx] += r"\ctrl{" + target + "} & "
+            elif entry == "octrl":
+                layer_lines[idx] += r"\octrl{" + target + "} & "
+            elif entry == "targ":
+                layer_lines[idx] += r"\targ{} \vqw{" + target + "} & "
+            else:
+                layer_lines[idx] += (
+                    r"\gate{" + entry + r"} \vqw{" + target + "} & "
+                )
 
 
 def convert_circuit_to_image(
