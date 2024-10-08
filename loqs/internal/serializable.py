@@ -668,7 +668,7 @@ class Serializable:
                     if ")" in line:
                         import_lines.append(textwrap.dedent(multiline))
                         multiline = ""
-                elif "import" in line:
+                elif "import " in line:
                     if "(" in line and ")" not in line:
                         multiline = line
                     else:

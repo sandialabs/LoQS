@@ -1,0 +1,141 @@
+"""TODO"""
+
+from collections import defaultdict
+from collections.abc import Sequence
+import itertools
+from typing import Literal
+
+
+def get_syndrome_from_stabilizers_and_pstr(
+    stabilizers: Sequence[str], pstr: str
+) -> str:
+    """TODO"""
+    assert all([len(s) == len(pstr) for s in stabilizers])
+    for stab in stabilizers:
+        assert all([c in "IXYZ" for c in stab])
+    assert all([c in "IXYZ" for c in pstr])
+
+    syndrome = ""
+    for stab in stabilizers:
+        non_commutes = 0
+        for pstab, perr in zip(stab, pstr):
+            if (
+                (pstab == "X" and perr in "YZ")
+                or (pstab == "Y" and perr != "I")
+                or (pstab == "Z" and perr in "XY")
+            ):
+                non_commutes += 1
+        # Our syndrome bit is the parity of noncommuting paulis
+        syndrome += str(non_commutes % 2)
+
+    return syndrome
+
+
+def get_syndrome_dict_from_stabilizers_and_pstrs(
+    stabilizers: Sequence[str],
+    pstrs: Sequence[str],
+    default_pstr: str | Literal["auto"] | None = "auto",
+) -> dict[str, str | list[str]]:
+    """TODO"""
+    raw_syndrome_dict = defaultdict(list)
+
+    for pstr in pstrs:
+        syndrome = get_syndrome_from_stabilizers_and_pstr(stabilizers, pstr)
+        raw_syndrome_dict[syndrome].append(pstr)
+
+    if default_pstr == "auto":
+        num_data_qubits = len(stabilizers[0])
+        default_pstr = "I" * num_data_qubits
+
+    # Run through syndromes
+    # Either remove the list if only one entry, or add default if specified
+    syndrome_dict = {}
+    syndromes = [
+        "".join(syndrome)
+        for syndrome in itertools.product("01", repeat=len(stabilizers))
+    ]
+    for syndrome in syndromes:
+        pstr_list = raw_syndrome_dict.get(syndrome, [default_pstr])
+        if pstr_list is None:
+            continue
+        elif len(set(pstr_list)) == 1:  # Only unique pauli strings
+            syndrome_dict[syndrome] = pstr_list[0]
+        else:
+            syndrome_dict[syndrome] = pstr_list
+
+    return syndrome_dict
+
+
+def get_weight_1_errors(num_qubits: int) -> list[str]:
+    """TODO"""
+    errors = []
+    for i in range(num_qubits):
+        for p in "XYZ":
+            error = [
+                "I",
+            ] * num_qubits
+            error[i] = p
+            errors.append("".join(error))
+
+    return errors
+
+
+def get_hook_errors_in_flagged_syndrome_extraction(
+    stabilizer: str,
+) -> list[str]:
+    """TODO
+
+    This is an automated version of the calculation performed to get
+    the data errors in Fig. 2d of arXiv:1705.02329.
+    """
+    assert all([c in "IXYZ" for c in stabilizer])
+
+    weight = sum([c != "I" for c in stabilizer])
+    hook_errors = []
+    stab_term_counter = 0
+    for i, p in enumerate(stabilizer):
+        if p != "I":
+            stab_term_counter += 1
+
+        # Skip first and last check
+        if stab_term_counter in [1, weight]:
+            continue
+
+        # Otherwise, pattern is as follows: identity before this data qubit,
+        # all Paulis on this data qubit, rest of stabilizer afterwards
+        for p in "IXYZ":
+            hook_errors.append("I" * i + p + stabilizer[i + 1 :])
+
+    return hook_errors
+
+
+def compose_pstrs(pstr1: str, pstr2: str) -> str:
+    """TODO"""
+    assert len(pstr1) == len(pstr2)
+    assert all([c in "IXYZ" for c in pstr1])
+    assert all([c in "IXYZ" for c in pstr2])
+
+    composed = ""
+    for p1, p2 in zip(pstr1, pstr2):
+        if p1 == p2:
+            composed += "I"
+        elif set((p1, p2)) in [set("YZ"), set("IX")]:
+            composed += "X"
+        elif set((p1, p2)) in [set("XZ"), set("IY")]:
+            composed += "Y"
+        else:
+            composed += "Z"
+
+    return composed
+
+
+def compose_pstr_lists(
+    pstr_list1: Sequence[str], pstr_list2: Sequence[str]
+) -> list[str]:
+    """TODO"""
+    composed_pstrs = []
+    for pstr1 in pstr_list1:
+        for pstr2 in pstr_list2:
+            composed_pstrs.append(compose_pstrs(pstr1, pstr2))
+
+    return composed_pstrs
