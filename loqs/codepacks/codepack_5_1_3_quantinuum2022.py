@@ -39,6 +39,7 @@ from loqs.core.qeccode import PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 import loqs.tools.pygstitools as pt
+import loqs.tools.qectools as qt
 
 
 def create_qec_code(
@@ -352,6 +353,7 @@ def create_qec_code(
 
     ## QEC
     _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend)
+    _create_flagged_QEC_instruction(instructions, qubits, circuit_backend)
 
     code = QECCode(instructions, qubits, data_qubits, "Perfect [[5,1,3]] code")
     return code
@@ -791,7 +793,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     # and the stabilizer definitions from Eqns B4-B7
 
     # XZZXI check
-    # This actually matches Fig 2b of arXiv:1705.02329 as well
+    # This actually matches Fig 2c of arXiv:1705.02329 as well
     XZZXI_circ = circuit_backend(
         [
             [("Gh", "A0")],
@@ -881,32 +883,21 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
 
     # Unflagged decoder
     # This is not written out in the references but can be quickly derived from the stabilizers
-    # XZZXI  IXZZX  XIXZZ  ZXIXZ: Data Error
-    unflagged_lookup_table = {
-        "0000": "IIIII",
-        "0001": "XIIII",
-        "1011": "YIIII",
-        "1010": "ZIIII",
-        "1000": "IXIII",
-        "1101": "IYIII",
-        "0101": "IZIII",
-        "1100": "IIXII",
-        "1110": "IIYII",
-        "0010": "IIZII",
-        "0110": "IIIXI",
-        "1111": "IIIYI",
-        "1001": "IIIZI",
-        "0011": "IIIIX",
-        "0111": "IIIIY",
-        "0100": "IIIIZ",
-    }
+    # This is now automated in loqs.tools.qectools
+    data_errors = qt.get_weight_1_errors(5)
+    stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
+    syndrome_dict = qt.get_syndrome_dict_from_stabilizers_and_pstrs(
+        stabilizers, data_errors
+    )
+    unflagged_lookup_table = {k: v[0] for k, v in syndrome_dict.items()}
+
     # Take the first measurement from A0 qubit for last 4 instructions as syndrome
     syndrome_labels = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
     instructions["Unflagged Decoder"] = (
         builders.build_lookup_decoder_instruction(
             lookup_table=unflagged_lookup_table,
             syndrome_labels=syndrome_labels,
-            raw_syndrome_frame_key="unflagged",
+            raw_syndrome_frame_key="raw_syndrome",
             name="Unflagged decoder",
         )
     )
@@ -921,4 +912,279 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
             instructions["Unflagged Decoder"],
         ],
         name="Unflagged QEC",
+    )
+
+
+def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
+    # These circuits are not explicitly stated in arxiv:2208.01863
+    # However, they can be inferred from the Hadamard-test-like circuits of Fig 12
+    # and the stabilizer definitions from Eqns B4-B7
+
+    # XZZXI check
+    # This actually matches Fig 2b of arXiv:1705.02329 as well
+    XZZXI_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D0")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcphase", "A0", "D1")],
+            [("Gcphase", "A0", "D2")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcnot", "A0", "D3")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Flagged XZZXI Check"] = (
+        builders.build_physical_circuit_instruction(
+            XZZXI_circ,
+            include_outcomes=True,
+            name="Flagged XZZXI stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # IXZZX check
+    IXZZX_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D1")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcphase", "A0", "D2")],
+            [("Gcphase", "A0", "D3")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcnot", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Flagged IXZZX Check"] = (
+        builders.build_physical_circuit_instruction(
+            IXZZX_circ,
+            include_outcomes=True,
+            name="Flagged IXZZX stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # XIXZZ check
+    XIXZZ_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcnot", "A0", "D0")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcnot", "A0", "D2")],
+            [("Gcphase", "A0", "D3")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcphase", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Flagged XIXZZ Check"] = (
+        builders.build_physical_circuit_instruction(
+            XIXZZ_circ,
+            include_outcomes=True,
+            name="Flagged XIXZZ stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # ZXIXZ check
+    ZXIXZ_circ = circuit_backend(
+        [
+            [("Gh", "A0")],
+            [("Gcphase", "A0", "D0")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcnot", "A0", "D1")],
+            [("Gcnot", "A0", "D3")],
+            [("Gcnot", "A0", "A1")],  # Flag
+            [("Gcphase", "A0", "D4")],
+            [("Gh", "A0")],
+            [("Iz", "A0")],
+        ],
+        qubit_labels=qubits,
+    )
+    instructions["Flagged ZXIXZ Check"] = (
+        builders.build_physical_circuit_instruction(
+            ZXIXZ_circ,
+            include_outcomes=True,
+            name="Flagged ZXIXZ stabilizer check",
+            reset_mcms=True,
+        )
+    )
+
+    # FLAGGED DECODER
+    # Unlike the unflagged decoder, this requires feed-forward logic
+    # This follows the Error Correction Procedure in Section II of arXiv:1705.02329
+    # Much of this is now automated in loqs.tools.qectools
+
+    # First, we create the four different lookup table decoders
+    # based on different flags being tripped
+    # For XZZXI, get_hook_errors... matches Error Correction Procedure 1a exactly
+    # For IXZZX, get_hook_errors... only matches Error Correction Procedure 2a
+    # up to reordering and multiplication by stabilizers (but this does not affect
+    # lookup table construction)
+    # Specifically, this is how you match Error Correction Procedure 2a:
+    # IXZZX_hook_errors = qectools.get_hook_errors_in_flagged_syndrome_extraction("IXZZX")
+    # [IXZZX_hook_errors[4], qectools.compose_pstrs(IXZZX_hook_errors[2], "IXZZX"),
+    #  IXZZX_hook_errors[5], qectools.compose_pstrs(IXZZX_hook_errors[1], "XIXZZ"),
+    #  qectools.compose_pstrs(IXZZX_hook_errors[3], "IXZZX"),
+    #  IXZZX_hook_errors[7], IXZZX_hook_errors[6]]
+    stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
+    for stab in stabilizers:
+        hook_data_errors = qt.get_hook_errors_in_flagged_syndrome_extraction(
+            stab
+        )
+        syndrome_dict = qt.get_syndrome_dict_from_stabilizers_and_pstrs(
+            stabilizers, hook_data_errors
+        )
+
+        # Note that this lookup table has many syndromes that correspond to no corrections
+        lookup_table = {k: v[0] for k, v in syndrome_dict.items()}
+
+        # If we are using this lookup table, we just did unflagged syndrome checks
+        # So the decoder instruction actually looks similar to unflagged, but
+        # with a different decoder. We also don't want to look at previous
+        # flagged corrections, this correction is based solely on this round info
+        syndrome_labels = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
+        instructions[f"Flagged {stab} Decoder"] = (
+            builders.build_lookup_decoder_instruction(
+                lookup_table=lookup_table,
+                syndrome_labels=syndrome_labels,
+                raw_syndrome_frame_key=f"flagged_{stab}_syndrome",
+                diff_prev_syndrome=False,
+                name=f"Flagged {stab} decoder",
+            )
+        )
+
+    ## FLAGGED QEC
+    # We will only create one additional instruction, as the same procedure is done
+    # for all four flagged measurements with different parameters
+    def flagged_feedforward_apply_fn(
+        stabilizer: str,
+        next_stabilizer: str,
+        syndrome_qubit: str,
+        flag_qubit: str,
+        measurement_outcomes: MeasurementOutcomes,
+        stack: InstructionStack,
+        patch_label: str,
+    ):
+        # Pull out flag and syndrome from previous frame
+        flag = measurement_outcomes[flag_qubit][0]
+        syndrome = measurement_outcomes[syndrome_qubit][0]
+        if flag:
+            # Follow branch 1a (or analogous) for Error Correction Procedure
+            # Do unflagged measurements and pass to flagged decoder
+            instructions = [
+                "Unflagged XZZXI Check",
+                "Unflagged IXZZX Check",
+                "Unflagged XIXZZ Check",
+                "Unflagged ZXIZX Check",
+                f"Flagged {stabilizer} Decoder",
+            ]
+        elif syndrome:
+            # Follow branch 1b (or analogous) for Error Correction Procedure
+            # Do unflagged measurements and pass to unflagged decoder
+            instructions = [
+                "Unflagged XZZXI Check",
+                "Unflagged IXZZX Check",
+                "Unflagged XIXZZ Check",
+                "Unflagged ZXIZX Check",
+                "Unflagged Decoder",
+            ]
+        else:
+            # Flag and syndrome trivial, move to next stabilizer
+            if next_stabilizer == "TERMINATE":
+                # Special case for last flagged check, no errors detected
+                # We are done with QEC!
+                instructions = []
+            else:
+                # Otherwise, add the next flagged check
+                # Note that the Feed-Forward is a forward reference to this type of instruction
+                instructions = [
+                    f"Flagged {next_stabilizer} Check",
+                    f"Flagged {next_stabilizer} Feed-Forward",
+                ]
+
+        # In all cases, we are doing a stack update
+        # (can be empty for case where no errors detected on last flagged check)
+        # This part just looks like a composite instruction
+        for i, instruction in enumerate(instructions):
+            new_label = InstructionLabel(instruction, patch_label)
+            stack = stack.insert_instruction(i, new_label)
+
+        return Frame({"stack": stack})
+
+    def flagged_feedforward_map_qubits_fn(
+        qubit_mapping: Mapping[str, str],
+        flag_qubit: str,
+        syndrome_qubit: str,
+        **kwargs,
+    ):
+        new_kwargs = kwargs.copy()
+        new_kwargs["flag_qubit"] = qubit_mapping[flag_qubit]
+        new_kwargs["syndrome_qubit"] = qubit_mapping[syndrome_qubit]
+        return new_kwargs
+
+    # Now to make our four feed-forward instructions
+    instructions["Flagged XZZXI Feed-Forward"] = Instruction(
+        flagged_feedforward_apply_fn,
+        {
+            "stabilizer": "XZZXI",
+            "next_stabilizer": "IXZZX",
+            "flag_qubit": "A1",
+            "syndrome_qubit": "A0",
+        },
+        flagged_feedforward_map_qubits_fn,
+        name="Flagged XZZXI Feed-Forward",
+    )
+
+    instructions["Flagged IXZZX Feed-Forward"] = Instruction(
+        flagged_feedforward_apply_fn,
+        {
+            "stabilizer": "IXZZX",
+            "next_stabilizer": "XIXZZ",
+            "flag_qubit": "A1",
+            "syndrome_qubit": "A0",
+        },
+        flagged_feedforward_map_qubits_fn,
+        name="Flagged IXZZX Feed-Forward",
+    )
+
+    instructions["Flagged XIXZZ Feed-Forward"] = Instruction(
+        flagged_feedforward_apply_fn,
+        {
+            "stabilizer": "XIXZZ",
+            "next_stabilizer": "ZXIXZ",
+            "flag_qubit": "A1",
+            "syndrome_qubit": "A0",
+        },
+        flagged_feedforward_map_qubits_fn,
+        name="Flagged XIXZZ Feed-Forward",
+    )
+
+    instructions["Flagged ZXIXZ Feed-Forward"] = Instruction(
+        flagged_feedforward_apply_fn,
+        {
+            "stabilizer": "ZXIXZZ",
+            "next_stabilizer": "TERMINATE",
+            "flag_qubit": "A1",
+            "syndrome_qubit": "A0",
+        },
+        flagged_feedforward_map_qubits_fn,
+        name="Flagged ZXIXZ Feed-Forward",
+    )
+
+    # Finally, we can define the QEC instruction
+    # This will just be the first stage of the flagged checks
+    instructions["Flagged QEC"] = builders.build_composite_instruction(
+        [
+            instructions["Flagged XZZXI Check"],
+            instructions["Flagged XZZXI Feed-Forward"],
+        ],
+        name="Flagged QEC",
     )

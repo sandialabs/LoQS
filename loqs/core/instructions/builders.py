@@ -70,6 +70,7 @@ def build_lookup_decoder_instruction(
     lookup_table: Mapping[str, str],
     syndrome_labels: Sequence[SyndromeLabelCastableTypes],
     raw_syndrome_frame_key: str,
+    diff_prev_syndrome: bool = True,
     name: str = "(Unnamed lookup decoder)",
 ) -> Instruction:
     """TODO"""
@@ -84,6 +85,7 @@ def build_lookup_decoder_instruction(
         lookup_table: dict[str, str],
         syndrome_labels: list[SyndromeLabel],
         raw_syndrome_frame_key: str,
+        diff_prev_syndrome: bool,
         patches: PatchDict,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
         history: History,
@@ -108,16 +110,17 @@ def build_lookup_decoder_instruction(
         # but punting on this for now. Need to fix before production 2Q runs
         prev_syndrome = None
         prev_frame_info = None
-        for i, frame in enumerate(history[::-1]):
-            prev_syndrome = frame.get(raw_syndrome_frame_key, None)
-            if prev_syndrome is None:
-                continue
-            assert isinstance(prev_syndrome, list)
-            assert all([isinstance(i, int) for i in prev_syndrome])
+        if diff_prev_syndrome:
+            for i, frame in enumerate(history[::-1]):
+                prev_syndrome = frame.get(raw_syndrome_frame_key, None)
+                if prev_syndrome is None:
+                    continue
+                assert isinstance(prev_syndrome, list)
+                assert all([isinstance(i, int) for i in prev_syndrome])
 
-            # If we got one, record logging info and break
-            prev_frame_info = (frame.log, -i - 1)
-            break
+                # If we got one, record logging info and break
+                prev_frame_info = (frame.log, -i - 1)
+                break
 
         # If we have a previous syndrome, XOR it to get the diff
         if prev_syndrome is None:
@@ -140,23 +143,32 @@ def build_lookup_decoder_instruction(
             patch.code, patch.qubits, new_pauli_frame
         )
 
-        return Frame(
+        frame = Frame(
             {
                 "patches": new_patches,
                 raw_syndrome_frame_key: syndrome,
-                "prev_syndrome_frame": prev_frame_info,
-                "syndrome_diff": syndrome_diff,
                 "decoded_error": data_error_str,
                 "prev_pauli_frame": "".join(patch.pauli_frame.pauli_frame),
                 "new_pauli_frame": "".join(new_pauli_frame.pauli_frame),
             }
         )
 
+        if diff_prev_syndrome:
+            frame = frame.update(
+                {
+                    "prev_syndrome_frame": prev_frame_info,
+                    "syndrome_diff": syndrome_diff,
+                }
+            )
+
+        return frame
+
     # We store lookup table and syndrome labels
     data = {
         "lookup_table": dict(lookup_table),
         "syndrome_labels": [SyndromeLabel.cast(sl) for sl in syndrome_labels],
         "raw_syndrome_frame_key": raw_syndrome_frame_key,
+        "diff_prev_syndrome": diff_prev_syndrome,
     }
 
     # We need to be able to map the qubit_labels

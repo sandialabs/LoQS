@@ -35,7 +35,7 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
     stabilizers: Sequence[str],
     pstrs: Sequence[str],
     default_pstr: str | Literal["auto"] | None = "auto",
-) -> dict[str, str | list[str]]:
+) -> dict[str, list[str]]:
     """TODO"""
     raw_syndrome_dict = defaultdict(list)
 
@@ -47,8 +47,7 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
         num_data_qubits = len(stabilizers[0])
         default_pstr = "I" * num_data_qubits
 
-    # Run through syndromes
-    # Either remove the list if only one entry, or add default if specified
+    # Run through syndromes and add default if specified
     syndrome_dict = {}
     syndromes = [
         "".join(syndrome)
@@ -58,10 +57,7 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
         pstr_list = raw_syndrome_dict.get(syndrome, [default_pstr])
         if pstr_list is None:
             continue
-        elif len(set(pstr_list)) == 1:  # Only unique pauli strings
-            syndrome_dict[syndrome] = pstr_list[0]
-        else:
-            syndrome_dict[syndrome] = pstr_list
+        syndrome_dict[syndrome] = pstr_list
 
     return syndrome_dict
 
@@ -94,8 +90,10 @@ def get_hook_errors_in_flagged_syndrome_extraction(
     hook_errors = []
     stab_term_counter = 0
     for i, p in enumerate(stabilizer):
-        if p != "I":
-            stab_term_counter += 1
+        if p == "I":
+            continue
+
+        stab_term_counter += 1
 
         # Skip first and last check
         if stab_term_counter in [1, weight]:
