@@ -442,6 +442,7 @@ def build_repeat_until_success_instruction(
         reset_key = kwargs.pop("reset_key")
 
         patch_label = kwargs.pop("patch_label")
+        patches = kwargs.pop("patches")
         stack = InstructionStack.cast(kwargs.pop("stack"))
 
         # All the remaining kwargs should go straight into the instruction
@@ -449,8 +450,10 @@ def build_repeat_until_success_instruction(
 
         # Run success function to see if we are terminated
         try:
+            patch = patches[patch_label]
+
             pauli_frame = PauliFrame.cast(
-                applied_frame.get("pauli_frame", None)
+                applied_frame.get("pauli_frame", patch.qubits)
             )
             outcomes = MeasurementOutcomes.cast(
                 applied_frame["measurement_outcomes"]
@@ -543,6 +546,9 @@ def build_repeat_until_success_instruction(
     # We also need the patch_label for new labels, and the stack to update it
     param_priorities["patch_label"] = param_priorities.get(
         "patch_label", DEFAULT_PRIORITIES
+    )
+    param_priorities["patches"] = param_priorities.get(
+        "patches", DEFAULT_PRIORITIES
     )
     param_priorities["stack"] = param_priorities.get(
         "stack", DEFAULT_PRIORITIES

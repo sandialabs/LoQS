@@ -76,8 +76,8 @@ def get_weight_1_errors(num_qubits: int) -> list[str]:
     return errors
 
 
-def get_hook_errors_in_flagged_syndrome_extraction(
-    stabilizer: str,
+def get_hook_errors_in_flagged_check(
+    stabilizer: str, check_order: Sequence[int] | None = None
 ) -> list[str]:
     """TODO
 
@@ -86,23 +86,31 @@ def get_hook_errors_in_flagged_syndrome_extraction(
     """
     assert all([c in "IXYZ" for c in stabilizer])
 
+    # Get weight and default check order if needed
     weight = sum([c != "I" for c in stabilizer])
-    hook_errors = []
-    stab_term_counter = 0
-    for i, p in enumerate(stabilizer):
-        if p == "I":
-            continue
+    if check_order is None:
+        check_order = [i for i, p in enumerate(stabilizer) if p != "I"]
+    assert len(check_order) == weight
 
-        stab_term_counter += 1
+    # Run through checks and calculate hook errors
+    hook_errors = []
+    for i, stab_idx in enumerate(check_order):
+        p = stabilizer[stab_idx]
 
         # Skip first and last check
-        if stab_term_counter in [1, weight]:
+        if i in [0, weight - 1]:
             continue
 
-        # Otherwise, pattern is as follows: identity before this data qubit,
-        # all Paulis on this data qubit, rest of stabilizer afterwards
+        # Any downstream checks will be triggered
+        downstream_errors = ["I"] * len(stabilizer)
+        for cidx in check_order[i + 1 :]:
+            downstream_errors[cidx] = stabilizer[cidx]
+
+        # On this qubit, we have all possible paulis
         for p in "IXYZ":
-            hook_errors.append("I" * i + p + stabilizer[i + 1 :])
+            hook_error = downstream_errors.copy()
+            hook_error[stab_idx] = p
+            hook_errors.append("".join(hook_error))
 
     return hook_errors
 

@@ -1024,21 +1024,9 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
 
     # First, we create the four different lookup table decoders
     # based on different flags being tripped
-    # For XZZXI, get_hook_errors... matches Error Correction Procedure 1a exactly
-    # For IXZZX, get_hook_errors... only matches Error Correction Procedure 2a
-    # up to reordering and multiplication by stabilizers (but this does not affect
-    # lookup table construction)
-    # Specifically, this is how you match Error Correction Procedure 2a:
-    # IXZZX_hook_errors = qectools.get_hook_errors_in_flagged_syndrome_extraction("IXZZX")
-    # [IXZZX_hook_errors[4], qectools.compose_pstrs(IXZZX_hook_errors[2], "IXZZX"),
-    #  IXZZX_hook_errors[5], qectools.compose_pstrs(IXZZX_hook_errors[1], "XIXZZ"),
-    #  qectools.compose_pstrs(IXZZX_hook_errors[3], "IXZZX"),
-    #  IXZZX_hook_errors[7], IXZZX_hook_errors[6]]
     stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
     for stab in stabilizers:
-        hook_data_errors = qt.get_hook_errors_in_flagged_syndrome_extraction(
-            stab
-        )
+        hook_data_errors = qt.get_hook_errors_in_flagged_check(stab)
         syndrome_dict = qt.get_syndrome_dict_from_stabilizers_and_pstrs(
             stabilizers, hook_data_errors
         )

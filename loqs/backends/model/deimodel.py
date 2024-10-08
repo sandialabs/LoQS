@@ -29,6 +29,7 @@ class DiscreteErrorInjectionNoiseModel(BaseNoiseModel):
         error_circuit: BasePhysicalCircuit | None = None,
         noise_reps: Sequence | None = None,
         inject_before: bool = True,
+        verbose: bool = True,
     ) -> None:
         """Initialize a noise model that injects discrete errors.
 
@@ -60,6 +61,7 @@ class DiscreteErrorInjectionNoiseModel(BaseNoiseModel):
         self.trigger_on_count = trigger_on_count
         self.get_rep_counter = 0
         self.inject_before = inject_before
+        self.verbose = verbose
 
     @property
     def gate_keys(self) -> list:
@@ -99,6 +101,12 @@ class DiscreteErrorInjectionNoiseModel(BaseNoiseModel):
                 assert self.noise_reps is not None
                 noise_reps = self.noise_reps
 
+            if self.verbose:
+                timing = "before" if self.inject_before else "after"
+                print(
+                    f"Injecting discrete error {noise_reps} {timing} {circuit}"
+                )
+
         if self.inject_before:
             reps = noise_reps + reps
         else:
@@ -125,9 +133,15 @@ class DiscreteErrorInjectionNoiseModel(BaseNoiseModel):
         trigger_on_count = state["trigger_on_count"]
         get_rep_counter = state["get_rep_counter"]
         inject_before = state["inject_before"]
+        verbose = state["verbose"]
 
         obj = cls(
-            model, trigger_on_count, error_circuit, noise_reps, inject_before
+            model,
+            trigger_on_count,
+            error_circuit,
+            noise_reps,
+            inject_before,
+            verbose,
         )
         obj.get_rep_counter = get_rep_counter
 
@@ -147,6 +161,7 @@ class DiscreteErrorInjectionNoiseModel(BaseNoiseModel):
                 "trigger_on_count": self.trigger_on_count,
                 "get_rep_counter": self.get_rep_counter,
                 "inject_before": self.inject_before,
+                "verbose": self.verbose,
             }
         )
         return state
