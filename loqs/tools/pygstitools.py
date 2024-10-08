@@ -90,6 +90,106 @@ def convert_run_programs_to_dataset(
     return ds
 
 
+## BEGIN VISUALIZATION TOOLS
+
+
+def convert_circuit_to_image(
+    circuit: Circuit,
+    gatename_conversion: Mapping[str, str | Sequence[str]],
+    lstick_values: Sequence[str | None] | None = None,
+    include_qubits_in_lsticks: bool = True,
+):  # Returns an Image but don't want to import that just for hinting as it's optional
+    try:
+        from PIL import Image
+        from qiskit.visualization import utils as vis_utils
+        from pdf2image import convert_from_path
+    except ImportError as e:
+        raise RuntimeError(
+            "convert_circuit_to_image requires loqs[visualization]"
+        ) from e
+
+    quantikz = convert_circuit_to_quantikz(
+        circuit,
+        gatename_conversion,
+        lstick_values,
+        include_qubits_in_lsticks,
+        True,
+    )
+
+    with NamedTemporaryFile("w+") as f, TemporaryDirectory() as tdname:
+        f.write(quantikz)
+        f.flush()
+
+        fpath = Path(f.name)
+        dirpath = Path(tdname)
+
+        try:
+            subprocess.run(
+                [
+                    "pdflatex",
+                    "-halt-on-error",
+                    f"-output-directory={tdname}",
+                    f.name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+        except CalledProcessError as e:
+            raise RuntimeError("Failed to compile quantikz") from e
+
+        pdfpath = str(dirpath / fpath.name) + ".pdf"
+
+        image = convert_from_path(pdfpath)[0]
+        image = vis_utils._trim(image)
+
+    return image
+
+
+def convert_circuit_to_qiskit_draw(
+    circuit: Circuit,
+    gatename_conversion: Mapping[str, str] | None = None,
+    placeholder_gate: str = "Gi",
+) -> str:
+
+    from pygsti.tools import internalgates as itgs
+
+    try:
+        from qiskit import QuantumCircuit
+    except ImportError as e:
+        raise RuntimeError(
+            "convert_circuit_to_qiskit_draw requires qiskit"
+        ) from e
+
+    if gatename_conversion is None:
+        gatename_conversion, _ = itgs.standard_gatenames_openqasm_conversions(
+            "u3"
+        )
+
+    for lidx in range(circuit.depth):
+        for comp in circuit._layer_components(lidx):
+            if (
+                comp.name.startswith("G")
+                and comp.name not in gatename_conversion
+            ):
+                print(
+                    f"{comp.name} conversion not provided, will be displayed as {placeholder_gate}"
+                )
+                gatename_conversion[comp.name] = gatename_conversion[
+                    placeholder_gate
+                ]
+
+    qasm = circuit.convert_to_openqasm(
+        gatename_conversion=gatename_conversion,
+        qubit_conversion={q: i for i, q in enumerate(circuit.line_labels)},
+        include_delay_on_idle=False,
+    )
+
+    qcirc = QuantumCircuit.from_qasm_str(qasm)
+
+    return qcirc.draw()
+
+
 def convert_circuit_to_quantikz(
     circuit: Circuit,
     gatename_conversion: Mapping[str, str | Sequence[str]],
@@ -332,102 +432,3 @@ def _add_component_to_layer(
                 layer_lines[idx] += (
                     r"\gate{" + entry + r"} \vqw{" + target + "} & "
                 )
-
-
-def convert_circuit_to_image(
-    circuit: Circuit,
-    gatename_conversion: Mapping[str, str | Sequence[str]],
-    lstick_values: Sequence[str | None] | None = None,
-    include_qubits_in_lsticks: bool = True,
-):  # Returns an Image but don't want to import that just for hinting as it's optional
-    try:
-        from PIL import Image
-        from qiskit.visualization import utils as vis_utils
-        from pdf2image import convert_from_path
-    except ImportError as e:
-        raise RuntimeError(
-            "convert_circuit_to_image requires loqs[visualization]"
-        ) from e
-
-    quantikz = convert_circuit_to_quantikz(
-        circuit,
-        gatename_conversion,
-        lstick_values,
-        include_qubits_in_lsticks,
-        True,
-    )
-
-    with NamedTemporaryFile("w+") as f, TemporaryDirectory() as tdname:
-        f.write(quantikz)
-        f.flush()
-
-        fpath = Path(f.name)
-        dirpath = Path(tdname)
-
-        try:
-            subprocess.run(
-                [
-                    "pdflatex",
-                    "-halt-on-error",
-                    f"-output-directory={tdname}",
-                    f.name,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-        except CalledProcessError as e:
-            raise RuntimeError(
-                "Failed to compile quantikz. Do you have pdflatex and poppler?"
-            ) from e
-
-        pdfpath = str(dirpath / fpath.name) + ".pdf"
-
-        image = convert_from_path(pdfpath)[0]
-        image = vis_utils._trim(image)
-
-    return image
-
-
-def convert_circuit_to_qiskit_draw(
-    circuit: Circuit,
-    gatename_conversion: Mapping[str, str] | None = None,
-    placeholder_gate: str = "Gi",
-) -> str:
-
-    from pygsti.tools import internalgates as itgs
-
-    try:
-        from qiskit import QuantumCircuit
-    except ImportError as e:
-        raise RuntimeError(
-            "convert_circuit_to_qiskit_draw requires qiskit"
-        ) from e
-
-    if gatename_conversion is None:
-        gatename_conversion, _ = itgs.standard_gatenames_openqasm_conversions(
-            "u3"
-        )
-
-    for lidx in range(circuit.depth):
-        for comp in circuit._layer_components(lidx):
-            if (
-                comp.name.startswith("G")
-                and comp.name not in gatename_conversion
-            ):
-                print(
-                    f"{comp.name} conversion not provided, will be displayed as {placeholder_gate}"
-                )
-                gatename_conversion[comp.name] = gatename_conversion[
-                    placeholder_gate
-                ]
-
-    qasm = circuit.convert_to_openqasm(
-        gatename_conversion=gatename_conversion,
-        qubit_conversion={q: i for i, q in enumerate(circuit.line_labels)},
-        include_delay_on_idle=False,
-    )
-
-    qcirc = QuantumCircuit.from_qasm_str(qasm)
-
-    return qcirc.draw()
