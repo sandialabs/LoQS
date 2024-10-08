@@ -501,8 +501,9 @@ class QuantumProgram(Serializable):
         patch_types = cls.deserialize(
             state["patch_types"], serial_id_to_obj_cache
         )
-        assert isinstance(patch_types, dict)
-        assert all([isinstance(v, QECCode) for v in patch_types.values()])
+        assert isinstance(patch_types, dict | None)
+        if patch_types is not None:
+            assert all([isinstance(v, QECCode) for v in patch_types.values()])
         global_instructions = cls.deserialize(
             state["global_instructions"], serial_id_to_obj_cache
         )
@@ -523,8 +524,9 @@ class QuantumProgram(Serializable):
         state_type = cls.deserialize(
             state["state_type"], serial_id_to_obj_cache
         )
-        assert isinstance(state_type, type)
-        assert issubclass(state_type, BaseQuantumState)
+        assert isinstance(state_type, type | None)
+        if state_type is not None:
+            assert issubclass(state_type, BaseQuantumState)
         name = state["name"]
         shot_histories = cls.deserialize(
             state["shot_histories"], serial_id_to_obj_cache

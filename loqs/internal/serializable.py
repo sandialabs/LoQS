@@ -11,6 +11,7 @@ import importlib
 import inspect
 import json
 import numpy as np
+import re
 import scipy.sparse as sps
 import textwrap
 from typing import Callable, ClassVar
@@ -606,9 +607,9 @@ class Serializable:
         # We need to find the function name
         # Search for last def, then first paren after it
         # Trim "def " and that should be the function name
-        start = src.rfind("def ")
-        end = src.find("(", start)
-        key = src[start + 4 : end]
+        fn_defs = re.findall(r"^def .*\(", src, re.MULTILINE)
+        last_fn_def = fn_defs[-1]
+        key = last_fn_def[4:-1]
 
         # Pull the function out of the executed environment
         return env[key]
@@ -660,16 +661,18 @@ class Serializable:
         # Get all import lines
         with open(srcfile, "r") as f:
             import_lines = []
-            multiline = False
+            multiline = ""
             for line in f.readlines():
-                if multiline:
-                    import_lines[-1] += line
+                if len(multiline):
+                    multiline += line
                     if ")" in line:
-                        multiline = False
+                        import_lines.append(textwrap.dedent(multiline))
+                        multiline = ""
                 elif "import" in line:
-                    import_lines.append(line)
-                    if line.endswith("(\n"):
-                        multiline = True
+                    if "(" in line and ")" not in line:
+                        multiline = line
+                    else:
+                        import_lines.append(textwrap.dedent(line))
 
         # Get all things that are imported
         needed_import_lines = []
