@@ -102,6 +102,16 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     ) -> None:
         self.circuit.delete_lines(qubits_to_delete, delete_straddlers=True)
 
+    def get_possible_discrete_error_locations(self) -> list[tuple[int, int]]:
+        circuit_locations = []
+        for lidx in range(self._circuit.depth):
+            for comp in self._circuit._layer_components(lidx):
+                for q in comp.qubits:
+                    circuit_locations.append(
+                        (lidx, self.qubit_labels.index(q))
+                    )
+        return circuit_locations
+
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         other_circuit: _Circuit = PyGSTiPhysicalCircuit.cast(circuit).circuit
         self.circuit.insert_circuit_inplace(other_circuit, idx)

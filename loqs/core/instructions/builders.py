@@ -377,15 +377,35 @@ def build_physical_circuit_instruction(
         include_outcomes: bool,
         inplace: bool,
         reset_mcms: bool,
+        error_injections: list[tuple[int, str, int]] | None,
     ) -> Frame:
 
+        # Modify circuit for injected errors
+        qubits = circuit.qubit_labels
+        errored_circuit = circuit.copy()
+
+        # Inject errors from the back
+        if error_injections is None:
+            error_injections = []
+        rev_sorted_errors = sorted(
+            error_injections, key=lambda x: x[0], reverse=True
+        )
+        for error in rev_sorted_errors:
+            circuit_backend = type(circuit)
+            error_circuit = circuit_backend(
+                [(error[1], qubits[error[2]])], qubit_labels=qubits
+            )
+            errored_circuit.insert_inplace(error_circuit, error[0])
+
         new_state, outcomes = propagate_state(
-            circuit, model, state, inplace, reset_mcms
+            errored_circuit, model, state, inplace, reset_mcms
         )
 
         data: dict[str, object] = {"state": new_state}
         if include_outcomes:
             data["measurement_outcomes"] = MeasurementOutcomes(outcomes)
+        if len(error_injections):
+            data["errored_circuit"] = errored_circuit
 
         return Frame(data)
 
@@ -395,6 +415,7 @@ def build_physical_circuit_instruction(
         "include_outcomes": include_outcomes,
         "inplace": inplace,
         "reset_mcms": reset_mcms,
+        "error_injections": None,  # Must be specified in label only
     }
     if model is not None:
         data["model"] = model
@@ -463,11 +484,11 @@ def build_repeat_until_success_instruction(
             )
             if target_outcomes is None:
                 # If target outcomes not provided, use all 0s
+                success = True
                 for _, v in outcomes.items():
                     if any([bit for bit in v]):
                         success = False
                         break
-                success = True
             else:
                 success = target_outcomes == inferred_outcomes
         except KeyError:

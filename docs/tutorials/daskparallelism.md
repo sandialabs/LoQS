@@ -53,6 +53,9 @@ os.environ['MKL_NUM_THREADS'] = '1'
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 from collections import Counter
 import numpy as np
 
@@ -70,6 +73,9 @@ While there are many ways to launch a LocalCluster on a single machine with Dask
 We can set many worker options from the client directly, like number of workers, the address of the Dask dashboard, and memory limits.
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 client = Client(n_workers = 2, threads_per_worker=1, memory_limit='2GB')
 # This will give us some info on the cluster, including a link to the dashboard
 client
@@ -80,7 +86,9 @@ client
 Let's get a baseline for what an unparallelized task looks like.
 
 ```{code-cell} ipython3
-
+---
+tags: [skip-exception]
+---
 code_5q = codepack_5_1_3.create_qec_code(circuit_backend=PyGSTiPhysicalCircuit)
 qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
 ideal_model = codepack_5_1_3.create_ideal_model(qubits, model_backend=PyGSTiNoiseModel)
@@ -113,11 +121,17 @@ serial_program = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 serial_program.run(shots=1000)
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 Counter(serial_program.collect_shot_data("logical_measurement", -1))
 ```
 
@@ -126,21 +140,33 @@ Counter(serial_program.collect_shot_data("logical_measurement", -1))
 Now we can throw the Dask client at this to parallelize shot execution.
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 parallel_program = QuantumProgram.from_quantum_program(
     serial_program, name=f"Parallel (2 workers) {serial_program.name}")
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 parallel_program.run(shots=1000, dask_client=client)
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 # Double check we get the same outcome statistics
 Counter(parallel_program.collect_shot_data("logical_measurement", -1))
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 # In fact, even shot order should be the same
 parallel_program.collect_shot_data("logical_measurement", -1) == serial_program.collect_shot_data("logical_measurement", -1)
 ```
@@ -154,11 +180,17 @@ Notice that we get a small speedup, but nowhere near the expected 2x speedup of 
 We can attempt to cut down on some of this by manually batching things ourselves. There is a tradeoff here - fewer batches means less scheduler overhead, but also less ability to load balance between the workers. Above we have one extreme, where every job is its own tasks. We can also try the other extreme, where we only have two batches, one per worker. Because we expect the shots to take roughly the same amount of time, we expect this to have reasonable performance and both workers to finish around the same time.
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 parallel_program_batched = QuantumProgram.from_quantum_program(
     serial_program, name=f"Parallel (2 workers, batched) {serial_program.name}")
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 parallel_program_batched.run(shots=1000, dask_client=client, dask_batch_size=500)
 ```
@@ -177,16 +209,25 @@ Running on two workers is sort of underwhelming due to the overhead. While this 
 We can try this by first scaling up our cluster and then rerunning the computations.
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 # Scale up to 8 workers
 client.cluster.scale(8)
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 parallel_program_8 = QuantumProgram.from_quantum_program(
     serial_program, name=f"Parallel (8 workers) {serial_program.name}")
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 parallel_program_8.run(shots=1000, dask_client=client)
 ```
@@ -198,11 +239,17 @@ We can see that we are getting nice speedups. Not 8x, but a factor of 2 speedup 
 We can also try batching for the 8 workers also.
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 parallel_program_8_batched = QuantumProgram.from_quantum_program(
     serial_program, name=f"Parallel (8 workers, batched) {serial_program.name}")
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 parallel_program_8_batched.run(shots=1000, dask_client=client, dask_batch_size=125)
 ```
@@ -220,6 +267,9 @@ Often we have more than one program we want to run, e.g. logical characterizatio
 Instead, we can imagine creating batches over some section of shots for *all* programs. This can be annoying to set up, so we provide a handy utility to do this in `loqs.tools.dasktools`. We also borrow from the LoGST tutorial for the example workload.
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 from pygsti.modelpacks import smq1Q_XZ as modelpack
 
 from loqs.tools import pygstitools as pt
@@ -227,6 +277,9 @@ from loqs.tools import dasktools
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 gst_design = modelpack.create_gst_experiment_design(max_max_length=2, qubit_labels=["Q0"])
 gst_model = modelpack.target_model(qubit_labels=["Q0"]) # 1 physical qubit model
 
@@ -259,21 +312,33 @@ serial_programs = pt.convert_edesign_to_programs(gst_design, gst_model, physical
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 # We have this many programs to run!
 len(serial_programs)
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 for program in serial_programs:
     program.run(shots=40)
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 parallel_programs = pt.convert_edesign_to_programs(gst_design, gst_model, physical_to_logical, **program_kwargs)
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 %%time
 dasktools.run_program_list(parallel_programs, client, shots_per_program=40, shots_per_program_per_batch=5)
 
@@ -282,6 +347,9 @@ dasktools.run_program_list(parallel_programs, client, shots_per_program=40, shot
 ```
 
 ```{code-cell} ipython3
+---
+tags: [skip-exception]
+---
 # And always nice to shutdown your cluster
 client.shutdown()
 ```

@@ -140,6 +140,16 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
                 qubits_to_keep.append(q)
         self._qubit_labels = qubits_to_keep
 
+    def get_possible_discrete_error_locations(self) -> list[tuple[int, int]]:
+        circuit_locations = []
+        for lidx in range(len(self._circuit)):
+            for comp in self._circuit[lidx]:
+                for q in comp[1]:
+                    circuit_locations.append(
+                        (lidx, self.qubit_labels.index(q))
+                    )
+        return circuit_locations
+
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         other_circuit = ListPhysicalCircuit.cast(circuit)
         self._circuit = (

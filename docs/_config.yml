@@ -8,7 +8,7 @@ logo: logo.png
 # Cache executed notebooks between builds.
 # See https://jupyterbook.org/content/execute.html
 execute:
-  execute_notebooks: 'off'
+  execute_notebooks: 'cache'
 
 # Define the name of the latex output file for PDF builds
 latex:

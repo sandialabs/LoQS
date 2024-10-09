@@ -240,6 +240,17 @@ class BasePhysicalCircuit(Castable, Serializable):
         # TODO: Check qubits available
         pass
 
+    @abstractmethod
+    def get_possible_discrete_error_locations(self) -> list[tuple[int, int]]:
+        """Return all possible circuit locations where errors can be injected.
+
+        Returns
+        -------
+            List of 2-tuples of (layer index, qubit index) describing all
+            possible circuit locations where a single-qubit error can be injected.
+        """
+        pass
+
     def insert(self: T, circuit: BasePhysicalCircuit, idx: int) -> T:
         """Insert another circuit to a copy of this circuit.
 

@@ -171,6 +171,7 @@ def create_qec_code(
     )
 
     # Logical K (transversal)
+    # TODO: Patch update
     # Fig 2a of arxiv:1603.03948
     logical_K_circ = circuit_backend(
         [[("Gk", q) for q in qubits[2:]]], qubit_labels=qubits
@@ -182,6 +183,7 @@ def create_qec_code(
     )
 
     # Logical H (transversal + permute)
+    # TODO: Patch update
     # Fig 2b of arxiv:1603.03948
     logical_H_circ = circuit_backend(
         [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
@@ -327,8 +329,8 @@ def create_qec_code(
     instructions["Non-FT Minus Unprep"] = (
         builders.build_physical_circuit_instruction(
             state_decoder_circ,
+            include_outcomes=True,
             name="Non-FT state decoder circuit",
-            reset_mcms=False,
         )
     )
 
@@ -561,6 +563,17 @@ def _create_adaptive_measure_instruction(
                     decoded_pstr = qt.compose_pstrs(
                         decoded_pstr, "".join(Z_pstr)
                     )
+                elif p == "Y":
+                    # This will trigger an X-like and Z-like error
+                    Y_pstr = [
+                        "I",
+                    ] * len(pstr)
+                    Y_pstr[(i - 1) % len(pstr)] = "X"
+                    Y_pstr[i] = "X"
+                    Y_pstr[(i + 1) % len(pstr)] = "X"
+                    decoded_pstr = qt.compose_pstrs(
+                        decoded_pstr, "".join(Y_pstr)
+                    )
             return decoded_pstr
 
         # Push possible errors through decoding circuit
@@ -589,8 +602,8 @@ def _create_adaptive_measure_instruction(
         # Convert back to bitstring
         final_bitstring = [int(p in "XY") for p in classically_corrected_pstr]
 
-        # An odd parity = logical 1, even parity = logical 0
-        logical_value = sum(final_bitstring) % 2
+        # An odd parity = logical 0, even parity = logical 1
+        logical_value = (sum(final_bitstring) + 1) % 2
 
         return Frame(
             {
@@ -1176,14 +1189,14 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # This actually matches Fig 2b of arXiv:1705.02329 as well
     XZZXI_circ = circuit_backend(
         [
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Gcnot", "A0", "D0")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D1")],
             [("Gcphase", "A0", "D2")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D3")],
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
@@ -1200,14 +1213,14 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # IXZZX check
     IXZZX_circ = circuit_backend(
         [
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Gcnot", "A0", "D1")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D2")],
             [("Gcphase", "A0", "D3")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D4")],
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
@@ -1224,14 +1237,14 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # XIXZZ check
     XIXZZ_circ = circuit_backend(
         [
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Gcnot", "A0", "D0")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D2")],
             [("Gcphase", "A0", "D3")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D4")],
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
@@ -1248,14 +1261,14 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # ZXIXZ check
     ZXIXZ_circ = circuit_backend(
         [
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Gcphase", "A0", "D0")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D1")],
             [("Gcnot", "A0", "D3")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D4")],
-            [("Gh", "A0"), ("Gh", "A1")],
+            [("Gh", "A0")],
             [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
@@ -1323,7 +1336,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
                 "Unflagged XZZXI Check",
                 "Unflagged IXZZX Check",
                 "Unflagged XIXZZ Check",
-                "Unflagged ZXIZX Check",
+                "Unflagged ZXIXZ Check",
                 f"Flagged {stabilizer} Decoder",
             ]
         elif syndrome:
@@ -1333,7 +1346,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
                 "Unflagged XZZXI Check",
                 "Unflagged IXZZX Check",
                 "Unflagged XIXZZ Check",
-                "Unflagged ZXIZX Check",
+                "Unflagged ZXIXZ Check",
                 "Unflagged Decoder",
             ]
         else:
@@ -1410,7 +1423,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Flagged ZXIXZ Feed-Forward"] = Instruction(
         flagged_feedforward_apply_fn,
         {
-            "stabilizer": "ZXIXZZ",
+            "stabilizer": "ZXIXZ",
             "next_stabilizer": "TERMINATE",
             "flag_qubit": "A1",
             "syndrome_qubit": "A0",

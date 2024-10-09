@@ -224,6 +224,7 @@ class QuantumProgram(Serializable):
         max_frame_limit: int = 100,
         dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
+        verbose: bool = True,
     ):
         """TODO"""
         # Take out shot histories to avoid unnecessary copies during dask.delayed
@@ -251,7 +252,9 @@ class QuantumProgram(Serializable):
         if dask_client is None:
             # Execute serially
             shot_results = []
-            for task in tqdm(tasks, f"Program {self.name}"):
+            for task in tqdm(
+                tasks, f"Program {self.name}", disable=not verbose
+            ):
                 result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
         else:
