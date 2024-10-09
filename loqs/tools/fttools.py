@@ -1,10 +1,10 @@
 """TODO"""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 
 from tqdm import tqdm
-from loqs.backends.circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
 from loqs.core.instructions import Instruction, InstructionLabel
 

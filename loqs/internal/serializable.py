@@ -16,6 +16,8 @@ import scipy.sparse as sps
 import textwrap
 from typing import Callable, ClassVar
 
+from loqs.internal import SerializableViewer
+
 class_location_changes = (
     {}
 )  # (module, class) mapping from OLD to NEW locations
@@ -270,6 +272,23 @@ class Serializable:
 
     ## PUBLIC INSTANCE FUNCTIONS
     # Primarily for serializing
+
+    def display(self):
+        """Launch an interactive viewer for the object.
+
+        This is a blocking operation until the viewer
+        window is closed.
+        """
+        data = self.to_serialization()
+
+        title = f"{self.__class__.__name__} "
+        obj_name = getattr(self, "name", None)
+        if obj_name is not None:
+            title += f"({obj_name}) "
+        title += "Viewer"
+
+        app = SerializableViewer(data, title)
+        app.mainloop()
 
     def dump(self, f, format="json", **format_kwargs):
         """

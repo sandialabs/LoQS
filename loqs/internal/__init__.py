@@ -2,4 +2,5 @@
 """
 
 from .castable import Castable
+from .serializableviewer import SerializableViewer
 from .serializable import Serializable
