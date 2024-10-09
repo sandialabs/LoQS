@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions.instruction import Instruction
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 T = TypeVar("T", bound="InstructionLabel")
@@ -17,7 +17,7 @@ InstructionLabelCastableTypes: TypeAlias = (
 )
 
 
-class InstructionLabel(Castable, Serializable):
+class InstructionLabel(Castable, Displayable):
     """TODO"""
 
     instruction: Instruction | None

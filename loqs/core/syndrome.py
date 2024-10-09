@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, TypeVar
 
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 T = TypeVar("T", bound="SyndromeLabel")
 U = TypeVar("U", bound="PauliFrame")
@@ -19,7 +19,7 @@ SyndromeLabelCastableTypes: TypeAlias = (
 
 
 @dataclass
-class SyndromeLabel(Castable, Serializable):
+class SyndromeLabel(Castable, Displayable):
     """Label that indicates which past outcome was a syndrome bit."""
 
     qubit_label: str
@@ -82,7 +82,7 @@ class SyndromeLabel(Castable, Serializable):
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
 
 
-class PauliFrame(Castable, Serializable):
+class PauliFrame(Castable, Displayable):
     """TODO"""
 
     qubit_labels: list[str]

@@ -8,14 +8,14 @@ from typing import ClassVar, TypeVar
 
 from loqs.core.instructions import Instruction
 from loqs.core.syndrome import PauliFrame, PauliFrameCastableTypes
-from loqs.internal import Serializable
+from loqs.internal import Displayable
 
 
 T = TypeVar("T", bound="QECCode")
 U = TypeVar("U", bound="QECCodePatch")
 
 
-class QECCode(Serializable):
+class QECCode(Displayable):
     """TODO"""
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
@@ -98,7 +98,7 @@ class QECCode(Serializable):
         return state
 
 
-class QECCodePatch(Mapping[str, Instruction], Serializable):
+class QECCodePatch(Mapping[str, Instruction], Displayable):
     """TODO"""
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True

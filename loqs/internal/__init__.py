@@ -2,5 +2,7 @@
 """
 
 from .castable import Castable
-from .serializableviewer import SerializableViewer
 from .serializable import Serializable
+
+# Must be after Serializable
+from .displayable import Displayable

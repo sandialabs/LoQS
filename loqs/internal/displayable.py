@@ -7,8 +7,36 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Mapping
 
+from loqs.internal import Serializable
 
-class SerializableViewer(tk.Tk):
+
+class Displayable(Serializable):
+    """Base class for all interactively displayable objects.
+
+    This uses the dict version of objects output by
+    `to_serializable()` and a tkinter Treeview to have
+    an interactive navigatable window.
+    """
+
+    def display(self):
+        """Launch an interactive viewer for the object.
+
+        This is a blocking operation until the viewer
+        window is closed.
+        """
+        data = self.to_serialization()
+
+        title = f"{self.__class__.__name__} "
+        obj_name = getattr(self, "name", None)
+        if obj_name is not None:
+            title += f"({obj_name}) "
+        title += "Viewer"
+
+        app = DisplayableViewer(data, title)
+        app.mainloop()
+
+
+class DisplayableViewer(tk.Tk):
     """TODO"""
 
     def __init__(self, data: Mapping, title: str = "LoQS Object Viewer"):
@@ -34,18 +62,34 @@ class SerializableViewer(tk.Tk):
         self.tree.heading("Value", text="Value", anchor=tk.W)
 
         # Insert data into the treeview
-        self.insert_items("", self.data, depth=1)
+        self.insert_items("", self.data)
 
         self.tree.bind("<Double-1>", self.on_item_click)
 
-    def insert_items(self, parent_id, item, depth=0):
+    def insert_items(self, parent_id, item, depth=1):
         """Recursively insert dictionary/list items into the treeview with indentation."""
         if isinstance(item, (list, tuple)):
-            item = {str(i): v for i, v in enumerate(item)}
+            list_dict = {}
+            for i, v in enumerate(item):
+                if isinstance(v, dict) and "class" in v:
+                    # This is probably a serialized object
+                    key = f"Index {i}: {v['class'].split('.')[-1]}"
+
+                    # Try to get a nice name
+                    name = v.get("name", None)
+                    if name is None:
+                        name = v.get("log", None)
+
+                    if name is not None:
+                        key += f" {name}"
+                else:
+                    key = f"Index {i}"
+                list_dict[key] = v
+            item = list_dict
 
         for key, value in item.items():
             # Create an indentation string based on the depth
-            indentation = "    " * depth  # 4 spaces for each depth level
+            indentation = "      " * depth  # 6 spaces for each depth level
             if isinstance(value, (dict, list, tuple)):
                 # If the value is a dictionary, insert it as a parent item
                 child_id = self.tree.insert(
