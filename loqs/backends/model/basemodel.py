@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 class GateRep(StrEnum):
@@ -28,7 +28,7 @@ class InstrumentRep(StrEnum):
     # TODO: PyGSTi instruments as a dict?
 
 
-class BaseNoiseModel(Castable, Serializable):
+class BaseNoiseModel(Castable, Displayable):
     """Base class for an object that holds noisy operation specifications.
 
     This class is primarily designed to translate between a circuit description

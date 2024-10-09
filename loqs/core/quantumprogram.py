@@ -27,13 +27,13 @@ from loqs.core.instructions.instructionstack import (
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
-from loqs.internal import Serializable
+from loqs.internal import Displayable
 
 
 T = TypeVar("T", bound="QuantumProgram")
 
 
-class QuantumProgram(Serializable):
+class QuantumProgram(Displayable):
     """A container for the main quantum program to be executed."""
 
     def __init__(

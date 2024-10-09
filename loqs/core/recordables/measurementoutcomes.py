@@ -8,7 +8,7 @@ from typing import Literal, TypeAlias, TypeVar
 
 from loqs.backends.state.basestate import OutcomeDict
 from loqs.core.syndrome import PauliFrame
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 T = TypeVar("T", bound="MeasurementOutcomes")
@@ -18,7 +18,7 @@ MeasurementOutcomesCastableTypes: TypeAlias = (
 )
 
 
-class MeasurementOutcomes(Mapping[str, list[int]], Castable, Serializable):
+class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
     """TODO"""
 
     outcomes: OutcomeDict

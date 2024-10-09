@@ -9,7 +9,7 @@ import warnings
 from collections.abc import Iterator, Mapping
 from typing import TypeAlias, TypeVar
 
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 T = TypeVar("T", bound="Frame")
@@ -18,7 +18,7 @@ FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
 """Things that can be cast to :class:`Frame`."""
 
 
-class Frame(Mapping[str, object], Castable, Serializable):
+class Frame(Mapping[str, object], Castable, Displayable):
     """A record of the state of the simulation at a given time.
 
     The core functionality is a dict that relates keys to stateful objects.

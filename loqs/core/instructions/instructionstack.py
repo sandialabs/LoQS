@@ -11,7 +11,7 @@ from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 T = TypeVar("T", bound="InstructionStack")
@@ -21,7 +21,7 @@ InstructionStackCastableTypes: TypeAlias = (
 )
 
 
-class InstructionStack(Sequence[InstructionLabel], Castable, Serializable):
+class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 

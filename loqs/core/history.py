@@ -8,7 +8,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Literal, TypeAlias, TypeVar, overload
 
 from loqs.core.frame import Frame, FrameCastableTypes
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 T = TypeVar("T", bound="History")
@@ -19,7 +19,7 @@ HistoryCastableTypes: TypeAlias = (
 """Things that can be cast to :class:`History`."""
 
 
-class History(Sequence[Frame], Castable, Serializable):
+class History(Sequence[Frame], Castable, Displayable):
     """A semi-mutable list of :class:`Frame` objects.
 
     The intention is to provide a list-like object where existing

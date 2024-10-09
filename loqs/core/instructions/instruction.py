@@ -18,7 +18,7 @@ from typing import (
 import warnings
 
 from loqs.core import Frame
-from loqs.internal.serializable import Serializable
+from loqs.internal import Displayable
 
 
 T = TypeVar("T", bound="Instruction")
@@ -50,7 +50,7 @@ DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
 """
 
 
-class Instruction(Serializable):
+class Instruction(Displayable):
     """TODO"""
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True

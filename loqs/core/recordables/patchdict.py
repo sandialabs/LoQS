@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core import QECCodePatch
-from loqs.internal import Castable, Serializable
+from loqs.internal import Castable, Displayable
 
 
 T = TypeVar("T", bound="PatchDict")
@@ -17,7 +17,7 @@ PatchDictCastableTypes: TypeAlias = (
 )
 
 
-class PatchDict(MutableMapping[str, QECCodePatch], Castable, Serializable):
+class PatchDict(MutableMapping[str, QECCodePatch], Castable, Displayable):
     """TODO"""
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
