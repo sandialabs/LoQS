@@ -663,14 +663,17 @@ def _create_adaptive_measure_instruction_part_I(
         F1 = measurement_outcomes[flag_qubit][0]
 
         # Use the Pauli frame to infer the correction on M1
+        # Also, we flip M1 at this point. Measuring 0 means we are in the minus state,
+        # but this should correspond to a 1 logical outcome
         # The check is XZIIZ, so Z0, X1, or X4 errors will flip it
+        # Qubit indices offset by 2 for A0/A1
         inferred_M1 = (
             sum(
                 [
-                    M1,
-                    pauli_frame.get_bit("Z", qubits[0]),
-                    pauli_frame.get_bit("X", qubits[1]),
-                    pauli_frame.get_bit("X", qubits[4]),
+                    M1 + 1,
+                    pauli_frame.get_bit("Z", qubits[2]),
+                    pauli_frame.get_bit("X", qubits[3]),
+                    pauli_frame.get_bit("X", qubits[6]),
                 ]
             )
             % 2
@@ -773,15 +776,18 @@ def _create_adaptive_measure_instruction_part_II(
         M2 = measurement_outcomes[meas_qubit][0]
         F2 = measurement_outcomes[flag_qubit][0]
 
-        # Use the Pauli frame to infer the correction on M1
+        # Use the Pauli frame to infer the correction on M2
+        # Also, we flip M2 at this point. Measuring 0 means we are in the minus state,
+        # but this should correspond to a 1 logical outcome
         # The check is ZXZII, so X0, Z1, or X2 errors will flip it
+        # Qubit indices offset by 2 for A0/A1
         inferred_M2 = (
             sum(
                 [
-                    M2,
-                    pauli_frame.get_bit("X", qubits[0]),
-                    pauli_frame.get_bit("Z", qubits[1]),
+                    M2 + 1,
                     pauli_frame.get_bit("X", qubits[2]),
+                    pauli_frame.get_bit("Z", qubits[3]),
+                    pauli_frame.get_bit("X", qubits[4]),
                 ]
             )
             % 2
@@ -847,8 +853,8 @@ def _create_adaptive_measure_instruction_part_II(
         {"qubits": qubits},
         map_qubits_fn,
         param_priorities={
-            "inferred_M1": "history[-2]"
-        },  # Look back 2 frames for M1
+            "inferred_M1": ["history[-2]"]  # Look back 2 frames for M1
+        },
         name="FT Logical X Measure Part II Feed-Forward",
     )
 
@@ -896,14 +902,17 @@ def _create_adaptive_measure_instruction_part_III(
         F3 = measurement_outcomes[flag_qubit][0]
 
         # Use the Pauli frame to infer the correction on M3
+        # Also, we flip M3 at this point. Measuring 0 means we are in the minus state,
+        # but this should correspond to a 1 logical outcome
         # The check is IIZXZ, so X2, Z3, or X4 errors will flip it
+        # Qubit indices offset by 2 for A0/A1
         inferred_M3 = (
             sum(
                 [
-                    M3,
-                    pauli_frame.get_bit("X", qubits[0]),
-                    pauli_frame.get_bit("Z", qubits[1]),
-                    pauli_frame.get_bit("X", qubits[2]),
+                    M3 + 1,
+                    pauli_frame.get_bit("X", qubits[4]),
+                    pauli_frame.get_bit("Z", qubits[5]),
+                    pauli_frame.get_bit("X", qubits[6]),
                 ]
             )
             % 2
@@ -973,8 +982,8 @@ def _create_adaptive_measure_instruction_part_III(
         {"qubits": qubits},
         map_qubits_fn,
         param_priorities={
-            "inferred_M1": "history[-4]",  # Look back 4 frames for M1
-            "inferred_M2": "history[-2]",  # and 2 frames for M2
+            "inferred_M1": ["history[-4]"],  # Look back 4 frames for M1
+            "inferred_M2": ["history[-2]"],  # and 2 frames for M2
         },
         name="FT Logical X Measure Part III Feed-Forward",
     )
@@ -1167,15 +1176,15 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # This actually matches Fig 2b of arXiv:1705.02329 as well
     XZZXI_circ = circuit_backend(
         [
-            [("Gh", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
             [("Gcnot", "A0", "D0")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D1")],
             [("Gcphase", "A0", "D2")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D3")],
-            [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
+            [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1191,15 +1200,15 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # IXZZX check
     IXZZX_circ = circuit_backend(
         [
-            [("Gh", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
             [("Gcnot", "A0", "D1")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D2")],
             [("Gcphase", "A0", "D3")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D4")],
-            [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
+            [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1215,15 +1224,15 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # XIXZZ check
     XIXZZ_circ = circuit_backend(
         [
-            [("Gh", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
             [("Gcnot", "A0", "D0")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D2")],
             [("Gcphase", "A0", "D3")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D4")],
-            [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
+            [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1239,15 +1248,15 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     # ZXIXZ check
     ZXIXZ_circ = circuit_backend(
         [
-            [("Gh", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
             [("Gcphase", "A0", "D0")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D1")],
             [("Gcnot", "A0", "D3")],
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D4")],
-            [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Gh", "A0"), ("Gh", "A1")],
+            [("Iz", "A0"), ("Iz", "A1")],
         ],
         qubit_labels=qubits,
     )
