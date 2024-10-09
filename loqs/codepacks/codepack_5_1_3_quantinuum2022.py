@@ -15,10 +15,9 @@ Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
 
 from collections.abc import Sequence
 import itertools
-from typing import Literal, Mapping
+from typing import Mapping
 import numpy as np
 
-from loqs.backends import propagate_state
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.backends.model.basemodel import (
@@ -28,14 +27,12 @@ from loqs.backends.model.basemodel import (
 )
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.backends.state.basestate import BaseQuantumState
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.qeccode import PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 import loqs.tools.pygstitools as pt
@@ -272,48 +269,39 @@ def create_qec_code(
         patch_label: str,
         patches: PatchDict,
         measurement_outcomes: MeasurementOutcomes,
-        measurement_type: Literal["X"] | Literal["Z"],
     ) -> Frame:
         # Get pauli frame
         pauli_frame = patches[patch_label].pauli_frame
 
         # Compute inferred bitstring
         inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            measurement_type, pauli_frame
+            "Z", pauli_frame
         )
         inferred_bitstring = [v[0] for v in inferred_outcomes.values()]
 
         logical_value = sum(inferred_bitstring) % 2
         return Frame({"logical_measurement": logical_value})
 
-    nonft_Z_logical_meas = Instruction(
+    nonft_logical_meas = Instruction(
         nonft_logical_meas_apply_fn,
-        data={"measurement_type": "Z"},
-        name="Non-FT Logical Measurement",
-    )
-
-    nonft_X_logical_meas = Instruction(
-        nonft_logical_meas_apply_fn,
-        data={"measurement_type": "X"},
         name="Non-FT Logical Measurement",
     )
 
     instructions["Non-FT Logical Z Measure"] = (
         builders.build_composite_instruction(
-            [prime_basis_Z_meas, nonft_Z_logical_meas],
+            [prime_basis_Z_meas, nonft_logical_meas],
             name="Non-FT logical Z measurement (via prime basis measurement)",
         )
     )
 
     instructions["Non-FT Logical X Measure"] = (
         builders.build_composite_instruction(
-            [prime_basis_X_meas, nonft_X_logical_meas],
+            [prime_basis_X_meas, nonft_logical_meas],
             name="Non-FT logical X measurement (via prime basis measurement)",
         )
     )
 
     ### DECODING CIRCUIT
-    # TODO: Split into decoding + raw Z measure?
     state_decoder_circ = circuit_backend(
         [
             [("Gcphase", "D0", "D4")],
@@ -494,41 +482,150 @@ def _create_adaptive_measure_instruction(
 
     # For an in-depth documentation of this function, check out
     # the Building a Complex Feed-Forward Instruction tutorial
+    # TODO: Update this tutorial
 
-    ## PART I
-    def partI_apply_fn(
-        circuit: BasePhysicalCircuit,
-        model: BaseNoiseModel,
-        state: BaseQuantumState,
-        inplace: bool,
-        stack: InstructionStack,
+    _create_adaptive_measure_instruction_part_I(
+        instructions, qubits, circuit_backend
+    )
+
+    _create_adaptive_measure_instruction_part_II(
+        instructions, qubits, circuit_backend
+    )
+
+    _create_adaptive_measure_instruction_part_III(
+        instructions, qubits, circuit_backend
+    )
+
+    ## CLASSICAL DECODER
+    # Not part of the figure, but described in the figure caption
+    # More details can also be found in Appendix B.2 of arxiv: 1705.02329
+    def classical_decoder_apply_fn(
         patch_label: str,
+        patches: PatchDict,
+        measurement_outcomes: MeasurementOutcomes,
+        flagged_check: str | None,
+        flagged_check_order: list[int] | None,
     ) -> Frame:
-        # Run circuit
-        new_state, outcomes = propagate_state(circuit, model, state, inplace)
 
-        # Do classical feed forward
-        flag_qubit = circuit.qubit_labels[1]
-        F1 = outcomes[flag_qubit][0]
-        if F1 == 0:
-            # We go to part II (forward reference, must match key later)
-            next_instruction = "FT Logical X Measure Part II"
+        # Get pauli frame
+        pauli_frame = patches[patch_label].pauli_frame
+        qubits = pauli_frame.qubit_labels
+
+        # Compute inferred bitstring
+        data_inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
+            "Z", pauli_frame
+        )
+        data_inferred_bitstring = [
+            data_inferred_outcomes[q][0] for q in qubits
+        ]
+
+        # Compute syndromes classically
+        # We only have Z basis measurements, so any 1s we see is like an X error
+        data_inferred_pstr = "".join(
+            ["I" if b == 0 else "X" for b in data_inferred_bitstring]
+        )
+
+        stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
+        if flagged_check is None:
+            # This was a measurement mismatch, so we are correcting a data error
+            # i.e. all possible weight-1 errors on data qubits
+            predecoded_errors = qt.get_weight_1_errors(5)
         else:
-            # We go to decoding circuit  (forward reference, must match key later)
-            next_instruction = "Non-FT Minus Unprep"
+            # We are not a data error, but a measurement hook error
+            # Compute the hook errors based on the failed flag check
+            predecoded_errors = qt.get_hook_errors_in_flagged_check(
+                flagged_check, flagged_check_order
+            )
 
-        # We need to make sure and feed the patch label forward
-        new_label = InstructionLabel(next_instruction, patch_label)
-        new_stack = stack.insert_instruction(0, new_label)
+        def compute_decoded_bitstring(pstr: str) -> str:
+            decoded_pstr = "I" * len(pstr)
+            for i, p in enumerate(pstr):
+                if p == "X":
+                    # This will trigger X errors on qubits above and below
+                    # (with periodic boundary conditions)
+                    X_pstr = [
+                        "I",
+                    ] * len(pstr)
+                    X_pstr[(i - 1) % len(pstr)] = "X"
+                    X_pstr[(i + 1) % len(pstr)] = "X"
 
-        # Return new frame
-        frame_data = {
-            "stack": new_stack,
-            "state": new_state,
-            "measurement_outcomes": MeasurementOutcomes(outcomes),
-        }
-        return Frame(frame_data)
+                    decoded_pstr = qt.compose_pstrs(
+                        decoded_pstr, "".join(X_pstr)
+                    )
+                elif p == "Z":
+                    # This will trigger an X error on this qubit
+                    Z_pstr = [
+                        "I",
+                    ] * len(pstr)
+                    Z_pstr[i] = "X"
+                    decoded_pstr = qt.compose_pstrs(
+                        decoded_pstr, "".join(Z_pstr)
+                    )
+            return decoded_pstr
 
+        # Push possible errors through decoding circuit
+        decoded_errors = [
+            compute_decoded_bitstring(err) for err in predecoded_errors
+        ]
+
+        # Create lookup table from the decoded errors
+        syndrome_dict = qt.get_syndrome_dict_from_stabilizers_and_pstrs(
+            stabilizers, decoded_errors
+        )
+
+        # Compute syndrome
+        syndrome = qt.get_syndrome_from_stabilizers_and_pstr(
+            stabilizers, data_inferred_pstr
+        )
+
+        # Look up correction (directly from syndrome since we applied full frame above)
+        classical_correction = syndrome_dict[syndrome][0]
+
+        # Apply correction
+        classically_corrected_pstr = qt.compose_pstrs(
+            data_inferred_pstr, classical_correction
+        )
+
+        # Convert back to bitstring
+        final_bitstring = [int(p in "XY") for p in classically_corrected_pstr]
+
+        # An odd parity = logical 1, even parity = logical 0
+        logical_value = sum(final_bitstring) % 2
+
+        return Frame(
+            {
+                "logical_measurement": logical_value,
+                "stage": "Classical Decoder",
+                "precorrected_inferred_outcomes": data_inferred_bitstring,
+                "possible_predecoded_errors": predecoded_errors,
+                "possible_decoded_errors": decoded_errors,
+                "classical_syndrome": syndrome,
+                "classical_correction": classical_correction,
+                "corrected_outcomes": final_bitstring,
+            }
+        )
+
+    instructions["FT Logical X Measure Classical Decoder"] = Instruction(
+        classical_decoder_apply_fn,
+        name="FT Logical X Measure Classical Decoder",
+    )
+
+    # Shortcut composite function to kick off the adaptive measurement
+    instructions["FT Logical X Measure"] = (
+        builders.build_composite_instruction(
+            [
+                instructions["FT Logical X Measure Part I Circuit"],
+                instructions["FT Logical X Measure Part I Feed-Forward"],
+            ],
+            name="FT Logical X Measure",
+        )
+    )
+
+
+def _create_adaptive_measure_instruction_part_I(
+    instructions, qubits, circuit_backend
+):
+    ## PART I of Fig 13 for arxiv:2208.01863
     measI_circ = circuit_backend(
         [
             ("Gh", "A0"),
@@ -542,73 +639,103 @@ def _create_adaptive_measure_instruction(
         ],
         qubit_labels=qubits,
     )
+    instructions["FT Logical X Measure Part I Circuit"] = (
+        builders.build_physical_circuit_instruction(
+            measI_circ,
+            include_outcomes=True,
+            name="FT Logical X Measure Part I Circuit",
+        )
+    )
 
-    partI_data = {
-        "circuit": measI_circ,
-        "inplace": True,
-    }
+    def partI_feedforward_apply_fn(
+        patch_label: str,
+        patches: PatchDict,
+        stack: InstructionStack,
+        measurement_outcomes: MeasurementOutcomes,
+        qubits: list[str],
+    ) -> Frame:
+        pauli_frame = patches[patch_label].pauli_frame
 
-    # Will be good for all three parts
+        # Pull out measurement and flag
+        meas_qubit = qubits[0]
+        flag_qubit = qubits[1]
+        M1 = measurement_outcomes[meas_qubit][0]
+        F1 = measurement_outcomes[flag_qubit][0]
+
+        # Use the Pauli frame to infer the correction on M1
+        # The check is XZIIZ, so Z0, X1, or X4 errors will flip it
+        inferred_M1 = (
+            sum(
+                [
+                    M1,
+                    pauli_frame.get_bit("Z", qubits[0]),
+                    pauli_frame.get_bit("X", qubits[1]),
+                    pauli_frame.get_bit("X", qubits[4]),
+                ]
+            )
+            % 2
+        )
+
+        # Do classical feed forward
+        if F1 == 0:
+            # We go to part II (forward reference, must match key later)
+            ilbls = [
+                ("FT Logical X Measure Part II Circuit", patch_label),
+                ("FT Logical X Measure Part II Feed-Forward", patch_label),
+            ]
+        else:
+            # We go to decoding circuit (forward references must match key later)
+            # This is a flag failure, so pass that information in
+            # We also need to pass a nonstandard order for this circuit
+            # (we measure Z_4 first, then X_0 and Z_1)
+            kwargs = {
+                "flagged_check": "XZIIZ",
+                "flagged_check_order": [4, 0, 1],
+            }
+            ilbls = [
+                ("Non-FT Minus Unprep", patch_label),
+                (
+                    "FT Logical X Measure Classical Decoder",
+                    patch_label,
+                    (),
+                    kwargs,
+                ),
+            ]
+
+        for i, ilbl in enumerate(ilbls):
+            new_label = InstructionLabel.cast(ilbl)
+            stack = stack.insert_instruction(i, new_label)
+
+        return Frame(
+            {
+                "stack": stack,
+                "F1": F1,
+                "raw_M1": M1,
+                "inferred_M1": inferred_M1,
+            }
+        )
+
     def map_qubits_fn(
         qubit_mapping: Mapping[str, str],
-        circuit: BasePhysicalCircuit,
+        qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
-        new_kwargs["circuit"] = circuit.map_qubit_labels(qubit_mapping)
+        new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
         return new_kwargs
 
-    # We are not calling this Part I because it will actually perform the whole operation
-    instructions["FT Logical X Measure"] = Instruction(
-        partI_apply_fn,
-        partI_data,
+    instructions["FT Logical X Measure Part I Feed-Forward"] = Instruction(
+        partI_feedforward_apply_fn,
+        {"qubits": qubits},
         map_qubits_fn,
         name="Part I of adaptive logical measurement",
     )
 
-    ## PART II
-    def partII_apply_fn(
-        circuit: BasePhysicalCircuit,
-        model: BaseNoiseModel,
-        state: BaseQuantumState,
-        inplace: bool,
-        previous_outcome: MeasurementOutcomes,
-        stack: InstructionStack,
-        patch_label: str,
-    ) -> Frame:
-        # Run circuit
-        new_state, outcomes = propagate_state(circuit, model, state, inplace)
 
-        # Pull measurements/flags
-        meas_qubit = circuit.qubit_labels[0]
-        flag_qubit = circuit.qubit_labels[1]
-        F2 = outcomes[flag_qubit][0]
-        M1 = previous_outcome[meas_qubit][0]
-        M2 = outcomes[meas_qubit][0]
-
-        # Do classical feed forward
-        if F2 != 0:
-            # We go to termination (forward reference, must match key later)
-            next_instruction = "FT Logical X Measure Termination"
-        elif M1 == M2:
-            # We go to part III (forward reference, must match key later)
-            next_instruction = "FT Logical X Measure Part III"
-        else:
-            # We go to decoding circuit (forward reference, must match key later)
-            next_instruction = "Non-FT Minus Unprep"
-
-        # We need to make sure and feed the patch label forward
-        new_label = InstructionLabel(next_instruction, patch_label)
-        new_stack = stack.insert_instruction(0, new_label)
-
-        # Return new frame
-        frame_data = {
-            "stack": new_stack,
-            "state": new_state,
-            "measurement_outcomes": MeasurementOutcomes(outcomes),
-        }
-        return Frame(frame_data)
-
+def _create_adaptive_measure_instruction_part_II(
+    instructions, qubits, circuit_backend
+):
+    ## PART II of Fig 13 of arxiv:2208.01863
     measII_circ = circuit_backend(
         [
             ("Gh", "A0"),
@@ -622,62 +749,114 @@ def _create_adaptive_measure_instruction(
         ],
         qubit_labels=qubits,
     )
-
-    partII_data = {"circuit": measII_circ, "inplace": True}
-
-    paramII_aliases = {"previous_outcome": "measurement_outcomes"}
-
-    instructions["FT Logical X Measure Part II"] = Instruction(
-        partII_apply_fn,
-        partII_data,
-        map_qubits_fn,
-        param_aliases=paramII_aliases,
-        name="Part II of adaptive logical measurement",
+    instructions["FT Logical X Measure Part II Circuit"] = (
+        builders.build_physical_circuit_instruction(
+            measII_circ,
+            include_outcomes=True,
+            name="FT Logical X Measure Part II Circuit",
+        )
     )
 
-    ## PART III
-    def partIII_apply_fn(
-        circuit: BasePhysicalCircuit,
-        model: BaseNoiseModel,
-        state: BaseQuantumState,
-        inplace: bool,
-        previous_outcomes: list[MeasurementOutcomes],
-        stack: InstructionStack,
+    def partII_feedforward_apply_fn(
         patch_label: str,
+        patches: PatchDict,
+        stack: InstructionStack,
+        measurement_outcomes: MeasurementOutcomes,
+        qubits: list[str],
+        inferred_M1: int,
     ) -> Frame:
-        # Run circuit
-        new_state, outcomes = propagate_state(circuit, model, state, inplace)
+        pauli_frame = patches[patch_label].pauli_frame
 
-        assert len(previous_outcomes) == 2
+        # Pull out measurement and flag
+        meas_qubit = qubits[0]
+        flag_qubit = qubits[1]
+        M2 = measurement_outcomes[meas_qubit][0]
+        F2 = measurement_outcomes[flag_qubit][0]
 
-        # Pull measurements/flags
-        meas_qubit = circuit.qubit_labels[0]
-        flag_qubit = circuit.qubit_labels[1]
-        F3 = outcomes[flag_qubit][0]
-        M1 = previous_outcomes[-2][meas_qubit][0]
-        M2 = previous_outcomes[-1][meas_qubit][0]
-        M3 = outcomes[meas_qubit][0]
+        # Use the Pauli frame to infer the correction on M1
+        # The check is ZXZII, so X0, Z1, or X2 errors will flip it
+        inferred_M2 = (
+            sum(
+                [
+                    M2,
+                    pauli_frame.get_bit("X", qubits[0]),
+                    pauli_frame.get_bit("Z", qubits[1]),
+                    pauli_frame.get_bit("X", qubits[2]),
+                ]
+            )
+            % 2
+        )
 
-        # Do feed forward
-        if F3 == 0 and M1 == M2 and M1 != M3:
-            # Go to decoding circuit (forward reference, must match key later)
-            next_instruction = "Non-FT Minus Unprep"
+        # Do classical feed forward
+        if F2 != 0:
+            # Terminate
+            return Frame(
+                {
+                    "logical_measurement": inferred_M1,
+                    "stage": "Part II (F2 != 0)",
+                    "F2": F2,
+                    "raw_M2": M2,
+                    "inferred_M2": inferred_M2,
+                }
+            )
+        elif inferred_M1 == inferred_M2:
+            # We go to part III (forward reference, must match key later)
+            ilbls = [
+                ("FT Logical X Measure Part III Circuit", patch_label),
+                ("FT Logical X Measure Part III Feed-Forward", patch_label),
+            ]
         else:
-            # Otherwise, we terminate (forward reference, must match key later)
-            next_instruction = "FT Logical X Measure Termination"
+            # We go to decoding circuit  (forward references, must match key later)
+            # This is not a flag failure, so we pass None to these kwargs
+            kwargs = {"flagged_check": None, "flagged_check_order": None}
+            ilbls = [
+                ("Non-FT Minus Unprep", patch_label),
+                (
+                    "FT Logical X Measure Classical Decoder",
+                    patch_label,
+                    (),
+                    kwargs,
+                ),
+            ]
 
         # We need to make sure and feed the patch label forward
-        new_label = InstructionLabel(next_instruction, patch_label)
-        new_stack = stack.insert_instruction(0, new_label)
+        for i, ilbl in enumerate(ilbls):
+            new_label = InstructionLabel.cast(ilbl)
+            stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
         frame_data = {
-            "stack": new_stack,
-            "state": new_state,
-            "measurement_outcomes": MeasurementOutcomes(outcomes),
+            "stack": stack,
+            "F2": F2,
+            "raw_M2": M2,
+            "inferred_M2": inferred_M2,
         }
         return Frame(frame_data)
 
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str],
+        qubits: Sequence[str],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
+        return new_kwargs
+
+    instructions["FT Logical X Measure Part II Feed-Forward"] = Instruction(
+        partII_feedforward_apply_fn,
+        {"qubits": qubits},
+        map_qubits_fn,
+        param_priorities={
+            "inferred_M1": "history[-2]"
+        },  # Look back 2 frames for M1
+        name="FT Logical X Measure Part II Feed-Forward",
+    )
+
+
+def _create_adaptive_measure_instruction_part_III(
+    instructions, qubits, circuit_backend
+):
+    ## PART III
     measIII_circ = circuit_backend(
         [
             ("Gh", "A0"),
@@ -691,49 +870,113 @@ def _create_adaptive_measure_instruction(
         ],
         qubit_labels=qubits,
     )
-
-    partIII_data = {
-        "circuit": measIII_circ,
-        "inplace": True,
-    }
-
-    paramIII_aliases = {"previous_outcomes": "measurement_outcomes"}
-
-    paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
-
-    instructions["FT Logical X Measure Part III"] = Instruction(
-        partIII_apply_fn,
-        partIII_data,
-        map_qubits_fn,
-        param_priorities=paramIII_priorities,
-        param_aliases=paramIII_aliases,
-        name="Part III of adaptive logical measurement",
+    instructions["FT Logical X Measure Part III Circuit"] = (
+        builders.build_physical_circuit_instruction(
+            measIII_circ,
+            include_outcomes=True,
+            name="FT Logical X Measure Part III Circuit",
+        )
     )
 
-    ## TERMINATION
-    def term_apply_fn(
+    def partIII_feedforward_apply_fn(
+        patch_label: str,
+        patches: PatchDict,
+        stack: InstructionStack,
         measurement_outcomes: MeasurementOutcomes,
-        measurement_type: Literal["X"] | Literal["Z"],
-        meas_qubit: str,
-        pauli_frame: PauliFrame | None,
+        qubits: list[str],
+        inferred_M1: int,
+        inferred_M2: int,
     ) -> Frame:
-        inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            measurement_type, pauli_frame
+        pauli_frame = patches[patch_label].pauli_frame
+
+        # Pull out measurement and flag
+        meas_qubit = qubits[0]
+        flag_qubit = qubits[1]
+        M3 = measurement_outcomes[meas_qubit][0]
+        F3 = measurement_outcomes[flag_qubit][0]
+
+        # Use the Pauli frame to infer the correction on M3
+        # The check is IIZXZ, so X2, Z3, or X4 errors will flip it
+        inferred_M3 = (
+            sum(
+                [
+                    M3,
+                    pauli_frame.get_bit("X", qubits[0]),
+                    pauli_frame.get_bit("Z", qubits[1]),
+                    pauli_frame.get_bit("X", qubits[2]),
+                ]
+            )
+            % 2
         )
-        return Frame({"logical_measurement": inferred_outcomes[meas_qubit][0]})
 
-    term_data = {"meas_qubit": "A0", "measurement_type": "X"}
+        # Do feed forward
+        if (
+            F3 == 0
+            and inferred_M1 == inferred_M2
+            and inferred_M1 != inferred_M3
+        ):
+            # We go to decoding circuit  (forward references, must match key later)
+            # This is not a flag failure, so we pass None as these kwargs
+            kwargs = {"flagged_check": None, "flagged_check_order": None}
+            ilbls = [
+                ("Non-FT Minus Unprep", patch_label),
+                (
+                    "FT Logical X Measure Classical Decoder",
+                    patch_label,
+                    (),
+                    kwargs,
+                ),
+            ]
+        else:
+            # Terminate, but let's note which condition caused it
+            if F3 != 0:
+                cause = "(F3 != 0)"
+            else:
+                cause = "M1 = M2 = M3"
 
-    def term_map_qubits_fn(
-        qubit_mapping: Mapping[str, str], meas_qubit: str, **kwargs
+            return Frame(
+                {
+                    "logical_measurement": inferred_M1,
+                    "stage": f"Part III {cause}",
+                    "F3": F3,
+                    "raw_M3": M3,
+                    "inferred_M3": inferred_M3,
+                }
+            )
+
+        # We need to make sure and feed the patch label forward
+        for i, ilbl in enumerate(ilbls):
+            new_label = InstructionLabel.cast(ilbl)
+            stack = stack.insert_instruction(i, new_label)
+
+        # Return new frame
+        return Frame(
+            {
+                "stack": stack,
+                "F3": F3,
+                "raw_M3": M3,
+                "inferred_M3": inferred_M3,
+            }
+        )
+
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str, str],
+        qubits: Sequence[str],
+        **kwargs,
     ) -> KwargDict:
-        return {"meas_qubit": qubit_mapping[meas_qubit]}
+        new_kwargs = kwargs.copy()
+        new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
+        return new_kwargs
 
-    instructions["FT Logical X Measure Termination"] = Instruction(
-        term_apply_fn,
-        term_data,
-        term_map_qubits_fn,
-        name="Termination for adaptive logical measurement",
+    instructions["FT Logical X Measure Part III Feed-Forward"] = Instruction(
+        partIII_feedforward_apply_fn,
+        {"qubits": qubits},
+        map_qubits_fn,
+        param_priorities={
+            "inferred_M1": "history[-4]",  # Look back 4 frames for M1
+            "inferred_M2": "history[-2]",  # and 2 frames for M2
+        },
+        name="FT Logical X Measure Part III Feed-Forward",
     )
 
 

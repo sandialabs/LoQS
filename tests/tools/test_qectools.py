@@ -99,6 +99,14 @@ class TestQECTools:
             "IIIIX", "IXXII", "IIIXX", "XIIIY",
             "IXIII", "IIIZX", "IIIYX"
         ]
+
+        # We can also test for reordered checks
+        # This corresponds to the hook errors for step I
+        # in the adaptive measurement of arXiv:1705.02329
+        # Specifically, this is from Appendix B.2.1
+        XZIIZ_hook_errors = qectools.get_hook_errors_in_flagged_check(
+            "XZIIZ", check_order=[4, 0, 1])
+        assert XZIIZ_hook_errors == ["IZIII","XZIII","YZIII","ZZIII"]
         
         
 
