@@ -28,6 +28,7 @@ Lint and type check:
 Run unit tests:
   stage: test
   image: python:3.11
+  coverage: /TOTAL.*? (100(?:\.0+)?\%\|[1-9]?\d(?:\.\d+)?\%)$/
   script:
     - pip install ".[test]"
     - tox -e py311

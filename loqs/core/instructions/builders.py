@@ -234,7 +234,7 @@ def build_object_builder_instruction(
     # Let's grab all the args from the constructor, excluding self
     param_priorities = {}
     sig = ins.signature(obj_class)
-    for param in list(sig.parameters)[1:]:  # Skipping self
+    for param in list(sig.parameters):
         param_priorities[param] = DEFAULT_PRIORITIES
     # And add on our instruction data information
     for k in data:

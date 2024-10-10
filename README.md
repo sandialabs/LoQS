@@ -1,5 +1,8 @@
 # LoQS (Public Release)
 
+![pipeline](https://gitlab-ex.sandia.gov/QCVV/loqs-public/badges/main/pipeline.svg?ignore_skipped=true)
+![coverage](https://gitlab-ex.sandia.gov/QCVV/loqs-public/badges/main/coverage.svg)
+
 This repository is intended to be a sanitized version of the Logical Qubit Simulator (LoQS)
 for eventual public release. Note that this repo is currently on CEE-GitLab only out of an
 abundance of caution while porting things from LoQS. It is eventually intended to be public
