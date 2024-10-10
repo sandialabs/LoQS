@@ -31,7 +31,7 @@ Run unit tests:
   script:
     - pip install ".[test]"
     - tox -e py311
-  coverage: '/TOTAL.*? (100(?:\.0+)?\%\|[1-9]?\d(?:\.\d+)?\%)$/'
+  coverage: '/\d+(?:\.\d+)?\%$/'
 
 Build documentation:
   stage: pages
