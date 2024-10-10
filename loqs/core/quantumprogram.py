@@ -11,10 +11,7 @@ import warnings
 try:
     from dask.distributed import Client
 except ImportError:
-    pass
-
-if TYPE_CHECKING:
-    from dask.distributed import Client  # noqa: F811
+    Client = None  # type: ignore
 
 from tqdm import tqdm
 
@@ -226,7 +223,7 @@ class QuantumProgram(Displayable):
         self,
         shots: int = 1,
         max_frame_limit: int = 100,
-        dask_client: Client | None = None,
+        dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
         reset_shot_histories: bool = True,
         verbose: bool = True,
