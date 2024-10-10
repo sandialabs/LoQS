@@ -31,7 +31,39 @@ def build_composite_instruction(
     instructions: Sequence[Instruction],
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
-    """TODO"""
+    """Build a composite instruction that updates the stack.
+
+    The composite instruction holds a sequence of instructions
+    that will be inserted into the stack. It is primarily intended
+    for convenience and organization purposes, i.e. being able
+    to define instructions in small modular pieces but still
+    providing a high-level sequence of instructions via the
+    composite instruction.
+
+    The apply function takes:
+
+    - `patch_label`, usually from the `InstructionLabel`
+    - `stack`, usually from the `QuantumProgram`
+    - `instructions`, usually from the `Instruction.data`
+
+    It returns a `Frame` where `instructions` have been inserted
+    onto the front of the `stack`.
+
+    There is a map qubits function, which calls the map qubits
+    functions for the underlying `instructions`.
+
+    Parameters
+    ----------
+    instructions:
+        A list of instructions to be inserted onto the stack
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built composite instruction
+    """
 
     def apply_fn(
         patch_label: str | None,
@@ -75,7 +107,62 @@ def build_lookup_decoder_instruction(
     diff_prev_syndrome: bool = True,
     name: str = "(Unnamed lookup decoder)",
 ) -> Instruction:
-    """TODO"""
+    """Build a lookup table decoder instruction.
+
+    The lookup table decoder instruction takes a lookup table
+    with syndrome keys and correction values and a sequence
+    of `SyndromeLabel` objects so that it can pull the syndrome
+    from previous measurement outcomes. It then applies
+    a Pauli frame update to the relevant patch.
+
+    The apply function takes:
+
+    - `patch_label`, usually from the `InstructionLabel`
+    - `lookup_table`, usually from the `Instruction.data`
+    - `syndrome_labels`, usually from the `Instruction.data`
+    - `raw_syndrome_frame_key`, usually from the `Instruction.data`
+    - `diff_prev_syndrome`, usually from the `Instruction.data`
+    - `patches`, usually from the previous frame
+    - `syndrome_outcomes`, an alias for `measurement_outcomes`
+      from the previous frames
+    - `history`, usually from the `QuantumProgram`
+
+    It returns a `Frame` with a `PatchDict` that has an updated `PauliFrame`,
+    the raw syndrome, and some other debugging information.
+
+    There is a map qubits function, which maps the `syndrome_labels`.
+
+    There is a non-standard parameter priority for `syndrome_labels`,
+    as this can require more than just the previous single frame.
+
+    Parameters
+    ----------
+    lookup_table:
+        A dict with syndrome keys (as strings of "0" and "1") and
+        data corrections (as Pauli strings with entries "IXYZ" and
+        length = number of data qubits).
+
+    syndrome_labels:
+        List of `SyndromeLabels` (or tuples to be cast as `SydromeLabels`)
+        that describe which entries in the previous measurement outcomes
+        correspond to which syndrome bit
+
+    raw_syndrome_frame_key:
+        The key to use in the output Frame for the raw syndrome information,
+        as well as the key used when searching for previous syndrome information.
+
+    diff_prev_syndrome:
+        Whether to do a bitwise XOR to the previous syndrome (True, default)
+        or to use this round's syndrome information directly (False).
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built lookup table decoder instruction
+    """
+
     # Sanity check: Have specified a syndrome label for each element of lookup_table
     assert all(
         [len(k) == len(syndrome_labels) for k in lookup_table]
@@ -217,6 +304,46 @@ def build_object_builder_instruction(
     obj_class: type,
     name: str = "(Unnamed object builder)",
 ) -> Instruction:
+    """Build an instruction that can initialize LoQS objects.
+
+    This is a sort of meta-instruction that can build LoQS
+    objects and then store them into a `Frame`. This is currently
+    used primarily to initialize the `BaseQuantumState` if no
+    `initial_history` is provided to a `QuantumProgram`.
+    The constructor arguments should typically be provided
+    in the `InstructionLabel` as args or kwargs.
+
+    The apply function takes variadic kwargs, since we do not
+    know the constructor arguments until runtime. However, it takes
+    at least the following:
+
+    - `frame_key`, taken from `Instruction.data`
+    - `obj_class`, taken from `Instruction.data`
+
+    It also must take all required args to the `obj_class` constructor, and
+    returns a `Frame` with the constructed object stored under `frame_key`.
+
+    There is no map qubits function.
+
+    The parameter priorities are generated programatically using
+    the `inspect` module for function signature introspection.
+
+    Parameters
+    ----------
+    frame_key:
+        The key used to store the resulting object in the `Frame`
+
+    obj_class:
+        The LoQS object to construct
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built object builder instruction
+    """
+
     # This is also an odd apply_fn because we do not know the args a priori
     # Here we define the generic apply_fn using variadic kwargs
     def apply_fn(**kwargs) -> Frame:
@@ -256,13 +383,54 @@ def build_patch_builder_instruction(
     qec_code: QECCode,
     name: str = "(Unnamed patch builder)",
 ) -> Instruction:
+    """Build an instruction that can make patches from a `QECCode`.
+
+    This is a sort of meta-instruction that can build `QECCodePatch`
+    objects and then store them into the main `PatchDict`.
+    The qubit labels for the new patch should typically be provided
+    in the `InstrumentLabel` as args or kwargs.
+
+    The apply function takes:
+
+    - `patch_label`, usually taken from `InstructionLabel`
+    - `qubits`, usually taken from `InstructionLabel`
+    - `qec_code`, usually taken from `Instruction.data`
+    - `patches`, usually taken from the previous frame,
+      but can be taken from `Instruction.data` as a default fallback
+
+    It returns a `Frame` with an updated `patches` containing the new
+    `QECCodePatch` under `patch_label`.
+
+    There is no map qubits function.
+
+    The parameter priorities for `patches` are not default,
+    because we want to prioritize a true `PatchDict` from
+    the `History` over the default one provided in the
+    `Instruction.data`.
+
+    Parameters
+    ----------
+    qec_code:
+        The `QECCode` to use when constructing new patches.
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built patch builder instruction
+    """
+
     # Standard apply_fn construction
     def apply_fn(
         patch_label: str,
         qubits: Sequence[str],
         qec_code: QECCode,
-        patches: PatchDict,
+        patches: PatchDict | None,
     ) -> Frame:
+        if patches is None:
+            patches = PatchDict()
+
         all_patch_qubits = patches.all_qubit_labels
 
         # Disjoint patch checks
@@ -282,7 +450,7 @@ def build_patch_builder_instruction(
 
         return Frame({"patches": patches})
 
-    data = {"qec_code": qec_code, "patches": PatchDict()}
+    data = {"qec_code": qec_code, "patches": None}
 
     # We are providing a default patches dict here in the instruction
     # However, we would like it to be loaded from History first if possible
@@ -300,6 +468,32 @@ def build_patch_builder_instruction(
 def build_patch_remover_instruction(
     name: str = "(Unnamed patch builder)",
 ) -> Instruction:
+    """Build an instruction that can make delete patches.
+
+    This is a sort of meta-instruction that can remove patches
+    from the main `PatchDict`. The patch label should typically
+    be provided in the `InstrumentLabel` as args or kwargs.
+
+    The apply function takes:
+
+    - `patch_label`, usually taken from `InstructionLabel`
+    - `patches`, usually taken from the previous frame
+
+    It returns a `Frame` with an updated `patches` without the
+    `QECCodePatch` under `patch_label`.
+
+    There is no map qubits function.
+
+    Parameters
+    ----------
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built patch remover instruction
+    """
+
     def apply_fn(
         patch_label: str,
         patches: PatchDict,
@@ -319,7 +513,36 @@ def build_patch_permute_instruction(
     mapping: Mapping[str, str],
     name: str = "(Unnamed patch permutation)",
 ) -> Instruction:
-    """TODO"""
+    """Build an instruction that permute patch qubits.
+
+    This can permute the qubits in a patch, i.e. doing SWAP
+    operations but in software.
+
+    The apply function takes:
+
+    - `patch_label`, usually taken from `InstructionLabel`
+    - `mapping`, usually taken from `Instruction.data`
+    - `patches`, usually taken from the previous frame
+
+    It returns a `Frame` with an updated `patches` where the
+    `QECCodePatch` stored under `patch_label` has had the qubits
+    mapped via `mapping`.
+
+    There is a map qubits function that updates both the keys
+    and values of `mapping`.
+
+    Parameters
+    ----------
+    mapping:
+        The qubit mapping to apply to the code patch
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built patch permuter instruction
+    """
 
     # Standard apply_fn construction
     def apply_fn(
@@ -376,7 +599,66 @@ def build_physical_circuit_instruction(
     pauli_frame_update: str | Sequence[str] | Mapping[str, str] | None = None,
     name: str = "(Unnamed physical circuit)",
 ) -> Instruction:
-    """TODO"""
+    """Build an instruction that applies a physical circuit to a state.
+
+    This is the computational workhorse for LoQS. This stores a circuit
+    that can propagate the quantum state forward in time.
+    However, it can do some other common pre-/post-processing tasks.
+    It can insert discrete errors into the circuit prior to application,
+    and it can update the Pauli frame if the circuit represents the action
+    of a Clifford gate.
+
+    The apply function takes:
+
+    - `model`, usually from the `QuantumProgram.default_noise_model`,
+      but also from `InstructionLabel` and `Instruction.data`
+    - `circuit`, usually from the `Instruction.data`
+    - `state`, usually from the previous frame
+    - `include_outcomes`, usually from `Instruction.data`
+    - `inplace`, usually from the `Instruction.data`
+    - `reset_mcms`, usually from the `Instruction.data`
+    - `error_injections`, usually from the `InstructionLabel`
+    - `pauli_frame_update`, usually from the `Instruction.data`
+    - `patch_label`, usually from the `InstructionLabel`
+    - `patches`, usually from the previous frame
+
+    It returns a `Frame` with an updated `state`, observed
+    `measurement_outcomes` if requested, an updated `patches` if a
+    `PauliFrame` update was requested, and some other debugging information.
+
+    There is a map qubits function calls `circuit.map_qubit_labels()`.
+
+    Parameters
+    ----------
+    circuit:
+        The physical circuit to run
+
+    include_outcomes:
+        Whether to include outcomes (True) or not (False, default)
+
+    inplace:
+        Whether to propagate the state in-place (True, default) or make a copy
+
+    reset_mcms:
+        Whether to reset the state after any instruments/mid-circuit measurements
+        are performed (True, default) or not (False)
+
+    model:
+        A model to use when converting the circuit into reps to apply to the state
+
+    pauli_frame_update: str | Sequence[str] | Mapping[str, str] | None = None,
+        Either a string that is passed to `PauliFrame.update_from_transversal_clifford()`,
+        a list of strings that is passed to `PauliFrame.update_from_clifford_conjugation()`,
+        a mapping that is passed to `PauliFrame.map_frame()`, or None (the default) if no
+        Pauli frame update is required.
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built physical circuit instruction
+    """
 
     # Standard apply_fn construction
     def apply_fn(
@@ -492,7 +774,66 @@ def build_repeat_until_success_instruction(
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
 ) -> Instruction:
-    """TODO"""
+    """Build an instruction that repeats a physical circuit instruction until success.
+
+    This is a special case feed-forward type of instruction.
+    It first applies the underlying instruction (presumed to be a physical
+    circuit instruction, although this is not actively checked),
+    and then compares the measurement outcomes to a set of target outcomes.
+    If the outcomes do not match, this places itself on top of the stack.
+
+    The apply function takes variadic kwargs since we do not
+    know the underlying instruction arguments until runtime. However, it takes
+    at least the following:
+
+    - `instruction`, usually from the `Instruction.data`
+    - `target_outcomes`, usually from the `Instruction.data`
+    - `max_repeats`, usually from the `Instruction.data`
+    - `repeat_count`, usually from the `Instruction.data`
+    - `rus_key`, usually from the `Instruction.data`
+    - `reset_key`, usually from the `Instruction.data`
+    - `patch_label`, usually from the `InstructionLabel`
+    - `patches`, usually from the previous frame
+    - `stack`, usually from the `QuantumProgram`
+
+    It returns a `Frame` with the outcome of the underlying
+    `instruction`, as well as an updated stack with a reset and
+    this operation again in the case of failure, and some debugging information.
+
+    There is a map qubits function that maps the qubits of
+    `instruction` and `reset_key`, in the case that `reset_key`
+    is an `Instruction`.
+
+    Parameters
+    ----------
+    instruction:
+        The underlying instruction to run and repeat until success
+
+    reset_label_key:
+        The key for the `InstructionLabel` needed to reset the
+        quantum state in the case of failure
+
+    rus_key:
+        The key for the `InstructionLabel` needed to run this
+        operation again in the case of failure.
+        We are not simply providing `self` to avoid loops
+        during operations such as serialization.
+
+    target_outcomes:
+        The target outcomes to compare to. If None (the default),
+        this assumes that all measurement outcomes should be 0.
+
+    max_repeats:
+        The number of repeats after which an error is thrown.
+        Defaults to 100.
+
+    name:
+        Name for logging purposes
+
+    Returns
+    -------
+        The built repeat-until-success instruction
+    """
 
     # We do not know all the params for the underlying instruction,
     # so take variadic kwargs here
