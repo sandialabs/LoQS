@@ -86,6 +86,3 @@ exclude = [
     "**/pycache",
     "**/venv"
 ]
-
-[tool.jupytext]
-formats = "md:myst,ipynb"

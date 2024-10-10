@@ -25,7 +25,7 @@ You can initialize a `History` from a list of `Frame` objects, including an empt
 We will cover the `Frame` in the next section, but for now we pass in some dummy data/log string purely for demonstrative purposes.
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 from loqs.core import History, Frame
 
 test_frames = [Frame({"index": i}, f"Title {i}") for i in range(5)]
@@ -35,23 +35,23 @@ history = History(test_frames)
 
 Printing a `History` will also print all the underlying `Frame` objects.
 
-```{code-cell} ipython3
+```{code-cell}
 print(history)
 ```
 
 The core editing operation for a `History` is `append`, which adds a new `Frame`.
 This operation returns a new `History`, maintaining the objects' immutability.
 
-```{code-cell} ipython3
+```{code-cell}
 new_frame = Frame({"index": 5}, "New frame")
 history.append(new_frame)
 print(history)
 ```
 
 The `History` uses `collections.abc.Sequence` as a base, rather than `collections.abc.MutableSequence`.
-As a result, trying to set/override an existing `Frame` will error. 
+As a result, trying to set/override an existing `Frame` will error.
 
-```{code-cell} ipython3
+```{code-cell}
 :tags: [raises-exception]
 
 # TypeError expected!
@@ -79,7 +79,7 @@ If the key exists in the new `Frame`, the `History` goes back and expires that k
 
 To showcase this, let's build our previous `History` example iteratively, but set `index` to be expiring. This means only the latest `index` should be available.
 
-```{code-cell} ipython3
+```{code-cell}
 expiring_history = History(None, expiring_keys=["index"])
 
 for tf in test_frames:
@@ -100,9 +100,9 @@ When a new `Frame` is added, its keys are checked against the propagating keys.
 If a key is not available, the `Frame` is updated with the previous frame's value for that key.
 
 To showcase this, let's build our previous `History` example iteratively, but this time add a `'data'` key that we want to propagate.
-We'll set this on frames 0 and 3 so we can see cases where the key both exists and doesn't exist. 
+We'll set this on frames 0 and 3 so we can see cases where the key both exists and doesn't exist.
 
-```{code-cell} ipython3
+```{code-cell}
 # This Frame functionality is covered in the next section
 test_frames[0] = test_frames[0].update({"data": "Dummy data 1"})
 test_frames[3] = test_frames[3].update({"data": "Dummy data 2"})
@@ -121,13 +121,13 @@ Organizing the data by `Frame` makes a lot of sense during program execution;
 however, for post-run analysis, we often want to pull out certain pieces of data from a `Frame` (or all of them).
 One can use `History.collect_data()` for this purpose, which takes a frame key and frame index/set of indices (including the special argument `"all"`) and returns the object/list of objects, respectively.
 
-```{code-cell} ipython3
+```{code-cell}
 # We can pull an entry from the last frame
 last_index = propagating_history.collect_data("index", -1)
 print(last_index)
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 # We can also pull an entry from all frames (or any subset)
 all_data = propagating_history.collect_data("data", "all")
 print(all_data)
@@ -135,6 +135,6 @@ print(all_data)
 
 ## What's next?
 
-See the [API Reference](/devguide/_autosummary/loqs.core.history.History) for more in-depth documentation of `History` objects.
+See the [API Reference](/_autosummary/loqs.core.history.History) for more in-depth documentation of `History` objects.
 
 Next, we will cover the building blocks of a`History`: the `Frame`.

@@ -72,8 +72,8 @@ The entries are tuples with the following entries:
 
 1. Either key into `QuantumProgram.global_instructions` or a `QECCode.instructions` (discussed more below) or an actual `Instruction` object
 2. A patch label
-3. A tuple of any arguments to pass into the `Instruction.apply_fn` (discussed in the [Instruction tutorial](/objguide/instructions.md))
-4. A dict of any keyword arguments to pass into the `Instruction.apply_fn` (discussed in the [Instruction tutorial](/objguide/instructions.md))
+3. A tuple of any arguments to pass into the `Instruction.apply_fn` (discussed in the [Instruction tutorial](/markdown/instructions.md))
+4. A dict of any keyword arguments to pass into the `Instruction.apply_fn` (discussed in the [Instruction tutorial](/markdown/instructions.md))
 
 You'll notice that all of the keys below are strings rather than an `Instruction`.
 These are converted into the proper instructions by the `QuantumProgram` by first looking into `QuantumProgram.global_instructions` and then in all `QECCode.instructions` for the given patch (if a patch label is provided).

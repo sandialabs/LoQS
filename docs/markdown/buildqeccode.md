@@ -15,7 +15,7 @@ kernelspec:
 
 In the previous tutorial, we saw how to create a multi-stage feed-forward instruction.
 A single instruction does not make a QEC code, but luckily not all instructions will take quite as much effort.
-In this tutorial, we show how you can build the majority of a QEC code using the [Instruction builders](/objguide/builders).
+In this tutorial, we show how you can build the majority of a QEC code using the [Instruction builders](/markdown/builders).
 
 ## The [[5,1,3]] Code
 
@@ -35,4 +35,4 @@ Like the previous tutorial, we will use the `PyGSTiPhysicalCircuit` [circuit bac
 
 ### Non-FT $\ket{-}$ Prep/Unprep
 
-The non-fault-tolerant versions of operations are often much simpler 
+The non-fault-tolerant versions of operations are often much simpler

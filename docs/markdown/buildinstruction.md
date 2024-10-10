@@ -13,12 +13,12 @@ kernelspec:
 
 # Building a Complex Instruction
 
-While the [instruction builders](/objguide/builders) can create many of the `Instruction` objects we will need to implement QEC codes, they are not exhaustive.
+While the [instruction builders](/markdown/builders) can create many of the `Instruction` objects we will need to implement QEC codes, they are not exhaustive.
 This is particularly true for feed-forward operations that process classical data and have branching logic.
 In this tutorial, we will cover how one can take a multi-stage feed-forward operation from a flowchart figure in a paper into something that `LoQS` can perform.
 
 ```{note}
-If you have not read through the [`Instruction` object guide](/objguide/instructions), it is highly recommended you do so before reading this tutorial.
+If you have not read through the [`Instruction` object guide](/markdown/instructions), it is highly recommended you do so before reading this tutorial.
 We will assume general familiarity with almost all `Instrument` functionality.
 ```
 
@@ -33,7 +33,7 @@ Branches in the flowchart will turn into `if/else` statements in the code that i
 
 We will use the `PyGSTiPhysicalCircuit` as our [circuit backend](circuit-backends).
 
-```{code-cell} ipython3
+```{code-cell}
 from collections.abc import Sequence
 from typing import Mapping
 
@@ -52,7 +52,7 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 # We will need to define a set to template qubits for physical circuits
 template_qubits = ["A0", "A1"] + [f"D{i}" for i in range(5)]
 
@@ -70,7 +70,7 @@ Our part I `Instruction` is going to:
     - Requires the stack and patch label
     - Generate a new stack
 
-```{code-cell} ipython3
+```{code-cell}
 def partI_apply_fn(
     circuit: BasePhysicalCircuit,
     model: BaseNoiseModel,
@@ -108,7 +108,7 @@ def partI_apply_fn(
 Now we consider what data we want to store with this `Instruction`. 
 Similar to other physical circuit instructions, we will store the physical circuit as well as any flags we pass in (just `inplace` in this case).
 
-```{code-cell} ipython3
+```{code-cell}
 measI_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -132,7 +132,7 @@ partI_data = {
 Since we are keeping a physical circuit in the `data`, we need to ensure that our `map_qubits_fn` maps this appropriately.
 Looking ahead, it turns out that this `map_qubits_fn` will be sufficient for all of the `Instruction` implementations, so we'll name it without a suffix.
 
-```{code-cell} ipython3
+```{code-cell}
 def map_qubits_fn(
     qubit_mapping: Mapping[str, str],
     circuit: BasePhysicalCircuit,
@@ -145,7 +145,7 @@ def map_qubits_fn(
 
 Finally we have all the components to define the entire instruction!
 
-```{code-cell} ipython3
+```{code-cell}
 instructions["Adaptive Measure Part I"] = Instruction(
     partI_apply_fn,
     partI_data,
@@ -160,7 +160,7 @@ We can follow a similar pattern part II with one major difference: in this case,
 
 Here, we choose to use a parameter alias to showcase that functionality.
 
-```{code-cell} ipython3
+```{code-cell}
 def partII_apply_fn(
     circuit: BasePhysicalCircuit,
     model: BaseNoiseModel,
@@ -204,7 +204,7 @@ def partII_apply_fn(
     return Frame(frame_data)
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 measII_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -225,12 +225,12 @@ partII_data = {
 }
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 # This step is new for Part II!
 paramII_aliases = {"previous_outcome": "measurement_outcomes"}
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 # Remember that this key must match what Part I put for instruction label
 instructions["Adaptive Measure Part II"] = Instruction(
     partII_apply_fn,
@@ -247,7 +247,7 @@ We again follow a similar pattern, except that this time a further modification 
 we need the past *two* measurement outcomes to do our conditional logic.
 We will achieve this by also modifying our parameter priorities.
 
-```{code-cell} ipython3
+```{code-cell}
 def partIII_apply_fn(
     circuit: BasePhysicalCircuit,
     model: BaseNoiseModel,
@@ -291,7 +291,7 @@ def partIII_apply_fn(
     return Frame(frame_data)
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 measIII_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -312,14 +312,14 @@ partIII_data = {
 }
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 paramIII_aliases = {"previous_outcomes": "measurement_outcomes"}
 
 # This part is new for Part III!
 paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 # Make sure our key matches the forward reference in part II
 instructions["Adaptive Measure Part III"] = Instruction(
     partIII_apply_fn,
@@ -336,7 +336,7 @@ instructions["Adaptive Measure Part III"] = Instruction(
 The "decoder" circuit, or the $\ket{-}$ state unprep circuit, is simply a physical circuit instruction.
 In this case, we can just use the builder directly.
 
-```{code-cell} ipython3
+```{code-cell}
 state_unprep_circ = PyGSTiPhysicalCircuit(
     [
         [("Gcphase", "D0", "D4")],
@@ -374,14 +374,14 @@ instructions["Non-FT Minus Unprep"] = (
 
 Finally, we have our termination. In this case, we are just returning the previous outcome as the measurement.
 
-```{code-cell} ipython3
+```{code-cell}
 def term_apply_fn(measurement_outcomes: MeasurementOutcomes, meas_qubit: str) -> Frame:
     return Frame({"logical_measurement": measurement_outcomes[meas_qubit][0]})
 ```
 
 The caveat is that which qubit of the measured outcomes to return is dependent on the template qubits, so we need to store this as data.
 
-```{code-cell} ipython3
+```{code-cell}
 term_data = {"meas_qubit": "A0"}
 
 def term_map_qubits_fn(
@@ -392,7 +392,7 @@ def term_map_qubits_fn(
 
 We can keep the default parameter prioirities and have assigned no aliases, so can go straight to `Instruction` definition.
 
-```{code-cell} ipython3
+```{code-cell}
 # Make sure this key matches forward references from previous parts
 instructions["Adaptive Measure Termination"] = Instruction(
     term_apply_fn,

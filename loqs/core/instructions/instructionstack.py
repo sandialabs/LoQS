@@ -19,6 +19,7 @@ T = TypeVar("T", bound="InstructionStack")
 InstructionStackCastableTypes: TypeAlias = (
     "InstructionStack | InstructionLabelCastableTypes | Sequence[InstructionLabelCastableTypes] | None"
 )
+"""Objects that can be cast to a :class:`.InstructionStack`."""
 
 
 class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):

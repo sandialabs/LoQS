@@ -63,13 +63,7 @@ if you are working off of a feature branch.
 ### Visualization
 
 LoQS now has some capability to turn circuit diagrams into LaTeX via the quantikz package.
-This requires several non-`pip` installable system packages:
-
-- `pdflatex`, commonly from the a TeX installation
-- `poppler`, which is used 
-
-For Mac, consider install TeX and `poppler` through Homebrew.
-On Linux, install through your package manager.
+This requires `pdflatex`, commonly from the a TeX installation, as well as `loqs[visualization]`.
 
 ## Documentation
 
@@ -85,20 +79,13 @@ and then viewed by opening `docs/_build/html/index.html` in a browser.
 ### Jupytext Notebooks
 
 For users who want executable versions of the MyST Markdown can use Jupytext to turn them into IPython/Jupyter notebooks.
-For example,
-
 ```
-jupytext --to ipynb docs/gettingstarted/workflow.md
+jupytext --sync docs/markdown/*
 ```
 
-will generate a corresponding `docs/gettingstarted/workflow.ipynb` file.
-The Jupyter notebook and Markdown file can be synced up via
-
-```
-jupytext --sync docs/gettingstarted/workflow.md
-```
-
-for those who are maybe updating documentation and going back and forth between notebook and Markdown.
+will synchronize all the Markdown files in `docs/markdown` with the Jupyter notebooks in `docs/notebook`. Only the 
+Markdown is committed and used for generating the JupyterBook, but the notebooks can be handy to test execution
+in an interactive way.
 
 ### GitLab Autobuilt Documentation
 

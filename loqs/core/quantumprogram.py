@@ -50,61 +50,61 @@ class QuantumProgram(Displayable):
         override_global_instructions: bool = False,
         name: str = "(Unnamed quantum program)",
     ) -> None:
-        """Initialize a QuantumProgram from a list of operations.
+        """Initialize a :class:`QuantumProgram` from a list of operations.
 
         Parameters
         ----------
         instruction_stack:
-            A list of :class:`InstructionLabel` castable objects
+            A list of :class:`.InstructionLabel` castable objects
             that determine what operations get run during program
-            execution. Defaults to None, in which case
-            :attr:`initial_history` needs to be provided and contain
-            a "stack" entry in the final :class:`Frame`.
+            execution. Defaults to ``None``, in which case
+            ``initial_history`` needs to be provided and contain
+            a ``"stack"`` entry in the final :class:`.Frame`.
 
         initial_history:
-            An initial :class:`History` to start num_shots from.
-            Defaults to None, in which case an empty
-            :class:`History` is initialized and
-            :attr:`instruction_stack` must be provided.
+            An initial :class:`.History` to start num_shots from.
+            Defaults to ``None``, in which case an empty
+            :class:`.History` is initialized and
+            ``instruction_stack`` must be provided.
 
         default_noise_model:
-            A noise model to pass to any :class:`Instruction`
+            A noise model to pass to any :class:`.Instruction`
             that requests a model but does not have one provided
-            in its :class:`InstructionLabel` or :attr:`Instruction.data`.
+            in its :class:`.InstructionLabel` or :attr:`.Instruction.data`.
 
         default_base_seed:
             Base seed to use for RNG. Each shot will use a seed as
-            :attr:`default_base_seed` + <shot index>.
+            ``default_base_seed`` + <shot index>.
 
         expiring_state:
-            Whether to set "state" as an expiring key in the
-            :attr:`initial_history`. Defaults to True, matching the default
-            behavior of :attr:`History.expiring_keys`.
+            Whether to set ``"state"`` as an expiring key in the
+            :attr:`.initial_history`. Defaults to True, matching the default
+            behavior of :attr:`.History.expiring_keys`.
 
         global_instructions:
-            A list of :class:`Instruction` objects that are not associated
-            with a specific :class:`QECCodePatch`.
+            A list of :class:`.Instruction` objects that are not associated
+            with a specific :class:`.QECCodePatch`.
 
         state_type:
-            The state type to use when constructing the "Init State"
-            global instruction. Defaults to None, in which case
-            an :attr:`initial_history` needs to be provided and have
-            "state" available in the final frame.
+            The state type to use when constructing the ``"Init State"``
+            global instruction. Defaults to ``None``, in which case
+            an ``initial_history`` needs to be provided and have
+            ``"state"`` available in the final frame.
 
         patch_types:
-            A dict of name keys and :class:`QECCode` values to use
-            when constructing "Init Patch <key>" global instructions.
-            If provided, then the "Remove Patch" global instruction is
-            also created. Defaults to None, in which case the
-            :attr:`initial_history` needs to be provided and have
-            "patches" available in the final frame.
+            A dict of name keys and :class:`.QECCode` values to use
+            when constructing ``"Init Patch <key>"`` global instructions.
+            If provided, then the ``"Remove Patch"`` global instruction is
+            also created. Defaults to ``None``, in which case the
+            ``initial_history`` needs to be provided and have
+            ``"patches"`` available in the final frame.
 
         override_global_instructions:
-            Whether or not to override "Init State", "Init Patch <key>", and
-            "Remove Patch" instructions if they exist in
-            :attr:`global_instructions` and :attr:`state_type` and/or
-            :attr:`patch_types` are provided.
-            Defaults to False, which preserves the existing instructions.
+            Whether or not to override ``"Init State"``, ``"Init Patch <key>"``, and
+            ``"Remove Patch"`` instructions if they exist in
+            :attr:`.global_instructions`, and ``state_type`` and/or
+            ``patch_types`` are provided.
+            Defaults to ``False``, which preserves the existing instructions.
 
         name:
             Name for logging
@@ -112,6 +112,8 @@ class QuantumProgram(Displayable):
         """
         # Do history before instruction stack in case it already has one
         self.initial_history = History.cast(initial_history)
+        """The initial history that all shots start from."""
+
         if instruction_stack is None and (
             initial_history is None
             or len(self.initial_history) < 1
@@ -122,12 +124,20 @@ class QuantumProgram(Displayable):
             )
 
         self.default_noise_model = default_noise_model
+        """A default noise model for instructions that otherwise do not have one."""
+
         self._noise_model_filename = None
         if isinstance(default_noise_model, str):
             # Likely passed a filename, try to load
             self.default_noise_model = BaseNoiseModel.read(default_noise_model)
             self._noise_model_filename = default_noise_model
         self.default_base_seed = default_base_seed
+        """A default base seed value for shot RNG.
+
+        Each shot actually uses ``default_base_seed + i``, where
+        ``i`` is the index of the shot. This ensures consistent
+        RNG even when running shots in parallel.
+        """
 
         if expiring_state:
             self.initial_history.expiring_keys.add("state")
@@ -135,6 +145,8 @@ class QuantumProgram(Displayable):
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
             self.instruction_stack = InstructionStack.cast(instruction_stack)
+            """The :class:`.InstructionStack` that holds
+            :attr:`.InstructionLabelCastableTypes` object to execute."""
         else:
             self.instruction_stack = InstructionStack.cast(
                 self.initial_history[-1]["stack"]
@@ -145,6 +157,8 @@ class QuantumProgram(Displayable):
         self.global_instructions = {
             k: v for k, v in global_instructions.items()
         }
+        """A set of global instructions not associated with any
+        :class:`.QECCodePatch`."""
         assert all(
             [
                 isinstance(v, Instruction)
@@ -154,6 +168,7 @@ class QuantumProgram(Displayable):
 
         # Add state initialization, if requested
         self.state_type = state_type
+        """The :class:`.BaseQuantumState` type used when constructing ``"Init State"``."""
         if state_type is not None:
             if (
                 "Init State" in self.global_instructions
@@ -175,6 +190,7 @@ class QuantumProgram(Displayable):
 
         # Add patch initializations/removals, if requested
         self.patch_types = patch_types
+        """A dict of keys to :class:`.QECCodePatch` objects used when constructing ``"Init Patch <key>"``."""
         if patch_types is not None:
             for patch_name, patch_code in patch_types.items():
                 label = f"Init Patch {patch_name}"
@@ -213,7 +229,9 @@ class QuantumProgram(Displayable):
                 self.global_instructions["Remove Patch"] = builder
 
         self.name = name
+        """Name for logging"""
         self.shot_histories: list[History] = []
+        """Record of shot :class:`.History` objects"""
 
     def __hash__(self) -> int:
         return hash(
@@ -249,8 +267,26 @@ class QuantumProgram(Displayable):
         other:
             The base :class:`QuantumProgram` to copy
 
-        Other Parameters:
-            Refer to :meth:`QuantumProgram.__init__`
+        instruction_stack:
+            See ``instruction_stack`` in :meth:`.__init__`
+
+        default_noise_model:
+            See ``default_noise_model`` in :meth:`.__init__`
+
+        default_base_seed:
+            See ``default_base_seed`` in :meth:`.__init__`
+
+        global_instructions:
+            See ``global_instructions`` in :meth:`.__init__`
+
+        state_type:
+            See ``state_type`` in :meth:`.__init__`
+
+        patch_types:
+            See ``patch_types`` in :meth:`.__init__`
+
+        name:
+            See ``name`` in :meth:`.__init__`
 
         Returns
         -------
@@ -301,8 +337,8 @@ class QuantumProgram(Displayable):
     ):
         """Execute some shots of this :class:`QuantumProgram`.
 
-        This does not return any :class:`History` objects,
-        but instead saves these to :attr:`shot_histories`.
+        This does not return any :class:`.History` objects,
+        but instead saves these to :attr:`.shot_histories`.
 
         Parameters
         ----------
@@ -317,7 +353,7 @@ class QuantumProgram(Displayable):
 
         dask_client:
             A Dask client to use for parallelizing shots.
-            Defaults to None, which runs shots in serial.
+            Defaults to ``None``, which runs shots in serial.
 
         dask_batch_size:
             The number of tasks that should be included in a batch of
@@ -326,12 +362,12 @@ class QuantumProgram(Displayable):
             for many (>1K) shots, at the expense of some possible load balancing.
 
         reset_shot_histories:
-            Whether to delete any existing shot histories (True, default) or keep
-            existing shot histories (False) when running shots.
+            Whether to delete any existing shot histories (``True``, default) or keep
+            existing shot histories (``False``) when running shots.
 
         verbose:
-            Whether to write a progress bar (True, default) or not when running
-            shots.
+            Whether to write a progress bar (``True``, default) or not (``False``)
+            when running shots.
         """
         # Take out shot histories to avoid unnecessary copies during dask.delayed
         if reset_shot_histories:
@@ -603,13 +639,16 @@ class QuantumProgram(Displayable):
 
         Parameters
         ----------
-        Other Parameters:
-            See :py:meth:`History.collect_data`.
+        key:
+            See ``key`` in :meth:`.History.collect_data`
+
+        indices:
+            See ``indices`` in :meth:`.History.collect_data`
 
         Returns
         -------
         list
-            List of :meth:`History.collect_data` outputs per shot
+            List of :meth:`.History.collect_data` outputs per shot
         """
         data = []
         for history in self.shot_histories:

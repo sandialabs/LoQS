@@ -139,6 +139,21 @@ class History(Sequence[Frame], Castable, Displayable):
     def collect_data(
         self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
     ) -> list | object:
+        """Pull data by key out of one or several stored :class:`.Frame` objects.
+
+        Parameters
+        ----------
+        key:
+            The key into each :class:`.Frame` corresponding to the desired data.
+
+        indices:
+            Frame indices to look for ``key`` in. This can either be an int for a single frame,
+            a list of ints for several frames, a slice for a continuous set of frames,
+            or ``"all"`` (which is equivalent to ``slice(0, None)``).
+            These values can either be positive and index starting from the beginning,
+            or negative and index from the last frame, i.e. -1 is a common way to get
+            data from the last frame.
+        """
 
         if isinstance(indices, int):
             iter_indices: list[int] | slice = [indices]

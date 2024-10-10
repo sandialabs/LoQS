@@ -34,16 +34,22 @@ html:
 # Sphinx options
 sphinx:
   extra_extensions:
+  - 'sphinx.ext.napoleon'
   - 'sphinx.ext.autodoc'
   - 'sphinx.ext.autosummary'
-  - 'sphinx.ext.napoleon'
   - 'sphinx.ext.viewcode'
   - 'sphinx.ext.doctest'
+  - 'sphinx.ext.intersphinx'
   config:
     add_module_names: False
     autosummary_generate: True
     autoclass_content: "both"
     autodoc_typehints: "both"
+    autodoc_member_order: "groupwise"
+    exclude_patterns: ["notebooks/", "**/*.ipynb"]
     suppress_warnings:
     - "etoc.toctree"
     templates_path: ["_templates"]
+    autodoc_type_aliases:
+      InstructionStackCastableTypes: "InstructionStackCastableTypes"
+      InstructionLabelCastableTypes: "InstructionLabelCastableTypes"

@@ -1,6 +1,7 @@
+
 # QEC Codes and Patches
 
-Now that we have talked about [Instructions](/objguide/instructions), we can finally talk about the `QECCode` class, and its more concrete cousin the `QECCodePatch`.
+Now that we have talked about [Instructions](/markdown/instructions), we can finally talk about the `QECCode` class, and its more concrete cousin the `QECCodePatch`.
 
 ## QEC Codes
 
@@ -21,6 +22,6 @@ It is this object that will be stored in the [`PatchDict` object](recordables-pa
 
 ## What's next?
 
-See the API Reference for [`QECCode`](/devguide/_autosummary/loqs.core.qeccode.QECCode) or [`QECCodePatch`](/devguide/_autosummary/loqs.core.qeccode.QECCodePatch) for more in-depth documentation of respective objects.
+See the API Reference for [`QECCode`](/_autosummary/loqs.core.qeccode.QECCode) or [`QECCodePatch`](/_autosummary/loqs.core.qeccode.QECCodePatch) for more in-depth documentation of respective objects.
 
 Next, we will talk about prebuilt `QECCode` objects called "codepacks".

@@ -1,3 +1,4 @@
+
 # Recordables
 
 The `History` framework is designed so that users can store whatever metadata is needed for their QEC code implementation.
@@ -13,7 +14,7 @@ This object is typically used as input for feed-forward instructions or decoding
 
 The default `MeasurementOutcomes` object is typically associated with the `"measurement_outcomes"` frame key.
 
-See the [API Reference](/devguide/_autosummary/loqs.core.recordables.measurementoutcomes.MeasurementOutcomes) for more in-depth documentation.
+See the [API Reference](/_autosummary/loqs.core.recordables.measurementoutcomes.MeasurementOutcomes) for more in-depth documentation.
 
 (recordables-patchdict)=
 ## PatchDict
@@ -26,7 +27,7 @@ for more information on this, see the [QuantumProgram tutorial section on instru
 
 The default `PatchDict` object is typically associated with the `"patches"` frame key.
 
-See the [API Reference](/devguide/_autosummary/loqs.core.recordables.patchdict.PatchDict) for more in-depth documentation.
+See the [API Reference](/_autosummary/loqs.core.recordables.patchdict.PatchDict) for more in-depth documentation.
 
 ## PauliFrame
 
@@ -38,7 +39,7 @@ This section is incomplete and will be filled out as the `PauliFrame` implementa
 
 The default `PauliFrame` object is typically associated with the `"pauli_frame"` frame key.
 
-See the [API Reference](/devguide/_autosummary/loqs.core.recordables.pauliframe.PauliFrame) for more in-depth documentation.
+See the [API Reference](/_autosummary/loqs.core.syndrome.PauliFrame) for more in-depth documentation.
 
 ## What's next?
 

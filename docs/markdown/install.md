@@ -1,3 +1,4 @@
+
 # Installing LoQS
 
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
@@ -28,6 +29,7 @@ There are several helper "categories" for optional dependencies, including:
 (useful for testing)
 - `all`: All optional dependencies
 
++++
 
 `LoQS` should now be installed and ready to go!
 

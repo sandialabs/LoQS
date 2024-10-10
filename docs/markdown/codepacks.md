@@ -1,3 +1,4 @@
+
 # Codepacks
 
 A "codepack" is to a `QECCode` as the instruction builders are to an `Instruction`;
@@ -19,9 +20,9 @@ These options should be documented in the docstring of the relevant `create_qec_
 Currently the only codepack provided is for the [[5,1,3]] perfect code, colloquially known as the [5-qubit code](https://errorcorrectionzoo.org/c/stab_5_1_3).
 Our implementation is based heavily on {cite}`codepacks-ryananderson_implementing_2022`, which in turn uses piecewise fault tolerance from {cite}`codepacks-yoder_universal_2016` and flag fault-tolerance from {cite}`codepacks-chao_quantum_2018`.
 
-This codepack is available [here](/devguide/_autosummary/loqs.codepacks.codepack_5_1_3_quantinuum2022).
+This codepack is available [here](/_autosummary/loqs.codepacks.codepack_5_1_3_quantinuum2022).
 
-This codepack is also the subject of the [Building a QECCode tutorial](/tutorials/buildqeccode), so those interested in learning how to build a `QECCode` object or understanding this codepack in particular may want to check that out.
+This codepack is also the subject of the [Building a QECCode tutorial](/markdown/buildqeccode), so those interested in learning how to build a `QECCode` object or understanding this codepack in particular may want to check that out.
 
 ## References
 

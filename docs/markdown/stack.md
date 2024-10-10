@@ -15,7 +15,7 @@ kernelspec:
 
 To continue the logical-to-physical analogy, if the `Instruction` is a unitary or superoperator matrix, then the `InstructionLabel` is the gate label consisting of the gate name and target qubits, and the `InstructionStack` is the full circuit description.
 
-As described in the [Overview section](/gettingstarted/overview), there is one major difference between the two that makes standard physical circuit constructions a suboptimal choice for describing logical "circuits":
+As described in the [Overview section](/markdown/overview), there is one major difference between the two that makes standard physical circuit constructions a suboptimal choice for describing logical "circuits":
 the logical circuit can (and often does) change in time!
 So rather than a static object, we utilize a "stack" where new instructions can be pushed on as needed.
 
@@ -42,9 +42,9 @@ It is implemented this way so that previous stacks (which are commonly stored in
 
 ## Basic Example
 
-We have already implicitly seen the `InstructionStack` at work in the [workflow example](/gettingstarted/workflow), but we can highlight some more of its features here.
+We have already implicitly seen the `InstructionStack` at work in the [workflow example](/markdown/workflow), but we can highlight some more of its features here.
 
-```{code-cell} ipython3
+```{code-cell}
 from loqs.core import InstructionStack
 
 # Here we take the stack from the workflow example
@@ -60,7 +60,7 @@ print(stack1)
 
 The `QuantumProgram` will pop instructions off the `InstructionStack` to execute them.
 
-```{code-cell} ipython3
+```{code-cell}
 inst_label, stack2 = stack1.pop_instruction()
 print(inst_label)
 print(stack2)
@@ -68,13 +68,13 @@ print(stack2)
 
 Adaptive instructions may prepend new instructions to the `InstructionStack`.
 
-```{code-cell} ipython3
+```{code-cell}
 stack3 = stack2.insert_instruction(0, ("New Instruction Label", "L0"))
 print(stack3)
 ```
 
 ## What's next?
 
-See the API Reference for [`InstructionLabel`](/devguide/_autosummary/loqs.core.instructions.instructionlabel.InstructionLabel) or [`InstructionStack`](/devguide/_autosummary/loqs.core.instructions.instructionstack.InstructionStack) for more in-depth documentation of respective objects.
+See the API Reference for [`InstructionLabel`](/_autosummary/loqs.core.instructions.instructionlabel.InstructionLabel) or [`InstructionStack`](/_autosummary/loqs.core.instructions.instructionstack.InstructionStack) for more in-depth documentation of respective objects.
 
 Next, we will cover the `loqs.core.instructions.builder` module and see how several commonly used types of `Instructions` can be quickly built.

@@ -36,7 +36,7 @@ Users are not intended to call `Instruction.apply()` directly like this.
 For the remainder of this section, we will be using an adder as an example `Instruction`.
 This will take an integer `data_val`(which would normally be provided from the last frame) and increment it by `add_val`.
 
-```{code-cell} ipython3
+```{code-cell}
 from loqs.core import Frame, Instruction
 
 def my_apply_fn1(data_val: int, add_val: int) -> Frame:
@@ -59,7 +59,7 @@ This can be stored in the `Instruction.data` attribute and set by the constructo
 
 In the case of our example, maybe we want to set the `add_val` to be part of the instruction data.
 
-```{code-cell} ipython3
+```{code-cell}
 # Define our Instruction with add_val as part of the data
 adder3 = Instruction(
     apply_fn=my_apply_fn1,
@@ -80,7 +80,7 @@ By default, the `map_qubits_fn` is a passthrough assuming no qubit labels need t
 The default has been good for our adder `Instruction` thus far, but we can make it not the case to show what happens when qubits need to be mapped.
 Instead of returning a bare `int`, let's return a dict with qubit label keys and store what that label is in `data`.
 
-```{code-cell} ipython3
+```{code-cell}
 from collections.abc import Mapping
 
 
@@ -111,7 +111,7 @@ print(frame4)
 
 Now that we have defined the `map_qubits_fn`, we should be able to use the `Instrument.map_qubits()` function to get a new `Instruction` with the new qubit labels.
 
-```{code-cell} ipython3
+```{code-cell}
 mapped_adder4 = adder4.map_qubits({"Q0": "Q1"})
 
 mapped_frame4 = mapped_adder4.apply(
@@ -146,7 +146,7 @@ This takes form as the `param_priority` kwarg in the `Instruction` constructor, 
 - `"program"` corresponding to the `QuantumProgram`
 - `"history[<idx>]"` corresponding to the `History` where `<idx>` is the indices for [a `collect_data` call](history-collecting-data)
 
-The default priority order is defined [here](/devguide/_autosummary/loqs.core.instructions.instruction.DEFAULT_PRIORITIES).
+The default priority order is defined [here](/_autosummary/loqs.core.instructions.instruction.DEFAULT_PRIORITIES).
 
 ```{note}
 `param_priorities` is automatically set by the `Instruction` construction. Users will only need to adjust this when they want to change the priority or if the `apply_fn` uses variadic kwargs (i.e. `**kwargs`), in which case the automatic functionality will not work properly.
@@ -175,7 +175,7 @@ The `Instruction.param_priorities` property does the aliasing when needed.
 We can make a version of our adder with custom priorities and aliases to showcase these features.
 Note that full use of this machinery requires context from a `QuantumProgram`, so we cannot show the full functionality here.
 
-```{code-cell} ipython3
+```{code-cell}
 # Define this with argument names that don't match frame/data keys
 def my_apply_fn3(dval: int, aval: int, qubit_label: str) -> Frame:
     new_val = dval + aval
@@ -204,7 +204,7 @@ adder5 = Instruction(
 print(adder5.param_priorities)
 ```
 
-```{code-cell} ipython3
+```{code-cell}
 # Similar to last example, manually extract from data for standalone example
 # Note that we are still using the aliased values here
 frame5 = adder5.apply(
@@ -216,8 +216,8 @@ print(frame5)
 
 ## What's next?
 
-While this covered many of the main points in creating an `Instruction`, it may also be useful to see a more complex example in the ["Building a Complex Instruction" tutorial](/tutorials/buildinstruction).
+While this covered many of the main points in creating an `Instruction`, it may also be useful to see a more complex example in the ["Building a Complex Instruction" tutorial](/markdown/buildinstruction).
 
-See the [API Reference](/devguide/_autosummary/loqs.core.instructions.instruction.Instruction) for more in-depth documentation of `Instruction` objects.
+See the [API Reference](/_autosummary/loqs.core.instructions.instruction.Instruction) for more in-depth documentation of `Instruction` objects.
 
 Next, we will cover how to tell the `QuantumProgram` which instructions to run during execution using the `InstructionLabel` and `InstructionStack`.

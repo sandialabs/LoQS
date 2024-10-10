@@ -1,3 +1,4 @@
+
 # Simulation Backends
 
 Traditionally, `LoQS` has been built on top of `pyGSTi` and `quantumsim==0.2.0`;
@@ -29,16 +30,16 @@ The packages currently available as circuit backends:
 
 - `pygsti` via `PyGSTiPhysicalCircuit`
 
-See the [API Reference](/devguide/_autosummary/loqs.backends.circuit) for more in-depth documentation of circuit backends.
+See the [API Reference](/_autosummary/loqs.backends.circuit) for more in-depth documentation of circuit backends.
 
 (model-backends)=
 ## Model Backends
 
 In this context, a noise model is a mapping from a circuit label (i.e. gate name and target qubits) into some operator representation that can be applied to a state.
 We need some way to enforce that a model's output can act on a state.
-The `GateRep` enum defines what types of representations can be used for gates, and the allowed options can be checked in the [API Reference](/devguide/_autosummary/loqs.backends.model.basemodel.GateRep).
+The `GateRep` enum defines what types of representations can be used for gates, and the allowed options can be checked in the [API Reference](/_autosummary/loqs.backends.model.basemodel.GateRep).
 Similarly, the `InstrumentRep` enum defines what types of representations can be used for quantum instruments (often used to describe midcircuit measurements).
-The allowed options can also be checked in the [API Reference](/devguide/_autosummary/loqs.backends.model.basemodel.InstrumentRep).
+The allowed options can also be checked in the [API Reference](/_autosummary/loqs.backends.model.basemodel.InstrumentRep).
 
 The model backend interface is enforced by the abstract `BaseNoiseModel` class, which has the following functions defined:
 
@@ -51,7 +52,7 @@ The packages currently available as noise models:
 
 - `pygsti.models.ExplicitOpModel` and `pygsti.models.ImplicitOpModel` via `PyGSTiNoiseModel`
 
-See the [API Reference](/devguide/_autosummary/loqs.backends.model) for more in-depth documentation of model backends.
+See the [API Reference](/_autosummary/loqs.backends.model) for more in-depth documentation of model backends.
 
 (state-backends)=
 ## State Backends
@@ -70,7 +71,7 @@ The packages currently available as quantum states:
 
 - `quantumsim.sparsedm` (0.2.0 only) via `QSimQuantumState`
 
-See the [API Reference](/devguide/_autosummary/loqs.backends.state) for more in-depth documentation of state backends.
+See the [API Reference](/_autosummary/loqs.backends.state) for more in-depth documentation of state backends.
 
 ## What's next?
 

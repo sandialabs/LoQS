@@ -28,7 +28,7 @@ from loqs.tools import fttools
 
 ## Non-FT Program
 
-Our starting point will be the non-FT program from the [Workflow tutorial](../gettingstarted/workflow).
+Our starting point will be the non-FT program from the [Workflow tutorial](../markdown/workflow).
 
 ```{code-cell} ipython3
 code_5q = codepack_5_1_3.create_qec_code(circuit_backend=PyGSTiPhysicalCircuit)
@@ -493,7 +493,6 @@ Seeing all the programs succeed above, one might wonder whether the testing is i
 It would be a lot of effort to do this exhaustively, but we can at least highlight a few interesting examples.
 
 +++
-
 
 ### In-Depth FT Prep
 
