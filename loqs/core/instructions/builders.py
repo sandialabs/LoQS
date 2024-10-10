@@ -365,6 +365,7 @@ def build_physical_circuit_instruction(
     inplace: bool = True,
     reset_mcms: bool = True,
     model: BaseNoiseModel | None = None,
+    pauli_frame_update: str | Sequence[str] | Mapping[str, str] | None = None,
     name: str = "(Unnamed physical circuit)",
 ) -> Instruction:
     """TODO"""
@@ -378,6 +379,9 @@ def build_physical_circuit_instruction(
         inplace: bool,
         reset_mcms: bool,
         error_injections: list[tuple[int, str, int]] | None,
+        pauli_frame_update: str | list[str] | dict[str, str] | None,
+        patch_label: str,
+        patches: PatchDict,
     ) -> Frame:
 
         # Modify circuit for injected errors
@@ -402,6 +406,38 @@ def build_physical_circuit_instruction(
         )
 
         data: dict[str, object] = {"state": new_state}
+
+        # Update pauli frame, if needed
+        if pauli_frame_update is not None:
+            patch = patches[patch_label]
+
+            if isinstance(pauli_frame_update, dict):
+                new_pauli_frame = patch.pauli_frame.map_frame(
+                    pauli_frame_update
+                )
+            elif isinstance(pauli_frame_update, str):
+                new_pauli_frame = (
+                    patch.pauli_frame.update_from_transversal_clifford(
+                        pauli_frame_update
+                    )
+                )
+            elif isinstance(pauli_frame_update, Sequence):
+                new_pauli_frame = (
+                    patch.pauli_frame.update_from_clifford_conjugation(
+                        pauli_frame_update
+                    )
+                )
+            else:
+                raise ValueError("Invalid pauli frame mapping")
+
+            # Update patches
+            new_patches = patches.copy()
+            new_patches[patch_label] = QECCodePatch(
+                patch.code, patch.qubits, new_pauli_frame
+            )
+
+            data["patches"] = new_patches
+
         if include_outcomes:
             data["measurement_outcomes"] = MeasurementOutcomes(outcomes)
         if len(error_injections):
@@ -416,6 +452,7 @@ def build_physical_circuit_instruction(
         "inplace": inplace,
         "reset_mcms": reset_mcms,
         "error_injections": None,  # Must be specified in label only
+        "pauli_frame_update": pauli_frame_update,
     }
     if model is not None:
         data["model"] = model
@@ -462,9 +499,18 @@ def build_repeat_until_success_instruction(
         rus_key = kwargs.pop("rus_key")
         reset_key = kwargs.pop("reset_key")
 
-        patch_label = kwargs.pop("patch_label")
-        patches = kwargs.pop("patches")
-        stack = InstructionStack.cast(kwargs.pop("stack"))
+        if "patch_label" in instruction.param_priorities:
+            patch_label = kwargs["patch_label"]
+        else:
+            patch_label = kwargs.pop("patch_label")
+        if "patches" in instruction.param_priorities:
+            patches = kwargs["patches"]
+        else:
+            patches = kwargs.pop("patches")
+        if "stack" in instruction.param_priorities:
+            stack = InstructionStack.cast(kwargs["stack"])
+        else:
+            stack = InstructionStack.cast(kwargs.pop("stack"))
 
         # All the remaining kwargs should go straight into the instruction
         applied_frame = instruction.apply(**kwargs)

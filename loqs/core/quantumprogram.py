@@ -224,10 +224,14 @@ class QuantumProgram(Displayable):
         max_frame_limit: int = 100,
         dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
+        reset_shot_histories: bool = True,
         verbose: bool = True,
     ):
         """TODO"""
         # Take out shot histories to avoid unnecessary copies during dask.delayed
+        if reset_shot_histories:
+            self.shot_histories = []
+
         old_shot_histories = self.shot_histories
         self.shot_histories = []
 

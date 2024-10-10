@@ -171,7 +171,6 @@ def create_qec_code(
     )
 
     # Logical K (transversal)
-    # TODO: Patch update
     # Fig 2a of arxiv:1603.03948
     logical_K_circ = circuit_backend(
         [[("Gk", q) for q in qubits[2:]]], qubit_labels=qubits
@@ -179,11 +178,11 @@ def create_qec_code(
     instructions["K"] = builders.build_physical_circuit_instruction(
         logical_K_circ,
         include_outcomes=False,
+        pauli_frame_update="K",
         name="Logical K",
     )
 
     # Logical H (transversal + permute)
-    # TODO: Patch update
     # Fig 2b of arxiv:1603.03948
     logical_H_circ = circuit_backend(
         [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
@@ -191,6 +190,7 @@ def create_qec_code(
     logical_H_circ_inst = builders.build_physical_circuit_instruction(
         logical_H_circ,
         include_outcomes=False,
+        pauli_frame_update="H",
         name="Logical H circuit",
     )
     logical_H_permutation = builders.build_patch_permute_instruction(

@@ -146,7 +146,19 @@ class PauliFrame(Castable, Displayable):
 
         new_frame = self.copy()
         for i, (Pold, P) in enumerate(zip(self.pauli_frame, pstr)):
-            old_to_new = self._clifford_mapping_dict(P)
+            old_to_new = self._pauli_product_mapping_dict(P)
+            new_frame.pauli_frame[i] = old_to_new[Pold]
+
+        return new_frame
+
+    def update_from_clifford_conjugation(
+        self, cliffords: Sequence[str]
+    ) -> PauliFrame:
+        assert len(cliffords) == len(self.pauli_frame)
+
+        new_frame = self.copy()
+        for i, (Pold, C) in enumerate(zip(self.pauli_frame, cliffords)):
+            old_to_new = self._clifford_mapping_dict(C)
             new_frame.pauli_frame[i] = old_to_new[Pold]
 
         return new_frame
@@ -155,19 +167,38 @@ class PauliFrame(Castable, Displayable):
         old_to_new = self._clifford_mapping_dict(clifford)
         return self.map_frame(old_to_new)
 
-    def _clifford_mapping_dict(self, clifford: str) -> dict[str, str]:
-        if clifford == "I":
+    def _pauli_product_mapping_dict(self, pauli: str) -> dict[str, str]:
+        """Return the Pauli frame element mapping under multiplication.
+
+        This just does $F \rightarrow F P$
+        """
+        if pauli == "I":
             old_to_new = {k: k for k in "IXYZ"}
-        elif clifford == "X":
+        elif pauli == "X":
             old_to_new = {"I": "X", "X": "I", "Y": "Z", "Z": "Y"}
-        elif clifford == "Y":
+        elif pauli == "Y":
             old_to_new = {"I": "Y", "X": "Z", "Y": "I", "Z": "X"}
-        elif clifford == "Z":
+        elif pauli == "Z":
             old_to_new = {"I": "Z", "X": "Y", "Y": "X", "Z": "I"}
-        elif clifford == "H":
+        else:
+            raise NotImplementedError(f"{pauli} is not a Pauli")
+
+        return old_to_new
+
+    def _clifford_mapping_dict(self, clifford: str) -> dict[str, str]:
+        """Return the Pauli frame element mapping under Clifford conjugation.
+
+        When passing through a Clifford gate, the Pauli frame undergoes
+        $F \rightarrow C^{-1} F C$.
+        """
+        if clifford in ["I", "X", "Y", "Z"]:
+            old_to_new = {k: k for k in "IXYZ"}
+        if clifford == "H":
             old_to_new = {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
         elif clifford in ["S", "Sdag"]:
             old_to_new = {"I": "I", "X": "Y", "Y": "X", "Z": "Z"}
+        elif clifford in ["K"]:
+            old_to_new = {"I": "I", "X": "Y", "Y": "Z", "Z": "X"}
         else:
             raise NotImplementedError(f"{clifford} is not implemented")
 
