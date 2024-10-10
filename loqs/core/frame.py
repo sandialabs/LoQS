@@ -88,6 +88,8 @@ class Frame(Mapping[str, object], Castable, Displayable):
                 f"Accessing an expired object {key}. "
                 + "The returned object may actually belong to a future frame."
             )
+        if key == "log":
+            return self.log
         return self._data[key]
 
     def __len__(self) -> int:
@@ -161,11 +163,12 @@ class Frame(Mapping[str, object], Castable, Displayable):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+        # Order for better display
         state.update(
             {
+                "log": self.log,
                 "_data": self.serialize(self._data, hash_to_serial_id_cache),
                 "_expired_keys": self._expired_keys,
-                "log": self.log,
             }
         )
         return state

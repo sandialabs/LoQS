@@ -747,7 +747,7 @@ def _create_adaptive_measure_instruction_part_I(
         partI_feedforward_apply_fn,
         {"qubits": qubits},
         map_qubits_fn,
-        name="Part I of adaptive logical measurement",
+        name="FT Logical X Measure Part I Feed-Forward",
     )
 
 

@@ -122,6 +122,7 @@ def test_program_output(
     collect_shot_data_args: Sequence[Sequence],
     expected_outcomes: Sequence,
     num_shots: int = 1,
+    verbose: bool = False,
 ) -> bool:
     """TODO"""
     test_program.run(shots=num_shots, verbose=False)
@@ -130,5 +131,8 @@ def test_program_output(
         outs = test_program.collect_shot_data(*args)
         for out in outs[-num_shots:]:
             if out != expected:
+                if verbose:
+                    print(f"Output:   {out}")
+                    print(f"Expected: {expected}")
                 return False
     return True

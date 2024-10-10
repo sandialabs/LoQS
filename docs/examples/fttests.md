@@ -20,9 +20,10 @@ from collections import Counter
 
 from loqs.backends import QSimQuantumState, PyGSTiNoiseModel, PyGSTiPhysicalCircuit
 from loqs.core import QuantumProgram, Frame, Instruction
+from loqs.core.recordables import MeasurementOutcomes
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 from loqs.tools.qsimtools import print_state_probs_phases
-from loqs.tools import qectools, fttools
+from loqs.tools import fttools
 ```
 
 ## Non-FT Program
@@ -378,18 +379,14 @@ program_ftqec1 = QuantumProgram.from_quantum_program(
     stack_ftqec1,
     name="FT Prep -, QEC, FT measure X"
 )
-```
 
-```{code-cell} ipython3
 noise_injected_programs = fttools.build_discrete_error_injection_programs(
     base_program=program_ftqec1,
     instruction_to_analyze=code_5q.instructions["Flagged XZZXI Check"],
     stack_idx_to_modify=3,
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
-```
 
-```{code-cell} ipython3
 failed = fttools.run_discrete_error_injected_programs(
     noise_injected_programs,
     [("logical_measurement", -1)],
@@ -414,18 +411,14 @@ program_ftqec2 = QuantumProgram.from_quantum_program(
     stack_ftqec2,
     name="FT Prep -, QEC, FT measure X"
 )
-```
 
-```{code-cell} ipython3
 noise_injected_programs = fttools.build_discrete_error_injection_programs(
     base_program=program_ftqec2,
     instruction_to_analyze=code_5q.instructions["Flagged IXZZX Check"],
     stack_idx_to_modify=3,
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
-```
 
-```{code-cell} ipython3
 failed = fttools.run_discrete_error_injected_programs(
     noise_injected_programs,
     [("logical_measurement", -1)],
@@ -448,18 +441,14 @@ program_ftqec3 = QuantumProgram.from_quantum_program(
     stack_ftqec3,
     name="FT Prep -, QEC, FT measure X"
 )
-```
 
-```{code-cell} ipython3
 noise_injected_programs = fttools.build_discrete_error_injection_programs(
     base_program=program_ftqec3,
     instruction_to_analyze=code_5q.instructions["Flagged XIXZZ Check"],
     stack_idx_to_modify=3,
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
-```
 
-```{code-cell} ipython3
 failed = fttools.run_discrete_error_injected_programs(
     noise_injected_programs,
     [("logical_measurement", -1)],
@@ -482,23 +471,200 @@ program_ftqec4 = QuantumProgram.from_quantum_program(
     stack_ftqec4,
     name="FT Prep -, QEC, FT measure X"
 )
-```
 
-```{code-cell} ipython3
 noise_injected_programs = fttools.build_discrete_error_injection_programs(
     base_program=program_ftqec4,
     instruction_to_analyze=code_5q.instructions["Flagged ZXIXZ Check"],
     stack_idx_to_modify=3,
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
-```
 
-```{code-cell} ipython3
 failed = fttools.run_discrete_error_injected_programs(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
 )
+```
+
+## More In-Depth Testing
+
+Seeing all the programs succeed above, one might wonder whether the testing is implemented correctly, or if it just always says things pass. To ensure that is not the case, we'll manually test several interesting injected errors and ensure that the correct syndromes are observed, decoding happens appropriately, and feed-forward logic proceeds as expected.
+
+It would be a lot of effort to do this exhaustively, but we can at least highlight a few interesting examples.
+
++++
+
+
+### In-Depth FT Prep
+
+First, we'll test the FT prep. Recall the FT $\ket{-}$ prep circuit is as follows:
+
+![image](../images/RyanAnderson2022-Fig2TopLeft.png)
+
+Let's insert an X error on data qubit 3 after the first CZ gate. This will spread to data qubit 2 as a Z error. The first $\bar{X}$ check is not sensitive to this. The second $\bar{X}$ actually does pick up on the errors, but it picks up on both of them, leaving the overall syndrome check untriggered. Thankfully, the last $\bar{X}$ does catch it. Thus, we expect to see measurement outcomes of [0, 0, 1] on the syndrome qubit and [0, 0, 0] on the flag qubit. This should in turn trigger a second round of the RUS instruction, which this time will be successful.
+
+```{code-cell} ipython3
+stack_ftprep_D3X_error = [
+    ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
+    ("Init Patch 5Q", None, ("L0", qubits)),
+    # Here we inject an X error before layer 2, i.e. between CZs, on qubit 4 (0-indexed, and our qubit convention is 2 aux + 5 data)
+    ("FT Minus Prep", "L0", (), {"error_injections": [(2, "Gxpi", 4)]}),
+    ("FT Logical X Measure", "L0")
+]
+
+program_ftprep_D3X_error = QuantumProgram.from_quantum_program(program, stack_ftprep_D3X_error)
+
+program_ftprep_D3X_error.run()
+```
+
+```{code-cell} ipython3
+# We can interactively look to see that this is indeed what happened...
+program_ftprep_D3X_error.display()
+```
+
+```{code-cell} ipython3
+# ... or we can programmatically test some of the shot features (more than just logical measurement)
+fttools.test_program_output(
+    program_ftprep_D3X_error,
+    collect_shot_data_args=[
+        ("inferred_outcomes", 2), # Let's grab the outcomes for the first round of RUS
+        ("rus_success", 2),       # And also the computed RUS success value
+        ("inferred_outcomes", 4), # Let's do it again for the second round (frame 3 is the reset)
+        ("rus_success", 4),       
+        ("logical_measurement", -1) # And still check the logical outcome
+    ],
+    expected_outcomes=[
+        MeasurementOutcomes({"A0": [0, 0, 1], "A1": [0, 0, 0]}),
+        False,
+        MeasurementOutcomes({"A0": [0, 0, 0], "A1": [0, 0, 0]}),
+        True,
+        1
+    ])
+```
+
+### In-Depth Adaptive Measure
+
+Next, we'll test the FT measure. Recall that the workflow for the adaptive measure is as follows:
+
+![image](../images/RyanAnderson2022-Fig13.png)
+
+In this case, we'll want to insert multiple errors that trigger different feed-forward conditions.
+
+Let's start simple: We can inject a data error on the first layer that will trip Part I syndrome but not Part II syndrome, or vice-versa. This should lead us then to to the decoding circuit, where we classically decode the data error and return the correct logical outcome. One such error is a Z error on data qubit 2, which will trip Part II but not Part I.
+
+```{code-cell} ipython3
+stack_ftmeas_partI_D2Z_error = [
+    ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
+    ("Init Patch 5Q", None, ("L0", qubits)),
+    ("FT Minus Prep", "L0"),
+    # Insert at layer 0, a Z error, on qubit 3 (0-indexed, where first 2 are aux qubits)
+    ("FT Logical X Measure Part I Circuit", "L0", (), {"error_injections": [(0, "Gzpi", 3)]}),
+    ("FT Logical X Measure Part I Feed-Forward", "L0"),
+]
+
+program_ftmeas_partI_D2Z_error = QuantumProgram.from_quantum_program(program, stack_ftmeas_partI_D2Z_error)
+
+program_ftmeas_partI_D2Z_error.run()
+```
+
+```{code-cell} ipython3
+program_ftmeas_partI_D2Z_error.display()
+```
+
+```{code-cell} ipython3
+fttools.test_program_output(
+    program_ftmeas_partI_D2Z_error,
+    collect_shot_data_args=[
+        ("log", 3),                # Double-check this is the Part I circuit result
+        ("measurement_outcomes", 3),  # This should be all 0
+        ("log", 4),                # Double-check this is the Part I feed-forward result
+        ("F1", 4),                 # Should have no flag
+        ("inferred_M1", 4),        # and this should have correctly identified logical 1 measurement
+        ("log", 5),                # Double-check this is the Part II circuit result
+        ("measurement_outcomes", 5),  # Now syndrome should be tripped
+        ("log", 6),                # Double-check this is the Part II feed-forward result
+        ("F2", 6),                 # Should have no flag
+        ("inferred_M2", 6),        # but incorrectly identify logical 0 measurement
+        ("log", 7),                # We should now hit decoder circuit
+        ("measurement_outcomes", 7), # The Z error should show up as a bitflip on data qubit 2
+        ("log", 8),                # Finally we hit the classical decoder
+        ("classical_correction", 8), # Let's see that the decoder picked out the correct error...
+        ("corrected_outcomes", 8), # ... and applied the correction properly
+        ("logical_measurement", 8) # And still check the logical outcome
+    ],
+    expected_outcomes=[
+        "FT Logical X Measure Part I Circuit result",
+        MeasurementOutcomes({"A0": [0], "A1": [0]}),
+        "FT Logical X Measure Part I Feed-Forward result",
+        0,
+        1,
+        "FT Logical X Measure Part II Circuit result",
+        MeasurementOutcomes({"A0": [1], "A1": [0]}),
+        "FT Logical X Measure Part II Feed-Forward result",
+        0,
+        0,
+        "Non-FT state decoder circuit result",
+        MeasurementOutcomes({"D2": [0], "D3": [1], "D4": [0], "D5": [0], "D6": [0]}),
+        "FT Logical X Measure Classical Decoder result",
+        "IXIII", # Remember that this is the decoded error
+        [0, 0, 0, 0, 0],
+        1
+    ], verbose=True)
+```
+
+Now let's also test one of those hook errors that flagged FT is supposed to be helping us with. Specifically, let's insert an X error on the syndrome qubit just before the CX check. This will create a weight-2 hook error (XZIII), which should push us straight to the decoding circuit. This time, the lookup table should not be the weight-1 errors we use for decoding data errors, but instead be based on the hook errors of our XZIIZ check. We should still be able to correct back though.
+
+```{code-cell} ipython3
+stack_ftmeas_partI_M1X_error = [
+    ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
+    ("Init Patch 5Q", None, ("L0", qubits)),
+    ("FT Minus Prep", "L0"),
+    # Insert at layer 3, a X error, on qubit 0 (0-indexed, where first qubit is measure qubit)
+    ("FT Logical X Measure Part I Circuit", "L0", (), {"error_injections": [(3, "Gxpi", 0)]}),
+    ("FT Logical X Measure Part I Feed-Forward", "L0"),
+]
+
+program_ftmeas_partI_M1X_error = QuantumProgram.from_quantum_program(program, stack_ftmeas_partI_M1X_error)
+
+program_ftmeas_partI_M1X_error.run()
+```
+
+```{code-cell} ipython3
+program_ftmeas_partI_M1X_error.display()
+```
+
+```{code-cell} ipython3
+fttools.test_program_output(
+    program_ftmeas_partI_M1X_error,
+    collect_shot_data_args=[
+        ("log", 3),                # Double-check this is the Part I circuit result
+        ("measurement_outcomes", 3),  # An X error is undetectable on measure, but it should trip the flag!
+        ("log", 4),                # Double-check this is the Part I feed-forward result
+        ("F1", 4),                 # We should have a flag...
+        ("inferred_M1", 4),        # ... but still think this is logical 1
+        ("log", 5),                # We should now hit decoder circuit
+        # The expected measurement outcome is non-trivial.
+        # The X error on data qubit 1 will prop to Z errors on data qubit 2 and 5
+        # This will cancel the Z error on data qubit 2, but show up as a bitflip on data qubit 5
+        ("measurement_outcomes", 5),
+        ("log", 6),                # Finally we hit the classical decoder
+        ("classical_correction", 6), # Let's see that the decoder picked out the correct error...
+        ("corrected_outcomes", 6), # ... and applied the correction properly
+        ("logical_measurement", 6) # And still check the logical outcome
+    ],
+    expected_outcomes=[
+        "FT Logical X Measure Part I Circuit result",
+        MeasurementOutcomes({"A0": [0], "A1": [1]}),
+        "FT Logical X Measure Part I Feed-Forward result",
+        1,
+        1,
+        "Non-FT state decoder circuit result",
+        MeasurementOutcomes({"D2": [0], "D3": [0], "D4": [0], "D5": [0], "D6": [1]}),
+        "FT Logical X Measure Classical Decoder result",
+        "IIIIX", # Remember that this is the decoded error
+        [0, 0, 0, 0, 0],
+        1
+    ], verbose=True)
 ```
 
 ```{code-cell} ipython3

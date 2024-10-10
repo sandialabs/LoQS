@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import tkinter as tk
 from tkinter import ttk
 from typing import Mapping
 
 from loqs.internal import Serializable
+
+
+def _display(data, title):
+    app = DisplayableViewer(data, title)
+    app.mainloop()
 
 
 class Displayable(Serializable):
@@ -21,8 +27,8 @@ class Displayable(Serializable):
     def display(self):
         """Launch an interactive viewer for the object.
 
-        This is a blocking operation until the viewer
-        window is closed.
+        This launches a separate process for Tkinter,
+        making it non-blocking.
         """
         data = self.to_serialization()
 
@@ -32,8 +38,11 @@ class Displayable(Serializable):
             title += f"({obj_name}) "
         title += "Viewer"
 
-        app = DisplayableViewer(data, title)
-        app.mainloop()
+        # We span Tkinter in its own process
+        # This prevents Jupyter notebook + Tkinter event loop conflicts
+        # This also has the benefit of not blocking the main process
+        p = multiprocessing.Process(target=_display, args=(data, title))
+        p.start()
 
 
 class DisplayableViewer(tk.Tk):
