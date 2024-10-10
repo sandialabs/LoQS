@@ -103,6 +103,24 @@ class TestPauliFrame:
         pf5 = pf.update_from_pauli_str("ZZZZ")
         self._check(pf5, "ZYXI")
 
+    def test_update_from_clifford_conjugation(self):
+        pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
+        
+        pf2 = pf.update_from_clifford_conjugation("IXYZ")
+        self._check(pf2, "IXYZ")
+
+        pf3 = pf.update_from_clifford_conjugation(["H", "S", "Sdag", "K"])
+        self._check(pf3, "IYXX")
+
+        pf4 = pf.update_from_clifford_conjugation(["K", "H", "S", "Sdag"])
+        self._check(pf4, "IZXZ")
+
+        pf5 = pf.update_from_clifford_conjugation(["Sdag", "K", "H", "S"])
+        self._check(pf5, "IYYZ")
+
+        pf6 = pf.update_from_clifford_conjugation(["S", "Sdag", "K", "H"])
+        self._check(pf6, "IYZX")
+
     def test_update_from_transversal_clifford(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
         
@@ -110,13 +128,13 @@ class TestPauliFrame:
         self._check(pf2, "IXYZ")
 
         pf3 = pf.update_from_transversal_clifford("X")
-        self._check(pf3, "XIZY")
+        self._check(pf3, "IXYZ")
 
         pf4 = pf.update_from_transversal_clifford("Y")
-        self._check(pf4, "YZIX")
+        self._check(pf4, "IXYZ")
         
         pf5 = pf.update_from_transversal_clifford("Z")
-        self._check(pf5, "ZYXI")
+        self._check(pf5, "IXYZ")
 
         pf6 = pf.update_from_transversal_clifford("H")
         self._check(pf6, "IZYX")
@@ -126,6 +144,9 @@ class TestPauliFrame:
 
         pf8 = pf.update_from_transversal_clifford("Sdag")
         self._check(pf8, "IYXZ")
+
+        pf9 = pf.update_from_transversal_clifford("K")
+        self._check(pf9, "IYZX")
         
     def test_serialization(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
