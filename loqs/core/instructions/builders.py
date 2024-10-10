@@ -64,6 +64,7 @@ def build_composite_instruction(
         data=data,
         map_qubits_fn=map_qubits_fn,
         name=name,
+        type="Composite",
     )
 
 
@@ -207,6 +208,7 @@ def build_lookup_decoder_instruction(
         param_priorities=param_priorities,
         param_aliases=param_aliases,
         name=name,
+        type="Lookup Decoder",
     )
 
 
@@ -246,6 +248,7 @@ def build_object_builder_instruction(
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Suppress variadic kwargs warning
         name=name,
+        type="Object builder",
     )
 
 
@@ -290,6 +293,7 @@ def build_patch_builder_instruction(
         data=data,
         param_priorities=param_priorities,
         name=name,
+        type="Patch Builder",
     )
 
 
@@ -308,10 +312,7 @@ def build_patch_remover_instruction(
 
         return Frame({"patches": patches})
 
-    return Instruction(
-        apply_fn=apply_fn,
-        name=name,
-    )
+    return Instruction(apply_fn=apply_fn, name=name, type="Patch Remover")
 
 
 def build_patch_permute_instruction(
@@ -362,6 +363,7 @@ def build_patch_permute_instruction(
         data=data,
         map_qubits_fn=map_qubits_fn,
         name=name,
+        type="Patch Permuter",
     )
 
 
@@ -478,6 +480,7 @@ def build_physical_circuit_instruction(
         data=data,
         map_qubits_fn=map_qubits_fn,
         name=name,
+        type="Physical circuit",
     )
 
 
@@ -634,4 +637,5 @@ def build_repeat_until_success_instruction(
         param_priorities=param_priorities,
         param_error_behavior="continue",  # Skip warning for variadic kwargs
         name=name,
+        type="Repeat-until-success",
     )

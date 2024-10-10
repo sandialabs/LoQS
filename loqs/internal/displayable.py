@@ -90,13 +90,33 @@ class DisplayableViewer(tk.Tk):
         for key, value in item.items():
             # Create an indentation string based on the depth
             indentation = "      " * depth  # 6 spaces for each depth level
-            if isinstance(value, (dict, list, tuple)):
+            if isinstance(value, dict):
                 # If the value is a dictionary, insert it as a parent item
                 child_id = self.tree.insert(
                     parent_id, "end", text="", values=(indentation + key, "")
                 )
                 # Insert nested dictionary items
                 self.insert_items(child_id, value, depth + 1)
+            elif isinstance(value, (list, tuple)):
+                # Check if all elements below this are simple
+                if any([isinstance(el, (dict, list, tuple)) for el in value]):
+                    # We have further nested objects, follow dict-like expansion
+                    child_id = self.tree.insert(
+                        parent_id,
+                        "end",
+                        text="",
+                        values=(indentation + key, ""),
+                    )
+                    # Insert nested dictionary items
+                    self.insert_items(child_id, value, depth + 1)
+                else:
+                    # They are simple, follow normal entry insertion
+                    self.tree.insert(
+                        parent_id,
+                        "end",
+                        text="",
+                        values=(indentation + key, value),
+                    )
             else:
                 # If the value is not a dictionary or list, insert it as a child item
                 self.tree.insert(

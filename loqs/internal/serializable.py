@@ -121,6 +121,11 @@ class Serializable:
         state : object
             An object, usually a dictionary, representing the object to de-serialize.
 
+        serial_id_to_obj_cache:
+            A dictionary of serialized id keys to object values. Note that unlike
+            `to_serialization()`, setting this to None simply initializes a new cache
+            rather than turning off caching.
+
         Returns
         -------
         object
@@ -322,7 +327,9 @@ class Serializable:
         Parameters
         ----------
         hash_to_serial_id_cache:
-            A dictionary of already serialized id keys with their corresponding object values
+            A dictionary of object hash keys with serialized id values.
+            Defaults to None, which disables cache usage. It is highly recommended that the
+            cache is used for serialization, and high-level functions like `write()` do so.
 
         Returns
         -------
@@ -330,26 +337,24 @@ class Serializable:
             Usually a dictionary representing the serialized object, but may also be another native
             Python type, e.g. a string or list.
         """
-        if hash_to_serial_id_cache is None:
-            hash_to_serial_id_cache = {}
-
-        try:
-            cache_id = hash_to_serial_id_cache[hash(self)]
-            return {
-                "module": self.__class__.__module__,
-                "class": self.__class__.__name__,
-                "version": 0,
-                "type": "cached_object_reference",
-                "cache_id": cache_id,
-            }
-        except KeyError:
-            # Cache miss
-            pass
+        if hash_to_serial_id_cache is not None:
+            try:
+                cache_id = hash_to_serial_id_cache[hash(self)]
+                return {
+                    "module": self.__class__.__module__,
+                    "class": self.__class__.__name__,
+                    "version": 0,
+                    "type": "cached_object_reference",
+                    "cache_id": cache_id,
+                }
+            except KeyError:
+                # Cache miss
+                pass
 
         state = self._to_serialization(hash_to_serial_id_cache)
 
         # Add this to the cache, if class marked as should be cached
-        if self.CACHE_ON_SERIALIZE:
+        if hash_to_serial_id_cache is not None and self.CACHE_ON_SERIALIZE:
             cache_id = len(hash_to_serial_id_cache)
             hash_to_serial_id_cache[hash(self)] = cache_id
             state.update(
@@ -435,7 +440,8 @@ class Serializable:
                 )  # don't update caller's dict!
                 format_kwargs["indent"] = 4
 
-            json_dict = self.to_serialization()
+            cache = {}
+            json_dict = self.to_serialization(cache)
             if f is not None:
                 json.dump(json_dict, f, **format_kwargs)
             else:

@@ -66,6 +66,7 @@ class Instruction(Displayable):
         serialized_apply_fn: str | None = None,
         serialized_map_qubits_fn: str | None = None,
         name: str = "(Unnamed instruction)",
+        type: str = "User-defined",
     ) -> None:
         """TODO
 
@@ -126,6 +127,7 @@ class Instruction(Displayable):
         }
 
         self.name = name
+        self.type = type
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
@@ -214,6 +216,7 @@ class Instruction(Displayable):
             serialized_apply_fn=self._serialized_apply_fn,
             serialized_map_qubits_fn=self._serialized_map_qubits_fn,
             name=self.name,
+            type=self.type,
         )
 
     def map_qubits(
@@ -243,6 +246,7 @@ class Instruction(Displayable):
         assert isinstance(data, dict)
         param_error_behavior = state["param_error_behavior"]
         name = state["name"]
+        type = state["type"]
 
         obj = cls(
             apply_fn,
@@ -252,6 +256,7 @@ class Instruction(Displayable):
             serialized_apply_fn=serialized_apply_fn,
             serialized_map_qubits_fn=serialized_map_qubits_fn,
             name=name,
+            type=type,
         )
         obj._param_priorities = state["_param_priorities"]
         obj._param_aliases = state["_param_aliases"]
@@ -261,15 +266,17 @@ class Instruction(Displayable):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+        # Ordering here is to be nicer during display()
         state.update(
             {
-                "_serialized_apply_fn": self._serialized_apply_fn,
-                "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
+                "name": self.name,
+                "type": self.type,
                 "data": self.serialize(self.data, hash_to_serial_id_cache),
                 "param_error_behavior": self.param_error_behavior,
                 "_param_priorities": self._param_priorities,
                 "_param_aliases": self._param_aliases,
-                "name": self.name,
+                "_serialized_apply_fn": self._serialized_apply_fn,
+                "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
             }
         )
         return state

@@ -62,10 +62,10 @@ def convert_edesign_to_programs(
 
     programs = []
     for circ in edesign.all_circuits_needing_data:
-        completed_circ: Circuit = model.complete_circuit(circ)
+        completed_circ: Circuit = model.complete_circuit(circ)  # type: ignore
 
         stack = []
-        for label in completed_circ._labels:
+        for label in completed_circ._labels:  # type: ignore
             stack.extend(label_to_logical[label])
 
         programs.append(QuantumProgram(stack, name=repr(circ), **kwargs))
