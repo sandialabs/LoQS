@@ -45,8 +45,8 @@ class DictNoiseModel(BaseNoiseModel):
         instrep:
             Instrument representation this model will return
         """
-        self.gate_dict = {}
-        self.inst_dict = {}
+        self.gate_dict: dict[tuple[str, tuple[str | int, ...]], object] = {}
+        self.inst_dict: dict[tuple[str, tuple[str | int, ...]], object] = {}
         if isinstance(model_or_dicts, DictNoiseModel):
             self.gate_dict = model_or_dicts.gate_dict.copy()
             self.inst_dict = model_or_dicts.inst_dict.copy()
@@ -128,7 +128,7 @@ class DictNoiseModel(BaseNoiseModel):
             for label in layer:
                 # Try to look up in gates
                 rep = self.gate_dict.get(label, None)
-                reptype = gaterep
+                reptype: GateRep | InstrumentRep = gaterep
 
                 if rep is None:
                     # Failed, now look up in instruments

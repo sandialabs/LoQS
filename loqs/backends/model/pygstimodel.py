@@ -33,8 +33,10 @@ def compute_qsim_bases(num_qubits: int):
     sigYq = np.array([[0, -1], [1, 0]], dtype="complex") * 1.0j / np.sqrt(2.0)
     sig1q = np.array([[0, 0], [0, 1]], dtype="complex")
 
-    qbasis = itertools.product([sig0q, sigXq, sigYq, sig1q], repeat=num_qubits)
-    qbasis = [functools.reduce(np.kron, x) for x in qbasis]
+    qbasis_prod = itertools.product(
+        [sig0q, sigXq, sigYq, sig1q], repeat=num_qubits
+    )
+    qbasis = [functools.reduce(np.kron, x) for x in qbasis_prod]
 
     return ExplicitBasis(
         qbasis,
@@ -195,7 +197,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                         basis = TensorProdBasis(target_bases)
 
                         op = op.embedded_op
-                    reptype = gaterep
+                    reptype: GateRep | InstrumentRep = gaterep
                     if gaterep == GateRep.UNITARY:
                         try:
                             rep = op.to_dense(on_space="Hilbert")

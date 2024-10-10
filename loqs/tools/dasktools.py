@@ -1,11 +1,15 @@
 """TODO"""
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 try:
     from dask.distributed import Client
 except ImportError:
-    Client = None
+    pass
+
+if TYPE_CHECKING:
+    from dask.distributed import Client  # noqa: F811
 
 from loqs.core import QuantumProgram
 
@@ -13,7 +17,7 @@ from loqs.core import QuantumProgram
 # TODO: This currently runs super slow, don't use?
 def run_program_list(
     programs: Sequence[QuantumProgram],
-    dask_client: Client,  # type: ignore
+    dask_client: Client,
     shots_per_program: int,
     shots_per_program_per_batch: int,
     max_frame_limit: int = 100,

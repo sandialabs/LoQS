@@ -68,7 +68,7 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable, Displayable):
     @property
     def all_qubit_labels(self) -> list[str]:
         """TODO"""
-        qubits = []
+        qubits: list[str] = []
         for patch in self.patches.values():
             qubits.extend(patch.qubits)
         return qubits

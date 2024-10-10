@@ -141,14 +141,19 @@ class History(Sequence[Frame], Castable, Displayable):
     ) -> list | object:
 
         if isinstance(indices, int):
-            iter_indices = [indices]
+            iter_indices: list[int] | slice = [indices]
         elif indices == "all":
             iter_indices = slice(len(self._history))
-        else:
+        elif isinstance(indices, slice):
             iter_indices = indices
+        elif isinstance(indices, Sequence):
+            assert indices != "all"
+            iter_indices = list(indices)
+        else:
+            raise ValueError("Invalid type for indices")
 
         if isinstance(iter_indices, slice):
-            iter_indices = range(len(self._history))[iter_indices]
+            iter_indices = list(range(len(self._history))[iter_indices])
 
         data = [self._history[i].get(key, None) for i in iter_indices]
 

@@ -8,7 +8,6 @@ from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-import warnings
 
 from loqs.backends.model.pygstimodel import PYGSTI_QSIM_BASES
 from loqs.core import QuantumProgram
@@ -18,7 +17,7 @@ from loqs.core.instructions.instructionlabel import (
 
 try:
     import pygsti
-    from pygsti.baseobjs import Label, ExplicitBasis
+    from pygsti.baseobjs import Label
     from pygsti.circuits import Circuit
     from pygsti.data import DataSet
     from pygsti.protocols import ExperimentDesign
@@ -165,6 +164,7 @@ def convert_circuit_to_qiskit_draw(
         gatename_conversion, _ = itgs.standard_gatenames_openqasm_conversions(
             "u3"
         )
+    gatename_conversion = dict(gatename_conversion)
 
     for lidx in range(circuit.depth):
         for comp in circuit._layer_components(lidx):
@@ -175,6 +175,7 @@ def convert_circuit_to_qiskit_draw(
                 print(
                     f"{comp.name} conversion not provided, will be displayed as {placeholder_gate}"
                 )
+                assert isinstance(comp.name, str)
                 gatename_conversion[comp.name] = gatename_conversion[
                     placeholder_gate
                 ]
@@ -187,7 +188,7 @@ def convert_circuit_to_qiskit_draw(
 
     qcirc = QuantumCircuit.from_qasm_str(qasm)
 
-    return qcirc.draw()
+    return str(qcirc.draw())
 
 
 def convert_circuit_to_quantikz(
@@ -199,7 +200,9 @@ def convert_circuit_to_quantikz(
 ) -> str:
 
     num_lines = circuit.width
-    quantikz_lines = [[] for _ in range(num_lines)]
+    quantikz_lines = [
+        "",
+    ] * num_lines
 
     # Lstick initialization
     if lstick_values is None:

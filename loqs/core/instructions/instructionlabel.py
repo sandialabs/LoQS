@@ -13,7 +13,7 @@ from loqs.internal import Castable, Displayable
 T = TypeVar("T", bound="InstructionLabel")
 
 InstructionLabelCastableTypes: TypeAlias = (
-    "Instruction | str | tuple[Instruction | str, str | None, str | None] | InstructionLabel"
+    "Instruction | str | tuple[Instruction | str, str | None] | tuple[Instruction | str, str | None, Sequence | None] | tuple[Instruction | str, str | None, Sequence | None, Mapping | None] | InstructionLabel"
 )
 
 

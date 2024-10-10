@@ -14,9 +14,9 @@ import numpy as np
 import re
 import scipy.sparse as sps
 import textwrap
-from typing import Callable, ClassVar
+from typing import Any, Callable, ClassVar
 
-class_location_changes = (
+class_location_changes: dict[tuple[str, str], tuple[str, str]] = (
     {}
 )  # (module, class) mapping from OLD to NEW locations
 
@@ -601,7 +601,7 @@ class Serializable:
     @staticmethod
     def _deserialize_function(src: str) -> Callable:
         # Execute the imports and function definition
-        env = {}
+        env: dict[str, Any] = {}
         exec(src, env)
 
         # We need to find the function name
@@ -678,12 +678,13 @@ class Serializable:
         needed_import_lines = []
         for line in import_lines:
             if " as " in line:
-                entries = line.split(" as ")[1]
+                entry_str = line.split(" as ")[1]
             else:
-                entries = line.split("import ")[1]
+                entry_str = line.split("import ")[1]
             # Remove parentheses from multiline imports
             entries = [
-                e.replace("(", "").replace(")", "") for e in entries.split(",")
+                e.replace("(", "").replace(")", "")
+                for e in entry_str.split(",")
             ]
 
             # Get rid of newline and whitespace for better searching

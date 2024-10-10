@@ -54,9 +54,12 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
         for syndrome in itertools.product("01", repeat=len(stabilizers))
     ]
     for syndrome in syndromes:
-        pstr_list = raw_syndrome_dict.get(syndrome, [default_pstr])
+        pstr_list = raw_syndrome_dict.get(syndrome, None)
         if pstr_list is None:
-            continue
+            if default_pstr is not None:
+                pstr_list = [default_pstr]
+            else:
+                continue
         syndrome_dict[syndrome] = pstr_list
 
     return syndrome_dict

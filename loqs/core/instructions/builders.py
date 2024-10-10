@@ -2,9 +2,10 @@
 """
 
 from __future__ import annotations
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 import inspect as ins
 import numpy as np
+import typing
 
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -97,7 +98,7 @@ def build_lookup_decoder_instruction(
         patch = patches[patch_label]
 
         # Extract our syndrome measurements based on the qubit labels
-        syndrome = []
+        syndrome: list[int] = []
         for synlbl in syndrome_labels:
             frame_outcomes = syndrome_outcomes[synlbl.frame_idx]
             outcome = frame_outcomes[synlbl.qubit_label][synlbl.outcome_idx]
@@ -112,7 +113,9 @@ def build_lookup_decoder_instruction(
         prev_frame_info = None
         if diff_prev_syndrome:
             for i, frame in enumerate(history[::-1]):
-                prev_syndrome = frame.get(raw_syndrome_frame_key, None)
+                prev_syndrome = typing.cast(
+                    list[int] | None, frame.get(raw_syndrome_frame_key, None)
+                )
                 if prev_syndrome is None:
                     continue
                 assert isinstance(prev_syndrome, list)
@@ -126,7 +129,9 @@ def build_lookup_decoder_instruction(
         if prev_syndrome is None:
             syndrome_diff = syndrome
         else:
-            syndrome_diff = np.bitwise_xor(syndrome, prev_syndrome)
+            syndrome_diff = [
+                int(b) for b in np.bitwise_xor(syndrome, prev_syndrome)
+            ]
 
         # Look up data error based on changed syndromes
         syndrome_str = "".join([str(s) for s in syndrome_diff])
@@ -164,9 +169,10 @@ def build_lookup_decoder_instruction(
         return frame
 
     # We store lookup table and syndrome labels
+    cast_labels = [SyndromeLabel.cast(sl) for sl in syndrome_labels]
     data = {
         "lookup_table": dict(lookup_table),
-        "syndrome_labels": [SyndromeLabel.cast(sl) for sl in syndrome_labels],
+        "syndrome_labels": cast_labels,
         "raw_syndrome_frame_key": raw_syndrome_frame_key,
         "diff_prev_syndrome": diff_prev_syndrome,
     }
@@ -188,7 +194,7 @@ def build_lookup_decoder_instruction(
 
     # We also need param priorities and aliases
     # For priorities, we need as many measurement outcomes as requested by syndrome labels
-    frame_idxes = [sl.frame_idx for sl in data["syndrome_labels"]]
+    frame_idxes = [sl.frame_idx for sl in cast_labels]
     param_priorities = {"syndrome_outcomes": [f"history[{min(frame_idxes)}:]"]}
 
     # For aliases, we just have syndrome -> measurement
@@ -227,7 +233,7 @@ def build_object_builder_instruction(
     # Because we don't know the signature, let's set the priorities ourselves
     # Let's grab all the args from the constructor, excluding self
     param_priorities = {}
-    sig = ins.signature(obj_class.__init__)
+    sig = ins.signature(obj_class)
     for param in list(sig.parameters)[1:]:  # Skipping self
         param_priorities[param] = DEFAULT_PRIORITIES
     # And add on our instruction data information
@@ -574,7 +580,7 @@ def build_repeat_until_success_instruction(
 
     # We need to store the instruction, target outcomes, and repeat information
     # To avoid recursion, we also store the key for the RUS instruction
-    data = {
+    data: dict[str, object] = {
         "instruction": instruction,
         "target_outcomes": target_outcomes,
         "max_repeats": max_repeats,

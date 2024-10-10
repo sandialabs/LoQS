@@ -25,17 +25,17 @@ def propagate_state(
     """TODO"""
     # Find a compatible model/state oprep
     oprep: GateRep | None = None
-    for rep in model.output_gate_reps:
-        if rep in state.input_reps:
-            oprep = rep
+    for grep in model.output_gate_reps:
+        if grep in state.input_reps:
+            oprep = grep
     assert (
         oprep is not None
     ), "Could not find matching gate rep between model output and state input"
 
     instrep: InstrumentRep | None = None
-    for rep in model.output_instrument_reps:
-        if rep in state.input_reps:
-            instrep = rep
+    for irep in model.output_instrument_reps:
+        if irep in state.input_reps:
+            instrep = irep
     assert (
         instrep is not None
     ), "Could not find matching instrument rep between model output and state input"

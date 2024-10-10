@@ -5,13 +5,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
-from typing import Literal, TypeVar
+from typing import Literal, TypeVar, TYPE_CHECKING
 import warnings
 
 try:
     from dask.distributed import Client
 except ImportError:
-    Client = None
+    pass
+
+if TYPE_CHECKING:
+    from dask.distributed import Client  # noqa: F811
+
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -156,7 +160,7 @@ class QuantumProgram(Displayable):
                 self.global_instructions["Remove Patch"] = builder
 
         self.name = name
-        self.shot_histories = []
+        self.shot_histories: list[History] = []
 
     def __hash__(self) -> int:
         return hash(
@@ -222,7 +226,7 @@ class QuantumProgram(Displayable):
         self,
         shots: int = 1,
         max_frame_limit: int = 100,
-        dask_client: Client | None = None,  # type: ignore
+        dask_client: Client | None = None,
         dask_batch_size: int = 1,
         reset_shot_histories: bool = True,
         verbose: bool = True,
@@ -458,7 +462,7 @@ class QuantumProgram(Displayable):
                 # Do string processing to figure out what values we need
                 idx_str = priority.split("[")[1][:-1]
                 if idx_str == "all":
-                    idxs = "all"
+                    idxs: Literal["all"] | slice | list[int] | int = "all"
                 elif ":" in idx_str:
                     slice_args = [
                         int(el) if el != "" else None
