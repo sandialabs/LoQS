@@ -96,7 +96,7 @@ def run_discrete_error_injected_programs(
     errored_programs: Sequence[QuantumProgram],
     collect_shot_data_args: Sequence[Sequence],
     expected_outcomes: Sequence,
-    num_shots: int = 1,
+    num_num_shots: int = 1,
 ) -> list[QuantumProgram]:
     """TODO"""
     failed = []
@@ -104,7 +104,7 @@ def run_discrete_error_injected_programs(
         errored_programs, "Running discrete error injected programs"
     ):
         success = test_program_output(
-            program, collect_shot_data_args, expected_outcomes, num_shots
+            program, collect_shot_data_args, expected_outcomes, num_num_shots
         )
         if not success:
             failed.append(program)
@@ -121,15 +121,15 @@ def test_program_output(
     test_program: QuantumProgram,
     collect_shot_data_args: Sequence[Sequence],
     expected_outcomes: Sequence,
-    num_shots: int = 1,
+    num_num_shots: int = 1,
     verbose: bool = False,
 ) -> bool:
     """TODO"""
-    test_program.run(shots=num_shots, verbose=False)
+    test_program.run(num_shots=num_num_shots, verbose=False)
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
         outs = test_program.collect_shot_data(*args)
-        for out in outs[-num_shots:]:
+        for out in outs[-num_num_shots:]:
             if out != expected:
                 if verbose:
                     print(f"Output:   {out}")

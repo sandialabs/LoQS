@@ -82,7 +82,7 @@ This takes the place of a `pygsti.data.simulate_data`
 
 ```{code-cell} ipython3
 for program in programs:
-    program.run(shots=10)
+    program.run(num_shots=10)
 ```
 
 ## Step 4: Convert this to a pyGSTi dataset

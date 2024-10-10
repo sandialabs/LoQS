@@ -47,7 +47,7 @@ class TestQuantumProgram:
             name="Prep minus, measure X"
         )
 
-        # Run 10 shots
+        # Run 10 num_shots
         program.run(10)
 
         logical_outcomes = program.collect_shot_data('logical_measurement', -1)

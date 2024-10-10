@@ -120,11 +120,11 @@ program = QuantumProgram(
 ## Running a `QuantumProgram`
 
 
-We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 100 times by specifying `shots=100` to the `run()` function.
+We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 100 times by specifying `num_shots=100` to the `run()` function.
 
 ```{code-cell} ipython3
 # And now we can run it for real!
-program.run(shots=100)
+program.run(num_shots=100)
 ```
 
 The individual `History` objects are now available in `program.shot_histories` member variable.
@@ -178,7 +178,7 @@ stack = [
 # We want to use the same program settings, just swap out the stack and name
 program2 = QuantumProgram.from_quantum_program(program, stack, name="Prep 0, measure Z")
 
-program2.run(shots=100)
+program2.run(num_shots=100)
 
 Counter(program2.collect_shot_data("logical_measurement", -1))
 ```
@@ -203,7 +203,7 @@ stack = [
 # This one will be non-determinate outcome. Let's seed the RNG
 program3 = QuantumProgram.from_quantum_program(program, stack, default_base_seed=20240702, name="Prep -, measure Z")
 
-program3.run(shots=1000) # Let's also collect more statistics!
+program3.run(num_shots=1000) # Let's also collect more statistics!
 
 Counter(program3.collect_shot_data("logical_measurement", -1))
 ```
@@ -214,7 +214,7 @@ And now we create a copy of this program (i.e. it has the same base seed since w
 # And now we can show that it's deterministic counts with the same RNG seed
 program4 = QuantumProgram.from_quantum_program(program3, name="Prep -, measure Z... again")
 
-program4.run(shots=1000) # Let's also collect more statistics!
+program4.run(num_shots=1000) # Let's also collect more statistics!
 
 Counter(program4.collect_shot_data("logical_measurement", -1))
 ```
@@ -232,7 +232,7 @@ Deserialization is just as simple, and follows a similar API with reverse functi
 
 ```{code-cell} ipython3
 # Note that this can take some time.
-# Currently ~20 seconds for 1000 shots, and 1.6 GB uncompressed
+# Currently ~20 seconds for 1000 num_shots, and 1.6 GB uncompressed
 program4.write('test.json')
 ```
 

@@ -62,10 +62,10 @@ program = QuantumProgram(
 
 ## Executing a Program
 
-The program can be executed with the `run()` function. A number of shots can be provided to run the program multiple times for better statistics.
+The program can be executed with the `run()` function. A number of num_shots can be provided to run the program multiple times for better statistics.
 
 ```{code-cell} ipython3
-program.run(shots=100)
+program.run(num_shots=100)
 ```
 
 ## Analyzing a Program
@@ -83,7 +83,7 @@ Note some key features that have been covered in other sections:
 print(program.shot_histories[-1])
 ```
 
-However, we often care about more collective statistics across all the shots.
+However, we often care about more collective statistics across all the num_shots.
 These can be quickly collected via `collect_shot_data`, which takes a frame key and frame index in the respective shot histories.
 
 ```{code-cell} ipython3
@@ -111,7 +111,7 @@ stack = [
 # This one will be non-determinate outcome. Let's seed the RNG
 program2 = QuantumProgram.from_quantum_program(program, stack, default_base_seed=20240702, name="Prep -, measure Z")
 
-program2.run(shots=1000) # Let's also collect more statistics!
+program2.run(num_shots=1000) # Let's also collect more statistics!
 
 Counter(program2.collect_shot_data("logical_measurement", -1))
 ```
@@ -123,14 +123,14 @@ Conversely, users should reset the RNG seed if they want different samples.
 ```{code-cell} ipython3
 # Keep RNG the same
 program3 = QuantumProgram.from_quantum_program(program2, name="Prep -, measure Z, same RNG")
-program3.run(shots=1000)
+program3.run(num_shots=1000)
 Counter(program3.collect_shot_data("logical_measurement", -1))
 ```
 
 ```{code-cell} ipython3
 # Change the RNG
 program4 = QuantumProgram.from_quantum_program(program2, default_base_seed=202400711, name="Prep -, measure Z, diff. RNG")
-program4.run(shots=1000)
+program4.run(num_shots=1000)
 Counter(program4.collect_shot_data("logical_measurement", -1))
 ```
 

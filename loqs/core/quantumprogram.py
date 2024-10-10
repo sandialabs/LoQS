@@ -1,11 +1,11 @@
-"""Class definition for QuantumProgram
+""":class:`QuantumProgram` definition.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
-from typing import Literal, TypeVar, TYPE_CHECKING
+from typing import Literal, TypeVar
 import warnings
 
 try:
@@ -52,7 +52,63 @@ class QuantumProgram(Displayable):
     ) -> None:
         """Initialize a QuantumProgram from a list of operations.
 
-        TODO
+        Parameters
+        ----------
+        instruction_stack:
+            A list of :class:`InstructionLabel` castable objects
+            that determine what operations get run during program
+            execution. Defaults to None, in which case
+            :attr:`initial_history` needs to be provided and contain
+            a "stack" entry in the final :class:`Frame`.
+
+        initial_history:
+            An initial :class:`History` to start num_shots from.
+            Defaults to None, in which case an empty
+            :class:`History` is initialized and
+            :attr:`instruction_stack` must be provided.
+
+        default_noise_model:
+            A noise model to pass to any :class:`Instruction`
+            that requests a model but does not have one provided
+            in its :class:`InstructionLabel` or :attr:`Instruction.data`.
+
+        default_base_seed:
+            Base seed to use for RNG. Each shot will use a seed as
+            :attr:`default_base_seed` + <shot index>.
+
+        expiring_state:
+            Whether to set "state" as an expiring key in the
+            :attr:`initial_history`. Defaults to True, matching the default
+            behavior of :attr:`History.expiring_keys`.
+
+        global_instructions:
+            A list of :class:`Instruction` objects that are not associated
+            with a specific :class:`QECCodePatch`.
+
+        state_type:
+            The state type to use when constructing the "Init State"
+            global instruction. Defaults to None, in which case
+            an :attr:`initial_history` needs to be provided and have
+            "state" available in the final frame.
+
+        patch_types:
+            A dict of name keys and :class:`QECCode` values to use
+            when constructing "Init Patch <key>" global instructions.
+            If provided, then the "Remove Patch" global instruction is
+            also created. Defaults to None, in which case the
+            :attr:`initial_history` needs to be provided and have
+            "patches" available in the final frame.
+
+        override_global_instructions:
+            Whether or not to override "Init State", "Init Patch <key>", and
+            "Remove Patch" instructions if they exist in
+            :attr:`global_instructions` and :attr:`state_type` and/or
+            :attr:`patch_types` are provided.
+            Defaults to False, which preserves the existing instructions.
+
+        name:
+            Name for logging
+
         """
         # Do history before instruction stack in case it already has one
         self.initial_history = History.cast(initial_history)
@@ -186,6 +242,21 @@ class QuantumProgram(Displayable):
         patch_types: Mapping[str, QECCode] | None = None,
         name: str | None = None,
     ) -> QuantumProgram:
+        """Create a copy of a :class:`QuantumProgram` with some options updated.
+
+        Parameters
+        ----------
+        other:
+            The base :class:`QuantumProgram` to copy
+
+        Other Parameters:
+            Refer to :meth:`QuantumProgram.__init__`
+
+        Returns
+        -------
+        QuantumProgram
+            The copied and updated :class:`QuantumProgram`
+        """
         if instruction_stack is None:
             instruction_stack = other.instruction_stack
         if default_noise_model is None:
@@ -221,14 +292,47 @@ class QuantumProgram(Displayable):
 
     def run(
         self,
-        shots: int = 1,
+        num_shots: int = 1,
         max_frame_limit: int = 100,
         dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
         reset_shot_histories: bool = True,
         verbose: bool = True,
     ):
-        """TODO"""
+        """Execute some shots of this :class:`QuantumProgram`.
+
+        This does not return any :class:`History` objects,
+        but instead saves these to :attr:`shot_histories`.
+
+        Parameters
+        ----------
+        num_shots:
+            The number of shots to execute.
+
+        max_frame_limit:
+            A maximum number of frames to execute before terminating.
+            Defaults to 100, which is sufficient for most small circuits,
+            but this may need to be (significantly) increased for long
+            circuits.
+
+        dask_client:
+            A Dask client to use for parallelizing shots.
+            Defaults to None, which runs shots in serial.
+
+        dask_batch_size:
+            The number of tasks that should be included in a batch of
+            Dask jobs. Defaults to 1, which submits each shot separately.
+            There may be scheduler overhead benefits to having fewer batches
+            for many (>1K) shots, at the expense of some possible load balancing.
+
+        reset_shot_histories:
+            Whether to delete any existing shot histories (True, default) or keep
+            existing shot histories (False) when running shots.
+
+        verbose:
+            Whether to write a progress bar (True, default) or not when running
+            shots.
+        """
         # Take out shot histories to avoid unnecessary copies during dask.delayed
         if reset_shot_histories:
             self.shot_histories = []
@@ -244,7 +348,7 @@ class QuantumProgram(Displayable):
 
         # Set up tasks
         tasks = []
-        for i in range(shots):
+        for i in range(num_shots):
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             seed_for_shot = None
             if self.default_base_seed is not None:
@@ -269,7 +373,7 @@ class QuantumProgram(Displayable):
                 # Reshape to tuple of arglists instead of list of argtuples
                 tasks_arg_lists = zip(*tasks)
 
-                # Not pure because RNG for shots underneath
+                # Not pure because RNG for num_shots underneath
                 futures = dask_client.map(
                     QuantumProgram._run_shot, *tasks_arg_lists, pure=False
                 )
@@ -280,10 +384,10 @@ class QuantumProgram(Displayable):
                 # Split tasks into appropriate number of batches
                 batched_tasks = [
                     tasks[i : i + dask_batch_size]
-                    for i in range(0, shots, dask_batch_size)
+                    for i in range(0, num_shots, dask_batch_size)
                 ]
 
-                # Not pure because RNG for shots underneath
+                # Not pure because RNG for num_shots underneath
                 futures = dask_client.map(
                     QuantumProgram._run_shot_batch, batched_tasks, pure=False
                 )
@@ -298,7 +402,7 @@ class QuantumProgram(Displayable):
         # Restore shot history and add new results
         self.shot_histories = old_shot_histories + shot_results  # type: ignore
 
-    # Helper function to run a chunk of shots at once
+    # Helper function to run a chunk of num_shots at once
     @staticmethod
     def _run_shot_batch(tasks: Sequence[tuple]):
         return [QuantumProgram._run_shot(*task) for task in tasks]
@@ -495,6 +599,18 @@ class QuantumProgram(Displayable):
     def collect_shot_data(
         self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
     ) -> list:
+        """Collate frame data over executed shots.
+
+        Parameters
+        ----------
+        Other Parameters:
+            See :py:meth:`History.collect_data`.
+
+        Returns
+        -------
+        list
+            List of :meth:`History.collect_data` outputs per shot
+        """
         data = []
         for history in self.shot_histories:
             data.append(history.collect_data(key, indices))

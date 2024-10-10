@@ -14,20 +14,20 @@ from loqs.core import QuantumProgram
 def run_program_list(
     programs: Sequence[QuantumProgram],
     dask_client: Client,  # type: ignore
-    shots_per_program: int,
-    shots_per_program_per_batch: int,
+    num_shots_per_program: int,
+    num_shots_per_program_per_batch: int,
     max_frame_limit: int = 100,
 ) -> None:
     """TODO"""
     histories_list = []
     tasks_by_program = []
     for program in programs:
-        # Store old shots to minimize data needed to copy
+        # Store old num_shots to minimize data needed to copy
         histories_list.append(program.shot_histories)
         program.shot_histories = []
 
         tasks = []
-        for i in range(shots_per_program):
+        for i in range(num_shots_per_program):
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             seed_for_shot = None
             if program.default_base_seed is not None:
@@ -42,7 +42,7 @@ def run_program_list(
     # Scatter all programs
     dask_client.scatter(programs, broadcast=True)
 
-    # Helper function to run a chunk of shots at once
+    # Helper function to run a chunk of num_shots at once
     # This should use the already remote programs and avoid more copying
     def _run_shot_program_batch(tasks: Sequence[Sequence[tuple]]):
         results_by_program = []
@@ -52,18 +52,20 @@ def run_program_list(
             results_by_program.append(results)
         return results_by_program
 
-    # To help load balancing, we want to batch over programs for the same shots
+    # To help load balancing, we want to batch over programs for the same num_shots
     # We could in theory let Dask load balance everything, but we know a good heuristic
     # and we can avoid scheduler overhead this way
     batched_task_list = [
         [
-            tasks_per_program[i : i + shots_per_program_per_batch]
+            tasks_per_program[i : i + num_shots_per_program_per_batch]
             for tasks_per_program in tasks_by_program
         ]
-        for i in range(0, shots_per_program, shots_per_program_per_batch)
+        for i in range(
+            0, num_shots_per_program, num_shots_per_program_per_batch
+        )
     ]
 
-    # Not pure because RNG for shots underneath
+    # Not pure because RNG for num_shots underneath
     futures = dask_client.map(
         _run_shot_program_batch, batched_task_list, pure=False
     )

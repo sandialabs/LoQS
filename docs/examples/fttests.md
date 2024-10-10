@@ -64,7 +64,7 @@ program = QuantumProgram(
 
 ```{code-cell} ipython3
 # And now we can run it for real!
-program.run(shots=10)
+program.run(num_shots=10)
 
 Counter(program.collect_shot_data("logical_measurement", -1))
 ```
@@ -186,7 +186,7 @@ stack_ft = [
 
 program_ft = QuantumProgram.from_quantum_program(program, stack_ft, name="FT Prep -, measure X")
 
-program_ft.run(shots=10)
+program_ft.run(num_shots=10)
 
 Counter(program_ft.collect_shot_data("logical_measurement", -1))
 ```

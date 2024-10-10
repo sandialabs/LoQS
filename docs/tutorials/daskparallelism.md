@@ -14,10 +14,10 @@ kernelspec:
 # Parallelizing Programs with Dask
 
 The short examples shown in these tutorials are simple enough to run on a laptop for demonstrative purposes.
-But real usage of `LoQS` may have larger codes with more expensive forward simulation, more circuits (e.g. logical characterization protocols), and many more shots required for higher precision.
+But real usage of `LoQS` may have larger codes with more expensive forward simulation, more circuits (e.g. logical characterization protocols), and many more num_shots required for higher precision.
 In that context, it is useful to try and parallelize program execution.
 
-Thankfully, it is simple enough to parallelize over shots (either for a single `QuantumProgram` or a collection of them).
+Thankfully, it is simple enough to parallelize over num_shots (either for a single `QuantumProgram` or a collection of them).
 We choose to use Dask to do this, as it can handle both single workstation and multi-node HPC environments equally well.
 
 Below, we show how parallelize program execution using Dask.
@@ -125,7 +125,7 @@ serial_program = QuantumProgram(
 tags: [skip-exception]
 ---
 %%time
-serial_program.run(shots=1000)
+serial_program.run(num_shots=1000)
 ```
 
 ```{code-cell} ipython3
@@ -152,7 +152,7 @@ parallel_program = QuantumProgram.from_quantum_program(
 tags: [skip-exception]
 ---
 %%time
-parallel_program.run(shots=1000, dask_client=client)
+parallel_program.run(num_shots=1000, dask_client=client)
 ```
 
 ```{code-cell} ipython3
@@ -177,7 +177,7 @@ Notice that we get a small speedup, but nowhere near the expected 2x speedup of 
 
 ![parallel no batching](../images/parallel_nobatching.png)
 
-We can attempt to cut down on some of this by manually batching things ourselves. There is a tradeoff here - fewer batches means less scheduler overhead, but also less ability to load balance between the workers. Above we have one extreme, where every job is its own tasks. We can also try the other extreme, where we only have two batches, one per worker. Because we expect the shots to take roughly the same amount of time, we expect this to have reasonable performance and both workers to finish around the same time.
+We can attempt to cut down on some of this by manually batching things ourselves. There is a tradeoff here - fewer batches means less scheduler overhead, but also less ability to load balance between the workers. Above we have one extreme, where every job is its own tasks. We can also try the other extreme, where we only have two batches, one per worker. Because we expect the num_shots to take roughly the same amount of time, we expect this to have reasonable performance and both workers to finish around the same time.
 
 ```{code-cell} ipython3
 ---
@@ -192,7 +192,7 @@ parallel_program_batched = QuantumProgram.from_quantum_program(
 tags: [skip-exception]
 ---
 %%time
-parallel_program_batched.run(shots=1000, dask_client=client, dask_batch_size=500)
+parallel_program_batched.run(num_shots=1000, dask_client=client, dask_batch_size=500)
 ```
 
 We can see this helps a little bit, although we still have a lot of overhead, presumably in copying results back.
@@ -229,7 +229,7 @@ parallel_program_8 = QuantumProgram.from_quantum_program(
 tags: [skip-exception]
 ---
 %%time
-parallel_program_8.run(shots=1000, dask_client=client)
+parallel_program_8.run(num_shots=1000, dask_client=client)
 ```
 
 We can see that we are getting nice speedups. Not 8x, but a factor of 2 speedup is a good start. The dashboard also shows a nice saturation of all 8 workers. Also note the red copy blocks at the beginning - this corresponds to `parallel_program_8` being copied over to the new workers.
@@ -251,7 +251,7 @@ parallel_program_8_batched = QuantumProgram.from_quantum_program(
 tags: [skip-exception]
 ---
 %%time
-parallel_program_8_batched.run(shots=1000, dask_client=client, dask_batch_size=125)
+parallel_program_8_batched.run(num_shots=1000, dask_client=client, dask_batch_size=125)
 ```
 
 Pretty nice for doing the same amount of work!
@@ -262,9 +262,9 @@ Pretty nice for doing the same amount of work!
 
 ## Parallelizing More Programs
 
-Often we have more than one program we want to run, e.g. logical characterization protocols like LoGST. We could just submit every shot for every program as a separate task to complete, but we've already seen above that batching calculations leads to some non-trivial improvements in parallel efficiency. The problem is that different programs may have different lengths, so simply batching over all shots will likely lead to load balancing problems.
+Often we have more than one program we want to run, e.g. logical characterization protocols like LoGST. We could just submit every shot for every program as a separate task to complete, but we've already seen above that batching calculations leads to some non-trivial improvements in parallel efficiency. The problem is that different programs may have different lengths, so simply batching over all num_shots will likely lead to load balancing problems.
 
-Instead, we can imagine creating batches over some section of shots for *all* programs. This can be annoying to set up, so we provide a handy utility to do this in `loqs.tools.dasktools`. We also borrow from the LoGST tutorial for the example workload.
+Instead, we can imagine creating batches over some section of num_shots for *all* programs. This can be annoying to set up, so we provide a handy utility to do this in `loqs.tools.dasktools`. We also borrow from the LoGST tutorial for the example workload.
 
 ```{code-cell} ipython3
 ---
@@ -325,7 +325,7 @@ tags: [skip-exception]
 ---
 %%time
 for program in serial_programs:
-    program.run(shots=40)
+    program.run(num_shots=40)
 ```
 
 ```{code-cell} ipython3
@@ -340,7 +340,7 @@ parallel_programs = pt.convert_edesign_to_programs(gst_design, gst_model, physic
 tags: [skip-exception]
 ---
 %%time
-dasktools.run_program_list(parallel_programs, client, shots_per_program=40, shots_per_program_per_batch=5)
+dasktools.run_program_list(parallel_programs, client, num_shots_per_program=40, num_shots_per_program_per_batch=5)
 
 ## TODO: This is much slower than I want still. Testing on a cluster node was fast, testing on my laptop is slow.
 # Best guess is a memory/communication thing locally
