@@ -193,7 +193,7 @@ class PauliFrame(Castable, Displayable):
         """
         if clifford in ["I", "X", "Y", "Z"]:
             old_to_new = {k: k for k in "IXYZ"}
-        if clifford == "H":
+        elif clifford == "H":
             old_to_new = {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
         elif clifford in ["S", "Sdag"]:
             old_to_new = {"I": "I", "X": "Y", "Y": "X", "Z": "Z"}
