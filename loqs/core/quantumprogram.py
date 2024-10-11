@@ -35,7 +35,15 @@ T = TypeVar("T", bound="QuantumProgram")
 
 
 class QuantumProgram(Displayable):
-    """A container for the main quantum program to be executed."""
+    """A container for the main quantum program to be executed.
+
+    At its core, a :class:`.QuantumProgram` is an
+    :class:`.InstructionStack` to run, a collection of all possible
+    :class:`.Instruction` objects that could be run (either "global"
+    or patch-based), and default noise model and RNG seeds.
+    Once the :meth:`.run` command has been used, it also contains
+    a collection of :class:`.History` objects for each shot.
+    """
 
     def __init__(
         self,
@@ -50,8 +58,7 @@ class QuantumProgram(Displayable):
         override_global_instructions: bool = False,
         name: str = "(Unnamed quantum program)",
     ) -> None:
-        """Initialize a :class:`QuantumProgram` from a list of operations.
-
+        """
         Parameters
         ----------
         instruction_stack:

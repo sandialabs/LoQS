@@ -1,4 +1,4 @@
-"""TODO
+"""class:`.History` definition.
 """
 
 from __future__ import annotations
@@ -38,7 +38,32 @@ class History(Sequence[Frame], Castable, Displayable):
             "patches",
         ),
     ) -> None:
-        """TODO"""
+        """
+        Parameters
+        ----------
+        history:
+            An initial history to use. Defaults to ``None``,
+            which initializes an empty list.
+
+        expiring_keys:
+            A list of keys that should "expire" when a new
+            :class:`.Frame` is added. Specifically, it calls
+            :meth:`.Frame.expire` on old frames when a new
+            frame containing that key is added.
+            It defaults to ``["state"]``, assuming that the
+            quantum state is being propagated in-place.
+
+        propagating_keys:
+            A list of keys that should be added to an
+            incoming :class:`.Frame` if it does not already
+            have it.
+            The default is ``["state", "patches"]``, ensuring
+            that the most up-to-date :class:`.BaseQuantumState`
+            and :class:`.PatchDict` are always available in the
+            last frame.
+            Common other additions including syndrome bits
+            for decoders that require the previous syndrome.
+        """
         self._history = []
 
         if expiring_keys is None:
@@ -108,6 +133,13 @@ class History(Sequence[Frame], Castable, Displayable):
         )
 
     def append(self, item: FrameCastableTypes) -> None:
+        """Add a :class:`.Frame` to the end of the :class:`.History`.
+
+        Parameters
+        ----------
+        item:
+            The frame-castable object to append.
+        """
         item = Frame.cast(item)
 
         # Propagate any keys that are not existing in new frame

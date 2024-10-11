@@ -1,4 +1,4 @@
-""":class:`Frame` documentation.
+""":class:`Frame` definition.
 """
 
 from __future__ import annotations
@@ -21,8 +21,13 @@ FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
 class Frame(Mapping[str, object], Castable, Displayable):
     """A record of the state of the simulation at a given time.
 
-    The core functionality is a dict that relates keys to stateful objects.
-    It is highly recommended that users not modify :attr:`_data` directly,
+    The core functionality is a ``dict`` that relates keys to stateful objects.
+    It is highly recommended that users not modify :attr:`._data` directly,
+    and instead use :meth:`.update` to return an updated copy instead.
+
+    The :attr:`.Frame.log` can be accessed with the key ``"log"``,
+    and any expired key will instead return the string ``"EXPIRED"``
+    (although the object could still be retrieved from :attr:`.Frame._data`).
     """
 
     _data: dict
@@ -63,7 +68,16 @@ class Frame(Mapping[str, object], Castable, Displayable):
         return cls(obj)  # type: ignore
 
     def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
-        """TODO"""
+        """
+        Parameters
+        ----------
+        data:
+            A ``dict``-like object with frame data. Defaults to ``None``,
+            which initializes an empty frame.
+
+        log:
+            See :attr:`.log`.
+        """
         if data is None:
             data = {}
 
@@ -128,7 +142,17 @@ class Frame(Mapping[str, object], Castable, Displayable):
         )
 
     def expire(self, key: str) -> None:
-        """TODO"""
+        """Mark a key as expired.
+
+        This will cause the key to return
+        ``"EXPIRED"`` instead of the stored object,
+        although the object is still stored in :attr:`._data`.
+
+        Parameters
+        ----------
+        key:
+            The key to expire
+        """
         if key in self and key not in self._expired_keys:
             self._expired_keys.append(key)
 
@@ -137,7 +161,19 @@ class Frame(Mapping[str, object], Castable, Displayable):
         new_data: Mapping[str, object] | None = None,
         new_log: str | None = None,
     ) -> Frame:
-        """TODO"""
+        """Create a new :class:`.Frame` with updated data and log.
+
+        Any data/log that is unchanged will be carried over
+        from the current :class:`.Frame`.
+
+        new_data:
+            Any data to add/override from the old frame.
+            Defaults to ``None``, which changes no data.
+
+        new_log:
+            A new log string. Defaults to ``None``,
+            which keeps the old :attr:`.log`.
+        """
         data = self._data.copy()
         if new_data is not None:
             data.update(new_data)

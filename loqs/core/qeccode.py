@@ -1,4 +1,4 @@
-"""TODO
+""":class:`.QECCode` and :class:`.QECCodePatch` definitions.
 """
 
 from __future__ import annotations
@@ -16,7 +16,12 @@ U = TypeVar("U", bound="QECCodePatch")
 
 
 class QECCode(Displayable):
-    """TODO"""
+    """A set of :class:`.Instruction` objects that implement a QEC code.
+
+    All qubit-specific quantities are defined with respect to a set of
+    template qubits that can then be replaced with real qubit labels
+    at runtime.
+    """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -27,14 +32,36 @@ class QECCode(Displayable):
         template_data_qubits: Sequence[str],
         name: str = "(Unnamed QEC code)",
     ):
-        """TODO"""
+        """
+        Parameters
+        ----------
+        instructions:
+            See :attr:`.instructions`.
+
+        template_qubits:
+            See :attr:`.template_qubits`.
+
+        template_data_qubits:
+            See :attr:`.template_data_qubits`.
+
+        name:
+            See :attr:`.name`.
+        """
         self.instructions = dict(instructions)
+        """A mapping from name keys to :class:`.Instruction` values."""
+
         self.template_qubits = list(template_qubits)
+        """All template qubits used in :attr:`instructions`."""
+
         self.template_data_qubits = list(template_data_qubits)
+        """The entries of :attr:`template_qubits` corresponding to data qubits."""
+
         assert all(
             [tdq in self.template_qubits for tdq in self.template_data_qubits]
         ), "Data qubits must a subset of all template qubits"
+
         self.name = name
+        """Name for logging"""
 
     def __str__(self) -> str:
         return f"QECCode {self.name}"
@@ -53,8 +80,24 @@ class QECCode(Displayable):
         self,
         qubits: Sequence[str],
         pauli_frame: PauliFrameCastableTypes | None = None,
-    ):
-        """TODO"""
+    ) -> QECCodePatch:
+        """Create a :class:`.QECCodePatch` based on this :class:`QECCode`.
+
+        Parameters
+        ----------
+        qubits:
+            Qubit labels to replace :attr:`.template_qubits`.
+
+        pauli_frame:
+            An initial :class:`.PauliFrame` to assign to the patch.
+            Defaults to ``None``, which assigns the trivial Pauli frame
+            of all ``"I"`` entries.
+
+        Returns
+        -------
+        QECCodePatch
+            The constructed :class:`.QECCodePatch`
+        """
         if pauli_frame is None:
             # Map template data qubits to real qubits
             data_qubits = [
@@ -99,7 +142,14 @@ class QECCode(Displayable):
 
 
 class QECCodePatch(Mapping[str, Instruction], Displayable):
-    """TODO"""
+    """An instantiation of a :class:`.QECCode` on a set of qubits.
+
+    This object acts like a ``dict``, where instruction names are the
+    keys and the appropriate :class:`.Instruction` (mapped to the patch
+    qubits) is returned.
+    It also stores the :class:`.PauliFrame` for the data qubits, as this
+    is the natural place for it.
+    """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -109,15 +159,31 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         qubits: Sequence[str],
         pauli_frame: PauliFrameCastableTypes,
     ):
-        """TODO"""
+        """
+        Parameters
+        ----------
+        code:
+            See :attr:`.code`.
+
+        qubits:
+            See :attr:`.qubits`.
+
+        pauli_frame:
+            See :attr:`.pauli_frame`.
+        """
         assert len(qubits) == len(code.template_qubits), (
             f"Patch must have {len(code.template_qubits)} qubits "
             + f"to match code {code}, not {len(qubits)}"
         )
 
         self.code = code
+        """The :class:`.QECCode` being used on this patch of qubits."""
+
         self.qubits = qubits
+        """The qubits this patch acts on."""
+
         self.pauli_frame = PauliFrame.cast(pauli_frame)
+        """The Pauli frame tracking errors on these qubits."""
 
     def __getitem__(self, key: str) -> Instruction:
         try:

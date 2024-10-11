@@ -16,6 +16,7 @@ U = TypeVar("U", bound="PauliFrame")
 SyndromeLabelCastableTypes: TypeAlias = (
     "str | tuple[str] | tuple[str, int] | tuple[str, int, int] | SyndromeLabel"
 )
+"""Objects that can be cast to :class:`.SyndromeLabel` objects."""
 
 
 @dataclass
@@ -34,8 +35,8 @@ class SyndromeLabel(Castable, Displayable):
     outcome_idx: int = 0
     """The outcome index.
 
-    Defaults to 0, the first outcome on `qubit_label`.
-    Could be >0 if multiple checks were measured on `qubit_label`.
+    Defaults to 0, the first outcome on :attr:`.qubit_label`.
+    Could be >0 if multiple checks were measured on :attr:`.qubit_label`.
     """
 
     def __hash__(self) -> int:
@@ -43,6 +44,11 @@ class SyndromeLabel(Castable, Displayable):
 
     @classmethod
     def cast(cls: type[SyndromeLabel], obj: object) -> SyndromeLabel:
+        """Cast this object to a :class:`SyndromeLabel`.
+
+        This is specialized because lists/tuples with up to 3 entries
+        should be unpacked into the three arguments.
+        """
         if isinstance(obj, cls):
             # We are already the correct class, perform no copy
             return obj
@@ -80,23 +86,43 @@ class SyndromeLabel(Castable, Displayable):
 
 # TODO: Long term location?
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
+"""Types that can be cast into a :class:`.PauliFrame`."""
 
 
 class PauliFrame(Castable, Displayable):
-    """TODO"""
+    """Tracks a Pauli frame on a set of qubits.
+
+    Commonly this is used to track data errors without applying
+    active correction, and can be used in conjunction with
+    :class:`.MeasurementOutcomes` to provide inferred outcomes.
+    """
 
     qubit_labels: list[str]
-    """TODO"""
+    """Qubit labels being tracked by this :class:`.PauliFrame`."""
 
     pauli_frame: list[str]
-    """TODO"""
+    """A list of Pauli errors on the given :attr:`.qubit_labels`."""
 
     def __init__(
         self,
         frame_or_labels: PauliFrameCastableTypes,
         initial_paulis: Sequence[str] | str | None = None,
     ) -> None:
-        """TODO"""
+        """
+        Parameters
+        ----------
+        frame_or_labels:
+            Either an existing :class:`.PauliFrame` or a set of
+            qubit labels to be used for :attr:`.qubit_labels`.
+            If qubit labels and no ``initial_paulis``, the frame
+            is initialized to all ``"I"``.
+
+        initial_paulis:
+            An initial set of Pauli corrections to track. If
+            ``frame_or_labels`` was an existing :class:`.PauliFrame`,
+            then ``initial_paulis`` will override the copied value of
+            :attr:`.pauli_frame`.
+        """
         if isinstance(frame_or_labels, PauliFrame):
             self.qubit_labels = frame_or_labels.qubit_labels
             self.pauli_frame = frame_or_labels.pauli_frame
@@ -122,12 +148,29 @@ class PauliFrame(Castable, Displayable):
 
     @property
     def num_qubits(self) -> int:
+        """Number of qubits tracked by this :class:`.PauliFrame`."""
         return len(self.qubit_labels)
 
     def copy(self) -> PauliFrame:
+        """Return a copy of this :class:`.PauliFrame`."""
         return PauliFrame(self.qubit_labels, self.pauli_frame)
 
     def get_bit(self, type: str, qubit: str) -> int:
+        """Get the bit value of this frame on a given qubit in a given basis.
+
+        Parameters
+        ----------
+        type:
+            One of ``["X", "Z"]``, indicating which basis to return.
+
+        qubit:
+            The qubit label to check.
+
+        Returns
+        -------
+        int
+            The bit value of :attr:`.pauli_frame` in basis ``type`` on qubit ``qubit``
+        """
         type = type.upper()
         assert type in ("X", "Z"), "Can only get X or Z type bits"
 
@@ -138,10 +181,37 @@ class PauliFrame(Castable, Displayable):
         return 0
 
     def map_frame(self, map: dict) -> PauliFrame:
+        """Map every element of the :class:`.PauliFrame`.
+
+        Parameters
+        ----------
+        map:
+            A dict with current Paulis as keys and new Paulis
+            as values. Both keys and values should be in ``'IXYZ'``.
+        """
         new_paulis = [map[P] for P in self.pauli_frame]
         return PauliFrame(self.qubit_labels, new_paulis)
 
     def update_from_pauli_str(self, pstr: str) -> PauliFrame:
+        """Update the :class:`.PauliFrame` by multiplication.
+
+        This is commonly used to update a :class:`.PauliFrame`
+        from a correction coming from a lookup table.
+
+        Formally, we are doing :math:`F \\rightarrow F P`, where
+        :math:`F` is the :attr:`.pauli_frame` and :math:`P` is the
+        multi-qubit Pauli represented by ``pstr``.
+
+        Parameters
+        ----------
+        pstr:
+            A Pauli string to be multiplied into :attr:`.pauli_frame`.
+
+        Returns
+        -------
+        :class:`.PauliFrame`
+            A copied and updated :class:`.PauliFrame`
+        """
         assert len(pstr) == self.num_qubits
 
         new_frame = self.copy()
@@ -154,6 +224,23 @@ class PauliFrame(Castable, Displayable):
     def update_from_clifford_conjugation(
         self, cliffords: Sequence[str]
     ) -> PauliFrame:
+        """Update the :class:`.PauliFrame` by Clifford conjugation.
+
+        Formally, we are doing :math:`F_i \\rightarrow C_i^{-1} F_i C_i`, where
+        :math:`F_i` is element :math:`i` of the :attr:`.pauli_frame` and
+        :math:`C_i` is element :math:`i` of the ``cliffords``.
+
+        Parameters
+        ----------
+        cliffords:
+            A set of Cliffords to conjugate the elements of
+            :attr:`.pauli_frame` element-wise.
+
+        Returns
+        -------
+        :class:`.PauliFrame`
+            A copied and updated :class:`.PauliFrame`
+        """
         assert len(cliffords) == len(self.pauli_frame)
 
         new_frame = self.copy()
@@ -164,14 +251,30 @@ class PauliFrame(Castable, Displayable):
         return new_frame
 
     def update_from_transversal_clifford(self, clifford: str) -> PauliFrame:
+        """Update the :class:`.PauliFrame` by Clifford conjugation.
+
+        This is commonly used to update a :class:`.PauliFrame`
+        after a logical Clifford gate has been applied.
+
+        Formally, we are doing :math:`F_i \\rightarrow C^{-1} F_i C`, where
+        :math:`F_i` is element :math:`i` of the :attr:`.pauli_frame` and
+        :math:`C` is the ``clifford``.
+
+        Parameters
+        ----------
+        clifford:
+           The Clifford to conjugate all elements of
+            :attr:`.pauli_frame`.
+
+        Returns
+        -------
+        :class:`.PauliFrame`
+            A copied and updated :class:`.PauliFrame`
+        """
         old_to_new = self._clifford_mapping_dict(clifford)
         return self.map_frame(old_to_new)
 
     def _pauli_product_mapping_dict(self, pauli: str) -> dict[str, str]:
-        """Return the Pauli frame element mapping under multiplication.
-
-        This just does $F \rightarrow F P$
-        """
         if pauli == "I":
             old_to_new = {k: k for k in "IXYZ"}
         elif pauli == "X":
@@ -186,11 +289,6 @@ class PauliFrame(Castable, Displayable):
         return old_to_new
 
     def _clifford_mapping_dict(self, clifford: str) -> dict[str, str]:
-        """Return the Pauli frame element mapping under Clifford conjugation.
-
-        When passing through a Clifford gate, the Pauli frame undergoes
-        $F \rightarrow C^{-1} F C$.
-        """
         if clifford in ["I", "X", "Y", "Z"]:
             old_to_new = {k: k for k in "IXYZ"}
         elif clifford == "H":

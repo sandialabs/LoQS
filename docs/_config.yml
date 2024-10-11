@@ -21,7 +21,7 @@ bibtex_bibfiles:
 
 # Information about where the book exists on the web
 repository:
-  url: https://cee-gitlab.sandia.gov/sserita/loqs-public  # Online location of your book
+  url: https://gitlab-ex.sandia.gov/QCVV/loqs-public  # Online location of your book
   path_to_book: docs  # Optional path to your book, relative to the repository root
   branch: main  # Which branch of the repository should be used when creating links (optional)
 
@@ -40,11 +40,12 @@ sphinx:
   - 'sphinx.ext.viewcode'
   - 'sphinx.ext.doctest'
   - 'sphinx.ext.intersphinx'
+  - 'sphinx.ext.mathjax'
   config:
     add_module_names: False
     autosummary_generate: True
     autoclass_content: "both"
-    autodoc_typehints: "both"
+    autodoc_typehints: "description"
     autodoc_member_order: "groupwise"
     exclude_patterns: ["notebooks/", "**/*.ipynb"]
     suppress_warnings:
