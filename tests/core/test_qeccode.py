@@ -31,7 +31,8 @@ class TestQECCodeAndPatch:
         assert result._data == {
             'state': 1,
             'qubits': ["D0", "A0"],
-            'instruction': ins2
+            'instruction': ins2,
+            'parameters': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
         assert result.log == "test result"
     
@@ -50,7 +51,8 @@ class TestQECCodeAndPatch:
             assert result._data == {
                 'state': 1,
                 'qubits': ["D0", "A0"],
-                'instruction': ins2
+                'instruction': ins2,
+                'parameters': {'state': 0, 'qubits': ins2.data["qubits"]}
             }
             assert result.log == "test result"
             

@@ -25,7 +25,8 @@ class TestInstruction:
         assert result._data == {
             'state': 1,
             'qubits': ["Q0", "Q1"],
-            'instruction': ins
+            'instruction': ins,
+            'parameters': {'state': 0, 'qubits': ins.data["qubits"]}
         }
         assert result.log == "test result"
 
@@ -35,7 +36,8 @@ class TestInstruction:
         assert result2._data == {
             'state': 1,
             'qubits': ["D2", "A3"],
-            'instruction': ins2
+            'instruction': ins2,
+            'parameters': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
         assert result2.log == "test result"
 
@@ -73,7 +75,8 @@ class TestInstruction:
             assert result._data == {
                 'state': 1,
                 'qubits': ["Q0", "Q1"],
-                'instruction': ins2
+                'instruction': ins2,
+                'parameters': {'state': 0, 'qubits': ins2.data["qubits"]}
             }
             assert result.log == "test result"
 
@@ -89,7 +92,8 @@ class TestInstruction:
             assert result2._data == {
                 'state': 1,
                 'qubits': ["Q0", "Q1"],
-                'instruction': ins3
+                'instruction': ins3,
+                'parameters': {'state': 0, 'qubits': ins3.data["qubits"]}
             }
             assert result2.log == "test result"
             
