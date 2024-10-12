@@ -51,11 +51,10 @@ def create_qec_code(
     ----------
     circuit_backend:
         The circuit backend to use when generating physical circuits.
-        Currently, only :class:`PyGSTiPhysicalCircuit` is allowed.
 
     Returns
     -------
-        A :class:`QECCode` implementing the [[5,1,3]] code.
+        A :class:`.QECCode` implementing the [[5,1,3]] code.
     """
 
     # Template qubits for defining one patch
@@ -280,7 +279,7 @@ def create_qec_code(
 
         # Compute inferred bitstring
         inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            "Z", pauli_frame
+            pauli_frame, "Z"
         )
         inferred_bitstring = [v[0] for v in inferred_outcomes.values()]
 
@@ -518,7 +517,7 @@ def _create_adaptive_measure_instruction(
 
         # Compute inferred bitstring
         data_inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            "Z", pauli_frame
+            pauli_frame, "Z"
         )
         data_inferred_bitstring = [
             data_inferred_outcomes[q][0] for q in qubits

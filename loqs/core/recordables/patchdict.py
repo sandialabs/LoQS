@@ -1,4 +1,4 @@
-""":class:`MeasurementOutcomes` definition.
+""":class:`.PatchDict` definition.
 """
 
 from __future__ import annotations
@@ -15,19 +15,36 @@ T = TypeVar("T", bound="PatchDict")
 PatchDictCastableTypes: TypeAlias = (
     "PatchDict | Mapping[str, QECCodePatch] | None"
 )
+"""Objects that can be cast to a :class:`.PatchDict`."""
 
 
 class PatchDict(MutableMapping[str, QECCodePatch], Castable, Displayable):
-    """TODO"""
+    """A collection of :class:`.QECCodePatch` objects.
+
+    This is a dict-like object where the keys are patch labels (literally,
+    as any ``patch_label`` usage in an :class:`.Instruction` apply function
+    refers to these keys) and the values are :class:`.QECCodePatch` objects.
+
+    Unlike many other LoQS objects, this is a mutable object to make it easy
+    to manipulate patches. Users should be careful to first use :attr:`.copy`
+    to avoid messing up previous :class:`.Frame` objects (or use
+    :meth:`.Frame.expire` properly).
+    """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     patches: dict[str, QECCodePatch]
-    """TODO
+    """Underlying dict of patch labels and :class:`.QECCodePatch` objects.
     """
 
     def __init__(self, patches: PatchDictCastableTypes = None) -> None:
-        """TODO"""
+        """
+        Parameters
+        ----------
+        patches:
+            See :attr:`.patches`. Defaults to ``None``, which uses
+            an empty ``dict``.
+        """
         if patches is None:
             patches = {}
 
@@ -67,13 +84,20 @@ class PatchDict(MutableMapping[str, QECCodePatch], Castable, Displayable):
 
     @property
     def all_qubit_labels(self) -> list[str]:
-        """TODO"""
+        """All qubits managed by patches in this :class:`.PatchDict`."""
         qubits: list[str] = []
         for patch in self.patches.values():
             qubits.extend(patch.qubits)
         return qubits
 
     def copy(self) -> PatchDict:
+        """Return a copy of this :class:`.PatchDict`.
+
+        Returns
+        -------
+        PatchDict
+            The copied :class:`.PatchDict`
+        """
         return PatchDict(self.patches.copy())
 
     @classmethod

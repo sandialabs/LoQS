@@ -29,13 +29,12 @@ parts:
   chapters:
   - file: markdown/buildinstruction.md
   - file: markdown/buildqeccode.md
-  - file: markdown/runlogst.md
   - file: markdown/daskparallelism.md
 - caption: Examples
   chapters:
+  - file: markdown/runlogst.md
   - file: markdown/fttests.md
 - caption: Developer Zone
-  maxdepth: 1
   chapters:
   - file: markdown/devguide.md
   - file: api.rst

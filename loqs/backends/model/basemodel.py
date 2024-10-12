@@ -1,4 +1,4 @@
-""":class:`GateRep`, :class:`InstrumentRep` and :class:`ModelBackend` definitions.
+""":class:`.GateRep`, :class:`.InstrumentRep` and :class:`.BaseNoiseModel` definitions.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from loqs.internal import Castable, Displayable
 
 
 class GateRep(StrEnum):
-    """TODO"""
+    """Representations for gate objects."""
 
     UNITARY = "Unitary"
     PTM = "Pauli transfer matrix"
@@ -22,7 +22,7 @@ class GateRep(StrEnum):
 
 
 class InstrumentRep(StrEnum):
-    """TODO"""
+    """Representations for instrument objects."""
 
     ZBASISPROJECTION = "Z-basis projection"
     # TODO: PyGSTi instruments as a dict?

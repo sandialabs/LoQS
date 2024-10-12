@@ -40,12 +40,12 @@ class TestMeasurementOutcomes:
 
         # X basis, Y and Z errors cause bitflips
         X_expected = {"Q0": [0, 1], "Q1": [0,1], "Q2": [1,0], "Q3": [1,0]}
-        m2 = m.get_inferred_outcomes("X", pf)
+        m2 = m.get_inferred_outcomes(pf, "X")
         self._check(m2, X_expected)
 
         # Z basis, X and Y errors cause bitflips
         Z_expected = {"Q0": [0, 1], "Q1": [1,0], "Q2": [1,0], "Q3": [0,1]}
-        m3 = m.get_inferred_outcomes("Z", pf)
+        m3 = m.get_inferred_outcomes(pf, "Z")
         self._check(m3, Z_expected)
     
     def test_serialization(self):

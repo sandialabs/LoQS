@@ -1,7 +1,5 @@
 """Circuit backend classes.
 
-More documentation TODO.
-
 Below use syndrome extraction circuits for the surface code
 as an example for how to generate complex tiled circuits
 from simple templates.

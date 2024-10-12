@@ -1,4 +1,4 @@
-""":class:`PyGSTiNoiseModel` definition.
+""":class:`.PyGSTiNoiseModel` definition.
 """
 
 from __future__ import annotations

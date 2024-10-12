@@ -1,4 +1,4 @@
-""":class:`PyGSTiPhysicalCircuit` definition.
+""":class:`.PyGSTiPhysicalCircuit` definition.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-""":class:`MeasurementOutcomes` definition.
+""":class:`.MeasurementOutcomes` definition.
 """
 
 from __future__ import annotations
@@ -16,24 +16,32 @@ T = TypeVar("T", bound="MeasurementOutcomes")
 MeasurementOutcomesCastableTypes: TypeAlias = (
     "MeasurementOutcomes | Mapping[str, int | Sequence[int]]"
 )
+"Things that can be cast to :class:`.MeasurementOutcomes`."
 
 
 class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
-    """TODO"""
+    """Measurement outcomes from physical circuit instructions.
+
+    This is a dict-like object with qubit label keys and lists of 0/1
+    outcome values. These can represent both raw measurement outcomes
+    or "inferred" outcomes where a :class:`.PauliFrame` has been applied
+    (see :attr:`.get_inferred_outcomes`).
+    """
 
     outcomes: OutcomeDict
     """Dict with qubit label keys and list of 0/1 outcome values.
 
-    Can be multiple outcomes if the qubit
-    was measured multiple times, e.g.
-    auxiliary qubit reuse.
+    Can be multiple outcomes if the qubit was measured multiple times,
+    e.g. auxiliary qubit reuse in a single circuit.
     """
 
     def __init__(self, outcomes: MeasurementOutcomesCastableTypes) -> None:
-        """Initialize a :class:`MockState`.
-
+        """
         Parameters
         ----------
+        outcomes:
+            See :attr:`.outcomes`. No default since this is intended to be
+            immutable, i.e. data is given once now and then not changed.
         """
         if isinstance(outcomes, MeasurementOutcomes):
             self.outcomes = outcomes.outcomes
@@ -65,8 +73,8 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
     def cast(cls: type[T], obj: object) -> T:
         """Cast to the derived class.
 
-        For Frame objects, a dict is an allowed first argument,
-        so we add a check for expected constructor kwarg names.
+        For :class:`MeasurementOutcome` objects, a dict is an allowed
+        first argument, so we add a check for expected constructor kwarg names.
 
         Parameters
         ----------
@@ -94,10 +102,21 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
 
     def get_inferred_outcomes(
         self,
-        basis: Literal["Z"] | Literal["X"],
         pauli_frame: PauliFrame | None = None,
+        basis: Literal["Z"] | Literal["X"] = "Z",
     ) -> MeasurementOutcomes:
-        """TODO"""
+        """Apply a :class:`.PauliFrame` to get inferred outcomes.
+
+        Parameters
+        ----------
+        pauli_frame:
+            The :class:`.PauliFrame` to apply. Defaults to ``None``,
+            in which case this just returns a copy.
+
+        basis:
+            Which measurement basis to use when applying the ``pauli_frame``.
+            Must be one of ``["X", "Z"]``, and defaults to ``"Z"``.
+        """
         if pauli_frame is None:
             return MeasurementOutcomes(self.outcomes.copy())
 

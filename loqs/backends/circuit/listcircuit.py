@@ -1,4 +1,4 @@
-"""TODO
+""":class:`.ListPhysicalCircuit` definition.
 """
 
 from __future__ import annotations

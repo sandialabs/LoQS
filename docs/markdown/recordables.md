@@ -29,18 +29,6 @@ The default `PatchDict` object is typically associated with the `"patches"` fram
 
 See the [API Reference](/_autosummary/loqs.core.recordables.patchdict.PatchDict) for more in-depth documentation.
 
-## PauliFrame
-
-The `PauliFrame` is currently under construction, but is intended to store the current stabilizer frame of the simulation.
-
-```{warning}
-This section is incomplete and will be filled out as the `PauliFrame` implementation is solidified.
-```
-
-The default `PauliFrame` object is typically associated with the `"pauli_frame"` frame key.
-
-See the [API Reference](/_autosummary/loqs.core.syndrome.PauliFrame) for more in-depth documentation.
-
 ## What's next?
 
 We have now covered how to store simulation data in `LoQS` via the `History`, `Frame`, and various "recordable" objects.

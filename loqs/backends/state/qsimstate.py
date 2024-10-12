@@ -1,4 +1,4 @@
-""":class:``QSimQuantumState`` definition.
+""":class:`.QSimQuantumState` definition.
 """
 
 from __future__ import annotations
@@ -57,8 +57,7 @@ class QSimQuantumState(BaseQuantumState):
         qubit_labels: Collection[QubitTypes] | None = None,
         seed: int | None = None,
     ) -> None:
-        """Initialize a BaseQuantumState.
-
+        """
         Parameters
         ----------
         state:

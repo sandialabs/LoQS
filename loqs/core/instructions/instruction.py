@@ -1,4 +1,4 @@
-"""TODO
+""":class:`.Instruction` definition.
 """
 
 from __future__ import annotations
@@ -25,13 +25,25 @@ T = TypeVar("T", bound="Instruction")
 P = ParamSpec("P")
 
 KwargDict: TypeAlias = dict[str, object]
+"""A type alias for kwarg dicts (str keys, object values)."""
 
 
 class ApplyCallable(Protocol[P]):
+    """The protocol a user-defined apply function must follow.
+
+    Specifically, it must return a :class:`.Frame`.
+    """
+
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Frame: ...  # noqa
 
 
 class MapQubitsCallable(Protocol[P]):
+    """The protocol a user-defined map qubits function must follow.
+
+    Specifically, it must take a qubit_mapping ``dict[str,str]`` as the
+    the first argument, and return the mapped :attr:`.KwargDict`.
+    """
+
     def __call__(  # noqa
         self,
         qubit_mapping: Mapping[str, str],
@@ -41,17 +53,90 @@ class MapQubitsCallable(Protocol[P]):
 
 
 def default_map_qubits(qubit_mapping: Mapping[str, str], **kwargs):
+    """A default map qubit function that does not change kwargs."""
     # Assume nothing needs to be mapped in kwargs
     return kwargs
 
 
 DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
-"""Default parameter priority order.
-"""
+"""Default parameter priority order."""
 
 
 class Instruction(Displayable):
-    """TODO"""
+    """An object that moves the state of the simulation forward.
+
+    This is the possibly the most important LoQS object.
+    It was designed to be maximally flexible: it can take in any
+    data it needs from the current state of the simulation,
+    perform any transformation on that data, and output any
+    information to be used by a downstream :class:`.Instruction`.
+
+    NOTE: The :class:`Instruction` is flexible and powerful; however,
+    with that flexibility comes complexity, and we are aware
+    it may not be immediately clear how to use these. Interested users are
+    encouraged to look at the Object Quickstart > Instructions and
+    Tutorials > Building a Complex Instruction for more,
+    or at :mod:`.builders` for concrete examples.
+
+    At its core, an :class:`.Instruction` is defined by five
+    pieces of user-defined information:
+
+    - An apply function that takes in simulation information and
+      outputs a new :class:`.Frame`
+    - Data that is needed for the apply function but will
+      not be provided by another source
+    - A map qubits function that can change any
+      :class:`.Instruction` data that has qubit labels in it
+      (needed to make the apply function qubit/patch agnostic)
+    - A set of parameter priorities for apply function input
+      collection
+    - A set of parameter aliases between apply function kwargs
+      and what to look for during input collection
+
+    The :class:`.Instruction` is then used in the following ways:
+
+    - A :class:`QECCode` will define these with respect to a
+      template set of qubits
+    - The :class:`QECCodePatch` will use :meth:`.Instruction.map_qubits`
+      to swap out the template qubits with the real ones (using
+      the user-defined map qubits function)
+    - The :class:`QuantumProgram` will use the data and parameter
+      priorities/aliases to collect the right simulation information,
+      and then call :meth:`.Instruction.apply` to generate the next
+      :class:`.Frame` (using the user-defined apply function)
+
+    NOTE: The :class:`Instruction` is annoying to serialize because it
+    contains user-defined code. The way LoQS handles this is by
+    storing the function definitions as strings for serialization,
+    and re-executing them during deserialization. This has several
+    important caveats:
+
+    1. THIS HAS OBVIOUS SECURITY IMPLICATIONS. DO NOT DESERIALIZE
+       INSTRUMENT-CONTAINING LOQS OBJECTS THAT YOU DO NOT TRUST.
+       The good news is that because the function is stored in plain text,
+       you can verify whether it is doing anything malicious.
+    2. The serialized versions are computed at construction time
+       and require access to the source code. They are then saved
+       so that they persist through deserialization - otherwise,
+       you could not re-serialize after deserialization because
+       you would not have access to the source code of the executed
+       function.
+    3. As a side effect of the string versions of the functions
+       being used for serialization, these are also the objects
+       used when hashing and (potentially importantly) when doing
+       equality testing. Two :class:`Instruction` objects can have
+       functionally equivalently :attr:`.apply_fn` and :attr:`.map_qubits_fn`,
+       but they will not test as equal if the string representations differ
+       in any way. Similarly, two :class:`Instruction` objects that
+       have very different functions would test as equal if one had
+       serialized versions that were set to match with the other.
+    4. Importantly for Jupyter users, Caveat 2 means that you may run
+       into issues when your apply function is only defined in a
+       notebook cell. There are two solutions to this: you can provide
+       the plain text versions during object construction, or you
+       can keep your function definitions in a separate script.
+       The latter is preferred, but both should work.
+    """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -68,13 +153,60 @@ class Instruction(Displayable):
         name: str = "(Unnamed instruction)",
         type: str = "User-defined",
     ) -> None:
-        """TODO
+        """
+        Parameters
+        ----------
+        apply_fn:
+            See :attr:`.apply_fn`
 
-        If apply_fn uses variadic args/kwargs, you must
-        supply param_priorities.
+        data:
+            See :attr:`.data`. Defaults to ``None``, which uses an empty ``dict``.
+
+        map_qubits_fn:
+            See :attr:`.map_qubits_fn`. Defaults to :meth:`.default_map_qubits`.
+
+        param_priorities:
+            A mapping of :attr:`.apply_fn` parameter names to lists of priorities
+            to using during parameter collection with
+            :meth:`.QuantumProgram._collect_kwarg`. Defaults to ``None``,
+            which sets every parameter's priority to :attr:`.DEFAULT_PARAMETERS`.
+            For an example, see :meth:`.builders.build_lookup_decoder_instruction`.
+
+        param_error_behavior:
+            See :attr:`.param_error_behavior`. Defaults to ``"warn"``.
+
+        param_aliases:
+            A mapping from `.apply_fn` parameter names to names to use during
+            parameter collection with :meth:`.QuantumProgram._collect_kwarg`.
+            For an example, see :meth:`.builders.build_lookup_decoder_instruction`.
+
+        serialized_apply_fn:
+            A serialized version of :attr:`.apply_fn`. Defaults to ``None``,
+            which sets this by calling :meth:`.serialize` on :attr:`.apply_fn`.
+            Not intended to be set by the user, see caveats above.
+
+        serialized_map_qubits_fn:
+            A serialized version of :attr:`.map_qubits_fn`. Defaults to ``None``,
+            which sets this by calling :meth:`.serialize` on :attr:`.map_qubits_fn`.
+            Not intended to be set by the user, see caveats above.
+
+        name:
+            See :attr:`.name`.
+
+        type:
+            See :attr:`.type`.
         """
         self.apply_fn = apply_fn
+        """A user-defined function called in :meth:`.apply`.
+
+        It must conform to the :attr:`.ApplyCallable` protocol.
+        """
+
         self.map_qubits_fn = map_qubits_fn
+        """A user-defined function called in :meth:`.map_qubits`.
+
+        It must conform to the :attr:`.MapQubitsCallable` protocol.
+        """
 
         # Let's serialize the functions now, when we know we have access to source code
         self._serialized_apply_fn = serialized_apply_fn
@@ -86,17 +218,24 @@ class Instruction(Displayable):
                 map_qubits_fn
             )
 
-        # TODO: Document limitation: Data cannot have functions in it right now
-        # due to serialization issues.
         if data is None:
             data = {}
         self.data = deepcopy(dict(data))
+        """Data to keep with this :class:`.Instruction`.
+
+        NOTE: There is currently a limitation that this data
+        cannot store functions due to serialization issues.
+        """
 
         # Introspect to ensure we set priorities for every arg needed
         if param_priorities is None:
             param_priorities = {}
         assert param_error_behavior in ["continue", "warn", "raise"]
         self.param_error_behavior = param_error_behavior
+        """Error behaviour when processing :attr:`.apply_fn` parameters.
+
+        Must be one of ``["continue", "warn", "raise"]``.
+        """
 
         self._param_priorities = {}
         sig = ins.signature(self.apply_fn)
@@ -127,7 +266,10 @@ class Instruction(Displayable):
         }
 
         self.name = name
+        """Name for logging"""
+
         self.type = type
+        """Type for logging"""
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
@@ -179,7 +321,7 @@ class Instruction(Displayable):
 
     @property
     def param_priorities(self) -> dict[str, Sequence[str]]:
-        """TODO"""
+        """The (aliased if needed) parameter priorities."""
         # Map priorities using aliases
         aliased_priorities = {
             self._param_aliases.get(k, k): v
@@ -188,7 +330,21 @@ class Instruction(Displayable):
         return aliased_priorities
 
     def apply(self, **kwargs) -> Frame:
-        """TODO"""
+        """Apply this :class:`.Instruction` to get a new :class:`.Frame`.
+
+        Parameters
+        ----------
+        **kwargs:
+            Unaliased parameters to pass on to :attr:`.apply_fn`.
+            Aliasing will be performed before the parameters are passed on.
+
+        Returns
+        -------
+        Frame
+            The output :class:`.Frame` of :attr:`.apply_fn`, with this
+            :class:`Instruction` and the input parameters appended for
+            informational/debugging purposes
+        """
         # Adjust aliases
         aliased_kwargs = {
             self._rev_param_aliases.get(k, k): v for k, v in kwargs.items()
@@ -197,15 +353,14 @@ class Instruction(Displayable):
         applied_frame = self.apply_fn(**aliased_kwargs)
 
         output_frame = applied_frame.update(
-            {
-                "instruction": self,
-            },
+            {"instruction": self, "parameters": aliased_kwargs},
             new_log=f"{self.name} result",
         )
 
         return output_frame
 
     def copy(self) -> Instruction:
+        """Return a copy of this :class:`.Instruction`."""
         return Instruction(
             apply_fn=self.apply_fn,
             data=deepcopy(self.data),
@@ -219,10 +374,20 @@ class Instruction(Displayable):
             type=self.type,
         )
 
-    def map_qubits(
-        self: Instruction, qubit_mapping: Mapping[str, str]
-    ) -> Instruction:
-        """TODO"""
+    def map_qubits(self, qubit_mapping: Mapping[str, str]) -> Instruction:
+        """Get a copy with mapped qubits.
+
+        Parameters
+        ----------
+        qubit_mapping:
+            The qubit mapping to apply, with old labels as keys
+            and new labels as values
+
+        Returns
+        -------
+        Instruction
+            A copy of the :class:`Instruction` with mapped qubits
+        """
         new_instruction = self.copy()
         # Map qubits on all data
         new_kwargs = self.map_qubits_fn(qubit_mapping, **self.data)

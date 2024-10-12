@@ -528,6 +528,36 @@ class QuantumProgram(Displayable):
     def _resolve_instruction(
         self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
     ) -> Instruction:
+        """An internal function to resolve instruction names.
+
+        This is not intended to be called by the user, but is documented
+        as it is a critical (and potentially non-obvious) component of
+        :meth:`QuantumProgram.run`.
+
+        This function has the following logic:
+
+        1. If :attr:`InstructionLabel.instruction` is not ``None``, return it
+        2. If ``inst_lbl.patch_label`` is ``None``, check for ``inst_lbl.inst_name``
+           in :attr:`.global_instructions`. Return it if there, error if not
+        3. Otherwise, we must be from a :class:`.QECCodePatch`. Look up the
+           :class:`PatchDict` via ``"patches"`` in the provided frame, and
+           check for ``inst_lbl.inst_name`` in the patch. Return if there,
+           error if anything goes wrong along the way
+
+        Parameters
+        ----------
+        inst_lbl:
+            The :class:`.InstructionLabel` to resolve
+
+        frame:
+            The last :class:`.Frame`, which should contain a :class:`.PatchDict`
+            under ``"patches"``, to allow patch-specific resolution
+
+        Returns
+        -------
+        :class:`.Instruction`
+            The resolved :class:`.Instruction`
+        """
         ilbl = InstructionLabel.cast(inst_lbl)
 
         if ilbl.instruction is not None:
@@ -583,7 +613,95 @@ class QuantumProgram(Displayable):
         history: History,
         name: str,
     ) -> object:
-        """TODO"""
+        """
+        An internal function to collect a parameter for :meth:`.Instruction.apply`.
+
+        This is not intended to be called by the user, but is documented
+        as it is a critical (and potentially non-obvious) component
+        of :meth:`QuantumProgram.run`.
+
+        There are four locations this function can source information.
+
+        - `"label"`: This means the information should come from the
+          :class:`InstrumentLabel`. First, the :attr:`.InstrumentLabel.inst_args`
+          as passed in by ``label_args`` is checked. The ``position``-th entry
+          is returned if available, or we continue if not. Next, the
+          :attr:`.InstrumentLabel.inst_kwargs` as passed in by ``label_kwargs``
+          are checked. Return the entry corresponding to ``key``,
+          or continue if not available.
+        - `"instruction"`: This means the information should come from the
+          :attr:`Instruction.data` as passed in by ``instruction_data``.
+          Return it if available, continue if not.
+        - `"program"`: This means the information should come from the
+          :class:`QuantumProgram` itself. If ``key`` matches any of these,
+          it is returned, otherwise continue. This data comes in the form of
+          the passed in ``program_data`` described below.
+        - `"history[<idxs>]"`: This means that the program should come from the
+          current :class:`.History` object being built by :meth:`.run`. This will
+          call :meth:`.History.collect_data` with ``key`` and ``<idxs>`` as args.
+          It will return the resulting list/object if it is not ``None``, otherwise
+          continue.
+          NOTE: This means that if a :class:`.Frame` value is ``None``, it will be
+          considered as not found by this function. Users should pick a different
+          default "missing" value in cases where that is a valid option that should
+          be passed on to :meth:`Instruction.apply`, or traverse the :class:`.History`
+          themselves by collecting it from the ``program_data``.
+
+        The ``program_data`` dict can have the following entries:
+
+        - "history": The current :class:`.History` object being built by
+            :meth:`.run`.
+        - "patch_label": The :attr:`.InstrumentLabel.patch_label`
+        - "stack": The current :class:`.InstructionStack` object being
+            read by :meth:`.run`.
+        - "seed": The shot of the seed, as :attr:`.default_base_seed`
+            :math:`+i` for seed :math:i if :attr:`.default_base_seed` is
+            not ``None``, or ``None`` otherwise.
+        - "model": The :attr:`.default_noise_model` if it is not ``None``,
+            otherwise it is not included in the dict
+
+        Finally, if all sources are exhausted and no object has been found,
+        a ``ValueError`` will be raised.
+
+        Parameters
+        ----------
+        position:
+            The position of the object in ``label_args``
+
+        key:
+            The key of the object in ``label_kwargs``, ``instruction_data``,
+            and ``program_data``
+
+        priorities:
+            A list where the entries must be in
+            ``["label", "instruction", "program", "history[<idxs>]"]``.
+            This determines the order in which the different data sources
+            are tried.
+
+        label_args:
+            The :attr:`.InstructionLabel.inst_args` to check
+
+        label_kwargs:
+            The :attr:`.InstructionLabel.inst_kwargs` to check
+
+        instruction_data:
+            The :attr:`.Instruction.data` to check
+
+        program_data:
+            The dict of program information described above under ``"program"``
+
+        history:
+            The current :class:`.History` object
+
+        name:
+            The resolved :attr:`.Instruction.name`.
+            Only used for better information if the object is not found.
+
+        Returns
+        -------
+        object
+            The collected object
+        """
         for priority in priorities:
             if priority == "label":
                 # Check label args and kwargs

@@ -1,4 +1,4 @@
-"""TODO
+""":class:`InstructionLabel` definition.
 """
 
 from __future__ import annotations
@@ -19,7 +19,12 @@ InstructionLabelCastableTypes: TypeAlias = (
 
 
 class InstructionLabel(Castable, Displayable):
-    """TODO"""
+    """Instruction labels intended to be elements of an :class:`.InstructionStack`.
+
+    These are also castable from 1- to 4-tuples, so users
+    can just specify a stack as a list of tuples and labels
+    will be cast into these under the hood.
+    """
 
     instruction: Instruction | None
     """Instruction.
@@ -64,9 +69,23 @@ class InstructionLabel(Castable, Displayable):
         inst_args: Sequence | None = None,
         inst_kwargs: Mapping[str, object] | None = None,
     ) -> None:
-        """Initialize an :class:`InstructionLabel`.
+        """
+        Parameters
+        ----------
+        inst_or_label:
+            Either an :class:`Instruction` or string, setting
+            one of :attr:`.instruction` or :attr:`.inst_label`.
 
-        TODO
+        patch_label:
+            See :attr:`.patch_label`. Defaults to ``None``.
+
+        inst_args:
+            See :attr:`.inst_args`. Default to ``None``, which
+            just sets it to be an empty list.
+
+        inst_kwargs:
+            See :attr:`.inst_kwargs`. Default to ``None``, which
+            just sets it to be an empty dict.
         """
         self.instruction = None
         self.inst_label = None
@@ -85,11 +104,9 @@ class InstructionLabel(Castable, Displayable):
         self.inst_kwargs = dict(inst_kwargs)
 
     def __str__(self) -> str:
-        """TODO"""
         return repr(self)
 
     def __repr__(self) -> str:
-        """TODO"""
         if self.inst_label is None:
             assert self.instruction is not None
             inst_label = self.instruction.name

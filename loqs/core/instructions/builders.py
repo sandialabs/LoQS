@@ -1,4 +1,17 @@
-"""TODO
+"""Functions to construct common :class:`.Instruction` objects.
+
+Each function documents both how to use it, as well
+as providing the following information about the created
+:class:`.Instruction`:
+
+- The apply function
+    - The parameters it pulls, including the typical source
+    - What keys are in the returned :class:`.Frame`
+- The map qubits function (if needed)
+- The parameter priorities (if not default)
+- The parameter aliases (if provided)
+
+If information is omitted, it is implied to be the default.
 """
 
 from __future__ import annotations
@@ -42,12 +55,12 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - `patch_label`, usually from the `InstructionLabel`
-    - `stack`, usually from the `QuantumProgram`
-    - `instructions`, usually from the `Instruction.data`
+    - ``patch_label``, usually from the :attr:`.InstructionLabel.patch_label`
+    - `stack`, usually from the :class:`.QuantumProgram`
+    - `instructions`, usually from the :attr:`.Instruction.data`
 
-    It returns a `Frame` where `instructions` have been inserted
-    onto the front of the `stack`.
+    It returns a :class:`.Frame` where ``instructions`` have been inserted
+    onto the front of :class:`.InstructionStack` stored at ``"stack"``.
 
     There is a map qubits function, which calls the map qubits
     functions for the underlying `instructions`.
@@ -323,8 +336,6 @@ def build_object_builder_instruction(
     It also must take all required args to the `obj_class` constructor, and
     returns a `Frame` with the constructed object stored under `frame_key`.
 
-    There is no map qubits function.
-
     The parameter priorities are generated programatically using
     the `inspect` module for function signature introspection.
 
@@ -400,8 +411,6 @@ def build_patch_builder_instruction(
 
     It returns a `Frame` with an updated `patches` containing the new
     `QECCodePatch` under `patch_label`.
-
-    There is no map qubits function.
 
     The parameter priorities for `patches` are not default,
     because we want to prioritize a true `PatchDict` from
@@ -481,8 +490,6 @@ def build_patch_remover_instruction(
 
     It returns a `Frame` with an updated `patches` without the
     `QECCodePatch` under `patch_label`.
-
-    There is no map qubits function.
 
     Parameters
     ----------
@@ -876,7 +883,7 @@ def build_repeat_until_success_instruction(
                 applied_frame["measurement_outcomes"]
             )
             inferred_outcomes = outcomes.get_inferred_outcomes(
-                "Z", pauli_frame
+                pauli_frame, "Z"
             )
             if target_outcomes is None:
                 # If target outcomes not provided, use all 0s

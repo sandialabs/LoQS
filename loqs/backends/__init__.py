@@ -22,7 +22,43 @@ def propagate_state(
     inplace: bool = True,
     reset_mcms: bool = True,
 ) -> tuple[BaseQuantumState, OutcomeDict]:
-    """TODO"""
+    """Given a circuit and model, propagate a state forward in time.
+
+    This is a wrapper for :meth:`.BaseNoiseModel.get_reps`
+    and :meth:`.BaseQuantumState.apply_reps_inplace` (or
+    the non-inplace version if ``inplace=False``).
+    It does also try to find compatible reptypes by
+    searching for a match in output reps from ``model``
+    and input reps from ``state``.
+
+    Parameters
+    ----------
+    circuit:
+        The circuit to run
+
+    model:
+        The noise model to use to convert circuit operations
+        into representations the state can apply
+
+    state:
+        The state to move forward in time
+
+    inplace:
+        Whether to modify the state in-place (``True``, default)
+        or propagate a copy forward (``False``).
+        This should probably remain ``True`` for memory reasons.
+
+    reset_mcms:
+        Whether to reset the qubit state after an instrument
+        (``True``, default) or not.
+
+    Returns
+    -------
+    BaseQuantumState, OutcomeDict
+        The output of :meth:`.BaseQuantumState.apply_reps`.
+        If ``inplace=True``, then the state is also returned
+        to provide a consistent API.
+    """
     # Find a compatible model/state oprep
     oprep: GateRep | None = None
     for grep in model.output_gate_reps:

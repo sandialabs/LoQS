@@ -1,4 +1,4 @@
-"""TODO
+""":class:`.InstructionStack` definition.
 """
 
 from __future__ import annotations
@@ -23,6 +23,11 @@ InstructionStackCastableTypes: TypeAlias = (
 
 
 class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
+    """A list of :class:`InstructionLabel` objects to execute.
+
+    This is intended to be an immutable list of :class:`InstructionLabel`
+    objects to execute. Stack manipulations return a modified copy.
+    """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -32,9 +37,12 @@ class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
     def __init__(
         self, instructions: InstructionStackCastableTypes = None
     ) -> None:
-        """Initialize an InstructionStack.
-
-        TODO
+        """
+        Parameters
+        ----------
+        instructions:
+            A sequence of :class:`InstructionLabel` castable things.
+            Defaults to ``None``, which creates an empty list.
         """
         self._instructions = []
         if isinstance(instructions, InstructionStack):
@@ -83,9 +91,33 @@ class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
     def append_instruction(
         self, item: InstructionLabelCastableTypes
     ) -> InstructionStack:
+        """Add an entry to the end of the stack.
+
+        Parameters
+        ----------
+        item:
+            The item to add
+
+        Returns
+        -------
+        InstructionStack
+            The modified stack
+        """
         return self.insert_instruction(len(self), item)
 
     def delete_instruction(self, i: int) -> InstructionStack:
+        """Remove an entry from the stack.
+
+        Parameters
+        ----------
+        i:
+            The index to remove
+
+        Returns
+        -------
+        InstructionStack
+            The modified stack
+        """
         instructions = self._instructions.copy()
         del instructions[i]
         return InstructionStack(instructions)
@@ -93,6 +125,21 @@ class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
     def insert_instruction(
         self, i: int, item: InstructionLabelCastableTypes
     ) -> InstructionStack:
+        """Add an entry to a position in the stack.
+
+        Parameters
+        ----------
+        i:
+            The index of insertion
+
+        item:
+            The item to add
+
+        Returns
+        -------
+        InstructionStack
+            The modified stack
+        """
         instructions = self._instructions.copy()
         instructions.insert(i, InstructionLabel.cast(item))
         return InstructionStack(instructions)
@@ -100,6 +147,14 @@ class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
     def pop_instruction(
         self,
     ) -> tuple[InstructionLabel, InstructionStack]:
+        """Remove and return the first entry on the stack.
+
+        Returns
+        -------
+        InstructionLabel, InstructionStack
+            The first instruction and modified stack without
+            the first element
+        """
         return self._instructions[0], InstructionStack(self._instructions[1:])
 
     @classmethod

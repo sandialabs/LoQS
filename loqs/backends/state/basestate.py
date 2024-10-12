@@ -1,4 +1,4 @@
-""":class:`BaseQuantumState` definition.
+""":class:`.BaseQuantumState` definition.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from loqs.internal import Castable, Displayable
 T = TypeVar("T", bound="BaseQuantumState")
 
 OutcomeDict: TypeAlias = dict[str, list[int]]
+"""A type alias for outcome dictionaries."""
 
 
 class BaseQuantumState(Castable, Displayable):
@@ -47,14 +48,45 @@ class BaseQuantumState(Castable, Displayable):
     def apply_reps_inplace(
         self, reps: Sequence, reset_mcms: bool = True
     ) -> OutcomeDict:
-        """TODO"""
+        """Apply the reps to the state in-place.
+
+        Parameters
+        ----------
+        reps:
+            Operator representations to apply
+
+        reset_mcms:
+            Whether mid-circuit measurements should reset.
+
+        Returns
+        -------
+        OutcomeDict
+            Dictionary of outcomes. Can be empty if no
+            measurements were performed.
+        """
         pass
 
     @abstractmethod
     def apply_reps(
         self: T, reps: Sequence, reset_mcms: bool = True
     ) -> tuple[T, OutcomeDict]:
-        """TODO"""
+        """Apply the reps to the state in-place.
+
+        Parameters
+        ----------
+        reps:
+            See :meth:`.apply_reps_inplace`.
+
+        reset_mcms:
+            See :meth:`.apply_reps_inplace`.
+
+        Returns
+        -------
+        BaseQuantumState, OutcomeDict
+            A copy of the state with reps applied, and
+            dictionary of outcomes. Outcomes can be empty if no
+            measurements were performed.
+        """
         new_state = self.copy()
         outputs = new_state.apply_reps_inplace(reps, reset_mcms)
         return new_state, outputs
