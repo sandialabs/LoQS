@@ -5,26 +5,32 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Sequence
-from enum import StrEnum
+from enum import Enum
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.internal import Castable, Displayable
 
 
-class GateRep(StrEnum):
+class GateRep(Enum):
     """Representations for gate objects."""
 
-    UNITARY = "Unitary"
-    PTM = "Pauli transfer matrix"
-    QSIM_SUPEROPERATOR = "QuantumSim superoperator"
+    UNITARY = 1
+    """Unitary matrices"""
+
+    PTM = 2
+    """Pauli-transfer matrices"""
+
+    QSIM_SUPEROPERATOR = 3
+    """QuantumSim-basis superoperator"""
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 
-class InstrumentRep(StrEnum):
+class InstrumentRep(Enum):
     """Representations for instrument objects."""
 
-    ZBASISPROJECTION = "Z-basis projection"
+    ZBASISPROJECTION = 1
+    """Z-basis projection"""
     # TODO: PyGSTi instruments as a dict?
 
 
