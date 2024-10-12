@@ -18,6 +18,16 @@ HistoryCastableTypes: TypeAlias = (
 )
 """Things that can be cast to :class:`History`."""
 
+HistoryCollectDataIndexTypes: TypeAlias = (
+    int | slice | Sequence[int] | Literal["all"]
+)
+"""Types that can be passed into ``indices`` for :meth:`.History.collect_data`"""
+
+HistoryCollectDataArgsType: TypeAlias = tuple[
+    str, HistoryCollectDataIndexTypes
+]
+"""Type alias for arguments to :meth:`.History.collect_data`"""
+
 
 class History(Sequence[Frame], Castable, Displayable):
     """A semi-mutable list of :class:`Frame` objects.
@@ -169,7 +179,7 @@ class History(Sequence[Frame], Castable, Displayable):
         self._history.append(item)
 
     def collect_data(
-        self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
+        self, key: str, indices: HistoryCollectDataIndexTypes
     ) -> list | object:
         """Pull data by key out of one or several stored :class:`.Frame` objects.
 

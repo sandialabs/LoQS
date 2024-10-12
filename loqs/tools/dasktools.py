@@ -1,4 +1,5 @@
-"""TODO"""
+"""Collection of functions for using Dask.
+"""
 
 from collections.abc import Sequence
 
@@ -18,7 +19,31 @@ def run_program_list(
     num_shots_per_program_per_batch: int,
     max_frame_limit: int = 100,
 ) -> None:
-    """TODO"""
+    """Run a set of programs in parallel.
+
+    WARNING: This is currently much slower than
+    expected.
+
+    Parameters
+    ----------
+    programs:
+        The programs to run
+
+    dask_client:
+        The Dask client to use when submitting shots
+
+    num_shots_per_program:
+        The number of shots to execute per program
+
+    num_shots_per_program_per_batch:
+        The number of shots to use for each program
+        in a batch, i.e. total shots per batch will
+        be ``num_shots_per_program_per_batch`` *
+        ``len(programs)``.
+
+    max_frame_limit:
+        See :meth:`.QuantumProgram.run`
+    """
     histories_list = []
     tasks_by_program = []
     for program in programs:

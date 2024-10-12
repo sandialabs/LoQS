@@ -1,4 +1,5 @@
-"""TODO"""
+"""A collection of functions to help fault-tolerance testing.
+"""
 
 from collections.abc import Sequence
 from copy import deepcopy
@@ -6,6 +7,7 @@ from copy import deepcopy
 from tqdm import tqdm
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
+from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions import Instruction, InstructionLabel
 
 
@@ -15,7 +17,35 @@ def build_discrete_error_injection_programs(
     stack_idx_to_modify: int,
     error_circuit_labels: Sequence[str],
 ) -> list[QuantumProgram]:
-    """TODO"""
+    """Create a series of programs with one discrete error injected each.
+
+    This will take a (presumably physical circuit) :class:`.Instruction`,
+    use :meth:`.BasePhysicalCircuit.get_possible_discrete_error_locations`
+    to collect the possible error locations, and then create new programs
+    where the error will be injected via ``error_injections`` (see
+    :meth:`.build_physical_circuit_instruction` for more) as a kwarg
+    to the relevant :class:`.InstructionLabel`.
+
+    Parameters
+    ----------
+    base_program:
+        The base program to modify
+
+    instruction_to_analyze:
+        The :class:`.Instruction` to get all possible discrete errors for
+
+    stack_idx_to_modify:
+        The entry in the :class:`.InstructionStack` of the ``base_program``
+        to modify with ``error_injections`` as a label kwarg.
+
+    error_circuit_labels:
+        The labels for possible errors to insert.
+
+    Returns
+    -------
+    list[QuantumProgram]
+        A list of programs, one for each possible discrete error
+    """
     # Get possible circuit locations
     try:
         circuit = instruction_to_analyze.data["circuit"]
@@ -94,17 +124,38 @@ def build_discrete_error_injection_programs(
 
 def run_discrete_error_injected_programs(
     errored_programs: Sequence[QuantumProgram],
-    collect_shot_data_args: Sequence[Sequence],
+    collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
     expected_outcomes: Sequence,
-    num_num_shots: int = 1,
+    num_shots: int = 1,
 ) -> list[QuantumProgram]:
-    """TODO"""
+    """Call :meth:`.test_program_output` on many programs.
+
+    Parameters
+    ----------
+    errored_programs:
+        A list of programs to test, usually the output of
+        :meth:`.build_discrete_error_injection_programs`.
+
+    collect_shot_data_args:
+        See :meth:`.test_program_output`.
+
+    expected_outcomes:
+        See :meth:`.test_program_output`.
+
+    num_shots:
+        See :meth:`.test_program_output`.
+
+    Returns
+    -------
+    list[QuantumProgram]
+        The failed programs
+    """
     failed = []
     for program in tqdm(
         errored_programs, "Running discrete error injected programs"
     ):
         success = test_program_output(
-            program, collect_shot_data_args, expected_outcomes, num_num_shots
+            program, collect_shot_data_args, expected_outcomes, num_shots
         )
         if not success:
             failed.append(program)
@@ -119,17 +170,43 @@ def run_discrete_error_injected_programs(
 
 def test_program_output(
     test_program: QuantumProgram,
-    collect_shot_data_args: Sequence[Sequence],
+    collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
     expected_outcomes: Sequence,
-    num_num_shots: int = 1,
+    num_shots: int = 1,
     verbose: bool = False,
 ) -> bool:
-    """TODO"""
-    test_program.run(num_shots=num_num_shots, verbose=False)
+    """Test a program against expected output.
+
+    Parameters
+    ----------
+    test_program:
+        The :class:`.QuantumProgram` to test
+
+    collect_shot_data_args:
+        A list of arguments to :meth:`.History.collect_shot_data`.
+
+    expected_outcomes:
+        A list of the expected results to the
+        :meth:`.History.collect_shot_data` calls.
+
+    num_shots:
+        The number of shots to run and test.
+
+    verbose:
+        Whether to print the failed entry, if one occurs.
+        Will only print the first failed entry, if more than
+        one fails.
+
+    Returns
+    -------
+    bool
+        ``True`` if all outputs match expected, ``False`` on failure
+    """
+    test_program.run(num_shots=num_shots, verbose=False)
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
         outs = test_program.collect_shot_data(*args)
-        for out in outs[-num_num_shots:]:
+        for out in outs[-num_shots:]:
             if out != expected:
                 if verbose:
                     print(f"Output:   {out}")

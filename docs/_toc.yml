@@ -35,6 +35,7 @@ parts:
   - file: markdown/runlogst.md
   - file: markdown/fttests.md
 - caption: Developer Zone
+  maxdepth: 1
   chapters:
   - file: markdown/devguide.md
   - file: api.rst

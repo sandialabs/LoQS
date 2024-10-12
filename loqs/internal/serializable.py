@@ -1,4 +1,4 @@
-"""TODO
+""":class:`.Serializable` definition.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""TODO"""
+"""A collection of tools using/for pyGSTi."""
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from loqs.backends.model.pygstimodel import PYGSTI_QSIM_BASES
 from loqs.core import QuantumProgram
+from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
@@ -30,7 +31,18 @@ except ImportError as e:
 
 ## QUANTUMSIM BASIS TOOLS
 def ptm_to_qsim_ptm(ptm: npt.NDArray):
-    """TODO"""
+    """Convert a PTM to a QSim PTM.
+
+    Parameters
+    ----------
+    ptm:
+        Standard Pauli basis PTM
+
+    Returns
+    -------
+    ndarray
+        QuantumSim basis PTM
+    """
     ptm = np.asarray(ptm)
     num_qubits = np.log2(ptm.shape[0]) // 2
     basis = pygsti.BuiltinBasis("pp", 4**num_qubits)
@@ -40,7 +52,18 @@ def ptm_to_qsim_ptm(ptm: npt.NDArray):
 
 
 def unitary_to_qsim_ptm(U: npt.NDArray):
-    """TODO"""
+    """Convert a unitary to a QSim PTM.
+
+    Parameters
+    ----------
+    U:
+        Unitary
+
+    Returns
+    -------
+    ndarray
+        QuantumSim basis PTM
+    """
     ptm = np.asarray(pygsti.tools.unitary_to_pauligate(U))
     return ptm_to_qsim_ptm(ptm)
 
@@ -54,7 +77,32 @@ def convert_edesign_to_programs(
     ],
     **kwargs,
 ) -> list[QuantumProgram]:
-    """TODO"""
+    """Convert a pyGSTi edesign to class:`.QuantumProgram` objects.
+
+    Parameters
+    ----------
+    edesign:
+        pyGSTi ``ExperimentDesign`` to convert
+
+    model:
+        pyGSTi model for the edesign. Currently only used
+        for ``model.complete_circuit``, to be removed soon.
+
+    physical_to_logical:
+        A mapping from pyGSTi physical circuit labels to
+        :attr:`.InstructionStackCastableTypes` to build up
+        the :class:`.InstructionStack` for each program.
+
+    **kwargs:
+        Any additional kwargs that should be passed to the
+        :class:`.QuantumProgram`.
+
+    Returns
+    -------
+    list[QuantumProgram]
+        List of programs, one per circuit in
+        ``edesign.all_circuits_needing_data``
+    """
     label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
 
     if "name" in kwargs:
@@ -74,14 +122,42 @@ def convert_edesign_to_programs(
 
 
 def convert_run_programs_to_dataset(
-    edesign: ExperimentDesign, programs: Sequence[QuantumProgram]
+    edesign: ExperimentDesign,
+    programs: Sequence[QuantumProgram],
+    collect_shot_data_args: HistoryCollectDataArgsType = (
+        "logical_measurement",
+        -1,
+    ),
 ) -> DataSet:
-    """TODO"""
+    """Convert class:`.QuantumProgram` objects to a pyGSTi ``DataSet``.
+
+    Parameters
+    ----------
+    edesign:
+        pyGSTi ``ExperimentDesign`` with `edesign.all_circuits_needing_data`
+        matching the order of :class:`.QuantumProgram` objects in
+        ``programs``. This is usually the same as in
+        :meth:`.convert_edesign_to_programs`.
+
+    programs:
+        List of programs, one per circuit in ``edesign.all_circuits_needing_data``,
+        with :meth:`.QuantumProgram.run` having been called on the programs
+        with the desired number of shots.
+
+    collect_shot_data_args:
+        The arguments to :meth:`.QuantumProgram.collect_shot_data` to extract
+        outcomes from each shot. The output should be a single element per shot.
+
+    Returns
+    -------
+    DataSet
+        A pyGSTi ``DataSet`` with outcomes stripped from the programs.
+    """
     from collections import Counter
 
     ds = DataSet()
     for circ, prog in zip(edesign.all_circuits_needing_data, programs):
-        counts = Counter(prog.collect_shot_data("logical_measurement", -1))
+        counts = Counter(prog.collect_shot_data(*collect_shot_data_args))
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)
@@ -98,8 +174,26 @@ def convert_circuit_to_image(
     lstick_values: Sequence[str | None] | None = None,
     include_qubits_in_lsticks: bool = True,
 ):  # Returns an Image but don't want to import that just for hinting as it's optional
+    """Convert a pyGSTi ``Circuit`` to a PNG image.
+
+    Requires ``loqs[visualization]`` and ``pdflatex``.
+
+    Parameters
+    ----------
+    circuit:
+        pyGSTi ``Circuit`` to convert. Attainable via
+        :attr:`.PyGSTiPhysicalCircuit.circuit`.
+
+    gatename_conversion:
+        See :meth:`.convert_circuit_to_quantikz`.
+
+    lstick_values:
+        See :meth:`.convert_circuit_to_quantikz`.
+
+    include_qubits_in_lsticks:
+        See :meth:`.convert_circuit_to_quantikz`.
+    """
     try:
-        from PIL import Image
         from qiskit.visualization import utils as vis_utils
         from pdf2image import convert_from_path
     except ImportError as e:
@@ -150,7 +244,27 @@ def convert_circuit_to_qiskit_draw(
     gatename_conversion: Mapping[str, str] | None = None,
     placeholder_gate: str = "Gi",
 ) -> str:
+    """Convert a pyGSTi ``Circuit`` to a Qiskit ``draw()`` string.
 
+    Requires ``loqs[visualization]``.
+
+    Parameters
+    ----------
+    circuit:
+        pyGSTi ``Circuit`` to convert. Attainable via
+        :attr:`.PyGSTiPhysicalCircuit.circuit`.
+
+    gatename_conversion:
+        See ``pygsti.circuits.Circuit.convert_to_openqasm``.
+
+    placeholder_gate:
+        Gate label to use if not provided in ``gatename_conversion``.
+
+    Returns
+    -------
+    str
+        The output of ``qiskit.QuantumCircuit.draw()``
+    """
     from pygsti.tools import internalgates as itgs
 
     try:
@@ -198,6 +312,53 @@ def convert_circuit_to_quantikz(
     include_qubits_in_lsticks: bool = True,
     full_document: bool = False,
 ) -> str:
+    """Convert a pyGSTi ``Circuit`` to a PNG image.
+
+    Parameters
+    ----------
+    circuit:
+        pyGSTi ``Circuit`` to convert. Attainable via
+        :attr:`.PyGSTiPhysicalCircuit.circuit`.
+
+    gatename_conversion:
+        A conversion between gate labels and the corresponding
+        quantikz input.
+        For single qubit gates, this should just be the gate
+        name to appear in gate boxes. Note that ``"X"`` gates
+        are replaced with ``\\targ{}`` automatically.
+        For two-qubit gates, this should be a list of strings,
+        where entries in ``["ctrl", "octrl", "targ"]`` are a
+        control, open control, or target, respectively. Any other
+        entry is just treated as a gate name for a controlled gate.
+        For measurements, this is a string with the format:
+        ``"meter [<basis>] [reset <ket value>]"``. Starting with
+        ``"meter"`` puts the ``\\meter{}`` in quantikz. The second
+        argument is an optional basis label that is inserted above
+        the meter symbol. Also optional is reset, which will insert
+        a new line with a ket label that contains the value of
+        ``<ket value>``. If ``"reset"`` is provided, the ket value
+        must be provided.
+
+    lstick_values:
+        Strings to include in the starting ``\\lstick{}`` entries.
+        Entries can be ``None`` to skip that line, allowing later
+        entries to be set without setting them all.
+
+    include_qubits_in_lsticks:
+        Whether to include qubit labels (``True``, the default)
+        or not (``False``) in the starting ``\\lstick{}`` entries.
+
+    full_document:
+        Whether to include a document preamble (``True``) or just
+        the quantikz code (``False``, default) when generating
+        the final string. The ``True`` option is useful if you
+        want a self-contained TeX string that can be compiled.
+
+    Returns
+    -------
+    str
+        The quantikz string ready for TeX compiling
+    """
 
     num_lines = circuit.width
     quantikz_lines = [
@@ -382,7 +543,6 @@ def _process_layers(circuit, gatename_conversion):
 def _add_component_to_layer(
     comp, gatename_conversion, layer_caches, layer_idx, line_idxs
 ):
-    """TODO"""
     # Convert to quantikz symbol
     gate_names = gatename_conversion.get(comp.name, comp.name)
 

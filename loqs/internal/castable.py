@@ -1,4 +1,4 @@
-"""Definition of IsCastable utility class.
+""":class:`.Castable` definition.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ T = TypeVar("T", bound="Castable")
 class Castable:
     """Utility class for objects that are "castable".
 
-    By default, a :class:`Castable` object is one that can be
+    By default, a :class:`.Castable` object is one that can be
     initialized from a single argument, i.e. the object
     can be passed as the first argument to the constructor and any
     remaining arguments have sensible defaults.
-    They also have a :meth:`cast` function, which either does nothing
+    They also have a :meth:`.cast` function, which either does nothing
     if the object matches the correct type, or initializes it by calling
     the constructor by passing the object as the first parameter.
     """

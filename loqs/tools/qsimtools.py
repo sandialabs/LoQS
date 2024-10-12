@@ -1,4 +1,7 @@
-"""TODO"""
+"""A collection of tools useful for :class:`.QSimQuantumState` objects.
+
+Primarily verbose printing for debugging currently.
+"""
 
 from loqs.backends.state import QSimQuantumState
 

@@ -1,4 +1,4 @@
-"""TODO
+""":class:`.Displayable` definition.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ class Displayable(Serializable):
     """Base class for all interactively displayable objects.
 
     This uses the dict version of objects output by
-    `to_serializable()` and a tkinter Treeview to have
+    :meth:`.to_serializable` and a tkinter ``Treeview`` to have
     an interactive navigatable window.
     """
 
@@ -46,9 +46,18 @@ class Displayable(Serializable):
 
 
 class DisplayableViewer(tk.Tk):
-    """TODO"""
+    """A tkinter widget to display :class:`.Displayable` objects."""
 
     def __init__(self, data: Mapping, title: str = "LoQS Object Viewer"):
+        """
+        Parameters
+        ----------
+        data:
+            The output of a :meth:`Serializable.to_serialization` call.
+
+        title:
+            String for logging
+        """
         super().__init__()
         self.title(title)
         self.geometry("400x300")
@@ -57,6 +66,7 @@ class DisplayableViewer(tk.Tk):
         self.create_widgets()
 
     def create_widgets(self):
+        """Add the ``Treeview`` into the scene."""
         self.tree = ttk.Treeview(self)
         self.tree.pack(expand=True, fill="both")
 
@@ -136,6 +146,7 @@ class DisplayableViewer(tk.Tk):
                 )
 
     def on_item_click(self, event):
+        """Toggle expand/collapse of items."""
         selected_item = self.tree.selection()
         if selected_item:
             item_id = selected_item[0]

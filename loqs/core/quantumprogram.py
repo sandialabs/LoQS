@@ -17,8 +17,12 @@ from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
-from loqs.core import Instruction, InstructionStack, History
-from loqs.core.history import Frame, HistoryCastableTypes
+from loqs.core import Instruction, InstructionStack, Frame
+from loqs.core.history import (
+    History,
+    HistoryCastableTypes,
+    HistoryCollectDataIndexTypes,
+)
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
@@ -758,7 +762,7 @@ class QuantumProgram(Displayable):
         raise RuntimeError(f"Failed to collect parameter {key} for {name}")
 
     def collect_shot_data(
-        self, key: str, indices: int | slice | Sequence[int] | Literal["all"]
+        self, key: str, indices: HistoryCollectDataIndexTypes
     ) -> list:
         """Collate frame data over executed shots.
 
