@@ -26,7 +26,7 @@ class TestInstruction:
             'state': 1,
             'qubits': ["Q0", "Q1"],
             'instruction': ins,
-            'parameters': {'state': 0, 'qubits': ins.data["qubits"]}
+            'collected_params': {'state': 0, 'qubits': ins.data["qubits"]}
         }
         assert result.log == "test result"
 
@@ -37,7 +37,7 @@ class TestInstruction:
             'state': 1,
             'qubits': ["D2", "A3"],
             'instruction': ins2,
-            'parameters': {'state': 0, 'qubits': ins2.data["qubits"]}
+            'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
         assert result2.log == "test result"
 
@@ -76,7 +76,7 @@ class TestInstruction:
                 'state': 1,
                 'qubits': ["Q0", "Q1"],
                 'instruction': ins2,
-                'parameters': {'state': 0, 'qubits': ins2.data["qubits"]}
+                'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
             }
             assert result.log == "test result"
 
@@ -93,7 +93,7 @@ class TestInstruction:
                 'state': 1,
                 'qubits': ["Q0", "Q1"],
                 'instruction': ins3,
-                'parameters': {'state': 0, 'qubits': ins3.data["qubits"]}
+                'collected_params': {'state': 0, 'qubits': ins3.data["qubits"]}
             }
             assert result2.log == "test result"
             

@@ -353,7 +353,7 @@ class Instruction(Displayable):
         applied_frame = self.apply_fn(**aliased_kwargs)
 
         output_frame = applied_frame.update(
-            {"instruction": self, "parameters": aliased_kwargs},
+            {"instruction": self, "collected_params": aliased_kwargs},
             new_log=f"{self.name} result",
         )
 
