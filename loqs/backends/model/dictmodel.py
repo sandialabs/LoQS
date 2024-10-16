@@ -6,10 +6,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import ClassVar, TypeAlias, TypeVar
 
-from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
-from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
+from loqs.backends.circuit import BasePhysicalCircuit, ListPhysicalCircuit
+from loqs.backends.model import BaseNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
+from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
 
 
 T = TypeVar("T", bound="DictNoiseModel")
@@ -30,7 +30,7 @@ class DictNoiseModel(BaseNoiseModel):
         self,
         model_or_dicts: GateDictModelCastableTypes,
         gaterep: GateRep = GateRep.PTM,
-        instrep: InstrumentRep = InstrumentRep.ZBASISPROJECTION,
+        instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
     ) -> None:
         """Initialize a generic gate dict model.
 
@@ -111,7 +111,7 @@ class DictNoiseModel(BaseNoiseModel):
         circuit: BasePhysicalCircuit,
         gaterep: GateRep,
         instrep: InstrumentRep,
-    ) -> list:
+    ) -> list[RepTuple]:
         assert (
             gaterep == self._gaterep
         ), f"Dict model only has {self._gaterep} gates"
@@ -137,7 +137,7 @@ class DictNoiseModel(BaseNoiseModel):
 
                 assert rep is not None, f"Failed to look up {label}"
 
-                reps.append((rep, label[1], reptype))
+                reps.append(RepTuple(rep, label[1], reptype))
         return reps
 
     @classmethod

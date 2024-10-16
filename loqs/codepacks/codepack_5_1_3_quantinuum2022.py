@@ -355,7 +355,7 @@ def create_ideal_model(
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
     gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASISPROJECTION,
+    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
 ):
     """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
 

@@ -17,6 +17,8 @@ from loqs.backends.state import BaseQuantumState, OutcomeDict
 
 try:
     from quantumsim.sparsedm import SparseDM as _SparseDM
+    from quantumsim.dm_np import DensityNP as _DensityNP
+    from quantumsim.dm10 import Density as _Density
 except ImportError as e:
     raise ImportError("Failed import, cannot use QuantumSim as backend") from e
 
@@ -49,7 +51,12 @@ class QSimQuantumState(BaseQuantumState):
 
     @property
     def input_reps(self) -> list[GateRep | InstrumentRep]:
-        return [GateRep.QSIM_SUPEROPERATOR, InstrumentRep.ZBASISPROJECTION]
+        return [
+            GateRep.QSIM_SUPEROPERATOR,
+            InstrumentRep.ZBASIS_PROJECTION,
+            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+        ]
 
     def __init__(
         self,
@@ -120,33 +127,40 @@ class QSimQuantumState(BaseQuantumState):
                     raise ValueError(
                         "Cannot apply more than a 2 qubit operation"
                     )
-            elif reptype == InstrumentRep.ZBASISPROJECTION:
+            elif reptype == InstrumentRep.ZBASIS_PROJECTION:
                 # TODO: Could do it all at once probably
                 # but currently just copying measureRenormalizeQubit behavior
                 for qbit in qubits:
-                    results = self.state.peak_multiple_measurements([qbit])
-                    # Results has following structure
-                    # results: [({'A1': 0}, p0), ({'A1': 1}, p1)}
-                    # results[a][0][qubit] = measurement value
-                    # results[a][1]        = corresponding probability
-                    # where a is in {0,1}
-                    # (unless the bit is classical, in which case,
-                    # there is only one entry in results)
-
-                    # TODO: At this point, we also have probabilities
-                    # We could do also save that data, maybe helpful later
-
-                    m = self._rng.random()
-                    if m < results[0][1]:
-                        cbit = results[0][0][qbit]
-                    else:
-                        cbit = results[1][0][qbit]
-                    if qbit in self.state.idx_in_full_dm:
-                        self.state.project_measurement(qbit, cbit)
-                    if reset_mcms:
-                        self.state.set_bit(qbit, 0)
-                    self.state.renormalize()
+                    cbit = self._apply_projective_z_measure(qbit, reset_mcms)
                     outcomes[qbit].append(cbit)
+            elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+                # Check we can apply noisy pre operation
+                # self.state.apply()
+                # cbit = self._apply_projective_z_measure(qbit, reset_mcms)
+                # outcomes[qbit].append(cbit)
+                raise NotImplementedError("TODO")
+            elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+                if len(qubits) > 1:
+                    raise NotImplementedError(
+                        "More than 1-qubit instruments not yet implemented"
+                    )
+
+                # Compute the probability of measuring 0
+                prob_0 = self._apply_instrument_ptm_for_prob(rep[0], qubits[0])
+
+                # Use RNG to see if we measure 0 or 1
+                m = self._rng.random()
+                cbit = 0 if m < prob_0 else 1
+
+                # Apply the correct PTM based on the classical output we see
+                self.state.apply_ptm(qubits[0], rep[1])
+
+                if reset_mcms:
+                    self.state.set_bit(qubits[0], 0)
+                    self.state.renormalize()
+
+                # Save result
+                outcomes[qubits[0]].append(cbit)
             else:
                 raise NotImplementedError(f"Cannot apply reptype {reptype}")
 
@@ -159,6 +173,53 @@ class QSimQuantumState(BaseQuantumState):
 
     def copy(self) -> QSimQuantumState:
         return QSimQuantumState(self.state.copy())
+
+    def _apply_projective_z_measure(self, qbit: int, reset_mcms: bool) -> int:
+        results = self.state.peak_multiple_measurements([qbit])
+        # Results has following structure
+        # results: [({'A1': 0}, p0), ({'A1': 1}, p1)}
+        # results[a][0][qubit] = measurement value
+        # results[a][1]        = corresponding probability
+        # where a is in {0,1}
+        # (unless the bit is classical, in which case,
+        # there is only one entry in results)
+
+        # TODO: At this point, we also have probabilities
+        # We could do also save that data, maybe helpful later
+
+        m = self._rng.random()
+        if m < results[0][1]:
+            cbit = results[0][0][qbit]
+        else:
+            cbit = results[1][0][qbit]
+        if qbit in self.state.idx_in_full_dm:
+            self.state.project_measurement(qbit, cbit)
+        if reset_mcms:
+            self.state.set_bit(qbit, 0)
+        self.state.renormalize()
+        return cbit
+
+    def _apply_instrument_ptm_for_prob(
+        self, inst_ptm: np.ndarray, inst_bit: int
+    ) -> float:
+        if isinstance(self._state.full_dm, _Density):
+            raise NotImplementedError(
+                "Have not implemented instrument PTM logic for GPU-based density mx"
+            )
+        elif not isinstance(self._state.full_dm, _DensityNP):
+            raise ValueError("Expected a quantumsim.dm_np.DensityNP object")
+
+        # Taken from apply_ptm, adjusted to only output the row entry we care about
+        assert inst_bit < self._state.no_qubits
+
+        dummy_idx = self._state.no_qubits
+        in_indices = list(reversed(range(self._state.no_qubits)))
+        in_indices[self._state.no_qubits - inst_bit - 1] = dummy_idx
+        ptm_indices = [inst_bit, dummy_idx]
+
+        prob_array = np.einsum(self._state.full_dm.dm, in_indices, inst_ptm, ptm_indices, [dummy_idx], optimize=True)  # type: ignore
+        prob = prob_array[0] / inst_ptm.shape[0] ** 0.25
+        return prob
 
     @classmethod
     def _from_serialization(

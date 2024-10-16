@@ -9,6 +9,7 @@ import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.model.basemodel import GateRep, InstrumentRep
+from loqs.backends.reps import RepTuple
 from loqs.internal import Castable, Displayable
 
 
@@ -46,7 +47,7 @@ class BaseQuantumState(Castable, Displayable):
 
     @abstractmethod
     def apply_reps_inplace(
-        self, reps: Sequence, reset_mcms: bool = True
+        self, reps: Sequence[RepTuple], reset_mcms: bool = True
     ) -> OutcomeDict:
         """Apply the reps to the state in-place.
 
@@ -68,7 +69,7 @@ class BaseQuantumState(Castable, Displayable):
 
     @abstractmethod
     def apply_reps(
-        self: T, reps: Sequence, reset_mcms: bool = True
+        self: T, reps: Sequence[RepTuple], reset_mcms: bool = True
     ) -> tuple[T, OutcomeDict]:
         """Apply the reps to the state in-place.
 

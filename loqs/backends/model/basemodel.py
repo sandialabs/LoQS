@@ -4,34 +4,11 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Sequence
-from enum import Enum
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
 from loqs.internal import Castable, Displayable
-
-
-class GateRep(Enum):
-    """Representations for gate objects."""
-
-    UNITARY = 1
-    """Unitary matrices"""
-
-    PTM = 2
-    """Pauli-transfer matrices"""
-
-    QSIM_SUPEROPERATOR = 3
-    """QuantumSim-basis superoperator"""
-    # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
-
-
-class InstrumentRep(Enum):
-    """Representations for instrument objects."""
-
-    ZBASISPROJECTION = 1
-    """Z-basis projection"""
-    # TODO: PyGSTi instruments as a dict?
 
 
 class BaseNoiseModel(Castable, Displayable):
@@ -79,7 +56,7 @@ class BaseNoiseModel(Castable, Displayable):
         circuit: BasePhysicalCircuit,
         gaterep: GateRep,
         instrep: InstrumentRep,
-    ) -> list:
+    ) -> list[RepTuple]:
         """Get list of operator representations that can be applied.
 
         Parameters
