@@ -8,14 +8,14 @@ from collections.abc import Sequence, Mapping
 import textwrap
 from typing import ClassVar, Type, TypeAlias, TypeVar
 
-from loqs.internal import Castable, Displayable
+from loqs.internal import SeqCastable, Displayable
 
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BasePhysicalCircuit")
 
 
-class BasePhysicalCircuit(Castable, Displayable):
+class BasePhysicalCircuit(SeqCastable, Displayable):
     """Base class for an object that can holds a physical quantum circuit."""
 
     # Class attributes
@@ -23,8 +23,6 @@ class BasePhysicalCircuit(Castable, Displayable):
     """Name of circuit backend"""
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
-
-    CastableTypes: ClassVar[TypeAlias]
 
     ## Dunder methods
     @abstractmethod

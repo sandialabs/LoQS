@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions.instruction import Instruction
-from loqs.internal import Castable, Displayable
+from loqs.internal import SeqCastable, Displayable
 
 
 T = TypeVar("T", bound="InstructionLabel")
@@ -18,7 +18,7 @@ InstructionLabelCastableTypes: TypeAlias = (
 """Objects that can be cast to a :class:`.InstructionLabel`."""
 
 
-class InstructionLabel(Castable, Displayable):
+class InstructionLabel(SeqCastable, Displayable):
     """Instruction labels intended to be elements of an :class:`.InstructionStack`.
 
     These are also castable from 1- to 4-tuples, so users

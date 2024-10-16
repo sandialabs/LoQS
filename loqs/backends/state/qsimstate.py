@@ -18,7 +18,6 @@ from loqs.backends.state import BaseQuantumState, OutcomeDict
 try:
     from quantumsim.sparsedm import SparseDM as _SparseDM
     from quantumsim.dm_np import DensityNP as _DensityNP
-    from quantumsim.dm10 import Density as _Density
 except ImportError as e:
     raise ImportError("Failed import, cannot use QuantumSim as backend") from e
 
@@ -26,7 +25,7 @@ except ImportError as e:
 T = TypeVar("T", bound="QSimQuantumState")
 
 # Type aliases for static type checking
-CastableTypes: TypeAlias = "QSimQuantumState | int | _SparseDM"
+QSimStateCastableTypes: TypeAlias = "QSimQuantumState | int | _SparseDM"
 """Types that this backend can cast to an underlying state object."""
 
 QubitTypes: TypeAlias = str | int
@@ -60,7 +59,7 @@ class QSimQuantumState(BaseQuantumState):
 
     def __init__(
         self,
-        state: CastableTypes,
+        state: QSimStateCastableTypes,
         qubit_labels: Collection[QubitTypes] | None = None,
         seed: int | None = None,
     ) -> None:
@@ -116,7 +115,11 @@ class QSimQuantumState(BaseQuantumState):
     ) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
 
-        for rep, qubits, reptype in reps:
+        for reptuple in reps:
+            rep = reptuple.rep
+            qubits = reptuple.qubits
+            reptype = reptuple.reptype
+
             if reptype == GateRep.QSIM_SUPEROPERATOR:
                 if len(qubits) == 1:
                     self.state.apply_ptm(qubits[0], rep)
@@ -202,11 +205,7 @@ class QSimQuantumState(BaseQuantumState):
     def _apply_instrument_ptm_for_prob(
         self, inst_ptm: np.ndarray, inst_bit: int
     ) -> float:
-        if isinstance(self._state.full_dm, _Density):
-            raise NotImplementedError(
-                "Have not implemented instrument PTM logic for GPU-based density mx"
-            )
-        elif not isinstance(self._state.full_dm, _DensityNP):
+        if not isinstance(self._state.full_dm, _DensityNP):
             raise ValueError("Expected a quantumsim.dm_np.DensityNP object")
 
         # Taken from apply_ptm, adjusted to only output the row entry we care about

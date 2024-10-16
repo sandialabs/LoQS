@@ -11,7 +11,7 @@ from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
-from loqs.internal import Castable, Displayable
+from loqs.internal import SeqCastable, Displayable
 
 
 T = TypeVar("T", bound="InstructionStack")
@@ -22,7 +22,7 @@ InstructionStackCastableTypes: TypeAlias = (
 """Objects that can be cast to a :class:`.InstructionStack`."""
 
 
-class InstructionStack(Sequence[InstructionLabel], Castable, Displayable):
+class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
     """A list of :class:`InstructionLabel` objects to execute.
 
     This is intended to be an immutable list of :class:`InstructionLabel`

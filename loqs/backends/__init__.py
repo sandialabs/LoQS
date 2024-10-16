@@ -64,6 +64,7 @@ def propagate_state(
     for grep in model.output_gate_reps:
         if grep in state.input_reps:
             oprep = grep
+            break
     assert (
         oprep is not None
     ), "Could not find matching gate rep between model output and state input"
@@ -72,6 +73,7 @@ def propagate_state(
     for irep in model.output_instrument_reps:
         if irep in state.input_reps:
             instrep = irep
+            break
     assert (
         instrep is not None
     ), "Could not find matching instrument rep between model output and state input"

@@ -154,6 +154,8 @@ class PyGSTiNoiseModel(BaseNoiseModel):
     def output_gate_reps(self) -> list[GateRep]:
         return [GateRep.UNITARY, GateRep.PTM, GateRep.QSIM_SUPEROPERATOR]
 
+    # TODO: This is not quite right. It's probably one or the other,
+    # depending on whether instruments are defined or not
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
         return [
@@ -242,6 +244,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         if instrep == InstrumentRep.ZBASIS_PROJECTION:
             rep = None
         elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            # TODO: What to do with key error?
             op = self.inst_dict[
                 name, *qubits
             ]  # Look up using unaliased qubits

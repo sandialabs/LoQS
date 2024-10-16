@@ -10,25 +10,24 @@ from loqs.backends.circuit import BasePhysicalCircuit, ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
+from loqs.internal import SeqCastable
 
 
 T = TypeVar("T", bound="DictNoiseModel")
 
 # Type aliases for static type checking
-GateDictModelCastableTypes: TypeAlias = (
-    BaseNoiseModel | tuple[Mapping, Mapping]
-)
+DictModelCastableTypes: TypeAlias = BaseNoiseModel | tuple[Mapping, Mapping]
 """Types of objects this backend can cast to dict models"""
 
 
-class DictNoiseModel(BaseNoiseModel):
+class DictNoiseModel(BaseNoiseModel, SeqCastable):
     """Model backend for handling generic operation dicts."""
 
     name: ClassVar[str] = "gate dict"
 
     def __init__(
         self,
-        model_or_dicts: GateDictModelCastableTypes,
+        model_or_dicts: DictModelCastableTypes,
         gaterep: GateRep = GateRep.PTM,
         instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
     ) -> None:

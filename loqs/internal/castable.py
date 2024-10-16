@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import TypeVar
 
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="Castable")
+U = TypeVar("U", bound="SeqCastable")
+V = TypeVar("V", bound="MapCastable")
 
 
 class Castable:
@@ -44,9 +47,11 @@ class Castable:
         obj:
             A castable object that is either:
             - Already the derived class type, in which case `obj`
-            is returned
+              is returned
             - A kwarg dict that is passed into the derived class
-            constructor
+              constructor
+            - An args list that is passed into the derived class
+              constructor
             - The first argument of the derived class constructor
 
         Returns
@@ -56,9 +61,84 @@ class Castable:
         if isinstance(obj, cls):
             # We are already the correct class, perform no copy
             return obj
-        elif isinstance(obj, dict):
+        elif isinstance(obj, Mapping):
             # Assume this is a kwarg dict, pass in all kwargs
             return cls(**obj)
+        elif isinstance(obj, Sequence) and not isinstance(obj, str):
+            # Assume this is a args list, pass in the args
+            return cls(*obj)
+
+        # Otherwise, assume this is the first __init__ argument
+        return cls(obj)
+
+
+class SeqCastable(Castable):
+    """:class:`.Castable` object whose first argument is a ``list`` or ``tuple``."""
+
+    @classmethod
+    def cast(cls: type[U], obj: object) -> U:
+        """Cast to the derived class.
+
+        The difference from :meth:`.Castable.cast` is that we are
+        expecting the first arg to be a ``Sequence``, so we skip
+        the args list logic.
+
+        Parameters
+        ----------
+        obj:
+            A castable object that is either:
+            - Already the derived class type, in which case `obj`
+              is returned
+            - A kwarg dict that is passed into the derived class
+              constructor
+            - The first argument of the derived class constructor
+
+        Returns
+        -------
+            An object with type U (matching the derived class)
+        """
+        if isinstance(obj, cls):
+            # We are already the correct class, perform no copy
+            return obj
+        elif isinstance(obj, Mapping):
+            # Assume this is a kwarg dict, pass in all kwargs
+            return cls(**obj)
+
+        # Otherwise, assume this is the first __init__ argument
+        return cls(obj)
+
+
+class MapCastable(Castable):
+    """:class:`.Castable` object whose first argument is a ``dict``."""
+
+    @classmethod
+    def cast(cls: type[V], obj: object) -> V:
+        """Cast to the derived class.
+
+        The difference from :meth:`.Castable.cast` is that we are
+        expecting the first arg to be a ``Mapping``, so we skip
+        the kwargs dict logic.
+
+        Parameters
+        ----------
+        obj:
+            A castable object that is either:
+            - Already the derived class type, in which case `obj`
+              is returned
+            - A kwarg dict that is passed into the derived class
+              constructor
+            - The first argument of the derived class constructor
+
+        Returns
+        -------
+            An object with type U (matching the derived class)
+        """
+        if isinstance(obj, cls):
+            # We are already the correct class, perform no copy
+            return obj
+        elif isinstance(obj, Sequence) and not isinstance(obj, str):
+            # Assume this is a args list, pass in the args
+            return cls(*obj)
 
         # Otherwise, assume this is the first __init__ argument
         return cls(obj)
