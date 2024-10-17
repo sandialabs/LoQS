@@ -5,13 +5,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Collection
-import random
+from copy import deepcopy
 from typing import ClassVar, TypeAlias, TypeVar
 
 import numpy as np
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
+from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 
 
@@ -137,11 +138,28 @@ class QSimQuantumState(BaseQuantumState):
                     cbit = self._apply_projective_z_measure(qbit, reset_mcms)
                     outcomes[qbit].append(cbit)
             elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
-                # Check we can apply noisy pre operation
-                # self.state.apply()
-                # cbit = self._apply_projective_z_measure(qbit, reset_mcms)
-                # outcomes[qbit].append(cbit)
-                raise NotImplementedError("TODO")
+                # Check we can apply the reps
+                preop, postop = rep
+                assert preop.reptype in self.input_reps
+                assert postop.reptype in self.input_reps
+                # TODO: Strict subsets is OK too
+                assert preop.qubits == qubits
+                assert postop.qubits == qubits
+
+                # Apply the pre-op
+                # Not expecting outputs
+                out1 = self.apply_reps_inplace([preop])
+                assert len(out1) == 0
+
+                # Do perfect measurement
+                for qbit in qubits:
+                    cbit = self._apply_projective_z_measure(qbit, reset_mcms)
+                    outcomes[qbit].append(cbit)
+
+                # Apply the post-op
+                # Not expecting outputs, but merge those in just in case
+                out2 = self.apply_reps_inplace([postop])
+                assert len(out2) == 0
             elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
                 if len(qubits) > 1:
                     raise NotImplementedError(
@@ -149,21 +167,22 @@ class QSimQuantumState(BaseQuantumState):
                     )
 
                 # Compute the probability of measuring 0
-                prob_0 = self._apply_instrument_ptm_for_prob(rep[0], qubits[0])
+                prob_0 = self._apply_instrument_element_ptm_for_prob(
+                    rep[0].rep, qubits[0]
+                )
 
                 # Use RNG to see if we measure 0 or 1
                 m = self._rng.random()
                 cbit = 0 if m < prob_0 else 1
+                outcomes[qubits[0]].append(cbit)
 
                 # Apply the correct PTM based on the classical output we see
-                self.state.apply_ptm(qubits[0], rep[1])
+                out1 = self.apply_reps_inplace([rep[cbit]])
+                assert len(out1) == 0
 
                 if reset_mcms:
                     self.state.set_bit(qubits[0], 0)
-                    self.state.renormalize()
-
-                # Save result
-                outcomes[qubits[0]].append(cbit)
+                self.state.renormalize()
             else:
                 raise NotImplementedError(f"Cannot apply reptype {reptype}")
 
@@ -175,9 +194,13 @@ class QSimQuantumState(BaseQuantumState):
         return super().apply_reps(reps, reset_mcms)
 
     def copy(self) -> QSimQuantumState:
-        return QSimQuantumState(self.state.copy())
+        new_state = QSimQuantumState(self.state.copy(), seed=self.seed)
+        new_state._rng = deepcopy(self._rng)
+        return new_state
 
-    def _apply_projective_z_measure(self, qbit: int, reset_mcms: bool) -> int:
+    def _apply_projective_z_measure(
+        self, qbit: int | str, reset_mcms: bool
+    ) -> int:
         results = self.state.peak_multiple_measurements([qbit])
         # Results has following structure
         # results: [({'A1': 0}, p0), ({'A1': 1}, p1)}
@@ -202,29 +225,30 @@ class QSimQuantumState(BaseQuantumState):
         self.state.renormalize()
         return cbit
 
-    def _apply_instrument_ptm_for_prob(
-        self, inst_ptm: np.ndarray, inst_bit: int
+    def _apply_instrument_element_ptm_for_prob(
+        self, inst_elem_ptm: np.ndarray, inst_bit: int | str
     ) -> float:
         if not isinstance(self._state.full_dm, _DensityNP):
             raise ValueError("Expected a quantumsim.dm_np.DensityNP object")
 
+        self.state.ensure_dense(inst_bit)
+        bit0 = self.state.idx_in_full_dm[inst_bit]
+
         # Taken from apply_ptm, adjusted to only output the row entry we care about
-        assert inst_bit < self._state.no_qubits
+        dummy_idx = self.state.no_qubits
+        in_indices = list(reversed(range(self.state.full_dm.no_qubits)))
+        in_indices[self.state.full_dm.no_qubits - bit0 - 1] = dummy_idx
+        ptm_indices = [bit0, dummy_idx]
 
-        dummy_idx = self._state.no_qubits
-        in_indices = list(reversed(range(self._state.no_qubits)))
-        in_indices[self._state.no_qubits - inst_bit - 1] = dummy_idx
-        ptm_indices = [inst_bit, dummy_idx]
-
-        prob_array = np.einsum(self._state.full_dm.dm, in_indices, inst_ptm, ptm_indices, [dummy_idx], optimize=True)  # type: ignore
-        prob = prob_array[0] / inst_ptm.shape[0] ** 0.25
+        prob_array = np.einsum(self._state.full_dm.dm, in_indices, inst_elem_ptm, ptm_indices, [bit0], optimize=True)  # type: ignore
+        prob = prob_array[0] * inst_elem_ptm.shape[0] ** 0.25
         return prob
 
     @classmethod
     def _from_serialization(
         cls: type[T], state: Mapping, serial_id_to_obj_cache=None
     ) -> T:
-        qubit_labels = ["qubit_labels"]
+        qubit_labels = state["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
 
         # Restore internal QuantumSim state

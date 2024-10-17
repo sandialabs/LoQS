@@ -1,9 +1,13 @@
 """Quantum simulation backends for LoQS
 """
 
-from .reps import GateRep, InstrumentRep
+from .reps import RepEnum, GateRep, InstrumentRep, RepTuple
 
-from .circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from .circuit import (
+    BasePhysicalCircuit,
+    PyGSTiPhysicalCircuit,
+    ListPhysicalCircuit,
+)
 
 # Needs to be after circuit import but before state so that we have OpRep
 from .model import (

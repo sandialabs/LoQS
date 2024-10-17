@@ -18,18 +18,29 @@ class GateRep(RepEnum):
     """Representations for gate objects."""
 
     UNITARY = 1
-    """Unitary matrices"""
+    """Unitary matrices.
+
+    The expected rep type is an array with
+    shape (2^n, 2^n) where n is the number
+    of qubits.
+    """
 
     PTM = 2
     """Pauli-transfer matrices
 
     A process matrix in the Pauli-product basis.
+    The expected rep type is an array with
+    shape (4^n, 4^n) where n is the number
+    of qubits.
     """
 
     QSIM_SUPEROPERATOR = 3
     """QuantumSim-basis superoperator
 
     Process matrices in QuantumSim's non-standard basis.
+    The expected rep type is an array with
+    shape (4^n, 4^n) where n is the number
+    of qubits.
     """
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
@@ -41,6 +52,7 @@ class InstrumentRep(RepEnum):
     """Z-basis projection.
 
     Essentially a perfect mid-circuit measurement.
+    The expected rep is None.
     """
 
     ZBASIS_PRE_POST_OPERATIONS = 2
@@ -48,17 +60,18 @@ class InstrumentRep(RepEnum):
 
     For when a mid-circuit measurement can be modeled by a perfect
     Z-basis projection sandwiched by two noisy operations.
+    The expected rep is a 2-tuple of RepTuples.
+    TODO: Make them labels that can be looked up?
     """
 
     ZBASIS_OUTCOME_OPERATION_DICT = 3
     """Dict with MCM outcome labels and CP map operation keys.
 
-    This is the typical description of a
-    ``pygsti.modelmembers.instrument.Instrument``.
-    For example,
-    ``{0: <map to apply if 0 is measured>, 1: <map to apply if 1 is measured>}``.
-    For multi-qubit operations, the keys should instead by tuples of
-    outcomes, e.g. ``(0, 0)``.
+    For when a mid-circuit measurement can be modeled by a
+    ``pyGSTi``-like quantum instrument.
+    The expected rep is a dict with tuple of outcome keys
+    and RepTuple values.
+    TODO: Make values labels that can be looked up?
     """
 
 
