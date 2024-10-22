@@ -32,7 +32,7 @@ class TestQECCodeAndPatch:
             'state': 1,
             'qubits': ["D0", "A0"],
             'instruction': ins2,
-            'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
+            #'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
         assert result.log == "test result"
     
@@ -52,7 +52,7 @@ class TestQECCodeAndPatch:
                 'state': 1,
                 'qubits': ["D0", "A0"],
                 'instruction': ins2,
-                'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
+                #'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
             }
             assert result.log == "test result"
             

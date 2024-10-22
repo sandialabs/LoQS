@@ -352,8 +352,10 @@ class Instruction(Displayable):
 
         applied_frame = self.apply_fn(**aliased_kwargs)
 
+        # TODO: Collected_params is a nice debugging feature here
+        # It fails if the History is passed in though, so commenting out for now
         output_frame = applied_frame.update(
-            {"instruction": self, "collected_params": aliased_kwargs},
+            {"instruction": self},  # "collected_params": aliased_kwargs},
             new_log=f"{self.name} result",
         )
 
