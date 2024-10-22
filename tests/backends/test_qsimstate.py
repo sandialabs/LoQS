@@ -165,7 +165,7 @@ class TestQSimQuantumState:
         idle_ptm = _ptm.rotate_x_ptm(0)
         idle_rep = RepTuple(idle_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
 
-        # Lets do X(pi/2) error before and nothing
+        # Lets do X(pi/2) error before and nothing after
         pre_xpi2_rep = RepTuple(
             [xpi2_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
         )
@@ -176,7 +176,7 @@ class TestQSimQuantumState:
         assert outcomes3 == outcomes1
 
         # Now let's do X(pi/2) after and no nothing before
-        # Very first one we have to do X(pi/2 to get same trace)
+        # Very first one we have to do X(pi/2) to get same outcomes
         post_xpi2_rep = RepTuple(
             [idle_rep, xpi2_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
         )
@@ -188,7 +188,7 @@ class TestQSimQuantumState:
 
         # Finally let's do the outcome/operation dict
         effect0 = np.array([1, 0, 0, 0]).reshape((4,1))
-        effect1 = np.array([0, 0, 0, 1]).reshape((1,4))
+        effect1 = np.array([0, 0, 0, 1]).reshape((4,1))
 
         ideal_maps = {
             0: RepTuple(effect0 @ effect0.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
@@ -196,12 +196,22 @@ class TestQSimQuantumState:
         }
         ideal_map_rep = RepTuple(ideal_maps, ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
 
-        # This should be the same as test2
         test5 = state0.copy()
         outs = test5.apply_reps_inplace([xpi2_rep, ideal_map_rep]*10, reset_mcms=True)
         outcomes5 = outs["Q0"]
         assert outcomes5 == outcomes1
 
+        # Let's use the instrument to also do reset
+        reset_maps = {
+            0: RepTuple(effect0 @ effect0.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
+            1: RepTuple(effect0 @ effect1.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        }
+        reset_map_rep = RepTuple(reset_maps, ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+
+        test6 = state0.copy()
+        outs = test6.apply_reps_inplace([xpi2_rep, reset_map_rep]*10, reset_mcms=False)
+        outcomes6 = outs["Q0"]
+        assert outcomes6 == outcomes1
 
     def test_serialization(self):
         # Start in the 10 state

@@ -142,14 +142,14 @@ class QSimQuantumState(BaseQuantumState):
                 preop, postop = rep
                 assert preop.reptype in self.input_reps
                 assert postop.reptype in self.input_reps
+                assert isinstance(preop.reptype, GateRep)
+                assert isinstance(postop.reptype, GateRep)
                 # TODO: Strict subsets is OK too
                 assert preop.qubits == qubits
                 assert postop.qubits == qubits
 
                 # Apply the pre-op
-                # Not expecting outputs
-                out1 = self.apply_reps_inplace([preop])
-                assert len(out1) == 0
+                self.apply_reps_inplace([preop])
 
                 # Do perfect measurement
                 for qbit in qubits:
@@ -157,14 +157,15 @@ class QSimQuantumState(BaseQuantumState):
                     outcomes[qbit].append(cbit)
 
                 # Apply the post-op
-                # Not expecting outputs, but merge those in just in case
-                out2 = self.apply_reps_inplace([postop])
-                assert len(out2) == 0
+                self.apply_reps_inplace([postop])
             elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
                 if len(qubits) > 1:
                     raise NotImplementedError(
                         "More than 1-qubit instruments not yet implemented"
                     )
+
+                # Propagate state
+                self.state.combine_and_apply_single_ptm(qubits[0])
 
                 # Compute the probability of measuring 0
                 prob_0 = self._apply_instrument_element_ptm_for_prob(
@@ -177,8 +178,10 @@ class QSimQuantumState(BaseQuantumState):
                 outcomes[qubits[0]].append(cbit)
 
                 # Apply the correct PTM based on the classical output we see
-                out1 = self.apply_reps_inplace([rep[cbit]])
-                assert len(out1) == 0
+                rep_to_apply = rep[cbit]
+                assert rep_to_apply.reptype in self.input_reps
+                assert isinstance(rep_to_apply.reptype, GateRep)
+                self.apply_reps_inplace([rep_to_apply])
 
                 if reset_mcms:
                     self.state.set_bit(qubits[0], 0)
@@ -194,7 +197,7 @@ class QSimQuantumState(BaseQuantumState):
         return super().apply_reps(reps, reset_mcms)
 
     def copy(self) -> QSimQuantumState:
-        new_state = QSimQuantumState(self.state.copy(), seed=self.seed)
+        new_state = QSimQuantumState(deepcopy(self.state), seed=self.seed)
         new_state._rng = deepcopy(self._rng)
         return new_state
 
@@ -231,17 +234,17 @@ class QSimQuantumState(BaseQuantumState):
         if not isinstance(self._state.full_dm, _DensityNP):
             raise ValueError("Expected a quantumsim.dm_np.DensityNP object")
 
+        # Pull out the relevant block of the density matrix
         self.state.ensure_dense(inst_bit)
         bit0 = self.state.idx_in_full_dm[inst_bit]
+        qubit_dm = np.take_along_axis(
+            self.state.full_dm.dm, np.array(range(4)), bit0
+        )
 
-        # Taken from apply_ptm, adjusted to only output the row entry we care about
-        dummy_idx = self.state.no_qubits
-        in_indices = list(reversed(range(self.state.full_dm.no_qubits)))
-        in_indices[self.state.full_dm.no_qubits - bit0 - 1] = dummy_idx
-        ptm_indices = [bit0, dummy_idx]
-
-        prob_array = np.einsum(self._state.full_dm.dm, in_indices, inst_elem_ptm, ptm_indices, [bit0], optimize=True)  # type: ignore
-        prob = prob_array[0] * inst_elem_ptm.shape[0] ** 0.25
+        # we are doing mat-vec product on only first row for our target bit to get probability
+        prob = inst_elem_ptm[0] @ qubit_dm
+        # prob *= inst_elem_ptm.shape[0] ** 0.25
+        # TODO: Do I need this normalization in qsim basis?
         return prob
 
     @classmethod
