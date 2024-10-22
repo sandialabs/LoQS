@@ -14,12 +14,14 @@ from loqs.internal import MapCastable, Displayable
 T = TypeVar("T", bound="MeasurementOutcomes")
 
 MeasurementOutcomesCastableTypes: TypeAlias = (
-    "MeasurementOutcomes | Mapping[str, int | Sequence[int]]"
+    "MeasurementOutcomes | Mapping[str | int, int | Sequence[int]]"
 )
 "Things that can be cast to :class:`.MeasurementOutcomes`."
 
 
-class MeasurementOutcomes(Mapping[str, list[int]], MapCastable, Displayable):
+class MeasurementOutcomes(
+    Mapping[str | int, list[int]], MapCastable, Displayable
+):
     """Measurement outcomes from physical circuit instructions.
 
     This is a dict-like object with qubit label keys and lists of 0/1
@@ -54,13 +56,13 @@ class MeasurementOutcomes(Mapping[str, list[int]], MapCastable, Displayable):
                 "Must pass dict of qubit keys and outcome/list of outcome values"
             )
 
-    def __getitem__(self, key: str) -> list[int]:
+    def __getitem__(self, key: str | int) -> list[int]:
         return self.outcomes[key]
 
     def __len__(self) -> int:
         return len(self.outcomes)
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> Iterator[str | int]:
         return iter(self.outcomes)
 
     def __str__(self) -> str:

@@ -24,7 +24,6 @@ def propagate_state(
     model: BaseNoiseModel,
     state: BaseQuantumState,
     inplace: bool = True,
-    reset_mcms: bool = True,
 ) -> tuple[BaseQuantumState, OutcomeDict]:
     """Given a circuit and model, propagate a state forward in time.
 
@@ -51,10 +50,6 @@ def propagate_state(
         Whether to modify the state in-place (``True``, default)
         or propagate a copy forward (``False``).
         This should probably remain ``True`` for memory reasons.
-
-    reset_mcms:
-        Whether to reset the qubit state after an instrument
-        (``True``, default) or not.
 
     Returns
     -------
@@ -87,8 +82,8 @@ def propagate_state(
 
     # Apply operator reps to state
     if inplace:
-        outcomes = state.apply_reps_inplace(reps, reset_mcms)
+        outcomes = state.apply_reps_inplace(reps)
     else:
-        state, outcomes = state.apply_reps(reps, reset_mcms)
+        state, outcomes = state.apply_reps(reps)
 
     return state, outcomes

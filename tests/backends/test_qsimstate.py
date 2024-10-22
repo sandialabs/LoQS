@@ -136,11 +136,11 @@ class TestQSimQuantumState:
 
         # In-place 10 times
         # Also test no reset
-        proj_rep = RepTuple(None, ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj_rep = RepTuple((None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
         test = state0.copy()
         outcomes1 = []
         for _ in range(10):
-            outs = test.apply_reps_inplace([xpi2_rep, proj_rep], reset_mcms=False)
+            outs = test.apply_reps_inplace([xpi2_rep, proj_rep])
             out = outs["Q0"][0]
             outcomes1.append(out)
 
@@ -151,14 +151,21 @@ class TestQSimQuantumState:
                 test.state.set_bit("Q0", 0)
             else:
                 self._check(test, state0)
-            
+
         
-        # Now another copy ten times at once.
+        # Also test no outcomes
+        proj2_rep = RepTuple((None, False), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        test1 = state0.copy()
+        outs = test1.apply_reps_inplace([xpi2_rep, proj2_rep]*10)
+        assert len(outs) == 0
+        
+        # Now another copy ten times at once with reset
+        reset_rep = RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
         test2 = state0.copy()
-        outs = test2.apply_reps_inplace([xpi2_rep, proj_rep]*10, reset_mcms=True)
+        outs = test2.apply_reps_inplace([xpi2_rep, reset_rep]*10)
         outcomes2 = outs["Q0"]
         
-        # Should be same outcomes because of RNG seeding and reset_mcms
+        # Should be same outcomes because of RNG seeding
         assert outcomes1 == outcomes2
 
         # Now lets test pre/post op
@@ -167,51 +174,62 @@ class TestQSimQuantumState:
 
         # Lets do X(pi/2) error before and nothing after
         pre_xpi2_rep = RepTuple(
-            [xpi2_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
+            [0, True, xpi2_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
         )
 
         test3 = state0.copy()
-        outs = test3.apply_reps_inplace([pre_xpi2_rep]*10, reset_mcms=True)
+        outs = test3.apply_reps_inplace([pre_xpi2_rep]*10)
         outcomes3 = outs["Q0"]
         assert outcomes3 == outcomes1
 
         # Now let's do X(pi/2) after and no nothing before
         # Very first one we have to do X(pi/2) to get same outcomes
         post_xpi2_rep = RepTuple(
-            [idle_rep, xpi2_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
+            [0, True, idle_rep, xpi2_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
         )
 
         test4 = state0.copy()
-        outs = test4.apply_reps_inplace([xpi2_rep] + [post_xpi2_rep]*10, reset_mcms=True)
+        outs = test4.apply_reps_inplace([xpi2_rep] + [post_xpi2_rep]*10)
         outcomes4 = outs["Q0"]
         assert outcomes4 == outcomes1
 
         # Finally let's do the outcome/operation dict
-        effect0 = np.array([1, 0, 0, 0]).reshape((4,1))
-        effect1 = np.array([0, 0, 0, 1]).reshape((4,1))
+        effect0 = np.array([[1, 0, 0, 0]])
+        effect1 = np.array([[0, 0, 0, 1]])
 
         ideal_maps = {
-            0: RepTuple(effect0 @ effect0.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            1: RepTuple(effect1 @ effect1.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
+            1: RepTuple(effect1.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
         }
-        ideal_map_rep = RepTuple(ideal_maps, ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        ideal_map_rep = RepTuple((ideal_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
 
         test5 = state0.copy()
-        outs = test5.apply_reps_inplace([xpi2_rep, ideal_map_rep]*10, reset_mcms=True)
+        outs = test5.apply_reps_inplace([xpi2_rep, ideal_map_rep]*10)
         outcomes5 = outs["Q0"]
         assert outcomes5 == outcomes1
 
         # Let's use the instrument to also do reset
         reset_maps = {
-            0: RepTuple(effect0 @ effect0.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            1: RepTuple(effect0 @ effect1.T, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
+            1: RepTuple(effect0.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
         }
-        reset_map_rep = RepTuple(reset_maps, ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        reset_map_rep = RepTuple((reset_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
 
         test6 = state0.copy()
-        outs = test6.apply_reps_inplace([xpi2_rep, reset_map_rep]*10, reset_mcms=False)
+        outs = test6.apply_reps_inplace([xpi2_rep, reset_map_rep]*10)
         outcomes6 = outs["Q0"]
         assert outcomes6 == outcomes1
+
+        noisy_reset_maps = {
+            0: RepTuple(xpi2_ptm @ effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
+            1: RepTuple(xpi2_ptm @ effect0.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        }
+        noisy_reset_map_rep = RepTuple((noisy_reset_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+
+        test7 = state0.copy()
+        outs = test7.apply_reps_inplace([xpi2_rep] + [noisy_reset_map_rep]*10)
+        outcomes7 = outs["Q0"]
+        assert outcomes7 == outcomes1
 
     def test_serialization(self):
         # Start in the 10 state

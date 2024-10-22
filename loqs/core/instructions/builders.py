@@ -599,9 +599,7 @@ def build_patch_permute_instruction(
 
 def build_physical_circuit_instruction(
     circuit: BasePhysicalCircuit,
-    include_outcomes: bool = False,
     inplace: bool = True,
-    reset_mcms: bool = True,
     model: BaseNoiseModel | None = None,
     pauli_frame_update: str | Sequence[str] | Mapping[str, str] | None = None,
     name: str = "(Unnamed physical circuit)",
@@ -621,9 +619,7 @@ def build_physical_circuit_instruction(
       but also from `InstructionLabel` and `Instruction.data`
     - `circuit`, usually from the `Instruction.data`
     - `state`, usually from the previous frame
-    - `include_outcomes`, usually from `Instruction.data`
     - `inplace`, usually from the `Instruction.data`
-    - `reset_mcms`, usually from the `Instruction.data`
     - `error_injections`, usually from the `InstructionLabel`
     - `pauli_frame_update`, usually from the `Instruction.data`
     - `patch_label`, usually from the `InstructionLabel`
@@ -640,15 +636,8 @@ def build_physical_circuit_instruction(
     circuit:
         The physical circuit to run
 
-    include_outcomes:
-        Whether to include outcomes (True) or not (False, default)
-
     inplace:
         Whether to propagate the state in-place (True, default) or make a copy
-
-    reset_mcms:
-        Whether to reset the state after any instruments/mid-circuit measurements
-        are performed (True, default) or not (False)
 
     model:
         A model to use when converting the circuit into reps to apply to the state
@@ -672,9 +661,7 @@ def build_physical_circuit_instruction(
         model: BaseNoiseModel,
         circuit: BasePhysicalCircuit,
         state: BaseQuantumState,
-        include_outcomes: bool,
         inplace: bool,
-        reset_mcms: bool,
         error_injections: list[tuple[int, str, int]] | None,
         pauli_frame_update: str | list[str] | dict[str, str] | None,
         patch_label: str,
@@ -699,7 +686,7 @@ def build_physical_circuit_instruction(
             errored_circuit.insert_inplace(error_circuit, error[0])
 
         new_state, outcomes = propagate_state(
-            errored_circuit, model, state, inplace, reset_mcms
+            errored_circuit, model, state, inplace
         )
 
         data: dict[str, object] = {"state": new_state}
@@ -735,7 +722,7 @@ def build_physical_circuit_instruction(
 
             data["patches"] = new_patches
 
-        if include_outcomes:
+        if len(outcomes):
             data["measurement_outcomes"] = MeasurementOutcomes(outcomes)
         if len(error_injections):
             data["errored_circuit"] = errored_circuit
@@ -745,9 +732,7 @@ def build_physical_circuit_instruction(
     # We store circuit and flags as defaults
     data = {
         "circuit": circuit,
-        "include_outcomes": include_outcomes,
         "inplace": inplace,
-        "reset_mcms": reset_mcms,
         "error_injections": None,  # Must be specified in label only
         "pauli_frame_update": pauli_frame_update,
     }

@@ -111,98 +111,138 @@ class QSimQuantumState(BaseQuantumState):
     def __hash__(self) -> int:
         return hash((hash(self._state), self.seed))
 
-    def apply_reps_inplace(
-        self, reps: Sequence, reset_mcms: bool = True
-    ) -> OutcomeDict:
+    def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
 
         for reptuple in reps:
-            rep = reptuple.rep
-            qubits = reptuple.qubits
             reptype = reptuple.reptype
+            if isinstance(reptype, GateRep):
+                self._apply_gate_rep(reptuple)
+            elif isinstance(reptype, InstrumentRep):
+                rep_outcomes = self._apply_instrument_rep(reptuple)
 
-            if reptype == GateRep.QSIM_SUPEROPERATOR:
-                if len(qubits) == 1:
-                    self.state.apply_ptm(qubits[0], rep)
-                elif len(qubits) == 2:
-                    # The qubits are flipped here, and this is a known QuantumSim bug
-                    self.state.apply_two_ptm(qubits[1], qubits[0], rep)
-                else:
-                    raise ValueError(
-                        "Cannot apply more than a 2 qubit operation"
-                    )
-            elif reptype == InstrumentRep.ZBASIS_PROJECTION:
-                # TODO: Could do it all at once probably
-                # but currently just copying measureRenormalizeQubit behavior
-                for qbit in qubits:
-                    cbit = self._apply_projective_z_measure(qbit, reset_mcms)
-                    outcomes[qbit].append(cbit)
-            elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
-                # Check we can apply the reps
-                preop, postop = rep
-                assert preop.reptype in self.input_reps
-                assert postop.reptype in self.input_reps
-                assert isinstance(preop.reptype, GateRep)
-                assert isinstance(postop.reptype, GateRep)
-                # TODO: Strict subsets is OK too
-                assert preop.qubits == qubits
-                assert postop.qubits == qubits
-
-                # Apply the pre-op
-                self.apply_reps_inplace([preop])
-
-                # Do perfect measurement
-                for qbit in qubits:
-                    cbit = self._apply_projective_z_measure(qbit, reset_mcms)
-                    outcomes[qbit].append(cbit)
-
-                # Apply the post-op
-                self.apply_reps_inplace([postop])
-            elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
-                if len(qubits) > 1:
-                    raise NotImplementedError(
-                        "More than 1-qubit instruments not yet implemented"
-                    )
-
-                # Propagate state
-                self.state.combine_and_apply_single_ptm(qubits[0])
-
-                # Compute the probability of measuring 0
-                prob_0 = self._apply_instrument_element_ptm_for_prob(
-                    rep[0].rep, qubits[0]
-                )
-
-                # Use RNG to see if we measure 0 or 1
-                m = self._rng.random()
-                cbit = 0 if m < prob_0 else 1
-                outcomes[qubits[0]].append(cbit)
-
-                # Apply the correct PTM based on the classical output we see
-                rep_to_apply = rep[cbit]
-                assert rep_to_apply.reptype in self.input_reps
-                assert isinstance(rep_to_apply.reptype, GateRep)
-                self.apply_reps_inplace([rep_to_apply])
-
-                if reset_mcms:
-                    self.state.set_bit(qubits[0], 0)
-                self.state.renormalize()
+                # Merge outcomes with already observed outcomes
+                for k, v in rep_outcomes.items():
+                    outcomes[k].extend(v)
             else:
-                raise NotImplementedError(f"Cannot apply reptype {reptype}")
+                raise NotImplementedError(
+                    f"Cannot apply unknown reptype {reptype}"
+                )
 
         return outcomes
 
     def apply_reps(
-        self, reps: Sequence, reset_mcms: bool = True
+        self, reps: Sequence
     ) -> tuple[QSimQuantumState, OutcomeDict]:
-        return super().apply_reps(reps, reset_mcms)
+        return super().apply_reps(reps)
 
     def copy(self) -> QSimQuantumState:
         new_state = QSimQuantumState(deepcopy(self.state), seed=self.seed)
         new_state._rng = deepcopy(self._rng)
         return new_state
 
+    def _apply_gate_rep(self, reptuple: RepTuple):
+        rep = reptuple.rep
+        # TODO: Can probably check this is an ndarray of the right shape
+
+        qubits = reptuple.qubits
+        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+
+        reptype = reptuple.reptype
+        assert isinstance(reptype, GateRep)
+
+        if reptype == GateRep.QSIM_SUPEROPERATOR:
+            if len(qubits) == 1:
+                self.state.apply_ptm(qubits[0], rep)
+            elif len(qubits) == 2:
+                # The qubits are flipped here, and this is a known QuantumSim quirk
+                self.state.apply_two_ptm(qubits[1], qubits[0], rep)
+            else:
+                raise ValueError("Cannot apply more than a 2 qubit operation")
+        else:
+            raise NotImplementedError(f"Cannot apply GateRep {reptype}")
+
+    def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
+        rep = reptuple.rep
+        assert isinstance(rep, (tuple, list)) and len(rep) > 1
+        reset = rep[0]
+        include_outcomes = rep[1]
+
+        qubits = reptuple.qubits
+        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+
+        reptype = reptuple.reptype
+        assert isinstance(reptype, InstrumentRep)
+
+        outcomes: OutcomeDict = defaultdict(list)
+
+        if reptype == InstrumentRep.ZBASIS_PROJECTION:
+            # TODO: Could do it all at once probably
+            # but currently just copying measureRenormalizeQubit behavior
+            for qbit in qubits:
+                cbit = self._apply_projective_z_measure(qbit, reset)
+                if include_outcomes:
+                    outcomes[qbit].append(cbit)
+        elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+            # Check we can apply the reps
+            preop = rep[2]
+            postop = rep[3]
+            assert reset in [None, 0, 1]
+            assert preop.reptype in self.input_reps
+            assert postop.reptype in self.input_reps
+            assert isinstance(preop.reptype, GateRep)
+            assert isinstance(postop.reptype, GateRep)
+            # TODO: Strict subsets is OK too
+            assert preop.qubits == qubits
+            assert postop.qubits == qubits
+
+            # Apply the pre-op
+            self.apply_reps_inplace([preop])
+
+            # Do perfect measurement
+            for qbit in qubits:
+                cbit = self._apply_projective_z_measure(qbit, reset)
+                if include_outcomes:
+                    outcomes[qbit].append(cbit)
+
+            # Apply the post-op
+            self.apply_reps_inplace([postop])
+        elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            if len(qubits) > 1:
+                raise NotImplementedError(
+                    "More than 1-qubit instruments not yet implemented"
+                )
+            instrument_dict = rep[0]
+            assert set(instrument_dict.keys()) == set((0, 1))
+
+            # Ensure state is propogated and up to date
+            self.state.combine_and_apply_single_ptm(qubits[0])
+
+            # Compute the probability of measuring 0
+            prob_0 = self._apply_instrument_element_ptm_for_prob(
+                instrument_dict[0].rep, qubits[0]
+            )
+
+            # Use RNG to see if we measure 0 or 1
+            m = self._rng.random()
+            cbit = 0 if m < prob_0 else 1
+            if include_outcomes:
+                outcomes[qubits[0]].append(cbit)
+
+            # Apply the correct PTM based on the classical output we see
+            rep_to_apply = instrument_dict[cbit]
+            assert rep_to_apply.reptype in self.input_reps
+            assert isinstance(rep_to_apply.reptype, GateRep)
+            self.apply_reps_inplace([rep_to_apply])
+
+            # Propogate and renormalize (maybe not needed, but safer to do it now)
+            self.state.combine_and_apply_single_ptm(qubits[0])
+            self.state.renormalize()
+
+        return outcomes
+
     def _apply_projective_z_measure(
-        self, qbit: int | str, reset_mcms: bool
+        self, qbit: int | str, reset: int | None
     ) -> int:
         results = self.state.peak_multiple_measurements([qbit])
         # Results has following structure
@@ -223,8 +263,9 @@ class QSimQuantumState(BaseQuantumState):
             cbit = results[1][0][qbit]
         if qbit in self.state.idx_in_full_dm:
             self.state.project_measurement(qbit, cbit)
-        if reset_mcms:
-            self.state.set_bit(qbit, 0)
+        if reset is not None:
+            assert reset in [0, 1]
+            self.state.set_bit(qbit, reset)
         self.state.renormalize()
         return cbit
 
@@ -242,9 +283,11 @@ class QSimQuantumState(BaseQuantumState):
         )
 
         # we are doing mat-vec product on only first row for our target bit to get probability
-        prob = inst_elem_ptm[0] @ qubit_dm
+        prob = inst_elem_ptm[0] @ qubit_dm + inst_elem_ptm[3] @ qubit_dm
+        # TODO: There is an implicit normalization cancelling out above
+        # Be careful of this when moving to more qubits
         # prob *= inst_elem_ptm.shape[0] ** 0.25
-        # TODO: Do I need this normalization in qsim basis?
+
         return prob
 
     @classmethod

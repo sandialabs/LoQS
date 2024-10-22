@@ -51,8 +51,13 @@ class InstrumentRep(RepEnum):
     ZBASIS_PROJECTION = 1
     """Z-basis projection.
 
-    Essentially a perfect mid-circuit measurement.
-    The expected rep is None.
+    Essentially a perfect mid-circuit measurement,
+    followed by optional reset.
+    The expected rep is 2-tuple where the first entry
+    is None for no reset or 0 or 1 for reset to the
+    corresponding state, and the second entry is a bool
+    which indicates whether the outcome should be
+    recorded, e.g. (0, False) would look like a pure reset.
     """
 
     ZBASIS_PRE_POST_OPERATIONS = 2
@@ -60,8 +65,9 @@ class InstrumentRep(RepEnum):
 
     For when a mid-circuit measurement can be modeled by a perfect
     Z-basis projection sandwiched by two noisy operations.
-    The expected rep is a 2-tuple of RepTuples.
-    TODO: Make them labels that can be looked up?
+    The expected rep is a 4-tuple where the first two elements are
+    as per :attr:`.InstrumentRep.ZBASIS_PROJECTION`, and then two
+    :class:`.RepTuple` objects with a :class:`.GateRep` ``reptype``.
     """
 
     ZBASIS_OUTCOME_OPERATION_DICT = 3
@@ -69,9 +75,11 @@ class InstrumentRep(RepEnum):
 
     For when a mid-circuit measurement can be modeled by a
     ``pyGSTi``-like quantum instrument.
-    The expected rep is a dict with tuple of outcome keys
-    and RepTuple values.
-    TODO: Make values labels that can be looked up?
+    The expected rep is a 2-tuple where the first entry is a
+    dict with tuple of outcome keys and :class:`.RepTuple` objects
+    with a :class:`.GateRep` ``reptype`` for values, and the second
+    entry is a bool which indicates whether the outcome should be recorded,
+    e.g. ({...}, False) would look like a noisy reset.
     """
 
 

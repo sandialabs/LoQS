@@ -64,7 +64,7 @@ class SyndromeLabel(Castable, Displayable):
 
 
 # TODO: Long term location?
-PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
+PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"
 """Types that can be cast into a :class:`.PauliFrame`."""
 
 
@@ -76,7 +76,7 @@ class PauliFrame(SeqCastable, Displayable):
     :class:`.MeasurementOutcomes` to provide inferred outcomes.
     """
 
-    qubit_labels: list[str]
+    qubit_labels: list[str | int]
     """Qubit labels being tracked by this :class:`.PauliFrame`."""
 
     pauli_frame: list[str]
@@ -134,7 +134,7 @@ class PauliFrame(SeqCastable, Displayable):
         """Return a copy of this :class:`.PauliFrame`."""
         return PauliFrame(self.qubit_labels, self.pauli_frame)
 
-    def get_bit(self, type: str, qubit: str) -> int:
+    def get_bit(self, type: str, qubit: str | int) -> int:
         """Get the bit value of this frame on a given qubit in a given basis.
 
         Parameters

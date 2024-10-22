@@ -66,8 +66,12 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         self,
         model: PyGSTiModelCastableTypes,
         qubit_aliases: Mapping | Sequence | None = None,
+        zbasis_proj_resets: bool = True,
     ) -> None:
         """Initialize a PyGSTiModelBackend.
+
+        TODO: Choices are made about instrument reset/outcomes.
+        Document this.
 
         Parameters
         ----------
@@ -126,6 +130,8 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             raise NotImplementedError("TODO: Build explicit op model")
         else:
             raise TypeError(f"Cannot cast {type(model)} to PyGSTiNoiseModel")
+
+        self.zbasis_proj_resets = zbasis_proj_resets
 
         # TODO: Crosstalk specification?
 
@@ -242,7 +248,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         assert name == "Iz", "Can only handle Z-basis MCMs"
 
         if instrep == InstrumentRep.ZBASIS_PROJECTION:
-            rep = None
+            rep: None | int | dict = 0 if self.zbasis_proj_resets else None
         elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
             # TODO: What to do with key error?
             op = self.inst_dict[
@@ -273,7 +279,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                 f"Cannot create instrument rep for {instrep}"
             )
 
-        return rep
+        return (rep, True)
 
     @classmethod
     def _from_serialization(
