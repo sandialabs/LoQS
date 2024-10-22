@@ -113,6 +113,18 @@ class RepTuple(Castable, Displayable):
         else:
             return KeyError("RepTuple only has 3 entries")
 
+    def __len__(self) -> int:
+        return 3
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.hash(self.rep),
+                self.hash(self.qubits),
+                self.hash(self.reptype),
+            )
+        )
+
     @classmethod
     def cast(cls: type[RepTuple], obj: object) -> RepTuple:
         """Cast this object to a :class:`RepTuple`.

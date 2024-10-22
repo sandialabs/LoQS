@@ -182,7 +182,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                 qubits = [self._rev_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
                     rep = self._get_gate_rep(comp.name, qubits, gaterep)
-                    reptype = gaterep
+                    reptype: RepEnum = gaterep
                 elif comp.name.startswith("I"):
                     rep = self._get_instrument_rep(comp.name, qubits, instrep)
                     reptype = instrep
@@ -253,22 +253,21 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             for k, v in op.items():
                 if isinstance(k, str):
                     try:
-                        if len(k) == 1:
-                            label = (int(k),)
+                        if len(k) > 1:
+                            label = tuple([int(c) for c in k])
                         else:
-                            label = []
-                            for c in k:
-                                label.append(int(c))
-                            label = tuple(label)
+                            label = (int(k),)
                     except ValueError as e:
                         raise ValueError(
                             "Failed to cast instrument keys to outcome labels"
                         ) from e
+                else:
+                    label = k
 
-                assert isinstance(k, tuple)
-                assert all([c in [0, 1] for c in k])
+                assert isinstance(label, tuple)
+                assert all([c in [0, 1] for c in label])
 
-                rep[k] = v
+                rep[label] = v
         else:
             raise NotImplementedError(
                 f"Cannot create instrument rep for {instrep}"
