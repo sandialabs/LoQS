@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.circuit import BasePhysicalCircuit, ListPhysicalCircuit
@@ -30,6 +31,8 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         model_or_dicts: DictModelCastableTypes,
         gaterep: GateRep = GateRep.PTM,
         instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
+        instrep_cast_reset: int | None = None,
+        instrep_cast_include_outcomes: bool = True,
     ) -> None:
         """Initialize a generic gate dict model.
 
@@ -43,6 +46,19 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
         instrep:
             Instrument representation this model will return
+
+        instrep_cast_include_outcomes:
+            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
+            are being cast up to :class:`.RepTuples`, this will be used as
+            the first argument of the rep, indicating which state to reset
+            to (``0`` or ``1``) or whether to not reset (``None``, default).
+
+        instrep_cast_include_outcomes:
+            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
+            :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
+            being cast up to :class:`.RepTuples`, this will be used as
+            the second argument of the rep, indicating whether outcomes
+            should be kept (``True``, default) or not (``False``).
         """
         self.gate_dict: dict[tuple[str, tuple[str | int, ...]], object] = {}
         self.inst_dict: dict[tuple[str, tuple[str | int, ...]], object] = {}
@@ -74,6 +90,47 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
         self._gaterep = gaterep
         self._instrep = instrep
+
+        # Run through instrument dict and fix pre/post ops or outcome op dicts
+        if instrep == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+            for (name, qubits), ir in self.inst_dict.items():
+                if (
+                    not isinstance(ir, RepTuple)
+                    and isinstance(ir, (tuple, list))
+                    and len(ir) == 2
+                    and all([isinstance(ir_el, np.ndarray) for ir_el in ir])
+                ):
+                    # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
+                    self.inst_dict[name, qubits] = RepTuple(
+                        (
+                            instrep_cast_reset,
+                            instrep_cast_include_outcomes,
+                            ir[0],
+                            ir[1],
+                        ),
+                        qubits,
+                        gaterep,
+                    )
+        elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            for (name, qubits), ir in self.inst_dict.items():
+                if (
+                    not isinstance(ir, RepTuple)
+                    and isinstance(ir, Mapping)
+                    and all(
+                        [
+                            isinstance(ir_el, np.ndarray)
+                            for ir_el in ir.values()
+                        ]
+                    )
+                ):
+                    # Assume this is a dict of PTMS that we need to turn it into a RepTuple
+                    self.inst_dict[name, qubits] = (
+                        {
+                            k: RepTuple(v, qubits, gaterep)
+                            for k, v in ir.items()
+                        },
+                        instrep_cast_include_outcomes,
+                    )
 
         # TODO: Crosstalk specification?
 
