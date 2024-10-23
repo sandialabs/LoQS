@@ -279,7 +279,7 @@ class QSimQuantumState(BaseQuantumState):
         self.state.ensure_dense(inst_bit)
         bit0 = self.state.idx_in_full_dm[inst_bit]
         qubit_dm = np.take_along_axis(
-            self.state.full_dm.dm, np.array(range(4)), bit0
+            self.state.full_dm.dm, np.array(range(4)), bit0  # type: ignore
         )
 
         # we are doing mat-vec product on only first row for our target bit to get probability
