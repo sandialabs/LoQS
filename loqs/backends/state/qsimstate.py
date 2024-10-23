@@ -215,9 +215,6 @@ class QSimQuantumState(BaseQuantumState):
             instrument_dict = rep[0]
             assert set(instrument_dict.keys()) == set((0, 1))
 
-            # Ensure state is propogated and up to date
-            self.state.combine_and_apply_single_ptm(qubits[0])
-
             # Compute the probability of measuring 0
             prob_0 = self._apply_instrument_element_ptm_for_prob(
                 instrument_dict[0].rep, qubits[0]
@@ -275,15 +272,25 @@ class QSimQuantumState(BaseQuantumState):
         if not isinstance(self._state.full_dm, _DensityNP):
             raise ValueError("Expected a quantumsim.dm_np.DensityNP object")
 
-        # Pull out the relevant block of the density matrix
-        self.state.ensure_dense(inst_bit)
-        bit0 = self.state.idx_in_full_dm[inst_bit]
-        qubit_dm = np.take_along_axis(
-            self.state.full_dm.dm, np.array(range(4)), bit0  # type: ignore
-        )
+        # Ensure state is propogated and up to date
+        self.state.combine_and_apply_single_ptm(inst_bit)
 
-        # we are doing mat-vec product on only first row for our target bit to get probability
-        prob = inst_elem_ptm[0] @ qubit_dm + inst_elem_ptm[3] @ qubit_dm
+        # Compute the reduced density matrix
+        trace_tensor = np.array([1, 0, 0, 1])
+        prob_compute_tensor = inst_elem_ptm[0] + inst_elem_ptm[3]
+        bit0 = self.state.idx_in_full_dm[inst_bit]
+        trace_argument = []
+        for i in range(self.state.full_dm.no_qubits):
+            if i == bit0:
+                trace_argument.append(prob_compute_tensor)
+            else:
+                trace_argument.append(trace_tensor)
+            trace_argument.append([i])
+        indices = list(reversed(range(self.state.full_dm.no_qubits)))
+        prob = np.einsum(self.state.full_dm.dm, indices, *trace_argument, optimize=True)  # type: ignore
+
+        # we are doing mat-vec product on only first and last row for our target bit to get probability
+        # prob = inst_elem_ptm[0] @ reduced_dm + inst_elem_ptm[3] @ reduced_dm
         # TODO: There is an implicit normalization cancelling out above
         # Be careful of this when moving to more qubits
         # prob *= inst_elem_ptm.shape[0] ** 0.25
