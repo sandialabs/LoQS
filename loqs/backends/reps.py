@@ -10,8 +10,27 @@ from typing import TypeVar
 from loqs.internal import Castable, Displayable
 
 
-class RepEnum(Enum):
+T = TypeVar("T", bound="RepEnum")
+U = TypeVar("U", bound="RepTuple")
+
+
+class RepEnum(Displayable, Enum):
     """Base class for all operation representation enums."""
+
+    def __hash__(self) -> int:
+        return hash((self.__class__.__name__, self.value))
+
+    @classmethod
+    def _from_serialization(
+        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
+    ) -> T:
+        value = state["value"]
+        return cls(value)
+
+    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+        state = super()._to_serialization()
+        state.update({"value": self.value})
+        return state
 
 
 class GateRep(RepEnum):
@@ -83,9 +102,6 @@ class InstrumentRep(RepEnum):
     """
 
 
-T = TypeVar("T", bound="RepTuple")
-
-
 class RepTuple(Castable, Displayable):
     rep: object
     """Underlying representation object."""
@@ -154,11 +170,12 @@ class RepTuple(Castable, Displayable):
 
     @classmethod
     def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
+        cls: type[U], state: Mapping, serial_id_to_obj_cache=None
+    ) -> U:
         rep = cls.deserialize(state["rep"])
         qubits = state["qubits"]
-        reptype = state["reptype"]
+        reptype = cls.deserialize(state["reptype"])
+        assert isinstance(reptype, RepEnum)
         return cls(rep, qubits, reptype)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
@@ -167,7 +184,7 @@ class RepTuple(Castable, Displayable):
             {
                 "rep": self.serialize(self.rep),
                 "qubits": self.qubits,
-                "reptype": self.reptype,
+                "reptype": self.serialize(self.reptype),
             }
         )
         return state

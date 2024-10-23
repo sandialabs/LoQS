@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Sequence
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -54,8 +55,8 @@ class BaseNoiseModel(Castable, Displayable):
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
-        gaterep: GateRep,
-        instrep: InstrumentRep,
+        gatereps: Sequence[GateRep],
+        instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
         """Get list of operator representations that can be applied.
 
@@ -64,12 +65,12 @@ class BaseNoiseModel(Castable, Displayable):
         circuit:
             Physical circuit to get the representations for
 
-        gaterep:
-            Output representation for gate operations.
+        gatereps:
+            Output representations for gate operations.
             For more details, look at :class:`GateRep`.
 
-        instrep:
-            Output representation for instrument operations.
+        instreps:
+            Output representations for instrument operations.
             For more details, look at :class:`InstrumentRep`.
 
         Returns

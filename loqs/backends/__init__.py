@@ -59,26 +59,20 @@ def propagate_state(
         to provide a consistent API.
     """
     # Find a compatible model/state oprep
-    oprep: GateRep | None = None
-    for grep in model.output_gate_reps:
-        if grep in state.input_reps:
-            oprep = grep
-            break
+    opreps = set(model.output_gate_reps).intersection(set(state.input_reps))
     assert (
-        oprep is not None
+        len(opreps) > 0
     ), "Could not find matching gate rep between model output and state input"
 
-    instrep: InstrumentRep | None = None
-    for irep in model.output_instrument_reps:
-        if irep in state.input_reps:
-            instrep = irep
-            break
+    instreps = set(model.output_instrument_reps).intersection(
+        set(state.input_reps)
+    )
     assert (
-        instrep is not None
+        len(instreps) > 0
     ), "Could not find matching instrument rep between model output and state input"
 
     # Look up reps from model
-    reps = model.get_reps(circuit, oprep, instrep)
+    reps = model.get_reps(circuit, list(opreps), list(instreps))
 
     # Apply operator reps to state
     if inplace:

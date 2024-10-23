@@ -172,8 +172,8 @@ class PyGSTiNoiseModel(BaseNoiseModel):
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
-        gaterep: GateRep,
-        instrep: InstrumentRep,
+        gatereps: Sequence[GateRep],
+        instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
         # Get bare circuit
         circuit = PyGSTiPhysicalCircuit.cast(circuit)
@@ -187,11 +187,15 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                 aliased_qubits = comp.qubits  # The circuit is already aliased
                 qubits = [self._rev_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
-                    rep = self._get_gate_rep(comp.name, qubits, gaterep)
-                    reptype: RepEnum = gaterep
+                    # TODO: Currently this is only using first rep. Fix?
+                    rep = self._get_gate_rep(comp.name, qubits, gatereps[0])
+                    reptype: RepEnum = gatereps[0]
                 elif comp.name.startswith("I"):
-                    rep = self._get_instrument_rep(comp.name, qubits, instrep)
-                    reptype = instrep
+                    # TODO: Currently this is only using first rep. Fix?
+                    rep = self._get_instrument_rep(
+                        comp.name, qubits, instreps[0]
+                    )
+                    reptype = instreps[0]
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
 

@@ -29,8 +29,8 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     def __init__(
         self,
         model_or_dicts: DictModelCastableTypes,
-        gaterep: GateRep = GateRep.PTM,
-        instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
+        gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
+        instreps: Sequence[InstrumentRep] = [InstrumentRep.ZBASIS_PROJECTION],
         instrep_cast_reset: int | None = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
@@ -70,14 +70,14 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 label = (gate_key.name, gate_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
                 self.gate_dict[label] = model_or_dicts.get_reps(
-                    circ, gaterep=gaterep, instrep=instrep
+                    circ, gatereps=[gaterep], instreps=instreps
                 )[0][0]
 
             for inst_key in model_or_dicts.instrument_keys:
                 label = (inst_key.name, inst_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
                 self.inst_dict[label] = model_or_dicts.get_reps(
-                    circ, gaterep=gaterep, instrep=instrep
+                    circ, gatereps=[gaterep], instreps=instreps
                 )[0][0]
 
         elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
@@ -89,19 +89,35 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
             )
 
         self._gaterep = gaterep
-        self._instrep = instrep
+        self._instreps = list(instreps)
 
-        # Run through instrument dict and fix pre/post ops or outcome op dicts
-        if instrep == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
-            for (name, qubits), ir in self.inst_dict.items():
-                if (
-                    not isinstance(ir, RepTuple)
-                    and isinstance(ir, (tuple, list))
-                    and len(ir) == 2
-                    and all([isinstance(ir_el, np.ndarray) for ir_el in ir])
-                ):
-                    # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
-                    self.inst_dict[name, qubits] = RepTuple(
+        # Run through gates and upgrade everything to RepTuples
+        for (name, qubits), gr in self.gate_dict.items():
+            if not isinstance(gr, RepTuple) and isinstance(gr, np.ndarray):
+                self.gate_dict[name, qubits] = RepTuple(gr, qubits, gaterep)
+            else:
+                assert isinstance(
+                    gr, RepTuple
+                ), f"{gr} failed to upgrade to a RepTuple"
+                assert (
+                    gr.reptype == gaterep
+                ), f"Provided {gr} but not provided gaterep"
+
+        # Run through instrument dict and upgrade everything to RepTuples
+        for (name, qubits), ir in self.inst_dict.items():
+            if (
+                not isinstance(ir, RepTuple)
+                and isinstance(ir, (tuple, list))
+                and len(ir) == 2
+                and all([isinstance(ir_el, np.ndarray) for ir_el in ir])
+            ):
+                assert InstrumentRep.ZBASIS_PRE_POST_OPERATIONS in instreps, (
+                    "Detected two PTMS for a pre/post operation instrument, but "
+                    + "ZBASIS_PRE_POST_OPERATIONS not passed as a valid instrument rep"
+                )
+                # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
+                self.inst_dict[name, qubits] = RepTuple(
+                    RepTuple(
                         (
                             instrep_cast_reset,
                             instrep_cast_include_outcomes,
@@ -110,27 +126,52 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                         ),
                         qubits,
                         gaterep,
-                    )
-        elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
-            for (name, qubits), ir in self.inst_dict.items():
-                if (
-                    not isinstance(ir, RepTuple)
-                    and isinstance(ir, Mapping)
-                    and all(
-                        [
-                            isinstance(ir_el, np.ndarray)
-                            for ir_el in ir.values()
-                        ]
-                    )
-                ):
-                    # Assume this is a dict of PTMS that we need to turn it into a RepTuple
-                    self.inst_dict[name, qubits] = (
+                    ),
+                    qubits,
+                    InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+                )
+            elif (
+                not isinstance(ir, RepTuple)
+                and isinstance(ir, Mapping)
+                and all(
+                    [isinstance(ir_el, np.ndarray) for ir_el in ir.values()]
+                )
+            ):
+                assert (
+                    InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT in instreps
+                ), (
+                    "Detected PTMS dict for a outcome-operation instrument, but "
+                    + "ZBASIS_OUTCOME_OPERATION_DICT not passed as a valid instrument rep"
+                )
+                # Assume this is a dict of PTMS that we need to turn it into a RepTuple
+                self.inst_dict[name, qubits] = RepTuple(
+                    (
                         {
                             k: RepTuple(v, qubits, gaterep)
                             for k, v in ir.items()
                         },
                         instrep_cast_include_outcomes,
-                    )
+                    ),
+                    qubits,
+                    InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+                )
+            elif (
+                not isinstance(ir, RepTuple)
+                and isinstance(ir, (tuple, list))
+                and len(ir) == 2
+                and (ir[0] is None or isinstance(ir[0], int))
+                and isinstance(ir[1], bool)
+            ):
+                self.inst_dict[name, qubits] = RepTuple(
+                    ir, qubits, InstrumentRep.ZBASIS_PROJECTION
+                )
+            else:
+                assert isinstance(
+                    ir, RepTuple
+                ), f"{ir} failed to upgrade to a RepTuple"
+                assert (
+                    ir.reptype in instreps
+                ), f"Provided {ir} but reptype not in instreps"
 
         # TODO: Crosstalk specification?
 
@@ -140,7 +181,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 self.hash(self.gate_dict),
                 self.hash(self.inst_dict),
                 self._gaterep.value,
-                self._instrep.value,
+                tuple([ir.value for ir in self._instreps]),
             )
         )
 
@@ -160,21 +201,14 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
-        return [self._instrep]
+        return self._instreps
 
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
-        gaterep: GateRep,
-        instrep: InstrumentRep,
+        gatereps: Sequence[GateRep],
+        instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
-        assert (
-            gaterep == self._gaterep
-        ), f"Dict model only has {self._gaterep} gates"
-        assert (
-            instrep == self._instrep
-        ), f"Dict model only has {self._instrep} instruments"
-
         # Get builtin circuit for easy processing
         circuit = ListPhysicalCircuit.cast(circuit)
 
@@ -183,17 +217,16 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         for layer in circuit.circuit:
             for label in layer:
                 # Try to look up in gates
-                rep = self.gate_dict.get(label, None)
-                reptype: GateRep | InstrumentRep = gaterep
+                reptuple = self.gate_dict.get(label, None)
 
-                if rep is None:
+                if reptuple is None:
                     # Failed, now look up in instruments
-                    rep = self.inst_dict.get(label, None)
-                    reptype = instrep
+                    reptuple = self.inst_dict.get(label, None)
 
-                assert rep is not None, f"Failed to look up {label}"
+                assert reptuple is not None, f"Failed to look up {label}"
+                assert isinstance(reptuple, RepTuple)
 
-                reps.append(RepTuple(rep, label[1], reptype))
+                reps.append(reptuple)
         return reps
 
     @classmethod
@@ -206,8 +239,8 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         inst_dict = cls.deserialize(state["inst_dict"])
         assert isinstance(inst_dict, dict)
         gaterep = GateRep(state["_gaterep"])
-        instrep = InstrumentRep(state["_instrep"])
-        return cls((gate_dict, inst_dict), gaterep, instrep)
+        instreps = [InstrumentRep(v) for v in state["_instreps"]]
+        return cls((gate_dict, inst_dict), gaterep, instreps)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         # Not worth caching below this object (i.e. don't pass cache on)
@@ -217,7 +250,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 "gate_dict": self.serialize(self.gate_dict),
                 "inst_dict": self.serialize(self.inst_dict),
                 "_gaterep": self._gaterep.value,
-                "_instrep": self._instrep.value,
+                "_instreps": [ir.value for ir in self._instreps],
             }
         )
         return state

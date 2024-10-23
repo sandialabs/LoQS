@@ -447,7 +447,7 @@ def create_ideal_model(
         inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
-            (gate_dict, inst_dict), gaterep=gaterep, instrep=instrep
+            (gate_dict, inst_dict), gaterep=gaterep, instreps=[instrep]
         )
 
     elif issubclass(model_backend, BaseNoiseModel):
