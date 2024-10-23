@@ -6,7 +6,7 @@ jupytext:
     format_version: 0.13
     jupytext_version: 1.16.1
 kernelspec:
-  display_name: Python 3
+  display_name: loqs-develop
   language: python
   name: python3
 ---
@@ -137,6 +137,12 @@ For example, we could print out the `History` corresponding to the last shot jus
 print(program.shot_histories[-1])
 ```
 
+This is a bit unwieldy to parse all the text, so we can instead ask ``LoQS`` to display the object in an interactive viewer.
+
+```{code-cell} ipython3
+program.shot_histories[-1].display()
+```
+
 While this is handy for looking at the details of a specific shot, we are often more interested in some collective result.
 In this case, we may be interested in the `"logical_measurement"` element of the final `Frame`.
 
@@ -231,19 +237,47 @@ Any object that is derived from `loqs.internal.Serializable` can be easily seria
 Deserialization is just as simple, and follows a similar API with reverse functions: `from_serialization` creates the object from a JSON-able dict, `loads` creates the object from the string version of the dict, `load` creates the object from a file pointer, and `read` creates the object from a filename/path.
 
 ```{code-cell} ipython3
-# Note that this can take some time.
-# Currently ~20 seconds for 1000 num_shots, and 1.6 GB uncompressed
+# Note that this can take some time (~10 seconds)
+# Currently 14 MB uncompressed
 program4.write('test.json')
 ```
 
 ```{code-cell} ipython3
-# Currently this takes ~1min20 seconds to reload
 program5 = QuantumProgram.read('test.json')
 ```
 
 ```{code-cell} ipython3
 # And we still have all our shot histories
 Counter(program5.collect_shot_data("logical_measurement", -1))
+```
+
+## Checkpointing QuantumProgram execution
+
+Now that we have serialization working, we can also easily checkpoint the execution of a ``QuantumProgram``. We can do this by passing in a ``checkpoint_dir`` kwarg.
+
+Note that enabling checkpointing will add some file I/O overhead to every shot. For the small jobs being run here, it is noticeable; for larger jobs where you would like to checkpoint, it should be less of a factor.
+
+```{code-cell} ipython3
+program6 = QuantumProgram.from_quantum_program(program3, name="Prep -, measure Z... again")
+
+# Let's use a checkpoint directory and Ctrl-C this partway through
+program6.run(num_shots=1000, checkpoint_dir="test-checkpoint", override_checkpoints=True)
+```
+
+We can now load the program using the ``QuantumProgram.from_checkpoint_dir`` class function. Checking the number of shot histories, we should have as many as was completed before we interrupted the program above.
+
+```{code-cell} ipython3
+program7 = QuantumProgram.from_checkpoint_dir('test-checkpoint')
+```
+
+```{code-cell} ipython3
+len(program7.shot_histories)
+```
+
+And because our ``num_shots`` argument to ``QuantumProgram.run`` is the total number of shots, we can rerun the same command to finish off the job.
+
+```{code-cell} ipython3
+program7.run(num_shots=1000)
 ```
 
 ```{code-cell} ipython3

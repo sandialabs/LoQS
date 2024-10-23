@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 import copy
 import glob
 from json import JSONDecodeError
+import json
 import os
 from pathlib import Path
 import shutil
@@ -285,16 +286,27 @@ class QuantumProgram(Displayable):
             The loaded :class:`QuantumProgram`
         """
         checkpoint_dir = Path(checkpoint_dir)
-        program = QuantumProgram.read(checkpoint_dir / "program.json")
+
+        # Use dump directly so we can get cache for shot deserialization
+        serialization_cache: dict[int, object] = {}
+        with open(checkpoint_dir / "program.json", "r") as f:
+            json_dict = json.load(f)
+            program = QuantumProgram.from_serialization(
+                json_dict, serialization_cache
+            )
 
         shot_files = glob.glob(str(checkpoint_dir) + "/shot-*.json")
         for sf in sorted(shot_files):
             try:
-                shot_history = History.read(sf)
+                with open(sf, "r") as f:
+                    json_dict = json.load(f)
             except JSONDecodeError:
                 # Checkpoint file was probably interrupted during write
                 # Skip it
                 continue
+            shot_history = History.from_serialization(
+                json_dict, serialization_cache
+            )
             program.shot_histories.append(shot_history)
 
         return program
@@ -465,6 +477,21 @@ class QuantumProgram(Displayable):
             # Delay program data to avoid copies every time
             program = dask_client.scatter(self)
 
+        # If we are checkpointing, compute the serialization cache
+        # This will save a huge amount of filesize and time writing
+        # shot history checkpoint files
+        serialization_cache: dict[int, int] | None = None
+        if checkpoint_dir is not None:
+            serialization_cache = {}
+
+            # Note that we don't care about the output here,
+            # just need to compute the cache. Also note that this will
+            # not have shot_history, but that is OK. Also note that
+            # we are computing this on the dask worker to save
+            # on data being copied across and avoid any hash
+            # mismatch problems
+            self.to_serialization(serialization_cache)
+
         # Set up tasks
         start = len(old_shot_histories)
         if start > 0:
@@ -483,7 +510,13 @@ class QuantumProgram(Displayable):
                 checkpoint_for_shot = checkpoint_dir / f"shot-{start + i}.json"
 
             tasks.append(
-                (program, max_frame_limit, seed_for_shot, checkpoint_for_shot)
+                (
+                    program,
+                    max_frame_limit,
+                    seed_for_shot,
+                    checkpoint_for_shot,
+                    serialization_cache,
+                )
             )
 
         if dask_client is None:
@@ -546,6 +579,7 @@ class QuantumProgram(Displayable):
         max_frame_limit: int = 100,
         seed: int | None = None,
         checkpoint_file: Path | None = None,
+        serialization_cache: dict | None = None,
     ):
         num_frames = 0
 
@@ -613,7 +647,10 @@ class QuantumProgram(Displayable):
             )
 
         if checkpoint_file is not None:
-            history.write(checkpoint_file)
+            # Use dump directory so we can use the program's serialized cache
+            with open(checkpoint_file, "w") as f:
+                json_dict = history.to_serialization(serialization_cache)
+                json.dump(json_dict, f, indent=4)
 
         return history
 
