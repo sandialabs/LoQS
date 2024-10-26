@@ -45,6 +45,7 @@ docs = [
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti[extensions]>=0.9.12", "numpy<2"]
+stim = ["stim>=1"]
 test = [
     "loqs[dev]",
     "mock>=5",
@@ -57,7 +58,7 @@ visualization = [
     "pillow",
     "qiskit[visualization]",
 ]
-backends = ["loqs[quantumsim,pygsti]"]
+backends = ["loqs[quantumsim,pygsti,stim]"]
 nobackends = ["loqs[dask,dev,docs,test,visualization]"]
 all = ["loqs[backends,nobackends]"]
 

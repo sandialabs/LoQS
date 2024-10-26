@@ -16,7 +16,12 @@ from .model import (
     DictNoiseModel,
 )
 
-from .state import BaseQuantumState, OutcomeDict, QSimQuantumState
+from .state import (
+    BaseQuantumState,
+    OutcomeDict,
+    QSimQuantumState,
+    STIMQuantumState,
+)
 
 
 def propagate_state(
