@@ -249,8 +249,6 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         return rep
 
     def _get_instrument_rep(self, name, qubits, instrep) -> object:
-        assert name == "Iz", "Can only handle Z-basis MCMs"
-
         if instrep == InstrumentRep.ZBASIS_PROJECTION:
             rep: None | int | dict = 0 if self.zbasis_proj_resets else None
         elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:

@@ -59,14 +59,18 @@ def propagate_state(
         to provide a consistent API.
     """
     # Find a compatible model/state oprep
-    opreps = set(model.output_gate_reps).intersection(set(state.input_reps))
+    opreps = []
+    for oprep in model.output_gate_reps:
+        if oprep in state.input_reps:
+            opreps.append(oprep)
     assert (
         len(opreps) > 0
     ), "Could not find matching gate rep between model output and state input"
 
-    instreps = set(model.output_instrument_reps).intersection(
-        set(state.input_reps)
-    )
+    instreps = []
+    for instrep in model.output_instrument_reps:
+        if instrep in state.input_reps:
+            instreps.append(instrep)
     assert (
         len(instreps) > 0
     ), "Could not find matching instrument rep between model output and state input"
