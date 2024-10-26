@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
@@ -25,7 +25,7 @@ T = TypeVar("T", bound="STIMQuantumState")
 
 # Type aliases for static type checking
 STIMStateCastableTypes: TypeAlias = (
-    "STIMQuantumState | _TableauSimulator | _Tableau"
+    "STIMQuantumState | _TableauSimulator | _Tableau | int | Sequence[int]"
 )
 """Types that this backend can cast to an underlying state object."""
 
@@ -44,6 +44,14 @@ class STIMQuantumState(BaseQuantumState):
 
     _state: _TableauSimulator
     """Underlying state object."""
+
+    qubit_labels: list[QubitTypes]
+    """Qubit labels.
+
+    These are used to map local ints
+    to global ints in
+    :attr:`.GateRep.STIM_CIRCUIT_STR` reps.
+    """
 
     @property
     def state(self) -> _TableauSimulator:
@@ -74,28 +82,48 @@ class STIMQuantumState(BaseQuantumState):
             Optional qubit labels. If not provided, the default range of ints
             is used.
         """
+        self.qubit_labels = []
         if isinstance(state, STIMQuantumState):
             # If we are setting a seed here, do not copy internal RNG
             # Otherwise, DO copy internal RNG
             self._state = state._state.copy(copy_rng=seed is None, seed=seed)
+            self.qubit_labels = state.qubit_labels
         elif isinstance(state, _TableauSimulator):
             self._state = state.copy(copy_rng=seed is None, seed=seed)
         elif isinstance(state, _Tableau):
             self._state = _TableauSimulator(seed=seed)
             self._state.set_inverse_tableau(state)
+        elif isinstance(state, int):
+            self._state = _TableauSimulator(seed=seed)
+            self._state.set_num_qubits(state)
+        elif isinstance(state, Sequence) and all(
+            [el in [0, 1] for el in state]
+        ):
+            self._state = _TableauSimulator(seed=seed)
+            self._state.set_num_qubits(len(state))
+            # Flip specified bits
+            for bit, val in enumerate(state):
+                if val:
+                    self.state.x(bit)
         else:
             raise ValueError(
                 f"Cannot initialize TableauSimulator from {state}"
             )
 
+        if qubit_labels is not None:
+            self.qubit_labels = list(qubit_labels)
+        if (
+            len(self.qubit_labels) == 0
+        ):  # We haven't set it yet, default to ints
+            self.qubit_labels = list(range(self.state.num_qubits))
         assert (
-            qubit_labels is not None
-        ), "Qubit labels must be specified for STIMQuantumState"
-        self.qubit_labels = qubit_labels
+            len(self.qubit_labels) == self.state.num_qubits
+        ), "Must specify a qubit label for every qubit"
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
         s += f"  STIM state on {self.state.num_qubits} qubits"
+        s += f" ([{self.qubit_labels[0]},...,{self.qubit_labels[-1]}])\n"
         return s
 
     def __hash__(self) -> int:
@@ -127,7 +155,7 @@ class STIMQuantumState(BaseQuantumState):
         return super().apply_reps(reps)
 
     def copy(self) -> STIMQuantumState:
-        return STIMQuantumState(self.state)
+        return STIMQuantumState(self.state, self.qubit_labels)
 
     def _apply_gate_rep(self, reptuple: RepTuple):
         rep = reptuple.rep
@@ -150,6 +178,10 @@ class STIMQuantumState(BaseQuantumState):
             # Split string for easy processing
             mapped_lines = []
             for line in rep.split("\n"):
+                if len(line) == 0 or line.startswith("TICK"):
+                    # Empty or TICK line, skip
+                    continue
+
                 entries = line.split()
 
                 mapped_entries = [entries[0]]  # instruction is unchanged

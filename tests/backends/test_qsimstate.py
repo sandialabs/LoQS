@@ -116,6 +116,11 @@ class TestQSimQuantumState:
             test.apply_reps([
                 RepTuple(None, "Q0", GateRep.PTM)
             ])
+        
+        with pytest.raises(NotImplementedError):
+            test.apply_reps([
+                RepTuple(None, "Q0", GateRep.STIM_CIRCUIT_STR)
+            ])
 
         # Try to pass in too many qubits
         with pytest.raises(ValueError):
