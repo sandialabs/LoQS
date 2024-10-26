@@ -61,6 +61,17 @@ class GateRep(RepEnum):
     shape (4^n, 4^n) where n is the number
     of qubits.
     """
+
+    STIM_CIRCUIT_STR = 4
+    """STIM circuit string
+
+    The expected rep type is STIM circuit string placeholder
+    qubit labels. The string can include bott gates (e.g. ``"H"``,
+    ``"CX"``) and noise specifications (e.g. ``"X_ERROR(<rate>)"``,
+    ``"DEPOLARIZE1(<rate>)"``). Qubit labels are placeholders
+    indexing into paired :attr:`.RepTuple.qubits`.
+    """
+
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 
