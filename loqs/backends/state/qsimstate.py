@@ -334,6 +334,7 @@ class QSimQuantumState(BaseQuantumState):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+        # TODO: Missing RNG!
         state.update(
             {
                 "qubit_labels": self.state.names,

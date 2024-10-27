@@ -72,6 +72,20 @@ class GateRep(RepEnum):
     indexing into paired :attr:`.RepTuple.qubits`.
     """
 
+    PROBABILISTIC_STIM_OPERATIONS = 5
+    """A weighted set of STIM circuit strings.
+
+    By default, STIM can only do Pauli noise channels. However,
+    some error channels can be "unraveled" into a probabilistic
+    choice from Pauli channels. For example, amplitude damping
+    can be performed as a probabilistic reset.
+
+    The expected rep type is a list of 2-tuples, where the first
+    entry is circuit string to apply if chosen and the second entry
+    is the probability of sampling that operation.
+    Probabilities should be positive and add to 1.
+    """
+
     # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 

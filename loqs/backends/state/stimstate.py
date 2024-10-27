@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from typing import ClassVar, Literal, TypeAlias, TypeVar
+from copy import deepcopy
+import numpy as np
+from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
@@ -61,6 +63,7 @@ class STIMQuantumState(BaseQuantumState):
     def input_reps(self) -> list[GateRep | InstrumentRep]:
         return [
             GateRep.STIM_CIRCUIT_STR,
+            GateRep.PROBABILISTIC_STIM_OPERATIONS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
         ]
@@ -120,6 +123,9 @@ class STIMQuantumState(BaseQuantumState):
             len(self.qubit_labels) == self.state.num_qubits
         ), "Must specify a qubit label for every qubit"
 
+        self.seed = seed
+        self._rng = np.random.default_rng(seed)
+
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
         s += f"  STIM state on {self.state.num_qubits} qubits"
@@ -127,7 +133,9 @@ class STIMQuantumState(BaseQuantumState):
         return s
 
     def __hash__(self) -> int:
-        return hash((hash(self._state), self.hash(self.qubit_labels)))
+        return hash(
+            (hash(self._state), self.hash(self.qubit_labels), self.seed)
+        )
 
     def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
@@ -155,7 +163,9 @@ class STIMQuantumState(BaseQuantumState):
         return super().apply_reps(reps)
 
     def copy(self) -> STIMQuantumState:
-        return STIMQuantumState(self.state, self.qubit_labels)
+        new_state = STIMQuantumState(self.state, self.qubit_labels, self.seed)
+        new_state._rng = deepcopy(self._rng)
+        return new_state
 
     def _apply_gate_rep(self, reptuple: RepTuple):
         rep = reptuple.rep
@@ -193,6 +203,26 @@ class STIMQuantumState(BaseQuantumState):
             mapped_circuit = _Circuit(mapped_circuit_str)
 
             self.state.do_circuit(mapped_circuit)
+        elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
+            assert isinstance(rep, (list, tuple))
+            probs = [r[1] for r in rep]
+            assert abs(1 - sum(probs)) < 1e-12, "Probabilities should sum to 1"
+            assert all(
+                [p >= 0 for p in probs]
+            ), "Probabilities should be positive"
+
+            # Pick an operation to sample
+            r = self._rng.random()
+            idx_to_apply = 0
+            cumul_prob = 0
+            while cumul_prob < r:
+                cumul_prob += probs[idx_to_apply]
+                idx_to_apply += 1
+
+            rep_to_apply = RepTuple(
+                rep[idx_to_apply][0], qubits, GateRep.STIM_CIRCUIT_STR
+            )
+            self.apply_reps_inplace([rep_to_apply])
         else:
             raise NotImplementedError(f"Cannot apply GateRep {reptype}")
 
@@ -275,6 +305,7 @@ class STIMQuantumState(BaseQuantumState):
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
         tableau_circ = self.state.current_inverse_tableau().to_circuit()
+        # TODO: Missing RNG!
         state.update(
             {
                 "qubit_labels": self.qubit_labels,
