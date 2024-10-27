@@ -3,9 +3,10 @@
 from tempfile import NamedTemporaryFile
 import pytest
 
+from loqs.backends import GateRep
 from loqs.backends.circuit import PyGSTiPhysicalCircuit, ListPhysicalCircuit
 from loqs.backends.model import PyGSTiNoiseModel, DictNoiseModel
-from loqs.backends.state import QSimQuantumState
+from loqs.backends.state import QSimQuantumState, STIMQuantumState
 from loqs.core import QuantumProgram
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 
@@ -17,14 +18,22 @@ class TestQuantumProgram:
     # Note that tests will be labeled state-model-circuit with this stacking
     @pytest.mark.parametrize("circuit_backend", [PyGSTiPhysicalCircuit, ListPhysicalCircuit])
     @pytest.mark.parametrize("model_backend", [PyGSTiNoiseModel, DictNoiseModel])
-    @pytest.mark.parametrize("state_backend", [QSimQuantumState])
+    @pytest.mark.parametrize("state_backend", [QSimQuantumState, STIMQuantumState])
     def test_integrated(self, circuit_backend, model_backend, state_backend):
+        if model_backend == PyGSTiNoiseModel and state_backend == STIMQuantumState:
+            pytest.skip("PyGSTiNoiseModel cannot output STIM reps yet")
+        
         code_5q = codepack_5_1_3.create_qec_code(circuit_backend=circuit_backend)
 
         # Define the physical qubit labels for our system here
         qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
 
-        ideal_model = codepack_5_1_3.create_ideal_model(qubits, model_backend=model_backend)
+        if state_backend == QSimQuantumState:
+            gaterep = GateRep.QSIM_SUPEROPERATOR
+        else:
+            gaterep = GateRep.STIM_CIRCUIT_STR
+
+        ideal_model = codepack_5_1_3.create_ideal_model(qubits, gaterep=gaterep, model_backend=model_backend)
 
         state_type = state_backend
         patch_types = {"5Q": code_5q}

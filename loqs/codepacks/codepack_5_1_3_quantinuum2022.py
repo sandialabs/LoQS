@@ -335,7 +335,7 @@ def create_qec_code(
     return code
 
 
-def create_ideal_model(
+def create_ideal_model(  # noqa: C901
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
     gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
@@ -407,40 +407,68 @@ def create_ideal_model(
 
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
     elif model_backend == DictNoiseModel:
-        # Currently we use pyGSTi to look up definitions
-        # TODO: Remove if needed
-        try:
-            import pygsti
-        except ImportError:
-            raise ImportError(
-                "pyGSTi not found, cannot construct dict noise model"
+        gate_dict = {}
+        if gaterep == GateRep.STIM_CIRCUIT_STR:
+            name_to_stim_ops = {
+                "Gxpi": ["X"],
+                "Gypi": ["Y"],
+                "Gzpi": ["Z"],
+                "Gzpi2": ["SQRT_Z"],
+                "Gzmpi2": ["SQRT_Z_DAG"],
+                "Gh": ["H"],
+                "Gk": ["H", "SQRT_Z"],
+                "Gcnot": ["CX"],
+                "Gcphase": ["CZ"],
+            }
+
+            for gate in gate_names:
+                num_qubits = 2 if gate in ["Gcnot", "Gcphase"] else 1
+
+                # For stim strings, all the representations are "local"
+                stim_str = ""
+                for stim_op in name_to_stim_ops[gate]:
+                    stim_str += stim_op
+                    for i in range(num_qubits):
+                        stim_str += f" {i}"
+                    stim_str += "\n"
+
+                qubit_perms = itertools.permutations(qubits, r=num_qubits)
+                for qs in qubit_perms:
+                    gate_dict[(gate, qs)] = stim_str
+        else:
+            # Currently we use pyGSTi to look up definitions for dense reps
+            # TODO: Remove if needed
+            try:
+                import pygsti
+            except ImportError:
+                raise ImportError(
+                    "pyGSTi not found, cannot construct dict noise model"
+                )
+
+            std_unitaries = (
+                pygsti.tools.internalgates.standard_gatename_unitaries()
             )
 
-        std_unitaries = (
-            pygsti.tools.internalgates.standard_gatename_unitaries()
-        )
+            for gate in gate_names:
+                U = std_unitaries.get(gate, None)
+                if U is None:
+                    U = nonstd_unitaries[gate]
 
-        gate_dict = {}
-        for gate in gate_names:
-            U = std_unitaries.get(gate, None)
-            if U is None:
-                U = nonstd_unitaries[gate]
-
-            num_qubits = int(np.log2(U.shape[0]))
-            qubit_perms = itertools.permutations(qubits, r=num_qubits)
-            for qs in qubit_perms:
-                if gaterep == GateRep.UNITARY:
-                    gate_dict[(gate, qs)] = U
-                elif gaterep == GateRep.PTM:
-                    gate_dict[(gate, qs)] = pygsti.tools.unitary_to_pauligate(
-                        U
-                    )
-                elif gaterep == GateRep.QSIM_SUPEROPERATOR:
-                    gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
-                else:
-                    raise NotImplementedError(
-                        "Conversion to this rep is not implemented yet."
-                    )
+                num_qubits = int(np.log2(U.shape[0]))
+                qubit_perms = itertools.permutations(qubits, r=num_qubits)
+                for qs in qubit_perms:
+                    if gaterep == GateRep.UNITARY:
+                        gate_dict[(gate, qs)] = U
+                    elif gaterep == GateRep.PTM:
+                        gate_dict[(gate, qs)] = (
+                            pygsti.tools.unitary_to_pauligate(U)
+                        )
+                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                        gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
+                    else:
+                        raise NotImplementedError(
+                            "Conversion to this rep is not implemented yet."
+                        )
 
         # Setting the value as (0, True) here means it will reset to 0 state
         # and it will record the outcomes

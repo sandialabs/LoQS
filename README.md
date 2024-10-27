@@ -4,9 +4,7 @@
 ![coverage](https://gitlab-ex.sandia.gov/QCVV/loqs-public/badges/main/coverage.svg)
 
 This repository is intended to be a sanitized version of the Logical Qubit Simulator (LoQS)
-for eventual public release. Note that this repo is currently on CEE-GitLab only out of an
-abundance of caution while porting things from LoQS. It is eventually intended to be public
-on GitHub in the SandiaLabs organization.
+for eventual public release.
 
 ## Installation
 
@@ -32,8 +30,9 @@ There are various optional requirements that are available, including:
 - `dev`: Allows the use of `black` and `flake8` prior to committing
 (see Code Formatting and Linting below).
 - `docs`: Allows building of the JupyterBook documentation (see Documentation below).
-- `quantumsim`: Enables the QuantumSim backend.
-- `pygsti`: Enables the PyGSTi backend.
+- `quantumsim`: Enables the QuantumSim (state) backend.
+- `pygsti`: Enables the PyGSTi (circuit, model, state) backend.
+- `stim`: Enables the STIM (state) backend.
 - `test`: Allows testing (see Testing below)
 - `visualization`: Enables some of the visualization tools in `loqs.tools`. Note that
   `pdflatex` is also required for full visualization support.

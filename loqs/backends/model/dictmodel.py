@@ -93,7 +93,23 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
         # Run through gates and upgrade everything to RepTuples
         for (name, qubits), gr in self.gate_dict.items():
-            if not isinstance(gr, RepTuple) and isinstance(gr, np.ndarray):
+            if not isinstance(gr, RepTuple) and (
+                isinstance(
+                    gr, (np.ndarray, str)
+                )  # matrix for dense rep or str for stim circ
+                or (  # list of (string, prob) tuples for probabilistic stim
+                    isinstance(gr, (tuple, list))
+                    and all(
+                        [
+                            isinstance(el, (tuple, list))
+                            and len(el) == 2
+                            and isinstance(el[0], str)
+                            and isinstance(el[1], (float, int))
+                            for el in gr
+                        ]
+                    )
+                )
+            ):
                 self.gate_dict[name, qubits] = RepTuple(gr, qubits, gaterep)
             else:
                 assert isinstance(
