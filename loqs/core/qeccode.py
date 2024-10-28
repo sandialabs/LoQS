@@ -28,8 +28,8 @@ class QECCode(Displayable):
     def __init__(
         self,
         instructions: Mapping[str, Instruction],
-        template_qubits: Sequence[str],
-        template_data_qubits: Sequence[str],
+        template_qubits: Sequence[str | int],
+        template_data_qubits: Sequence[str | int],
         name: str = "(Unnamed QEC code)",
     ):
         """

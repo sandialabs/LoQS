@@ -74,7 +74,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         if "TICK" not in str(self.circuit):
             warnings.warn(
-                "No TICK instructions, layer-based functionality will not work as intended."
+                "No TICK instructions, layer-based functionality will not work as intended if this is more than one layer."
             )
 
         super().__init__(circuit, qubit_labels)

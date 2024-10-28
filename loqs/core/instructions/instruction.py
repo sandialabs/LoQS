@@ -46,13 +46,13 @@ class MapQubitsCallable(Protocol[P]):
 
     def __call__(  # noqa
         self,
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> KwargDict: ...
 
 
-def default_map_qubits(qubit_mapping: Mapping[str, str], **kwargs):
+def default_map_qubits(qubit_mapping: Mapping[str | int, str | int], **kwargs):
     """A default map qubit function that does not change kwargs."""
     # Assume nothing needs to be mapped in kwargs
     return kwargs
@@ -376,7 +376,9 @@ class Instruction(Displayable):
             type=self.type,
         )
 
-    def map_qubits(self, qubit_mapping: Mapping[str, str]) -> Instruction:
+    def map_qubits(
+        self, qubit_mapping: Mapping[str | int, str | int]
+    ) -> Instruction:
         """Get a copy with mapped qubits.
 
         Parameters
