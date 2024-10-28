@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core import QECCodePatch
-from loqs.internal import Castable, Displayable
+from loqs.internal import MapCastable, Displayable
 
 
 T = TypeVar("T", bound="PatchDict")
@@ -18,7 +18,7 @@ PatchDictCastableTypes: TypeAlias = (
 """Objects that can be cast to a :class:`.PatchDict`."""
 
 
-class PatchDict(MutableMapping[str, QECCodePatch], Castable, Displayable):
+class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
     """A collection of :class:`.QECCodePatch` objects.
 
     This is a dict-like object where the keys are patch labels (literally,

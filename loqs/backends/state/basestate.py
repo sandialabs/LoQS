@@ -9,13 +9,14 @@ import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.model.basemodel import GateRep, InstrumentRep
+from loqs.backends.reps import RepTuple
 from loqs.internal import Castable, Displayable
 
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
 
-OutcomeDict: TypeAlias = dict[str, list[int]]
+OutcomeDict: TypeAlias = dict[str | int, list[int]]
 """A type alias for outcome dictionaries."""
 
 
@@ -45,18 +46,13 @@ class BaseQuantumState(Castable, Displayable):
         pass
 
     @abstractmethod
-    def apply_reps_inplace(
-        self, reps: Sequence, reset_mcms: bool = True
-    ) -> OutcomeDict:
+    def apply_reps_inplace(self, reps: Sequence[RepTuple]) -> OutcomeDict:
         """Apply the reps to the state in-place.
 
         Parameters
         ----------
         reps:
             Operator representations to apply
-
-        reset_mcms:
-            Whether mid-circuit measurements should reset.
 
         Returns
         -------
@@ -67,17 +63,12 @@ class BaseQuantumState(Castable, Displayable):
         pass
 
     @abstractmethod
-    def apply_reps(
-        self: T, reps: Sequence, reset_mcms: bool = True
-    ) -> tuple[T, OutcomeDict]:
+    def apply_reps(self: T, reps: Sequence[RepTuple]) -> tuple[T, OutcomeDict]:
         """Apply the reps to the state in-place.
 
         Parameters
         ----------
         reps:
-            See :meth:`.apply_reps_inplace`.
-
-        reset_mcms:
             See :meth:`.apply_reps_inplace`.
 
         Returns
@@ -88,7 +79,7 @@ class BaseQuantumState(Castable, Displayable):
             measurements were performed.
         """
         new_state = self.copy()
-        outputs = new_state.apply_reps_inplace(reps, reset_mcms)
+        outputs = new_state.apply_reps_inplace(reps)
         return new_state, outputs
 
     @abstractmethod

@@ -364,8 +364,7 @@ state_unprep_circ = PyGSTiPhysicalCircuit(
 instructions["Non-FT Minus Unprep"] = (
     builders.build_physical_circuit_instruction(
         state_unprep_circ,
-        name="Non-FT minus unprep circuit",
-        reset_mcms=False,
+        name="Non-FT minus unprep circuit"
     )
 )
 ```

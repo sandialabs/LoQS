@@ -9,9 +9,9 @@ import itertools
 import numpy as np
 from typing import ClassVar, Sequence, TypeAlias, TypeVar
 
-from loqs.backends.circuit import PyGSTiPhysicalCircuit
-from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
-from loqs.backends.model import BaseNoiseModel, GateRep, InstrumentRep
+from loqs.backends.circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from loqs.backends.model import BaseNoiseModel
+from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
 
 try:
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
@@ -66,8 +66,12 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         self,
         model: PyGSTiModelCastableTypes,
         qubit_aliases: Mapping | Sequence | None = None,
+        zbasis_proj_resets: bool = True,
     ) -> None:
         """Initialize a PyGSTiModelBackend.
+
+        TODO: Choices are made about instrument reset/outcomes.
+        Document this.
 
         Parameters
         ----------
@@ -127,6 +131,8 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         else:
             raise TypeError(f"Cannot cast {type(model)} to PyGSTiNoiseModel")
 
+        self.zbasis_proj_resets = zbasis_proj_resets
+
         # TODO: Crosstalk specification?
 
     def __hash__(self) -> int:
@@ -154,22 +160,26 @@ class PyGSTiNoiseModel(BaseNoiseModel):
     def output_gate_reps(self) -> list[GateRep]:
         return [GateRep.UNITARY, GateRep.PTM, GateRep.QSIM_SUPEROPERATOR]
 
+    # TODO: This is not quite right. It's probably one or the other,
+    # depending on whether instruments are defined or not
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
-        return [InstrumentRep.ZBASISPROJECTION]  # TODO: Can do more
+        return [
+            InstrumentRep.ZBASIS_PROJECTION,
+            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+        ]
 
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
-        gaterep: GateRep,
-        instrep: InstrumentRep,
-    ) -> list:
+        gatereps: Sequence[GateRep],
+        instreps: Sequence[InstrumentRep],
+    ) -> list[RepTuple]:
         # Get bare circuit
         circuit = PyGSTiPhysicalCircuit.cast(circuit)
         pygsti_circuit = circuit.circuit
 
         # Iterate through circuit and pull out representations
-        # TODO: What to do about instruments
         reps = []
         for layer in pygsti_circuit.layertup:  # type: ignore
             for comp in layer.components:  # type: ignore
@@ -177,72 +187,101 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                 aliased_qubits = comp.qubits  # The circuit is already aliased
                 qubits = [self._rev_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
-                    op = self.gate_dict[
-                        name, *qubits
-                    ]  # Look up using unaliased qubits
-                    basis = self.model.basis
-
-                    if self.use_embedded_op and isinstance(op, EmbeddedOp):
-                        # Pull out the relevant part of the tensor prod basis
-                        assert isinstance(self.model.basis, TensorProdBasis)
-                        assert op.target_labels is not None
-                        target_indices = [
-                            op.state_space.qubit_labels.index(q)
-                            for q in op.target_labels
-                        ]
-                        target_bases = [
-                            self.model.basis.component_bases[i]
-                            for i in target_indices
-                        ]
-                        basis = TensorProdBasis(target_bases)
-
-                        op = op.embedded_op
-                    reptype: GateRep | InstrumentRep = gaterep
-                    if gaterep == GateRep.UNITARY:
-                        try:
-                            rep = op.to_dense(on_space="Hilbert")
-                        except ValueError as e:
-                            raise ValueError(
-                                "Failed to cast gate as a unitary. Consider ",
-                                "using process matrices instead.",
-                            ) from e
-                    elif gaterep == GateRep.PTM:
-                        rep = op.to_dense(on_space="HilbertSchmidt")
-                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
-                        rep = op.to_dense(on_space="HilbertSchmidt")
-
-                        if comp.num_qubits in [1, 2]:
-                            rep = bt.change_basis(
-                                rep, basis, PYGSTI_QSIM_BASES[comp.num_qubits]
-                            )
-                        else:
-                            raise ValueError(
-                                "Cannot change more than a 2 qubit operation into",
-                                " the QuantumSim basis",
-                            )
-                    else:
-                        raise NotImplementedError(
-                            f"Cannot create gate rep for {gaterep}"
-                        )
+                    # TODO: Currently this is only using first rep. Fix?
+                    rep = self._get_gate_rep(comp.name, qubits, gatereps[0])
+                    reptype: RepEnum = gatereps[0]
                 elif comp.name.startswith("I"):
-                    # inst = self.inst_dict[comp]
-                    assert comp.name == "Iz", "Can only handle Z-basis MCMs"
-
-                    reptype = instrep
-
-                    # TODO: Do more for not just projections
-                    if instrep == InstrumentRep.ZBASISPROJECTION:
-                        rep = None
-                    else:
-                        raise NotImplementedError(
-                            f"Cannot create instrument rep for {instrep}"
-                        )
+                    # TODO: Currently this is only using first rep. Fix?
+                    rep = self._get_instrument_rep(
+                        comp.name, qubits, instreps[0]
+                    )
+                    reptype = instreps[0]
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
 
                 # We need to save with original (aliased) qubits
-                reps.append((rep, aliased_qubits, reptype))
+                reps.append(RepTuple(rep, aliased_qubits, reptype))
         return reps
+
+    def _get_gate_rep(self, name, qubits, gaterep) -> object:
+        op = self.gate_dict[name, *qubits]  # Look up using unaliased qubits
+        basis = self.model.basis
+
+        if self.use_embedded_op and isinstance(op, EmbeddedOp):
+            # Pull out the relevant part of the tensor prod basis
+            assert isinstance(self.model.basis, TensorProdBasis)
+            assert op.target_labels is not None
+            target_indices = [
+                op.state_space.qubit_labels.index(q) for q in op.target_labels
+            ]
+            target_bases = [
+                self.model.basis.component_bases[i] for i in target_indices
+            ]
+            basis = TensorProdBasis(target_bases)
+
+            op = op.embedded_op
+
+        if gaterep == GateRep.UNITARY:
+            try:
+                rep = op.to_dense(on_space="Hilbert")
+            except ValueError as e:
+                raise ValueError(
+                    "Failed to cast gate as a unitary. Consider ",
+                    "using process matrices instead.",
+                ) from e
+        elif gaterep == GateRep.PTM:
+            rep = op.to_dense(on_space="HilbertSchmidt")
+        elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+            rep = op.to_dense(on_space="HilbertSchmidt")
+
+            if len(qubits) in [1, 2]:
+                rep = bt.change_basis(
+                    rep, basis, PYGSTI_QSIM_BASES[len(qubits)]
+                )
+            else:
+                raise ValueError(
+                    "Cannot change more than a 2 qubit operation into",
+                    " the QuantumSim basis",
+                )
+        else:
+            raise NotImplementedError(f"Cannot create gate rep for {gaterep}")
+
+        return rep
+
+    def _get_instrument_rep(self, name, qubits, instrep) -> object:
+        if instrep == InstrumentRep.ZBASIS_PROJECTION:
+            rep: None | int | dict = 0 if self.zbasis_proj_resets else None
+        elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            # TODO: What to do with key error?
+            op = self.inst_dict[
+                name, *qubits
+            ]  # Look up using unaliased qubits
+
+            rep = {}
+            for k, v in op.items():
+                if isinstance(k, str):
+                    try:
+                        if len(k) > 1:
+                            label = tuple([int(c) for c in k])
+                        else:
+                            label = (int(k),)
+                    except ValueError as e:
+                        raise ValueError(
+                            "Failed to cast instrument keys to outcome labels"
+                        ) from e
+                else:
+                    label = k
+
+                assert isinstance(label, tuple)
+                assert all([c in [0, 1] for c in label])
+
+                rep[label] = v
+        else:
+            raise NotImplementedError(
+                f"Cannot create instrument rep for {instrep}"
+            )
+
+        return (rep, True)
 
     @classmethod
     def _from_serialization(

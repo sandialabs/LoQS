@@ -46,13 +46,13 @@ class MapQubitsCallable(Protocol[P]):
 
     def __call__(  # noqa
         self,
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> KwargDict: ...
 
 
-def default_map_qubits(qubit_mapping: Mapping[str, str], **kwargs):
+def default_map_qubits(qubit_mapping: Mapping[str | int, str | int], **kwargs):
     """A default map qubit function that does not change kwargs."""
     # Assume nothing needs to be mapped in kwargs
     return kwargs
@@ -352,8 +352,10 @@ class Instruction(Displayable):
 
         applied_frame = self.apply_fn(**aliased_kwargs)
 
+        # TODO: Collected_params is a nice debugging feature here
+        # It fails if the History is passed in though, so commenting out for now
         output_frame = applied_frame.update(
-            {"instruction": self}, #  "collected_params": aliased_kwargs},
+            {"instruction": self},  # "collected_params": aliased_kwargs},
             new_log=f"{self.name} result",
         )
 
@@ -374,7 +376,9 @@ class Instruction(Displayable):
             type=self.type,
         )
 
-    def map_qubits(self, qubit_mapping: Mapping[str, str]) -> Instruction:
+    def map_qubits(
+        self, qubit_mapping: Mapping[str | int, str | int]
+    ) -> Instruction:
         """Get a copy with mapped qubits.
 
         Parameters

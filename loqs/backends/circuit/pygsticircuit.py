@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
@@ -15,19 +15,7 @@ try:
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
 
-T = TypeVar("T", bound="PyGSTiPhysicalCircuit")
-
 ## Type aliases for static type checking
-CastableTypes: TypeAlias = (
-    "BasePhysicalCircuit | _Circuit | str | Sequence[OperationTypes]"
-)
-"""Types we can cast to a pyGSTi circuit.
-
-These include another PyGSTiPhysicalCircuit, a bare pyGSTi Circuit,
-or things that a pyGSTi Circuit can cast (a subset of these include
-a string and a list of operations/layers).
-"""
-
 QubitTypes: TypeAlias = str | int
 """PyGSTi backend qubit label types (strs and ints)"""
 
@@ -45,15 +33,23 @@ e.g. ('Gxpi2', 0) or ['Gcnot', ("Q0", "Q1")]
 OperationTypes: TypeAlias = LayerTypes | Sequence[LayerTypes]
 """PyGSTi backend operations type (one or several gates/layers)"""
 
+PyGSTiCircuitCastableTypes: TypeAlias = (
+    BasePhysicalCircuit | _Circuit | str | Sequence[OperationTypes]
+)
+"""Types we can cast to a pyGSTi circuit.
+
+These include another PyGSTiPhysicalCircuit, a bare pyGSTi Circuit,
+or things that a pyGSTi Circuit can cast (a subset of these include
+a string and a list of operations/layers).
+"""
+
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     """Circuit backend for handling ``pygsti.circuits.Circuit`` objects."""
 
-    CastableTypes: ClassVar[TypeAlias] = CastableTypes
-
     def __init__(
         self,
-        circuit: CastableTypes,
+        circuit: PyGSTiCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         if isinstance(circuit, PyGSTiPhysicalCircuit):

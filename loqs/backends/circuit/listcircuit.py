@@ -10,10 +10,6 @@ from loqs.backends.circuit import BasePhysicalCircuit
 
 
 ## Type aliases for static type checking
-CastableTypes: TypeAlias = "BasePhysicalCircuit | Sequence[OperationTypes]"
-"""Types we can cast to a built-in circuit.
-"""
-
 QubitTypes: TypeAlias = str | int
 """Qubit types for builtins"""
 
@@ -24,11 +20,15 @@ OperationTypes: TypeAlias = LabelType | Sequence[LabelType]
 """Type alias for things allowed to be in circuit layer
 """
 
+ListCircuitCastableTypes: TypeAlias = (
+    BasePhysicalCircuit | Sequence[OperationTypes]
+)
+"""Types we can cast to a built-in circuit.
+"""
+
 
 class ListPhysicalCircuit(BasePhysicalCircuit):
     """Circuit backend using built-in Python objects."""
-
-    CastableTypes: ClassVar[TypeAlias] = CastableTypes
 
     _circuit: list[list[tuple[str, tuple[QubitTypes, ...]]]]
     """List of layers (which are lists of 2-tuples with (name, qubits))
@@ -39,7 +39,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: CastableTypes,
+        circuit: ListCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         from loqs.backends.circuit import PyGSTiPhysicalCircuit

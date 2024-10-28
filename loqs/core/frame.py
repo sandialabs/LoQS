@@ -9,7 +9,7 @@ import warnings
 from collections.abc import Iterator, Mapping
 from typing import TypeAlias, TypeVar
 
-from loqs.internal import Castable, Displayable
+from loqs.internal import MapCastable, Displayable
 
 
 T = TypeVar("T", bound="Frame")
@@ -18,7 +18,7 @@ FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
 """Things that can be cast to :class:`Frame`."""
 
 
-class Frame(Mapping[str, object], Castable, Displayable):
+class Frame(Mapping[str, object], MapCastable, Displayable):
     """A record of the state of the simulation at a given time.
 
     The core functionality is a ``dict`` that relates keys to stateful objects.
@@ -35,37 +35,6 @@ class Frame(Mapping[str, object], Castable, Displayable):
 
     log: str
     """Log string for better printing."""
-
-    @classmethod
-    def cast(cls: type[T], obj: object) -> T:
-        """Cast to the derived class.
-
-        For Frame objects, a dict is an allowed first argument,
-        so we add a check for expected constructor kwarg names.
-
-        Parameters
-        ----------
-        obj:
-            A castable object that is either:
-            - Already the derived class type, in which case `obj`
-            is returned
-            - A kwarg dict that is passed into the derived class
-            constructor
-            - The first argument of the derived class constructor
-
-        Returns
-        -------
-            An object with type T (matching the derived class)
-        """
-        if isinstance(obj, cls):
-            # We are already the correct class, perform no copy
-            return obj
-        elif isinstance(obj, dict) and ("data" in obj or "log" in obj):
-            # Assume this is a kwarg dict, pass in all kwargs
-            return cls(**obj)
-
-        # Otherwise, assume this is the first __init__ argument
-        return cls(obj)  # type: ignore
 
     def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
         """

@@ -3,3 +3,4 @@
 
 from .basestate import BaseQuantumState, OutcomeDict
 from .qsimstate import QSimQuantumState
+from .stimstate import STIMQuantumState

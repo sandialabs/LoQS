@@ -83,7 +83,6 @@ def create_qec_code(
     instructions["Non-FT Minus Prep"] = (
         builders.build_physical_circuit_instruction(
             nonft_state_prep_circ,
-            include_outcomes=False,
             name="Non-FT minus state prep",
         )
     )
@@ -127,16 +126,12 @@ def create_qec_code(
     )
     ft_state_prep = builders.build_physical_circuit_instruction(
         ft_state_prep_circ,
-        include_outcomes=True,
-        reset_mcms=True,
         name="Non-FT Minus Prep + Checks",
     )
     reset = builders.build_physical_circuit_instruction(
         circuit_backend(
             [[("Iz", q) for q in qubits[2:]]], qubit_labels=qubits
         ),
-        include_outcomes=False,
-        reset_mcms=True,
         name="Reset to all 0 state",
     )
     instructions["FT Minus Prep"] = (
@@ -156,7 +151,6 @@ def create_qec_code(
     )
     instructions["X"] = builders.build_physical_circuit_instruction(
         logical_X_circ,
-        include_outcomes=False,
         name="Logical X",
     )
 
@@ -168,7 +162,6 @@ def create_qec_code(
     )
     instructions["Z"] = builders.build_physical_circuit_instruction(
         logical_Z_circ,
-        include_outcomes=False,
         name="Logical Z",
     )
 
@@ -179,7 +172,6 @@ def create_qec_code(
     )
     instructions["K"] = builders.build_physical_circuit_instruction(
         logical_K_circ,
-        include_outcomes=False,
         pauli_frame_update="K",
         name="Logical K",
     )
@@ -191,7 +183,6 @@ def create_qec_code(
     )
     logical_H_circ_inst = builders.build_physical_circuit_instruction(
         logical_H_circ,
-        include_outcomes=False,
         pauli_frame_update="H",
         name="Logical H circuit",
     )
@@ -217,7 +208,6 @@ def create_qec_code(
     instructions["Logical Prime Basis Transform"] = (
         builders.build_physical_circuit_instruction(
             to_prime_basis_circ,
-            include_outcomes=False,
             name="Local Clifford rotation to prime basis",
         )
     )
@@ -232,7 +222,6 @@ def create_qec_code(
     instructions["Logical Prime Basis Inverse Transform"] = (
         builders.build_physical_circuit_instruction(
             from_prime_basis_circ,
-            include_outcomes=False,
             name="Local Clifford rotation out of prime basis",
         )
     )
@@ -252,15 +241,11 @@ def create_qec_code(
 
     prime_basis_Z_meas = builders.build_physical_circuit_instruction(
         to_prime_basis_circ.append(raw_Z_meas_circ),
-        include_outcomes=True,
-        reset_mcms=False,
         name="Raw logical Z-basis measurement",
     )
 
     prime_basis_X_meas = builders.build_physical_circuit_instruction(
         to_prime_basis_circ.append(raw_X_meas_circ),
-        include_outcomes=True,
-        reset_mcms=False,
         name="Raw logical X-basis measurement",
     )
 
@@ -331,7 +316,6 @@ def create_qec_code(
     instructions["Non-FT Minus Unprep"] = (
         builders.build_physical_circuit_instruction(
             state_decoder_circ,
-            include_outcomes=True,
             name="Non-FT state decoder circuit",
         )
     )
@@ -351,11 +335,11 @@ def create_qec_code(
     return code
 
 
-def create_ideal_model(
+def create_ideal_model(  # noqa: C901
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
     gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASISPROJECTION,
+    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
 ):
     """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
 
@@ -423,45 +407,75 @@ def create_ideal_model(
 
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
     elif model_backend == DictNoiseModel:
-        # Currently we use pyGSTi to look up definitions
-        # TODO: Remove if needed
-        try:
-            import pygsti
-        except ImportError:
-            raise ImportError(
-                "pyGSTi not found, cannot construct dict noise model"
+        gate_dict = {}
+        if gaterep == GateRep.STIM_CIRCUIT_STR:
+            name_to_stim_ops = {
+                "Gxpi": ["X"],
+                "Gypi": ["Y"],
+                "Gzpi": ["Z"],
+                "Gzpi2": ["SQRT_Z"],
+                "Gzmpi2": ["SQRT_Z_DAG"],
+                "Gh": ["H"],
+                "Gk": ["H", "SQRT_Z"],
+                "Gcnot": ["CX"],
+                "Gcphase": ["CZ"],
+            }
+
+            for gate in gate_names:
+                num_qubits = 2 if gate in ["Gcnot", "Gcphase"] else 1
+
+                # For stim strings, all the representations are "local"
+                stim_str = ""
+                for stim_op in name_to_stim_ops[gate]:
+                    stim_str += stim_op
+                    for i in range(num_qubits):
+                        stim_str += f" {i}"
+                    stim_str += "\n"
+
+                qubit_perms = itertools.permutations(qubits, r=num_qubits)
+                for qs in qubit_perms:
+                    gate_dict[(gate, qs)] = stim_str
+        else:
+            # Currently we use pyGSTi to look up definitions for dense reps
+            # TODO: Remove if needed
+            try:
+                import pygsti
+            except ImportError:
+                raise ImportError(
+                    "pyGSTi not found, cannot construct dict noise model"
+                )
+
+            std_unitaries = (
+                pygsti.tools.internalgates.standard_gatename_unitaries()
             )
 
-        std_unitaries = (
-            pygsti.tools.internalgates.standard_gatename_unitaries()
-        )
+            for gate in gate_names:
+                U = std_unitaries.get(gate, None)
+                if U is None:
+                    U = nonstd_unitaries[gate]
 
-        gate_dict = {}
-        for gate in gate_names:
-            U = std_unitaries.get(gate, None)
-            if U is None:
-                U = nonstd_unitaries[gate]
+                num_qubits = int(np.log2(U.shape[0]))
+                qubit_perms = itertools.permutations(qubits, r=num_qubits)
+                for qs in qubit_perms:
+                    if gaterep == GateRep.UNITARY:
+                        gate_dict[(gate, qs)] = U
+                    elif gaterep == GateRep.PTM:
+                        gate_dict[(gate, qs)] = (
+                            pygsti.tools.unitary_to_pauligate(U)
+                        )
+                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                        gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
+                    else:
+                        raise NotImplementedError(
+                            "Conversion to this rep is not implemented yet."
+                        )
 
-            num_qubits = int(np.log2(U.shape[0]))
-            qubit_perms = itertools.permutations(qubits, r=num_qubits)
-            for qs in qubit_perms:
-                if gaterep == GateRep.UNITARY:
-                    gate_dict[(gate, qs)] = U
-                elif gaterep == GateRep.PTM:
-                    gate_dict[(gate, qs)] = pygsti.tools.unitary_to_pauligate(
-                        U
-                    )
-                elif gaterep == GateRep.QSIM_SUPEROPERATOR:
-                    gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
-                else:
-                    raise NotImplementedError(
-                        "Conversion to this rep is not implemented yet."
-                    )
-
-        inst_dict = {("Iz", (q,)): "TODO" for q in qubits}
+        # Setting the value as (0, True) here means it will reset to 0 state
+        # and it will record the outcomes
+        inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
-            (gate_dict, inst_dict), gaterep=gaterep, instrep=instrep
+            (gate_dict, inst_dict), gaterep=gaterep, instreps=[instrep]
         )
 
     elif issubclass(model_backend, BaseNoiseModel):
@@ -657,7 +671,6 @@ def _create_adaptive_measure_instruction_part_I(
     instructions["FT Logical X Measure Part I Circuit"] = (
         builders.build_physical_circuit_instruction(
             measI_circ,
-            include_outcomes=True,
             name="FT Logical X Measure Part I Circuit",
         )
     )
@@ -770,7 +783,6 @@ def _create_adaptive_measure_instruction_part_II(
     instructions["FT Logical X Measure Part II Circuit"] = (
         builders.build_physical_circuit_instruction(
             measII_circ,
-            include_outcomes=True,
             name="FT Logical X Measure Part II Circuit",
         )
     )
@@ -894,7 +906,6 @@ def _create_adaptive_measure_instruction_part_III(
     instructions["FT Logical X Measure Part III Circuit"] = (
         builders.build_physical_circuit_instruction(
             measIII_circ,
-            include_outcomes=True,
             name="FT Logical X Measure Part III Circuit",
         )
     )
@@ -1012,7 +1023,6 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
     instructions["XZZXI Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             XZZXI_circ,
-            include_outcomes=False,
             name="XZZXI stabilizer",
         )
     )
@@ -1024,7 +1034,6 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
     instructions["IXZZX Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             IXZZX_circ,
-            include_outcomes=False,
             name="IXZZX stabilizer",
         )
     )
@@ -1036,7 +1045,6 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
     instructions["XIXZZ Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             XIXZZ_circ,
-            include_outcomes=False,
             name="XIXZZ stabilizer",
         )
     )
@@ -1048,7 +1056,6 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
     instructions["ZXIXZ Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             ZXIXZ_circ,
-            include_outcomes=False,
             name="ZXIXZ stabilizer",
         )
     )
@@ -1076,9 +1083,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Unflagged XZZXI Check"] = (
         builders.build_physical_circuit_instruction(
             XZZXI_circ,
-            include_outcomes=True,
             name="Unflagged XZZXI stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1098,9 +1103,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Unflagged IXZZX Check"] = (
         builders.build_physical_circuit_instruction(
             IXZZX_circ,
-            include_outcomes=True,
             name="Unflagged IXZZX stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1120,9 +1123,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Unflagged XIXZZ Check"] = (
         builders.build_physical_circuit_instruction(
             XIXZZ_circ,
-            include_outcomes=True,
             name="Unflagged XIXZZ stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1142,9 +1143,7 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Unflagged ZXIXZ Check"] = (
         builders.build_physical_circuit_instruction(
             ZXIXZ_circ,
-            include_outcomes=True,
             name="Unflagged ZXIXZ stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1206,9 +1205,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Flagged XZZXI Check"] = (
         builders.build_physical_circuit_instruction(
             XZZXI_circ,
-            include_outcomes=True,
             name="Flagged XZZXI stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1230,9 +1227,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Flagged IXZZX Check"] = (
         builders.build_physical_circuit_instruction(
             IXZZX_circ,
-            include_outcomes=True,
             name="Flagged IXZZX stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1254,9 +1249,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Flagged XIXZZ Check"] = (
         builders.build_physical_circuit_instruction(
             XIXZZ_circ,
-            include_outcomes=True,
             name="Flagged XIXZZ stabilizer check",
-            reset_mcms=True,
         )
     )
 
@@ -1278,9 +1271,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
     instructions["Flagged ZXIXZ Check"] = (
         builders.build_physical_circuit_instruction(
             ZXIXZ_circ,
-            include_outcomes=True,
             name="Flagged ZXIXZ stabilizer check",
-            reset_mcms=True,
         )
     )
 

@@ -5,6 +5,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import glob
+from json import JSONDecodeError
+import json
+import os
+from pathlib import Path
+import shutil
 from typing import Literal, TypeVar
 import warnings
 
@@ -260,6 +266,52 @@ class QuantumProgram(Displayable):
         )
 
     @classmethod
+    def from_checkpoint_dir(cls, checkpoint_dir: Path | str) -> QuantumProgram:
+        """Load a :class:`QuantumProgram` from a checkpoint directory.
+
+        Note that this may have an incomplete list of shots,
+        which means that the RNG seeds may not be as expected.
+        Take care that all shots were completed if doing shot-by-shot
+        equality testing.
+
+        Parameters
+        ----------
+        checkpoint_dir:
+            The checkpoint directory to load from.
+            See ``checkpoint_dir`` in :meth:`.run`.
+
+        Returns
+        -------
+        QuantumProgram
+            The loaded :class:`QuantumProgram`
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+
+        # Use dump directly so we can get cache for shot deserialization
+        serialization_cache: dict[int, object] = {}
+        with open(checkpoint_dir / "program.json", "r") as f:
+            json_dict = json.load(f)
+            program = QuantumProgram.from_serialization(
+                json_dict, serialization_cache
+            )
+
+        shot_files = glob.glob(str(checkpoint_dir) + "/shot-*.json")
+        for sf in sorted(shot_files):
+            try:
+                with open(sf, "r") as f:
+                    json_dict = json.load(f)
+            except JSONDecodeError:
+                # Checkpoint file was probably interrupted during write
+                # Skip it
+                continue
+            shot_history = History.from_serialization(
+                json_dict, serialization_cache
+            )
+            program.shot_histories.append(shot_history)
+
+        return program
+
+    @classmethod
     def from_quantum_program(
         cls,
         other: QuantumProgram,
@@ -343,7 +395,9 @@ class QuantumProgram(Displayable):
         max_frame_limit: int = 100,
         dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
-        reset_shot_histories: bool = True,
+        reset_shot_histories: bool = False,
+        checkpoint_dir: Path | str | None = None,
+        override_checkpoints: bool = False,
         verbose: bool = True,
     ):
         """Execute some shots of this :class:`QuantumProgram`.
@@ -373,13 +427,43 @@ class QuantumProgram(Displayable):
             for many (>1K) shots, at the expense of some possible load balancing.
 
         reset_shot_histories:
-            Whether to delete any existing shot histories (``True``, default) or keep
-            existing shot histories (``False``) when running shots.
+            Whether to delete any existing shot histories (``True``) or keep
+            existing shot histories (``False``, default) when running shots.
+
+        checkpoint_dir:
+            The directory to use for checkpointing. If None (the default), no
+            checkpointing is performed. The :class:`.QuantumProgram` will be written
+            to ``"checkpoint_dir/program.json"``, while shot :math:`i` will be written
+            to ``"checkpoint_dir/shot_{i}.json"``. The resulting checkpoint can be loaded
+            via :meth:`.QuantumProgram.from_checkpoint_dir`.
+
+        override_checkpoints:
+            Whether to error (False, default) or wipe and override (True) an existing
+            checkpoint directory.
 
         verbose:
             Whether to write a progress bar (``True``, default) or not (``False``)
             when running shots.
         """
+        # Checkpoint if requested
+        if checkpoint_dir is not None:
+            checkpoint_dir = Path(checkpoint_dir)
+            if checkpoint_dir.exists():
+                if not override_checkpoints:
+                    raise FileExistsError(
+                        "Checkpoint exists and override_checkpoint not True. "
+                        + "Allow override, move checkpoints, or use a different path."
+                    )
+
+                # It exists but we can wipe it
+                shutil.rmtree(checkpoint_dir)
+
+            # Create the checkpoint directory
+            os.makedirs(checkpoint_dir, exist_ok=True)
+
+            # Write the base program
+            self.write(checkpoint_dir / "program.json")
+
         # Take out shot histories to avoid unnecessary copies during dask.delayed
         if reset_shot_histories:
             self.shot_histories = []
@@ -393,23 +477,57 @@ class QuantumProgram(Displayable):
             # Delay program data to avoid copies every time
             program = dask_client.scatter(self)
 
+        # If we are checkpointing, compute the serialization cache
+        # This will save a huge amount of filesize and time writing
+        # shot history checkpoint files
+        serialization_cache: dict[int, int] | None = None
+        if checkpoint_dir is not None:
+            serialization_cache = {}
+
+            # Note that we don't care about the output here,
+            # just need to compute the cache. Also note that this will
+            # not have shot_history, but that is OK. Also note that
+            # we are computing this on the dask worker to save
+            # on data being copied across and avoid any hash
+            # mismatch problems
+            self.to_serialization(serialization_cache)
+
         # Set up tasks
+        start = len(old_shot_histories)
+        if start > 0:
+            print(f"Detecting {start} already completed shots")
+
         tasks = []
-        for i in range(num_shots):
+        for i in range(start, num_shots):
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             seed_for_shot = None
             if self.default_base_seed is not None:
-                seed_for_shot = (
-                    self.default_base_seed + len(old_shot_histories) + i
-                )
+                seed_for_shot = self.default_base_seed + start + i
 
-            tasks.append((program, max_frame_limit, seed_for_shot))
+            # Create per-shot checkpoint file
+            checkpoint_for_shot = None
+            if checkpoint_dir is not None:
+                checkpoint_for_shot = checkpoint_dir / f"shot-{start + i}.json"
+
+            tasks.append(
+                (
+                    program,
+                    max_frame_limit,
+                    seed_for_shot,
+                    checkpoint_for_shot,
+                    serialization_cache,
+                )
+            )
 
         if dask_client is None:
             # Execute serially
             shot_results = []
             for task in tqdm(
-                tasks, f"Program {self.name}", disable=not verbose
+                tasks,
+                f"Program {self.name}",
+                disable=not verbose,
+                initial=start,
+                total=num_shots,
             ):
                 result = QuantumProgram._run_shot(*task)
                 shot_results.append(result)
@@ -460,8 +578,9 @@ class QuantumProgram(Displayable):
         program,
         max_frame_limit: int = 100,
         seed: int | None = None,
+        checkpoint_file: Path | None = None,
+        serialization_cache: dict | None = None,
     ):
-        """TODO"""
         num_frames = 0
 
         history = copy.deepcopy(program.initial_history)
@@ -526,6 +645,12 @@ class QuantumProgram(Displayable):
             warnings.warn(
                 f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
             )
+
+        if checkpoint_file is not None:
+            # Use dump directory so we can use the program's serialized cache
+            with open(checkpoint_file, "w") as f:
+                json_dict = history.to_serialization(serialization_cache)
+                json.dump(json_dict, f, indent=4)
 
         return history
 

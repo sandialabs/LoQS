@@ -1,18 +1,28 @@
 """Quantum simulation backends for LoQS
 """
 
-from .circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from .reps import RepEnum, GateRep, InstrumentRep, RepTuple
+
+from .circuit import (
+    BasePhysicalCircuit,
+    PyGSTiPhysicalCircuit,
+    ListPhysicalCircuit,
+    STIMPhysicalCircuit,
+)
 
 # Needs to be after circuit import but before state so that we have OpRep
 from .model import (
     BaseNoiseModel,
-    GateRep,
-    InstrumentRep,
     PyGSTiNoiseModel,
     DictNoiseModel,
 )
 
-from .state import BaseQuantumState, OutcomeDict, QSimQuantumState
+from .state import (
+    BaseQuantumState,
+    OutcomeDict,
+    QSimQuantumState,
+    STIMQuantumState,
+)
 
 
 def propagate_state(
@@ -20,7 +30,6 @@ def propagate_state(
     model: BaseNoiseModel,
     state: BaseQuantumState,
     inplace: bool = True,
-    reset_mcms: bool = True,
 ) -> tuple[BaseQuantumState, OutcomeDict]:
     """Given a circuit and model, propagate a state forward in time.
 
@@ -48,10 +57,6 @@ def propagate_state(
         or propagate a copy forward (``False``).
         This should probably remain ``True`` for memory reasons.
 
-    reset_mcms:
-        Whether to reset the qubit state after an instrument
-        (``True``, default) or not.
-
     Returns
     -------
     BaseQuantumState, OutcomeDict
@@ -60,29 +65,29 @@ def propagate_state(
         to provide a consistent API.
     """
     # Find a compatible model/state oprep
-    oprep: GateRep | None = None
-    for grep in model.output_gate_reps:
-        if grep in state.input_reps:
-            oprep = grep
+    opreps = []
+    for oprep in model.output_gate_reps:
+        if oprep in state.input_reps:
+            opreps.append(oprep)
     assert (
-        oprep is not None
+        len(opreps) > 0
     ), "Could not find matching gate rep between model output and state input"
 
-    instrep: InstrumentRep | None = None
-    for irep in model.output_instrument_reps:
-        if irep in state.input_reps:
-            instrep = irep
+    instreps = []
+    for instrep in model.output_instrument_reps:
+        if instrep in state.input_reps:
+            instreps.append(instrep)
     assert (
-        instrep is not None
+        len(instreps) > 0
     ), "Could not find matching instrument rep between model output and state input"
 
     # Look up reps from model
-    reps = model.get_reps(circuit, oprep, instrep)
+    reps = model.get_reps(circuit, list(opreps), list(instreps))
 
     # Apply operator reps to state
     if inplace:
-        outcomes = state.apply_reps_inplace(reps, reset_mcms)
+        outcomes = state.apply_reps_inplace(reps)
     else:
-        state, outcomes = state.apply_reps(reps, reset_mcms)
+        state, outcomes = state.apply_reps(reps)
 
     return state, outcomes

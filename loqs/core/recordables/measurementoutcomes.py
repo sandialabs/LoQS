@@ -8,18 +8,20 @@ from typing import Literal, TypeAlias, TypeVar
 
 from loqs.backends.state.basestate import OutcomeDict
 from loqs.core.syndrome import PauliFrame
-from loqs.internal import Castable, Displayable
+from loqs.internal import MapCastable, Displayable
 
 
 T = TypeVar("T", bound="MeasurementOutcomes")
 
 MeasurementOutcomesCastableTypes: TypeAlias = (
-    "MeasurementOutcomes | Mapping[str, int | Sequence[int]]"
+    "MeasurementOutcomes | Mapping[str | int, int | Sequence[int]]"
 )
 "Things that can be cast to :class:`.MeasurementOutcomes`."
 
 
-class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
+class MeasurementOutcomes(
+    Mapping[str | int, list[int]], MapCastable, Displayable
+):
     """Measurement outcomes from physical circuit instructions.
 
     This is a dict-like object with qubit label keys and lists of 0/1
@@ -54,13 +56,13 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
                 "Must pass dict of qubit keys and outcome/list of outcome values"
             )
 
-    def __getitem__(self, key: str) -> list[int]:
+    def __getitem__(self, key: str | int) -> list[int]:
         return self.outcomes[key]
 
     def __len__(self) -> int:
         return len(self.outcomes)
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self) -> Iterator[str | int]:
         return iter(self.outcomes)
 
     def __str__(self) -> str:
@@ -68,37 +70,6 @@ class MeasurementOutcomes(Mapping[str, list[int]], Castable, Displayable):
 
     def __hash__(self) -> int:
         return self.hash(self.outcomes)
-
-    @classmethod
-    def cast(cls: type[T], obj: object) -> T:
-        """Cast to the derived class.
-
-        For :class:`MeasurementOutcome` objects, a dict is an allowed
-        first argument, so we add a check for expected constructor kwarg names.
-
-        Parameters
-        ----------
-        obj:
-            A castable object that is either:
-            - Already the derived class type, in which case `obj`
-            is returned
-            - A kwarg dict that is passed into the derived class
-            constructor
-            - The first argument of the derived class constructor
-
-        Returns
-        -------
-            An object with type T (matching the derived class)
-        """
-        if isinstance(obj, cls):
-            # We are already the correct class, perform no copy
-            return obj
-        elif isinstance(obj, dict) and ("outcomes" in obj):
-            # Assume this is a kwarg dict, pass in all kwargs
-            return cls(**obj)
-
-        # Otherwise, assume this is the first __init__ argument
-        return cls(obj)  # type: ignore
 
     def get_inferred_outcomes(
         self,

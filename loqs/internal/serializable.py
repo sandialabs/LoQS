@@ -440,6 +440,13 @@ class Serializable:
                 )  # don't update caller's dict!
                 format_kwargs["indent"] = 4
 
+            if "sort_keys" in format_kwargs:
+                # Sorting keys will potentially break caching on deserialization,
+                # so let's catch that here
+                raise ValueError(
+                    "Cannot use the 'sort_key' formatting option for caching reasons."
+                )
+
             cache = {}
             json_dict = self.to_serialization(cache)
             if f is not None:

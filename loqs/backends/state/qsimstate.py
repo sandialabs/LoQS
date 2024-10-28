@@ -5,18 +5,20 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Collection
-import random
+from copy import deepcopy
 from typing import ClassVar, TypeAlias, TypeVar
 
 import numpy as np
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
+from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 
 
 try:
     from quantumsim.sparsedm import SparseDM as _SparseDM
+    from quantumsim.dm_np import DensityNP as _DensityNP
 except ImportError as e:
     raise ImportError("Failed import, cannot use QuantumSim as backend") from e
 
@@ -24,7 +26,7 @@ except ImportError as e:
 T = TypeVar("T", bound="QSimQuantumState")
 
 # Type aliases for static type checking
-CastableTypes: TypeAlias = "QSimQuantumState | int | _SparseDM"
+QSimStateCastableTypes: TypeAlias = "QSimQuantumState | int | _SparseDM"
 """Types that this backend can cast to an underlying state object."""
 
 QubitTypes: TypeAlias = str | int
@@ -49,11 +51,16 @@ class QSimQuantumState(BaseQuantumState):
 
     @property
     def input_reps(self) -> list[GateRep | InstrumentRep]:
-        return [GateRep.QSIM_SUPEROPERATOR, InstrumentRep.ZBASISPROJECTION]
+        return [
+            GateRep.QSIM_SUPEROPERATOR,
+            InstrumentRep.ZBASIS_PROJECTION,
+            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+        ]
 
     def __init__(
         self,
-        state: CastableTypes,
+        state: QSimStateCastableTypes,
         qubit_labels: Collection[QubitTypes] | None = None,
         seed: int | None = None,
     ) -> None:
@@ -104,67 +111,197 @@ class QSimQuantumState(BaseQuantumState):
     def __hash__(self) -> int:
         return hash((hash(self._state), self.seed))
 
-    def apply_reps_inplace(
-        self, reps: Sequence, reset_mcms: bool = True
-    ) -> OutcomeDict:
+    def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
 
-        for rep, qubits, reptype in reps:
-            if reptype == GateRep.QSIM_SUPEROPERATOR:
-                if len(qubits) == 1:
-                    self.state.apply_ptm(qubits[0], rep)
-                elif len(qubits) == 2:
-                    # The qubits are flipped here, and this is a known QuantumSim bug
-                    self.state.apply_two_ptm(qubits[1], qubits[0], rep)
-                else:
-                    raise ValueError(
-                        "Cannot apply more than a 2 qubit operation"
-                    )
-            elif reptype == InstrumentRep.ZBASISPROJECTION:
-                # TODO: Could do it all at once probably
-                # but currently just copying measureRenormalizeQubit behavior
-                for qbit in qubits:
-                    results = self.state.peak_multiple_measurements([qbit])
-                    # Results has following structure
-                    # results: [({'A1': 0}, p0), ({'A1': 1}, p1)}
-                    # results[a][0][qubit] = measurement value
-                    # results[a][1]        = corresponding probability
-                    # where a is in {0,1}
-                    # (unless the bit is classical, in which case,
-                    # there is only one entry in results)
+        for reptuple in reps:
+            reptype = reptuple.reptype
+            if isinstance(reptype, GateRep):
+                self._apply_gate_rep(reptuple)
+            elif isinstance(reptype, InstrumentRep):
+                rep_outcomes = self._apply_instrument_rep(reptuple)
 
-                    # TODO: At this point, we also have probabilities
-                    # We could do also save that data, maybe helpful later
-
-                    m = self._rng.random()
-                    if m < results[0][1]:
-                        cbit = results[0][0][qbit]
-                    else:
-                        cbit = results[1][0][qbit]
-                    if qbit in self.state.idx_in_full_dm:
-                        self.state.project_measurement(qbit, cbit)
-                    if reset_mcms:
-                        self.state.set_bit(qbit, 0)
-                    self.state.renormalize()
-                    outcomes[qbit].append(cbit)
+                # Merge outcomes with already observed outcomes
+                for k, v in rep_outcomes.items():
+                    outcomes[k].extend(v)
             else:
-                raise NotImplementedError(f"Cannot apply reptype {reptype}")
+                raise NotImplementedError(
+                    f"Cannot apply unknown reptype {reptype}"
+                )
 
         return outcomes
 
     def apply_reps(
-        self, reps: Sequence, reset_mcms: bool = True
+        self, reps: Sequence
     ) -> tuple[QSimQuantumState, OutcomeDict]:
-        return super().apply_reps(reps, reset_mcms)
+        return super().apply_reps(reps)
 
     def copy(self) -> QSimQuantumState:
-        return QSimQuantumState(self.state.copy())
+        new_state = QSimQuantumState(deepcopy(self.state), seed=self.seed)
+        new_state._rng = deepcopy(self._rng)
+        return new_state
+
+    def _apply_gate_rep(self, reptuple: RepTuple):
+        rep = reptuple.rep
+        # TODO: Can probably check this is an ndarray of the right shape
+
+        qubits = reptuple.qubits
+        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+
+        reptype = reptuple.reptype
+        assert isinstance(reptype, GateRep)
+
+        if reptype == GateRep.QSIM_SUPEROPERATOR:
+            if len(qubits) == 1:
+                self.state.apply_ptm(qubits[0], rep)
+            elif len(qubits) == 2:
+                # The qubits are flipped here, and this is a known QuantumSim quirk
+                self.state.apply_two_ptm(qubits[1], qubits[0], rep)
+            else:
+                raise ValueError("Cannot apply more than a 2 qubit operation")
+        else:
+            raise NotImplementedError(f"Cannot apply GateRep {reptype}")
+
+    def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
+        rep = reptuple.rep
+        assert isinstance(rep, (tuple, list)) and len(rep) > 1
+        reset = rep[0]
+        include_outcomes = rep[1]
+
+        qubits = reptuple.qubits
+        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+
+        reptype = reptuple.reptype
+        assert isinstance(reptype, InstrumentRep)
+
+        outcomes: OutcomeDict = defaultdict(list)
+
+        if reptype == InstrumentRep.ZBASIS_PROJECTION:
+            # TODO: Could do it all at once probably
+            # but currently just copying measureRenormalizeQubit behavior
+            for qbit in qubits:
+                cbit = self._apply_projective_z_measure(qbit, reset)
+                if include_outcomes:
+                    outcomes[qbit].append(cbit)
+        elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+            # Check we can apply the reps
+            preop = rep[2]
+            postop = rep[3]
+            assert reset in [None, 0, 1]
+            assert preop.reptype in self.input_reps
+            assert postop.reptype in self.input_reps
+            assert isinstance(preop.reptype, GateRep)
+            assert isinstance(postop.reptype, GateRep)
+            # TODO: Strict subsets is OK too
+            assert preop.qubits == qubits
+            assert postop.qubits == qubits
+
+            # Apply the pre-op
+            self.apply_reps_inplace([preop])
+
+            # Do perfect measurement
+            for qbit in qubits:
+                cbit = self._apply_projective_z_measure(qbit, reset)
+                if include_outcomes:
+                    outcomes[qbit].append(cbit)
+
+            # Apply the post-op
+            self.apply_reps_inplace([postop])
+        elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            if len(qubits) > 1:
+                raise NotImplementedError(
+                    "More than 1-qubit instruments not yet implemented"
+                )
+            instrument_dict = rep[0]
+            assert set(instrument_dict.keys()) == set((0, 1))
+
+            # Compute the probability of measuring 0
+            prob_0 = self._apply_instrument_element_ptm_for_prob(
+                instrument_dict[0].rep, qubits[0]
+            )
+
+            # Use RNG to see if we measure 0 or 1
+            m = self._rng.random()
+            cbit = 0 if m < prob_0 else 1
+            if include_outcomes:
+                outcomes[qubits[0]].append(cbit)
+
+            # Apply the correct PTM based on the classical output we see
+            rep_to_apply = instrument_dict[cbit]
+            assert rep_to_apply.reptype in self.input_reps
+            assert isinstance(rep_to_apply.reptype, GateRep)
+            self.apply_reps_inplace([rep_to_apply])
+
+            # Propogate and renormalize (maybe not needed, but safer to do it now)
+            self.state.combine_and_apply_single_ptm(qubits[0])
+            self.state.renormalize()
+
+        return outcomes
+
+    def _apply_projective_z_measure(
+        self, qbit: int | str, reset: int | None
+    ) -> int:
+        results = self.state.peak_multiple_measurements([qbit])
+        # Results has following structure
+        # results: [({'A1': 0}, p0), ({'A1': 1}, p1)}
+        # results[a][0][qubit] = measurement value
+        # results[a][1]        = corresponding probability
+        # where a is in {0,1}
+        # (unless the bit is classical, in which case,
+        # there is only one entry in results)
+
+        # TODO: At this point, we also have probabilities
+        # We could do also save that data, maybe helpful later
+
+        m = self._rng.random()
+        if m < results[0][1]:
+            cbit = results[0][0][qbit]
+        else:
+            cbit = results[1][0][qbit]
+        if qbit in self.state.idx_in_full_dm:
+            self.state.project_measurement(qbit, cbit)
+        if reset is not None:
+            assert reset in [0, 1]
+            self.state.set_bit(qbit, reset)
+        self.state.renormalize()
+        return cbit
+
+    def _apply_instrument_element_ptm_for_prob(
+        self, inst_elem_ptm: np.ndarray, inst_bit: int | str
+    ) -> float:
+        if not isinstance(self._state.full_dm, _DensityNP):
+            raise ValueError("Expected a quantumsim.dm_np.DensityNP object")
+
+        # Ensure state is propogated and up to date
+        self.state.combine_and_apply_single_ptm(inst_bit)
+
+        # Compute the reduced density matrix
+        trace_tensor = np.array([1, 0, 0, 1])
+        prob_compute_tensor = inst_elem_ptm[0] + inst_elem_ptm[3]
+        bit0 = self.state.idx_in_full_dm[inst_bit]
+        trace_argument = []
+        for i in range(self.state.full_dm.no_qubits):
+            if i == bit0:
+                trace_argument.append(prob_compute_tensor)
+            else:
+                trace_argument.append(trace_tensor)
+            trace_argument.append([i])
+        indices = list(reversed(range(self.state.full_dm.no_qubits)))
+        prob = np.einsum(self.state.full_dm.dm, indices, *trace_argument, optimize=True)  # type: ignore
+
+        # we are doing mat-vec product on only first and last row for our target bit to get probability
+        # prob = inst_elem_ptm[0] @ reduced_dm + inst_elem_ptm[3] @ reduced_dm
+        # TODO: There is an implicit normalization cancelling out above
+        # Be careful of this when moving to more qubits
+        # prob *= inst_elem_ptm.shape[0] ** 0.25
+
+        return prob
 
     @classmethod
     def _from_serialization(
         cls: type[T], state: Mapping, serial_id_to_obj_cache=None
     ) -> T:
-        qubit_labels = ["qubit_labels"]
+        qubit_labels = state["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
 
         # Restore internal QuantumSim state
@@ -197,6 +334,7 @@ class QSimQuantumState(BaseQuantumState):
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+        # TODO: Missing RNG!
         state.update(
             {
                 "qubit_labels": self.state.names,

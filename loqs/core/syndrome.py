@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, TypeVar
 
-from loqs.internal import Castable, Displayable
+from loqs.internal import Castable, SeqCastable, Displayable
 
 T = TypeVar("T", bound="SyndromeLabel")
 U = TypeVar("U", bound="PauliFrame")
@@ -43,27 +43,6 @@ class SyndromeLabel(Castable, Displayable):
         return hash((self.qubit_label, self.frame_idx, self.outcome_idx))
 
     @classmethod
-    def cast(cls: type[SyndromeLabel], obj: object) -> SyndromeLabel:
-        """Cast this object to a :class:`SyndromeLabel`.
-
-        This is specialized because lists/tuples with up to 3 entries
-        should be unpacked into the three arguments.
-        """
-        if isinstance(obj, cls):
-            # We are already the correct class, perform no copy
-            return obj
-        elif isinstance(obj, dict):
-            # Assume this is a kwarg dict, pass in all kwargs
-            return cls(**obj)
-        elif isinstance(obj, (tuple, list)):
-            assert len(obj) < 4
-            return cls(*obj)
-        elif isinstance(obj, str):
-            return cls(obj)
-
-        raise ValueError(f"Cannot cast {obj} to a SyndromeLabel")
-
-    @classmethod
     def _from_serialization(
         cls: type[T], state: Mapping, serial_id_to_obj_cache=None
     ) -> T:
@@ -85,11 +64,11 @@ class SyndromeLabel(Castable, Displayable):
 
 
 # TODO: Long term location?
-PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str]"
+PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"
 """Types that can be cast into a :class:`.PauliFrame`."""
 
 
-class PauliFrame(Castable, Displayable):
+class PauliFrame(SeqCastable, Displayable):
     """Tracks a Pauli frame on a set of qubits.
 
     Commonly this is used to track data errors without applying
@@ -97,7 +76,7 @@ class PauliFrame(Castable, Displayable):
     :class:`.MeasurementOutcomes` to provide inferred outcomes.
     """
 
-    qubit_labels: list[str]
+    qubit_labels: list[str | int]
     """Qubit labels being tracked by this :class:`.PauliFrame`."""
 
     pauli_frame: list[str]
@@ -155,7 +134,7 @@ class PauliFrame(Castable, Displayable):
         """Return a copy of this :class:`.PauliFrame`."""
         return PauliFrame(self.qubit_labels, self.pauli_frame)
 
-    def get_bit(self, type: str, qubit: str) -> int:
+    def get_bit(self, type: str, qubit: str | int) -> int:
         """Get the bit value of this frame on a given qubit in a given basis.
 
         Parameters
