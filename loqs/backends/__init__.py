@@ -7,6 +7,7 @@ from .circuit import (
     BasePhysicalCircuit,
     PyGSTiPhysicalCircuit,
     ListPhysicalCircuit,
+    STIMPhysicalCircuit,
 )
 
 # Needs to be after circuit import but before state so that we have OpRep

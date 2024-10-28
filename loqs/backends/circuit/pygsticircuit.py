@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
@@ -14,8 +14,6 @@ try:
     from pygsti.baseobjs import Label as _Label
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
-
-T = TypeVar("T", bound="PyGSTiPhysicalCircuit")
 
 ## Type aliases for static type checking
 QubitTypes: TypeAlias = str | int

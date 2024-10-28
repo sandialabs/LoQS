@@ -277,7 +277,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         Parameters
         ----------
         circuit:
-            Circuit to append
+            Circuit to insert
 
         idx:
             Starting index to begin insert. If -1, append to the end.
