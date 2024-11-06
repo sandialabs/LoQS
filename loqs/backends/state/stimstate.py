@@ -123,8 +123,7 @@ class STIMQuantumState(BaseQuantumState):
             len(self.qubit_labels) == self.state.num_qubits
         ), "Must specify a qubit label for every qubit"
 
-        self.seed = seed
-        self._rng = np.random.default_rng(seed)
+        self.reset_seed(seed)
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -166,6 +165,13 @@ class STIMQuantumState(BaseQuantumState):
         new_state = STIMQuantumState(self.state, self.qubit_labels, self.seed)
         new_state._rng = deepcopy(self._rng)
         return new_state
+
+    def reset_seed(self, new_seed: int | None) -> None:
+        self._state = self._state.copy(
+            copy_rng=new_seed is None, seed=new_seed
+        )
+        self.seed = new_seed
+        self._rng = np.random.default_rng(new_seed)
 
     def _apply_gate_rep(self, reptuple: RepTuple):
         rep = reptuple.rep

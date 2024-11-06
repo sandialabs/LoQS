@@ -585,6 +585,12 @@ class QuantumProgram(Displayable):
 
         history = copy.deepcopy(program.initial_history)
 
+        # If we have state in the last frame, reset seed
+        try:
+            history[-1]["state"].reset_seed(seed)
+        except KeyError:
+            pass
+
         stack = program.instruction_stack
 
         while num_frames < max_frame_limit and len(stack):
@@ -619,7 +625,9 @@ class QuantumProgram(Displayable):
             ):
                 apply_kwargs[key] = program._collect_kwarg(
                     position=i,
-                    key=key,
+                    key=inst.param_alias(
+                        key
+                    ),  # Unalias for expected frame key
                     priorities=priorities,
                     label_args=label_args,
                     label_kwargs=label_kwargs,

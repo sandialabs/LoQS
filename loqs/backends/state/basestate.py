@@ -91,3 +91,8 @@ class BaseQuantumState(Castable, Displayable):
             Copied state
         """
         pass
+
+    @abstractmethod
+    def reset_seed(self, new_seed: int | None) -> None:
+        """Reset the RNG seed."""
+        pass

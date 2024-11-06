@@ -99,8 +99,7 @@ class QSimQuantumState(BaseQuantumState):
                 name_map[k]: v for k, v in self.state.classical.items()
             }
 
-        self.seed = seed
-        self._rng = np.random.default_rng(seed)
+        self.reset_seed(seed)
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -140,6 +139,10 @@ class QSimQuantumState(BaseQuantumState):
         new_state = QSimQuantumState(deepcopy(self.state), seed=self.seed)
         new_state._rng = deepcopy(self._rng)
         return new_state
+
+    def reset_seed(self, new_seed: int | None) -> None:
+        self.seed = new_seed
+        self._rng = np.random.default_rng(new_seed)
 
     def _apply_gate_rep(self, reptuple: RepTuple):
         rep = reptuple.rep

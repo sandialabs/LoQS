@@ -23,7 +23,7 @@ SyndromeLabelCastableTypes: TypeAlias = (
 class SyndromeLabel(Castable, Displayable):
     """Label that indicates which past outcome was a syndrome bit."""
 
-    qubit_label: str
+    qubit_label: str | int
     """The qubit label."""
 
     frame_idx: int = -1

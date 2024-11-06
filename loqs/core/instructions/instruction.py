@@ -261,9 +261,6 @@ class Instruction(Displayable):
         if param_aliases is None:
             param_aliases = {}
         self._param_aliases = dict(param_aliases)
-        self._rev_param_aliases = {
-            v: k for k, v in self._param_aliases.items()
-        }
 
         self.name = name
         """Name for logging"""
@@ -321,13 +318,11 @@ class Instruction(Displayable):
 
     @property
     def param_priorities(self) -> dict[str, Sequence[str]]:
-        """The (aliased if needed) parameter priorities."""
-        # Map priorities using aliases
-        aliased_priorities = {
-            self._param_aliases.get(k, k): v
-            for k, v in self._param_priorities.items()
-        }
-        return aliased_priorities
+        """The unaliased parameter priorities."""
+        return self._param_priorities
+
+    def param_alias(self, key: str) -> str:
+        return self._param_aliases.get(key, key)
 
     def apply(self, **kwargs) -> Frame:
         """Apply this :class:`.Instruction` to get a new :class:`.Frame`.
@@ -335,8 +330,7 @@ class Instruction(Displayable):
         Parameters
         ----------
         **kwargs:
-            Unaliased parameters to pass on to :attr:`.apply_fn`.
-            Aliasing will be performed before the parameters are passed on.
+            Parameters to pass on to :attr:`.apply_fn`.
 
         Returns
         -------
@@ -345,12 +339,7 @@ class Instruction(Displayable):
             :class:`Instruction` and the input parameters appended for
             informational/debugging purposes
         """
-        # Adjust aliases
-        aliased_kwargs = {
-            self._rev_param_aliases.get(k, k): v for k, v in kwargs.items()
-        }
-
-        applied_frame = self.apply_fn(**aliased_kwargs)
+        applied_frame = self.apply_fn(**kwargs)
 
         # TODO: Collected_params is a nice debugging feature here
         # It fails if the History is passed in though, so commenting out for now
@@ -429,7 +418,6 @@ class Instruction(Displayable):
         )
         obj._param_priorities = state["_param_priorities"]
         obj._param_aliases = state["_param_aliases"]
-        obj._rev_param_aliases = {v: k for k, v in obj._param_aliases.items()}
 
         return obj
 

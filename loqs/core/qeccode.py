@@ -78,7 +78,7 @@ class QECCode(Displayable):
 
     def create_patch(
         self,
-        qubits: Sequence[str],
+        qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes | None = None,
     ) -> QECCodePatch:
         """Create a :class:`.QECCodePatch` based on this :class:`QECCode`.
@@ -156,7 +156,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
     def __init__(
         self,
         code: QECCode,
-        qubits: Sequence[str],
+        qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes,
     ):
         """

@@ -90,7 +90,7 @@ def build_composite_instruction(
         return Frame({"stack": stack})
 
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         instructions: Sequence[Instruction],
         **kwargs,
     ) -> KwargDict:
@@ -280,7 +280,7 @@ def build_lookup_decoder_instruction(
 
     # We need to be able to map the qubit_labels
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         syndrome_labels: list[SyndromeLabel],
         **kwargs,
     ) -> KwargDict:
@@ -517,7 +517,7 @@ def build_patch_remover_instruction(
 
 
 def build_patch_permute_instruction(
-    mapping: Mapping[str, str],
+    mapping: Mapping[str | int, str | int],
     name: str = "(Unnamed patch permutation)",
 ) -> Instruction:
     """Build an instruction that permute patch qubits.
@@ -554,7 +554,7 @@ def build_patch_permute_instruction(
     # Standard apply_fn construction
     def apply_fn(
         patch_label: str,
-        mapping: Mapping[str, str],
+        mapping: Mapping[str | int, str | int],
         patches: PatchDict,
     ) -> Frame:
         assert (
@@ -580,8 +580,8 @@ def build_patch_permute_instruction(
 
     # In this case, we do need to be able to update the mapping if qubits change
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
-        mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
+        mapping: Mapping[str | int, str | int],
     ) -> KwargDict:
         new_mapping = {
             qubit_mapping[k]: qubit_mapping[v] for k, v in mapping.items()
@@ -601,7 +601,9 @@ def build_physical_circuit_instruction(
     circuit: BasePhysicalCircuit,
     inplace: bool = True,
     model: BaseNoiseModel | None = None,
-    pauli_frame_update: str | Sequence[str] | Mapping[str, str] | None = None,
+    pauli_frame_update: (
+        str | Sequence[str] | Mapping[str | int, str | int] | None
+    ) = None,
     name: str = "(Unnamed physical circuit)",
 ) -> Instruction:
     """Build an instruction that applies a physical circuit to a state.
@@ -642,7 +644,7 @@ def build_physical_circuit_instruction(
     model:
         A model to use when converting the circuit into reps to apply to the state
 
-    pauli_frame_update: str | Sequence[str] | Mapping[str, str] | None = None,
+    pauli_frame_update: str | Sequence[str] | Mapping[str|int, str|int] | None = None,
         Either a string that is passed to `PauliFrame.update_from_transversal_clifford()`,
         a list of strings that is passed to `PauliFrame.update_from_clifford_conjugation()`,
         a mapping that is passed to `PauliFrame.map_frame()`, or None (the default) if no
@@ -741,7 +743,7 @@ def build_physical_circuit_instruction(
 
     # We need to be able to map the circuit if qubits change
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         circuit: BasePhysicalCircuit,
         **kwargs,
     ) -> KwargDict:
@@ -933,7 +935,9 @@ def build_repeat_until_success_instruction(
 
     # We need to map the instruction
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str], instruction: Instruction, **kwargs
+        qubit_mapping: Mapping[str | int, str | int],
+        instruction: Instruction,
+        **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
         new_kwargs["instruction"] = instruction.map_qubits(qubit_mapping)
@@ -949,7 +953,7 @@ def build_repeat_until_success_instruction(
     # Since we have variadic kwargs, we'll set the param priority ourselves
     # Default order is OK for new params. We'll pick up most of what we need
     # from instruction, but repeat count will be from label arg after first iteration
-    param_priorities = instruction.param_priorities
+    param_priorities = instruction.param_priorities.copy()
     for k in data:
         param_priorities[k] = DEFAULT_PRIORITIES
     # We also need the patch_label for new labels, and the stack to update it
