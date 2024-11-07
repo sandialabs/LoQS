@@ -239,14 +239,23 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         pass
 
     @abstractmethod
-    def get_possible_discrete_error_locations(self) -> list[tuple[int, int]]:
+    def get_possible_discrete_error_locations(
+        self, post_twoq_gates: bool = False
+    ) -> list[tuple[int, int | tuple[int]]]:
         """Return all possible circuit locations where errors can be injected.
+
+        Parameters
+        ----------
+        post_twoq_gates:
+            If ``False`` (default), this function returns error locations as single qubit
+            locations before every gate. If ``True``, this function instead returns error
+            locations after only two qubit gates.
 
         Returns
         -------
         list
-            List of 2-tuples of (layer index, qubit index) describing all
-            possible circuit locations where a single-qubit error can be injected.
+            List of 2-tuples of (layer index, qubit index/tuple of indices) describing all
+            possible circuit locations where errors can be injected.
         """
         pass
 

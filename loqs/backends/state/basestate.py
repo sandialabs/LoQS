@@ -33,6 +33,12 @@ class BaseQuantumState(Castable, Displayable):
         s += textwrap.indent(str(self.state), "  ")
         return s
 
+    # Provide a hook to deepcopy that avoids default pickling route
+    # Often states will have a C/C++/Cython binding that doesn't work via pickling,
+    # so we must leverage the object's non-default copy behavior
+    def __deepcopy__(self: T, memo) -> T:
+        return self.copy()
+
     @property
     @abstractmethod
     def state(self) -> object:

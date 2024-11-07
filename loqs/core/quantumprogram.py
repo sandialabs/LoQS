@@ -588,7 +588,7 @@ class QuantumProgram(Displayable):
         # If we have state in the last frame, reset seed
         try:
             history[-1]["state"].reset_seed(seed)
-        except KeyError:
+        except (KeyError, IndexError):
             pass
 
         stack = program.instruction_stack

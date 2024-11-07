@@ -34,7 +34,8 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """List of qubit labels"""
 
     _stim_annotations: ClassVar[list[str]] = [
-        "REPEAT" "DETECTOR",
+        "REPEAT",
+        "DETECTOR",
         "MPAD",
         "OBSERVABLE_INCLUDE",
         "QUBIT_COORDS",
@@ -46,6 +47,42 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     These instructions are handled differently
     (or often ignored) by many circuit manipulation
     functions.
+    """
+
+    _stim_twoq_gates: ClassVar[list[str]] = [
+        "CNOT",
+        "CX",
+        "CXSWAP",
+        "CY",
+        "CZ",
+        "CZSWAP",
+        "ISWAP",
+        "ISWAP_DAG",
+        "SQRT_XX",
+        "SQRT_XX_DAG",
+        "SQRT_YY",
+        "SQRT_YY_DAG",
+        "SQRT_ZZ",
+        "SQRT_ZZ_DAG",
+        "SWAP",
+        "SWAPCX",
+        "SWAPCZ",
+        "XCX",
+        "XCY",
+        "XCZ",
+        "YCX",
+        "YCY",
+        "YCZ",
+        "ZCX",
+        "ZCY",
+        "ZCZ",
+    ]
+    """STIM 2Q gates.
+
+    Number of qubits is an unreliable way to keep track
+    of 2Q gates, since multiple 2Q gates can be defined
+    in one line as pairs of indices. So we keep the 2Q
+    gate names to check for them.
     """
 
     def __init__(
@@ -125,7 +162,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                 qubits_to_keep.append(q)
         self._qubit_labels = qubits_to_keep
 
-    def get_possible_discrete_error_locations(self) -> list[tuple[int, int]]:
+    def get_possible_discrete_error_locations(
+        self, post_twoq_gates: bool = False
+    ) -> list[tuple[int, int | tuple[int]]]:
         circuit_locations = []
         unrolled_str = self._unroll_repeats()
         for lidx, lstr in enumerate(unrolled_str.split("TICK\n")):
@@ -135,10 +174,26 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     # Empty line or not a gate, skip to next line
                     continue
 
+                # Normally we would look up the qubit index,
+                # but for stim, the circuit uses indices already
+                if post_twoq_gates:
+                    if entries[0] in self._stim_twoq_gates:
+                        # Handle the case where multiple 2Q gates are defined on one line
+                        for i in range(1, len(entries[1:]), 2):
+                            circuit_locations.append(
+                                (
+                                    lidx + 1,
+                                    (int(entries[i]), int(entries[i + 1])),
+                                )
+                            )
+                else:
+                    circuit_locations.extend(
+                        [(lidx, int(q)) for q in entries[1:]]
+                    )
+
                 # Otherwise, each qubit index is a location
                 for qidx in entries[1]:
-                    # Normally we would look up the qubit index,
-                    # but for stim, the circuit uses indices already
+
                     circuit_locations.append((lidx, qidx))
         return circuit_locations
 
