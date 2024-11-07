@@ -70,6 +70,58 @@ def build_discrete_error_injection_programs(
         base_program.instruction_stack[stack_idx_to_modify]
     )
 
+    def insert_2q_error(layer, eclabel1, eclabel2, qubit1, qubit2):
+        new_label = deepcopy(instruction_label)
+
+        # Inject a weight-2 error
+        new_label.inst_kwargs["error_injections"] = [
+            (layer, eclabel1, qubit1),
+            (layer, eclabel2, qubit2),
+        ]
+
+        new_stack = base_program.instruction_stack.delete_instruction(
+            stack_idx_to_modify
+        )
+        new_stack = new_stack.insert_instruction(
+            stack_idx_to_modify, new_label
+        )
+
+        # Name with weight-2 error
+        new_name = f"{base_program.name} + injected error {eclabel1}/{eclabel2} on qubit indices {(qubit1, qubit2)} after component {layer} of stack location {stack_idx_to_modify}"
+
+        new_program = QuantumProgram.from_quantum_program(
+            base_program,
+            instruction_stack=new_stack,
+            name=new_name,
+        )
+
+        errored_programs.append(new_program)
+
+    def insert_1q_error(layer, eclabel, qubit, end=False):
+        new_label = deepcopy(instruction_label)
+
+        # Inject a weight-1 error
+        new_label.inst_kwargs["error_injections"] = [(layer, eclabel, qubit)]
+
+        new_stack = base_program.instruction_stack.delete_instruction(
+            stack_idx_to_modify
+        )
+        new_stack = new_stack.insert_instruction(
+            stack_idx_to_modify, new_label
+        )
+
+        # Name with weight-1 error
+        if end:
+            new_name = f"{base_program.name} + injected error {eclabel} on qubit index {qubit} at end of stack location {stack_idx_to_modify}"
+        else:
+            new_name = f"{base_program.name} + injected error {eclabel} on qubit index {qubit} before component {layer} of stack location {stack_idx_to_modify}"
+
+        new_program = QuantumProgram.from_quantum_program(
+            base_program, instruction_stack=new_stack, name=new_name
+        )
+
+        errored_programs.append(new_program)
+
     # Iterate over all errors during the circuit, i.e. before every gate
     errored_programs = []
     for error_loc in error_locations:
@@ -81,93 +133,25 @@ def build_discrete_error_injection_programs(
 
                 # We have two qubit gate errors, we need an extra loop to create weight-2 errors
                 for eclabel2 in error_circuit_labels:
-                    instruction_label = InstructionLabel.cast(
-                        base_program.instruction_stack[stack_idx_to_modify]
+                    insert_2q_error(
+                        error_loc[0],
+                        eclabel,
+                        eclabel2,
+                        error_loc[1][0],
+                        error_loc[1][1],
                     )
-                    new_label = deepcopy(instruction_label)
-
-                    # Inject a weight-2 error
-                    new_label.inst_kwargs["error_injections"] = [
-                        (error_loc[0], eclabel, error_loc[1][0]),
-                        (error_loc[0], eclabel2, error_loc[1][0]),
-                    ]
-
-                    new_stack = (
-                        base_program.instruction_stack.delete_instruction(
-                            stack_idx_to_modify
-                        )
-                    )
-                    new_stack = new_stack.insert_instruction(
-                        stack_idx_to_modify, new_label
-                    )
-
-                    # Name with weight-2 error
-                    new_name = f"{base_program.name} + injected error {eclabel}/{eclabel2} on qubit indices {error_loc[1]} after component {error_loc[0]}"
-
-                    new_program = QuantumProgram.from_quantum_program(
-                        base_program,
-                        instruction_stack=new_stack,
-                        name=new_name,
-                    )
-
-                    errored_programs.append(new_program)
             else:
                 assert isinstance(error_loc[1], int)
 
                 # We only have single qubit errors, create the new program at this loop level
-                instruction_label = InstructionLabel.cast(
-                    base_program.instruction_stack[stack_idx_to_modify]
-                )
-                new_label = deepcopy(instruction_label)
+                insert_1q_error(error_loc[0], eclabel, error_loc[1])
 
-                # Inject a weight-1 error
-                new_label.inst_kwargs["error_injections"] = [
-                    (error_loc[0], eclabel, error_loc[1])
-                ]
-
-                new_stack = base_program.instruction_stack.delete_instruction(
-                    stack_idx_to_modify
-                )
-                new_stack = new_stack.insert_instruction(
-                    stack_idx_to_modify, new_label
-                )
-
-                # Name with weight-1 error
-                new_name = f"{base_program.name} + injected error {eclabel} on qubit index {error_loc[1]} before component {error_loc[0]}"
-
-                new_program = QuantumProgram.from_quantum_program(
-                    base_program, instruction_stack=new_stack, name=new_name
-                )
-
-                errored_programs.append(new_program)
-
-    # Also add every error at the end of the circuit
-    for i in range(len(circuit.qubit_labels)):
+    # Also add every error at the end of the circuit in the case of single qubit errors
+    # Two qubit errors don't need this because they are already post errors
+    if not post_twoq_gates:
         for eclabel in error_circuit_labels:
-            instruction_label = InstructionLabel.cast(
-                base_program.instruction_stack[stack_idx_to_modify]
-            )
-            new_label = deepcopy(instruction_label)
-
-            # Assign error injections to the instrument label
-            new_label.inst_kwargs["error_injections"] = [
-                (circuit.depth, eclabel, i)
-            ]
-
-            new_stack = base_program.instruction_stack.delete_instruction(
-                stack_idx_to_modify
-            )
-            new_stack = new_stack.insert_instruction(
-                stack_idx_to_modify, new_label
-            )
-
-            new_name = f"{base_program.name} + injected error {eclabel} at circuit end"
-
-            new_program = QuantumProgram.from_quantum_program(
-                base_program, instruction_stack=new_stack, name=new_name
-            )
-
-            errored_programs.append(new_program)
+            for i in range(len(circuit.qubit_labels)):
+                insert_1q_error(circuit.depth, eclabel, i, end=True)
 
     return errored_programs
 
