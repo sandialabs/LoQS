@@ -47,7 +47,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             "state",
             "patches",
         ),
-        no_serialization_keys: Sequence[str] | None = None,
+        no_serialize_keys: Sequence[str] | None = None,
     ) -> None:
         """
         Parameters
@@ -75,7 +75,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             Common other additions including syndrome bits
             for decoders that require the previous syndrome.
 
-        no_serialization_keys:
+        no_serialize_keys:
             A list of keys that should not be serialized by
             each :class:`.Frame`. Specifically, it calls
             :meth:`.Frame.no_serialize` on frames as they
@@ -96,9 +96,9 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             propagating_keys = []
         self.propagating_keys = set(propagating_keys)
 
-        if no_serialization_keys is None:
-            no_serialization_keys = []
-        self.no_serialization_keys = set(no_serialization_keys)
+        if no_serialize_keys is None:
+            no_serialize_keys = []
+        self.no_serialize_keys = set(no_serialize_keys)
 
         if isinstance(history, History):
             self._history = history._history.copy()
@@ -109,8 +109,8 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             self.propagating_keys = self.propagating_keys.union(
                 history.propagating_keys
             )
-            self.no_serialization_keys = self.no_serialization_keys.union(
-                history.no_serialization_keys
+            self.no_serialize_keys = self.no_serialize_keys.union(
+                history.no_serialize_keys
             )
         elif isinstance(history, Sequence):
             for frame in history:
@@ -157,7 +157,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
                 tuple(self.expiring_keys),
                 self.hash(self._expiring_key_locs),
                 tuple(self.propagating_keys),
-                tuple(self.no_serialization_keys),
+                tuple(self.no_serialize_keys),
             )
         )
 
@@ -195,7 +195,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
                 self._expiring_key_locs[exp_key] = len(self._history)
 
         # Set no serialization keys
-        for no_ser_key in self.no_serialization_keys:
+        for no_ser_key in self.no_serialize_keys:
             item.no_serialize(no_ser_key)
 
         # Finally append
@@ -253,8 +253,9 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         assert all([isinstance(f, Frame) for f in history])
         expiring_keys = state["expiring_keys"]
         propagating_keys = state["propagating_keys"]
+        no_serialize_keys = state["no_serialize_keys"]
 
-        obj = cls(history, expiring_keys, propagating_keys)
+        obj = cls(history, expiring_keys, propagating_keys, no_serialize_keys)
         obj._expiring_key_locs = state["_expiring_key_locs"]
 
         return obj
@@ -269,6 +270,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
                 "expiring_keys": list(self.expiring_keys),
                 "_expiring_key_locs": self._expiring_key_locs,
                 "propagating_keys": list(self.propagating_keys),
+                "no_serialized_keys": list(self.no_serialize_keys),
             }
         )
         return state
