@@ -47,6 +47,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             "state",
             "patches",
         ),
+        no_serialization_keys: Sequence[str] | None = None,
     ) -> None:
         """
         Parameters
@@ -73,6 +74,16 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             last frame.
             Common other additions including syndrome bits
             for decoders that require the previous syndrome.
+
+        no_serialization_keys:
+            A list of keys that should not be serialized by
+            each :class:`.Frame`. Specifically, it calls
+            :meth:`.Frame.no_serialize` on frames as they
+            are added.
+            It defaults to ``None``, but a common choice would
+            also be ``["state"]`` in cases where the quantum
+            state is large or there is no need to keep it,
+            i.e. no plans to rerun a shot starting from that point.
         """
         self._history = []
 
@@ -85,6 +96,10 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             propagating_keys = []
         self.propagating_keys = set(propagating_keys)
 
+        if no_serialization_keys is None:
+            no_serialization_keys = []
+        self.no_serialization_keys = set(no_serialization_keys)
+
         if isinstance(history, History):
             self._history = history._history.copy()
             # Take union of expiring/propagating keys
@@ -93,6 +108,9 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             )
             self.propagating_keys = self.propagating_keys.union(
                 history.propagating_keys
+            )
+            self.no_serialization_keys = self.no_serialization_keys.union(
+                history.no_serialization_keys
             )
         elif isinstance(history, Sequence):
             for frame in history:
@@ -139,6 +157,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
                 tuple(self.expiring_keys),
                 self.hash(self._expiring_key_locs),
                 tuple(self.propagating_keys),
+                tuple(self.no_serialization_keys),
             )
         )
 
@@ -174,6 +193,10 @@ class History(Sequence[Frame], SeqCastable, Displayable):
 
                 # Update location of expiring key
                 self._expiring_key_locs[exp_key] = len(self._history)
+
+        # Set no serialization keys
+        for no_ser_key in self.no_serialization_keys:
+            item.no_serialize(no_ser_key)
 
         # Finally append
         self._history.append(item)

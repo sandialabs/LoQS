@@ -60,6 +60,7 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
             raise ValueError(f"Cannot cast {data} to a HistoryFrame")
 
         self._expired_keys: list[str] = []
+        self._no_serialize_keys: list[str] = []
 
     # We define this one to avoid __getitem__ warning until value is actually returned
     def __contains__(self, key: object) -> bool:
@@ -107,7 +108,12 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
     def __hash__(self) -> int:
         return hash(
-            (self.hash(self._data), self.log, tuple(self._expired_keys))
+            (
+                self.hash(self._data),
+                self.log,
+                tuple(self._expired_keys),
+                tuple(self._no_serialize_keys),
+            )
         )
 
     def expire(self, key: str) -> None:
@@ -124,6 +130,19 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         """
         if key in self and key not in self._expired_keys:
             self._expired_keys.append(key)
+
+    def no_serialize(self, key: str) -> None:
+        """Mark a key to not be serialized.
+
+        This will cause the key to be saved as "NOT SERIALIZED"
+        during serialization.
+
+        Parameters
+        ----------
+        key:
+            The key to not serialize
+        """
+        self._no_serialize_keys.append(key)
 
     def update(
         self,
@@ -164,16 +183,26 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         log = state["log"]
         obj = cls(data, log)
         obj._expired_keys = state["_expired_keys"]
+        obj._no_serialize_keys = state["_no_serialize_keys"]
         return obj
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         state = super()._to_serialization()
+
+        no_serialize_data = {
+            k: v if k not in self._no_serialize_keys else "NOT SERIALIZED"
+            for k, v in self._data.items()
+        }
+
         # Order for better display
         state.update(
             {
                 "log": self.log,
-                "_data": self.serialize(self._data, hash_to_serial_id_cache),
+                "_data": self.serialize(
+                    no_serialize_data, hash_to_serial_id_cache
+                ),
                 "_expired_keys": self._expired_keys,
+                "_no_serialize_keys": self._no_serialize_keys,
             }
         )
         return state

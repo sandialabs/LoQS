@@ -71,13 +71,14 @@ class TestFrame:
         
         # Test recursive functionality
         f2 = Frame({"c": 3, "other": f1}, "test")
+        f2.no_serialize("c")
 
         with NamedTemporaryFile("w+", suffix='.json') as tempf:
             f2.write(tempf.name)
 
             f3 = Frame.read(tempf.name)
         
-        assert f3["c"] == 3
+        assert f3["c"] == "NOT SERIALIZED"
         # Real data should come back, even for expired keys
         assert f3["other"]._data == {'a': 1, 'b': 2}
         assert f3["other"]._expired_keys == ["b"]
