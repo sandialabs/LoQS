@@ -163,6 +163,112 @@ class TestIntegratedNoise:
         outs = [mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
         # But the RNG is handled differently for X basis, so we don't get a match (although it is still ~50)
         assert Counter(outs) == {0: 944, 1: 56}
+    
+    def test_1q_amp_damp(self):
+        X_Gi_Iz_instruction = builders.build_physical_circuit_instruction(
+            ListPhysicalCircuit([[("Gx", ("Q0",))], [("Gi", ("Q0",))], [("Iz", ("Q0",))]]),
+            name="Idle and measure circuit (Z basis)"
+        )
+        H_Gi_H_Iz_instruction = builders.build_physical_circuit_instruction(
+            ListPhysicalCircuit([[("Gh", ("Q0",))], [("Gi", ("Q0",))], [("Gh", ("Q0",))], [("Iz", ("Q0",))]]),
+            name="Idle and measure circuit (X basis)"
+        )
+
+        code_1Q = QECCode({"X + Gi + Iz": X_Gi_Iz_instruction, "H + Gi + H + Iz": H_Gi_H_Iz_instruction}, ["Q0"], ["Q0"])
+
+        damping_rate = 0.1
+        qsim_native_ptm = _ptm.amp_ph_damping_ptm(damping_rate, 0)
+
+        ## QUANTUMSIM 
+        depol_gate_dict = {
+            ("Gi", ("Q0",)): qsim_native_ptm, # Amplitude damping idle
+            ("Gh", ("Q0",)): _ptm.hadamard_ptm(),
+            ("Gx", ("Q0",)): _ptm.rotate_x_ptm(np.pi)
+        }
+        inst_dict = {("Iz", ("Q0",)): (0, True)} # Measure and reset
+        depol_noise_model = DictNoiseModel(
+            (depol_gate_dict, inst_dict),
+            gaterep=GateRep.QSIM_SUPEROPERATOR,
+            instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        )
+
+        stack_Zbasis = [
+            ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
+            ("Init Patch 1Q", None, ("L0", ["Q0"])),
+            ("X + Gi + Iz", "L0")
+        ]
+
+        ## QUANTUMSIM
+        program_qsim = QuantumProgram(
+            stack_Zbasis,
+            default_noise_model=depol_noise_model,
+            default_base_seed=20241104,
+            state_type=QSimState,
+            patch_types={"1Q": code_1Q},
+            name="1Q depolarizing test"
+        )
+
+        program_qsim.run(num_shots=1000)
+
+        # Because we set the seed, we should exactly match output from test creation
+        # Also ~10% = 100 shots should fall from 1 back to 0
+        outs = [mo["Q0"][0] for mo in program_qsim.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs) == {1: 904, 0: 96}
+
+        # We can test in X basis also
+        stack_Xbasis = [
+            ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
+            ("Init Patch 1Q", None, ("L0", ["Q0"])),
+            ("H + Gi + H + Iz", "L0")
+        ]
+        program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Xbasis)
+
+        # Here's why I think this should be ~2.5% = 25 shots off
+        # |+> is a 50/50 mix of 0 and 1, so only half drop back to 0
+        # Then second H takes that population to +, which projects down to 0 and 1 50/50
+        # So two splits = 10%/2/2 = 2.5%
+        program_qsim_Xbasis.run(num_shots=1000, reset_shot_histories=True)
+        outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs) == {0: 979, 1: 21}
+
+        ## STIM
+        # For this, let's use our probabilstic representation
+        depol_gate_dict_stim = {
+            ("Gi", ("Q0",)): [("I 0", 1-damping_rate), ("R 0", damping_rate)], # probablistic reset
+            ("Gh", ("Q0",)): [("H 0", 1)],
+            ("Gx", ("Q0",)): [("X 0", 1)],
+        }
+        depol_noise_model_stim = DictNoiseModel(
+            (depol_gate_dict_stim, inst_dict),
+            gaterep=GateRep.PROBABILISTIC_STIM_OPERATIONS,
+            instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        )
+
+        program_stim = QuantumProgram.from_quantum_program(
+            program_qsim,
+            state_type=STIMState,
+            default_noise_model=depol_noise_model_stim
+        )
+
+        program_stim.run(num_shots=1000)
+        
+        # As above, we expect ~10% = 100 shots to fall from 1 to 0
+        outs = [mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs) == {1: 903, 0: 97}
+
+        program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
+
+        # This also makes sense from what the op does...
+        # 10% of the time, the + state gets degraded down to 0,
+        # which second H takes to + and then measured 50/50
+        # TODO: So this is correct for what the op does, but it has a different behavior to density mx...
+        # Not sure how to resolve that discrepancy. But so long as you are amp damp after Z measure,
+        # i.e. as an imperfect reset, it should be identical in both cases...
+        program_stim_Xbasis.run(num_shots=1000)
+        outs = [mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs) == {0: 953, 1: 47}
+
+
 
 
 

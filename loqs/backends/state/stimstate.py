@@ -220,10 +220,10 @@ class STIMQuantumState(BaseQuantumState):
             # Pick an operation to sample
             r = self._rng.random()
             idx_to_apply = 0
-            cumul_prob = 0
+            cumul_prob = probs[0]
             while cumul_prob < r:
-                cumul_prob += probs[idx_to_apply]
                 idx_to_apply += 1
+                cumul_prob += probs[idx_to_apply]
 
             rep_to_apply = RepTuple(
                 rep[idx_to_apply][0], qubits, GateRep.STIM_CIRCUIT_STR
