@@ -91,8 +91,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         self._gaterep = gaterep
         self._instreps = list(instreps)
 
-        # Run through gates and upgrade everything to RepTuples
-        for (name, qubits), gr in self.gate_dict.items():
+        def convert_to_gatereptuple(gr, qubits):
             if not isinstance(gr, RepTuple) and (
                 isinstance(
                     gr, (np.ndarray, str)
@@ -110,68 +109,24 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                     )
                 )
             ):
-                self.gate_dict[name, qubits] = RepTuple(gr, qubits, gaterep)
-            else:
-                assert isinstance(
-                    gr, RepTuple
-                ), f"{gr} failed to upgrade to a RepTuple"
-                assert (
-                    gr.reptype == gaterep
-                ), f"Provided {gr} but not provided gaterep"
+                return RepTuple(gr, qubits, gaterep)
+
+            assert isinstance(
+                gr, RepTuple
+            ), f"{gr} failed to upgrade to a RepTuple"
+            assert (
+                gr.reptype == gaterep
+            ), f"Provided {gr} but not provided gaterep"
+
+            return gr
+
+        # Run through gates and upgrade everything to RepTuples
+        for (name, qubits), gr in self.gate_dict.items():
+            self.gate_dict[name, qubits] = convert_to_gatereptuple(gr, qubits)
 
         # Run through instrument dict and upgrade everything to RepTuples
         for (name, qubits), ir in self.inst_dict.items():
             if (
-                not isinstance(ir, RepTuple)
-                and isinstance(ir, (tuple, list))
-                and len(ir) == 2
-                and all([isinstance(ir_el, np.ndarray) for ir_el in ir])
-            ):
-                assert InstrumentRep.ZBASIS_PRE_POST_OPERATIONS in instreps, (
-                    "Detected two PTMS for a pre/post operation instrument, but "
-                    + "ZBASIS_PRE_POST_OPERATIONS not passed as a valid instrument rep"
-                )
-                # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
-                self.inst_dict[name, qubits] = RepTuple(
-                    RepTuple(
-                        (
-                            instrep_cast_reset,
-                            instrep_cast_include_outcomes,
-                            ir[0],
-                            ir[1],
-                        ),
-                        qubits,
-                        gaterep,
-                    ),
-                    qubits,
-                    InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-                )
-            elif (
-                not isinstance(ir, RepTuple)
-                and isinstance(ir, Mapping)
-                and all(
-                    [isinstance(ir_el, np.ndarray) for ir_el in ir.values()]
-                )
-            ):
-                assert (
-                    InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT in instreps
-                ), (
-                    "Detected PTMS dict for a outcome-operation instrument, but "
-                    + "ZBASIS_OUTCOME_OPERATION_DICT not passed as a valid instrument rep"
-                )
-                # Assume this is a dict of PTMS that we need to turn it into a RepTuple
-                self.inst_dict[name, qubits] = RepTuple(
-                    (
-                        {
-                            k: RepTuple(v, qubits, gaterep)
-                            for k, v in ir.items()
-                        },
-                        instrep_cast_include_outcomes,
-                    ),
-                    qubits,
-                    InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
-                )
-            elif (
                 not isinstance(ir, RepTuple)
                 and isinstance(ir, (tuple, list))
                 and len(ir) == 2
@@ -180,6 +135,49 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
             ):
                 self.inst_dict[name, qubits] = RepTuple(
                     ir, qubits, InstrumentRep.ZBASIS_PROJECTION
+                )
+            elif (
+                not isinstance(ir, RepTuple)
+                and isinstance(ir, (tuple, list))
+                and len(ir) == 2
+            ):
+                assert InstrumentRep.ZBASIS_PRE_POST_OPERATIONS in instreps, (
+                    "Detected two ops for a pre/post operation instrument, but "
+                    + "ZBASIS_PRE_POST_OPERATIONS not passed as a valid instrument rep"
+                )
+                # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
+                self.inst_dict[name, qubits] = RepTuple(
+                    RepTuple(
+                        (
+                            instrep_cast_reset,
+                            instrep_cast_include_outcomes,
+                            convert_to_gatereptuple(ir[0], qubits),
+                            convert_to_gatereptuple(ir[1], qubits),
+                        ),
+                        qubits,
+                        gaterep,
+                    ),
+                    qubits,
+                    InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+                )
+            elif not isinstance(ir, RepTuple) and isinstance(ir, Mapping):
+                assert (
+                    InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT in instreps
+                ), (
+                    "Detected dict for a outcome-operation instrument, but "
+                    + "ZBASIS_OUTCOME_OPERATION_DICT not passed as a valid instrument rep"
+                )
+                # Assume this is a dict of PTMS that we need to turn it into a RepTuple
+                self.inst_dict[name, qubits] = RepTuple(
+                    (
+                        {
+                            k: convert_to_gatereptuple(v, qubits)
+                            for k, v in ir.items()
+                        },
+                        instrep_cast_include_outcomes,
+                    ),
+                    qubits,
+                    InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
                 )
             else:
                 assert isinstance(
