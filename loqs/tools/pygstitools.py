@@ -554,13 +554,11 @@ def _add_component_to_layer(
     layer_lines = layer_caches[layer_idx]["lines"]
     if isinstance(gate_names, str):
         # Single qubit gate
-        if gate_names == "X":
-            layer_lines[line_idxs[0]] += r"\targ{} & "
-        elif gate_names.startswith("meter"):
+        if gate_names.startswith("meter"):
             entries = gate_names.split()
 
             # Add measure symbol
-            if entries[1] != "reset":
+            if len(entries) > 1 and entries[1] != "reset":
                 layer_lines[line_idxs[0]] += r"\meter{" + entries[1] + "} & "
                 next_entry = 2
             else:
@@ -569,11 +567,14 @@ def _add_component_to_layer(
 
             # Add reset
             try:
-                if entries[next_entry] == "reset":
-                    reset = entries[next_entry + 1]
-                    layer_lines[line_idxs[0]] += r"\midstick{" + reset + "} & "
+                reset = entries[next_entry + 1]
             except IndexError:
-                pass
+                reset = ""
+            layer_lines[line_idxs[0]] += r"\midstick{" + reset + "} & "
+        elif gate_names.startswith("reset"):
+            entries = gate_names.split()
+            assert len(entries) == 2
+            layer_lines[line_idxs[0]] += r"\midstick{" + entries[1] + "} & "
         else:
             layer_lines[line_idxs[0]] += r"\gate{" + str(gate_names) + r"} & "
     elif isinstance(gate_names, list):

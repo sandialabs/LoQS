@@ -167,9 +167,7 @@ class STIMQuantumState(BaseQuantumState):
         return new_state
 
     def reset_seed(self, new_seed: int | None) -> None:
-        self._state = self._state.copy(
-            copy_rng=new_seed is None, seed=new_seed
-        )
+        self._state = self._state.copy(copy_rng=False, seed=new_seed)
         self.seed = new_seed
         self._rng = np.random.default_rng(new_seed)
 
