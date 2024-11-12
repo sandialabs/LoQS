@@ -72,21 +72,50 @@ class GateRep(RepEnum):
     indexing into paired :attr:`.RepTuple.qubits`.
     """
 
-    PROBABILISTIC_STIM_OPERATIONS = 5
-    """A weighted set of STIM circuit strings.
+    KRAUS_OPERATORS = 5
+    r"""A list of Kraus operators.
 
-    By default, STIM can only do Pauli noise channels. However,
-    some error channels can be "unraveled" into a probabilistic
-    choice from Pauli channels. For example, amplitude damping
-    can be performed as a probabilistic reset.
+    The Kraus operators for a CP channel :math:`\Lambda` are
+    defined as :math:`K_i` s.t. the
 
-    The expected rep type is a list of 2-tuples, where the first
-    entry is circuit string to apply if chosen and the second entry
-    is the probability of sampling that operation.
-    Probabilities should be positive and add to 1.
+    .. math::
+
+        \Lambda(\rho) = \sum_i K_i \rho K_i^\dagger
+
+    The Kraus operators do not have to be unitary, Hermitian,
+    or invertible, but the map is also TP if they obey
+
+    .. math::
+
+        \sum_i K_i^\dagger K_i = I
+
+
+    This representation is convenient for all sorts of
+    "unraveling" techniques. Critically, it is also possible
+    to unravel non-unital channels such as amplitude damping.
+    In that case, one must sample from the probability
+    distribution given by
+
+    .. math::
+
+        P_i = \mathrm{Tr}\left[\rho K_i K_i^\dagger]
+
+    After sampling which Kraus operator to apply, the final state
+    is then
+
+    .. math::
+
+        \rho \rightarrow K_i \rho K_i^\dagger / P_i
+
+    Note the renormalization by probability here!
+
+    This unraveling of non-unital channels can even be done with a
+    :class:`.STIMQuantumState`, enabling fast stabilizer simulation
+    with amplitude damping.
+
+    The expected rep type is a list of arrays with shape (2^n, 2^n)
+    where n is the number of qubits.
     """
-
-    # TODO: Kraus? Some other Clifford/stabilizer/symplectic stuff?
 
 
 class InstrumentRep(RepEnum):

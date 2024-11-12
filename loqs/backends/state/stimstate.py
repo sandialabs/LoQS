@@ -63,7 +63,7 @@ class STIMQuantumState(BaseQuantumState):
     def input_reps(self) -> list[GateRep | InstrumentRep]:
         return [
             GateRep.STIM_CIRCUIT_STR,
-            GateRep.PROBABILISTIC_STIM_OPERATIONS,
+            GateRep.KRAUS_OPERATORS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
         ]
@@ -167,6 +167,7 @@ class STIMQuantumState(BaseQuantumState):
         return new_state
 
     def reset_seed(self, new_seed: int | None) -> None:
+        # We explicitly don't want to copy RNG here, force a new RNG seed
         self._state = self._state.copy(copy_rng=False, seed=new_seed)
         self.seed = new_seed
         self._rng = np.random.default_rng(new_seed)
@@ -207,13 +208,46 @@ class STIMQuantumState(BaseQuantumState):
             mapped_circuit = _Circuit(mapped_circuit_str)
 
             self.state.do_circuit(mapped_circuit)
-        elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
+        elif reptype == GateRep.KRAUS_OPERATORS:
             assert isinstance(rep, (list, tuple))
-            probs = [r[1] for r in rep]
-            assert abs(1 - sum(probs)) < 1e-12, "Probabilities should sum to 1"
-            assert all(
-                [p >= 0 for p in probs]
-            ), "Probabilities should be positive"
+            assert all(isinstance(K, np.ndarray) for K in rep)
+
+            # Get the current state vector in little endian,
+            # i.e. entries correspond to 000, 001, 010, 011,
+            # 100, 101, 110, 111 for a 3-qubit example
+            state_vec = self.state.state_vector(endian="little")
+
+            # We need to compute probabilities as:
+            # P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
+            # But our rho is a pure state, so we can simplify this to
+            # P_i = Tr[K_i |\Psi> <\Psi| K_i^\dagger] = 2-norm of K_i |\Psi>
+
+            # We will do these computations using QuantumSim-like einsum calls
+            # First, we'll reshape the statevec into a tensor and use einsum
+            # to contract out the unaffected indices (and reorder if need)
+            # Then we can revectorize and simply do a matmul with our Kraus ops
+            Nq = len(self.qubit_labels)
+            state_vec_tensor = state_vec.reshape(
+                [
+                    2,
+                ]
+                * Nq
+            )
+
+            in_indices = list(range(Nq))
+            out_indices = [self.qubit_labels.index(q) for q in qubits]
+            reduced_state_vec = np.einsum(
+                state_vec_tensor, in_indices, out_indices, optimize=True
+            )
+            reduced_state_vec = reduced_state_vec.reshape(
+                (-1, 1)
+            )  # Col vector, i.e. |\Psi>
+
+            # Now we can just compute our probabilities
+            probs = []
+            for K in rep:
+                KPsi = K @ reduced_state_vec
+                probs.append(np.vdot(KPsi, KPsi))
 
             # Pick an operation to sample
             r = self._rng.random()
@@ -223,10 +257,36 @@ class STIMQuantumState(BaseQuantumState):
                 idx_to_apply += 1
                 cumul_prob += probs[idx_to_apply]
 
-            rep_to_apply = RepTuple(
-                rep[idx_to_apply][0], qubits, GateRep.STIM_CIRCUIT_STR
+            # Get rescaled versions of the Kraus operator so that we can
+            # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i
+            rescaled_K = rep[idx_to_apply] / np.sqrt(probs[idx_to_apply])
+
+            # Use another einsum to multiply the rescaled Kraus operator through
+            # This effectively handles embedding the Kraus operator in the full space
+            # Borrows the reversed from QuantumSim, which I think is for efficiency?
+            out_indices = list(reversed(range(Nq)))
+            temp_indices = list(range(Nq, Nq + len(qubits)))
+            qubit_indices = [self.qubit_labels.index(q) for q in qubits]
+            in_indices = list(reversed(range(Nq)))
+            # Replace incoming indices with temp ones to do the matmul correctly
+            for ti, qidx in zip(temp_indices, qubit_indices):
+                in_indices[Nq - qidx - 1] = ti
+            K_indices = qubit_indices + temp_indices
+
+            # Perform contraction to get new state
+            new_state_vec = np.einsum(
+                state_vec,
+                in_indices,
+                rescaled_K,
+                K_indices,
+                out_indices,
+                optimize=True,
             )
-            self.apply_reps_inplace([rep_to_apply])
+
+            # Overwrite simulator state (with the flatted state vector)
+            self.state.set_state_from_state_vector(
+                new_state_vec.ravel(), endian="little"
+            )
         else:
             raise NotImplementedError(f"Cannot apply GateRep {reptype}")
 

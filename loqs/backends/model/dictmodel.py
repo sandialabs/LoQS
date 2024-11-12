@@ -29,8 +29,9 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     def __init__(
         self,
         model_or_dicts: DictModelCastableTypes,
-        gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
+        gatereps: Sequence[GateRep] = [GateRep.QSIM_SUPEROPERATOR],
         instreps: Sequence[InstrumentRep] = [InstrumentRep.ZBASIS_PROJECTION],
+        gaterep_array_cast_rep: GateRep = GateRep.QSIM_SUPEROPERATOR,
         instrep_cast_reset: int | None = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
@@ -70,14 +71,14 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 label = (gate_key.name, gate_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
                 self.gate_dict[label] = model_or_dicts.get_reps(
-                    circ, gatereps=[gaterep], instreps=instreps
+                    circ, gatereps=gatereps, instreps=instreps
                 )[0][0]
 
             for inst_key in model_or_dicts.instrument_keys:
                 label = (inst_key.name, inst_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
                 self.inst_dict[label] = model_or_dicts.get_reps(
-                    circ, gatereps=[gaterep], instreps=instreps
+                    circ, gatereps=gatereps, instreps=instreps
                 )[0][0]
 
         elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
@@ -88,35 +89,27 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 "Can only other NoiseModels or a 2-tuple of gate/inst dicts"
             )
 
-        self._gaterep = gaterep
+        self._gatereps = list(gatereps)
         self._instreps = list(instreps)
 
         def convert_to_gatereptuple(gr, qubits):
-            if not isinstance(gr, RepTuple) and (
-                isinstance(
-                    gr, (np.ndarray, str)
-                )  # matrix for dense rep or str for stim circ
-                or (  # list of (string, prob) tuples for probabilistic stim
-                    isinstance(gr, (tuple, list))
-                    and all(
-                        [
-                            isinstance(el, (tuple, list))
-                            and len(el) == 2
-                            and isinstance(el[0], str)
-                            and isinstance(el[1], (float, int))
-                            for el in gr
-                        ]
-                    )
-                )
-            ):
-                return RepTuple(gr, qubits, gaterep)
+            if not isinstance(gr, RepTuple):
+                if isinstance(gr, np.ndarray):
+                    # matrix for dense rep
+                    return RepTuple(gr, qubits, gaterep_array_cast_rep)
+                elif isinstance(gr, str):
+                    return RepTuple(gr, qubits, GateRep.STIM_CIRCUIT_STR)
+                elif isinstance(gr, (tuple, list)) and all(
+                    [isinstance(el, np.ndarray) for el in gr]
+                ):
+                    return RepTuple(gr, qubits, GateRep.KRAUS_OPERATORS)
 
             assert isinstance(
                 gr, RepTuple
             ), f"{gr} failed to upgrade to a RepTuple"
             assert (
-                gr.reptype == gaterep
-            ), f"Provided {gr} but not provided gaterep"
+                gr.reptype in gatereps
+            ), f"Provided {gr} but not provided gatereps"
 
             return gr
 
@@ -147,15 +140,11 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 )
                 # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
                 self.inst_dict[name, qubits] = RepTuple(
-                    RepTuple(
-                        (
-                            instrep_cast_reset,
-                            instrep_cast_include_outcomes,
-                            convert_to_gatereptuple(ir[0], qubits),
-                            convert_to_gatereptuple(ir[1], qubits),
-                        ),
-                        qubits,
-                        gaterep,
+                    (
+                        instrep_cast_reset,
+                        instrep_cast_include_outcomes,
+                        convert_to_gatereptuple(ir[0], qubits),
+                        convert_to_gatereptuple(ir[1], qubits),
                     ),
                     qubits,
                     InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
@@ -194,7 +183,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
             (
                 self.hash(self.gate_dict),
                 self.hash(self.inst_dict),
-                self._gaterep.value,
+                tuple([gr.value for gr in self._gatereps]),
                 tuple([ir.value for ir in self._instreps]),
             )
         )
@@ -211,7 +200,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
-        return [self._gaterep]
+        return self._gatereps
 
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
@@ -252,9 +241,9 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         assert isinstance(gate_dict, dict)
         inst_dict = cls.deserialize(state["inst_dict"])
         assert isinstance(inst_dict, dict)
-        gaterep = GateRep(state["_gaterep"])
+        gatereps = [GateRep(v) for v in state["_gatereps"]]
         instreps = [InstrumentRep(v) for v in state["_instreps"]]
-        return cls((gate_dict, inst_dict), gaterep, instreps)
+        return cls((gate_dict, inst_dict), gatereps, instreps)
 
     def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
         # Not worth caching below this object (i.e. don't pass cache on)
@@ -263,7 +252,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
             {
                 "gate_dict": self.serialize(self.gate_dict),
                 "inst_dict": self.serialize(self.inst_dict),
-                "_gaterep": self._gaterep.value,
+                "_gatereps": [gr.value for gr in self._gatereps],
                 "_instreps": [ir.value for ir in self._instreps],
             }
         )
