@@ -220,7 +220,7 @@ class STIMQuantumState(BaseQuantumState):
             # We need to compute probabilities as:
             # P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
             # But our rho is a pure state, so we can simplify this to
-            # P_i = Tr[K_i |\Psi> <\Psi| K_i^\dagger] = 2-norm of K_i |\Psi>
+            # P_i = Tr[<\Psi| K_i^\dagger K_i |\Psi> ] = KPsi * KPsi
 
             # We will do these computations using QuantumSim-like einsum calls
             # First, we'll reshape the statevec into a tensor and use einsum
@@ -234,28 +234,33 @@ class STIMQuantumState(BaseQuantumState):
                 * Nq
             )
 
+            # Trace out indices we don't need
+            # However, for state vec, these need to add in quadrature, like a density mx would
+            # I don't want to expand to a full density mx, but we can square now, trace, and sqrt,
+            # i.e. store the diagonals of the density mx. This is fine because we are only tracing
+            # over it anyway
+            # TODO: Not sure this is correct
             in_indices = list(range(Nq))
             out_indices = [self.qubit_labels.index(q) for q in qubits]
-            reduced_state_vec = np.einsum(
-                state_vec_tensor, in_indices, out_indices, optimize=True
+            reduced_state_vec_tensor = np.einsum(
+                np.square(state_vec_tensor),
+                in_indices,
+                out_indices,
+                optimize=True,
             )
-            reduced_state_vec = reduced_state_vec.reshape(
+            # Also reshape to col vector, i.e. |\Psi>
+            reduced_state_vec = np.sqrt(reduced_state_vec_tensor).reshape(
                 (-1, 1)
-            )  # Col vector, i.e. |\Psi>
+            )
 
             # Now we can just compute our probabilities
             probs = []
             for K in rep:
                 KPsi = K @ reduced_state_vec
-                probs.append(np.vdot(KPsi, KPsi))
+                probs.append(np.sqrt(np.vdot(KPsi, KPsi)))
 
             # Pick an operation to sample
-            r = self._rng.random()
-            idx_to_apply = 0
-            cumul_prob = probs[0]
-            while cumul_prob < r:
-                idx_to_apply += 1
-                cumul_prob += probs[idx_to_apply]
+            idx_to_apply = np.random.choice(list(range(len(rep))), p=probs)
 
             # Get rescaled versions of the Kraus operator so that we can
             # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i
@@ -275,7 +280,7 @@ class STIMQuantumState(BaseQuantumState):
 
             # Perform contraction to get new state
             new_state_vec = np.einsum(
-                state_vec,
+                state_vec_tensor,
                 in_indices,
                 rescaled_K,
                 K_indices,
@@ -287,6 +292,11 @@ class STIMQuantumState(BaseQuantumState):
             self.state.set_state_from_state_vector(
                 new_state_vec.ravel(), endian="little"
             )
+
+            # Check that STIM has not snapped our state down
+            assert np.allclose(
+                self.state.state_vector(), new_state_vec
+            ), "State vec changed, likely not a stabilizer state"
         else:
             raise NotImplementedError(f"Cannot apply GateRep {reptype}")
 
