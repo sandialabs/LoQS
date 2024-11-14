@@ -241,7 +241,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
     @abstractmethod
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
-    ) -> list[tuple[int, int | tuple[int]]]:
+    ) -> list[tuple[int, int | tuple[int, ...]]]:
         """Return all possible circuit locations where errors can be injected.
 
         Parameters

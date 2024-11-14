@@ -83,9 +83,9 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
         )
 
     @property
-    def all_qubit_labels(self) -> list[str]:
+    def all_qubit_labels(self) -> list[str | int]:
         """All qubits managed by patches in this :class:`.PatchDict`."""
-        qubits: list[str] = []
+        qubits: list[str | int] = []
         for patch in self.patches.values():
             qubits.extend(patch.qubits)
         return qubits

@@ -164,8 +164,8 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
-    ) -> list[tuple[int, int | tuple[int]]]:
-        circuit_locations = []
+    ) -> list[tuple[int, int | tuple[int, ...]]]:
+        circuit_locations: list[tuple[int, int | tuple[int, ...]]] = []
         unrolled_str = self._unroll_repeats()
         for lidx, lstr in enumerate(unrolled_str.split("TICK\n")):
             for line in lstr.split("\n"):
@@ -193,8 +193,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
                 # Otherwise, each qubit index is a location
                 for qidx in entries[1]:
-
-                    circuit_locations.append((lidx, qidx))
+                    circuit_locations.append((lidx, int(qidx)))
         return circuit_locations
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
@@ -317,10 +316,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
             # Insert idling operations
             missing_qubits = set(self._qubit_labels) - seen_qubits
-            for qubit in missing_qubits:
-                new_circ_str += (
-                    "\n" + f"{layer_idle} {self.qubit_labels.index(qubit)}"
-                )
+            for mq in missing_qubits:
+                idx = self.qubit_labels.index(mq)
+                new_circ_str += f"\n{layer_idle} {idx}"
 
             # Finish layer
             new_circ_str += "\nTICK\n"

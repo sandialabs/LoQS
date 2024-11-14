@@ -142,8 +142,8 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
-    ) -> list[tuple[int, int | tuple[int]]]:
-        circuit_locations = []
+    ) -> list[tuple[int, int | tuple[int, ...]]]:
+        circuit_locations: list[tuple[int, int | tuple[int, ...]]] = []
         for lidx in range(len(self._circuit)):
             for comp in self._circuit[lidx]:
                 if post_twoq_gates:

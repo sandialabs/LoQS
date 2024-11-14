@@ -123,7 +123,7 @@ def build_discrete_error_injection_programs(
         errored_programs.append(new_program)
 
     # Iterate over all errors during the circuit, i.e. before every gate
-    errored_programs = []
+    errored_programs: list[QuantumProgram] = []
     for error_loc in error_locations:
         for eclabel in error_circuit_labels:
             if post_twoq_gates:

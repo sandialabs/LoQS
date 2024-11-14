@@ -204,7 +204,9 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         return reps
 
     def _get_gate_rep(self, name, qubits, gaterep) -> object:
-        op = self.gate_dict[(name,)+qubits]  # Look up using unaliased qubits
+        op = self.gate_dict[
+            (name,) + tuple(qubits)
+        ]  # Look up using unaliased qubits
         basis = self.model.basis
 
         if self.use_embedded_op and isinstance(op, EmbeddedOp):
@@ -254,7 +256,7 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
             # TODO: What to do with key error?
             op = self.inst_dict[
-                (name,) + qubits
+                (name,) + tuple(qubits)
             ]  # Look up using unaliased qubits
 
             rep = {}

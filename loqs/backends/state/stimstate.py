@@ -194,6 +194,7 @@ class STIMQuantumState(BaseQuantumState):
             mapped_lines = []
             for line in rep.split("\n"):
                 if len(line) == 0 or line.startswith("TICK"):
+                    # TODO: We want to skip other annotations too...
                     # Empty or TICK line, skip
                     continue
 
@@ -208,6 +209,24 @@ class STIMQuantumState(BaseQuantumState):
             mapped_circuit = _Circuit(mapped_circuit_str)
 
             self.state.do_circuit(mapped_circuit)
+        elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
+            assert isinstance(rep, (list, tuple))
+            probs = [r[1] for r in rep]
+            assert abs(1 - sum(probs)) < 1e-12, "Probabilities should sum to 1"
+            assert all(
+                [p >= 0 for p in probs]
+            ), "Probabilities should be positive"
+
+            # Pick an op to apply
+            idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
+            print(probs, idx_to_apply, rep[idx_to_apply][0])
+
+            rep_to_apply = RepTuple(
+                rep[idx_to_apply][0], qubits, GateRep.STIM_CIRCUIT_STR
+            )
+
+            # Apply chosen op
+            self.apply_reps_inplace([rep_to_apply])
         elif reptype == GateRep.KRAUS_OPERATORS:
             assert isinstance(rep, (list, tuple))
             assert all(isinstance(K, np.ndarray) for K in rep)
@@ -260,7 +279,7 @@ class STIMQuantumState(BaseQuantumState):
                 probs.append(np.sqrt(np.vdot(KPsi, KPsi)))
 
             # Pick an operation to sample
-            idx_to_apply = np.random.choice(list(range(len(rep))), p=probs)
+            idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
 
             # Get rescaled versions of the Kraus operator so that we can
             # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i

@@ -109,23 +109,28 @@ class TestSTIMQuantumState:
         self._check(test4, state11)
 
         # Let's try the probabilistic operations
-        prob_of_reset = 0.2
+        prob_of_reset = 0.4
         prob_reset_rep = RepTuple([("", 1-prob_of_reset), ("R 0", prob_of_reset)], ["Q0"], GateRep.PROBABILISTIC_STIM_OPERATIONS)
         
         # Let's compute what the expected sampling should be
         rng = np.random.default_rng(20241026)
-        expected_outcomes = [rng.random() > 1-prob_of_reset for _ in range(10)]
+        # Note 0 and 1 are flipped here. If we pick first element, then we will stay in 1 state,
+        # while if we pick second element, we will reset to 0 state
+        expected_outcomes = [rng.choice([1, 0], p=[1-prob_of_reset, prob_of_reset]) for _ in range(10)]
 
         # Start in 1 state, but set RNG to be the same as above so we know expected choices
         state1_rng = STIMState([1], ["Q0"], seed=20241026)
-        for i in range(10):
+        outcomes = []
+        for _ in range(10):
             state1_rng.apply_reps_inplace([prob_reset_rep])
-            outcome = (state1_rng.state.peek_z(0) == -1) # peek_z gives 1 if in state 0, -1 if in state 1
-            assert outcome == expected_outcomes[i]
+            # peek_z gives 1 if in state 0, -1 if in state 1
+            # This prevents a measurement which would use the RNG and mess up our expected samples
+            outcome = int(state1_rng.state.peek_z(0) == -1)
+            outcomes.append(outcome)
             
             # Go back to 1 state for next test
-            if outcome:
-                state1_rng.state.x(0)
+            state1_rng.state.do_circuit(stim.Circuit("R 0\nX 0")) # type: ignore
+        assert outcomes == expected_outcomes
 
         # Let's try to pass in some unsupported reps
         with pytest.raises(NotImplementedError):

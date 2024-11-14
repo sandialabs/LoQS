@@ -99,10 +99,21 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                     return RepTuple(gr, qubits, gaterep_array_cast_rep)
                 elif isinstance(gr, str):
                     return RepTuple(gr, qubits, GateRep.STIM_CIRCUIT_STR)
-                elif isinstance(gr, (tuple, list)) and all(
-                    [isinstance(el, np.ndarray) for el in gr]
-                ):
-                    return RepTuple(gr, qubits, GateRep.KRAUS_OPERATORS)
+                elif isinstance(gr, (tuple, list)):
+                    if all([isinstance(el, np.ndarray) for el in gr]):
+                        return RepTuple(gr, qubits, GateRep.KRAUS_OPERATORS)
+                    elif all(
+                        [
+                            isinstance(el, (tuple, list))
+                            and len(el) == 2
+                            and isinstance(el[0], str)
+                            and isinstance(el[1], (float, int))
+                            for el in gr
+                        ]
+                    ):
+                        return RepTuple(
+                            gr, qubits, GateRep.PROBABILISTIC_STIM_OPERATIONS
+                        )
 
             assert isinstance(
                 gr, RepTuple

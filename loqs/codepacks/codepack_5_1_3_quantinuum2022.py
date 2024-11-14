@@ -475,7 +475,7 @@ def create_ideal_model(  # noqa: C901
         inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
-            (gate_dict, inst_dict), gaterep=gaterep, instreps=[instrep]
+            (gate_dict, inst_dict), gatereps=[gaterep], instreps=[instrep]
         )
 
     elif issubclass(model_backend, BaseNoiseModel):
@@ -747,7 +747,7 @@ def _create_adaptive_measure_instruction_part_I(
         )
 
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
@@ -867,7 +867,7 @@ def _create_adaptive_measure_instruction_part_II(
         return Frame(frame_data)
 
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
@@ -995,7 +995,7 @@ def _create_adaptive_measure_instruction_part_III(
         )
 
     def map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
@@ -1366,7 +1366,7 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
         return Frame({"stack": stack})
 
     def flagged_feedforward_map_qubits_fn(
-        qubit_mapping: Mapping[str, str],
+        qubit_mapping: Mapping[str | int, str | int],
         flag_qubit: str,
         syndrome_qubit: str,
         **kwargs,

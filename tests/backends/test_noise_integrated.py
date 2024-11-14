@@ -113,7 +113,7 @@ class TestIntegratedNoise:
         stack_Zbasis = [
             ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
             ("Init Patch 1Q", None, ("L0", ["Q0"])),
-            ("Gi", "L0"),
+            ("I", "L0"),
             ("Mz", "L0")
         ]
 
@@ -139,7 +139,7 @@ class TestIntegratedNoise:
             ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
             ("Init Patch 1Q", None, ("L0", ["Q0"])),
             ("H", "L0"),
-            ("Gi", "L0"),
+            ("I", "L0"),
             ("H", "L0"),
             ("Mz", "L0")
         ]
@@ -204,7 +204,7 @@ class TestIntegratedNoise:
             ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
             ("Init Patch 1Q", None, ("L0", ["Q0"])),
             ("X", "L0"),
-            ("Gi", "L0"),
+            ("I", "L0"),
             ("Mz", "L0"),
         ]
 

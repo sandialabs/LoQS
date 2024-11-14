@@ -49,9 +49,10 @@ class TestInstruction:
             param_priorities={"qubits": ["instruction"]},
             name="test")
         assert ins3.param_priorities == {
-            "state_name_in_program": DEFAULT_PRIORITIES,
+            "state": DEFAULT_PRIORITIES,
             "qubits": ["instruction"]
         }
+        assert ins3.param_alias("state") == "state_name_in_program"
 
     
     def test_serialization(self):

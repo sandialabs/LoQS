@@ -270,7 +270,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
                 "expiring_keys": list(self.expiring_keys),
                 "_expiring_key_locs": self._expiring_key_locs,
                 "propagating_keys": list(self.propagating_keys),
-                "no_serialized_keys": list(self.no_serialize_keys),
+                "no_serialize_keys": list(self.no_serialize_keys),
             }
         )
         return state
