@@ -183,9 +183,36 @@ class TestIntegratedNoise:
         # But the RNG is handled differently for X basis, so we don't get a match (although it is still ~50)
         assert Counter(outs) == {0: 944, 1: 56}
     
-    def test_1q_amp_damp(self):
-        damping_rate = 0.1
-        qsim_native_ptm = _ptm.amp_ph_damping_ptm(damping_rate, 0) # type: ignore
+    # Amp damp tests, given as damping rate, dephasing rate, seed, num shots, and then expected 1 counts in order of:
+    # QuantumSim X,I,Mz; QuantumSim H,I,Mz; QuantumSim H,I,Mx; STIM X,I,Mz; STIM H,I,Mz; STIM H,I,Mx
+    # Recall that e^{-t/T1} = 1-damping_rate and
+    # e^{-t/T2} = sqrt([1-damping_rate][1-dephase_rate])
+    # Physical rates often have T1 > T2, so damping_rate < dephase_rate
+    # If T1 = T2, then damping rate = dephase rate
+    # If dephase rate = 0, this is technically not a quantum channel (I think)
+    # For full details on this, see Stefan's 2024-11-14 Mathematica notebook
+    amp_damp_dephase_tests = [
+        # damping_rate=0.15,dephasing_rate=0. This does not leave stabilizer states as stabilizer states, so not STIM compatible
+        # prep |1>, measure Z: expect 15/85
+        # prep |+>, measure Z: expect 57.5/42.5
+        # prep |+>, measure X: expect 96.1/3.9
+        # Skip STIM for these
+        (0.15, 0.0, 20241104, 1000, [143, 591, 962]),
+        # damping_rate=0.15,dephasing_rate=0.15. This IS compatible with STIM
+        # Note that STIM uses more RNG so counts won't be the same
+        # It is also fast so I'm running 10x the shots to boost our confidence on those
+        # Only +/X changes
+        # prep |+>, measure X: expect 92.5/7.5
+        (0.15, 0.15, 20241104, 1000, [143, 591, 929, 1488, 5717, 9238]),
+        # damping_rate=0.15,dephasing_rate=0.2. This is also compatible with STIM
+        # Only +/X changes
+        # prep |+>, measure X: expect 91.2/8.8
+        (0.15, 0.2, 20241104, 1000, [143, 591, 917, 1488, 5747, 9116])
+    ]
+    @pytest.mark.parametrize("p_damp,p_dephase,seed,shots,expected0s",amp_damp_dephase_tests)
+    @pytest.mark.parametrize("stim_rep",["probabilistic"])
+    def test_1q_amp_damp_dephase(self, p_damp, p_dephase, seed, shots, expected0s, stim_rep):
+        qsim_native_ptm = _ptm.amp_ph_damping_ptm(p_damp, p_dephase) # type: ignore
 
         ## QUANTUMSIM 
         damp_gate_dict = {
@@ -212,33 +239,16 @@ class TestIntegratedNoise:
         program_qsim = QuantumProgram(
             stack_Zbasis,
             default_noise_model=damp_noise_model,
-            default_base_seed=20241104,
+            default_base_seed=seed,
             state_type=QSimState,
             patch_types={"1Q": self.code_1Q},
             name="1Q damparizing test"
         )
 
-        program_qsim.run(num_shots=1000)
+        program_qsim.run(num_shots=shots)
 
-        # Because we set the seed, we should exactly match output from test creation
-        # Also ~10% = 100 shots should fall from 1 back to 0
         outs = [mo["Q0"][0] for mo in program_qsim.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs) == {1: 904, 0: 96}
-
-        # We can test in X basis also
-        stack_Xbasis = [
-            ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
-            ("Init Patch 1Q", None, ("L0", ["Q0"])),
-            ("H", "L0"),
-            ("I", "L0"),
-            ("Mx", "L0"),
-        ]
-        program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Xbasis)
-
-        # 0.5(1-sqrt(1-p)) is deviation, p=0.1 => 2.56%
-        program_qsim_Xbasis.run(num_shots=1000, reset_shot_histories=True)
-        outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs) == {0: 979, 1: 21}
+        assert Counter(outs)[0] == expected0s[0]
 
         # We can test in prep X, meas Z basis also
         stack_Zprep_Xbasis = [
@@ -250,53 +260,93 @@ class TestIntegratedNoise:
         ]
         program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Zprep_Xbasis)
 
-        # Deviation = p/2, p=0.1 => 0.05
-        program_qsim_Xbasis.run(num_shots=1000, reset_shot_histories=True)
+        program_qsim_Xbasis.run(num_shots=shots)
         outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs) == {0: 562, 1: 438}
+        assert Counter(outs)[0] == expected0s[1]
+
+        # We can test in X basis also
+        stack_Xbasis = [
+            ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
+            ("Init Patch 1Q", None, ("L0", ["Q0"])),
+            ("H", "L0"),
+            ("I", "L0"),
+            ("Mx", "L0"),
+        ]
+        program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Xbasis)
+
+        program_qsim_Xbasis.run(num_shots=shots)
+        outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs)[0] == expected0s[2]
+
+        if len(expected0s) < 4:
+            # Don't run STIM tests if outputs not provided
+            return
 
         ## STIM
-        # TODO: Punting on this for now, fix these tests when everything is ironed out
+        kappa = 1 - (1-p_dephase)/(1-p_damp)
+        pz = 0.5*(1-np.sqrt(1-kappa))
+        if stim_rep == "probabilistic":
+            damp_gate_dict_stim = {
+                ("Gi", ("Q0",)): [
+                    (f"Z_ERROR({pz}) 0", (1-p_damp)),
+                    ("R 0", p_damp),
+                ],
+                ("Gh", ("Q0",)): "H 0",
+                ("Gx", ("Q0",)): "X 0",
+            }
+            damp_noise_model_stim = DictNoiseModel(
+                (damp_gate_dict_stim, inst_dict),
+                gatereps=[GateRep.PROBABILISTIC_STIM_OPERATIONS, GateRep.STIM_CIRCUIT_STR],
+                instreps=[InstrumentRep.ZBASIS_PROJECTION]
+            )
+        elif stim_rep == "kraus":
+            # The Kraus operators for the asym dephasing/damping channel
+            # See operators M in Stefan's Mathematica notebook
+            Ks = [
+                # Identity
+                np.sqrt((1-kappa)*(1-p_damp))*np.array([[1, 0], [0, 1]]),
+                # Reset
+                np.sqrt((1-kappa)*p_damp)*np.array([[0, 1], [0, 0]]),
+                np.sqrt((1-kappa)*p_damp)*np.array([[1, 0], [0, 0]]),
+                # Dephasing
+                np.sqrt(kappa)*np.array([[1, 0], [0, -1]]),
+            ]
 
-        # For this, let's use the Kraus presentation
-        # Ks = [
-        #     np.array([[1, 0], [0, np.sqrt(1-damping_rate)]]), # K_0 of Eqn 2.4 of Greenbaum arXiv:1509.02921
-        #     np.array([[0, np.sqrt(damping_rate)], [0, 0]])    # K_1 of Eqn 2.4 of Greenbaum arXiv:1509.02921
-        # ]
-        # damp_gate_dict_stim = {
-        #     ("Gi", ("Q0",)): Ks,
-        #     ("Gh", ("Q0",)): "H 0",
-        #     ("Gx", ("Q0",)): "X 0",
-        # }
-        # damp_noise_model_stim = DictNoiseModel(
-        #     (damp_gate_dict_stim, inst_dict),
-        #     gatereps=[GateRep.KRAUS_OPERATORS, GateRep.STIM_CIRCUIT_STR],
-        #     instreps=[InstrumentRep.ZBASIS_PROJECTION]
-        # )
 
-        # program_stim = QuantumProgram.from_quantum_program(
-        #     program_qsim,
-        #     state_type=STIMState,
-        #     default_noise_model=damp_noise_model_stim
-        # )
+            damp_gate_dict_stim = {
+                ("Gi", ("Q0",)): Ks,
+                ("Gh", ("Q0",)): "H 0",
+                ("Gx", ("Q0",)): "X 0",
+            }
+            damp_noise_model_stim = DictNoiseModel(
+                (damp_gate_dict_stim, inst_dict),
+                gatereps=[GateRep.KRAUS_OPERATORS, GateRep.STIM_CIRCUIT_STR],
+                instreps=[InstrumentRep.ZBASIS_PROJECTION]
+            )
+        else:
+            raise ValueError("Invalid stim rep")
 
-        # program_stim.run(num_shots=1000)
+        program_stim = QuantumProgram.from_quantum_program(
+            program_qsim,
+            state_type=STIMState,
+            default_noise_model=damp_noise_model_stim
+        )
 
-        # # As above, we expect ~10% = 100 shots to fall from 1 to 0
-        # outs = [mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)]
-        # assert Counter(outs) == {1: 903, 0: 97}
+        program_stim.run(num_shots=10*shots)
+        outs = [mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs)[0] == expected0s[3]
 
-        # # We can also test X, which has the expected ~2.5% deviation from all 0
-        # program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
-        # program_stim_Xbasis.run(num_shots=1000)
-        # outs = [mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        # assert Counter(outs) == {0: 976, 1: 24}
+        program_stim_prepZ_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)        
+        program_stim_prepZ_Xbasis.run(num_shots=10*shots)
+        outs = [mo["Q0"][0] for mo in program_stim_prepZ_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs)[0] == expected0s[4]
+        
+        program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
+        program_stim_Xbasis.run(num_shots=10*shots)
+        outs = [mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs)[0] == expected0s[5]
 
-        # # We can also test prep z and meas X, with the expected 5% deviation from 50/50
-        # program_stim_prepZ_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)        
-        # program_stim_prepZ_Xbasis.run(num_shots=1000, reset_shot_histories=True)
-        # outs = [mo["Q0"][0] for mo in program_stim_prepZ_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        # assert Counter(outs) == {0: 535, 1: 465}
+        
 
 
 

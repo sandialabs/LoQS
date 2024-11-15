@@ -219,7 +219,6 @@ class STIMQuantumState(BaseQuantumState):
 
             # Pick an op to apply
             idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
-            print(probs, idx_to_apply, rep[idx_to_apply][0])
 
             rep_to_apply = RepTuple(
                 rep[idx_to_apply][0], qubits, GateRep.STIM_CIRCUIT_STR
