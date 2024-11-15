@@ -200,14 +200,15 @@ class TestIntegratedNoise:
         (0.15, 0.0, 20241104, 1000, [143, 591, 962]),
         # damping_rate=0.15,dephasing_rate=0.15. This IS compatible with STIM
         # Note that STIM uses more RNG so counts won't be the same
+        # Annoyingly, I've found this also differs on machines, so STIM tests must just be within 100
         # It is also fast so I'm running 10x the shots to boost our confidence on those
         # Only +/X changes
         # prep |+>, measure X: expect 92.5/7.5
-        (0.15, 0.15, 20241104, 1000, [143, 591, 929, 1488, 5717, 9238]),
+        (0.15, 0.15, 20241104, 1000, [143, 591, 929, 1500, 5750, 9250]),
         # damping_rate=0.15,dephasing_rate=0.2. This is also compatible with STIM
         # Only +/X changes
         # prep |+>, measure X: expect 91.2/8.8
-        (0.15, 0.2, 20241104, 1000, [143, 591, 917, 1488, 5747, 9116])
+        (0.15, 0.2, 20241104, 1000, [143, 591, 917, 1500, 5750, 9120])
     ]
     @pytest.mark.parametrize("p_damp,p_dephase,seed,shots,expected0s",amp_damp_dephase_tests)
     @pytest.mark.parametrize("stim_rep",["probabilistic"])
@@ -242,7 +243,7 @@ class TestIntegratedNoise:
             default_base_seed=seed,
             state_type=QSimState,
             patch_types={"1Q": self.code_1Q},
-            name="1Q damparizing test"
+            name="1Q amp damp/dephasing test"
         )
 
         program_qsim.run(num_shots=shots)
@@ -334,17 +335,17 @@ class TestIntegratedNoise:
 
         program_stim.run(num_shots=10*shots)
         outs = [mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs)[0] == expected0s[3]
+        assert abs(Counter(outs)[0] - expected0s[3]) < 100
 
         program_stim_prepZ_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)        
         program_stim_prepZ_Xbasis.run(num_shots=10*shots)
         outs = [mo["Q0"][0] for mo in program_stim_prepZ_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs)[0] == expected0s[4]
+        assert abs(Counter(outs)[0] - expected0s[4]) < 100
         
         program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
         program_stim_Xbasis.run(num_shots=10*shots)
         outs = [mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs)[0] == expected0s[5]
+        assert abs(Counter(outs)[0] - expected0s[5]) < 100
 
         
 

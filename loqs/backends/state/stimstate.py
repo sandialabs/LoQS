@@ -63,6 +63,7 @@ class STIMQuantumState(BaseQuantumState):
     def input_reps(self) -> list[GateRep | InstrumentRep]:
         return [
             GateRep.STIM_CIRCUIT_STR,
+            GateRep.PROBABILISTIC_STIM_OPERATIONS,
             GateRep.KRAUS_OPERATORS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
@@ -123,7 +124,8 @@ class STIMQuantumState(BaseQuantumState):
             len(self.qubit_labels) == self.state.num_qubits
         ), "Must specify a qubit label for every qubit"
 
-        self.reset_seed(seed)
+        self.seed = seed
+        self._rng = np.random.default_rng(seed)
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
