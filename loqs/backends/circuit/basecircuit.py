@@ -54,6 +54,16 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
     def __hash__(self) -> int:
         return hash(repr(self))
 
+    def __add__(self: T, other: T) -> T:
+        # TODO: Should eventually be able to cast to derived class
+        # and add any BasePhysicalCircuit
+        return self.append(other)
+
+    def __iadd__(self: T, other: T) -> None:
+        # TODO: Should eventually be able to cast to derived class
+        # and add any BasePhysicalCircuit
+        return self.append_inplace(other)
+
     # Class methods
     @classmethod
     def from_circuit_tiling(
