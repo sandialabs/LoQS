@@ -242,6 +242,11 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 if reptuple is None:
                     # Also try to look up just by name
                     reptuple = self.gate_dict.get(label[0], None)
+                    if reptuple is not None:
+                        assert isinstance(reptuple, RepTuple)
+                        reptuple = RepTuple(
+                            reptuple.rep, label[1], reptuple.reptype
+                        )
 
                 if reptuple is None:
                     # Failed, now look up in instruments
@@ -250,6 +255,11 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 if reptuple is None:
                     # Also try to look up just by name
                     reptuple = self.inst_dict.get(label[0], None)
+                    if reptuple is not None:
+                        assert isinstance(reptuple, RepTuple)
+                        reptuple = RepTuple(
+                            reptuple.rep, label[1], reptuple.reptype
+                        )
 
                 assert reptuple is not None, f"Failed to look up {label}"
                 assert isinstance(reptuple, RepTuple)

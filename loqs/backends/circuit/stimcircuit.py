@@ -205,7 +205,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def qubit_labels(self) -> list[QubitTypes]:
-        assert len(self._qubit_labels) > self.circuit.num_qubits
+        assert len(self._qubit_labels) >= self.circuit.num_qubits
         return self._qubit_labels
 
     def copy(self) -> STIMPhysicalCircuit:

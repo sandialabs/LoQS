@@ -66,6 +66,7 @@ class STIMQuantumState(BaseQuantumState):
             GateRep.PROBABILISTIC_STIM_OPERATIONS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            InstrumentRep.STIM_CIRCUIT_STR,
         ]
 
     def __init__(
@@ -126,6 +127,9 @@ class STIMQuantumState(BaseQuantumState):
         self.seed = seed
         self._rng = np.random.default_rng(seed)
 
+        self.latest_applied_circuit = _Circuit()
+        self.latest_measurement_labels = []
+
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
         s += f"  STIM state on {self.state.num_qubits} qubits"
@@ -137,10 +141,13 @@ class STIMQuantumState(BaseQuantumState):
             (hash(self._state), self.hash(self.qubit_labels), self.seed)
         )
 
-    def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
+    def apply_reps_inplace(
+        self, reps: Sequence, reset_latest_circ: bool = True
+    ) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
 
-        self.latest_applied_circuit = _Circuit()
+        if reset_latest_circ:
+            self.latest_applied_circuit = _Circuit()
 
         for reptuple in reps:
             reptype = reptuple.reptype
@@ -195,18 +202,24 @@ class STIMQuantumState(BaseQuantumState):
         if reptype == GateRep.STIM_CIRCUIT_STR:
             assert isinstance(rep, str)
 
-            # Create mapping from placeholder to global qubit indices
+            # We have three types of indices here
+            # Local: The placeholder/template qubit used in the rep
+            # Global: The qubit label
+            # Internal: The qubit label index
             local_to_global = {}
+            local_to_internal = {}
             for i, q in enumerate(qubits):
                 assert isinstance(q, str)
                 qidx = int(q.strip("!"))
                 negated = q.startswith("!")
-                local_to_global[str(i)] = (
-                    f"{'!' if negated else ''}{self.qubit_labels[qidx]}"
+                local_to_internal[str(i)] = (
+                    f"{'!' if negated else ''}{self.qubit_labels.index(qidx)}"
                 )
+                local_to_global[str(i)] = f"{'!' if negated else ''}{qidx}"
 
             # Split string for easy processing
-            mapped_lines = []
+            internal_lines = []
+            global_lines = []
             for line in rep.split("\n"):
                 if len(line) == 0:
                     # Skip empty line
@@ -214,18 +227,46 @@ class STIMQuantumState(BaseQuantumState):
 
                 entries = line.split()
 
-                mapped_entries = [entries[0]]  # instruction is unchanged
-                mapped_entries += [local_to_global[e] for e in entries[1:]]
+                internal_entries = [entries[0]]  # instruction is unchanged
+                internal_entries += [local_to_internal[e] for e in entries[1:]]
 
-                mapped_lines.append(" ".join(mapped_entries))
+                # Pull measurement labels, if they exist
+                command = entries[0].split("(")[0]
+                # Subset of measure/reset gates that we want to record
+                include_outcomes = [
+                    "M",
+                    "MX",
+                    "MY",
+                    "MZ",
+                    "MR",
+                    "MRX",
+                    "MRY",
+                    "MRZ",
+                ]
+                if command in include_outcomes:
+                    noneg_internal_entries = [
+                        self.qubit_labels[int(me.strip("!"))]
+                        for me in internal_entries[1:]
+                    ]
+                    self.latest_measurement_labels.extend(
+                        noneg_internal_entries
+                    )
 
-            mapped_circuit_str = "\n".join(mapped_lines)
-            mapped_circuit = _Circuit(mapped_circuit_str)
+                internal_lines.append(" ".join(internal_entries))
+
+                global_entries = [entries[0]]  # instruction is unchanged
+                global_entries += [local_to_global[e] for e in entries[1:]]
+                global_lines.append(" ".join(global_entries))
+
+            internal_circuit_str = "\n".join(internal_lines)
+            internal_circuit = _Circuit(internal_circuit_str)
+            self.state.do_circuit(internal_circuit)
 
             # Save executed circuit, needed for decoding via pymatching
-            self.latest_applied_circuit += mapped_circuit
-
-            self.state.do_circuit(mapped_circuit)
+            # This one we do in global labels since we don't need the smaller internal space,
+            # and this is less confusing to read off
+            global_circuit_str = "\n".join(global_lines)
+            self.latest_applied_circuit += _Circuit(global_circuit_str)
         elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
             assert isinstance(rep, (list, tuple))
             probs = [r[1] for r in rep]
@@ -242,7 +283,7 @@ class STIMQuantumState(BaseQuantumState):
             )
 
             # Apply chosen op
-            self.apply_reps_inplace([rep_to_apply])
+            self.apply_reps_inplace([rep_to_apply], reset_latest_circ=False)
         # elif reptype == GateRep.KRAUS_OPERATORS:
         #     assert isinstance(rep, (list, tuple))
         #     assert all(isinstance(K, np.ndarray) for K in rep)
@@ -337,9 +378,6 @@ class STIMQuantumState(BaseQuantumState):
 
     def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
         rep = reptuple.rep
-        assert isinstance(rep, (tuple, list)) and len(rep) > 1
-        reset = rep[0]
-        include_outcomes = rep[1]
 
         qubits = reptuple.qubits
         assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
@@ -350,11 +388,19 @@ class STIMQuantumState(BaseQuantumState):
         outcomes: OutcomeDict = defaultdict(list)
 
         if reptype == InstrumentRep.ZBASIS_PROJECTION:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            reset = rep[0]
+            include_outcomes = rep[1]
+
             for qbit in qubits:
                 cbit = self._measure_and_reset(qbit, reset)
                 if include_outcomes:
                     outcomes[qbit].append(cbit)
         elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            reset = rep[0]
+            include_outcomes = rep[1]
+
             # Check we can apply the reps
             preop = rep[2]
             postop = rep[3]
@@ -378,6 +424,26 @@ class STIMQuantumState(BaseQuantumState):
 
             # Apply the post-op
             self.apply_reps_inplace([postop])
+        elif reptype == InstrumentRep.STIM_CIRCUIT_STR:
+            assert isinstance(rep, str)
+
+            self.latest_measurement_labels = []
+
+            # We'll reuse the gate apply code...
+            self.apply_reps_inplace(
+                [RepTuple(rep, qubits, GateRep.STIM_CIRCUIT_STR)],
+                reset_latest_circ=False,
+            )
+
+            # but then post-process to grab the outcomes from the measurement record
+            current_mr = self.state.current_measurement_record()
+            mr_entries = [
+                int(mre)
+                for mre in current_mr[-len(self.latest_measurement_labels) :]
+            ]
+
+            for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
+                outcomes[qbit].append(cbit)
         else:
             raise NotImplementedError(f"Cannot apply InstrumentRep {reptype}")
 
