@@ -23,7 +23,7 @@ import typing
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
-from loqs.backends.state import BaseQuantumState
+from loqs.backends.state import BaseQuantumState, STIMQuantumState
 from loqs.core.frame import Frame
 from loqs.core.history import History
 from loqs.core.instructions import Instruction
@@ -728,6 +728,9 @@ def build_physical_circuit_instruction(
             data["measurement_outcomes"] = MeasurementOutcomes(outcomes)
         if len(error_injections):
             data["errored_circuit"] = errored_circuit
+        # TODO: Make this more general, maybe models have a "save_to_frame_attrs" or somethign
+        if isinstance(state, STIMQuantumState):
+            data["applied_stim_circuit"] = state.latest_applied_circuit
 
         return Frame(data)
 

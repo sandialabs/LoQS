@@ -49,6 +49,29 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     functions.
     """
 
+    _stim_oneq_gates: ClassVar[list[str]] = [
+        "I",
+        "X",
+        "Y",
+        "Z",
+        "C_XYZ",
+        "C_ZYX",
+        "H",
+        "H_XY",
+        "H_XZ",
+        "H_YZ",
+        "S",
+        "SQRT_X",
+        "SQRT_X_DAG",
+        "SQRT_Y",
+        "SQRT_Y_DAG",
+        "SQRT_Z",
+        "SQRT_Z_DAG",
+        "S_DAG",
+    ]
+    """STIM 1Q gates.
+    """
+
     _stim_twoq_gates: ClassVar[list[str]] = [
         "CNOT",
         "CX",
@@ -83,6 +106,60 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     of 2Q gates, since multiple 2Q gates can be defined
     in one line as pairs of indices. So we keep the 2Q
     gate names to check for them.
+    """
+
+    _stim_measure_reset_gates: ClassVar[list[str]] = [
+        "M",
+        "MR",
+        "MRX",
+        "MRY",
+        "MRZ",
+        "MX",
+        "MY",
+        "MZ",
+        "R",
+        "RX",
+        "RY",
+        "RZ",
+        "MXX",
+        "MYY",
+        "MZZ",
+    ]
+    """STIM measure and reset gates.
+
+    These may be treated differently as arguments may
+    include ! before the qubit index to denote that the
+    measurement should be flipped before being recorded.
+    """
+
+    _stim_noise_channels: ClassVar[list[str]] = [
+        "CORRELATED_ERROR",
+        "DEPOLARIZE1",
+        "DEPOLARIZE2",
+        "E",
+        "ELSE_CORRELATED_ERROR",
+        "HERALDED_ERASE",
+        "HERALDED_PAULI_CHANNEL_1",
+        "PAULI_CHANNEL_1",
+        "PAULI_CHANNEL_2",
+        "X_ERROR",
+        "Y_ERROR",
+        "Z_ERROR",
+    ]
+    """STIM noise channels.
+
+    These should probably not be part of a circuit
+    prior to it going through a :class:`.BaseNoiseModel`,
+    but currently they will just pass through.
+    """
+
+    _stim_gates: ClassVar[list[str]] = (
+        _stim_oneq_gates + _stim_twoq_gates + _stim_measure_reset_gates
+    )
+    """STIM 1Q, 2Q, and measurement gates.
+
+    These are the STIM instructions that will be treated
+    as possible keys into a :class:`.STIMDictNoiseModel`.
     """
 
     def __init__(
@@ -144,7 +221,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         new_lines = []
         for line in str(self.circuit).split("\n"):
             entries = line.split()
-            if len(entries) == 0 or entries[0] in self._stim_annotations:
+            if len(entries) == 0 or entries[0] not in self._stim_gates:
                 # Empty line or not a gate, don't do qubit idx check
                 pass
             elif any([qidx in qubit_idxs_to_delete for qidx in entries[1:]]):
@@ -170,7 +247,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         for lidx, lstr in enumerate(unrolled_str.split("TICK\n")):
             for line in lstr.split("\n"):
                 entries = line.split()
-                if len(entries) == 0 or entries[0] in self._stim_annotations:
+                if len(entries) == 0 or entries[0] not in self._stim_gates:
                     # Empty line or not a gate, skip to next line
                     continue
 
@@ -287,7 +364,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             layer_duration = None
             for line in lstr.split("\n"):
                 entries = line.split()
-                if len(entries) == 0 or entries[0] in self._stim_annotations:
+                if len(entries) == 0 or entries[0] not in self._stim_gates:
                     continue
 
                 duration = durations.get(entries[0], default_duration)

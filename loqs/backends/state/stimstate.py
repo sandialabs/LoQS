@@ -64,7 +64,6 @@ class STIMQuantumState(BaseQuantumState):
         return [
             GateRep.STIM_CIRCUIT_STR,
             GateRep.PROBABILISTIC_STIM_OPERATIONS,
-            GateRep.KRAUS_OPERATORS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
         ]
@@ -141,6 +140,8 @@ class STIMQuantumState(BaseQuantumState):
     def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
 
+        self.latest_applied_circuit = _Circuit()
+
         for reptuple in reps:
             reptype = reptuple.reptype
             if isinstance(reptype, GateRep):
@@ -178,26 +179,37 @@ class STIMQuantumState(BaseQuantumState):
         rep = reptuple.rep
 
         qubits = reptuple.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert isinstance(qubits, (tuple, list)) and all(
+            [isinstance(q, str) for q in qubits]
+        )
 
         reptype = reptuple.reptype
         assert isinstance(reptype, GateRep)
+
+        if len(qubits) == 0:
+            # This is a STIM annotation or comment, pass it on to applied circuit directly
+            assert isinstance(rep, str) and reptype == GateRep.STIM_CIRCUIT_STR
+            self.latest_applied_circuit += _Circuit(rep)
+            return
 
         if reptype == GateRep.STIM_CIRCUIT_STR:
             assert isinstance(rep, str)
 
             # Create mapping from placeholder to global qubit indices
-            local_to_global = {
-                str(i): str(self.qubit_labels.index(q))
-                for i, q in enumerate(qubits)
-            }
+            local_to_global = {}
+            for i, q in enumerate(qubits):
+                assert isinstance(q, str)
+                qidx = int(q.strip("!"))
+                negated = q.startswith("!")
+                local_to_global[str(i)] = (
+                    f"{'!' if negated else ''}{self.qubit_labels[qidx]}"
+                )
 
             # Split string for easy processing
             mapped_lines = []
             for line in rep.split("\n"):
-                if len(line) == 0 or line.startswith("TICK"):
-                    # TODO: We want to skip other annotations too...
-                    # Empty or TICK line, skip
+                if len(line) == 0:
+                    # Skip empty line
                     continue
 
                 entries = line.split()
@@ -209,6 +221,9 @@ class STIMQuantumState(BaseQuantumState):
 
             mapped_circuit_str = "\n".join(mapped_lines)
             mapped_circuit = _Circuit(mapped_circuit_str)
+
+            # Save executed circuit, needed for decoding via pymatching
+            self.latest_applied_circuit += mapped_circuit
 
             self.state.do_circuit(mapped_circuit)
         elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
@@ -228,95 +243,95 @@ class STIMQuantumState(BaseQuantumState):
 
             # Apply chosen op
             self.apply_reps_inplace([rep_to_apply])
-        elif reptype == GateRep.KRAUS_OPERATORS:
-            assert isinstance(rep, (list, tuple))
-            assert all(isinstance(K, np.ndarray) for K in rep)
+        # elif reptype == GateRep.KRAUS_OPERATORS:
+        #     assert isinstance(rep, (list, tuple))
+        #     assert all(isinstance(K, np.ndarray) for K in rep)
 
-            # Get the current state vector in little endian,
-            # i.e. entries correspond to 000, 001, 010, 011,
-            # 100, 101, 110, 111 for a 3-qubit example
-            state_vec = self.state.state_vector(endian="little")
+        #     # Get the current state vector in little endian,
+        #     # i.e. entries correspond to 000, 001, 010, 011,
+        #     # 100, 101, 110, 111 for a 3-qubit example
+        #     state_vec = self.state.state_vector(endian="little")
 
-            # We need to compute probabilities as:
-            # P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
-            # But our rho is a pure state, so we can simplify this to
-            # P_i = Tr[<\Psi| K_i^\dagger K_i |\Psi> ] = KPsi * KPsi
+        #     # We need to compute probabilities as:
+        #     # P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
+        #     # But our rho is a pure state, so we can simplify this to
+        #     # P_i = Tr[<\Psi| K_i^\dagger K_i |\Psi> ] = KPsi * KPsi
 
-            # We will do these computations using QuantumSim-like einsum calls
-            # First, we'll reshape the statevec into a tensor and use einsum
-            # to contract out the unaffected indices (and reorder if need)
-            # Then we can revectorize and simply do a matmul with our Kraus ops
-            Nq = len(self.qubit_labels)
-            state_vec_tensor = state_vec.reshape(
-                [
-                    2,
-                ]
-                * Nq
-            )
+        #     # We will do these computations using QuantumSim-like einsum calls
+        #     # First, we'll reshape the statevec into a tensor and use einsum
+        #     # to contract out the unaffected indices (and reorder if need)
+        #     # Then we can revectorize and simply do a matmul with our Kraus ops
+        #     Nq = len(self.qubit_labels)
+        #     state_vec_tensor = state_vec.reshape(
+        #         [
+        #             2,
+        #         ]
+        #         * Nq
+        #     )
 
-            # Trace out indices we don't need
-            # However, for state vec, these need to add in quadrature, like a density mx would
-            # I don't want to expand to a full density mx, but we can square now, trace, and sqrt,
-            # i.e. store the diagonals of the density mx. This is fine because we are only tracing
-            # over it anyway
-            # TODO: Not sure this is correct
-            in_indices = list(range(Nq))
-            out_indices = [self.qubit_labels.index(q) for q in qubits]
-            reduced_state_vec_tensor = np.einsum(
-                np.square(state_vec_tensor),
-                in_indices,
-                out_indices,
-                optimize=True,
-            )
-            # Also reshape to col vector, i.e. |\Psi>
-            reduced_state_vec = np.sqrt(reduced_state_vec_tensor).reshape(
-                (-1, 1)
-            )
+        #     # Trace out indices we don't need
+        #     # However, for state vec, these need to add in quadrature, like a density mx would
+        #     # I don't want to expand to a full density mx, but we can square now, trace, and sqrt,
+        #     # i.e. store the diagonals of the density mx. This is fine because we are only tracing
+        #     # over it anyway
+        #     # TODO: Not sure this is correct
+        #     in_indices = list(range(Nq))
+        #     out_indices = [self.qubit_labels.index(q) for q in qubits]
+        #     reduced_state_vec_tensor = np.einsum(
+        #         np.square(state_vec_tensor),
+        #         in_indices,
+        #         out_indices,
+        #         optimize=True,
+        #     )
+        #     # Also reshape to col vector, i.e. |\Psi>
+        #     reduced_state_vec = np.sqrt(reduced_state_vec_tensor).reshape(
+        #         (-1, 1)
+        #     )
 
-            # Now we can just compute our probabilities
-            probs = []
-            for K in rep:
-                KPsi = K @ reduced_state_vec
-                probs.append(np.sqrt(np.vdot(KPsi, KPsi)))
+        #     # Now we can just compute our probabilities
+        #     probs = []
+        #     for K in rep:
+        #         KPsi = K @ reduced_state_vec
+        #         probs.append(np.sqrt(np.vdot(KPsi, KPsi)))
 
-            # Pick an operation to sample
-            idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
+        #     # Pick an operation to sample
+        #     idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
 
-            # Get rescaled versions of the Kraus operator so that we can
-            # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i
-            rescaled_K = rep[idx_to_apply] / np.sqrt(probs[idx_to_apply])
+        #     # Get rescaled versions of the Kraus operator so that we can
+        #     # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i
+        #     rescaled_K = rep[idx_to_apply] / np.sqrt(probs[idx_to_apply])
 
-            # Use another einsum to multiply the rescaled Kraus operator through
-            # This effectively handles embedding the Kraus operator in the full space
-            # Borrows the reversed from QuantumSim, which I think is for efficiency?
-            out_indices = list(reversed(range(Nq)))
-            temp_indices = list(range(Nq, Nq + len(qubits)))
-            qubit_indices = [self.qubit_labels.index(q) for q in qubits]
-            in_indices = list(reversed(range(Nq)))
-            # Replace incoming indices with temp ones to do the matmul correctly
-            for ti, qidx in zip(temp_indices, qubit_indices):
-                in_indices[Nq - qidx - 1] = ti
-            K_indices = qubit_indices + temp_indices
+        #     # Use another einsum to multiply the rescaled Kraus operator through
+        #     # This effectively handles embedding the Kraus operator in the full space
+        #     # Borrows the reversed from QuantumSim, which I think is for efficiency?
+        #     out_indices = list(reversed(range(Nq)))
+        #     temp_indices = list(range(Nq, Nq + len(qubits)))
+        #     qubit_indices = [self.qubit_labels.index(q) for q in qubits]
+        #     in_indices = list(reversed(range(Nq)))
+        #     # Replace incoming indices with temp ones to do the matmul correctly
+        #     for ti, qidx in zip(temp_indices, qubit_indices):
+        #         in_indices[Nq - qidx - 1] = ti
+        #     K_indices = qubit_indices + temp_indices
 
-            # Perform contraction to get new state
-            new_state_vec = np.einsum(
-                state_vec_tensor,
-                in_indices,
-                rescaled_K,
-                K_indices,
-                out_indices,
-                optimize=True,
-            )
+        #     # Perform contraction to get new state
+        #     new_state_vec = np.einsum(
+        #         state_vec_tensor,
+        #         in_indices,
+        #         rescaled_K,
+        #         K_indices,
+        #         out_indices,
+        #         optimize=True,
+        #     )
 
-            # Overwrite simulator state (with the flatted state vector)
-            self.state.set_state_from_state_vector(
-                new_state_vec.ravel(), endian="little"
-            )
+        #     # Overwrite simulator state (with the flatted state vector)
+        #     self.state.set_state_from_state_vector(
+        #         new_state_vec.ravel(), endian="little"
+        #     )
 
-            # Check that STIM has not snapped our state down
-            assert np.allclose(
-                self.state.state_vector(), new_state_vec
-            ), "State vec changed, likely not a stabilizer state"
+        #     # Check that STIM has not snapped our state down
+        #     assert np.allclose(
+        #         self.state.state_vector(), new_state_vec
+        #     ), "State vec changed, likely not a stabilizer state"
         else:
             raise NotImplementedError(f"Cannot apply GateRep {reptype}")
 

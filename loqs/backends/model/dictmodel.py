@@ -61,8 +61,12 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
             the second argument of the rep, indicating whether outcomes
             should be kept (``True``, default) or not (``False``).
         """
-        self.gate_dict: dict[tuple[str, tuple[str | int, ...]], object] = {}
-        self.inst_dict: dict[tuple[str, tuple[str | int, ...]], object] = {}
+        self.gate_dict: dict[
+            str | tuple[str, tuple[str | int, ...]], object
+        ] = {}
+        self.inst_dict: dict[
+            str | tuple[str, tuple[str | int, ...]], object
+        ] = {}
         if isinstance(model_or_dicts, DictNoiseModel):
             self.gate_dict = model_or_dicts.gate_dict.copy()
             self.inst_dict = model_or_dicts.inst_dict.copy()
@@ -125,11 +129,13 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
             return gr
 
         # Run through gates and upgrade everything to RepTuples
-        for (name, qubits), gr in self.gate_dict.items():
-            self.gate_dict[name, qubits] = convert_to_gatereptuple(gr, qubits)
+        for k, gr in self.gate_dict.items():
+            qubits = tuple() if isinstance(k, str) else k[1]
+            self.gate_dict[k] = convert_to_gatereptuple(gr, qubits)
 
         # Run through instrument dict and upgrade everything to RepTuples
-        for (name, qubits), ir in self.inst_dict.items():
+        for k, ir in self.inst_dict.items():
+            qubits = tuple() if isinstance(k, str) else k[1]
             if (
                 not isinstance(ir, RepTuple)
                 and isinstance(ir, (tuple, list))
@@ -137,7 +143,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 and (ir[0] is None or isinstance(ir[0], int))
                 and isinstance(ir[1], bool)
             ):
-                self.inst_dict[name, qubits] = RepTuple(
+                self.inst_dict[k] = RepTuple(
                     ir, qubits, InstrumentRep.ZBASIS_PROJECTION
                 )
             elif (
@@ -150,7 +156,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                     + "ZBASIS_PRE_POST_OPERATIONS not passed as a valid instrument rep"
                 )
                 # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
-                self.inst_dict[name, qubits] = RepTuple(
+                self.inst_dict[k] = RepTuple(
                     (
                         instrep_cast_reset,
                         instrep_cast_include_outcomes,
@@ -168,7 +174,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                     + "ZBASIS_OUTCOME_OPERATION_DICT not passed as a valid instrument rep"
                 )
                 # Assume this is a dict of PTMS that we need to turn it into a RepTuple
-                self.inst_dict[name, qubits] = RepTuple(
+                self.inst_dict[k] = RepTuple(
                     (
                         {
                             k: convert_to_gatereptuple(v, qubits)
@@ -234,8 +240,16 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 reptuple = self.gate_dict.get(label, None)
 
                 if reptuple is None:
+                    # Also try to look up just by name
+                    reptuple = self.gate_dict.get(label[0], None)
+
+                if reptuple is None:
                     # Failed, now look up in instruments
                     reptuple = self.inst_dict.get(label, None)
+
+                if reptuple is None:
+                    # Also try to look up just by name
+                    reptuple = self.inst_dict.get(label[0], None)
 
                 assert reptuple is not None, f"Failed to look up {label}"
                 assert isinstance(reptuple, RepTuple)
