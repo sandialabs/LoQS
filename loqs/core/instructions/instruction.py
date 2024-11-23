@@ -421,14 +421,20 @@ class Instruction(Displayable):
 
         return obj
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         # Ordering here is to be nicer during display()
         state.update(
             {
                 "name": self.name,
                 "type": self.type,
-                "data": self.serialize(self.data, hash_to_serial_id_cache),
+                "data": self.serialize(
+                    self.data,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
+                ),
                 "param_error_behavior": self.param_error_behavior,
                 "_param_priorities": self._param_priorities,
                 "_param_aliases": self._param_aliases,

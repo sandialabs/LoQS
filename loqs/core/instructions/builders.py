@@ -730,7 +730,9 @@ def build_physical_circuit_instruction(
             data["errored_circuit"] = errored_circuit
         # TODO: Make this more general, maybe models have a "save_to_frame_attrs" or somethign
         if isinstance(state, STIMQuantumState):
-            data["applied_stim_circuit"] = state.latest_applied_circuit
+            data["applied_stim_circuit_str"] = str(
+                state.latest_applied_circuit
+            )
 
         return Frame(data)
 

@@ -27,7 +27,9 @@ class RepEnum(Displayable, Enum):
         value = state["value"]
         return cls(value)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update({"value": self.value})
         return state
@@ -275,7 +277,9 @@ class RepTuple(Castable, Displayable):
         assert isinstance(reptype, RepEnum)
         return cls(rep, qubits, reptype)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {

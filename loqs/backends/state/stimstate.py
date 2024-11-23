@@ -14,7 +14,6 @@ from loqs.backends.model.basemodel import InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 
-
 try:
     from stim import Circuit as _Circuit
     from stim import Tableau as _Tableau
@@ -210,7 +209,17 @@ class STIMQuantumState(BaseQuantumState):
             local_to_internal = {}
             for i, q in enumerate(qubits):
                 assert isinstance(q, str)
-                qidx = int(q.strip("!"))
+                qidx = q.strip("!")
+                if qidx not in self.qubit_labels:
+                    try:
+                        qidx = int(qidx)
+                        assert (
+                            qidx in self.qubit_labels
+                        ), f"{qidx} not in qubit labels as str or int"
+                    except ValueError:
+                        raise ValueError(
+                            f"{qidx} not in qubit labels as str but failed to convert to int"
+                        )
                 negated = q.startswith("!")
                 local_to_internal[str(i)] = (
                     f"{'!' if negated else ''}{self.qubit_labels.index(qidx)}"
@@ -265,8 +274,13 @@ class STIMQuantumState(BaseQuantumState):
             # Save executed circuit, needed for decoding via pymatching
             # This one we do in global labels since we don't need the smaller internal space,
             # and this is less confusing to read off
-            global_circuit_str = "\n".join(global_lines)
-            self.latest_applied_circuit += _Circuit(global_circuit_str)
+            try:
+                global_circuit_str = "\n".join(global_lines)
+                self.latest_applied_circuit += _Circuit(global_circuit_str)
+            except ValueError:
+                # STIM failed to convert, our global labels are probably non-int strings
+                # Fall back to internal representation
+                self.latest_applied_circuit += internal_circuit
         elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
             assert isinstance(rep, (list, tuple))
             probs = [r[1] for r in rep]
@@ -284,95 +298,6 @@ class STIMQuantumState(BaseQuantumState):
 
             # Apply chosen op
             self.apply_reps_inplace([rep_to_apply], reset_latest_circ=False)
-        # elif reptype == GateRep.KRAUS_OPERATORS:
-        #     assert isinstance(rep, (list, tuple))
-        #     assert all(isinstance(K, np.ndarray) for K in rep)
-
-        #     # Get the current state vector in little endian,
-        #     # i.e. entries correspond to 000, 001, 010, 011,
-        #     # 100, 101, 110, 111 for a 3-qubit example
-        #     state_vec = self.state.state_vector(endian="little")
-
-        #     # We need to compute probabilities as:
-        #     # P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
-        #     # But our rho is a pure state, so we can simplify this to
-        #     # P_i = Tr[<\Psi| K_i^\dagger K_i |\Psi> ] = KPsi * KPsi
-
-        #     # We will do these computations using QuantumSim-like einsum calls
-        #     # First, we'll reshape the statevec into a tensor and use einsum
-        #     # to contract out the unaffected indices (and reorder if need)
-        #     # Then we can revectorize and simply do a matmul with our Kraus ops
-        #     Nq = len(self.qubit_labels)
-        #     state_vec_tensor = state_vec.reshape(
-        #         [
-        #             2,
-        #         ]
-        #         * Nq
-        #     )
-
-        #     # Trace out indices we don't need
-        #     # However, for state vec, these need to add in quadrature, like a density mx would
-        #     # I don't want to expand to a full density mx, but we can square now, trace, and sqrt,
-        #     # i.e. store the diagonals of the density mx. This is fine because we are only tracing
-        #     # over it anyway
-        #     # TODO: Not sure this is correct
-        #     in_indices = list(range(Nq))
-        #     out_indices = [self.qubit_labels.index(q) for q in qubits]
-        #     reduced_state_vec_tensor = np.einsum(
-        #         np.square(state_vec_tensor),
-        #         in_indices,
-        #         out_indices,
-        #         optimize=True,
-        #     )
-        #     # Also reshape to col vector, i.e. |\Psi>
-        #     reduced_state_vec = np.sqrt(reduced_state_vec_tensor).reshape(
-        #         (-1, 1)
-        #     )
-
-        #     # Now we can just compute our probabilities
-        #     probs = []
-        #     for K in rep:
-        #         KPsi = K @ reduced_state_vec
-        #         probs.append(np.sqrt(np.vdot(KPsi, KPsi)))
-
-        #     # Pick an operation to sample
-        #     idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
-
-        #     # Get rescaled versions of the Kraus operator so that we can
-        #     # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i
-        #     rescaled_K = rep[idx_to_apply] / np.sqrt(probs[idx_to_apply])
-
-        #     # Use another einsum to multiply the rescaled Kraus operator through
-        #     # This effectively handles embedding the Kraus operator in the full space
-        #     # Borrows the reversed from QuantumSim, which I think is for efficiency?
-        #     out_indices = list(reversed(range(Nq)))
-        #     temp_indices = list(range(Nq, Nq + len(qubits)))
-        #     qubit_indices = [self.qubit_labels.index(q) for q in qubits]
-        #     in_indices = list(reversed(range(Nq)))
-        #     # Replace incoming indices with temp ones to do the matmul correctly
-        #     for ti, qidx in zip(temp_indices, qubit_indices):
-        #         in_indices[Nq - qidx - 1] = ti
-        #     K_indices = qubit_indices + temp_indices
-
-        #     # Perform contraction to get new state
-        #     new_state_vec = np.einsum(
-        #         state_vec_tensor,
-        #         in_indices,
-        #         rescaled_K,
-        #         K_indices,
-        #         out_indices,
-        #         optimize=True,
-        #     )
-
-        #     # Overwrite simulator state (with the flatted state vector)
-        #     self.state.set_state_from_state_vector(
-        #         new_state_vec.ravel(), endian="little"
-        #     )
-
-        #     # Check that STIM has not snapped our state down
-        #     assert np.allclose(
-        #         self.state.state_vector(), new_state_vec
-        #     ), "State vec changed, likely not a stabilizer state"
         else:
             raise NotImplementedError(f"Cannot apply GateRep {reptype}")
 
@@ -470,20 +395,23 @@ class STIMQuantumState(BaseQuantumState):
         cls: type[T], state: Mapping, serial_id_to_obj_cache=None
     ) -> T:
         qubit_labels = state["qubit_labels"]
+        seed = state["seed"]
         tableau_circ = _Circuit(state["_stim_tableau_circuit"])
-        # TODO: This does not set serialization... not sure I can do much about that
-        # Do I recommend doing a copy with a new seed after deserialization?
-        return cls(
+        obj = cls(
             _Tableau.from_circuit(tableau_circ), qubit_labels=qubit_labels
         )
+        obj.reset_seed(seed)
+        return obj
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         tableau_circ = self.state.current_inverse_tableau().to_circuit()
-        # TODO: Missing RNG!
         state.update(
             {
                 "qubit_labels": self.qubit_labels,
+                "seed": self.seed,
                 "_stim_tableau_circuit": str(tableau_circ),
             }
         )

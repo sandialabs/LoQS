@@ -167,12 +167,16 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         assert isinstance(instructions, list)
         return cls(instructions)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {
                 "_instructions": self.serialize(
-                    self._instructions, hash_to_serial_id_cache
+                    self._instructions,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 )
             }
         )

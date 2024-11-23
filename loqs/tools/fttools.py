@@ -3,12 +3,18 @@
 
 from collections.abc import Sequence
 from copy import deepcopy
-
 from tqdm import tqdm
+
+try:
+    from dask.distributed import Client, progress
+except ImportError:
+    Client = None  # type: ignore
+
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions import Instruction, InstructionLabel
+from loqs.tools.dasktools import run_program_list
 
 
 def build_discrete_error_injection_programs(
@@ -161,6 +167,7 @@ def run_discrete_error_injected_programs(
     collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
     expected_outcomes: Sequence,
     num_shots: int = 1,
+    dask_client: Client | None = None,  # type: ignore
 ) -> list[QuantumProgram]:
     """Call :meth:`.test_program_output` on many programs.
 
@@ -179,20 +186,42 @@ def run_discrete_error_injected_programs(
     num_shots:
         See :meth:`.test_program_output`.
 
+    dask_client:
+        A Dask client to use for parallelizing over programs
+        (as this is likely a better strategy than parallelizing
+        over small number of shots per program).
+        Defaults to ``None``, which runs shots in serial.
+
     Returns
     -------
     list[QuantumProgram]
         The failed programs
     """
     failed = []
-    for program in tqdm(
-        errored_programs, "Running discrete error injected programs"
-    ):
-        success = test_program_output(
-            program, collect_shot_data_args, expected_outcomes, num_shots
-        )
-        if not success:
-            failed.append(program)
+
+    if dask_client is None:
+        tasks = [
+            (p, collect_shot_data_args, expected_outcomes, num_shots)
+            for p in errored_programs
+        ]
+        for task in tqdm(tasks, "Running discrete error injected programs"):
+            success = test_program_output(*task)
+            if not success:
+                failed.append(task[0])
+    else:
+        print("Running discrete error injected programs in parallel with Dask")
+        run_program_list(errored_programs, dask_client, num_shots)
+
+        for program in errored_programs:
+            success = test_program_output(
+                program,
+                collect_shot_data_args,
+                expected_outcomes,
+                num_shots,
+                skip_run=True,
+            )
+            if not success:
+                failed.append(program)
 
     if len(failed):
         print(f"Failed {len(failed)} programs!")
@@ -208,6 +237,7 @@ def test_program_output(
     expected_outcomes: Sequence,
     num_shots: int = 1,
     verbose: bool = False,
+    skip_run: bool = False,
 ) -> bool:
     """Test a program against expected output.
 
@@ -236,7 +266,9 @@ def test_program_output(
     bool
         ``True`` if all outputs match expected, ``False`` on failure
     """
-    test_program.run(num_shots=num_shots, verbose=False)
+    if not skip_run:
+        test_program.run(num_shots=num_shots, verbose=False)
+
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
         outs = test_program.collect_shot_data(*args)

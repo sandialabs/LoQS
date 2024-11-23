@@ -280,7 +280,9 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         instreps = [InstrumentRep(v) for v in state["_instreps"]]
         return cls((gate_dict, inst_dict), gatereps, instreps)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         # Not worth caching below this object (i.e. don't pass cache on)
         state = super()._to_serialization()
         state.update(

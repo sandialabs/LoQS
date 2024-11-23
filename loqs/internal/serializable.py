@@ -10,11 +10,20 @@ import gzip
 import importlib
 import inspect
 import json
+import pickle
 import numpy as np
 import re
 import scipy.sparse as sps
 import textwrap
 from typing import Any, Callable, ClassVar
+import zlib
+
+try:
+    from distributed.protocol.serialize import dask_deserialize, dask_serialize
+
+    DASK_SERIALIZE = True
+except ImportError:
+    DASK_SERIALIZE = False
 
 class_location_changes: dict[tuple[str, str], tuple[str, str]] = (
     {}
@@ -65,7 +74,9 @@ class Serializable:
         pass
 
     @abstractmethod
-    def _to_serialization(self, hash_to_serial_id_cache=None):
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ):
         state = {
             "module": self.__class__.__module__,
             "class": self.__class__.__name__,
@@ -320,7 +331,9 @@ class Serializable:
         """
         return self._dump_or_dumps(None, format, **format_kwargs)
 
-    def to_serialization(self, hash_to_serial_id_cache=None):
+    def to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ):
         """
         Serialize this object in a way that adheres to "niceness" rules of common text file formats.
 
@@ -330,6 +343,12 @@ class Serializable:
             A dictionary of object hash keys with serialized id values.
             Defaults to None, which disables cache usage. It is highly recommended that the
             cache is used for serialization, and high-level functions like `write()` do so.
+
+        ignore_no_serialize_flags:
+            Ignore flags in objects that ignore serialization. While those are designed
+            to save space when saving to disk, serialization can also be used for
+            communicating objects (e.g. via Dask). In those cases, we want to serialize
+            all subobjects.
 
         Returns
         -------
@@ -351,7 +370,9 @@ class Serializable:
                 # Cache miss
                 pass
 
-        state = self._to_serialization(hash_to_serial_id_cache)
+        state = self._to_serialization(
+            hash_to_serial_id_cache, ignore_no_serialize_flags
+        )
 
         # Add this to the cache, if class marked as should be cached
         if hash_to_serial_id_cache is not None and self.CACHE_ON_SERIALIZE:
@@ -566,7 +587,9 @@ class Serializable:
         return hash(obj)
 
     @staticmethod
-    def serialize(obj, hash_to_serial_id_cache=None):
+    def serialize(
+        obj, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ):
         """Helper function to recursively serialize objects."""
         if isinstance(obj, dict):
             serial_dict = {}
@@ -574,14 +597,17 @@ class Serializable:
                 if isinstance(k, tuple):
                     k = str(k)
                 serial_dict[k] = Serializable.serialize(
-                    v, hash_to_serial_id_cache
+                    v, hash_to_serial_id_cache, ignore_no_serialize_flags
                 )
             return serial_dict
         elif isinstance(obj, np.ndarray) or sps.issparse(obj):
             return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
         elif isinstance(obj, (list, tuple, set)):
             return [
-                Serializable.serialize(e, hash_to_serial_id_cache) for e in obj
+                Serializable.serialize(
+                    e, hash_to_serial_id_cache, ignore_no_serialize_flags
+                )
+                for e in obj
             ]
         elif isinstance(obj, type):
             # This should be before function serialization,
@@ -591,7 +617,9 @@ class Serializable:
         elif isinstance(obj, Callable):
             return Serializable._serialize_function(obj)
         elif isinstance(obj, Serializable):
-            return obj.to_serialization(hash_to_serial_id_cache)
+            return obj.to_serialization(
+                hash_to_serial_id_cache, ignore_no_serialize_flags
+            )
 
         # Otherwise, assume we are a built-in serializable object
         return obj
@@ -737,3 +765,39 @@ class Serializable:
             )
             encoded = np.array([enc(x) for x in mx.flat])
             return encoded.reshape(mx.shape).tolist()
+
+
+# Provide custom serialization for Dask
+# Based on https://distributed.dask.org/en/stable/serialization.html#dask-serialization-family
+if DASK_SERIALIZE:
+
+    @dask_serialize.register(Serializable)
+    def loqs_serialize(obj: Serializable) -> tuple[dict, list[bytes]]:
+        header = {}
+
+        # Try pickle first
+        try:
+            frames = [pickle.dumps(obj)]
+        except TypeError:
+            # We've failed to pickle, go to more cumbersome Serialization fallback
+            obj_dict = obj.to_serialization(ignore_no_serialize_flags=True)
+            obj_str = json.dumps(obj_dict)
+            frames = [zlib.compress(obj_str.encode())]
+
+        return header, frames
+
+    @dask_deserialize.register(Serializable)
+    def loqs_deserialize(header: dict, frames: list[bytes]) -> Serializable:
+        # Concatenate frames
+        frame = b""
+        for f in frames:
+            frame += f
+
+        # Try pickle first
+        try:
+            obj = pickle.loads(frame)
+        except pickle.UnpicklingError:
+            # Fallback to Serializable
+            obj_str = zlib.decompress(frame).decode()
+            obj = Serializable.loads(obj_str)
+        return obj
