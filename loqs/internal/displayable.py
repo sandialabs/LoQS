@@ -124,7 +124,7 @@ class DisplayableViewer(tk.Tk):
                         parent_id,
                         "end",
                         text="",
-                        values=(indentation + key, ""),
+                        values=(indentation + str(key), ""),
                     )
                     # Insert nested dictionary items
                     self.insert_items(child_id, value, depth + 1)
@@ -134,7 +134,7 @@ class DisplayableViewer(tk.Tk):
                         parent_id,
                         "end",
                         text="",
-                        values=(indentation + key, value),
+                        values=(indentation + str(key), value),
                     )
             else:
                 # If the value is not a dictionary or list, insert it as a child item
@@ -142,7 +142,7 @@ class DisplayableViewer(tk.Tk):
                     parent_id,
                     "end",
                     text="",
-                    values=(indentation + key, value),
+                    values=(indentation + str(key), value),
                 )
 
     def on_item_click(self, event):

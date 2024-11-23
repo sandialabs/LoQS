@@ -513,7 +513,9 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         circuit = cls._deserialize_circuit(state["circuit"], qubit_labels)
         return cls(circuit, qubit_labels)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {

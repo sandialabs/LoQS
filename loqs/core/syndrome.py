@@ -51,7 +51,9 @@ class SyndromeLabel(Castable, Displayable):
         outcome_idx = state["outcome_idx"]
         return cls(qubit_label, frame_idx, outcome_idx)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {
@@ -289,7 +291,9 @@ class PauliFrame(SeqCastable, Displayable):
         pauli_frame = list(state["pauli_frame"])
         return cls(qubit_labels, pauli_frame)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {

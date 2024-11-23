@@ -14,7 +14,6 @@ from loqs.backends.model.basemodel import InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 
-
 try:
     from stim import Circuit as _Circuit
     from stim import Tableau as _Tableau
@@ -64,9 +63,9 @@ class STIMQuantumState(BaseQuantumState):
         return [
             GateRep.STIM_CIRCUIT_STR,
             GateRep.PROBABILISTIC_STIM_OPERATIONS,
-            GateRep.KRAUS_OPERATORS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            InstrumentRep.STIM_CIRCUIT_STR,
         ]
 
     def __init__(
@@ -127,6 +126,9 @@ class STIMQuantumState(BaseQuantumState):
         self.seed = seed
         self._rng = np.random.default_rng(seed)
 
+        self.latest_applied_circuit = _Circuit()
+        self.latest_measurement_labels = []
+
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
         s += f"  STIM state on {self.state.num_qubits} qubits"
@@ -138,8 +140,13 @@ class STIMQuantumState(BaseQuantumState):
             (hash(self._state), self.hash(self.qubit_labels), self.seed)
         )
 
-    def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
+    def apply_reps_inplace(
+        self, reps: Sequence, reset_latest_circ: bool = True
+    ) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
+
+        if reset_latest_circ:
+            self.latest_applied_circuit = _Circuit()
 
         for reptuple in reps:
             reptype = reptuple.reptype
@@ -178,39 +185,102 @@ class STIMQuantumState(BaseQuantumState):
         rep = reptuple.rep
 
         qubits = reptuple.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert isinstance(qubits, (tuple, list)) and all(
+            [isinstance(q, str) for q in qubits]
+        )
 
         reptype = reptuple.reptype
         assert isinstance(reptype, GateRep)
 
+        if len(qubits) == 0:
+            # This is a STIM annotation or comment, pass it on to applied circuit directly
+            assert isinstance(rep, str) and reptype == GateRep.STIM_CIRCUIT_STR
+            self.latest_applied_circuit += _Circuit(rep)
+            return
+
         if reptype == GateRep.STIM_CIRCUIT_STR:
             assert isinstance(rep, str)
 
-            # Create mapping from placeholder to global qubit indices
-            local_to_global = {
-                str(i): str(self.qubit_labels.index(q))
-                for i, q in enumerate(qubits)
-            }
+            # We have three types of indices here
+            # Local: The placeholder/template qubit used in the rep
+            # Global: The qubit label
+            # Internal: The qubit label index
+            local_to_global = {}
+            local_to_internal = {}
+            for i, q in enumerate(qubits):
+                assert isinstance(q, str)
+                qidx = q.strip("!")
+                if qidx not in self.qubit_labels:
+                    try:
+                        qidx = int(qidx)
+                        assert (
+                            qidx in self.qubit_labels
+                        ), f"{qidx} not in qubit labels as str or int"
+                    except ValueError:
+                        raise ValueError(
+                            f"{qidx} not in qubit labels as str but failed to convert to int"
+                        )
+                negated = q.startswith("!")
+                local_to_internal[str(i)] = (
+                    f"{'!' if negated else ''}{self.qubit_labels.index(qidx)}"
+                )
+                local_to_global[str(i)] = f"{'!' if negated else ''}{qidx}"
 
             # Split string for easy processing
-            mapped_lines = []
+            internal_lines = []
+            global_lines = []
             for line in rep.split("\n"):
-                if len(line) == 0 or line.startswith("TICK"):
-                    # TODO: We want to skip other annotations too...
-                    # Empty or TICK line, skip
+                if len(line) == 0:
+                    # Skip empty line
                     continue
 
                 entries = line.split()
 
-                mapped_entries = [entries[0]]  # instruction is unchanged
-                mapped_entries += [local_to_global[e] for e in entries[1:]]
+                internal_entries = [entries[0]]  # instruction is unchanged
+                internal_entries += [local_to_internal[e] for e in entries[1:]]
 
-                mapped_lines.append(" ".join(mapped_entries))
+                # Pull measurement labels, if they exist
+                command = entries[0].split("(")[0]
+                # Subset of measure/reset gates that we want to record
+                include_outcomes = [
+                    "M",
+                    "MX",
+                    "MY",
+                    "MZ",
+                    "MR",
+                    "MRX",
+                    "MRY",
+                    "MRZ",
+                ]
+                if command in include_outcomes:
+                    noneg_internal_entries = [
+                        self.qubit_labels[int(me.strip("!"))]
+                        for me in internal_entries[1:]
+                    ]
+                    self.latest_measurement_labels.extend(
+                        noneg_internal_entries
+                    )
 
-            mapped_circuit_str = "\n".join(mapped_lines)
-            mapped_circuit = _Circuit(mapped_circuit_str)
+                internal_lines.append(" ".join(internal_entries))
 
-            self.state.do_circuit(mapped_circuit)
+                global_entries = [entries[0]]  # instruction is unchanged
+                global_entries += [local_to_global[e] for e in entries[1:]]
+                global_lines.append(" ".join(global_entries))
+
+            internal_circuit_str = "\n".join(internal_lines)
+            internal_circuit = _Circuit(internal_circuit_str)
+            self.state.do_circuit(internal_circuit)
+
+            # Save executed circuit, needed for decoding via pymatching
+            # This one we do in global labels since we don't need the smaller internal space,
+            # and this is less confusing to read off
+            try:
+                global_circuit_str = "\n".join(global_lines)
+                self.latest_applied_circuit += _Circuit(global_circuit_str)
+            except ValueError:
+                # STIM failed to convert, our global labels are probably non-int strings
+                # Fall back to internal representation
+                self.latest_applied_circuit += internal_circuit
         elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
             assert isinstance(rep, (list, tuple))
             probs = [r[1] for r in rep]
@@ -227,104 +297,12 @@ class STIMQuantumState(BaseQuantumState):
             )
 
             # Apply chosen op
-            self.apply_reps_inplace([rep_to_apply])
-        elif reptype == GateRep.KRAUS_OPERATORS:
-            assert isinstance(rep, (list, tuple))
-            assert all(isinstance(K, np.ndarray) for K in rep)
-
-            # Get the current state vector in little endian,
-            # i.e. entries correspond to 000, 001, 010, 011,
-            # 100, 101, 110, 111 for a 3-qubit example
-            state_vec = self.state.state_vector(endian="little")
-
-            # We need to compute probabilities as:
-            # P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
-            # But our rho is a pure state, so we can simplify this to
-            # P_i = Tr[<\Psi| K_i^\dagger K_i |\Psi> ] = KPsi * KPsi
-
-            # We will do these computations using QuantumSim-like einsum calls
-            # First, we'll reshape the statevec into a tensor and use einsum
-            # to contract out the unaffected indices (and reorder if need)
-            # Then we can revectorize and simply do a matmul with our Kraus ops
-            Nq = len(self.qubit_labels)
-            state_vec_tensor = state_vec.reshape(
-                [
-                    2,
-                ]
-                * Nq
-            )
-
-            # Trace out indices we don't need
-            # However, for state vec, these need to add in quadrature, like a density mx would
-            # I don't want to expand to a full density mx, but we can square now, trace, and sqrt,
-            # i.e. store the diagonals of the density mx. This is fine because we are only tracing
-            # over it anyway
-            # TODO: Not sure this is correct
-            in_indices = list(range(Nq))
-            out_indices = [self.qubit_labels.index(q) for q in qubits]
-            reduced_state_vec_tensor = np.einsum(
-                np.square(state_vec_tensor),
-                in_indices,
-                out_indices,
-                optimize=True,
-            )
-            # Also reshape to col vector, i.e. |\Psi>
-            reduced_state_vec = np.sqrt(reduced_state_vec_tensor).reshape(
-                (-1, 1)
-            )
-
-            # Now we can just compute our probabilities
-            probs = []
-            for K in rep:
-                KPsi = K @ reduced_state_vec
-                probs.append(np.sqrt(np.vdot(KPsi, KPsi)))
-
-            # Pick an operation to sample
-            idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
-
-            # Get rescaled versions of the Kraus operator so that we can
-            # perform: \rho \rightarrow K_i \rho K_i^\dagger / P_i
-            rescaled_K = rep[idx_to_apply] / np.sqrt(probs[idx_to_apply])
-
-            # Use another einsum to multiply the rescaled Kraus operator through
-            # This effectively handles embedding the Kraus operator in the full space
-            # Borrows the reversed from QuantumSim, which I think is for efficiency?
-            out_indices = list(reversed(range(Nq)))
-            temp_indices = list(range(Nq, Nq + len(qubits)))
-            qubit_indices = [self.qubit_labels.index(q) for q in qubits]
-            in_indices = list(reversed(range(Nq)))
-            # Replace incoming indices with temp ones to do the matmul correctly
-            for ti, qidx in zip(temp_indices, qubit_indices):
-                in_indices[Nq - qidx - 1] = ti
-            K_indices = qubit_indices + temp_indices
-
-            # Perform contraction to get new state
-            new_state_vec = np.einsum(
-                state_vec_tensor,
-                in_indices,
-                rescaled_K,
-                K_indices,
-                out_indices,
-                optimize=True,
-            )
-
-            # Overwrite simulator state (with the flatted state vector)
-            self.state.set_state_from_state_vector(
-                new_state_vec.ravel(), endian="little"
-            )
-
-            # Check that STIM has not snapped our state down
-            assert np.allclose(
-                self.state.state_vector(), new_state_vec
-            ), "State vec changed, likely not a stabilizer state"
+            self.apply_reps_inplace([rep_to_apply], reset_latest_circ=False)
         else:
             raise NotImplementedError(f"Cannot apply GateRep {reptype}")
 
     def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
         rep = reptuple.rep
-        assert isinstance(rep, (tuple, list)) and len(rep) > 1
-        reset = rep[0]
-        include_outcomes = rep[1]
 
         qubits = reptuple.qubits
         assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
@@ -335,11 +313,19 @@ class STIMQuantumState(BaseQuantumState):
         outcomes: OutcomeDict = defaultdict(list)
 
         if reptype == InstrumentRep.ZBASIS_PROJECTION:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            reset = rep[0]
+            include_outcomes = rep[1]
+
             for qbit in qubits:
                 cbit = self._measure_and_reset(qbit, reset)
                 if include_outcomes:
                     outcomes[qbit].append(cbit)
         elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            reset = rep[0]
+            include_outcomes = rep[1]
+
             # Check we can apply the reps
             preop = rep[2]
             postop = rep[3]
@@ -363,6 +349,26 @@ class STIMQuantumState(BaseQuantumState):
 
             # Apply the post-op
             self.apply_reps_inplace([postop])
+        elif reptype == InstrumentRep.STIM_CIRCUIT_STR:
+            assert isinstance(rep, str)
+
+            self.latest_measurement_labels = []
+
+            # We'll reuse the gate apply code...
+            self.apply_reps_inplace(
+                [RepTuple(rep, qubits, GateRep.STIM_CIRCUIT_STR)],
+                reset_latest_circ=False,
+            )
+
+            # but then post-process to grab the outcomes from the measurement record
+            current_mr = self.state.current_measurement_record()
+            mr_entries = [
+                int(mre)
+                for mre in current_mr[-len(self.latest_measurement_labels) :]
+            ]
+
+            for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
+                outcomes[qbit].append(cbit)
         else:
             raise NotImplementedError(f"Cannot apply InstrumentRep {reptype}")
 
@@ -389,20 +395,23 @@ class STIMQuantumState(BaseQuantumState):
         cls: type[T], state: Mapping, serial_id_to_obj_cache=None
     ) -> T:
         qubit_labels = state["qubit_labels"]
+        seed = state["seed"]
         tableau_circ = _Circuit(state["_stim_tableau_circuit"])
-        # TODO: This does not set serialization... not sure I can do much about that
-        # Do I recommend doing a copy with a new seed after deserialization?
-        return cls(
+        obj = cls(
             _Tableau.from_circuit(tableau_circ), qubit_labels=qubit_labels
         )
+        obj.reset_seed(seed)
+        return obj
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         tableau_circ = self.state.current_inverse_tableau().to_circuit()
-        # TODO: Missing RNG!
         state.update(
             {
                 "qubit_labels": self.qubit_labels,
+                "seed": self.seed,
                 "_stim_tableau_circuit": str(tableau_circ),
             }
         )

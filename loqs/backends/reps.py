@@ -27,7 +27,9 @@ class RepEnum(Displayable, Enum):
         value = state["value"]
         return cls(value)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update({"value": self.value})
         return state
@@ -65,11 +67,15 @@ class GateRep(RepEnum):
     STIM_CIRCUIT_STR = 4
     """STIM circuit string
 
-    The expected rep type is STIM circuit string placeholder
-    qubit labels. The string can include bott gates (e.g. ``"H"``,
+    The expected rep type is a STIM circuit string with placeholder
+    qubit labels. The string can include both gates (e.g. ``"H"``,
     ``"CX"``) and noise specifications (e.g. ``"X_ERROR(<rate>)"``,
-    ``"DEPOLARIZE1(<rate>)"``). Qubit labels are placeholders
-    indexing into paired :attr:`.RepTuple.qubits`.
+    ``"DEPOLARIZE1(<rate>)"``). However, this should not include
+    measurement or reset gates; for those, use
+    :attr:`.InstrumentRep.STIM_CIRCUIT_STR` instead.
+
+    Qubit labels are placeholders indexing into the paired
+    :attr:`.RepTuple.qubits`.
     """
 
     PROBABILISTIC_STIM_OPERATIONS = 5
@@ -169,6 +175,31 @@ class InstrumentRep(RepEnum):
     e.g. ({...}, False) would look like a noisy reset.
     """
 
+    # It is a coincidence that the Enum value is the same as in GateRep
+    STIM_CIRCUIT_STR = 4
+    """STIM circuit string
+
+    The expected rep type is a STIM circuit string with placeholder
+    qubit labels. This is the same as :attr:`.GateRep.STIM_CIRCUIT_STR`,
+    except that it should only be a measurement gate, i.e. one of
+    {M, MX, MY, MZ, MR, MRX, MRY, MRZ, R, RX, RY, RZ, MXX, MYY, MZZ}.
+    These are analogous to the following :attr:`.ZBASIS_PROJECTION`
+    specifications, except in all bases instead of just Z:
+
+    - The first four (i.e., start with "M") are like (None, True),
+      i.e., don't reset but record this outcome.
+    - The second four (i.e., start with "MR") are like (0, True),
+      i.e., reset to 0 and also record this outcome.
+    - The third four (i.e., start with "R") are like (0, False),
+      i.e., reset to 0 but don't record an outcome.
+    - The last three do not correspond to a single qubit Z-basis projection,
+      but could be considered equivalent to a circuit measuring the parity
+      on an auxiliary qubit and then performing a (0, True) on the auxiliary.
+
+    Qubit labels are placeholders indexing into the paired
+    :attr:`.RepTuple.qubits`.
+    """
+
 
 class RepTuple(Castable, Displayable):
     rep: object
@@ -246,7 +277,9 @@ class RepTuple(Castable, Displayable):
         assert isinstance(reptype, RepEnum)
         return cls(rep, qubits, reptype)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {

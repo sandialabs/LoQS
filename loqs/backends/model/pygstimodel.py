@@ -293,7 +293,9 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         qubit_aliases = state["qubit_aliases"]
         return cls(model, qubit_aliases)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {

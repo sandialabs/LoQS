@@ -923,6 +923,10 @@ class QuantumProgram(Displayable):
     ) -> T:
         # ORDER MATTERS
         # Must match serialization order for caching to work properly
+        default_noise_model = cls.deserialize(
+            state["default_noise_model"], serial_id_to_obj_cache
+        )
+        assert isinstance(default_noise_model, BaseNoiseModel | None)
         patch_types = cls.deserialize(
             state["patch_types"], serial_id_to_obj_cache
         )
@@ -937,10 +941,6 @@ class QuantumProgram(Displayable):
             state["initial_history"], serial_id_to_obj_cache
         )
         assert isinstance(initial_history, History | None)
-        default_noise_model = cls.deserialize(
-            state["default_noise_model"], serial_id_to_obj_cache
-        )
-        assert isinstance(default_noise_model, BaseNoiseModel | None)
         default_base_seed = state["default_base_seed"]
         stack = cls.deserialize(
             state["instruction_stack"], serial_id_to_obj_cache
@@ -978,7 +978,9 @@ class QuantumProgram(Displayable):
 
         return obj
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
 
         # Avoid serializing noise model if loaded from file
@@ -986,32 +988,47 @@ class QuantumProgram(Displayable):
             serial_noise_model = self._noise_model_filename
         else:
             serial_noise_model = self.serialize(
-                self.default_noise_model, hash_to_serial_id_cache
+                self.default_noise_model,
+                hash_to_serial_id_cache,
+                ignore_no_serialize_flags,
             )
 
         state.update(
             {
+                # Noise model already serialized above
+                "default_noise_model": serial_noise_model,
                 # Patch types and global instructions first to cache QEC code and instructions
                 "patch_types": self.serialize(
-                    self.patch_types, hash_to_serial_id_cache
+                    self.patch_types,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "global_instructions": self.serialize(
-                    self.global_instructions, hash_to_serial_id_cache
+                    self.global_instructions,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "initial_history": self.serialize(
-                    self.initial_history, hash_to_serial_id_cache
+                    self.initial_history,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
-                "default_noise_model": serial_noise_model,
                 "default_base_seed": self.default_base_seed,
                 "instruction_stack": self.serialize(
-                    self.instruction_stack, hash_to_serial_id_cache
+                    self.instruction_stack,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "state_type": self.serialize(
-                    self.state_type, hash_to_serial_id_cache
+                    self.state_type,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "name": self.name,
                 "shot_histories": self.serialize(
-                    self.shot_histories, hash_to_serial_id_cache
+                    self.shot_histories,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
             }
         )

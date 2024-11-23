@@ -260,12 +260,16 @@ class History(Sequence[Frame], SeqCastable, Displayable):
 
         return obj
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {
                 "_history": self.serialize(
-                    self._history, hash_to_serial_id_cache
+                    self._history,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "expiring_keys": list(self.expiring_keys),
                 "_expiring_key_locs": self._expiring_key_locs,

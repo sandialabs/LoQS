@@ -126,12 +126,16 @@ class QECCode(Displayable):
             name=name,
         )
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {
                 "instructions": self.serialize(
-                    self.instructions, hash_to_serial_id_cache
+                    self.instructions,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "template_qubits": self.template_qubits,
                 "template_data_qubits": self.template_data_qubits,
@@ -232,14 +236,22 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         assert isinstance(pauli_frame, PauliFrame)
         return cls(code, qubits, pauli_frame)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {
-                "code": self.serialize(self.code, hash_to_serial_id_cache),
+                "code": self.serialize(
+                    self.code,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
+                ),
                 "qubits": self.qubits,
                 "pauli_frame": self.serialize(
-                    self.pauli_frame, hash_to_serial_id_cache
+                    self.pauli_frame,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
             }
         )

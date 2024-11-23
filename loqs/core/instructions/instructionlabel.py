@@ -191,20 +191,28 @@ class InstructionLabel(SeqCastable, Displayable):
         assert isinstance(inst_kwargs, dict)
         return cls(inst_label, patch_label, inst_args, inst_kwargs)
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
         state.update(
             {
                 "instruction": self.serialize(
-                    self.instruction, hash_to_serial_id_cache
+                    self.instruction,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "inst_label": self.inst_label,
                 "patch_label": self.patch_label,
                 "inst_args": self.serialize(
-                    self.inst_args, hash_to_serial_id_cache
+                    self.inst_args,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "inst_kwargs": self.serialize(
-                    self.inst_kwargs, hash_to_serial_id_cache
+                    self.inst_kwargs,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
             }
         )

@@ -2,27 +2,26 @@
 """
 
 from collections.abc import Sequence
+import json
+import os
+from tempfile import NamedTemporaryFile
 
 try:
-    from dask.distributed import Client
+    from dask.distributed import Client, progress
 except ImportError:
     Client = None  # type: ignore
 
 from loqs.core import QuantumProgram
 
 
-# TODO: This currently runs super slow, don't use?
+# TODO: Batch and shuffle for coarse-grained load balancing?
 def run_program_list(
     programs: Sequence[QuantumProgram],
     dask_client: Client,  # type: ignore
-    num_shots_per_program: int,
-    num_shots_per_program_per_batch: int,
+    num_shots_per_program: int | Sequence[int],
     max_frame_limit: int = 100,
 ) -> None:
     """Run a set of programs in parallel.
-
-    WARNING: This is currently much slower than
-    expected.
 
     Parameters
     ----------
@@ -33,78 +32,70 @@ def run_program_list(
         The Dask client to use when submitting shots
 
     num_shots_per_program:
-        The number of shots to execute per program
-
-    num_shots_per_program_per_batch:
-        The number of shots to use for each program
-        in a batch, i.e. total shots per batch will
-        be ``num_shots_per_program_per_batch`` *
-        ``len(programs)``.
+        The number of shots to execute per program.
+        See :meth:`.QuantumProgram.run`.
 
     max_frame_limit:
         See :meth:`.QuantumProgram.run`
     """
+    if isinstance(num_shots_per_program, int):
+        num_shots_per_program = [
+            num_shots_per_program,
+        ] * len(programs)
+    else:
+        num_shots_per_program = list(num_shots_per_program)
+    assert len(num_shots_per_program) == len(programs)
+
     histories_list = []
-    tasks_by_program = []
-    for program in programs:
+    program_filenames = []
+    all_tasks = []
+    for program, num_shots in zip(programs, num_shots_per_program):
         # Store old num_shots to minimize data needed to copy
         histories_list.append(program.shot_histories)
         program.shot_histories = []
 
-        tasks = []
-        for i in range(num_shots_per_program):
+        # Write program to file so that other processes can load
+        with NamedTemporaryFile("w+", suffix=".json", delete=False) as tempf:
+            p_dict = program.to_serialization(ignore_no_serialize_flags=True)
+            json.dump(p_dict, tempf)
+            program_filenames.append(tempf.name)
+
+        for j in range(num_shots):
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
             seed_for_shot = None
             if program.default_base_seed is not None:
                 seed_for_shot = (
-                    program.default_base_seed + len(histories_list[-1]) + i
+                    program.default_base_seed + len(histories_list[-1]) + j
                 )
 
-            tasks.append((max_frame_limit, seed_for_shot))
+            all_tasks.append(
+                (program_filenames[-1], max_frame_limit, seed_for_shot)
+            )
 
-        tasks_by_program.append(tasks)
+    loaded_programs = {}
 
-    # Scatter all programs
-    dask_client.scatter(programs, broadcast=True)
-
-    # Helper function to run a chunk of num_shots at once
-    # This should use the already remote programs and avoid more copying
-    def _run_shot_program_batch(tasks: Sequence[Sequence[tuple]]):
-        results_by_program = []
-        for program, tasks_per_program in zip(programs, tasks):
-            full_tasks = [(program, *task) for task in tasks_per_program]
-            results = QuantumProgram._run_shot_batch(full_tasks)
-            results_by_program.append(results)
-        return results_by_program
-
-    # To help load balancing, we want to batch over programs for the same num_shots
-    # We could in theory let Dask load balance everything, but we know a good heuristic
-    # and we can avoid scheduler overhead this way
-    batched_task_list = [
-        [
-            tasks_per_program[i : i + num_shots_per_program_per_batch]
-            for tasks_per_program in tasks_by_program
-        ]
-        for i in range(
-            0, num_shots_per_program, num_shots_per_program_per_batch
-        )
-    ]
+    def _run_task(task: tuple):
+        if task[0] not in loaded_programs:
+            loaded_programs[task[0]] = QuantumProgram.read(task[0])
+        program = loaded_programs[task[0]]
+        return QuantumProgram._run_shot(program, *task[1:])
 
     # Not pure because RNG for num_shots underneath
-    futures = dask_client.map(
-        _run_shot_program_batch, batched_task_list, pure=False
-    )
+    futures = dask_client.map(_run_task, all_tasks, pure=False)
 
     # Retrive results (blocks until all tasks are finished)
-    batched_results = dask_client.gather(futures)
+    results = dask_client.gather(futures)
 
-    results_per_program = []
-    for i, batch_results in enumerate(batched_results):  # type: ignore
-        for j, batch_results_per_program in enumerate(batch_results):
-            if i == 0:
-                results_per_program.append(batch_results_per_program)
-            else:
-                results_per_program[j].extend(batch_results_per_program)
+    # Add results back into programs
+    offset = 0
+    for i, (program, num_shots) in enumerate(
+        zip(programs, num_shots_per_program)
+    ):
+        program.shot_histories = (
+            histories_list[i] + results[offset : offset + num_shots]
+        )
+        offset += num_shots
 
-    for i, program in enumerate(programs):
-        program.shot_histories = histories_list[i] + results_per_program[i]
+    # Remove temporary files
+    for fname in program_filenames:
+        os.unlink(fname)

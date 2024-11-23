@@ -186,20 +186,27 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         obj._no_serialize_keys = state["_no_serialize_keys"]
         return obj
 
-    def _to_serialization(self, hash_to_serial_id_cache=None) -> dict:
+    def _to_serialization(
+        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
+    ) -> dict:
         state = super()._to_serialization()
 
-        no_serialize_data = {
-            k: v if k not in self._no_serialize_keys else "NOT SERIALIZED"
-            for k, v in self._data.items()
-        }
+        if not ignore_no_serialize_flags:
+            no_serialize_data = {
+                k: v if k not in self._no_serialize_keys else "NOT SERIALIZED"
+                for k, v in self._data.items()
+            }
+        else:
+            no_serialize_data = self._data
 
         # Order for better display
         state.update(
             {
                 "log": self.log,
                 "_data": self.serialize(
-                    no_serialize_data, hash_to_serial_id_cache
+                    no_serialize_data,
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
                 ),
                 "_expired_keys": self._expired_keys,
                 "_no_serialize_keys": self._no_serialize_keys,
