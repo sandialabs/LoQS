@@ -18,6 +18,8 @@ import textwrap
 from typing import Any, Callable, ClassVar
 import zlib
 
+from loqs.internal.jsonencoding import dump_or_dumps_with_error_handling
+
 try:
     from distributed.protocol.serialize import dask_deserialize, dask_serialize
 
@@ -781,7 +783,12 @@ if DASK_SERIALIZE:
         except TypeError:
             # We've failed to pickle, go to more cumbersome Serialization fallback
             obj_dict = obj.to_serialization(ignore_no_serialize_flags=True)
-            obj_str = json.dumps(obj_dict)
+
+            # Serialize with some extra error handling to make it easy to debug
+            # which entry is failing
+            obj_str = dump_or_dumps_with_error_handling(obj_dict)
+
+            # Finally compress to make communication smaller
             frames = [zlib.compress(obj_str.encode())]
 
         return header, frames
