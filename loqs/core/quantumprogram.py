@@ -475,7 +475,7 @@ class QuantumProgram(Displayable):
             program = self
         else:
             # Delay program data to avoid copies every time
-            program = dask_client.scatter(self)
+            program = dask_client.scatter(self, broadcast=True)
 
         # If we are checkpointing, compute the serialization cache
         # This will save a huge amount of filesize and time writing

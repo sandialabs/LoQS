@@ -604,6 +604,8 @@ class Serializable:
             return serial_dict
         elif isinstance(obj, np.ndarray) or sps.issparse(obj):
             return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
+        elif isinstance(obj, np.int64):
+            return int(obj)
         elif isinstance(obj, (list, tuple, set)):
             return [
                 Serializable.serialize(
@@ -786,7 +788,8 @@ if DASK_SERIALIZE:
 
             # Serialize with some extra error handling to make it easy to debug
             # which entry is failing
-            obj_str = dump_or_dumps_with_error_handling(obj_dict)
+            obj_str = dump_or_dumps_with_error_handling(obj_dict, None)
+            # obj_str = json.dumps(obj_dict)
 
             # Finally compress to make communication smaller
             frames = [zlib.compress(obj_str.encode())]

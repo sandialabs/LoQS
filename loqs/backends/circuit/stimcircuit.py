@@ -173,6 +173,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         elif isinstance(circuit, str):
             self._circuit = _Circuit(circuit)
             self._qubit_labels = list(range(self.circuit.num_qubits))
+        elif isinstance(circuit, _Circuit):
+            self._circuit = circuit
+            self._qubit_labels = list(range(self.circuit.num_qubits))
         elif isinstance(circuit, BasePhysicalCircuit):
             raise NotImplementedError(
                 "Have not implemented this conversion yet"
