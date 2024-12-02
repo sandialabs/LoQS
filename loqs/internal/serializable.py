@@ -23,7 +23,9 @@ from loqs.internal.jsonencoding import dump_or_dumps_with_error_handling
 try:
     from distributed.protocol.serialize import dask_deserialize, dask_serialize
 
-    DASK_SERIALIZE = True
+    # DASK_SERIALIZE = True
+    # SS: Currently I think this is buggy, fall back to default Dask serialization
+    DASK_SERIALIZE = False
 except ImportError:
     DASK_SERIALIZE = False
 
