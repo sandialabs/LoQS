@@ -432,7 +432,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         Derived classes should implement this for
         serialization to work.
         """
-        # For SIM circuit, string version is already serializable
+        # For STIM circuit, string version is already serializable
         return str(self.circuit)
 
     def _unroll_repeats(self) -> str:

@@ -209,22 +209,12 @@ class STIMQuantumState(BaseQuantumState):
             local_to_internal = {}
             for i, q in enumerate(qubits):
                 assert isinstance(q, str)
-                qidx = q.strip("!")
-                if qidx not in self.qubit_labels:
-                    try:
-                        qidx = int(qidx)
-                        assert (
-                            qidx in self.qubit_labels
-                        ), f"{qidx} not in qubit labels as str or int"
-                    except ValueError:
-                        raise ValueError(
-                            f"{qidx} not in qubit labels as str but failed to convert to int"
-                        )
                 negated = q.startswith("!")
+                global_label = q.strip("!")
                 local_to_internal[str(i)] = (
-                    f"{'!' if negated else ''}{self.qubit_labels.index(qidx)}"
+                    f"{'!' if negated else ''}{self.qubit_labels.index(global_label)}"
                 )
-                local_to_global[str(i)] = f"{'!' if negated else ''}{qidx}"
+                local_to_global[str(i)] = q
 
             # Split string for easy processing
             internal_lines = []

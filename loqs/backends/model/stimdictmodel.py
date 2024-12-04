@@ -200,11 +200,15 @@ class STIMDictNoiseModel(DictNoiseModel):
         for line in circuit._unroll_repeats().split("\n"):
             entries = line.split()
 
+            if len(entries) == 0:
+                # Empty line, but pass it on as a comment so full circuit has same formatting
+                reps.append(RepTuple(line, tuple(), GateRep.STIM_CIRCUIT_STR))
+
             # Some commands can have parameters
             # Strip those so we can check base command name
             command = entries[0].split("(")[0]
 
-            if len(entries) == 0 or command not in circuit._stim_gates:
+            if command not in circuit._stim_gates:
                 # We don't want to just ignore this, pass it on as a dummy reptuple
                 # so that it will be included in the full circuit, but
                 # we don't need to handle it here.
@@ -229,15 +233,21 @@ class STIMDictNoiseModel(DictNoiseModel):
                         f"Measure noise '{entries[0]}' detected, but STIMDictNoiseModel is also adding noise"
                     )
 
+                mapped_qubits = []
+                for qidx in entries[1:]:
+                    negated = qidx.startswith("!")
+                    qlabel = circuit.qubit_labels[int(qidx.strip("!"))]
+                    mapped_qubits.append(f"{'!' if negated else ''}{qlabel}")
+
                 # Put these in a tuple form commensurate with dict keys
                 if command in circuit._stim_twoq_gates:
                     qubit_tuples = [
-                        (entries[i], entries[i + 1])
-                        for i in range(1, len(entries), 2)
+                        (mapped_qubits[i], mapped_qubits[i + 1])
+                        for i in range(0, len(mapped_qubits), 2)
                     ]
                 else:
                     # Otherwise everything is single qubit action
-                    qubit_tuples = [(q,) for q in entries[1:]]
+                    qubit_tuples = [(q,) for q in mapped_qubits]
 
                 for qt in qubit_tuples:
                     label = (command.upper(), qt)

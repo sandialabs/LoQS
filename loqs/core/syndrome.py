@@ -272,7 +272,7 @@ class PauliFrame(SeqCastable, Displayable):
     def _clifford_mapping_dict(self, clifford: str) -> dict[str, str]:
         if clifford in ["I", "X", "Y", "Z"]:
             old_to_new = {k: k for k in "IXYZ"}
-        elif clifford == "H":
+        elif clifford in ["H", "SY", "SYdag"]:
             old_to_new = {"I": "I", "X": "Z", "Y": "Y", "Z": "X"}
         elif clifford in ["S", "Sdag"]:
             old_to_new = {"I": "I", "X": "Y", "Y": "X", "Z": "Z"}
