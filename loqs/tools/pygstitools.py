@@ -405,7 +405,7 @@ def convert_circuit_to_quantikz(
                     quantikz_lines[i] += r"\qw & "
                 elif "RESET" in line:
                     # Reset line, should be two empty layers
-                    quantikz_lines[i] += r"\qw & "
+                    # quantikz_lines[i] += r"\qw & "
                     quantikz_lines[i] += line.replace("RESET", r"\qw & ")
                 else:
                     # Some gate, add it
@@ -567,10 +567,12 @@ def _add_component_to_layer(
 
             # Add reset
             try:
+                assert entries[next_entry] == "reset"
                 reset = entries[next_entry + 1]
             except IndexError:
                 reset = ""
-            layer_lines[line_idxs[0]] += r"\midstick{" + reset + "} & "
+            if len(entries) > 1:
+                layer_lines[line_idxs[0]] += r"\midstick{" + reset + "} & "
         elif gate_names.startswith("reset"):
             entries = gate_names.split()
             assert len(entries) == 2
