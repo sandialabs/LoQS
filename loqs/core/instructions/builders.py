@@ -68,7 +68,8 @@ def build_composite_instruction(
     Parameters
     ----------
     instructions:
-        A list of instructions to be inserted onto the stack
+        A list of instructions or instruction labels to be inserted
+        onto the stack
 
     name:
         Name for logging purposes
@@ -81,22 +82,29 @@ def build_composite_instruction(
     def apply_fn(
         patch_label: str | None,
         stack: InstructionStack,
-        instructions: Sequence[Instruction],
+        instructions: Sequence[Instruction | InstructionLabel],
     ) -> Frame:
         for i, instruction in enumerate(instructions):
-            new_label = InstructionLabel(instruction, patch_label)
+            if isinstance(instruction, Instruction):
+                new_label = InstructionLabel(instruction, patch_label)
+            else:
+                new_label = instruction
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
 
     def map_qubits_fn(
         qubit_mapping: Mapping[str | int, str | int],
-        instructions: Sequence[Instruction],
+        instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
         new_kwargs["instructions"] = [
-            instruction.map_qubits(qubit_mapping)
+            (
+                instruction.map_qubits(qubit_mapping)
+                if isinstance(instruction, Instruction)
+                else instruction
+            )
             for instruction in instructions
         ]
         return new_kwargs
