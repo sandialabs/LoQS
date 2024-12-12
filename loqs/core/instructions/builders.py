@@ -29,7 +29,10 @@ from loqs.core.history import History
 from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import InstructionLabel
-from loqs.core.instructions.instructionstack import InstructionStack
+from loqs.core.instructions.instructionstack import (
+    InstructionStack,
+    InstructionStackCastableTypes,
+)
 from loqs.core.qeccode import QECCode, QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
@@ -41,7 +44,7 @@ from loqs.core.syndrome import (
 
 
 def build_composite_instruction(
-    instructions: Sequence[Instruction],
+    instructions: InstructionStackCastableTypes,
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
     """Build a composite instruction that updates the stack.
@@ -82,7 +85,7 @@ def build_composite_instruction(
     def apply_fn(
         patch_label: str | None,
         stack: InstructionStack,
-        instructions: Sequence[Instruction | InstructionLabel],
+        instructions: InstructionStack,
     ) -> Frame:
         for i, instruction in enumerate(instructions):
             if isinstance(instruction, Instruction):
@@ -110,7 +113,7 @@ def build_composite_instruction(
         return new_kwargs
 
     # We will need to store the instructions and param priorities
-    data = {"instructions": instructions}
+    data = {"instructions": InstructionStack.cast(instructions)}
 
     return Instruction(
         apply_fn=apply_fn,
@@ -710,11 +713,15 @@ def build_physical_circuit_instruction(
                     pauli_frame_update
                 )
             elif isinstance(pauli_frame_update, str):
-                new_pauli_frame = (
-                    patch.pauli_frame.update_from_transversal_clifford(
-                        pauli_frame_update
+                if pauli_frame_update.lower() == "reset":
+                    # Reset back to trivial frame
+                    new_pauli_frame = PauliFrame(patch.qubits)
+                else:
+                    new_pauli_frame = (
+                        patch.pauli_frame.update_from_transversal_clifford(
+                            pauli_frame_update
+                        )
                     )
-                )
             elif isinstance(pauli_frame_update, Sequence):
                 new_pauli_frame = (
                     patch.pauli_frame.update_from_clifford_conjugation(
@@ -774,10 +781,9 @@ def build_physical_circuit_instruction(
 
 
 def build_repeat_until_success_instruction(
-    instruction: Instruction,
-    reset_label_key: Instruction | str,
-    rus_key: str,
-    target_outcomes: MeasurementOutcomes | None = None,
+    instructions: InstructionStackCastableTypes,
+    test_frame_key: str = "rus_success",
+    expected: object = True,
     max_repeats: int = 100,
     name: str = "(Unnamed repeat-until-success instruction)",
 ) -> Instruction:
@@ -814,21 +820,13 @@ def build_repeat_until_success_instruction(
     Parameters
     ----------
     instruction:
-        The underlying instruction to run and repeat until success
+        The underlying instruction to run and repeat until success.
+        This should include reset to 0 as the first instruction,
+        and the final frame should contain a `success_frame_key`
+        as True if successful and False if not.
 
-    reset_label_key:
-        The key for the `InstructionLabel` needed to reset the
-        quantum state in the case of failure
-
-    rus_key:
-        The key for the `InstructionLabel` needed to run this
-        operation again in the case of failure.
-        We are not simply providing `self` to avoid loops
-        during operations such as serialization.
-
-    target_outcomes:
-        The target outcomes to compare to. If None (the default),
-        this assumes that all measurement outcomes should be 0.
+    success_frame_key:
+        The key to check in the final frame for success.
 
     max_repeats:
         The number of repeats after which an error is thrown.
@@ -842,150 +840,70 @@ def build_repeat_until_success_instruction(
         The built repeat-until-success instruction
     """
 
-    # We do not know all the params for the underlying instruction,
-    # so take variadic kwargs here
-    def apply_fn(**kwargs) -> Frame:
-        # Pull some args out of kwargs
-        instruction = kwargs.pop("instruction")
-        assert isinstance(instruction, Instruction)
-        target_outcomes = kwargs.pop("target_outcomes")
-        if target_outcomes is not None:
-            target_outcomes = MeasurementOutcomes.cast(target_outcomes)
-        max_repeats = int(kwargs.pop("max_repeats"))
-        repeat_count = int(kwargs.pop("repeat_count"))
-        rus_key = kwargs.pop("rus_key")
-        reset_key = kwargs.pop("reset_key")
+    def apply_fn(
+        observed: object,
+        expected: object,
+        repeat_count: int,
+        instructions: InstructionStackCastableTypes,
+        max_repeats: int,
+        stack: InstructionStack,
+    ) -> Frame:
+        # If we were successful, return empty frame (with debug info)
+        if observed == expected:
+            return Frame({"total_rus_count": repeat_count})
 
-        if "patch_label" in instruction.param_priorities:
-            patch_label = kwargs["patch_label"]
-        else:
-            patch_label = kwargs.pop("patch_label")
-        if "patches" in instruction.param_priorities:
-            patches = kwargs["patches"]
-        else:
-            patches = kwargs.pop("patches")
-        if "stack" in instruction.param_priorities:
-            stack = InstructionStack.cast(kwargs["stack"])
-        else:
-            stack = InstructionStack.cast(kwargs.pop("stack"))
-
-        # All the remaining kwargs should go straight into the instruction
-        applied_frame = instruction.apply(**kwargs)
-
-        # Run success function to see if we are terminated
-        try:
-            patch = patches[patch_label]
-
-            pauli_frame = PauliFrame.cast(
-                applied_frame.get("pauli_frame", patch.qubits)
-            )
-            outcomes = MeasurementOutcomes.cast(
-                applied_frame["measurement_outcomes"]
-            )
-            inferred_outcomes = outcomes.get_inferred_outcomes(
-                pauli_frame, "Z"
-            )
-            if target_outcomes is None:
-                # If target outcomes not provided, use all 0s
-                success = True
-                for _, v in outcomes.items():
-                    if any([bit for bit in v]):
-                        success = False
-                        break
-            else:
-                success = target_outcomes == inferred_outcomes
-        except KeyError:
+        repeat_count += 1
+        if repeat_count > max_repeats:
             raise RuntimeError(
-                "Try-until-success instruction does not output outcomes"
+                "Hit max repeats in repeat-until-success instruction"
             )
 
-        if not success:  # We have failed, need to add this back again
-            # Check if we have hit limit
-            repeat_count += 1
-            if repeat_count >= max_repeats:
-                raise RuntimeError(
-                    "Try-until-success instruction hit max repeats"
+        new_labels = []
+        for label in InstructionStack.cast(instructions):
+            new_kwargs = label.inst_kwargs.copy()
+            new_kwargs["repeat_count"] = repeat_count
+
+            inst_or_label = (
+                label.inst_label
+                if label.inst_label is not None
+                else label.instruction
+            )
+            assert inst_or_label is not None
+
+            new_labels.append(
+                InstructionLabel(
+                    inst_or_label,
+                    label.patch_label,
+                    label.inst_args,
+                    new_kwargs,
                 )
-
-            # Otherwise, we need to reset and redo the RUS instruction
-            reset_label = InstructionLabel(reset_key, patch_label)
-
-            # We need to at least put repeat_counts into label args
-            rus_label = InstructionLabel(
-                rus_key,
-                patch_label,
-                inst_kwargs={"repeat_count": repeat_count},
             )
 
-            stack = stack.insert_instruction(0, rus_label)
-            stack = stack.insert_instruction(0, reset_label)
+        stack = stack.insert_instructions(0, new_labels)
 
         # Return frame with the stack update
-        return applied_frame.update(
-            {
-                "stack": stack,
-                "inferred_outcomes": inferred_outcomes,
-                "rus_success": success,
-            }
-        )
+        return Frame({"stack": stack})
 
     # We need to store the instruction, target outcomes, and repeat information
     # To avoid recursion, we also store the key for the RUS instruction
     data: dict[str, object] = {
-        "instruction": instruction,
-        "target_outcomes": target_outcomes,
+        "instructions": instructions,
+        test_frame_key: (
+            None if expected is not None else False
+        ),  # Will always fail first round so we do prep
+        "expected": expected,
         "max_repeats": max_repeats,
         "repeat_count": 0,
-        "rus_key": rus_key,
-        "reset_key": reset_label_key,
     }
-    # We also need to pull out any data from the instruction
-    for k, v in instruction.data.items():
-        assert (
-            k not in data
-        ), "Have key collision between RUS and underlying instructions"
-        data[k] = v
 
-    # We need to map the instruction
-    def map_qubits_fn(
-        qubit_mapping: Mapping[str | int, str | int],
-        instruction: Instruction,
-        **kwargs,
-    ) -> KwargDict:
-        new_kwargs = kwargs.copy()
-        new_kwargs["instruction"] = instruction.map_qubits(qubit_mapping)
-        # Reset any data we pulled from instruction
-        for k, v in new_kwargs["instruction"].data.items():
-            new_kwargs[k] = v
-        if isinstance(new_kwargs["reset_key"], Instruction):
-            new_kwargs["reset_key"] = new_kwargs["reset_key"].map_qubits(
-                qubit_mapping
-            )
-        return new_kwargs
-
-    # Since we have variadic kwargs, we'll set the param priority ourselves
-    # Default order is OK for new params. We'll pick up most of what we need
-    # from instruction, but repeat count will be from label arg after first iteration
-    param_priorities = instruction.param_priorities.copy()
-    for k in data:
-        param_priorities[k] = DEFAULT_PRIORITIES
-    # We also need the patch_label for new labels, and the stack to update it
-    param_priorities["patch_label"] = param_priorities.get(
-        "patch_label", DEFAULT_PRIORITIES
-    )
-    param_priorities["patches"] = param_priorities.get(
-        "patches", DEFAULT_PRIORITIES
-    )
-    param_priorities["stack"] = param_priorities.get(
-        "stack", DEFAULT_PRIORITIES
-    )
-
+    # The success argument is being collected from the previous frame by alias
     return Instruction(
         apply_fn=apply_fn,
         data=data,
-        map_qubits_fn=map_qubits_fn,
-        param_priorities=param_priorities,
-        param_error_behavior="continue",  # Skip warning for variadic kwargs
+        param_priorities={
+            "observed": ["label", "history[-1]", "instruction"]
+        },  # prioritize history over instruction data
+        param_aliases={"observed": test_frame_key},
         name=name,
         type="Repeat-until-success",
     )

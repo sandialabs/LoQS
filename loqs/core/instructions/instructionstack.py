@@ -105,6 +105,23 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         """
         return self.insert_instruction(len(self), item)
 
+    def append_instructions(
+        self, items: Sequence[InstructionLabelCastableTypes]
+    ) -> InstructionStack:
+        """Add a series of entries to the end of the stack.
+
+        Parameters
+        ----------
+        items:
+            The items to add
+
+        Returns
+        -------
+        InstructionStack
+            The modified stack
+        """
+        return self.insert_instructions(len(self), items)
+
     def delete_instruction(self, i: int) -> InstructionStack:
         """Remove an entry from the stack.
 
@@ -142,6 +159,31 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         """
         instructions = self._instructions.copy()
         instructions.insert(i, InstructionLabel.cast(item))
+        return InstructionStack(instructions)
+
+    def insert_instructions(
+        self, i: int, items: Sequence[InstructionLabelCastableTypes]
+    ) -> InstructionStack:
+        """Add a series of entries to a position in the stack.
+
+        Parameters
+        ----------
+        i:
+            The index of insertion
+
+        items:
+            The items to add
+
+        Returns
+        -------
+        InstructionStack
+            The modified stack
+        """
+        instructions = self._instructions.copy()
+        items_to_add = [InstructionLabel.cast(item) for item in items]
+        instructions = (
+            self._instructions[:i] + items_to_add + self._instructions[i:]
+        )
         return InstructionStack(instructions)
 
     def pop_instruction(

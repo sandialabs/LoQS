@@ -339,12 +339,15 @@ class Instruction(Displayable):
             :class:`Instruction` and the input parameters appended for
             informational/debugging purposes
         """
-        applied_frame = self.apply_fn(**kwargs)
+        # Pull out only kwargs we need
+        apply_kwargs = {k: kwargs[k] for k in self.param_priorities}
+
+        applied_frame = self.apply_fn(**apply_kwargs)
 
         # TODO: Collected_params is a nice debugging feature here
         # It fails if the History is passed in though, so commenting out for now
         output_frame = applied_frame.update(
-            {"instruction": self},  # "collected_params": aliased_kwargs},
+            {"instruction": self},  # "collected_params": apply_kwargs},
             new_log=f"{self.name} result",
         )
 
