@@ -248,6 +248,9 @@ class RepTuple(Castable, Displayable):
             )
         )
 
+    def __str__(self) -> str:
+        return f"RepTuple({repr(self.rep)},{self.qubits},{self.reptype})"
+
     @classmethod
     def cast(cls: type[RepTuple], obj: object) -> RepTuple:
         """Cast this object to a :class:`RepTuple`.

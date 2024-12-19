@@ -161,9 +161,16 @@ class QuantumProgram(Displayable):
 
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
-            self.instruction_stack = InstructionStack.cast(instruction_stack)
-            """The :class:`.InstructionStack` that holds
-            :attr:`.InstructionLabelCastableTypes` object to execute."""
+            try:
+                self.instruction_stack = InstructionStack.cast(
+                    instruction_stack
+                )
+                """The :class:`.InstructionStack` that holds
+                :attr:`.InstructionLabelCastableTypes` object to execute."""
+            except ValueError as e:
+                raise ValueError(
+                    "InstructionStack failed to cast, check all instructions/labels are well-formed"
+                ) from e
         else:
             self.instruction_stack = InstructionStack.cast(
                 self.initial_history[-1]["stack"]
@@ -895,7 +902,10 @@ class QuantumProgram(Displayable):
         raise RuntimeError(f"Failed to collect parameter {key} for {name}")
 
     def collect_shot_data(
-        self, key: str, indices: HistoryCollectDataIndexTypes
+        self,
+        key: str,
+        indices: HistoryCollectDataIndexTypes,
+        strip_none_entries: bool = False,
     ) -> list:
         """Collate frame data over executed shots.
 
@@ -914,7 +924,10 @@ class QuantumProgram(Displayable):
         """
         data = []
         for history in self.shot_histories:
-            data.append(history.collect_data(key, indices))
+            data_per_shot = history.collect_data(key, indices)
+            if strip_none_entries and isinstance(data_per_shot, list):
+                data_per_shot = [d for d in data_per_shot if d is not None]
+            data.append(data_per_shot)
         return data
 
     @classmethod

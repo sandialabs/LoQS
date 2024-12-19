@@ -134,7 +134,14 @@ class DisplayableViewer(tk.Tk):
                         parent_id,
                         "end",
                         text="",
-                        values=(indentation + str(key), value),
+                        values=(
+                            indentation + str(key),
+                            (
+                                value
+                                if not isinstance(value, str)
+                                else repr(value)
+                            ),
+                        ),
                     )
             else:
                 # If the value is not a dictionary or list, insert it as a child item
@@ -142,7 +149,10 @@ class DisplayableViewer(tk.Tk):
                     parent_id,
                     "end",
                     text="",
-                    values=(indentation + str(key), value),
+                    values=(
+                        indentation + str(key),
+                        value if not isinstance(value, str) else repr(value),
+                    ),
                 )
 
     def on_item_click(self, event):

@@ -185,7 +185,7 @@ class STIMDictNoiseModel(DictNoiseModel):
                     ir.reptype in instreps
                 ), f"Provided {ir} but reptype not in instreps"
 
-    def get_reps(
+    def get_reps(  # noqa: C901
         self,
         circuit: BasePhysicalCircuit,
         gatereps: Sequence[GateRep],
@@ -249,7 +249,12 @@ class STIMDictNoiseModel(DictNoiseModel):
                     # Otherwise everything is single qubit action
                     qubit_tuples = [(q,) for q in mapped_qubits]
 
+                # When we are looking things up generically by name only,
+                # we can combine all qubit tuples into a common command
+                # This is mostly to make STIM print these circuits much nicer
+                common = {}
                 for qt in qubit_tuples:
+                    is_common = False
                     label = (command.upper(), qt)
 
                     # Try to look up in gates
@@ -264,6 +269,24 @@ class STIMDictNoiseModel(DictNoiseModel):
                                 reptuple.rep, qt, reptuple.reptype
                             )
 
+                            # Append this to common rep
+                            is_common = True
+                            if command in common:
+                                new_lines = []
+                                for line in common[command].rep.split("\n"):
+                                    # Add qubit indices to template lines
+                                    for i in range(len(qt)):
+                                        line += f" {len(common[command].qubits) + i}"
+                                    new_lines.append(line)
+                                new_qubits = common[command].qubits + qt
+                                common[command] = RepTuple(
+                                    "\n".join(new_lines),
+                                    new_qubits,
+                                    reptuple.reptype,
+                                )
+                            else:
+                                common[command] = reptuple
+
                     if reptuple is None:
                         # Failed, now look up in instruments
                         reptuple = self.inst_dict.get(label, None)
@@ -277,8 +300,31 @@ class STIMDictNoiseModel(DictNoiseModel):
                                 reptuple.rep, qt, reptuple.reptype
                             )
 
+                            # Append this to common rep
+                            is_common = True
+                            if command in common:
+                                new_lines = []
+                                for line in common[command].rep.split("\n"):
+                                    # Add qubit indices to template lines
+                                    for i in range(len(qt)):
+                                        line += f" {len(common[command].qubits) + i}"
+                                    new_lines.append(line)
+                                new_qubits = common[command].qubits + qt
+                                common[command] = RepTuple(
+                                    "\n".join(new_lines),
+                                    new_qubits,
+                                    reptuple.reptype,
+                                )
+                            else:
+                                common[command] = reptuple
+
                     assert reptuple is not None, f"Failed to look up {label}"
                     assert isinstance(reptuple, RepTuple)
 
-                    reps.append(reptuple)
+                    if not is_common:
+                        reps.append(reptuple)
+
+                # Add common commands to the rep
+                reps.extend(common.values())
+
         return reps

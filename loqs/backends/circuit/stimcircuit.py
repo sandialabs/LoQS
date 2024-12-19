@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
+import textwrap
 from typing import ClassVar, TypeAlias
 import warnings
 
@@ -166,6 +167,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         self,
         circuit: STIMCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
+        suppress_tick_warning: bool = False,
     ) -> None:
         if isinstance(circuit, STIMPhysicalCircuit):
             self._circuit = circuit.circuit.copy()
@@ -189,7 +191,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                 f"STIM circuit contains a LoQS-unsupported instruction {unsupported}"
             )
 
-        if "TICK" not in str(self.circuit):
+        if not suppress_tick_warning and "TICK" not in str(self.circuit):
             warnings.warn(
                 "No TICK instructions, layer-based functionality will not work as intended if this is more than one layer."
             )
@@ -197,6 +199,11 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         super().__init__(circuit, qubit_labels)
 
     name: ClassVar[str] = "STIM"
+
+    def __str__(self) -> str:
+        s = f"Physical {self.name} circuit ({self.qubit_labels}):\n"
+        s += textwrap.indent(str(self.circuit), "  ")
+        return s
 
     @property
     def circuit(self) -> _Circuit:

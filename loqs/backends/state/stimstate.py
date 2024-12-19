@@ -386,9 +386,10 @@ class STIMQuantumState(BaseQuantumState):
     ) -> T:
         qubit_labels = state["qubit_labels"]
         seed = state["seed"]
-        tableau_circ = _Circuit(state["_stim_tableau_circuit"])
+        state_vector = state["_stim_state_vector"]
         obj = cls(
-            _Tableau.from_circuit(tableau_circ), qubit_labels=qubit_labels
+            _Tableau.from_state_vector(state_vector, endian="little"),
+            qubit_labels=qubit_labels,
         )
         obj.reset_seed(seed)
         return obj
@@ -397,12 +398,11 @@ class STIMQuantumState(BaseQuantumState):
         self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
     ) -> dict:
         state = super()._to_serialization()
-        tableau_circ = self.state.current_inverse_tableau().to_circuit()
         state.update(
             {
                 "qubit_labels": self.qubit_labels,
                 "seed": self.seed,
-                "_stim_tableau_circuit": str(tableau_circ),
+                "_stim_state_vector": self.state.state_vector(endian="little"),
             }
         )
         return state

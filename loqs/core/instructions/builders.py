@@ -28,7 +28,10 @@ from loqs.core.frame import Frame
 from loqs.core.history import History
 from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
-from loqs.core.instructions.instructionlabel import InstructionLabel
+from loqs.core.instructions.instructionlabel import (
+    InstructionLabel,
+    InstructionLabelCastableTypes,
+)
 from loqs.core.instructions.instructionstack import (
     InstructionStack,
     InstructionStackCastableTypes,
@@ -44,7 +47,7 @@ from loqs.core.syndrome import (
 
 
 def build_composite_instruction(
-    instructions: InstructionStackCastableTypes,
+    instructions: Sequence[InstructionLabelCastableTypes],
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
     """Build a composite instruction that updates the stack.
@@ -85,7 +88,7 @@ def build_composite_instruction(
     def apply_fn(
         patch_label: str | None,
         stack: InstructionStack,
-        instructions: InstructionStack,
+        instructions: Sequence[Instruction | InstructionLabel],
     ) -> Frame:
         for i, instruction in enumerate(instructions):
             if isinstance(instruction, Instruction):
@@ -112,12 +115,10 @@ def build_composite_instruction(
         ]
         return new_kwargs
 
-    # We will need to store the instructions and param priorities
-    data = {"instructions": InstructionStack.cast(instructions)}
-
+    # We will need to store the instructions
     return Instruction(
         apply_fn=apply_fn,
-        data=data,
+        data={"instructions": instructions},
         map_qubits_fn=map_qubits_fn,
         name=name,
         type="Composite",
