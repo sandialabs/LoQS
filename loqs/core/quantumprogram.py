@@ -917,18 +917,18 @@ class QuantumProgram(Displayable):
         indices:
             See ``indices`` in :meth:`.History.collect_data`
 
+        strip_none_entries:
+            See ``strip_none_entries`` in :meth:`.History.collect_data`
+
         Returns
         -------
         list
             List of :meth:`.History.collect_data` outputs per shot
         """
-        data = []
-        for history in self.shot_histories:
-            data_per_shot = history.collect_data(key, indices)
-            if strip_none_entries and isinstance(data_per_shot, list):
-                data_per_shot = [d for d in data_per_shot if d is not None]
-            data.append(data_per_shot)
-        return data
+        return [
+            h.collect_data(key, indices, strip_none_entries)
+            for h in self.shot_histories
+        ]
 
     @classmethod
     def _from_serialization(

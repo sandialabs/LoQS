@@ -202,7 +202,10 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         self._history.append(item)
 
     def collect_data(
-        self, key: str, indices: HistoryCollectDataIndexTypes
+        self,
+        key: str,
+        indices: HistoryCollectDataIndexTypes,
+        strip_none_entries: bool = False,
     ) -> list | object:
         """Pull data by key out of one or several stored :class:`.Frame` objects.
 
@@ -218,6 +221,10 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             These values can either be positive and index starting from the beginning,
             or negative and index from the last frame, i.e. -1 is a common way to get
             data from the last frame.
+
+        strip_none_entry:
+            Whether to keep None entries (``False``, default) or remove them (``True``).
+            Only has an effect if returned data will have more than one value.
         """
 
         if isinstance(indices, int):
@@ -240,6 +247,9 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         if isinstance(indices, int):
             # If we only requested one entry, return bare object
             return data[0]
+
+        if strip_none_entries and isinstance(data, list):
+            data = [d for d in data if d is not None]
 
         # Otherwise, return the series of objects
         return data
