@@ -48,6 +48,7 @@ from loqs.core.syndrome import (
 
 def build_composite_instruction(
     instructions: Sequence[InstructionLabelCastableTypes],
+    extra_data: KwargDict | None = None,
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
     """Build a composite instruction that updates the stack.
@@ -89,12 +90,29 @@ def build_composite_instruction(
         patch_label: str | None,
         stack: InstructionStack,
         instructions: Sequence[Instruction | InstructionLabel],
+        **kwargs,
     ) -> Frame:
-        for i, instruction in enumerate(instructions):
-            if isinstance(instruction, Instruction):
-                new_label = InstructionLabel(instruction, patch_label)
+        for i, inst_or_label in enumerate(instructions):
+            if isinstance(inst_or_label, Instruction):
+                new_label = InstructionLabel(
+                    inst_or_label, patch_label, inst_kwargs=kwargs
+                )
             else:
-                new_label = instruction
+                inst_or_label = InstructionLabel.cast(inst_or_label)
+                new_kwargs = kwargs.copy()
+                new_kwargs.update(inst_or_label.inst_kwargs)
+                first_entry = (
+                    inst_or_label.instruction
+                    if inst_or_label.instruction is not None
+                    else inst_or_label.inst_label
+                )
+                assert first_entry is not None
+                new_label = InstructionLabel(
+                    first_entry,
+                    inst_or_label.patch_label,
+                    inst_or_label.inst_args,
+                    new_kwargs,
+                )
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
@@ -115,11 +133,20 @@ def build_composite_instruction(
         ]
         return new_kwargs
 
+    if extra_data is None:
+        extra_data = {}
+    data = extra_data.copy()
+    data["instructions"] = instructions
+
+    # Make sure all extra data gets pulled in
+    param_priorities = {k: DEFAULT_PRIORITIES for k in data.keys()}
+
     # We will need to store the instructions
     return Instruction(
         apply_fn=apply_fn,
-        data={"instructions": instructions},
+        data=data,
         map_qubits_fn=map_qubits_fn,
+        param_priorities=param_priorities,
         name=name,
         type="Composite",
     )
