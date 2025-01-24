@@ -277,10 +277,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     circuit_locations.extend(
                         [(lidx, int(q)) for q in entries[1:]]
                     )
-
-                # Otherwise, each qubit index is a location
-                for qidx in entries[1]:
-                    circuit_locations.append((lidx, int(qidx)))
         return circuit_locations
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
@@ -302,10 +298,12 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         unrolled = self._unroll_repeats()
         layers = unrolled.split("TICK\n")
-        pre_str = "TICK\n".join(layers[:idx]) + "TICK\n"
-        post_str = "TICK\n".join(layers[idx:])
+        pre_str = "\nTICK\n".join(layers[:idx]) + "\n"
+        post_str = "\n" + "\nTICK\n".join(layers[idx:])
 
-        self._circuit = _Circuit(pre_str + str(other_circuit) + post_str)
+        self._circuit = _Circuit(
+            pre_str + str(other_circuit.circuit) + post_str
+        )
 
     def map_qubit_labels_inplace(
         self, qubit_mapping: Mapping[QubitTypes, QubitTypes]

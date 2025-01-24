@@ -501,7 +501,7 @@ class QuantumProgram(Displayable):
 
         # Set up tasks
         start = len(old_shot_histories)
-        if start > 0:
+        if start > 0 and verbose:
             print(f"Detecting {start} already completed shots")
 
         tasks = []

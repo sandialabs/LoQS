@@ -211,9 +211,11 @@ class STIMQuantumState(BaseQuantumState):
                 assert isinstance(q, str)
                 negated = q.startswith("!")
                 global_label = q.strip("!")
-                local_to_internal[str(i)] = (
-                    f"{'!' if negated else ''}{self.qubit_labels.index(global_label)}"
-                )
+                try:
+                    index = self.qubit_labels.index(global_label)
+                except ValueError:
+                    index = self.qubit_labels.index(int(global_label))
+                local_to_internal[str(i)] = f"{'!' if negated else ''}{index}"
                 local_to_global[str(i)] = q
 
             # Split string for easy processing
@@ -352,10 +354,13 @@ class STIMQuantumState(BaseQuantumState):
 
             # but then post-process to grab the outcomes from the measurement record
             current_mr = self.state.current_measurement_record()
+            # print(current_mr[-len(self.latest_measurement_labels):])
             mr_entries = [
                 int(mre)
                 for mre in current_mr[-len(self.latest_measurement_labels) :]
             ]
+            # print(mr_entries)
+            # print()
 
             for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
                 outcomes[qbit].append(cbit)

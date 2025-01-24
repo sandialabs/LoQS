@@ -87,7 +87,15 @@ def create_qec_code(
         )
     )
 
-    # Try-until-success FT |-> state prep
+    ### Try-until-success FT |-> state prep
+    # Qubit reset in case of failure
+    reset = builders.build_physical_circuit_instruction(
+        circuit_backend(
+            [[("Iz", q) for q in qubits[2:]]], qubit_labels=qubits
+        ),
+        name="Reset to all 0 state",
+    )
+
     # First green box of Fig 3 of arxiv:2208.01863
     ft_state_prep_checks_circ = circuit_backend(
         [
@@ -128,17 +136,17 @@ def create_qec_code(
         ft_state_prep_circ,
         name="Non-FT Minus Prep + Checks",
     )
-    reset = builders.build_physical_circuit_instruction(
-        circuit_backend(
-            [[("Iz", q) for q in qubits[2:]]], qubit_labels=qubits
-        ),
-        name="Reset to all 0 state",
+
+    # On success, we expect three sets of 0 outcomes on the flag qubits from the check circuit
+    rus_success_expected = MeasurementOutcomes(
+        {"A0": [0, 0, 0], "A1": [0, 0, 0]}
     )
+
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
-            ft_state_prep,
-            reset_label_key=reset,
-            rus_key="FT Minus Prep",
+            [reset, ft_state_prep],
+            test_frame_key="measurement_outcomes",
+            expected=rus_success_expected,
             name="Repeat-until-success FT Minus Prep",
         )
     )

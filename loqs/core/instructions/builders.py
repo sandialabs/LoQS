@@ -21,7 +21,7 @@ import numpy as np
 import typing
 
 from loqs.backends import propagate_state
-from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends.circuit import BasePhysicalCircuit, STIMPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState, STIMQuantumState
 from loqs.core.frame import Frame
@@ -721,9 +721,14 @@ def build_physical_circuit_instruction(
         )
         for error in rev_sorted_errors:
             circuit_backend = type(circuit)
-            error_circuit = circuit_backend(
-                [(error[1], qubits[error[2]])], qubit_labels=qubits
-            )
+            if isinstance(circuit, STIMPhysicalCircuit):
+                error_circuit = circuit_backend(
+                    f"{error[1]} {error[2]}\nTICK\n", qubit_labels=qubits
+                )
+            else:
+                error_circuit = circuit_backend(
+                    [(error[1], qubits[error[2]])], qubit_labels=qubits  # type: ignore
+                )
             errored_circuit.insert_inplace(error_circuit, error[0])
 
         new_state, outcomes = propagate_state(
@@ -924,10 +929,28 @@ def build_repeat_until_success_instruction(
         "repeat_count": 0,
     }
 
+    # Need to map underlying instructions also
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str | int, str | int],
+        instructions: Sequence[Instruction | InstructionLabel],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["instructions"] = [
+            (
+                instruction.map_qubits(qubit_mapping)
+                if isinstance(instruction, Instruction)
+                else instruction
+            )
+            for instruction in instructions
+        ]
+        return new_kwargs
+
     # The success argument is being collected from the previous frame by alias
     return Instruction(
         apply_fn=apply_fn,
         data=data,
+        map_qubits_fn=map_qubits_fn,
         param_priorities={
             "observed": ["label", "history[-1]", "instruction"]
         },  # prioritize history over instruction data
