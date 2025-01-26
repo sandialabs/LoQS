@@ -52,6 +52,26 @@ def create_qec_code(
 
     Parameters
     ----------
+    include_idles:
+        Whether to include (``True``) or not (``False``, default) idle gates
+        in physical circuits.
+
+    gate_durations:
+        Mapping from gate names to durations. Defaults to ``None``, which uses
+        dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
+        measurements, respectively.
+        See ``durations`` from
+        :meth:`.BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace`
+        for more details.
+
+    idle_gates:
+        Mapping from gate duration to idle gate names. Defaults to ``None``,
+        which maps the dummy values from ``gate_durations`` to ``"Gi1Q"``,
+        ``"Gi2Q"``, and ``"GiMCM"``, respectively.
+        See ``idle_names`` from
+        :meth:`.BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace`
+        for more details.
+
     circuit_backend:
         The circuit backend to use when generating physical circuits.
 
@@ -470,6 +490,9 @@ def create_ideal_model(  # noqa: C901
         "Gk",
         "Gcnot",
         "Gcphase",
+        "Gi1Q",
+        "Gi2Q",
+        "GiMCM",
     ]
 
     nonstd_unitaries = {
@@ -478,7 +501,10 @@ def create_ideal_model(  # noqa: C901
                 [1 / np.sqrt(2), 1 / np.sqrt(2)],
                 [1j / np.sqrt(2), -1j / np.sqrt(2)],
             ]
-        )
+        ),
+        "Gi1Q": np.eye(2),
+        "Gi2Q": np.eye(2),
+        "GiMCM": np.eye(2),
     }
 
     if model_backend == PyGSTiNoiseModel:
@@ -514,6 +540,9 @@ def create_ideal_model(  # noqa: C901
                 "Gk": ["H", "SQRT_Z"],
                 "Gcnot": ["CX"],
                 "Gcphase": ["CZ"],
+                "Gi1Q": ["I"],
+                "Gi2Q": ["I"],
+                "GiMCM": ["I"],
             }
 
             for gate in gate_names:
