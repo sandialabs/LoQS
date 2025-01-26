@@ -241,9 +241,9 @@ class Instruction(Displayable):
         sig = ins.signature(self.apply_fn)
         for key, param in sig.parameters.items():
             if param.kind != param.POSITIONAL_OR_KEYWORD:
-                if self.param_error_behavior == "warn":
+                if self.param_error_behavior == "warn" and key != "kwargs":
                     warnings.warn(f"Skipping param priority for {key}")
-                elif self.param_error_behavior == "raise":
+                elif self.param_error_behavior == "raise" and key != "kwargs":
                     raise NotImplementedError(
                         f"Cannot handle param priority for {key}"
                     )
