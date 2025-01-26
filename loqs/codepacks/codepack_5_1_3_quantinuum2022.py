@@ -43,6 +43,9 @@ import loqs.tools.qectools as qt
 
 
 def create_qec_code(
+    include_idles: bool = False,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
 ):
     """Create a QECCode implementing the [[5,1,3]] code.
@@ -63,6 +66,18 @@ def create_qec_code(
 
     instructions: dict[str, Instruction] = {}
 
+    # For padding by idles with duration
+    if gate_durations is None:
+        gate_durations = {
+            k: 1
+            for k in ["Gxpi", "Gypi", "Gzpi", "Gzpi2", "Gzmpi2", "Gh", "Gk"]
+        }
+        gate_durations["Gcnot"] = 2
+        gate_durations["Gcphase"] = 2
+        gate_durations["Iz"] = 3
+    if idle_gates is None:
+        idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
+
     # Non-FT |-> state prep
     # First gray box of Fig 3 of arxiv:2208.01863
     nonft_state_prep_circ = circuit_backend(
@@ -80,6 +95,10 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        nonft_state_prep_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Non-FT Minus Prep"] = (
         builders.build_physical_circuit_instruction(
             nonft_state_prep_circ,
@@ -132,6 +151,10 @@ def create_qec_code(
     ft_state_prep_circ = nonft_state_prep_circ.append(
         ft_state_prep_checks_circ
     )
+    if include_idles:
+        ft_state_prep_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     ft_state_prep = builders.build_physical_circuit_instruction(
         ft_state_prep_circ,
         name="Non-FT Minus Prep + Checks",
@@ -147,6 +170,7 @@ def create_qec_code(
             [reset, ft_state_prep],
             test_frame_key="measurement_outcomes",
             expected=rus_success_expected,
+            max_repeats=250,
             name="Repeat-until-success FT Minus Prep",
         )
     )
@@ -157,6 +181,10 @@ def create_qec_code(
         [[("Gypi", "D0"), ("Gxpi", "D2"), ("Gypi", "D4")]],
         qubit_labels=qubits,
     )
+    if include_idles:
+        logical_X_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["X"] = builders.build_physical_circuit_instruction(
         logical_X_circ,
         name="Logical X",
@@ -168,6 +196,10 @@ def create_qec_code(
         [[("Gxpi", "D0"), ("Gzpi", "D2"), ("Gxpi", "D4")]],
         qubit_labels=qubits,
     )
+    if include_idles:
+        logical_Z_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Z"] = builders.build_physical_circuit_instruction(
         logical_Z_circ,
         name="Logical Z",
@@ -178,6 +210,10 @@ def create_qec_code(
     logical_K_circ = circuit_backend(
         [[("Gk", q) for q in qubits[2:]]], qubit_labels=qubits
     )
+    if include_idles:
+        logical_K_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["K"] = builders.build_physical_circuit_instruction(
         logical_K_circ,
         pauli_frame_update="K",
@@ -189,6 +225,10 @@ def create_qec_code(
     logical_H_circ = circuit_backend(
         [[("Gh", q) for q in qubits[2:]]], qubit_labels=qubits
     )
+    if include_idles:
+        logical_H_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     logical_H_circ_inst = builders.build_physical_circuit_instruction(
         logical_H_circ,
         pauli_frame_update="H",
@@ -213,6 +253,10 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        to_prime_basis_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Logical Prime Basis Transform"] = (
         builders.build_physical_circuit_instruction(
             to_prime_basis_circ,
@@ -227,6 +271,10 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        from_prime_basis_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Logical Prime Basis Inverse Transform"] = (
         builders.build_physical_circuit_instruction(
             from_prime_basis_circ,
@@ -246,6 +294,13 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        raw_Z_meas_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
+        raw_X_meas_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
 
     prime_basis_Z_meas = builders.build_physical_circuit_instruction(
         to_prime_basis_circ.append(raw_Z_meas_circ),
@@ -321,6 +376,10 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        state_decoder_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Non-FT Minus Unprep"] = (
         builders.build_physical_circuit_instruction(
             state_decoder_circ,
@@ -330,14 +389,42 @@ def create_qec_code(
 
     # Fig 13 of arxiv:2208.01863
     # Adds the instructions in-place
-    _create_adaptive_measure_instruction(instructions, qubits, circuit_backend)
+    _create_adaptive_measure_instruction(
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
+    )
 
     ## Stabilizer circuits (for debugging)
-    _create_stabilizer_instructions(instructions, qubits, circuit_backend)
+    _create_stabilizer_instructions(
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
+    )
 
     ## QEC
-    _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend)
-    _create_flagged_QEC_instruction(instructions, qubits, circuit_backend)
+    _create_unflagged_QEC_instruction(
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
+    )
+    _create_flagged_QEC_instruction(
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
+    )
 
     code = QECCode(instructions, qubits, data_qubits, "Perfect [[5,1,3]] code")
     return code
@@ -501,7 +588,12 @@ def create_ideal_model(  # noqa: C901
 
 ## Helper functions
 def _create_adaptive_measure_instruction(
-    instructions, qubits, circuit_backend
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
 ):
     # FT Adaptive X Measurement Scheme
     # Fig 13 of arxiv:2208.01863
@@ -511,15 +603,30 @@ def _create_adaptive_measure_instruction(
     # TODO: Update this tutorial
 
     _create_adaptive_measure_instruction_part_I(
-        instructions, qubits, circuit_backend
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
     )
 
     _create_adaptive_measure_instruction_part_II(
-        instructions, qubits, circuit_backend
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
     )
 
     _create_adaptive_measure_instruction_part_III(
-        instructions, qubits, circuit_backend
+        instructions,
+        qubits,
+        include_idles,
+        gate_durations,
+        idle_gates,
+        circuit_backend,
     )
 
     ## CLASSICAL DECODER
@@ -660,7 +767,12 @@ def _create_adaptive_measure_instruction(
 
 
 def _create_adaptive_measure_instruction_part_I(
-    instructions, qubits, circuit_backend
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
 ):
     ## PART I of Fig 13 for arxiv:2208.01863
     measI_circ = circuit_backend(
@@ -676,6 +788,10 @@ def _create_adaptive_measure_instruction_part_I(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        measI_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["FT Logical X Measure Part I Circuit"] = (
         builders.build_physical_circuit_instruction(
             measI_circ,
@@ -772,7 +888,12 @@ def _create_adaptive_measure_instruction_part_I(
 
 
 def _create_adaptive_measure_instruction_part_II(
-    instructions, qubits, circuit_backend
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
 ):
     ## PART II of Fig 13 of arxiv:2208.01863
     measII_circ = circuit_backend(
@@ -788,6 +909,10 @@ def _create_adaptive_measure_instruction_part_II(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        measII_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["FT Logical X Measure Part II Circuit"] = (
         builders.build_physical_circuit_instruction(
             measII_circ,
@@ -895,7 +1020,12 @@ def _create_adaptive_measure_instruction_part_II(
 
 
 def _create_adaptive_measure_instruction_part_III(
-    instructions, qubits, circuit_backend
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
 ):
     ## PART III
     measIII_circ = circuit_backend(
@@ -911,6 +1041,10 @@ def _create_adaptive_measure_instruction_part_III(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        measIII_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["FT Logical X Measure Part III Circuit"] = (
         builders.build_physical_circuit_instruction(
             measIII_circ,
@@ -1023,11 +1157,22 @@ def _create_adaptive_measure_instruction_part_III(
     )
 
 
-def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
+def _create_stabilizer_instructions(
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
+):
     XZZXI_circ = circuit_backend(
         [[("Gxpi", "D0"), ("Gzpi", "D1"), ("Gzpi", "D2"), ("Gxpi", "D3")]],
         qubit_labels=qubits,
     )
+    if include_idles:
+        XZZXI_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["XZZXI Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             XZZXI_circ,
@@ -1039,6 +1184,10 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
         [[("Gxpi", "D1"), ("Gzpi", "D2"), ("Gzpi", "D3"), ("Gxpi", "D4")]],
         qubit_labels=qubits,
     )
+    if include_idles:
+        IXZZX_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["IXZZX Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             IXZZX_circ,
@@ -1050,6 +1199,10 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
         [[("Gxpi", "D0"), ("Gxpi", "D2"), ("Gzpi", "D3"), ("Gzpi", "D4")]],
         qubit_labels=qubits,
     )
+    if include_idles:
+        XIXZZ_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["XIXZZ Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             XIXZZ_circ,
@@ -1061,6 +1214,10 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
         [[("Gzpi", "D0"), ("Gxpi", "D1"), ("Gxpi", "D3"), ("Gzpi", "D4")]],
         qubit_labels=qubits,
     )
+    if include_idles:
+        ZXIXZ_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["ZXIXZ Stabilizer"] = (
         builders.build_physical_circuit_instruction(
             ZXIXZ_circ,
@@ -1069,7 +1226,14 @@ def _create_stabilizer_instructions(instructions, qubits, circuit_backend):
     )
 
 
-def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
+def _create_unflagged_QEC_instruction(
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
+):
     # These circuits are not explicitly stated in arxiv:2208.01863
     # However, they can be inferred from the Hadamard-test-like circuits of Fig 12
     # and the stabilizer definitions from Eqns B4-B7
@@ -1088,6 +1252,10 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        XZZXI_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Unflagged XZZXI Check"] = (
         builders.build_physical_circuit_instruction(
             XZZXI_circ,
@@ -1108,6 +1276,10 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        IXZZX_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Unflagged IXZZX Check"] = (
         builders.build_physical_circuit_instruction(
             IXZZX_circ,
@@ -1128,6 +1300,10 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        XIXZZ_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Unflagged XIXZZ Check"] = (
         builders.build_physical_circuit_instruction(
             XIXZZ_circ,
@@ -1148,6 +1324,10 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        ZXIXZ_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Unflagged ZXIXZ Check"] = (
         builders.build_physical_circuit_instruction(
             ZXIXZ_circ,
@@ -1189,7 +1369,14 @@ def _create_unflagged_QEC_instruction(instructions, qubits, circuit_backend):
     )
 
 
-def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
+def _create_flagged_QEC_instruction(
+    instructions,
+    qubits,
+    include_idles,
+    gate_durations,
+    idle_gates,
+    circuit_backend,
+):
     # These circuits are not explicitly stated in arxiv:2208.01863
     # However, they can be inferred from the Hadamard-test-like circuits of Fig 12
     # and the stabilizer definitions from Eqns B4-B7
@@ -1210,6 +1397,10 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        XZZXI_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Flagged XZZXI Check"] = (
         builders.build_physical_circuit_instruction(
             XZZXI_circ,
@@ -1232,6 +1423,10 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        IXZZX_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Flagged IXZZX Check"] = (
         builders.build_physical_circuit_instruction(
             IXZZX_circ,
@@ -1254,6 +1449,10 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        XIXZZ_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Flagged XIXZZ Check"] = (
         builders.build_physical_circuit_instruction(
             XIXZZ_circ,
@@ -1276,6 +1475,10 @@ def _create_flagged_QEC_instruction(instructions, qubits, circuit_backend):
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        ZXIXZ_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     instructions["Flagged ZXIXZ Check"] = (
         builders.build_physical_circuit_instruction(
             ZXIXZ_circ,
