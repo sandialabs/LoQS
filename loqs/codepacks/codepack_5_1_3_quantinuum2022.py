@@ -250,19 +250,38 @@ def create_qec_code(
         logical_H_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
-    logical_H_circ_inst = builders.build_physical_circuit_instruction(
-        logical_H_circ,
-        pauli_frame_update="H",
-        name="Logical H circuit",
+    instructions["Logical H circuit"] = (
+        builders.build_physical_circuit_instruction(
+            logical_H_circ,
+            pauli_frame_update="H",
+            name="Logical H circuit",
+        )
     )
-    logical_H_permutation = builders.build_patch_permute_instruction(
-        {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
-        name="Logical H permutation",
+    instructions["Logical H permutation"] = (
+        builders.build_patch_permute_instruction(
+            {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
+            name="Logical H permutation",
+        )
     )
 
     instructions["H"] = builders.build_composite_instruction(
-        [logical_H_circ_inst, logical_H_permutation],
+        [
+            instructions["Logical H circuit"],
+            instructions["Logical H permutation"],
+        ],
         name="Logical H",
+    )
+
+    logical_I_circ = circuit_backend(
+        [[("Gi", q) for q in qubits[2:]]], qubit_labels=qubits
+    )
+    if include_idles:
+        logical_I_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
+    instructions["I"] = builders.build_physical_circuit_instruction(
+        logical_I_circ,
+        name="Logical I",
     )
 
     # Rotations to and from the "prime" basis
