@@ -168,13 +168,13 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
+    if include_idles:
+        ft_state_prep_checks_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
     ft_state_prep_circ = nonft_state_prep_circ.append(
         ft_state_prep_checks_circ
     )
-    if include_idles:
-        ft_state_prep_circ.pad_single_qubit_idles_by_duration_inplace(
-            idle_gates, gate_durations
-        )
     ft_state_prep = builders.build_physical_circuit_instruction(
         ft_state_prep_circ,
         name="Non-FT Minus Prep + Checks",
@@ -188,6 +188,7 @@ def create_qec_code(
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
             [reset, ft_state_prep],
+            rus_key="FT Minus Prep",
             test_frame_key="measurement_outcomes",
             expected=rus_success_expected,
             max_repeats=250,
