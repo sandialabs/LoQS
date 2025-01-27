@@ -815,6 +815,7 @@ def build_physical_circuit_instruction(
 
 def build_repeat_until_success_instruction(
     instructions: InstructionStackCastableTypes,
+    rus_key: str,
     test_frame_key: str = "rus_success",
     expected: object = True,
     max_repeats: int = 100,
@@ -832,14 +833,13 @@ def build_repeat_until_success_instruction(
     know the underlying instruction arguments until runtime. However, it takes
     at least the following:
 
-    - `instruction`, usually from the `Instruction.data`
-    - `target_outcomes`, usually from the `Instruction.data`
-    - `max_repeats`, usually from the `Instruction.data`
-    - `repeat_count`, usually from the `Instruction.data`
+    - `observed`, usually from the previous frame
+    - `expected`, usually from the `Instruction.data`
     - `rus_key`, usually from the `Instruction.data`
-    - `reset_key`, usually from the `Instruction.data`
     - `patch_label`, usually from the `InstructionLabel`
-    - `patches`, usually from the previous frame
+    - `repeat_count`, usually (except first time) from the `InstructionLabel`
+    - `instructions`, usually from the `Instruction.data`
+    - `max_repeats`, usually from the `Instruction.data`
     - `stack`, usually from the `QuantumProgram`
 
     It returns a `Frame` with the outcome of the underlying
@@ -876,6 +876,8 @@ def build_repeat_until_success_instruction(
     def apply_fn(
         observed: object,
         expected: object,
+        rus_key: str,
+        patch_label: str,
         repeat_count: int,
         instructions: InstructionStackCastableTypes,
         max_repeats: int,
@@ -891,27 +893,17 @@ def build_repeat_until_success_instruction(
                 "Hit max repeats in repeat-until-success instruction"
             )
 
-        new_labels = []
-        for label in InstructionStack.cast(instructions):
-            new_kwargs = label.inst_kwargs.copy()
-            new_kwargs["repeat_count"] = repeat_count
+        # TODO: InstructionStack cast misbehaved, track that down
+        # new_labels = InstructionStack.cast(instructions)._instructions
+        new_labels = [InstructionLabel.cast(ilbl) for ilbl in instructions]
 
-            inst_or_label = (
-                label.inst_label
-                if label.inst_label is not None
-                else label.instruction
-            )
-            assert inst_or_label is not None
+        # Create a new RUS label with updated count
+        rus_label = InstructionLabel(
+            rus_key, patch_label, None, {"repeat_count": repeat_count}
+        )
+        new_labels.append(rus_label)
 
-            new_labels.append(
-                InstructionLabel(
-                    inst_or_label,
-                    label.patch_label,
-                    label.inst_args,
-                    new_kwargs,
-                )
-            )
-
+        # Update stack
         stack = stack.insert_instructions(0, new_labels)
 
         # Return frame with the stack update
@@ -927,6 +919,7 @@ def build_repeat_until_success_instruction(
         "expected": expected,
         "max_repeats": max_repeats,
         "repeat_count": 0,
+        "rus_key": rus_key,
     }
 
     # Need to map underlying instructions also
