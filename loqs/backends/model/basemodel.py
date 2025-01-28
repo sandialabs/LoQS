@@ -1,4 +1,4 @@
-""":class:`.GateRep`, :class:`.InstrumentRep` and :class:`.BaseNoiseModel` definitions.
+""":class:`.BaseNoiseModel` and :class:`.BaseTimeDependentNoiseModel` definitions.
 """
 
 from __future__ import annotations
@@ -77,5 +77,49 @@ class BaseNoiseModel(Castable, Displayable):
         -------
         list
             List of operation representations for the circuit
+        """
+        pass
+
+
+class TimeDependentBaseNoiseModel(BaseNoiseModel):
+    """Base class for an object that holds possibly *time-dependent* noisy operations.
+
+    This class additionally holds the current time, as well as gate/instrument durations
+    so that it can update the time as operations are applied.
+    """
+
+    current_time: float = 0.0
+    """The current simulation time, according to the model."""
+
+    _local_layer_duration: float = 0.0
+    """The time taken for the current layer.
+
+    This is mostly a helper variable that keeps track of the longest
+    gate duration in a layer so that we update the time after each
+    layer properly.
+    """
+
+    def add_gate_duration_to_layer(self, gate_duration):
+        self._local_layer_duration = max(
+            self._local_layer_duration, gate_duration
+        )
+
+    def add_layer_duration_to_current_time(self):
+        self.current_time += self._local_layer_duration
+        self._local_layer_duration = 0.0
+
+    @abstractmethod
+    def get_gate_duration(self, gate_label):
+        """Get the gate duration from a gate label.
+
+        Derived classes should implement this.
+        """
+        pass
+
+    @abstractmethod
+    def get_instrument_duration(self, inst_label):
+        """Get the instrument duration from an instrument label.
+
+        Derived classes should implement this.
         """
         pass

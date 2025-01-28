@@ -10,11 +10,12 @@ import numpy as np
 from typing import ClassVar, Sequence, TypeAlias, TypeVar
 
 from loqs.backends.circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
-from loqs.backends.model import BaseNoiseModel
+from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
 
 try:
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
+    from pygsti.baseobjs.label import LabelTupTupWithTime, LabelTupWithTime
     from pygsti.modelmembers.operations import EmbeddedOp
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt
@@ -57,8 +58,15 @@ PyGSTiModelCastableTypes: TypeAlias = (
 """Types of pyGSTi models this backend can handle"""
 
 
-class PyGSTiNoiseModel(BaseNoiseModel):
-    """Model backend for handling ``pygsti.model.OpModel`` objects."""
+class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
+    """Model backend for handling ``pygsti.model.OpModel`` objects.
+
+    PyGSTi models are inherently time-dependent, so this inherits from
+    :class:`TimeDependentBaseNoiseModel` rather than
+    :class:`BaseNoiseModel`.
+    However, time-dependent features are opt-in and require the user
+    to specify ``use_time_dependence=True`` during initialization.
+    """
 
     name: ClassVar[str] = "pyGSTi"
 
@@ -67,6 +75,9 @@ class PyGSTiNoiseModel(BaseNoiseModel):
         model: PyGSTiModelCastableTypes,
         qubit_aliases: Mapping | Sequence | None = None,
         zbasis_proj_resets: bool = True,
+        use_time_dependence: bool = False,
+        default_gate_durations: Mapping | None = None,
+        default_instrument_durations: Mapping | None = None,
     ) -> None:
         """Initialize a PyGSTiModelBackend.
 
@@ -133,6 +144,10 @@ class PyGSTiNoiseModel(BaseNoiseModel):
 
         self.zbasis_proj_resets = zbasis_proj_resets
 
+        self.use_time_dependence = use_time_dependence
+        self.default_gate_durations = default_gate_durations
+        self.default_instrument_durations = default_instrument_durations
+
         # TODO: Crosstalk specification?
 
     def __hash__(self) -> int:
@@ -169,6 +184,64 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
         ]
 
+    def get_gate_duration(self, gate_label):
+        if isinstance(gate_label, LabelTupWithTime):
+            return gate_label.time  # type: ignore
+        elif isinstance(gate_label, LabelTupTupWithTime):
+            # This represents a layer. Technically this should be fine to extract the time,
+            # but we almost certainly didn't mean to pass a whole layer here
+            raise ValueError(
+                "Unexpectedly got a LayerTupTupWithTime (i.e., layer) in get_gate_duration"
+            )
+
+        # If we are here, we got a normal (probably LabelTup/LabelTupWithArgs)
+        # and need to be looking up in the defaults
+        if self.default_gate_durations is None:
+            raise ValueError(
+                "Time not specified in pyGSTi circuit label and no default gate durations given!"
+            )
+
+        duration = self.default_gate_durations.get(gate_label, None)
+        if duration is None:
+            # Failed specific lookup, let's try by name only
+            duration = self.default_gate_durations.get(gate_label.name, None)  # type: ignore
+
+        if duration is None:
+            raise KeyError(
+                f"{gate_label} not available by label or name in default gate durations!"
+            )
+
+        return duration
+
+    def get_instrument_duration(self, inst_label):
+        if isinstance(inst_label, LabelTupWithTime):
+            return inst_label.time  # type: ignore
+        elif isinstance(inst_label, LabelTupTupWithTime):
+            # This represents a layer. Technically this should be fine to extract the time,
+            # but we almost certainly didn't mean to pass a whole layer here
+            raise ValueError(
+                "Unexpectedly got a LayerTupTupWithTime (i.e., layer) in get_instrument_duration"
+            )
+
+        # If we are here, we got a normal (probably LabelTup/LabelTupWithArgs)
+        # and need to be looking up in the defaults
+        if self.default_instrument_durations is None:
+            raise ValueError(
+                "Time not specified in pyGSTi circuit label and no default instrument durations given!"
+            )
+
+        duration = self.default_instrument_durations.get(inst_label, None)
+        if duration is None:
+            # Failed specific lookup, let's try by name only
+            duration = self.default_instrument_durations.get(inst_label.name, None)  # type: ignore
+
+        if duration is None:
+            raise KeyError(
+                f"{inst_label} not available by label or name in default instrument durations!"
+            )
+
+        return duration
+
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
@@ -189,18 +262,27 @@ class PyGSTiNoiseModel(BaseNoiseModel):
                 if name.startswith("G"):
                     # TODO: Currently this is only using first rep. Fix?
                     rep = self._get_gate_rep(comp.name, qubits, gatereps[0])
+                    duration = self.get_gate_duration(comp)
                     reptype: RepEnum = gatereps[0]
                 elif comp.name.startswith("I"):
                     # TODO: Currently this is only using first rep. Fix?
                     rep = self._get_instrument_rep(
                         comp.name, qubits, instreps[0]
                     )
+                    duration = self.get_instrument_duration(comp)
                     reptype = instreps[0]
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
 
                 # We need to save with original (aliased) qubits
                 reps.append(RepTuple(rep, aliased_qubits, reptype))
+
+                # If using time-dependence, update layer time
+                if self.use_time_dependence:
+                    self.add_gate_duration_to_layer(duration)
+            # If using time-dependence, move simulation time forward
+            if self.use_time_dependence:
+                self.add_layer_duration_to_current_time()
         return reps
 
     def _get_gate_rep(self, name, qubits, gaterep) -> object:
@@ -208,6 +290,10 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             (name,) + tuple(qubits)
         ]  # Look up using unaliased qubits
         basis = self.model.basis
+
+        # if using time-dependence, update operator rep
+        if self.use_time_dependence:
+            op.set_time(self.current_time)
 
         if self.use_embedded_op and isinstance(op, EmbeddedOp):
             # Pull out the relevant part of the tensor prod basis
@@ -258,6 +344,10 @@ class PyGSTiNoiseModel(BaseNoiseModel):
             op = self.inst_dict[
                 (name,) + tuple(qubits)
             ]  # Look up using unaliased qubits
+
+            # if using time-dependence, update operator rep
+            if self.use_time_dependence:
+                op.set_time(self.current_time)
 
             rep = {}
             for k, v in op.items():
