@@ -109,7 +109,7 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
         self._local_layer_duration = 0.0
 
     @abstractmethod
-    def get_gate_duration(self, gate_label):
+    def get_gate_duration(self, gate_label) -> int | float:
         """Get the gate duration from a gate label.
 
         Derived classes should implement this.
@@ -117,7 +117,7 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
         pass
 
     @abstractmethod
-    def get_instrument_duration(self, inst_label):
+    def get_instrument_duration(self, inst_label) -> int | float:
         """Get the instrument duration from an instrument label.
 
         Derived classes should implement this.

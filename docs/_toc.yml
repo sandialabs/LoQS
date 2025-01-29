@@ -34,6 +34,7 @@ parts:
   chapters:
   - file: markdown/runlogst.md
   - file: markdown/fttests.md
+  - file: markdown/timedepmodel.md
 - caption: Developer Zone
   maxdepth: 1
   chapters:

@@ -22,7 +22,11 @@ import typing
 
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit, STIMPhysicalCircuit
-from loqs.backends.model import BaseNoiseModel
+from loqs.backends.model import (
+    BaseNoiseModel,
+    TimeDependentBaseNoiseModel,
+    PyGSTiNoiseModel,
+)
 from loqs.backends.state import BaseQuantumState, STIMQuantumState
 from loqs.core.frame import Frame
 from loqs.core.history import History
@@ -772,6 +776,13 @@ def build_physical_circuit_instruction(
 
             data["patches"] = new_patches
 
+        if (
+            isinstance(model, TimeDependentBaseNoiseModel)
+            and not isinstance(model, PyGSTiNoiseModel)
+        ) or (
+            isinstance(model, PyGSTiNoiseModel) and model.use_time_dependence
+        ):
+            data["current_model_time"] = model.current_time
         if len(outcomes):
             data["measurement_outcomes"] = MeasurementOutcomes(outcomes)
         if len(error_injections):

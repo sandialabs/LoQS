@@ -273,7 +273,7 @@ def create_qec_code(
     )
 
     logical_I_circ = circuit_backend(
-        [[("Gi", q) for q in qubits[2:]]], qubit_labels=qubits
+        [[("Gi1Q", q) for q in qubits[2:]]], qubit_labels=qubits
     )
     if include_idles:
         logical_I_circ.pad_single_qubit_idles_by_duration_inplace(

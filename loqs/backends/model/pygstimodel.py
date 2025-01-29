@@ -15,7 +15,12 @@ from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
 
 try:
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
-    from pygsti.baseobjs.label import LabelTupTupWithTime, LabelTupWithTime
+    from pygsti.baseobjs.label import (
+        Label,
+        LabelStr,
+        LabelTupTupWithTime,
+        LabelTupWithTime,
+    )
     from pygsti.modelmembers.operations import EmbeddedOp
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt
@@ -76,8 +81,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         qubit_aliases: Mapping | Sequence | None = None,
         zbasis_proj_resets: bool = True,
         use_time_dependence: bool = False,
-        default_gate_durations: Mapping | None = None,
-        default_instrument_durations: Mapping | None = None,
+        default_gate_durations: (
+            Mapping[Label | str, int | float] | None
+        ) = None,
+        default_instrument_durations: (
+            Mapping[Label | str, int | float] | None
+        ) = None,
     ) -> None:
         """Initialize a PyGSTiModelBackend.
 
@@ -120,7 +129,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             }
         else:
             raise TypeError("Invalid type for qubit aliases")
-        self._rev_qubit_aliases = {v: k for k, v in self.qubit_aliases.items()}
+        self.model_qubit_aliases = {
+            v: k for k, v in self.qubit_aliases.items()
+        }
 
         self.use_embedded_op = False
         if isinstance(model, ExplicitOpModel):
@@ -158,6 +169,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         keys = []
         for key in self.gate_dict.keys():
             name = key.name
+
+            if isinstance(key, LabelStr):
+                # LabelStr does not have any qubits with it
+                keys.append((name,))
+                continue
+
             aliased_qubits = [self.qubit_aliases[q] for q in key.qubits]
             keys.append((name, aliased_qubits))
         return keys
@@ -184,7 +201,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
         ]
 
-    def get_gate_duration(self, gate_label):
+    def get_gate_duration(self, gate_label) -> int | float:
+        if not self.use_time_dependence:
+            return 0
+
         if isinstance(gate_label, LabelTupWithTime):
             return gate_label.time  # type: ignore
         elif isinstance(gate_label, LabelTupTupWithTime):
@@ -213,7 +233,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         return duration
 
-    def get_instrument_duration(self, inst_label):
+    def get_instrument_duration(self, inst_label) -> int | float:
+        if not self.use_time_dependence:
+            return 0
+
         if isinstance(inst_label, LabelTupWithTime):
             return inst_label.time  # type: ignore
         elif isinstance(inst_label, LabelTupTupWithTime):
@@ -258,7 +281,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             for comp in layer.components:  # type: ignore
                 name = comp.name
                 aliased_qubits = comp.qubits  # The circuit is already aliased
-                qubits = [self._rev_qubit_aliases[q] for q in aliased_qubits]
+                qubits = [self.model_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
                     # TODO: Currently this is only using first rep. Fix?
                     rep = self._get_gate_rep(comp.name, qubits, gatereps[0])
