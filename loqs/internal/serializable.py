@@ -538,13 +538,13 @@ class Serializable:
                     # If this is just the class, return it
                     return Serializable._deserialize_class(obj)
 
-                if obj.get("type", None) == "matrix":
-                    # This is a matrix, deserialize
-                    return Serializable._deserialize_mx(obj["data"])
-
                 # Otherwise, get the class and call its deserialization
                 cls = Serializable._state_class(obj)
                 return cls.from_serialization(obj, serial_id_to_obj_cache)
+
+            if obj.get("type", None) == "matrix":
+                # This is a matrix, deserialize
+                return Serializable._deserialize_mx(obj["data"])
 
             # Otherwise, assume just a dict and recursively unserialize
             deserialized = {}

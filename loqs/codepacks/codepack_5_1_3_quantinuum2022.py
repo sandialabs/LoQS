@@ -90,7 +90,16 @@ def create_qec_code(
     if gate_durations is None:
         gate_durations = {
             k: 1
-            for k in ["Gxpi", "Gypi", "Gzpi", "Gzpi2", "Gzmpi2", "Gh", "Gk"]
+            for k in [
+                "Gi",
+                "Gxpi",
+                "Gypi",
+                "Gzpi",
+                "Gzpi2",
+                "Gzmpi2",
+                "Gh",
+                "Gk",
+            ]
         }
         gate_durations["Gcnot"] = 2
         gate_durations["Gcphase"] = 2
@@ -175,9 +184,11 @@ def create_qec_code(
     ft_state_prep_circ = nonft_state_prep_circ.append(
         ft_state_prep_checks_circ
     )
-    ft_state_prep = builders.build_physical_circuit_instruction(
-        ft_state_prep_circ,
-        name="Non-FT Minus Prep + Checks",
+    instructions["Non-FT Minus Prep + Checks"] = (
+        builders.build_physical_circuit_instruction(
+            ft_state_prep_circ,
+            name="Non-FT Minus Prep + Checks",
+        )
     )
 
     # On success, we expect three sets of 0 outcomes on the flag qubits from the check circuit
@@ -187,7 +198,7 @@ def create_qec_code(
 
     instructions["FT Minus Prep"] = (
         builders.build_repeat_until_success_instruction(
-            [reset, ft_state_prep],
+            [reset, instructions["Non-FT Minus Prep + Checks"]],
             rus_key="FT Minus Prep",
             test_frame_key="measurement_outcomes",
             expected=rus_success_expected,
@@ -273,7 +284,7 @@ def create_qec_code(
     )
 
     logical_I_circ = circuit_backend(
-        [[("Gi1Q", q) for q in qubits[2:]]], qubit_labels=qubits
+        [[("Gi", q) for q in qubits[2:]]], qubit_labels=qubits
     )
     if include_idles:
         logical_I_circ.pad_single_qubit_idles_by_duration_inplace(

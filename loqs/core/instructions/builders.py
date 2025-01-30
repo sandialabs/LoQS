@@ -895,8 +895,11 @@ def build_repeat_until_success_instruction(
         stack: InstructionStack,
     ) -> Frame:
         # If we were successful, return empty frame (with debug info)
+        # TODO: If these are measurement_outcomes, how do we get inferred_outcomes from Pauli frame?
         if observed == expected:
-            return Frame({"total_rus_count": repeat_count})
+            return Frame(
+                {"total_rus_count": repeat_count, "rus_success": True}
+            )
 
         repeat_count += 1
         if repeat_count > max_repeats:
@@ -918,7 +921,7 @@ def build_repeat_until_success_instruction(
         stack = stack.insert_instructions(0, new_labels)
 
         # Return frame with the stack update
-        return Frame({"stack": stack})
+        return Frame({"stack": stack, "rus_success": False})
 
     # We need to store the instruction, target outcomes, and repeat information
     # To avoid recursion, we also store the key for the RUS instruction

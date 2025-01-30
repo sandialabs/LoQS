@@ -391,7 +391,9 @@ class STIMQuantumState(BaseQuantumState):
     ) -> T:
         qubit_labels = state["qubit_labels"]
         seed = state["seed"]
-        state_vector = state["_stim_state_vector"]
+        state_vector = cls.deserialize(state["_stim_state_vector"])
+        assert isinstance(state_vector, np.ndarray)
+
         obj = cls(
             _Tableau.from_state_vector(state_vector, endian="little"),
             qubit_labels=qubit_labels,
@@ -407,7 +409,11 @@ class STIMQuantumState(BaseQuantumState):
             {
                 "qubit_labels": self.qubit_labels,
                 "seed": self.seed,
-                "_stim_state_vector": self.state.state_vector(endian="little"),
+                "_stim_state_vector": self.serialize(
+                    self.state.state_vector(endian="little"),
+                    hash_to_serial_id_cache,
+                    ignore_no_serialize_flags,
+                ),
             }
         )
         return state
