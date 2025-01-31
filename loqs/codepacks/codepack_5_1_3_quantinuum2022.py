@@ -43,6 +43,7 @@ import loqs.tools.qectools as qt
 
 
 def create_qec_code(
+    ft_state_prep_max_repeats: int = 100,
     include_idles: bool = False,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
@@ -52,6 +53,10 @@ def create_qec_code(
 
     Parameters
     ----------
+    ft_state_prep_max_repeats:
+        The number of max repeats to include in the repeat-until-success
+        fault-tolerant state prep instruction.
+
     include_idles:
         Whether to include (``True``) or not (``False``, default) idle gates
         in physical circuits.
@@ -92,6 +97,7 @@ def create_qec_code(
             k: 1
             for k in [
                 "Gi",
+                "Gi1Q",
                 "Gxpi",
                 "Gypi",
                 "Gzpi",
@@ -103,7 +109,9 @@ def create_qec_code(
         }
         gate_durations["Gcnot"] = 2
         gate_durations["Gcphase"] = 2
+        gate_durations["Gi2Q"] = 2
         gate_durations["Iz"] = 3
+        gate_durations["GiMCM"] = 3
     if idle_gates is None:
         idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 
@@ -202,7 +210,7 @@ def create_qec_code(
             rus_key="FT Minus Prep",
             test_frame_key="measurement_outcomes",
             expected=rus_success_expected,
-            max_repeats=250,
+            max_repeats=ft_state_prep_max_repeats,
             name="Repeat-until-success FT Minus Prep",
         )
     )
@@ -521,6 +529,7 @@ def create_ideal_model(  # noqa: C901
         "Gk",
         "Gcnot",
         "Gcphase",
+        "Gi",
         "Gi1Q",
         "Gi2Q",
         "GiMCM",

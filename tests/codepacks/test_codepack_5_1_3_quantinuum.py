@@ -50,8 +50,9 @@ class Test5QCodepack:
 
     @classmethod
     def setup_class(cls):
-        cls.code_5Q = codepack_5_1_3.create_qec_code(PyGSTiPhysicalCircuit)
+        cls.code_5Q = codepack_5_1_3.create_qec_code(circuit_backend=PyGSTiPhysicalCircuit)
         cls.program = cls._create_program(PyGSTiPhysicalCircuit, PyGSTiNoiseModel, QSimQuantumState)
+        cls.stim_program = cls._create_program(PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState)
         cls.qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
     
     # Note that tests will be labeled stack_outcome-state-model-circuit with this stacking
@@ -130,7 +131,7 @@ class Test5QCodepack:
             ("FT Logical X Measure", "L0")
         ]
 
-        program_ftprep = QuantumProgram.from_quantum_program(self.program, stack_ftprep, name="FT Prep -, FT measure X")
+        program_ftprep = QuantumProgram.from_quantum_program(self.stim_program, stack_ftprep, name="FT Prep -, FT measure X")
         assert self._test_program(program_ftprep, "Non-FT Minus Prep", 2)
 
     def test_all_discrete_errors_meas(self):
@@ -143,7 +144,7 @@ class Test5QCodepack:
             ("FT Logical X Measure Part I Feed-Forward", "L0"),
         ]
 
-        program_ftmeas_partI = QuantumProgram.from_quantum_program(self.program, stack_ftmeas_partI, name="FT Prep -, non-FT measure X")
+        program_ftmeas_partI = QuantumProgram.from_quantum_program(self.stim_program, stack_ftmeas_partI, name="FT Prep -, non-FT measure X")
         assert self._test_program(program_ftmeas_partI, "FT Logical X Measure Part I Circuit", 3)
 
         ## PART II
@@ -166,7 +167,7 @@ class Test5QCodepack:
         ]
 
         program_ftmeas_partII = QuantumProgram.from_quantum_program(
-            self.program,
+            self.stim_program,
             stack_ftmeas_partII,
             global_instructions={"Ideal Part I Feed-Forward": ideal_partI},
             name="FT Prep -, FT measure X"
@@ -195,7 +196,7 @@ class Test5QCodepack:
         ]
 
         program_ftmeas_partIII = QuantumProgram.from_quantum_program(
-            self.program,
+            self.stim_program,
             stack_ftmeas_partIII,
             global_instructions={
                 "Ideal Part I Feed-Forward": ideal_partI,
@@ -217,7 +218,7 @@ class Test5QCodepack:
         ]
 
         program_ftqec1 = QuantumProgram.from_quantum_program(
-            self.program,
+            self.stim_program,
             stack_ftqec1,
             name="FT Prep -, QEC, FT measure X"
         )
@@ -234,7 +235,7 @@ class Test5QCodepack:
         ]
 
         program_ftqec2 = QuantumProgram.from_quantum_program(
-            self.program,
+            self.stim_program,
             stack_ftqec2,
             name="FT Prep -, QEC, FT measure X"
         )
@@ -251,7 +252,7 @@ class Test5QCodepack:
         ]
 
         program_ftqec3 = QuantumProgram.from_quantum_program(
-            self.program,
+            self.stim_program,
             stack_ftqec3,
             name="FT Prep -, QEC, FT measure X"
         )
@@ -268,7 +269,7 @@ class Test5QCodepack:
         ]
 
         program_ftqec4 = QuantumProgram.from_quantum_program(
-            self.program,
+            self.stim_program,
             stack_ftqec4,
             name="FT Prep -, QEC, FT measure X"
         )
