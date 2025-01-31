@@ -12,7 +12,7 @@ Thus, we will have 10 qubits total: 7 data and 3 auxiliary.
 
 from collections.abc import Sequence
 import itertools
-from typing import Literal, Mapping
+from typing import Mapping
 import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
@@ -28,15 +28,10 @@ from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
-from loqs.core.instructions.instructionlabel import (
-    InstructionLabel,
-    InstructionLabelCastableTypes,
-)
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 import loqs.tools.pygstitools as pt
-import loqs.tools.qectools as qt
 
 
 def create_qec_code(
@@ -222,6 +217,7 @@ def create_qec_code(
             )
         instructions[n] = builders.build_physical_circuit_instruction(
             logical_circ,
+            pauli_frame_update=n,
             name=f"Logical {n}",
         )
 
@@ -379,7 +375,7 @@ def create_qec_code(
         )
     )
 
-    # Now that we have all the circuits, we can make our feed-forward QEC instructions
+    _create_adaptive_qec_instructions(instructions, qubits)
 
     ## MEASURE
     # Full data qubit measurements
@@ -424,41 +420,48 @@ def create_qec_code(
         patch_label: str,
         patches: PatchDict,
         data_qubits: list[str],
-        basis: Literal["X", "Z"],
-        pauli_frame_per_patch: dict[str, list[int]],
+        measurement_basis: str,
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
-        # Get pauli frame
-        pauli_frame = patches[patch_label].pauli_frame
+        # Get the logical pauli frame
+        logical_pauli_frame = patches[patch_label].data["logical_pauli_frame"]
 
-        # Compute inferred bitstring
-        assert basis in "XZ"
-        inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
-            pauli_frame, basis
-        )
-        inferred_bitstring = [inferred_outcomes[q][0] for q in edge_qubits]
-
-        uncorrected_outcome = sum(inferred_bitstring) % 2
+        # Compute uncorrected output
+        raw_bitstring = [measurement_outcomes[q][0] for q in edge_qubits]
+        uncorrected_outcome = sum(raw_bitstring) % 2
 
         plaq_idxs = [[0, 1, 2, 3], [1, 2, 4, 5], [2, 3, 5, 6]]
-        classical_syndrome = ""
+        classical_syndrome = []
         for plaq in plaq_idxs:
             plaq_outcomes = [
-                inferred_outcomes[data_qubits[q]][0] for q in plaq
+                measurement_outcomes[data_qubits[q]][0] for q in plaq
             ]
             parity = sum(plaq_outcomes) % 2
-            classical_syndrome += str(parity)
+            classical_syndrome.append(parity)
 
-        # TODO
-        correction = 0
+        # Final data qubit decoding. This is Table 1 of 10.1103/PhysRevX.11.041058, as implemented
+        # by the algorithm in Fig 21
+        def data_decode(sd, pf_idx):
+            if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
+                logical_pauli_frame[pf_idx] = (
+                    logical_pauli_frame[pf_idx] + 1
+                ) % 2
 
-        logical_outcome = (uncorrected_outcome + correction) % 2
+        # We are correcting the opposite basis as our measurement, because
+        # that is the thing that does not commute/we are sensitive to
+        pf_idx = 1 if measurement_basis == "X" else 0
+        data_decode(classical_syndrome, pf_idx)
+
+        # Flip if needed based on logical pauli frame
+        logical_outcome = (
+            uncorrected_outcome + logical_pauli_frame[pf_idx]
+        ) % 2
         return Frame(
             {
                 "logical_measurement": logical_outcome,
-                "inferred_outcomes": inferred_outcomes,
                 "uncorrected_measurement": uncorrected_outcome,
                 "classical_syndrome": classical_syndrome,
+                "final_logical_pauli_frame": logical_pauli_frame,
             }
         )
 
@@ -485,60 +488,218 @@ def create_qec_code(
         )
     )
 
-    # X_logical_meas = Instruction(
-    #     logical_meas_apply_fn,
-    #     data={"data_qubits": qubits[3:], "basis": "X"},
-    #     map_qubits_fn=logical_meas_map_qubits_fn,
-    #     name="Non-FT X logical parity calculation",
-    # )
+    X_logical_meas = Instruction(
+        logical_meas_apply_fn,
+        data={"data_qubits": qubits[3:], "basis": "X"},
+        map_qubits_fn=logical_meas_map_qubits_fn,
+        name="Non-FT X logical parity calculation",
+    )
 
     instructions["FT Logical X Measure"] = (
         builders.build_composite_instruction(
             [
                 instructions["H"],
                 instructions["Raw Z Data Measure"],
-                Z_logical_meas,
+                X_logical_meas,
             ],
-            name="FT logical Z measurement",
+            name="FT logical X measurement",
         )
     )
 
-    ### DECODING CIRCUIT
-    state_decoder_circ = circuit_backend(
-        [
-            [("Gcphase", "D0", "D4")],
-            [("Gcphase", "D1", "D2"), ("Gcphase", "D3", "D4")],
-            [("Gcphase", "D0", "D1"), ("Gcphase", "D2", "D3")],
-            [
-                ("Gh", "D0"),
-                ("Gh", "D1"),
-                ("Gh", "D2"),
-                ("Gh", "D3"),
-                ("Gh", "D4"),
-            ],
-            [
-                ("Iz", "D0"),
-                ("Iz", "D1"),
-                ("Iz", "D2"),
-                ("Iz", "D3"),
-                ("Iz", "D4"),
-            ],
-        ],
-        qubit_labels=qubits,
+    code = QECCode(
+        instructions,
+        qubits,
+        data_qubits,
+        "Quantinuum 2021 [[7,1,3]] color code",
     )
-    if include_idles:
-        state_decoder_circ.pad_single_qubit_idles_by_duration_inplace(
-            idle_gates, gate_durations
-        )
-    instructions["Non-FT Minus Unprep"] = (
-        builders.build_physical_circuit_instruction(
-            state_decoder_circ,
-            name="Non-FT state decoder circuit",
-        )
-    )
-
-    code = QECCode(instructions, qubits, data_qubits, "Perfect [[5,1,3]] code")
     return code
+
+
+def _create_adaptive_qec_instructions(instructions, qubits):
+    # Now that we have all the circuits, we can make our feed-forward QEC instructions
+    # Overall, this will encapsulate the dashed QEC cycle box in Fig 10 of 10.1103/PhysRevX.11.041058
+    # NOTE: Quantinuum's version of QEC does not have a per-qubit Pauli frame, but rather
+    # a "logical" Pauli frame just for the patch. We will store this "logical" Pauli frame
+    # in the extra `data` dict in the QECCodePatch and use it rather than the default Pauli frame object
+    # TODO: We will almost certainly want the qubit-specific version too.
+    # Need to test if the automated workflow that we used for 5Q code will work here too
+    # Quantinuum's procedure is detailed in Section II.A.3 of 10.1103/PhysRevX.11.041058, and is summarized here
+    # (corresponding to the two apply functions and their if/else branches):
+    # 1a. Measure parallel flagged S1-S5-S6.
+    #   IF: No syndrome diff to last round, proceed to 1b.
+    #   ELSE: Proceed to 2.
+    # 1b. Measure parallel flagged S2-S3-S4.
+    #   IF: No syndrome diff to last round, no error. Terminate.
+    #   ELSE: proceed to 2.
+    # 2. Measure all unflagged syndromes. Save these as "ground truth" for next round.
+    #   a. Computed unflagged syndrome diffs to last round.
+    #      Send these to Table 1 LUT to get the data qubit error correction.
+    #      Update the "logical" Pauli frame accordingly.
+    #   b. Send all 6 sets of syndrome diffs (flagged to last, and unflagged to last)
+    #      to Table 2 LUT to get the hook error correction.
+    #      Update the "logical" Pauli frame accordingly.
+
+    # The differences between steps 1 and 2 are minor enough that we can handle
+    # it with a single function that switches behavior slightly on `first_check`
+    def QEC_flagged_feedforward_apply_fn(
+        # For patch to get our logical Pauli frame and last syndromes
+        patch_label: str,
+        patches: PatchDict,
+        # To check flag outcomes
+        measurement_outcomes: MeasurementOutcomes,
+        # For flag/aux qubit labels in the measurement outcome
+        flag_qubits: list[str],
+        # Whether this is the first check or not
+        first_check: bool,
+        # For feed-forward processing
+        stack: InstructionStack,
+    ) -> Frame:
+        # Get last syndromes (or default to trivial)
+        patch = patches[patch_label]
+        last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
+        syndrome_diff = patch.data.get("flagged_syndrome_diff", [None] * 6)
+
+        # Compute flagged syndrome diffs for these three checks
+        changes = [measurement_outcomes[fq][0] for fq in flag_qubits]
+
+        syndrome_idxs = [0, 4, 5] if first_check else [1, 2, 3]
+        for i, si in enumerate(syndrome_idxs):
+            syndrome_diff[si] = (changes[i] + last_syndromes[si]) % 2
+        patch.data["flagged_syndrome_diff"] = syndrome_diff
+
+        if any([sd == 1 for sd in syndrome_diff]):
+            # Non-trivial syndrome, go to unflagged
+            next_instructions = [
+                ("Unflagged Parallel S1-S2-S3 Check", patch_label),
+                ("Unflagged Parallel S4-S5-S6 Check", patch_label),
+                ("QEC Decoder", patch_label),  # FORWARD REFERENCE
+            ]
+            new_stack = stack.insert_instructions(0, next_instructions)
+        elif first_check:
+            # This is our first check with no errors, proceed to part 2
+            next_instructions = [
+                ("Flagged Parallel S2-S3-S4 Check", patch_label),
+                (
+                    "Flagged S2-S3-S4 Feed-Forward",
+                    patch_label,
+                ),  # FORWARD REFERENCE
+            ]
+            new_stack = stack.insert_instructions(0, next_instructions)
+        else:
+            # this is our second check with no errors, we proceed with no correction
+            new_stack = stack
+
+        return Frame(
+            {"stack": new_stack, "flagged_syndrome_diff": syndrome_diff}
+        )
+
+    def QEC_flagged_feedforward_map_qubits_fn(
+        qubit_mapping: Mapping[str | int, str | int],
+        flag_qubits: list[str | int],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["flag_qubits"] = [qubit_mapping[q] for q in flag_qubits]
+        return new_kwargs
+
+    instructions["Flagged S1-S5-S6 Feed-Forward"] = Instruction(
+        QEC_flagged_feedforward_apply_fn,
+        data={"flag_qubits": qubits[:3], "first_check": True},
+        map_qubits_fn=QEC_flagged_feedforward_map_qubits_fn,
+        name="Flagged S1-S5-S6 Feed-Forward",
+    )
+
+    instructions["Flagged S2-S3-S4 Feed-Forward"] = Instruction(
+        QEC_flagged_feedforward_apply_fn,
+        data={"flag_qubits": qubits[:3], "first_check": False},
+        map_qubits_fn=QEC_flagged_feedforward_map_qubits_fn,
+        name="Flagged S2-S3-S4 Feed-Forward",
+    )
+
+    # Unflagged decoder
+    def QEC_decoder_apply_fn(
+        # For patch to get our logical Pauli frame and last syndromes
+        patch_label: str,
+        patches: PatchDict,
+        # To check X/Z outcomes
+        X_outcomes: MeasurementOutcomes,
+        Z_outcomes: MeasurementOutcomes,
+        # For flag/aux qubit labels in the measurement outcome
+        X_qubits: list[str],
+        Z_qubits: list[str],
+    ) -> Frame:
+        # Get last syndromes (or default to trivial)
+        patch = patches[patch_label]
+        last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
+        logical_pauli_frame = patch.data.get("logical_pauli_frame", [0, 0])
+        flagged_syndrome_diff = patch.data.get(
+            "flagged_syndrome_diff", [None] * 6
+        )
+
+        # Get syndrome bits
+        unflagged_syndrome = [X_outcomes[fq][0] for fq in X_qubits]
+        unflagged_syndrome.extend([Z_outcomes[fq][0] for fq in Z_qubits])
+
+        # Compute syndrome diffs
+        unflagged_syndrome_diff = [
+            int(i) for i in np.bitwise_xor(last_syndromes, unflagged_syndrome)
+        ]
+
+        # Data qubit decoding. This is Table 1 of 10.1103/PhysRevX.11.041058, as implemented
+        # by the algorithm in Fig 21
+        def data_decode(sd, pf_idx):
+            if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
+                logical_pauli_frame[pf_idx] = (
+                    logical_pauli_frame[pf_idx] + 1
+                ) % 2
+
+        data_decode(unflagged_syndrome_diff[:3], 0)
+        data_decode(unflagged_syndrome_diff[3:], 0)
+
+        # Hook error decoding. This is Table 2 of 10.1103/PhysRevX.11.041058, as implemented
+        # by a modified version of the algorithm in Fig 22
+        def hook_decode(sd, fsd, pf_idx):
+            if (fsd, sd) in [
+                ([1, 0, 0], [0, 1, 0]),
+                ([1, 0, 0], [0, 0, 1]),
+                ([0, 1, 1], [0, 0, 1]),
+            ]:
+                logical_pauli_frame[pf_idx] = (
+                    logical_pauli_frame[pf_idx] + 1
+                ) % 2
+
+        hook_decode(unflagged_syndrome_diff[:3], flagged_syndrome_diff[:3], 0)
+        hook_decode(unflagged_syndrome_diff[3:], flagged_syndrome_diff[3:], 1)
+
+        # Update the patch data
+        patch.data["logical_pauli_frame"] = logical_pauli_frame
+        del patch.data["flagged_syndrome_diff"]
+        patch.data["last_syndrome"] = unflagged_syndrome
+
+        return Frame(
+            {
+                "unflagged_syndrome_diff": unflagged_syndrome_diff,
+                "new_logical_pauli_frame": logical_pauli_frame,
+            }
+        )
+
+    def QEC_decoder_map_qubits_fn(
+        qubit_mapping: Mapping[str | int, str | int],
+        X_qubits: list[str | int],
+        Z_qubits: list[str | int],
+        **kwargs,
+    ) -> KwargDict:
+        new_kwargs = kwargs.copy()
+        new_kwargs["X_qubits"] = [qubit_mapping[q] for q in X_qubits]
+        new_kwargs["Z_qubits"] = [qubit_mapping[q] for q in Z_qubits]
+        return new_kwargs
+
+    instructions["QEC Decoder"] = Instruction(
+        QEC_decoder_apply_fn,
+        data={"X_qubits": qubits[:3], "Z_qubits": qubits[:3]},
+        map_qubits_fn=QEC_decoder_map_qubits_fn,
+        name="QEC Decoder",
+    )
 
 
 def create_ideal_model(  # noqa: C901
@@ -547,7 +708,7 @@ def create_ideal_model(  # noqa: C901
     gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
     instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
 ):
-    """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
+    """Create an ideal (i.e. noiseless) model for the [[7,1,3]] code.
 
     This model will contain all the instructions needed to run the
     physical circuits in the :class:`QECCode` returned by :meth:`create_qec_code()`.
@@ -556,8 +717,8 @@ def create_ideal_model(  # noqa: C901
     Parameters
     ----------
     qubits:
-        List of qubit labels to use. It should be have 7 entries,
-        and the first two qubits should be the auxiliary qubits.
+        List of qubit labels to use. It should be have 10 entries,
+        and the first three qubits should be the auxiliary qubits.
 
     model_backend:
         The model backend to use when generating operations.
@@ -568,8 +729,8 @@ def create_ideal_model(  # noqa: C901
         A noiseless model for the `QECCode` returned by
         :meth:`create_qec_code`
     """
-    assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
-    model_qubits = [f"Q{i}" for i in range(7)]
+    assert len(qubits) == 10, "Must provide exactly 10 qubit labels"
+    model_qubits = [f"Q{i}" for i in range(10)]
 
     gate_names = [
         "Gxpi",
@@ -578,21 +739,14 @@ def create_ideal_model(  # noqa: C901
         "Gzpi2",
         "Gzmpi2",
         "Gh",
-        "Gk",
         "Gcnot",
-        "Gcphase",
+        "Gi",
         "Gi1Q",
         "Gi2Q",
         "GiMCM",
     ]
 
     nonstd_unitaries = {
-        "Gk": np.array(
-            [
-                [1 / np.sqrt(2), 1 / np.sqrt(2)],
-                [1j / np.sqrt(2), -1j / np.sqrt(2)],
-            ]
-        ),
         "Gi1Q": np.eye(2),
         "Gi2Q": np.eye(2),
         "GiMCM": np.eye(2),
@@ -628,9 +782,8 @@ def create_ideal_model(  # noqa: C901
                 "Gzpi2": ["SQRT_Z"],
                 "Gzmpi2": ["SQRT_Z_DAG"],
                 "Gh": ["H"],
-                "Gk": ["H", "SQRT_Z"],
                 "Gcnot": ["CX"],
-                "Gcphase": ["CZ"],
+                "Gi": ["I"],
                 "Gi1Q": ["I"],
                 "Gi2Q": ["I"],
                 "GiMCM": ["I"],

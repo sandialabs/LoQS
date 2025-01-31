@@ -189,6 +189,9 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self.pauli_frame = PauliFrame.cast(pauli_frame)
         """The Pauli frame tracking errors on these qubits."""
 
+        self.data = {}
+        """Extra patch-specific data to be tracked."""
+
     def __getitem__(self, key: str) -> Instruction:
         try:
             template_op = self.code.instructions[key]
