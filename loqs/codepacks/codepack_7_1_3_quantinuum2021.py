@@ -45,6 +45,10 @@ def create_qec_code(
 
     Parameters
     ----------
+    ft_state_prep_max_repeats:
+        The number of max repeats to include in the repeat-until-success
+        fault-tolerant state prep instruction.
+
     include_idles:
         Whether to include (``True``) or not (``False``, default) idle gates
         in physical circuits.
@@ -86,18 +90,19 @@ def create_qec_code(
             k: 1
             for k in [
                 "Gi",
+                "Gi1Q",
                 "Gxpi",
                 "Gypi",
                 "Gzpi",
                 "Gzpi2",
                 "Gzmpi2",
                 "Gh",
-                "Gk",
             ]
         }
         gate_durations["Gcnot"] = 2
-        gate_durations["Gcphase"] = 2
+        gate_durations["Gi2Q"] = 2
         gate_durations["Iz"] = 3
+        gate_durations["GiMCM"] = 3
     if idle_gates is None:
         idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 
@@ -109,25 +114,20 @@ def create_qec_code(
         [
             [
                 ("Gh", "D0"),
-                ("Gh", "D5"),
-                ("Gh", "D7"),
+                ("Gh", "D4"),
+                ("Gh", "D6"),
             ],
             [
                 ("Gcnot", "D0", "D1"),
-                ("Gcnot", "D5", "D6"),
-                ("Gcnot", "D7", "D4"),
+                ("Gcnot", "D4", "D5"),
+                ("Gcnot", "D6", "D3"),
             ],
             [
                 ("Gcnot", "D0", "D3"),
-                ("Gcnot", "D5", "D3"),
-                ("Gcnot", "D7", "D6"),
+                ("Gcnot", "D4", "D2"),
+                ("Gcnot", "D6", "D5"),
             ],
-            [
-                ("Gcnot", "D0", "D3"),
-                ("Gcnot", "D5", "D3"),
-                ("Gcnot", "D7", "D6"),
-            ],
-            [("Gcnot", "D5", "D2"), ("Gcnot", "D4", "D3")],
+            [("Gcnot", "D4", "D1"), ("Gcnot", "D3", "D2")],
         ],
         qubit_labels=qubits,
     )
@@ -154,9 +154,9 @@ def create_qec_code(
     # Auxiliary qubit check from Encoding circuit box of Fig 10 of 10.1103/PhysRevX.11.041058
     ft_state_prep_checks_circ = circuit_backend(
         [
-            [("Gcnot", "D2", "A0")],
-            [("Gcnot", "D4", "A0")],
-            [("Gcnot", "D6", "A0")],
+            [("Gcnot", "D1", "A0")],
+            [("Gcnot", "D3", "A0")],
+            [("Gcnot", "D5", "A0")],
             [("Iz", "A0")],
         ],
         qubit_labels=qubits,
@@ -181,7 +181,7 @@ def create_qec_code(
     instructions["FT Zero Prep"] = (
         builders.build_repeat_until_success_instruction(
             [reset, instructions["Non-FT Zero Prep + Checks"]],
-            rus_key="FT Minus Prep",
+            rus_key="FT Zero Prep",
             test_frame_key="measurement_outcomes",
             expected=rus_success_expected,
             max_repeats=ft_state_prep_max_repeats,
@@ -318,7 +318,7 @@ def create_qec_code(
         + [[("Gh", "aux")], [("Iz", "aux")]]
     )
     mappings = {
-        0: ["D0", "D1", "D2", "D4"],
+        0: ["D0", "D1", "D2", "D3"],
         1: ["D1", "D2", "D4", "D5"],
         2: ["D2", "D3", "D5", "D6"],
     }
@@ -377,6 +377,15 @@ def create_qec_code(
 
     _create_adaptive_qec_instructions(instructions, qubits)
 
+    # Convenience start function for QEC
+    instructions["Adaptive QEC"] = builders.build_composite_instruction(
+        [
+            instructions["Flagged Parallel S1-S5-S6 Check"],
+            instructions["Flagged S1-S5-S6 Feed-Forward"],
+        ],
+        name="Start of Adaptive QEC",
+    )
+
     ## MEASURE
     # Full data qubit measurements
     raw_Z_meas_circ = circuit_backend(
@@ -424,10 +433,12 @@ def create_qec_code(
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
         # Get the logical pauli frame
-        logical_pauli_frame = patches[patch_label].data["logical_pauli_frame"]
+        logical_pauli_frame = patches[patch_label].data.get(
+            "logical_pauli_frame", [0, 0]
+        )
 
         # Compute uncorrected output
-        raw_bitstring = [measurement_outcomes[q][0] for q in edge_qubits]
+        raw_bitstring = [measurement_outcomes[q][0] for q in data_qubits]
         uncorrected_outcome = sum(raw_bitstring) % 2
 
         plaq_idxs = [[0, 1, 2, 3], [1, 2, 4, 5], [2, 3, 5, 6]]
@@ -443,9 +454,7 @@ def create_qec_code(
         # by the algorithm in Fig 21
         def data_decode(sd, pf_idx):
             if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
-                logical_pauli_frame[pf_idx] = (
-                    logical_pauli_frame[pf_idx] + 1
-                ) % 2
+                logical_pauli_frame[pf_idx] ^= 1
 
         # We are correcting the opposite basis as our measurement, because
         # that is the thing that does not commute/we are sensitive to
@@ -453,9 +462,7 @@ def create_qec_code(
         data_decode(classical_syndrome, pf_idx)
 
         # Flip if needed based on logical pauli frame
-        logical_outcome = (
-            uncorrected_outcome + logical_pauli_frame[pf_idx]
-        ) % 2
+        logical_outcome = uncorrected_outcome ^ logical_pauli_frame[pf_idx]
         return Frame(
             {
                 "logical_measurement": logical_outcome,
@@ -467,18 +474,18 @@ def create_qec_code(
 
     def logical_meas_map_qubits_fn(
         qubit_mapping: Mapping[str | int, str | int],
-        edge_qubits: list[str],
+        data_qubits: list[str],
         **kwargs,
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
-        new_kwargs["edge_qubits"] = [qubit_mapping[q] for q in edge_qubits]
+        new_kwargs["data_qubits"] = [qubit_mapping[q] for q in data_qubits]
         return new_kwargs
 
     Z_logical_meas = Instruction(
         logical_meas_apply_fn,
-        data={"data_qubits": qubits[3:], "basis": "Z"},
+        data={"data_qubits": qubits[3:], "measurement_basis": "Z"},
         map_qubits_fn=logical_meas_map_qubits_fn,
-        name="Non-FT Z logical parity calculation",
+        name="FT Z logical parity calculation",
     )
 
     instructions["FT Logical Z Measure"] = (
@@ -490,9 +497,9 @@ def create_qec_code(
 
     X_logical_meas = Instruction(
         logical_meas_apply_fn,
-        data={"data_qubits": qubits[3:], "basis": "X"},
+        data={"data_qubits": qubits[3:], "measurement_basis": "X"},
         map_qubits_fn=logical_meas_map_qubits_fn,
-        name="Non-FT X logical parity calculation",
+        name="FT X logical parity calculation",
     )
 
     instructions["FT Logical X Measure"] = (
@@ -564,7 +571,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
 
         syndrome_idxs = [0, 4, 5] if first_check else [1, 2, 3]
         for i, si in enumerate(syndrome_idxs):
-            syndrome_diff[si] = (changes[i] + last_syndromes[si]) % 2
+            syndrome_diff[si] = changes[i] ^ last_syndromes[si]
         patch.data["flagged_syndrome_diff"] = syndrome_diff
 
         if any([sd == 1 for sd in syndrome_diff]):
@@ -649,9 +656,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         # by the algorithm in Fig 21
         def data_decode(sd, pf_idx):
             if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
-                logical_pauli_frame[pf_idx] = (
-                    logical_pauli_frame[pf_idx] + 1
-                ) % 2
+                logical_pauli_frame[pf_idx] ^= 1
 
         data_decode(unflagged_syndrome_diff[:3], 0)
         data_decode(unflagged_syndrome_diff[3:], 0)
@@ -664,9 +669,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
                 ([1, 0, 0], [0, 0, 1]),
                 ([0, 1, 1], [0, 0, 1]),
             ]:
-                logical_pauli_frame[pf_idx] = (
-                    logical_pauli_frame[pf_idx] + 1
-                ) % 2
+                logical_pauli_frame[pf_idx] ^= 1
 
         hook_decode(unflagged_syndrome_diff[:3], flagged_syndrome_diff[:3], 0)
         hook_decode(unflagged_syndrome_diff[3:], flagged_syndrome_diff[3:], 1)
