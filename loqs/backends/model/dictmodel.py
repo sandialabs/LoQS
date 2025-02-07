@@ -137,7 +137,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         for k, ir in self.inst_dict.items():
             qubits = tuple() if isinstance(k, str) else k[1]
             if not isinstance(ir, RepTuple) and isinstance(ir, str):
-                self.inst_dict[label] = RepTuple(
+                self.inst_dict[k] = RepTuple(
                     ir, qubits, InstrumentRep.STIM_CIRCUIT_STR
                 )
             elif (
