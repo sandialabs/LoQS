@@ -26,7 +26,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     name: ClassVar[str] = "gate dict"
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         model_or_dicts: DictModelCastableTypes,
         gatereps: Sequence[GateRep] = [GateRep.QSIM_SUPEROPERATOR],
@@ -136,7 +136,11 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         # Run through instrument dict and upgrade everything to RepTuples
         for k, ir in self.inst_dict.items():
             qubits = tuple() if isinstance(k, str) else k[1]
-            if (
+            if not isinstance(ir, RepTuple) and isinstance(ir, str):
+                self.inst_dict[label] = RepTuple(
+                    ir, qubits, InstrumentRep.STIM_CIRCUIT_STR
+                )
+            elif (
                 not isinstance(ir, RepTuple)
                 and isinstance(ir, (tuple, list))
                 and len(ir) == 2
