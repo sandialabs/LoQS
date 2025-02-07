@@ -580,6 +580,7 @@ def create_ideal_model(  # noqa: C901
                 "Gk": ["H", "SQRT_Z"],
                 "Gcnot": ["CX"],
                 "Gcphase": ["CZ"],
+                "Gi": ["I"],
                 "Gi1Q": ["I"],
                 "Gi2Q": ["I"],
                 "GiMCM": ["I"],
