@@ -122,7 +122,6 @@ def convert_edesign_to_programs(
 
 
 def convert_run_programs_to_dataset(
-    edesign: ExperimentDesign,
     programs: Sequence[QuantumProgram],
     collect_shot_data_args: HistoryCollectDataArgsType = (
         "logical_measurement",
@@ -133,12 +132,6 @@ def convert_run_programs_to_dataset(
 
     Parameters
     ----------
-    edesign:
-        pyGSTi ``ExperimentDesign`` with `edesign.all_circuits_needing_data`
-        matching the order of :class:`.QuantumProgram` objects in
-        ``programs``. This is usually the same as in
-        :meth:`.convert_edesign_to_programs`.
-
     programs:
         List of programs, one per circuit in ``edesign.all_circuits_needing_data``,
         with :meth:`.QuantumProgram.run` having been called on the programs
@@ -155,8 +148,10 @@ def convert_run_programs_to_dataset(
     """
     from collections import Counter
 
+    circs = [Circuit(p.name[8:-1]) for p in programs]
+
     ds = DataSet()
-    for circ, prog in zip(edesign.all_circuits_needing_data, programs):
+    for circ, prog in zip(circs, programs):
         counts = Counter(prog.collect_shot_data(*collect_shot_data_args))
         count_dict = {(str(k),): v for k, v in counts.items()}
 
