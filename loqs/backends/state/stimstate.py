@@ -405,6 +405,7 @@ class STIMQuantumState(BaseQuantumState):
         self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
     ) -> dict:
         state = super()._to_serialization()
+        # TODO: RNG. Maybe https://stackoverflow.com/q/63081108
         state.update(
             {
                 "qubit_labels": self.qubit_labels,
