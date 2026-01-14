@@ -20,6 +20,7 @@ from .model import (
 from .state import (
     BaseQuantumState,
     OutcomeDict,
+    NumpyStatevectorQuantumState,
     QSimQuantumState,
     STIMQuantumState,
 )

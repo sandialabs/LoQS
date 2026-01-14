@@ -21,9 +21,9 @@ try:
         LabelTupTupWithTime,
         LabelTupWithTime,
     )
-    from pygsti.modelmembers.operations import EmbeddedOp
+    from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
-    from pygsti.tools import basistools as bt
+    from pygsti.tools import basistools as bt, superop_to_unitary
 except ImportError as e:
     raise ImportError("Failed import, cannot use pyGSTi as backend") from e
 
@@ -190,7 +190,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
-        return [GateRep.UNITARY, GateRep.PTM, GateRep.QSIM_SUPEROPERATOR]
+        return [
+            GateRep.UNITARY,
+            GateRep.KRAUS_OPERATORS,
+            GateRep.PTM,
+            GateRep.QSIM_SUPEROPERATOR,
+        ]
 
     # TODO: This is not quite right. It's probably one or the other,
     # depending on whether instruments are defined or not
@@ -335,10 +340,31 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         if gaterep == GateRep.UNITARY:
             try:
                 rep = op.to_dense(on_space="Hilbert")
-            except ValueError as e:
+            except ValueError:
+                # Failed, could be because we have the densitymx evotype
+                # Try to manually convert down to unitary
+                try:
+                    rep = superop_to_unitary(op.to_dense())
+
+                except (ValueError, IndexError) as e:
+                    raise ValueError(
+                        "Failed to cast gate as a unitary. Consider "
+                        + "using process matrices instead. PyGSTi error: "
+                        + str(e),
+                    ) from e
+        elif gaterep == GateRep.KRAUS_OPERATORS:
+            try:
+                # We'll upcast to DenseOperator to get access to the kraus property
+                # TODO: This should probably be moved to optools instead of DenseOperator in pygsti
+                dense_op = DenseOperator(
+                    op.to_dense(), basis, self.model.evotype
+                )
+                rep = dense_op.kraus_operators
+            except (ValueError, AttributeError) as e:
                 raise ValueError(
-                    "Failed to cast gate as a unitary. Consider ",
-                    "using process matrices instead.",
+                    "Failed to cast gate as Kraus operators. Consider "
+                    + "using process matrices instead. PyGSTi error: "
+                    + str(e),
                 ) from e
         elif gaterep == GateRep.PTM:
             rep = op.to_dense(on_space="HilbertSchmidt")
