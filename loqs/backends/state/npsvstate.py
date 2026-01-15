@@ -88,6 +88,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         elif isinstance(state, int):
             self._state = np.zeros((2 * state, 1), complex)
             self._state[::2] = 1
+            self._state /= np.sqrt(self.state.shape[0] / 2)
         elif isinstance(state, np.ndarray):
             self._state = state.copy()
         elif isinstance(state, Sequence) and all(
@@ -95,7 +96,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         ):
             self._state = np.zeros((2 * len(state), 1), complex)
             for i, el in enumerate(state):
-                self.state[2 * i + el] = 1
+                self._state[2 * i + el] = 1
+            self._state /= np.sqrt(self.state.shape[0] / 2)
         else:
             raise ValueError(
                 f"Cannot initialize NumpyStatevectorQuantumState from {state}"
@@ -293,71 +295,27 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return outcomes
 
     def _apply_projective_z_measure(self, qbit, reset) -> int:
-        # Compute all coefficients for basis states with 0 in the desired qubit
         num_qubits = len(self.qubit_labels)
-        qidx = self.qubit_labels.index(qbit)
+        target_idx = self.qubit_labels.index(qbit)
 
-        prob_0 = 0
-        projected_state = np.zeros_like(self.state)
-        for i in range(2 * num_qubits):
-            # Binary rep gives us state 0 or 1 in standard basis (in big-endian)
-            # First, let's check the bit we want and make sure it is low
-            if i & 1 << qidx:
-                # Bit is high, this is for state 1, skip
+        # Compute probability of measuring 0
+        prob_0 = self.state[2 * target_idx] ** 2
+        for qidx in range(num_qubits):
+            if qidx == target_idx:
+                # Already counting probability of target qubit before
                 continue
 
-            # Next, convert from int to a list of [1, 0] or [0, 1] as the statevec rep
-            sv_list = [
-                [1, 0] if i & 1 << j else [0, 1]
-                for j in range(num_qubits - 1, -1, -1)
-            ]
-            # Use itertools to flatten this
-            sv_flat = list(itertools.chain.from_iterable(sv_list))
-            # And finally cast to a row vector
-            basis_vec = np.asarray(sv_flat, np.complex128)
-            # And normalize
-            basis_vec /= np.linalg.norm(basis_vec)
-
-            # Now compute the coefficient with state
-            coeff = np.vdot(basis_vec, self.state)
-            print(f"{coeff=}")
-
-            # Add to prob and projected state
-            prob_0 += coeff
-            projected_state += coeff * basis_vec.reshape((14, 1))
+            prob_0 *= self.state[2 * qidx] ** 2 + self.state[2 * qidx + 1] ** 2
 
         # Probabilistically select 0 or 1 outcome
         assert self._rng is not None
         cbit = 0 if self._rng.random() < prob_0 else 1
 
-        print(f"DEBUG: {prob_0=}, {cbit=}")
+        # print(f"DEBUG: {prob_0=}, {cbit=}")
 
-        # If we measured 1, compute the projected state now (if not resetting to 0)
-        assert reset in [None, 0, 1]
-        if cbit == 1 and reset == 1:
-            projected_state = np.zeros_like(self.state)
-            for i in range(2 * num_qubits):
-                # Binary rep gives us state 0 or 1 in standard basis (in big-endian)
-                # First, let's check the bit we want and make sure it is low
-                if not (i & 1 << qidx):
-                    # Bit is low, this was for state 0, skip
-                    continue
-
-                # All same as state 0 computation
-                sv_list = [
-                    [1, 0] if i & 1 << j else [0, 1]
-                    for j in range(num_qubits - 1, -1, -1)
-                ]
-                sv_flat = itertools.chain.from_iterable(sv_list)
-                basis_vec = np.asarray(sv_flat, np.complex128)
-                basis_vec /= np.linalg.norm(basis_vec)
-                coeff = np.vdot(basis_vec, self.state)
-
-                projected_state += coeff * basis_vec.reshape((14, 1))
-
-        # Set state to post-projection and renormalize
-        renorm = np.sqrt(prob_0) if cbit == 0 else np.sqrt(1 - prob_0)
-        self._state = projected_state / renorm
+        # Now get the projected state, and renormalize
+        self.state[2 * target_idx + (cbit + 1) % 2] = 0
+        self._state /= np.sqrt(1 - prob_0) if cbit else np.sqrt(prob_0)
 
         return cbit
 
