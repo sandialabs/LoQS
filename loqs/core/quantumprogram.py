@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 import copy
 import glob
@@ -906,7 +907,8 @@ class QuantumProgram(Displayable):
         key: str,
         indices: HistoryCollectDataIndexTypes,
         strip_none_entries: bool = False,
-    ) -> list:
+        return_counter: bool = False,
+    ) -> list | Counter:
         """Collate frame data over executed shots.
 
         Parameters
@@ -920,15 +922,19 @@ class QuantumProgram(Displayable):
         strip_none_entries:
             See ``strip_none_entries`` in :meth:`.History.collect_data`
 
+        return_counter:
+            Whether to return using a collections.Counter or not (default).
+
         Returns
         -------
         list
             List of :meth:`.History.collect_data` outputs per shot
         """
-        return [
+        data = [
             h.collect_data(key, indices, strip_none_entries)
             for h in self.shot_histories
         ]
+        return Counter(data) if return_counter else data
 
     @classmethod
     def _from_serialization(

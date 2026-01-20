@@ -77,8 +77,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             Optional RNG seed. If not provided, default NumPy RNG behavior applies.
         """
         self.qubit_labels = []
-        self.seed = None
-        self._rng = None
+        self.seed = seed
+        self._rng = np.random.default_rng(self.seed)
 
         if isinstance(state, NumpyStatevectorQuantumState):
             self._state = state._state
@@ -95,7 +95,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             [el in [0, 1] for el in state]
         ):
             self._state = np.zeros((2,) * len(state), np.complex128)
-            self._state[state] = 1
+            self._state[*state] = 1
         else:
             raise ValueError(
                 f"Cannot initialize NumpyStatevectorQuantumState from {state}"
@@ -110,11 +110,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         assert len(self.qubit_labels) == len(
             self.state.shape
         ), "Must specify a qubit label for every qubit"
-
-        if self.seed is None:
-            self.seed = seed
-        if self._rng is None:
-            self._rng = np.random.default_rng(self.seed)
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -226,8 +221,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self.qubit_labels.index(lbl): n_tot + i
             for i, lbl in enumerate(sublbls)
         }
-        # Our submatrix has indices of subset + temp labels
-        submat_idxs = list(sub_idx_map.keys()) + list(sub_idx_map.values())
+        # Our submatrix has indices of temp labels (rows, output states) and subset labels (cols, input states)
+        submat_idxs = list(sub_idx_map.values()) + list(sub_idx_map.keys())
 
         # Just the start vec, but the sublbls replaced with the temp ones to do the contraction
         vec_out_idxs = [sub_idx_map.get(i, i) for i in range(n_tot)]
@@ -321,7 +316,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
         # Compute probability of measuring 0 on the target qubit
         target_slice = self._slice(self.state, target_idx, end=1)
-        prob_0 = np.dot(target_slice.flat, target_slice.flat)
+        prob_0 = np.vdot(target_slice.flat, target_slice.flat)
 
         # Probabilistically select 0 or 1 outcome
         assert self._rng is not None
@@ -331,13 +326,13 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         proj_mat = np.zeros((2, 2), np.complex128)
         if reset is None:
             reset = cbit
-        assert reset in [0, 1]
+        assert reset in [0, 1], "reset must be None, 0, or 1"
         if cbit == 0:
-            # Measuring 0 (normalize by prob 0) and final state is given by reset
-            proj_mat[0, reset] = 1 / np.sqrt(prob_0)
+            # Measuring 0 (normalize by prob 0) and reset determines output row
+            proj_mat[reset, 0] = 1 / np.sqrt(prob_0)
         else:
-            # Measuring 1 (normalize by prob 1) and final state is given by reset
-            proj_mat[1, reset] = 1 / np.sqrt(1 - prob_0)
+            # Measuring 1 (normalize by prob 1) and reset determines output row
+            proj_mat[reset, 1] = 1 / np.sqrt(1 - prob_0)
 
         # Apply projector
         self._state = self._block_matvec(proj_mat, [qbit], self.state)
@@ -352,6 +347,16 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         )
         new_state._rng = deepcopy(self._rng)
         return new_state
+
+    def print_bitstring_amplitudes(self):
+        n_qubits = len(self.qubit_labels)
+        print(self.qubit_labels)
+        for i in range(2**n_qubits):
+            bs = bin(i)[2:].zfill(n_qubits)
+            idx = list(reversed([int(b) for b in bs]))
+            amp = self.state[*idx]
+            if amp > 1e-6:
+                print(f"{bs}: {amp}")
 
     @classmethod
     def _from_serialization(
