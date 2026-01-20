@@ -288,17 +288,15 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 aliased_qubits = comp.qubits  # The circuit is already aliased
                 qubits = [self.model_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
-                    # TODO: Currently this is only using first rep. Fix?
-                    rep = self._get_gate_rep(comp.name, qubits, gatereps[0])
+                    rep, reptype = self._get_gate_rep(
+                        comp.name, qubits, gatereps
+                    )
                     duration = self.get_gate_duration(comp)
-                    reptype: RepEnum = gatereps[0]
                 elif comp.name.startswith("I"):
-                    # TODO: Currently this is only using first rep. Fix?
-                    rep = self._get_instrument_rep(
-                        comp.name, qubits, instreps[0]
+                    rep, reptype = self._get_instrument_rep(
+                        comp.name, qubits, instreps
                     )
                     duration = self.get_instrument_duration(comp)
-                    reptype = instreps[0]
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
 
@@ -313,7 +311,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 self.add_layer_duration_to_current_time()
         return reps
 
-    def _get_gate_rep(self, name, qubits, gaterep) -> object:
+    def _get_gate_rep(self, name, qubits, gatereps):  # noqa: C901
         op = self.gate_dict[
             (name,) + tuple(qubits)
         ]  # Look up using unaliased qubits
@@ -337,92 +335,128 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
             op = op.embedded_op
 
-        if gaterep == GateRep.UNITARY:
-            try:
-                rep = op.to_dense(on_space="Hilbert")
-            except ValueError:
-                # Failed, could be because we have the densitymx evotype
-                # Try to manually convert down to unitary
-                try:
-                    rep = superop_to_unitary(op.to_dense())
+        rep = None
 
-                except (ValueError, IndexError) as e:
+        def _get_rep(gaterep):
+            if gaterep == GateRep.UNITARY:
+                try:
+                    rep = op.to_dense(on_space="Hilbert")
+                except ValueError:
+                    # Failed, could be because we have the densitymx evotype
+                    # Try to manually convert down to unitary
+                    try:
+                        rep = superop_to_unitary(op.to_dense())
+
+                    except (ValueError, IndexError) as e:
+                        raise ValueError(
+                            "Failed to cast gate as a unitary. Consider "
+                            + "using process matrices instead. PyGSTi error: "
+                            + str(e),
+                        ) from e
+            elif gaterep == GateRep.KRAUS_OPERATORS:
+                try:
+                    # We'll upcast to DenseOperator to get access to the kraus property
+                    # TODO: This should probably be moved to optools instead of DenseOperator in pygsti
+                    dense_op = DenseOperator(
+                        op.to_dense(), basis, self.model.evotype
+                    )
+                    rep = dense_op.kraus_operators
+                except (ValueError, AttributeError) as e:
                     raise ValueError(
-                        "Failed to cast gate as a unitary. Consider "
+                        "Failed to cast gate as Kraus operators. Consider "
                         + "using process matrices instead. PyGSTi error: "
                         + str(e),
                     ) from e
-        elif gaterep == GateRep.KRAUS_OPERATORS:
-            try:
-                # We'll upcast to DenseOperator to get access to the kraus property
-                # TODO: This should probably be moved to optools instead of DenseOperator in pygsti
-                dense_op = DenseOperator(
-                    op.to_dense(), basis, self.model.evotype
-                )
-                rep = dense_op.kraus_operators
-            except (ValueError, AttributeError) as e:
-                raise ValueError(
-                    "Failed to cast gate as Kraus operators. Consider "
-                    + "using process matrices instead. PyGSTi error: "
-                    + str(e),
-                ) from e
-        elif gaterep == GateRep.PTM:
-            rep = op.to_dense(on_space="HilbertSchmidt")
-        elif gaterep == GateRep.QSIM_SUPEROPERATOR:
-            rep = op.to_dense(on_space="HilbertSchmidt")
+            elif gaterep == GateRep.PTM:
+                rep = op.to_dense(on_space="HilbertSchmidt")
+            elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                rep = op.to_dense(on_space="HilbertSchmidt")
 
-            if len(qubits) in [1, 2]:
-                rep = bt.change_basis(
-                    rep, basis, PYGSTI_QSIM_BASES[len(qubits)]
-                )
-            else:
-                raise ValueError(
-                    "Cannot change more than a 2 qubit operation into",
-                    " the QuantumSim basis",
-                )
-        else:
-            raise NotImplementedError(f"Cannot create gate rep for {gaterep}")
-
-        return rep
-
-    def _get_instrument_rep(self, name, qubits, instrep) -> object:
-        if instrep == InstrumentRep.ZBASIS_PROJECTION:
-            rep: None | int | dict = 0 if self.zbasis_proj_resets else None
-        elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
-            # TODO: What to do with key error?
-            op = self.inst_dict[
-                (name,) + tuple(qubits)
-            ]  # Look up using unaliased qubits
-
-            # if using time-dependence, update operator rep
-            if self.use_time_dependence:
-                op.set_time(self.current_time)
-
-            rep = {}
-            for k, v in op.items():
-                if isinstance(k, str):
-                    try:
-                        if len(k) > 1:
-                            label = tuple([int(c) for c in k])
-                        else:
-                            label = (int(k),)
-                    except ValueError as e:
-                        raise ValueError(
-                            "Failed to cast instrument keys to outcome labels"
-                        ) from e
+                if len(qubits) in [1, 2]:
+                    rep = bt.change_basis(
+                        rep, basis, PYGSTI_QSIM_BASES[len(qubits)]
+                    )
                 else:
-                    label = k
+                    raise ValueError(
+                        "Cannot change more than a 2 qubit operation into",
+                        " the QuantumSim basis",
+                    )
+            else:
+                raise ValueError(f"Cannot create gate rep for {gaterep}")
 
-                assert isinstance(label, tuple)
-                assert all([c in [0, 1] for c in label])
+            return rep
 
-                rep[label] = v
-        else:
-            raise NotImplementedError(
-                f"Cannot create instrument rep for {instrep}"
+        repidx = 0
+        while repidx < len(gatereps):
+            try:
+                rep = _get_rep(gatereps[repidx])
+                break
+            except ValueError:
+                # Try next one
+                repidx += 1
+
+        if repidx == len(gatereps):
+            raise ValueError(
+                f"Failed to create gate rep for any of {gatereps}"
             )
 
-        return (rep, True)
+        return rep, gatereps[repidx]
+
+    def _get_instrument_rep(self, name, qubits, instreps):
+        rep = None
+
+        def _get_rep(instrep):
+            if instrep == InstrumentRep.ZBASIS_PROJECTION:
+                rep: None | int | dict = 0 if self.zbasis_proj_resets else None
+            elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+                # TODO: What to do with key error?
+                op = self.inst_dict[
+                    (name,) + tuple(qubits)
+                ]  # Look up using unaliased qubits
+
+                # if using time-dependence, update operator rep
+                if self.use_time_dependence:
+                    op.set_time(self.current_time)
+
+                rep = {}
+                for k, v in op.items():
+                    if isinstance(k, str):
+                        try:
+                            if len(k) > 1:
+                                label = tuple([int(c) for c in k])
+                            else:
+                                label = (int(k),)
+                        except ValueError as e:
+                            raise ValueError(
+                                "Failed to cast instrument keys to outcome labels"
+                            ) from e
+                    else:
+                        label = k
+
+                    assert isinstance(label, tuple)
+                    assert all([c in [0, 1] for c in label])
+
+                    rep[label] = v
+            else:
+                raise ValueError(f"Cannot create instrument rep for {instrep}")
+
+            return rep
+
+        repidx = 0
+        while repidx < len(instreps):
+            try:
+                rep = _get_rep(instreps[repidx])
+                break
+            except ValueError:
+                # Try next one
+                repidx += 1
+
+        if repidx == len(instreps):
+            raise ValueError(
+                f"Failed to create instrument rep for any of {instreps}"
+            )
+
+        return (rep, True), instreps[repidx]
 
     @classmethod
     def _from_serialization(

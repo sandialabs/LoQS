@@ -86,18 +86,16 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self.seed = state.seed
             self._rng = state._rng
         elif isinstance(state, int):
-            self._state = np.zeros((2 * state, 1), complex)
-            self._state[::2] = 1
-            self._state /= np.sqrt(self.state.shape[0] / 2)
+            self._state = np.zeros((2,) * state, np.complex128)
+            self._state[(0,) * state] = 1
         elif isinstance(state, np.ndarray):
+            assert NotImplementedError("Have to fix reshape")
             self._state = state.copy()
         elif isinstance(state, Sequence) and all(
             [el in [0, 1] for el in state]
         ):
-            self._state = np.zeros((2 * len(state), 1), complex)
-            for i, el in enumerate(state):
-                self._state[2 * i + el] = 1
-            self._state /= np.sqrt(self.state.shape[0] / 2)
+            self._state = np.zeros((2,) * len(state), np.complex128)
+            self._state[state] = 1
         else:
             raise ValueError(
                 f"Cannot initialize NumpyStatevectorQuantumState from {state}"
@@ -108,9 +106,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         if (
             len(self.qubit_labels) == 0
         ):  # We haven't set it yet, default to ints
-            self.qubit_labels = list(range(self.state.shape[0] / 2))
-        assert (
-            len(self.qubit_labels) == self.state.shape[0] / 2
+            self.qubit_labels = list(range(len(self.state.shape)))
+        assert len(self.qubit_labels) == len(
+            self.state.shape
         ), "Must specify a qubit label for every qubit"
 
         if self.seed is None:
@@ -128,6 +126,11 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return hash(
             (hash(self._state), self.hash(self.qubit_labels), self.seed)
         )
+
+    # Source - https://stackoverflow.com/a/64436208
+    def _slice(self, a: np.ndarray, axis, start=None, end=None, step=1):
+        assert axis >= -len(a.shape) and axis < len(a.shape)
+        return a[(slice(None),) * (axis % a.ndim) + (slice(start, end, step),)]
 
     def apply_reps(
         self, reps: Sequence[RepTuple]
@@ -148,15 +151,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 for k, v in rep_outcomes.items():
                     outcomes[k].extend(v)
             else:
-                raise NotImplementedError(
-                    f"Cannot apply unknown reptype {reptype}"
-                )
+                raise ValueError(f"Cannot apply unknown reptype {reptype}")
 
         return outcomes
 
     def _apply_gate_rep(self, reptuple: RepTuple) -> None:
         rep = reptuple.rep
-        # TODO: Could do shape checking here
 
         qubits = reptuple.qubits
         assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
@@ -164,56 +164,79 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         reptype = reptuple.reptype
 
         if reptype == GateRep.UNITARY:
-            self._block_matvec_inplace(rep, qubits, self.state)
+            assert isinstance(rep, np.ndarray) and rep.shape == (
+                2 * len(qubits),
+                2 * len(qubits),
+            )
+
+            self._state = self._block_matvec(rep, qubits, self.state)
         elif reptype == GateRep.KRAUS_OPERATORS:
-            assert isinstance(rep, (list, tuple)) and all(
-                [isinstance(mat, np.ndarray) for mat in rep]
+            assert isinstance(rep, (list, tuple))
+            assert all([isinstance(mat, np.ndarray) for mat in rep])
+            assert all(
+                [
+                    mat.shape == (2 * len(qubits), 2 * len(qubits))
+                    for mat in rep
+                ]
             )
 
             # TODO: We could cache probabilities for unitary Kraus operators, maybe in the model
             # Compute probabilities (have to do this in order for non-unital Kraus operations to work)
-            probs = []
-            for K in rep:
-                # We need to do P_i = Tr(rho K^dag K), but for a pure state rho = |x><x|,
-                # this is just <x|K^dag K|x>, or the dot of K|x> with itself
-                prod = self._block_matvec(K, qubits, self.state)
-                probs.append(np.vdot(prod, prod))
+            # probs = []
+            # Kprods = []
+            # for K in rep:
+            #     subvec = self._get_subvector(qubits, self.state)
+            #     subprob = np.vdot(subvec, subvec)
 
-            assert np.isclose(np.sum(probs), 1)
+            #     Kprod = K @ subvec
 
-            # Sample
-            assert self._rng is not None
-            choice = self._rng.choice(range(len(rep)), size=1, p=probs)
+            #     prob = np.vdot(Kprod, Kprod) / subprob
+            #     assert np.isreal(prob)
 
-            # Apply chosen Kraus operator
-            # From rho -> K rho K^dag / P, we have |x> -> K |x> / sqrt(P) for the pure state version
-            # Note that we have to normalize by probability since it is folded into K for our formalism
-            self._block_matvec_inplace(rep[choice], qubits, self.state)
-            self._state /= np.sqrt(probs[choice])
+            #     probs.append(prob.real)
+            #     Kprods.append(Kprod)
+
+            # assert np.isclose(np.sum(probs), 1)
+
+            # # Sample
+            # assert self._rng is not None
+            # choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
+
+            # # Normalize final subvector
+            # final_subvec = Kprods[choice] / np.sqrt(probs[choice])
+
+            # self._set_subvector(final_subvec, qubits, self.state)
+            # assert np.isclose(np.linalg.norm(self.state), 1)
         else:
-            raise NotImplementedError(f"Cannot apply GateRep {reptype}")
+            raise ValueError(f"Cannot apply GateRep {reptype}")
 
-    def _block_matvec_inplace(self, submat, sublbls, vec) -> None:
-        # Map sublabels in qubit label indices
-        full_idxs = [self.qubit_labels.index(lbl) for lbl in sublbls]
+    def _block_matvec(self, submat, sublbls, vec) -> np.ndarray:
+        n_sub = len(sublbls)
+        n_tot = len(vec.shape)
+        assert len(submat.flat) == 4**n_sub
+        submat = submat.reshape((2,) * 2 * n_sub)
 
-        # Pull out the appropriate subvector
-        subvec = np.zeros((2 * len(sublbls), 1), np.complex128)
-        for i, full_idx in enumerate(full_idxs):
-            full_idx = full_idxs[i]
-            subvec[2 * i : 2 * i + 2] = vec[full_idx : full_idx + 2]
+        # Get contraction indices
+        # Our vector will just have 0..n_qubits-1 indices to start
+        vec_in_idxs = list(range(n_tot))
 
-        # Perform dense mat-vec product
-        subprod = submat @ subvec
+        # We will need n_qubits..n_qubits+n_subqubits temp indices (vals of the dict below)
+        # These will map to the qubit labels in our qubit subset (keys of the dict below)
+        sub_idx_map = {
+            self.qubit_labels.index(lbl): n_tot + i
+            for i, lbl in enumerate(sublbls)
+        }
+        # Our submatrix has indices of subset + temp labels
+        submat_idxs = list(sub_idx_map.keys()) + list(sub_idx_map.values())
 
-        # Put back into full vector
-        for i, full_idx in enumerate(full_idxs):
-            vec[full_idx : full_idx + 2] = subprod[2 * i : 2 * i + 2]
+        # Just the start vec, but the sublbls replaced with the temp ones to do the contraction
+        vec_out_idxs = [sub_idx_map.get(i, i) for i in range(n_tot)]
 
-    def _block_matvec(self, submat, sublbls, vec: np.ndarray) -> np.ndarray:
-        newvec = vec.copy()
-        self._block_matvec_inplace(submat, sublbls, newvec)
-        return newvec
+        # Now perform the einsum
+        # TODO: For multiple back-to-back mults, it might be better to einsum_path
+        return np.einsum(
+            vec, vec_in_idxs, submat, submat_idxs, vec_out_idxs, optimize=True
+        )
 
     def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
         rep = reptuple.rep
@@ -287,35 +310,37 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self.apply_reps_inplace([rep_to_apply])
 
             # Propogate and renormalize (maybe not needed, but safer to do it now)
-            self._block_matvec_inplace(rep_to_apply, qubits, self.state)
-            self._state /= (
-                np.sqrt(prob_0) if cbit == 0 else np.sqrt(1 - prob_0)
-            )
+            self._state = self._block_matvec(
+                rep_to_apply, qubits, self.state
+            ) / (np.sqrt(prob_0) if cbit == 0 else np.sqrt(1 - prob_0))
 
         return outcomes
 
     def _apply_projective_z_measure(self, qbit, reset) -> int:
-        num_qubits = len(self.qubit_labels)
         target_idx = self.qubit_labels.index(qbit)
 
-        # Compute probability of measuring 0
-        prob_0 = self.state[2 * target_idx] ** 2
-        for qidx in range(num_qubits):
-            if qidx == target_idx:
-                # Already counting probability of target qubit before
-                continue
-
-            prob_0 *= self.state[2 * qidx] ** 2 + self.state[2 * qidx + 1] ** 2
+        # Compute probability of measuring 0 on the target qubit
+        target_slice = self._slice(self.state, target_idx, end=1)
+        prob_0 = np.dot(target_slice.flat, target_slice.flat)
 
         # Probabilistically select 0 or 1 outcome
         assert self._rng is not None
         cbit = 0 if self._rng.random() < prob_0 else 1
 
-        # print(f"DEBUG: {prob_0=}, {cbit=}")
+        # Get the projector (I'll wrap normalization into it)
+        proj_mat = np.zeros((2, 2), np.complex128)
+        if reset is None:
+            reset = cbit
+        assert reset in [0, 1]
+        if cbit == 0:
+            # Measuring 0 (normalize by prob 0) and final state is given by reset
+            proj_mat[0, reset] = 1 / np.sqrt(prob_0)
+        else:
+            # Measuring 1 (normalize by prob 1) and final state is given by reset
+            proj_mat[1, reset] = 1 / np.sqrt(1 - prob_0)
 
-        # Now get the projected state, and renormalize
-        self.state[2 * target_idx + (cbit + 1) % 2] = 0
-        self._state /= np.sqrt(1 - prob_0) if cbit else np.sqrt(prob_0)
+        # Apply projector
+        self._state = self._block_matvec(proj_mat, [qbit], self.state)
 
         return cbit
 
