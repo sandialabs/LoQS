@@ -161,6 +161,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         # TODO: Crosstalk specification?
 
+        self._gate_rep_cache = {}
+        self._inst_rep_cache = {}
+
     def __hash__(self) -> int:
         return hash((hash(self.model), self.hash(self.qubit_aliases)))
 
@@ -312,12 +315,17 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         return reps
 
     def _get_gate_rep(self, name, qubits, gatereps):  # noqa: C901
-        op = self.gate_dict[
-            (name,) + tuple(qubits)
-        ]  # Look up using unaliased qubits
+        op_key = (name,) + tuple(qubits)
+        # Check cache
+        for gaterep in gatereps:
+            if (op_key, gaterep) in self._gate_rep_cache:
+                return (self._gate_rep_cache[op_key, gaterep], gaterep)
+
+        # Look up using unaliased qubits
+        op = self.gate_dict[op_key]
         basis = self.model.basis
 
-        # if using time-dependence, update operator rep
+        # if using time-dependence, update operator rep and clear cache
         if self.use_time_dependence:
             op.set_time(self.current_time)
 
@@ -360,7 +368,21 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     dense_op = DenseOperator(
                         op.to_dense(), basis, self.model.evotype
                     )
-                    rep = dense_op.kraus_operators
+                    Ks = dense_op.kraus_operators
+
+                    rep = []
+                    # Pre-compute probabilities (if unitary)
+                    for K in Ks:
+                        KKdag = K @ K.conjugate()
+                        prob = KKdag[0, 0]
+                        if all(
+                            np.isclose(KKdag / prob, np.eye(KKdag.shape[0]))
+                        ):
+                            # This was the identity when we pulled the probability out
+                            rep.append((K, prob))
+                        else:
+                            # Not the identity, so store None (signal states to compute on the fly)
+                            rep.append((K, None))
                 except (ValueError, AttributeError) as e:
                     raise ValueError(
                         "Failed to cast gate as Kraus operators. Consider "
@@ -400,9 +422,18 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 f"Failed to create gate rep for any of {gatereps}"
             )
 
+        if not self.use_time_dependence:
+            self._gate_rep_cache[op_key, gatereps[repidx]] = rep
+
         return rep, gatereps[repidx]
 
     def _get_instrument_rep(self, name, qubits, instreps):
+        inst_key = (name,) + tuple(qubits)
+        # Check cache
+        for instrep in instreps:
+            if (inst_key, instrep) in self._inst_rep_cache:
+                return (self._inst_rep_cache[inst_key, instrep], instrep)
+
         rep = None
 
         def _get_rep(instrep):
@@ -410,9 +441,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 rep: None | int | dict = 0 if self.zbasis_proj_resets else None
             elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
                 # TODO: What to do with key error?
-                op = self.inst_dict[
-                    (name,) + tuple(qubits)
-                ]  # Look up using unaliased qubits
+                # Look up using unaliased qubits
+                op = self.inst_dict[inst_key]
 
                 # if using time-dependence, update operator rep
                 if self.use_time_dependence:
@@ -455,6 +485,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             raise ValueError(
                 f"Failed to create instrument rep for any of {instreps}"
             )
+
+        if not self.use_time_dependence:
+            self._inst_rep_cache[inst_key, instreps[repidx]] = (rep, True)
 
         return (rep, True), instreps[repidx]
 

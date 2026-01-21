@@ -140,8 +140,12 @@ class GateRep(RepEnum):
     :class:`.STIMQuantumState`, enabling fast stabilizer simulation
     with amplitude damping.
 
-    The expected rep type is a list of tuples of arrays with shape (2^n, 2^n)
-    where n is the number of qubits.
+    The expected rep type is a list of 2-tuples with the first entry as
+    an array of size (2^n, 2^n) where n is the number of qubits, and the
+    second entry as a float between 0 and 1 for pre-computed probabilities
+    (or None in the case of non-unital/state-dependent Kraus operators).
+    Even when pre-computed probabilities are provided, Kraus operators should
+    not be normalized, i.e. they should include the probability also.
     """
 
 

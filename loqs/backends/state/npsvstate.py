@@ -167,41 +167,48 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self._state = self._block_matvec(rep, qubits, self.state)
         elif reptype == GateRep.KRAUS_OPERATORS:
             assert isinstance(rep, (list, tuple))
-            assert all([isinstance(mat, np.ndarray) for mat in rep])
+            assert all([isinstance(r, tuple) and len(r) == 2 for r in rep])
+
+            Ks = [r[0] for r in rep]
+            probs = [r[1] for r in rep]
             assert all(
                 [
-                    mat.shape == (2 * len(qubits), 2 * len(qubits))
-                    for mat in rep
+                    isinstance(K, np.ndarray)
+                    and K.shape == (2 * len(qubits), 2 * len(qubits))
+                    for K in Ks
                 ]
             )
 
-            # TODO: We could cache probabilities for unitary Kraus operators, maybe in the model
-            # Compute probabilities (have to do this in order for non-unital Kraus operations to work)
-            # probs = []
-            # Kprods = []
-            # for K in rep:
-            #     subvec = self._get_subvector(qubits, self.state)
-            #     subprob = np.vdot(subvec, subvec)
+            # Compute any state-dependent probabilities we need to
+            Kprods = {}
+            for i, (K, prob) in enumerate(rep):
+                if prob is None:
+                    # Compute probability
 
-            #     Kprod = K @ subvec
+                    Kprod = self._block_matvec(K, qubits, self.state)
+                    prob_calc = np.vdot(Kprod, Kprod)
+                    assert np.isreal(prob_calc)
 
-            #     prob = np.vdot(Kprod, Kprod) / subprob
-            #     assert np.isreal(prob)
+                    probs[i] = prob_calc.real
+                    Kprods[i] = Kprod
 
-            #     probs.append(prob.real)
-            #     Kprods.append(Kprod)
-
-            # assert np.isclose(np.sum(probs), 1)
+            assert all([prob >= 0 for prob in probs])
+            assert np.isclose(sum(probs), 1.0)
 
             # # Sample
-            # assert self._rng is not None
-            # choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
+            choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
 
-            # # Normalize final subvector
-            # final_subvec = Kprods[choice] / np.sqrt(probs[choice])
+            # Normalize final subvector
+            try:
+                chosen_Kprod = Kprods[choice]
+            except KeyError:
+                # Was not computed for probability, compute it now
+                chosen_Kprod = self._block_matvec(
+                    Ks[choice], qubits, self.state
+                )
+            self._state = chosen_Kprod / np.sqrt(probs[choice])
 
-            # self._set_subvector(final_subvec, qubits, self.state)
-            # assert np.isclose(np.linalg.norm(self.state), 1)
+            assert np.isclose(np.linalg.norm(self.state), 1)
         else:
             raise ValueError(f"Cannot apply GateRep {reptype}")
 
