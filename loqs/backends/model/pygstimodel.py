@@ -375,11 +375,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     for K in Ks:
                         KKdag = K @ K.conjugate()
                         prob = KKdag[0, 0]
-                        if all(
+                        if np.all(
                             np.isclose(KKdag / prob, np.eye(KKdag.shape[0]))
                         ):
                             # This was the identity when we pulled the probability out
-                            rep.append((K, prob))
+                            assert np.isreal(prob)
+                            rep.append((K, abs(prob.real)))
                         else:
                             # Not the identity, so store None (signal states to compute on the fly)
                             rep.append((K, None))
@@ -409,17 +410,21 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             return rep
 
         repidx = 0
+        errors = []
         while repidx < len(gatereps):
             try:
                 rep = _get_rep(gatereps[repidx])
                 break
-            except ValueError:
+            except ValueError as e:
                 # Try next one
                 repidx += 1
 
+                errors.append(e)
+
         if repidx == len(gatereps):
             raise ValueError(
-                f"Failed to create gate rep for any of {gatereps}"
+                f"Failed to create gate rep for any of {gatereps}, with errors:"
+                + "\n".join([str(e) for e in errors])
             )
 
         if not self.use_time_dependence:
