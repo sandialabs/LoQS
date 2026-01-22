@@ -31,6 +31,11 @@ Note that this is technically not a true restriction,
 but keeping it simple as other types are unlikely.
 """
 
+# TODO: Possible performance improvements:
+# Use QSim's trick of removing measured qubits for smaller statevector
+# Use two 2**N arrays and use einsum's out= to prevent new mem allocations
+# Use einsum_path to chain operations over a whole circuit at once
+
 
 class NumpyStatevectorQuantumState(BaseQuantumState):
     """Base class for an object that holds a (physical) quantum state."""
@@ -89,8 +94,14 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self._state = np.zeros((2,) * state, np.complex128)
             self._state[(0,) * state] = 1
         elif isinstance(state, np.ndarray):
-            assert NotImplementedError("Have to fix reshape")
             self._state = state.copy()
+            curr_shape = state.shape
+            if not all([dim == 2 for dim in curr_shape]):
+                # This is not the right shape
+                # Flatten and take as (2,)*num_qubits
+                num_qubits = np.log2(self.state.flatten().shape[0])
+                assert num_qubits.is_integer()
+                self._state = self.state.reshape((2,) * int(num_qubits))
         elif isinstance(state, Sequence) and all(
             [el in [0, 1] for el in state]
         ):
@@ -119,7 +130,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     def __hash__(self) -> int:
         return hash(
-            (hash(self._state), self.hash(self.qubit_labels), self.seed)
+            (self.hash(self._state), self.hash(self.qubit_labels), self.seed)
         )
 
     # Source - https://stackoverflow.com/a/64436208
@@ -159,10 +170,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         reptype = reptuple.reptype
 
         if reptype == GateRep.UNITARY:
-            assert isinstance(rep, np.ndarray) and rep.shape == (
-                2 * len(qubits),
-                2 * len(qubits),
-            )
+            assert isinstance(rep, np.ndarray)
+            assert rep.shape == (2 ** len(qubits), 2 ** len(qubits))
 
             self._state = self._block_matvec(rep, qubits, self.state)
         elif reptype == GateRep.KRAUS_OPERATORS:
@@ -224,10 +233,15 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
         # We will need n_qubits..n_qubits+n_subqubits temp indices (vals of the dict below)
         # These will map to the qubit labels in our qubit subset (keys of the dict below)
-        sub_idx_map = {
-            self.qubit_labels.index(lbl): n_tot + i
-            for i, lbl in enumerate(sublbls)
-        }
+        try:
+            sub_idx_map = {
+                self.qubit_labels.index(lbl): n_tot + i
+                for i, lbl in enumerate(sublbls)
+            }
+        except ValueError as e:
+            raise ValueError(
+                "Rep's qubit is not in state's qubit labels\n" + str(e)
+            )
         # Our submatrix has indices of temp labels (rows, output states) and subset labels (cols, input states)
         submat_idxs = list(sub_idx_map.values()) + list(sub_idx_map.keys())
 
@@ -295,7 +309,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
             # Compute the probability of measuring 0
             # (Same as Kraus logic in _apply_gate_rep)
-            prod = self._block_matvec(instrument_dict[0], qubits, self.state)
+            prod = self._block_matvec(
+                instrument_dict[0].rep, qubits, self.state
+            )
             prob_0 = np.vdot(prod, prod)
 
             # Use RNG to see if we measure 0 or 1
@@ -306,15 +322,15 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 outcomes[qubits[0]].append(cbit)
 
             # Apply the correct PTM based on the classical output we see
-            rep_to_apply = instrument_dict[cbit]
-            assert rep_to_apply.reptype in self.input_reps
-            assert isinstance(rep_to_apply.reptype, GateRep)
-            self.apply_reps_inplace([rep_to_apply])
-
-            # Propogate and renormalize (maybe not needed, but safer to do it now)
-            self._state = self._block_matvec(
-                rep_to_apply, qubits, self.state
-            ) / (np.sqrt(prob_0) if cbit == 0 else np.sqrt(1 - prob_0))
+            # and renormalize
+            if cbit == 0:
+                # We already computed this product
+                self._state = prod / np.sqrt(prob_0)
+            else:
+                print(f"{instrument_dict[1].rep=}")
+                self._state = self._block_matvec(
+                    instrument_dict[1].rep, qubits, self.state
+                ) / np.sqrt(1 - prob_0)
 
         return outcomes
 
