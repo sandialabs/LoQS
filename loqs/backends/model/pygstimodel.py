@@ -45,7 +45,7 @@ def compute_qsim_bases(num_qubits: int):
     qbasis = [functools.reduce(np.kron, x) for x in qbasis_prod]
 
     return ExplicitBasis(
-        qbasis,
+        qbasis,  # type: ignore
         ["myEl%d" % i for i in range(4**num_qubits)],
         name=f"qsim_{num_qubits}q",
         longname=f"QuantumSim_{num_qubits}qubit",
@@ -364,7 +364,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             elif gaterep == GateRep.KRAUS_OPERATORS:
                 try:
                     # We'll upcast to DenseOperator to get access to the kraus property
-                    # TODO: This should probably be moved to optools instead of DenseOperator in pygsti
+                    # TODO for pygsti: This should probably be moved to optools instead of DenseOperator
                     dense_op = DenseOperator(
                         op.to_dense(), basis, self.model.evotype
                     )
@@ -373,7 +373,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     rep = []
                     # Pre-compute probabilities (if unitary)
                     for K in Ks:
-                        KKdag = K @ K.conjugate()
+                        KKdag = K @ K.conjugate().T
                         prob = KKdag[0, 0]
                         if np.all(
                             np.isclose(KKdag / prob, np.eye(KKdag.shape[0]))
@@ -384,11 +384,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                         else:
                             # Not the identity, so store None (signal states to compute on the fly)
                             rep.append((K, None))
-                except (ValueError, AttributeError) as e:
+                except (ValueError, AttributeError, ZeroDivisionError) as e:
                     raise ValueError(
                         "Failed to cast gate as Kraus operators. Consider "
-                        + "using process matrices instead. PyGSTi error: "
-                        + str(e),
+                        + "using process matrices instead."
                     ) from e
             elif gaterep == GateRep.PTM:
                 rep = op.to_dense(on_space="HilbertSchmidt")

@@ -104,7 +104,18 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 elif isinstance(gr, str):
                     return RepTuple(gr, qubits, GateRep.STIM_CIRCUIT_STR)
                 elif isinstance(gr, (tuple, list)):
-                    if all([isinstance(el, np.ndarray) for el in gr]):
+                    if all(
+                        [
+                            isinstance(el, (tuple, list))
+                            and len(el) == 2
+                            and isinstance(el[0], np.ndarray)
+                            and (
+                                isinstance(el[1], (float, int))
+                                or el[1] is None
+                            )
+                            for el in gr
+                        ]
+                    ):
                         return RepTuple(gr, qubits, GateRep.KRAUS_OPERATORS)
                     elif all(
                         [
