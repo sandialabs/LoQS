@@ -76,6 +76,7 @@ def build_discrete_error_injection_programs(
         base_program.instruction_stack[stack_idx_to_modify]
     )
 
+    # TODO: Split these out so we can inject one error at will at a higher level of API
     def insert_2q_error(layer, eclabel1, eclabel2, qubit1, qubit2):
         new_label = deepcopy(instruction_label)
 

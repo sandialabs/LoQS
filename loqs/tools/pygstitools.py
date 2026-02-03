@@ -3,26 +3,29 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 import numpy as np
-import numpy.typing as npt
 from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from loqs.backends.model.pygstimodel import PYGSTI_QSIM_BASES
+from loqs.backends.reps import GateRep, RepTuple
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
+from loqs.tools import reptools
 
 try:
     import pygsti
     from pygsti.baseobjs import Label
     from pygsti.circuits import Circuit
     from pygsti.data import DataSet
+    from pygsti.evotypes import Evotype
     from pygsti.protocols import ExperimentDesign
     from pygsti.models import ExplicitOpModel
+    from pygsti.modelmembers.operations import DenseOperator
 except ImportError as e:
     raise ImportError(
         "Could not import pygsti, needed for loqs.extenstions.pygstitools"
@@ -30,7 +33,7 @@ except ImportError as e:
 
 
 ## QUANTUMSIM BASIS TOOLS
-def ptm_to_qsim_ptm(ptm: npt.NDArray):
+def ptm_to_qsim_ptm(ptm: np.ndarray):
     """Convert a PTM to a QSim PTM.
 
     Parameters
@@ -51,7 +54,7 @@ def ptm_to_qsim_ptm(ptm: npt.NDArray):
     )
 
 
-def unitary_to_qsim_ptm(U: npt.NDArray):
+def unitary_to_qsim_ptm(U: np.ndarray):
     """Convert a unitary to a QSim PTM.
 
     Parameters
@@ -66,6 +69,134 @@ def unitary_to_qsim_ptm(U: npt.NDArray):
     """
     ptm = np.asarray(pygsti.tools.unitary_to_pauligate(U))
     return ptm_to_qsim_ptm(ptm)
+
+
+## KRAUS CONVERSION TOOLS
+def ptm_to_kraus(ptm: np.ndarray):
+    """Convert a Pauli transfer matrix into a series of Kraus operators.
+
+    This does not do any prescreening for known noise channels,
+    and thus there are no guarantees on unitarity of individual Kraus operators
+    (e.g. even in the case of a 1Q depolarizing PTM).
+
+    Parameters
+    ----------
+    PTM:
+        PTM to convert of size (4**N, 4**N) for N qubits
+
+    Returns
+    -------
+    np.ndarray
+        A list of the converted Kraus operators with size (2**N, 2**N).
+        Unnormalized such that Tr(K rho K^dag) gives the probability of
+        applying operator K.
+    """
+    ptm_op = DenseOperator(ptm, "pp", Evotype.default_evotype)
+
+    try:
+        return ptm_op.kraus_operators
+    except ValueError as e:
+        raise ValueError("Failed to convert PTM to Kraus operators") from e
+
+
+def kraus_to_ptm(Ks: Sequence[np.ndarray]) -> np.ndarray:
+    r"""Convert a series of Kraus operators into a Pauli transfer matrix.
+
+    Convention is that the coefficient should be folded in, such that the
+    channel is given by
+
+    .. math::
+
+        \Lambda(\rho) = \sum_i K_i \rho K_i^\dagger
+
+    Parameters
+    ----------
+    Ks:
+        List of (2**N, 2**N) Kraus matrices for N qubits
+
+    Returns
+    -------
+    np.ndarray
+        Resulting (4**N, 4**N) Pauli-transfer matrix
+    """
+    ptms = [pygsti.tools.unitary_to_pauligate(K) for K in Ks]
+    return np.asarray(sum(ptms))
+
+
+def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
+    """Convert a Pauli transfer matrix into
+
+    In contrast to :meth:`ptm_to_kraus`, this method *does*
+    check the noise channel for Pauli stochastic-ness and returns
+    textbook Kraus operators in that case.
+    This also precomputes the probabilities for the Kraus operator
+    representation, if possible.
+
+    Parameters
+    ----------
+    ptm:
+        PTM to convert
+
+    qubits:
+        Qubit labels (for output RepTuple)
+
+    ideal_ptm:
+        PTM for the ideal operation, by default None. If not None,
+        prescreening for Pauli stochastc noise channel is done.
+
+    Returns
+    -------
+    RepTuple
+        Output Kraus representation
+    """
+    if pygsti.tools.superop_is_unitary(ptm, mx_basis="pp"):
+        U = pygsti.tools.superop_to_unitary(
+            ptm, mx_basis="pp", check_superop_is_unitary=False
+        )
+        return RepTuple((U, 1), qubits, GateRep.KRAUS_OPERATORS)
+
+    # If ideal ptm, pre-screen for stochastic channel
+    if ideal_ptm is not None and pygsti.tools.superop_is_unitary(ideal_ptm):
+        ideal_ptm_inv = np.linalg.inv(ideal_ptm)
+        noise_channel = ptm @ ideal_ptm_inv
+
+        eigvals = list(np.diag(noise_channel))
+
+        if np.linalg.norm(noise_channel - np.diag(eigvals)) < 1e-10:
+            # We are only defined by the diagonal, i.e. we are Pauli stochastic
+            # Convert from PTM elements (Pauli eigenvalues) to Kraus coefficients (Pauli rates)
+            rates = reptools.pauli_eigvals_to_rates(eigvals)
+
+            # Create the Kraus rep for the noise
+            noise_rep = reptools.create_pauli_stochastic_kraus_rep(
+                rates, qubits
+            )
+
+            ideal_U = pygsti.tools.superop_to_unitary(
+                ideal_ptm, mx_basis="pp", check_superop_is_unitary=False
+            )
+            ideal_rep = RepTuple(ideal_U, qubits, GateRep.UNITARY)
+
+            # Re-compose ideal and noise operations
+            return reptools.compose_kraus_reptuples(ideal_rep, noise_rep)
+
+    # Otherwise, just get Kraus ops from pygsti
+    Ks = ptm_to_kraus(ptm)
+
+    rep = []
+    # Pre-compute probabilities (if unitary)
+    for K in Ks:
+        KKdag = K @ K.conjugate().T
+        prob = KKdag[0, 0]
+        if prob > 1e-10 and np.allclose(KKdag / prob, np.eye(KKdag.shape[0])):
+            # This was the identity when we pulled the probability out
+            assert np.isreal(prob)
+            rep.append((K, abs(prob.real)))
+        else:
+            # Not the identity, so store None (signal states to compute on the fly)
+            rep.append((K, None))
+
+    return RepTuple(rep, qubits, GateRep.KRAUS_OPERATORS)
 
 
 ## EDESIGN CONVERSION TOOLS
@@ -276,7 +407,7 @@ def convert_circuit_to_qiskit_draw(
     gatename_conversion = dict(gatename_conversion)
 
     for lidx in range(circuit.depth):
-        for comp in circuit._layer_components(lidx):
+        for comp in circuit._layer_components(lidx):  # type: ignore
             if (
                 comp.name.startswith("G")
                 and comp.name not in gatename_conversion

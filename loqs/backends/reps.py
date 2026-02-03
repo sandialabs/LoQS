@@ -118,7 +118,12 @@ class GateRep(RepEnum):
 
     .. math::
 
-        P_i = \mathrm{Tr}\left[\rho K_i K_i^\dagger]
+        P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
+
+    Note that in the case that :math:`K_i` is a scaled unitary,
+    this probability will be independent of the state and be a
+    fixed coefficient (which is often pulled out of the Kraus matrix
+    in most descriptions of the formalism).
 
     After sampling which Kraus operator to apply, the final state
     is then
@@ -127,14 +132,20 @@ class GateRep(RepEnum):
 
         \rho \rightarrow K_i \rho K_i^\dagger / P_i
 
-    Note the renormalization by probability here!
+    Note the renormalization by probability here, since this version
+    of the formalism folds the probability into the Kraus matrix,
+    and thus works even when the probability is state-dependent.
 
     This unraveling of non-unital channels can even be done with a
     :class:`.STIMQuantumState`, enabling fast stabilizer simulation
     with amplitude damping.
 
-    The expected rep type is a list of arrays with shape (2^n, 2^n)
-    where n is the number of qubits.
+    The expected rep type is a list of 2-tuples with the first entry as
+    an array of size (2^n, 2^n) where n is the number of qubits, and the
+    second entry as a float between 0 and 1 for pre-computed probabilities
+    (or None in the case of non-unital/state-dependent Kraus operators).
+    Even when pre-computed probabilities are provided, Kraus operators should
+    not be normalized, i.e. they should include the probability also.
     """
 
 

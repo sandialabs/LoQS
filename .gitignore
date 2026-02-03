@@ -21,6 +21,7 @@ loqs.egg-info/
 build/
 src/
 status
+test_runner.py
 
 .DS_Store
 **/.ipynb_checkpoints/
