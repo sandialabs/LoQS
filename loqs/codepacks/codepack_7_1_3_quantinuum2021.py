@@ -24,6 +24,7 @@ from loqs.backends.model.basemodel import (
 )
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
+from loqs.backends.reps import RepTuple
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -732,8 +733,9 @@ def create_ideal_model(  # noqa: C901
         A noiseless model for the `QECCode` returned by
         :meth:`create_qec_code`
     """
-    assert len(qubits) == 10, "Must provide exactly 10 qubit labels"
-    model_qubits = [f"Q{i}" for i in range(10)]
+    # assert len(qubits) == 10, "Must provide exactly 10 qubit labels"
+    # model_qubits = [f"Q{i}" for i in range(10)]
+    model_qubits = [f"Q{i}" for i in range(len(qubits))]
 
     gate_names = [
         "Gxpi",
@@ -829,7 +831,9 @@ def create_ideal_model(  # noqa: C901
                 qubit_perms = itertools.permutations(qubits, r=num_qubits)
                 for qs in qubit_perms:
                     if gaterep == GateRep.UNITARY:
-                        gate_dict[(gate, qs)] = U
+                        gate_dict[(gate, qs)] = RepTuple(
+                            U, qs, GateRep.UNITARY
+                        )
                     elif gaterep == GateRep.PTM:
                         gate_dict[(gate, qs)] = (
                             pygsti.tools.unitary_to_pauligate(U)

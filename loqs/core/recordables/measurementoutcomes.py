@@ -71,6 +71,39 @@ class MeasurementOutcomes(
     def __hash__(self) -> int:
         return self.hash(self.outcomes)
 
+    def map_qubits_inplace(
+        self, qubit_mapping: Mapping[str | int, str | int]
+    ) -> None:
+        """Map the qubit label keys (in-place).
+
+        Parameters
+        ----------
+        qubit_mapping:
+            Qubit mapping from current keys to new values.
+        """
+        self.outcomes = {
+            qubit_mapping.get(q, q): v for q, v in self.outcomes.items()
+        }
+
+    def map_qubits(
+        self, qubit_mapping: Mapping[str | int, str | int]
+    ) -> MeasurementOutcomes:
+        """Return a copy with mapped qubit label keys.
+
+        Parameters
+        ----------
+        qubit_mapping:
+            Qubit mapping from current keys to new values.
+
+        Returns
+        -------
+        MeasurementOutcomes
+            Outcomes with mapped qubit labels
+        """
+        new_outcomes = MeasurementOutcomes(self)
+        new_outcomes.map_qubits_inplace(qubit_mapping)
+        return new_outcomes
+
     def get_inferred_outcomes(
         self,
         pauli_frame: PauliFrame | None = None,
