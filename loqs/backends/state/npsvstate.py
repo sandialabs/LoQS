@@ -196,6 +196,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
                     Kprod = self._block_matvec(K, qubits, self.state)
                     prob_calc = np.vdot(Kprod, Kprod)
+                    prob_calc = np.abs(np.real_if_close(prob_calc))
                     assert np.isreal(prob_calc)
 
                     probs[i] = prob_calc.real

@@ -190,6 +190,7 @@ def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
         prob = KKdag[0, 0]
         if prob > 1e-10 and np.allclose(KKdag / prob, np.eye(KKdag.shape[0])):
             # This was the identity when we pulled the probability out
+            prob = np.abs(np.real_if_close(prob))
             assert np.isreal(prob)
             rep.append((K, abs(prob.real)))
         else:

@@ -412,7 +412,7 @@ def create_qec_code(
             name="Raw logical Z-basis measurement",
         )
     )
-    instructions["Raw X measure circuit"] = (
+    instructions["Raw X Data Measure"] = (
         builders.build_physical_circuit_instruction(
             raw_X_meas_circ,
             name="Raw logical X-basis measurement",
