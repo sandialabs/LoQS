@@ -206,7 +206,14 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             assert np.isclose(sum(probs), 1.0)
 
             # # Sample
-            choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
+            try:
+                choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
+            except ValueError:
+                if np.abs(1 - sum(probs)) < 1e-7:
+                    renormed_probs = np.asarray(probs) / np.sum(probs)
+                    choice = self._rng.choice(
+                        range(len(rep)), size=1, p=renormed_probs
+                    )[0]
 
             # Normalize final subvector
             try:

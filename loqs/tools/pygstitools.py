@@ -153,7 +153,7 @@ def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
         U = pygsti.tools.superop_to_unitary(
             ptm, mx_basis="pp", check_superop_is_unitary=False
         )
-        return RepTuple((U, 1), qubits, GateRep.KRAUS_OPERATORS)
+        return RepTuple([(U, 1)], qubits, GateRep.KRAUS_OPERATORS)
 
     # If ideal ptm, pre-screen for stochastic channel
     if ideal_ptm is not None and pygsti.tools.superop_is_unitary(ideal_ptm):
