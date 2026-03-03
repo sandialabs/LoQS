@@ -58,7 +58,13 @@ def default_map_qubits(qubit_mapping: Mapping[str | int, str | int], **kwargs):
     return kwargs
 
 
-DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
+DEFAULT_PRIORITIES = [
+    "label",
+    "instruction",
+    "patch_data",
+    "program",
+    "history[-1]",
+]
 """Default parameter priority order."""
 
 

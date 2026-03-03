@@ -747,7 +747,7 @@ class QuantumProgram(Displayable):
         return inst
 
     @staticmethod
-    def _collect_kwarg(
+    def _collect_kwarg(  # noqa: C901
         position: int,
         key: str,
         priorities: Sequence[str],
@@ -765,7 +765,7 @@ class QuantumProgram(Displayable):
         as it is a critical (and potentially non-obvious) component
         of :meth:`QuantumProgram.run`.
 
-        There are four locations this function can source information.
+        There are five locations this function can source information.
 
         - `"label"`: This means the information should come from the
           :class:`InstrumentLabel`. First, the :attr:`.InstrumentLabel.inst_args`
@@ -777,6 +777,10 @@ class QuantumProgram(Displayable):
         - `"instruction"`: This means the information should come from the
           :attr:`Instruction.data` as passed in by ``instruction_data``.
           Return it if available, continue if not.
+        - `"patch_data"`: This means the information should come from a
+          :attr:`QECCodePatch.data`. This requires both "patches" to be a :class:`PatchDict`
+          in the last :class:`Frame` of the :class:`History` which has an entry corresponding to
+          "patch_label" from the ``program_data``.
         - `"program"`: This means the information should come from the
           :class:`QuantumProgram` itself. If ``key`` matches any of these,
           it is returned, otherwise continue. This data comes in the form of
@@ -819,7 +823,7 @@ class QuantumProgram(Displayable):
 
         priorities:
             A list where the entries must be in
-            ``["label", "instruction", "program", "history[<idxs>]"]``.
+            ``["label", "instruction", "patch_data", "program", "history[<idxs>]"]``.
             This determines the order in which the different data sources
             are tried.
 
@@ -861,6 +865,31 @@ class QuantumProgram(Displayable):
                 # Check instruction data dict
                 if key in instruction_data:
                     return instruction_data[key]
+            elif priority == "patch_data":
+                # Extract patch_label from program_data
+                patch_label = program_data.get("patch_label", None)
+                if patch_label is None:
+                    continue
+                assert isinstance(patch_label, str)
+
+                # Get patches from the last frame in history
+                if not history or len(history) == 0:
+                    continue
+
+                patches = history[-1].get("patches", None)
+                if patches is None:
+                    continue
+                assert isinstance(patches, PatchDict)
+
+                # Get the specific patch by label
+                patch = patches.get(patch_label)
+                if patch is None:
+                    continue
+
+                # Get the value from patch.data
+                value = patch.data.get(key)
+                if value is not None:
+                    return value
             elif priority == "program":
                 # Check provided program data dict
                 if key in program_data:
