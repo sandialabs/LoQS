@@ -9,6 +9,9 @@ coverage.xml
 .mypy_cache
 htmlcov
 
+.env
+.claude/*.local.*
+
 docs/_build
 docs/**/_autosummary
 docs/**/*.ipynb
