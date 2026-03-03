@@ -11,6 +11,7 @@ Thus, we will have 10 qubits total: 7 data and 3 auxiliary.
 """
 
 from collections.abc import Sequence
+import copy
 import itertools
 from typing import Mapping
 import numpy as np
@@ -30,6 +31,7 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionstack import InstructionStack
+from loqs.core.qeccode import QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 import loqs.tools.pygstitools as pt
@@ -261,7 +263,7 @@ def create_qec_code(
     instructions["Flagged Parallel S1-S5-S6 Check"] = (
         builders.build_physical_circuit_instruction(
             flagged_QEC_part1_circ,
-            name="Flagged S1 Check",
+            name="Flagged S1-S5-S6 Check",
         )
     )
 
@@ -303,7 +305,7 @@ def create_qec_code(
     instructions["Flagged Parallel S2-S3-S4 Check"] = (
         builders.build_physical_circuit_instruction(
             flagged_QEC_part2_circ,
-            name="Flagged S1 Check",
+            name="Flagged S2-S3-S4 Check",
         )
     )
 
@@ -466,6 +468,7 @@ def create_qec_code(
         logical_outcome = uncorrected_outcome ^ logical_pauli_frame[pf_idx]
         return Frame(
             {
+                "patch_label": patch_label,
                 "logical_measurement": logical_outcome,
                 "uncorrected_measurement": uncorrected_outcome,
                 "classical_syndrome": classical_syndrome,
@@ -564,18 +567,26 @@ def _create_adaptive_qec_instructions(instructions, qubits):
     ) -> Frame:
         # Get last syndromes (or default to trivial)
         patch = patches[patch_label]
+        # S_previous in paper
         last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
-        syndrome_diff = patch.data.get("flagged_syndrome_diff", [None] * 6)
+        # \Delta S^f in paper. Here because we may have populated half of it in first step
+        flag_syndrome_diff = patch.data.get("flagged_syndrome_diff", [0] * 6)
 
         # Compute flagged syndrome diffs for these three checks
-        changes = [measurement_outcomes[fq][0] for fq in flag_qubits]
+        # S^f in paper
+        # Specifically S^f_{1,5,6} if first_check else S^f_{2,3,4}
+        flag_syndromes = [measurement_outcomes[fq][0] for fq in flag_qubits]
 
         syndrome_idxs = [0, 4, 5] if first_check else [1, 2, 3]
-        for i, si in enumerate(syndrome_idxs):
-            syndrome_diff[si] = changes[i] ^ last_syndromes[si]
-        patch.data["flagged_syndrome_diff"] = syndrome_diff
+        for i, j in enumerate(syndrome_idxs):
+            flag_syndrome_diff[j] = flag_syndromes[i] ^ last_syndromes[j]
 
-        if any([sd == 1 for sd in syndrome_diff]):
+        # Save in patch information for if needed in decoding later
+        new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
+        new_patch.data = copy.deepcopy(patch.data)
+        new_patch.data["flagged_syndrome_diff"] = flag_syndrome_diff
+
+        if any([sd == 1 for sd in flag_syndrome_diff]):
             # Non-trivial syndrome, go to unflagged
             next_instructions = [
                 ("Unflagged Parallel S1-S2-S3 Check", patch_label),
@@ -597,8 +608,17 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             # this is our second check with no errors, we proceed with no correction
             new_stack = stack
 
+            # Delete flag syndrome
+            del new_patch.data["flagged_syndrome_diff"]
+
+        patches[patch_label] = new_patch
+
         return Frame(
-            {"stack": new_stack, "flagged_syndrome_diff": syndrome_diff}
+            {
+                "stack": new_stack,
+                "patches": patches,
+                "flag_syndrome_diff": flag_syndrome_diff,
+            }
         )
 
     def QEC_flagged_feedforward_map_qubits_fn(
@@ -638,17 +658,22 @@ def _create_adaptive_qec_instructions(instructions, qubits):
     ) -> Frame:
         # Get last syndromes (or default to trivial)
         patch = patches[patch_label]
+        # S_previous in paper
         last_syndromes = patch.data.get("latest_syndrome", [0] * 6)
+        # Whether to apply logical X or Z corrections, i.e. Correction col in Table I/II
         logical_pauli_frame = patch.data.get("logical_pauli_frame", [0, 0])
+        # \Delta S^f in paper
         flagged_syndrome_diff = patch.data.get(
             "flagged_syndrome_diff", [None] * 6
         )
 
         # Get syndrome bits
+        # This will be S in paper
         unflagged_syndrome = [X_outcomes[fq][0] for fq in X_qubits]
         unflagged_syndrome.extend([Z_outcomes[fq][0] for fq in Z_qubits])
 
         # Compute syndrome diffs
+        # This is \Delta S in paper
         unflagged_syndrome_diff = [
             int(i) for i in np.bitwise_xor(last_syndromes, unflagged_syndrome)
         ]
@@ -660,7 +685,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
                 logical_pauli_frame[pf_idx] ^= 1
 
         data_decode(unflagged_syndrome_diff[:3], 0)
-        data_decode(unflagged_syndrome_diff[3:], 0)
+        data_decode(unflagged_syndrome_diff[3:], 1)
 
         # Hook error decoding. This is Table 2 of 10.1103/PhysRevX.11.041058, as implemented
         # by a modified version of the algorithm in Fig 22
@@ -676,14 +701,23 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         hook_decode(unflagged_syndrome_diff[3:], flagged_syndrome_diff[3:], 1)
 
         # Update the patch data
-        patch.data["logical_pauli_frame"] = logical_pauli_frame
-        del patch.data["flagged_syndrome_diff"]
-        patch.data["last_syndrome"] = unflagged_syndrome
+        new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
+        new_patch.data = copy.deepcopy(patch.data)
+        new_patch.data["last_syndrome"] = (
+            unflagged_syndrome  # S becomes the new S_previous
+        )
+        new_patch.data["logical_pauli_frame"] = logical_pauli_frame
+        del new_patch.data["flagged_syndrome_diff"]
+
+        patches[patch_label] = new_patch
 
         return Frame(
             {
+                "unflagged_syndrome": unflagged_syndrome,
                 "unflagged_syndrome_diff": unflagged_syndrome_diff,
+                "flagged_syndrome_diff": flagged_syndrome_diff,
                 "new_logical_pauli_frame": logical_pauli_frame,
+                "patches": patches,
             }
         )
 
@@ -701,6 +735,14 @@ def _create_adaptive_qec_instructions(instructions, qubits):
     instructions["QEC Decoder"] = Instruction(
         QEC_decoder_apply_fn,
         data={"X_qubits": qubits[:3], "Z_qubits": qubits[:3]},
+        param_priorities={
+            "X_outcomes": ["history[-2]"],
+            "Z_outcomes": ["history[-1]"],
+        },
+        param_aliases={
+            "X_outcomes": "measurement_outcomes",
+            "Z_outcomes": "measurement_outcomes",
+        },
         map_qubits_fn=QEC_decoder_map_qubits_fn,
         name="QEC Decoder",
     )
