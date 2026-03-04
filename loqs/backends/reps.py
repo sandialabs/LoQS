@@ -5,8 +5,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import TypeVar
+from types import NoneType
+from typing import Hashable, Literal, TypeAlias, TypeVar, Union
+import warnings
 
+import numpy as np
+
+from loqs.types import Float, NDArray
 from loqs.internal import Castable, Displayable
 
 
@@ -149,6 +154,72 @@ class GateRep(RepEnum):
     """
 
 
+class ConcreteGateReps:
+    # Namespace class
+
+    # fmt: off
+    UNITARY_t                       : TypeAlias = NDArray
+    PTM_t                           : TypeAlias = NDArray
+    QSIM_SUPEROPERATOR_t            : TypeAlias = NDArray
+    STIM_CIRCUIT_STR_t              : TypeAlias = str
+    PROBABILISTIC_STIM_OPERATIONS_t : TypeAlias = Sequence[tuple[STIM_CIRCUIT_STR_t, Float]]
+    KRAUS_OPERATORS_t               : TypeAlias = Sequence[tuple[NDArray, Float | None]]
+    # fmt: on
+
+    TP_CHECK_TOL = 1e-8
+
+    @staticmethod
+    def sequence_is_krausop_rep(
+        gr: Sequence, tp_check_abstol: Float = TP_CHECK_TOL
+    ) -> bool:
+        if len(gr) == 0:
+            return False
+        for el in gr:
+            if not isinstance(el, (tuple, list)):
+                return False
+            if len(el) != 2:
+                return False
+            if not isinstance(el[0], np.ndarray):
+                return False
+            if not isinstance(el[1], (float, np.floating, NoneType)):
+                return False
+        if np.isfinite(tp_check_abstol):
+            ops = [K @ K.conj().T for K, _ in gr]
+            diff = np.zeros(ops[0].shape, complex)
+            diff = np.sum(ops, out=diff, axis=0)
+            diff[np.diag_indices_from(diff)] -= 1.0
+            if np.any(np.abs(diff) > tp_check_abstol):
+                warnings.warn(
+                    'Supplied "Kraus operators" do not constitute a TP channel.'
+                )
+        return True
+
+    @staticmethod
+    def sequence_is_probabilisticstim_rep(gr: Sequence) -> bool:
+        if len(gr) == 0:
+            return False
+        for el in gr:
+            if not isinstance(el, (tuple, list)):
+                return False
+            if len(el) != 2:
+                return False
+            if not isinstance(el[0], ConcreteGateReps.STIM_CIRCUIT_STR_t):
+                return False
+            if not isinstance(el[1], (float, np.floating, int)):
+                return False
+        return True
+
+
+ConcreteGateRep: TypeAlias = Union[
+    ConcreteGateReps.UNITARY_t,
+    ConcreteGateReps.PTM_t,
+    ConcreteGateReps.QSIM_SUPEROPERATOR_t,
+    ConcreteGateReps.STIM_CIRCUIT_STR_t,
+    ConcreteGateReps.PROBABILISTIC_STIM_OPERATIONS_t,
+    ConcreteGateReps.KRAUS_OPERATORS_t,
+]
+
+
 class InstrumentRep(RepEnum):
     """Representations for instrument objects."""
 
@@ -170,8 +241,9 @@ class InstrumentRep(RepEnum):
     For when a mid-circuit measurement can be modeled by a perfect
     Z-basis projection sandwiched by two noisy operations.
     The expected rep is a 4-tuple where the first two elements are
-    as per :attr:`.InstrumentRep.ZBASIS_PROJECTION`, and then two
-    :class:`.RepTuple` objects with a :class:`.GateRep` ``reptype``.
+    the unpacking of some :attr:`.InstrumentRep.ZBASIS_PROJECTION`,
+    and then two :class:`.RepTuple` objects with a :class:`.GateRep`
+    ``reptype``.
     """
 
     ZBASIS_OUTCOME_OPERATION_DICT = 3
@@ -212,8 +284,43 @@ class InstrumentRep(RepEnum):
     """
 
 
+class ConcreteInstrumentReps:
+    # Namespace class
+
+    # fmt: off
+    STIM_CIRCUIT_STR_t              : TypeAlias = str
+    ZBASIS_PROJECTION_t             : TypeAlias = tuple[Literal[None, 0, 1], bool]
+    ZBASIS_PRE_POST_OPERATIONS_t    : TypeAlias = tuple[
+        Literal[None, 0, 1], bool, U, U
+    ]
+    ZBASIS_OUTCOME_OPERATION_DICT_t: TypeAlias = tuple[
+        dict[Hashable, U], bool  # TODO: make this a frozendict.
+    ]
+    # fmt: on
+
+    @staticmethod
+    def is_zbasis_projection_rep(ir) -> bool:
+        if not isinstance(ir, (tuple, list)):
+            return False
+        if len(ir) != 2:
+            return False
+        if not isinstance(ir[0], (int, NoneType)):
+            return False
+        if not isinstance(ir[1], bool):
+            return False
+        return True
+
+
+ConcreteInstrumentRep = Union[
+    ConcreteInstrumentReps.STIM_CIRCUIT_STR_t,
+    ConcreteInstrumentReps.ZBASIS_PROJECTION_t,
+    ConcreteInstrumentReps.ZBASIS_PRE_POST_OPERATIONS_t,  # type: ignore
+    ConcreteInstrumentReps.ZBASIS_OUTCOME_OPERATION_DICT_t,  # type: ignore
+]
+
+
 class RepTuple(Castable, Displayable):
-    rep: object
+    rep: ConcreteGateRep | ConcreteInstrumentRep
     """Underlying representation object."""
 
     qubits: tuple[str | int, ...]
@@ -224,7 +331,7 @@ class RepTuple(Castable, Displayable):
 
     def __init__(
         self,
-        rep: object,
+        rep: ConcreteGateRep | ConcreteInstrumentRep,
         qubits: str | int | Sequence[str | int],
         reptype: RepEnum,
     ):
@@ -253,7 +360,9 @@ class RepTuple(Castable, Displayable):
     def __hash__(self) -> int:
         return hash(
             (
-                self.hash(self.rep),
+                self.hash(
+                    self.rep
+                ),  # WAIT! self.rep isn't necessarily Hashable. See ZBASIS_OUTCOME_OPERATION_DICT_t.
                 self.hash(self.qubits),
                 self.hash(self.reptype),
             )
