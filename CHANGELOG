@@ -1,0 +1,30 @@
+# CHANGELOG
+
+## [1.0] - 2026-03-06
+
+This marks the first public release of LoQS.
+This includes the core LoQS API surrounding how to build user-defined functions into Instructions,
+how to bundle these up into QECCodes, how to run QuantumPrograms, and use the resulting History object.
+
+The following backends are supported:
+- Circuit: PyGSTi, STIM, and native Python lists
+- Model: PyGSTi and native Python dicts
+- State: QuantumSim (density matrix), STIM (stabilizer), and native NumPy (statevector)
+
+The following gate representations are supported:
+- Unitary matrices
+- Pauli-transfer matrices
+- Superoperators in QuantumSim's 0xy1 basis
+- STIM strings
+- A list of STIM strings to apply probabilistically
+- Kraus operators
+
+The following measurement/instrument representations are supported:
+- Perfect Z basis measurement (with or without reset)
+- Perfect Z basis measurement (with or without reset) sandwiched by noisy gates
+- PyGSTi-like instruments, i.e. dicts of outcomes to gates that should be applied
+
+Other preliminary features include parallelization via Dask, JSON serialization,
+and object display via tkinter.
+Test coverage is moderate (~70%), and documentation covers most LoQS features and
+is mostly up-to-date.
