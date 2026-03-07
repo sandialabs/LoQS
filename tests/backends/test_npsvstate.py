@@ -6,7 +6,7 @@ import pytest
 from tempfile import NamedTemporaryFile
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
-from loqs.backends.state import NumpyStatevectorQuantumState as SVState
+from loqs.backends import NumpyStatevectorQuantumState as SVState
 
 
 class TestNumPyStatevectorQuantumState:

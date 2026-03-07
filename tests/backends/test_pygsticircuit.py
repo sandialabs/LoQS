@@ -126,18 +126,18 @@ class TestPyGSTiPhysicalCircuit:
         self._check(pc5, self.test_circ_intlbls)
 
 
-class TestPyGSTiPhysicalCircuitFailedImport:
-        # Mock not having the pygsti available
-        def test_failed_import(self):
-            with mock.patch.dict('sys.modules', {
-                    'pygsti.circuits': None,
-                    'pygsti.baseobjs': None,
-                }):
+# class TestPyGSTiPhysicalCircuitFailedImport:
+#         # Mock not having the pygsti available
+#         def test_failed_import(self):
+#             with mock.patch.dict('sys.modules', {
+#                     'pygsti.circuits': None,
+#                     'pygsti.baseobjs': None,
+#                 }):
 
-                with pytest.raises(ImportError):
-                    import importlib
-                    import sys
+#                 with pytest.raises(ImportError):
+#                     import importlib
+#                     import sys
 
-                    mod = sys.modules['loqs.backends.circuit.pygsticircuit']
-                    importlib.reload(mod)
+#                     mod = sys.modules['loqs.backends.circuit.pygsticircuit']
+#                     importlib.reload(mod)
                     

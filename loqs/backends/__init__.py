@@ -16,9 +16,9 @@ from dataclasses import dataclass
 
 from .reps import RepEnum, GateRep, InstrumentRep, RepTuple
 
-from .circuit import BasePhysicalCircuit
-from .model import BaseNoiseModel
-from .state import BaseQuantumState
+from .circuit import BasePhysicalCircuit, ListPhysicalCircuit
+from .model import BaseNoiseModel, DictNoiseModel, TimeDependentBaseNoiseModel
+from .state import BaseQuantumState, NumpyStatevectorQuantumState
 from .state.basestate import OutcomeDict
 
 
@@ -74,11 +74,11 @@ def get_backend_error(backend_name: str) -> str | None:
 
 
 # Check availability of all backends at import time
-_check_backend_availability("pygsti_circuit", "pygsti.circuits")
-_check_backend_availability("pygsti_model", "pygsti.objects")
+_check_backend_availability("pygsti_circuit", "pygsti")
+_check_backend_availability("pygsti_model", "pygsti")
 _check_backend_availability("stim_circuit", "stim")
 _check_backend_availability("stim_state", "stim")
-_check_backend_availability("qsim", "quantumsim")
+_check_backend_availability("qsim_state", "quantumsim")
 
 
 # Import concrete backend classes with conditional availability
@@ -125,7 +125,7 @@ def __getattr__(name: str) -> Any:
                 f"Error: {get_backend_error('stim_state')}"
             )
     elif name == "QSimQuantumState":
-        if is_backend_available("qsim"):
+        if is_backend_available("qsim_state"):
             from .state.qsimstate import QSimQuantumState
 
             return QSimQuantumState
@@ -134,38 +134,6 @@ def __getattr__(name: str) -> Any:
                 f"QSim backend is not available. "
                 f"Error: {get_backend_error('qsim')}"
             )
-
-    # Always available backends
-    elif name == "ListPhysicalCircuit":
-        from .circuit.listcircuit import ListPhysicalCircuit
-
-        return ListPhysicalCircuit
-    elif name == "DictNoiseModel":
-        from .model.dictmodel import DictNoiseModel
-
-        return DictNoiseModel
-    elif name == "NumpyStatevectorQuantumState":
-        from .state.npsvstate import NumpyStatevectorQuantumState
-
-        return NumpyStatevectorQuantumState
-
-    # Base classes
-    elif name == "BasePhysicalCircuit":
-        from .circuit.basecircuit import BasePhysicalCircuit
-
-        return BasePhysicalCircuit
-    elif name == "BaseNoiseModel":
-        from .model.basemodel import BaseNoiseModel
-
-        return BaseNoiseModel
-    elif name == "BaseQuantumState":
-        from .state.basestate import BaseQuantumState
-
-        return BaseQuantumState
-    elif name == "OutcomeDict":
-        from .state.basestate import OutcomeDict
-
-        return OutcomeDict
 
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 

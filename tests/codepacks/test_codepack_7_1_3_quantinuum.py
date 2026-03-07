@@ -3,9 +3,9 @@
 import pytest
 
 from loqs.backends import GateRep
-from loqs.backends.circuit import PyGSTiPhysicalCircuit, ListPhysicalCircuit
-from loqs.backends.model import PyGSTiNoiseModel, DictNoiseModel
-from loqs.backends.state import QSimQuantumState, STIMQuantumState
+from loqs.backends import PyGSTiPhysicalCircuit, ListPhysicalCircuit
+from loqs.backends import PyGSTiNoiseModel, DictNoiseModel
+from loqs.backends import QSimQuantumState, STIMQuantumState
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.core.recordables import MeasurementOutcomes

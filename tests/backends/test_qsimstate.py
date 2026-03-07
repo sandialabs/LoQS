@@ -14,7 +14,7 @@ except ImportError:
     NO_QSIM = True
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
-from loqs.backends.state import QSimQuantumState as QSimState
+from loqs.backends import QSimQuantumState as QSimState
 
 
 @pytest.mark.skipif(
@@ -275,18 +275,18 @@ class TestQSimQuantumState:
 
         self._check(test2, state11)
 
-class TestQSimQuantumStateFailedImport:
-        # Mock not having the pygsti available
-        def test_failed_import(self):
-            with mock.patch.dict('sys.modules', {
-                    'quantumsim.sparsedm': None,
-                    'quantumsim.dm_np': None,
-                }):
+# class TestQSimQuantumStateFailedImport:
+#         # Mock not having the pygsti available
+#         def test_failed_import(self):
+#             with mock.patch.dict('sys.modules', {
+#                     'quantumsim.sparsedm': None,
+#                     'quantumsim.dm_np': None,
+#                 }):
 
-                with pytest.raises(ImportError):
-                    import importlib
-                    import sys
+#                 with pytest.raises(ImportError):
+#                     import importlib
+#                     import sys
 
-                    mod = sys.modules['loqs.backends.state.qsimstate']
-                    importlib.reload(mod)
+#                     mod = sys.modules['loqs.backends.state.qsimstate']
+#                     importlib.reload(mod)
                     

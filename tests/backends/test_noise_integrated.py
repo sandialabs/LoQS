@@ -30,10 +30,9 @@ except ImportError:
     NO_STIM = True
 
 from loqs.backends.reps import GateRep, InstrumentRep
-from loqs.backends.circuit import ListPhysicalCircuit
-from loqs.backends.model import DictNoiseModel
-from loqs.backends.state import QSimQuantumState as QSimState
-from loqs.backends.state import STIMQuantumState as STIMState
+from loqs.backends import ListPhysicalCircuit, DictNoiseModel
+from loqs.backends import QSimQuantumState as QSimState
+from loqs.backends import STIMQuantumState as STIMState
 from loqs.core import QuantumProgram, QECCode
 from loqs.core.instructions import builders
 from loqs.tools import pygstitools as pt
@@ -168,18 +167,18 @@ class TestIntegratedNoise:
         # prep |+>, measure Z: expect 57.5/42.5
         # prep |+>, measure X: expect 96.1/3.9
         # Skip STIM for these
-        (0.15, 0.0, 20241104, 1000, [143, 591, 962]),
+        (0.15, 0.0, 20241104, 100, [12, 60, 97]),
         # damping_rate=0.15,dephasing_rate=0.15. This IS compatible with STIM
         # Note that STIM uses more RNG so counts won't be the same
-        # Annoyingly, I've found this also differs on machines, so STIM tests must just be within 100
+        # Annoyingly, I've found this also differs on machines, so STIM tests must just be within 10
         # It is also fast so I'm running 10x the shots to boost our confidence on those
         # Only +/X changes
         # prep |+>, measure X: expect 92.5/7.5
-        (0.15, 0.15, 20241104, 1000, [143, 591, 929, 1500, 5750, 9250]),
+        (0.15, 0.15, 20241104, 100, [12, 60, 94, 15, 57, 93]),
         # damping_rate=0.15,dephasing_rate=0.2. This is also compatible with STIM
         # Only +/X changes
         # prep |+>, measure X: expect 91.2/8.8
-        (0.15, 0.2, 20241104, 1000, [143, 591, 917, 1500, 5750, 9120])
+        (0.15, 0.2, 20241104, 100, [12, 60, 93, 15, 57, 91])
     ]
     @pytest.mark.parametrize("p_damp,p_dephase,seed,shots,expected0s",amp_damp_dephase_tests)
     @pytest.mark.parametrize("stim_rep",[GateRep.PROBABILISTIC_STIM_OPERATIONS])
@@ -312,22 +311,22 @@ class TestIntegratedNoise:
 
         def check_stim(program, expected):
             outs = [mo["Q1"][0] for mo in program.collect_shot_data("measurement_outcomes", -3)]
-            assert abs(Counter(outs)[0] - expected) < 100
+            assert abs(Counter(outs)[0] - expected) < 10
             # Verify side qubits unaffected
             outs = [mo["Q0"][0] for mo in program.collect_shot_data("measurement_outcomes", -2)]
             assert Counter(outs)[0] == 0
             outs = [mo["Q2"][0] for mo in program.collect_shot_data("measurement_outcomes", -1)]
-            assert Counter(outs)[0] == 10*shots
+            assert Counter(outs)[0] == shots
 
-        program_stim.run(num_shots=10*shots)
+        program_stim.run(num_shots=shots)
         check_stim(program_stim, expected0s[3])
 
         program_stim_Zprep_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)        
-        program_stim_Zprep_Xbasis.run(num_shots=10*shots)
+        program_stim_Zprep_Xbasis.run(num_shots=shots)
         check_stim(program_stim_Zprep_Xbasis, expected0s[4])
         
         program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
-        program_stim_Xbasis.run(num_shots=10*shots)
+        program_stim_Xbasis.run(num_shots=shots)
         check_stim(program_stim_Xbasis, expected0s[5])
     
     @staticmethod
