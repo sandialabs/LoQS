@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
 
@@ -42,13 +42,19 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         circuit: ListCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
-        from loqs.backends.circuit import PyGSTiPhysicalCircuit
+        try:
+            from loqs.backends import PyGSTiPhysicalCircuit
+
+            _pygsti_available = True
+        except ImportError:
+            _pygsti_available = False
+            PyGSTiPhysicalCircuit = Any
 
         self._circuit = []
         if isinstance(circuit, ListPhysicalCircuit):
             self._circuit = circuit.circuit.copy()
             self._qubit_labels = circuit.qubit_labels
-        elif isinstance(circuit, PyGSTiPhysicalCircuit):
+        elif _pygsti_available and isinstance(circuit, PyGSTiPhysicalCircuit):
             try:
                 circuit = PyGSTiPhysicalCircuit.cast(circuit)
 
@@ -61,7 +67,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
                 self._circuit = layers
 
                 if qubit_labels is None:
-                    qubit_labels = circuit.circuit.line_labels
+                    qubit_labels = circuit.circuit.line_labels  # type: ignore
             except ImportError as e:
                 raise ValueError("Could not cast pyGSTi circuit") from e
         elif isinstance(circuit, Sequence):

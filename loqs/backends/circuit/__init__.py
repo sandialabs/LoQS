@@ -81,5 +81,3 @@ Gcnot:D4:A12Gcnot:D6:A13Gcnot:D8:A15][Gh:A9Gh:A11Gh:A14Gh:A16]\
 
 from .basecircuit import BasePhysicalCircuit
 from .listcircuit import ListPhysicalCircuit
-from .pygsticircuit import PyGSTiPhysicalCircuit
-from .stimcircuit import STIMPhysicalCircuit

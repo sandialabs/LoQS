@@ -4,11 +4,12 @@
 from collections.abc import Sequence
 from copy import deepcopy
 from tqdm import tqdm
+from typing import Any
 
 try:
-    from dask.distributed import Client, progress
+    from dask.distributed import Client
 except ImportError:
-    Client = None  # type: ignore
+    Client = Any  # type: ignore
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram

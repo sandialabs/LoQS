@@ -4,16 +4,26 @@
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 
-try:
+# Conditional imports for PyGSTi
+_pygsti_available = True
+if TYPE_CHECKING:
+    # Type checking imports - these won't be executed at runtime
     from pygsti.circuits import Circuit as _Circuit
     from pygsti.baseobjs import Label as _Label
-except ImportError as e:
-    raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+else:
+    # Runtime imports - these will be attempted only when needed
+    try:
+        from pygsti.circuits import Circuit as _Circuit
+        from pygsti.baseobjs import Label as _Label
+    except ImportError:
+        _pygsti_available = False
+        _Circuit = Any  # type: ignore
+        _Label = Any  # type: ignore
 
 ## Type aliases for static type checking
 QubitTypes: TypeAlias = str | int
@@ -52,6 +62,11 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         circuit: PyGSTiCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
+        if not _pygsti_available:
+            raise ImportError(
+                "PyGSTi backend is not available. "
+                "Please install pygsti: pip install loqs[pygsti]"
+            )
         if isinstance(circuit, PyGSTiPhysicalCircuit):
             self._circuit = circuit.circuit
         elif isinstance(circuit, ListPhysicalCircuit):
@@ -105,16 +120,16 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         for lidx in range(self._circuit.depth):
             for comp in self._circuit._layer_components(lidx):
                 if post_twoq_gates:
-                    if len(comp.qubits) == 2:
+                    if len(comp.qubits) == 2:  # type: ignore
                         idxs = [
-                            self.qubit_labels.index(q) for q in comp.qubits
+                            self.qubit_labels.index(q) for q in comp.qubits  # type: ignore
                         ]
                         circuit_locations.append((lidx + 1, tuple(idxs)))
                 else:
                     circuit_locations.extend(
                         [
                             (lidx, self.qubit_labels.index(q))
-                            for q in comp.qubits
+                            for q in comp.qubits  # type: ignore
                         ]
                     )
         return circuit_locations
@@ -145,7 +160,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         for lidx in range(idx, end):
             comps = self._circuit._layer_components(
                 lidx
-            ) + other_circuit._layer_components(lidx - idx)
+            ) + other_circuit._layer_components(
+                lidx - idx
+            )  # type: ignore
             self._circuit.set_labels(comps, lidx)
 
     def pad_single_qubit_idles_by_duration_inplace(
@@ -162,22 +179,22 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             seen_qubits = set()
             layer_duration = None
             for comp in comps:
-                if comp.qubits is None:
+                if comp.qubits is None:  # type: ignore
                     # This has no qubit labels, assume it is a whole layer instruction
                     seen_qubits = set(self._circuit.line_labels)
                     continue
 
-                duration = durations.get(comp.name, default_duration)
+                duration = durations.get(comp.name, default_duration)  # type: ignore
                 if duration is None:
                     raise KeyError(
-                        f"No duration for {comp.name} or default specified"
+                        f"No duration for {comp.name} or default specified"  # type: ignore
                     )
                 if layer_duration is None:
                     layer_duration = duration
                 else:
                     layer_duration = max(layer_duration, duration)
 
-                for qubit in comp.qubits:
+                for qubit in comp.qubits:  # type: ignore
                     seen_qubits.add(qubit)
 
             # Get idling operation (or skip for empty layers with no idles)
@@ -191,7 +208,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             # Insert idling operations
             missing_qubits = set(self._circuit.line_labels) - seen_qubits
             for qubit in missing_qubits:
-                comps.append(_Label(layer_idle, (qubit,)))
+                comps.append(_Label(layer_idle, (qubit,)))  # type: ignore
 
             # Substitute new padded layer
             self._circuit.set_labels(comps, lidx)

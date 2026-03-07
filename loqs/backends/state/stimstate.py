@@ -7,19 +7,32 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import numpy as np
-from typing import ClassVar, TypeAlias, TypeVar
+from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
+from loqs.types import Float
 
-try:
+# Conditional imports for STIM
+_stim_available = True
+if TYPE_CHECKING:
+    # Type checking imports - these won't be executed at runtime
     from stim import Circuit as _Circuit
     from stim import Tableau as _Tableau
     from stim import TableauSimulator as _TableauSimulator
-except ImportError as e:
-    raise ImportError("Failed import, cannot use STIM as backend") from e
+else:
+    # Runtime imports - these will be attempted only when needed
+    try:
+        from stim import Circuit as _Circuit
+        from stim import Tableau as _Tableau
+        from stim import TableauSimulator as _TableauSimulator
+    except ImportError:
+        _stim_available = False
+        _Circuit = Any  # type: ignore
+        _Tableau = Any  # type: ignore
+        _TableauSimulator = Any  # type: ignore
 
 
 T = TypeVar("T", bound="STIMQuantumState")
@@ -85,6 +98,11 @@ class STIMQuantumState(BaseQuantumState):
             Optional qubit labels. If not provided, the default range of ints
             is used.
         """
+        if not _stim_available:
+            raise ImportError(
+                "STIM backend is not available. "
+                "Please install stim: pip install loqs[stim]"
+            )
         self.qubit_labels = []
         if isinstance(state, STIMQuantumState):
             # If we are setting a seed here, do not copy internal RNG

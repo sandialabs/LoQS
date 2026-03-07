@@ -7,13 +7,16 @@ from collections.abc import Mapping
 import functools
 import itertools
 import numpy as np
-from typing import ClassVar, Sequence, TypeAlias, TypeVar
+from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
-from loqs.backends.circuit import BasePhysicalCircuit, PyGSTiPhysicalCircuit
+from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
 
-try:
+# Conditional imports for PyGSTi
+_pygsti_available = True
+if TYPE_CHECKING:
+    # Type checking imports - these won't be executed at runtime
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
     from pygsti.baseobjs.label import (
         Label,
@@ -24,8 +27,21 @@ try:
     from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt, superop_to_unitary
-except ImportError as e:
-    raise ImportError("Failed import, cannot use pyGSTi as backend") from e
+else:
+    # Runtime imports - these will be attempted only when needed
+    try:
+        from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
+        from pygsti.baseobjs.label import (
+            Label,
+            LabelStr,
+            LabelTupTupWithTime,
+            LabelTupWithTime,
+        )
+        from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
+        from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
+        from pygsti.tools import basistools as bt, superop_to_unitary
+    except ImportError:
+        _pygsti_available = False
 
 
 T = TypeVar("T", bound="PyGSTiNoiseModel")
@@ -52,14 +68,22 @@ def compute_qsim_bases(num_qubits: int):
     )
 
 
-PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
-"""Precomputed 1- and 2-qubit basis for QSim PTMs"""
+# Module-level code that depends on PyGSTi must be conditional
+if _pygsti_available:
+    PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
+    """Precomputed 1- and 2-qubit basis for QSim PTMs"""
+else:
+    PYGSTI_QSIM_BASES = {}
 
 
 # Type aliases for static type checking
-PyGSTiModelCastableTypes: TypeAlias = (
-    ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
-)
+if _pygsti_available:
+    PyGSTiModelCastableTypes: TypeAlias = (
+        ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
+    )
+else:
+    PyGSTiModelCastableTypes = Any  # type: ignore
+
 """Types of pyGSTi models this backend can handle"""
 
 
@@ -98,6 +122,11 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         model:
             A pyGSTi model to use when looking up operations
         """
+        if not _pygsti_available:
+            raise ImportError(
+                "PyGSTi model backend is not available. "
+                "Please install pygsti: pip install loqs[pygsti]"
+            )
         from loqs.backends.model import DictNoiseModel
 
         # Currently there is a pyGSTi bug deserializing models that have
@@ -280,6 +309,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
         # Get bare circuit
+        from loqs.backends import PyGSTiPhysicalCircuit
+
         circuit = PyGSTiPhysicalCircuit.cast(circuit)
         pygsti_circuit = circuit.circuit
 

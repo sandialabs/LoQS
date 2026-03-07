@@ -5,15 +5,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
 import textwrap
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 import warnings
 
 from loqs.backends.circuit import BasePhysicalCircuit
 
-try:
+# Conditional imports for STIM
+_stim_available = True
+if TYPE_CHECKING:
+    # Type checking imports - these won't be executed at runtime
     from stim import Circuit as _Circuit
-except ImportError as e:
-    raise ImportError("Failed import, cannot use STIM as backend") from e
+else:
+    # Runtime imports - these will be attempted only when needed
+    try:
+        from stim import Circuit as _Circuit
+    except ImportError:
+        _stim_available = False
+        _Circuit = Any  # type: ignore
 
 ## Type aliases for static type checking
 QubitTypes: TypeAlias = str | int
@@ -169,6 +177,11 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         qubit_labels: Sequence[QubitTypes] | None = None,
         suppress_tick_warning: bool = False,
     ) -> None:
+        if not _stim_available:
+            raise ImportError(
+                "STIM backend is not available. "
+                "Please install stim: pip install loqs[stim]"
+            )
         if isinstance(circuit, STIMPhysicalCircuit):
             self._circuit = circuit.circuit.copy()
             self._qubit_labels = circuit.qubit_labels

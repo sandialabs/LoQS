@@ -3,7 +3,13 @@
 Primarily verbose printing for debugging currently.
 """
 
-from loqs.backends.state import QSimQuantumState
+from typing import Any
+
+# Conditional import for QSimQuantumState
+try:
+    from loqs.backends import QSimQuantumState
+except ImportError:
+    QSimQuantumState = Any  # type: ignore
 
 
 def get_state_probs_phases(qsim_state: QSimQuantumState):
