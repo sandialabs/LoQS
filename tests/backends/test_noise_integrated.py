@@ -5,6 +5,7 @@ representations match under the correct parameters.
 """
 
 from collections import Counter
+from scipy.stats import chisquare
 import numpy as np
 import pytest
 
@@ -37,6 +38,7 @@ from loqs.backends.state import STIMQuantumState as STIMState
 from loqs.core import QuantumProgram, QECCode
 from loqs.core.instructions import builders
 from loqs.tools import pygstitools as pt
+
 
 
 @pytest.mark.skipif(
@@ -98,14 +100,16 @@ class TestIntegratedNoise:
             patch_types={"1Q": code_1Q},
             name="1Q depolarizing test"
         )
-
-        program_qsim.run(num_shots=1000)
-        outs = [mo["Q0"][0] for mo in program_qsim.collect_shot_data("measurement_outcomes", -1)]
-        # Because we set the seed, we should exactly match output from test creation
-        # Also, because our depol rate is 10%, we expected a flip 5% of the time (the X and Y errors)
+        # Because our depol rate is 10%, we expected a flip 5% of the time (the X and Y errors)
         # For 1000 shots, this is ~50 shots should flip
-        expected_outs = {0: 952, 1: 48}
-        assert Counter(outs) == expected_outs
+        num_shots = 1_000
+        expected_outs  = num_shots * np.array([1 - p_depol/2, p_depol/2])
+        reference_outs = {0: 952, 1: 48}
+        # ^ Use the reference value when we have full control over the RNG.
+
+        program_qsim.run(num_shots=num_shots)
+        outs = [mo["Q0"][0] for mo in program_qsim.collect_shot_data("measurement_outcomes", -1)]
+        assert Counter(outs) == reference_outs
 
         # Also test QuantumSim in the X basis
         stack_Xbasis = [
@@ -118,10 +122,10 @@ class TestIntegratedNoise:
         ]
         program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Xbasis)
 
-        program_qsim_Xbasis.run(num_shots=1000, reset_shot_histories=True)
+        program_qsim_Xbasis.run(num_shots=num_shots, reset_shot_histories=True)
         outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
         # Now Y and Z should flip. Because rate X == rate Z and we have RNG, results should be unchanged
-        assert Counter(outs) == expected_outs
+        assert Counter(outs) == reference_outs
 
         ## STIM
         gate_dict, inst_dict = self._create_model_dicts(qubits, GateRep.STIM_CIRCUIT_STR)
@@ -134,25 +138,26 @@ class TestIntegratedNoise:
             instreps=[InstrumentRep.ZBASIS_PROJECTION]
         )
 
+        # STIM handles its own RNG, so this could in principle can differ from QuantumSim results
         program_stim = QuantumProgram.from_quantum_program(
             program_qsim,
             state_type=STIMState,
             default_noise_model=depol_noise_model_stim
         )
-
-        program_stim.run(num_shots=1000)
-        outs = [mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)]
-        # STIM handles its own RNG, so this could in principle differ from QuantumSim results
-        # In practice, for this simple circuit, I've found that this coincidentally matches for Z basis
-        assert Counter(outs) == expected_outs
+        program_stim.run(num_shots=num_shots)
+        outs = Counter([mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)])
+        outs = np.array([outs[0], outs[1]])
+        ts   = chisquare(f_obs=outs, f_exp=expected_outs)
+        assert ts.pvalue >= 0.5
 
         # Also test STIM in the X basis
         program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
-
-        program_stim_Xbasis.run(num_shots=1000)
-        outs = [mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
-        # But the RNG is handled differently for X basis, so we don't get a match (although it is still ~50)
-        assert Counter(outs) == {0: 944, 1: 56}
+        program_stim_Xbasis.run(num_shots=num_shots)
+        outs = Counter([mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)])
+        outs = np.array([outs[0], outs[1]])
+        ts   = chisquare(f_obs=outs, f_exp=expected_outs)
+        assert ts.pvalue >= 0.5
+        return
     
     # Amp damp tests, given as damping rate, dephasing rate, seed, num shots, and then expected 1 counts in order of:
     # QuantumSim X,I,Mz; QuantumSim H,I,Mz; QuantumSim H,I,Mx; STIM X,I,Mz; STIM H,I,Mz; STIM H,I,Mx
