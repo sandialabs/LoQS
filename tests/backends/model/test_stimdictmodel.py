@@ -60,7 +60,10 @@ class TestSTIMDictNoiseModel:
             "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
         }
 
-        model = STIMDictNoiseModel((gate_dict, inst_dict))
+        model = STIMDictNoiseModel(
+            (gate_dict, inst_dict),
+            instreps=[InstrumentRep.STIM_CIRCUIT_STR, InstrumentRep.ZBASIS_PROJECTION]
+        )
 
         # Check that instrument dict was properly initialized
         assert len(model.inst_dict) == 1
