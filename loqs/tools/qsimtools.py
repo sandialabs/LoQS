@@ -6,6 +6,7 @@ Primarily verbose printing for debugging currently.
 from loqs.backends.state import QSimQuantumState
 
 
+# TODO: clarify: should we have probs.keys() == phases.keys() ?
 def get_state_probs_phases(qsim_state: QSimQuantumState):
     """Compute computational basis probabilities and phases.
 
