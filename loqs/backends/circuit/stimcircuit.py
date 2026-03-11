@@ -163,6 +163,10 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     as possible keys into a :class:`.STIMDictNoiseModel`.
     """
 
+    stim_command_aliases : ClassVar[dict[str,str]] = {
+        'CNOT': 'CX'
+    }
+
     def __init__(
         self,
         circuit: STIMCircuitCastableTypes,
@@ -197,6 +201,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             )
 
         super().__init__(circuit, qubit_labels)
+        return
 
     name: ClassVar[str] = "STIM"
 
@@ -447,14 +452,14 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         def find_first_repeat_start(lines):
             for i, line in enumerate(lines):
                 entries = line.split()
-                if entries[0] == "REPEAT":
+                if entries and entries[0] == "REPEAT":
                     return i
             return None
 
         def find_last_repeat_end(lines):
             for i, line in enumerate(lines[::-1]):
                 entries = line.split()
-                if entries[0] == "}":
+                if entries and entries[0] == "}":
                     return len(lines) - i - 1
             return None
 

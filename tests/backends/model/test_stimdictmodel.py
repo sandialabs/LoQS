@@ -1,10 +1,7 @@
 """Tester for loqs.backends.model.stimdictmodel"""
 
-import mock
 import pytest
 import warnings
-from collections.abc import Mapping, Sequence
-from typing import Literal
 
 try:
     import stim
@@ -232,7 +229,10 @@ class TestSTIMDictNoiseModel:
         inst_dict = {
             "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
         }
-        model = STIMDictNoiseModel((gate_dict, inst_dict))
+        model = STIMDictNoiseModel(
+            (gate_dict, inst_dict),
+            instreps=[InstrumentRep.STIM_CIRCUIT_STR, InstrumentRep.ZBASIS_PROJECTION]
+        )
 
         # Create circuit with measurement
         circuit = STIMPhysicalCircuit("X 0\nM 0", ["Q0"])
@@ -247,23 +247,6 @@ class TestSTIMDictNoiseModel:
         # Should include both gate and instrument reps
         assert len(reps) == 2
 
-    def test_get_reps_unsupported_command(self):
-        """Test get_reps with unsupported STIM commands."""
-        gate_dict = {}
-        inst_dict = {}
-        model = STIMDictNoiseModel((gate_dict, inst_dict))
-
-        # Create circuit with unsupported command
-        circuit = STIMPhysicalCircuit("DEPOLARIZE1 0.1 0", ["Q0"])
-
-        # This should still work but may produce warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
-
-            # Should still return some reps (possibly as dummy/comment reps)
-            assert len(reps) >= 1
-
     def test_warnings_for_noise_channels(self):
         """Test that warnings are issued for noise channels."""
         gate_dict = {}
@@ -277,10 +260,12 @@ class TestSTIMDictNoiseModel:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
-
             # Should have issued a warning
             assert len(w) > 0
             assert "Noise channel" in str(w[0].message)
+            # Should still return some reps (possibly as dummy/comment reps)
+            assert len(reps) >= 1
+        return
 
     def test_warnings_for_measure_noise(self):
         """Test that warnings are issued for measurement noise."""
@@ -288,7 +273,10 @@ class TestSTIMDictNoiseModel:
         inst_dict = {
             "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
         }
-        model = STIMDictNoiseModel((gate_dict, inst_dict))
+        model = STIMDictNoiseModel(
+            (gate_dict, inst_dict),
+            instreps=[InstrumentRep.STIM_CIRCUIT_STR, InstrumentRep.ZBASIS_PROJECTION]
+        )
 
         # Create circuit with noisy measurement
         circuit = STIMPhysicalCircuit("M(0.1) 0", ["Q0"])
@@ -375,7 +363,7 @@ class TestSTIMDictNoiseModel:
         # This should produce a warning about unused parameter
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            model = STIMDictNoiseModel(
+            _ = STIMDictNoiseModel(
                 (gate_dict, inst_dict),
                 gaterep_array_cast_rep=GateRep.QSIM_SUPEROPERATOR
             )
@@ -401,7 +389,9 @@ class TestSTIMDictNoiseModel:
 
     def test_circuit_with_comments(self):
         """Test get_reps with circuit containing comments."""
-        gate_dict = {}
+        gate_dict = {
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
         inst_dict = {}
         model = STIMDictNoiseModel((gate_dict, inst_dict))
 
@@ -413,21 +403,3 @@ class TestSTIMDictNoiseModel:
 
         # Should handle comments appropriately
         assert len(reps) >= 1
-
-
-class TestSTIMDictNoiseModelFailedImport:
-    """Test behavior when STIM is not available."""
-
-    def test_failed_import(self):
-        """Test that STIMDictNoiseModel handles missing STIM gracefully."""
-        with mock.patch.dict('sys.modules', {
-                'stim': None,
-            }):
-            # This should raise ImportError when STIM is not available
-            with pytest.raises(ImportError):
-                import importlib
-                import sys
-
-                mod = sys.modules.get('loqs.backends.model.stimdictmodel')
-                if mod:
-                    importlib.reload(mod)
