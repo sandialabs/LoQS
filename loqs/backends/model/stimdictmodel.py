@@ -131,7 +131,9 @@ class STIMDictNoiseModel(DictNoiseModel):
                 return (k[0].upper(), k[1]), k[1]
 
         # Run through gates and upgrade everything to RepTuples
-        for k, gr in gate_dict.items():
+        gate_dict_unfiltered = gate_dict.copy()
+        gate_dict.clear()
+        for k, gr in gate_dict_unfiltered.items():
             k, qubits = promoted_key_and_qubits(k)
             gate_dict[k] = convert_to_gatereptuple(gr, qubits)
 

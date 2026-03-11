@@ -153,7 +153,6 @@ class TestSTIMDictNoiseModel:
         }
         inst_dict = {
             "NOISY_M": [
-                0, True,
                 RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
                 RepTuple("Y 0", ("Q0",), GateRep.STIM_CIRCUIT_STR)
             ],
