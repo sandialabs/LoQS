@@ -1,5 +1,7 @@
 """Tester for loqs.backends.state.qsimstate"""
 
+import os
+
 import mock
 import numpy as np
 import pytest
@@ -236,6 +238,7 @@ class TestQSimQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         # Start in the 10 state
         state10 = QSimState(2, ["Q0", "Q1"])
@@ -257,7 +260,7 @@ class TestQSimQuantumState:
         # Don't force propagation here
         # So serialization should both serialize DM and operations to be applied
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             test.write(tempf.name)
             
             test2: QSimState = QSimState.read(tempf.name)
@@ -275,18 +278,18 @@ class TestQSimQuantumState:
 
         self._check(test2, state11)
 
-# class TestQSimQuantumStateFailedImport:
-#         # Mock not having the pygsti available
-#         def test_failed_import(self):
-#             with mock.patch.dict('sys.modules', {
-#                     'quantumsim.sparsedm': None,
-#                     'quantumsim.dm_np': None,
-#                 }):
+class TestQSimQuantumStateFailedImport:
+        # Mock not having the pygsti available
+        def test_failed_import(self):
+            with mock.patch.dict('sys.modules', {
+                    'quantumsim.sparsedm': None,
+                    'quantumsim.dm_np': None,
+                }):
 
-#                 with pytest.raises(ImportError):
-#                     import importlib
-#                     import sys
+                with pytest.raises(ImportError):
+                    import importlib
+                    import sys
 
-#                     mod = sys.modules['loqs.backends.state.qsimstate']
-#                     importlib.reload(mod)
+                    mod = sys.modules['loqs.backends.state.qsimstate']
+                    importlib.reload(mod)
                     

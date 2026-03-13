@@ -1,5 +1,7 @@
 """Tester for loqs.backends.state.qsimstate"""
 
+import os
+
 import mock
 import numpy as np
 import pytest
@@ -243,6 +245,7 @@ class TestNumPyStatevectorQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
+    @pytest.mark.skipif(os.getenv("RUNNER_OS") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         # Start in the 10 state
         state10 = SVState([1, 0], ["Q0", "Q1"])
@@ -256,7 +259,7 @@ class TestNumPyStatevectorQuantumState:
         test, _ = state10.apply_reps([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
         test.apply_reps_inplace([RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY)])
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             test.write(tempf.name)
             
             test2: SVState = SVState.read(tempf.name)

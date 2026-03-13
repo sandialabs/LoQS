@@ -1,5 +1,6 @@
 """Tester for loqs.core.syndrome"""
 
+import os
 from tempfile import NamedTemporaryFile
 import pytest
 
@@ -38,10 +39,11 @@ class TestSyndromeLabel:
         with pytest.raises(TypeError):
             SyndromeLabel() # type: ignore
     
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         l = SyndromeLabel("Q0", 1, 2)
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             l.write(tempf.name)
 
             l2 = SyndromeLabel.read(tempf.name)
@@ -148,10 +150,11 @@ class TestPauliFrame:
         pf9 = pf.update_from_transversal_clifford("K")
         self._check(pf9, "IYZX")
         
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             pf.write(tempf.name)
 
             pf2 = PauliFrame.read(tempf.name)

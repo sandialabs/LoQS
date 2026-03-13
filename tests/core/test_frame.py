@@ -1,5 +1,6 @@
 """Tester for loqs.core.frame"""
 
+import os
 from tempfile import NamedTemporaryFile
 import pytest
 
@@ -65,6 +66,7 @@ class TestFrame:
         assert f4.log == "test"
         assert f4._expired_keys == ["b"]
     
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         f1 = Frame({"a": 1, "b": 2})
         f1.expire("b")
@@ -73,7 +75,7 @@ class TestFrame:
         f2 = Frame({"c": 3, "other": f1}, "test")
         f2.no_serialize("c")
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             f2.write(tempf.name)
 
             f3 = Frame.read(tempf.name)

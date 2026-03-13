@@ -1,6 +1,9 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
+import os
 from tempfile import NamedTemporaryFile
+
+import pytest
 
 from loqs.core.instructions import Instruction, InstructionStack
 
@@ -49,10 +52,11 @@ class TestInstructionStack:
         assert ilbl.patch_label == "L0"
         self._check(s5, ["L1"])
     
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             s.write(tempf.name)
 
             s2 = InstructionStack.read(tempf.name)

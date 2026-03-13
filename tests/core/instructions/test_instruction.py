@@ -1,6 +1,9 @@
 """Tester for loqs.core.instructions.instruction"""
 
+import os
 from tempfile import NamedTemporaryFile
+
+import pytest
 
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
@@ -55,6 +58,7 @@ class TestInstruction:
         assert ins3.param_alias("state") == "state_name_in_program"
 
     
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         def apply_fn(state, qubits):
             return Frame({"state": state+1, 'qubits': qubits})
@@ -67,7 +71,7 @@ class TestInstruction:
 
         ins = Instruction(apply_fn, data, map_qubits_fn, name="test")
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             ins.write(tempf.name)
 
             ins2 = Frame.read(tempf.name)
@@ -84,7 +88,7 @@ class TestInstruction:
         # We should be able to do it a second time also
         # This is because we cache the serialization the first time,
         # so even though the second time we don't have access to the source code, it works
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             ins2.write(tempf.name)
 
             ins3 = Frame.read(tempf.name)

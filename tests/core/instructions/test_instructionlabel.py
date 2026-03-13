@@ -1,6 +1,9 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
+import os
 from tempfile import NamedTemporaryFile
+
+import pytest
 
 from loqs.core.instructions import Instruction, InstructionLabel
 
@@ -67,11 +70,12 @@ class TestInstructionLabel:
         self._check(ilbl11, self.ins, None, None, (), {})
 
     
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         # Test string version
         ilbl = InstructionLabel("Label", "L0", self.args, self.kwargs)
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             ilbl.write(tempf.name)
 
             ilbl2 = InstructionLabel.read(tempf.name)
@@ -80,7 +84,7 @@ class TestInstructionLabel:
         # And instruction version
         ilbl3 = InstructionLabel(self.ins, "L0", self.args, self.kwargs)
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             ilbl3.write(tempf.name)
 
             ilbl4 = InstructionLabel.read(tempf.name)

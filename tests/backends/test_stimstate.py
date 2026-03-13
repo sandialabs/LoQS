@@ -1,5 +1,7 @@
 """Tester for loqs.backends.state.stimstate"""
 
+import os
+
 import mock
 import pytest
 import numpy as np
@@ -214,28 +216,29 @@ class TestSTIMQuantumState:
         outcomes4 = outs["Q0"]
         assert outcomes4 == outcomes1
 
+    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         # Test bell state
         test = STIMState([1, 0], ["Q0", "Q1"])
         test.state.cx(0, 1)
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
+        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             test.write(tempf.name)
             
             test2 = STIMState.read(tempf.name)
             self._check(test, test2)
 
-# class TestSTIMQuantumStateFailedImport:
-#         # Mock not having stim available
-#         def test_failed_import(self):
-#             with mock.patch.dict('sys.modules', {
-#                     'stim': None,
-#                 }):
+class TestSTIMQuantumStateFailedImport:
+        # Mock not having stim available
+        def test_failed_import(self):
+            with mock.patch.dict('sys.modules', {
+                    'stim': None,
+                }):
 
-#                 with pytest.raises(ImportError):
-#                     import importlib
-#                     import sys
+                with pytest.raises(ImportError):
+                    import importlib
+                    import sys
 
-#                     mod = sys.modules['loqs.backends.state.stimstate']
-#                     importlib.reload(mod)
+                    mod = sys.modules['loqs.backends.state.stimstate']
+                    importlib.reload(mod)
                     

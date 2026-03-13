@@ -1,0 +1,76 @@
+# Main reusable LoQS test runner
+
+name: Core LoQS tests
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      python-version:
+        required: true
+        type: string
+      loqs-version:
+        required: true
+        type: string
+      loqs-optional:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ inputs.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ inputs.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    
+    - name: Cache pip environments
+      uses: actions/cache@v4
+      id: pip-cache-id
+      with:
+        path: ~/.cache/pip
+        key: ${{ inputs.os }}-${{ inputs.python-version }}-pip-${{ inputs.loqs-optional }}
+        restore-keys: |
+          ${{ inputs.os }}-${{ inputs.python-version }}-pip-
+    
+    # TODO: This can be simplified and made more consistent by using existing tox config with tox-gh
+    
+    - name: Install loqs[${{ inputs.loqs-optional }}]
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ".[${{ inputs.loqs-optional }}]"
+        python -m pip install black==24.4.0 # Pin black version
+  
+    - name: Linting
+      run: |
+        # Format check, allow failure
+        black --check loqs || true
+        
+        # Standard PEP8, allowed to fail since exit-zero treats all errors as warnings
+        flake8 loqs --exit-zero --statistics
+    
+    - name: Type checking
+      run: |
+        # Allow to fail
+        mypy loqs || true
+    
+    - name: Docstring tests
+      run: |
+        python -m pytest loqs
+    
+    - name: Unit tests (with coverage)
+      run: |
+        python -m pytest --cov=loqs --cov-branch --cov-report term-missing tests
+
+
+
+
+
+
+
+
