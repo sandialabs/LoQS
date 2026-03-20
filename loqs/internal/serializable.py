@@ -12,53 +12,142 @@
 
 from __future__ import annotations
 
-from abc import abstractmethod
-from ast import literal_eval as make_tuple
-from collections.abc import Mapping
+import functools
 import gzip
 import importlib
-import inspect
-import json
-import pickle
-import numpy as np
 import re
-import scipy.sparse as sps
-import textwrap
-from typing import Any, Callable, ClassVar
-import zlib
+import h5py
+from pathlib import Path
+from io import TextIOBase
+from typing import (
+    IO,
+    Any,
+    Callable,
+    ClassVar,
+    Literal,
+    Mapping,
+    Type,
+    TypeAlias,
+    TypeVar,
+    Union,
+)
 
-from loqs.internal.jsonencoding import dump_or_dumps_with_error_handling
+from loqs.types import Bool, Complex, Float, Int, NDArray, SPSArray
 
-try:
-    from distributed.protocol.serialize import dask_deserialize, dask_serialize
 
-    # DASK_SERIALIZE = True
-    # SS: Currently I think this is buggy, fall back to default Dask serialization
-    DASK_SERIALIZE = False
-except ImportError:
-    DASK_SERIALIZE = False
+class IncorrectDecodableTypeError(Exception):
+    """Exception raised when an BaseEncoder function cannot handle an object.
 
-class_location_changes: dict[tuple[str, str], tuple[str, str]] = (
-    {}
-)  # (module, class) mapping from OLD to NEW locations
+    This is a recoverable error (to a point), signaling that a different
+    :class:`.BaseEncoder` function should be tried.
+    """
+
+    pass
+
+
+class MisformedDecodableError(Exception):
+    """Exception raised when an object is properly identified but misformed.
+
+    This is not a recoverable error. The serialized object is misformed
+    and cannot be loaded.
+    """
+
+    pass
+
+
+class DecodableVersionError(Exception):
+    """Exception raised when decoding a object with an unsupported version."""
+
+    def __init__(
+        self, msg="Version is not supported for decoding", *args, **kwargs
+    ):
+        super().__init__(msg, *args, **kwargs)
+
+
+IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
+    int, dict[tuple[str, str], tuple[str, str]]
+] = {
+    1: {
+        ("loqs.core.syndrome", "SyndromeLabel"): (
+            "loqs.core.syndromelabel",
+            "SyndromeLabel",
+        ),
+        ("loqs.core.syndrome", "SyndromeLabelCastableTypes"): (
+            "loqs.core.syndromelabel",
+            "SyndromeLabelCastableTypes",
+        ),
+        ("loqs.core.syndrome", "PauliFrame"): (
+            "loqs.core.recordables.pauliframe",
+            "PauliFrame",
+        ),
+    }
+}  # (module, class) mapping from OLD to NEW locations for each version change
+
+SERIALIZATION_VERSION = 1
+"""Serialization versions.
+
+0: First version. JSON encoding only, per-shot checkpointing only.
+1: HDF5 encoding now available. Backwards compatible to version 0.
+"""
+
+# Encoding types
+EncodableArrays: TypeAlias = NDArray | SPSArray
+EncodableIterables: TypeAlias = list | tuple | set
+EncodablePrimitives: TypeAlias = (
+    Int | Float | Bool | str | bytes | Complex | None
+)
+Encodable: TypeAlias = (
+    "Union[Serializable, EncodableIterables, dict, EncodableArrays, type, Callable, EncodablePrimitives]"
+)
+Encoded: TypeAlias = dict | h5py.Group
+EncodeFormats: TypeAlias = Literal["json", "json.gz", "hdf5", "h5"] | None
+EncodeCache: TypeAlias = dict[int, int] | None
+DecodeCache: TypeAlias = dict[int, "Serializable"] | None
+
+
+# Generic type variable to stand-in for derived class below
+T = TypeVar("T", bound="Serializable")
 
 
 class Serializable:
     """
-    The base class for all serializable objects.
+    The base class for all serializable objects in LoQS.
 
-    Derived classes should implement at least _to_serialization
-    and _from_serialization (the abstract methods).
-    They can just call super() versions, but they must at least be
-    explicitly implemented in derived classes.
+    This class provides a unified serialization framework that supports both JSON
+    and HDF5 formats. Derived classes must implement the abstract methods to
+    define their serialization behavior.
 
-    Based heavily on pygsti.baseobjs.NicelySerializable.
-    A "nicely serializable" object can be converted to and created from a
-    native Python object (like a string or dict) that contains only other native
-    Python objects.  In addition, there are constraints on the makeup of these
-    objects so that they can be easily serialized to standard text-based formats,
-    e.g. JSON.  For example, dictionary keys must be strings, and the list vs. tuple
-    distinction cannot be assumed to be preserved during serialization.
+    Key Features:
+    - Support for both JSON and HDF5 serialization formats
+    - Automatic object caching and reference tracking
+    - Recursive serialization of complex nested structures
+    - Format-agnostic API for easy switching between formats
+
+    Derived classes should implement:
+    - `from_decoded_attrs()`: Create object from decoded attributes
+
+    Example:
+        >>> # Define a simple serializable class
+        >>> class SimpleClass(Serializable):
+        ...     CACHE_ON_SERIALIZE = True
+        ...     SERIALIZE_ATTRS = ["name", "value"]
+        ...
+        ...     def __init__(self, name, value):
+        ...         self.name = name
+        ...         self.value = value
+        ...
+        ...
+        ...     @classmethod
+        ...     def from_decoded_attrs(cls, attr_dict):
+        ...         return cls(**attr_dict)
+
+        >>> # Create and serialize an object
+        >>> obj = SimpleClass("test", 42)
+        >>> encoded = Serializable.encode(obj, format="json", reset_encode_id=True)
+        >>> isinstance(encoded, dict)  # Should return True
+        True
+        >>> encoded["encode_type"]  # Should be 'Serializable'
+        'Serializable'
     """
 
     # Class attributes
@@ -75,245 +164,231 @@ class Serializable:
     QECCodePatch, any backend objects, etc.
     """
 
+    SERIALIZE_ATTRS: ClassVar[list[str]] = []
+    """Attributes to serialize.
+
+    If encoding requires a different access pattern
+    than :meth:`getattr()`, derived classes should
+    implement :meth:`.get_encoding_attrs`.
+    """
+
+    SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
+    """Attribute map to use in :meth:`.from_decoded_attrs()`.
+
+    Useful when internal (e.g. _<attr>) attributes are
+    serialized, but they are named differently (e.g. <attr>)
+    in class constructors. If decoding requires more complex
+    state management than the class constructor, derived
+    classes should implement :meth:`.from_decoded_attrs`.
+    """
+
     ## ABSTRACT METHODS
     # Implement these in derived classes
 
-    @abstractmethod
-    def __hash__(self) -> int:
-        """Hash for serializable object.
-
-        This is required to enable caching while serializing.
+    def get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
         """
-        pass
+        Extract the attributes needed for encoding to a dictionary.
 
-    @abstractmethod
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ):
-        state = {
-            "module": self.__class__.__module__,
-            "class": self.__class__.__name__,
-            "version": 0,
-        }
-        return state
+        By default, this assumes all requested attributes are available
+        via getattr.
+        This should be implemented in all Serializable-derived classes
+        that required objects for encoding where this is not true,
+        e.g. state backends. This is also true for the Frame object,
+        which may modify the :attr:`.Frame.data` attribute depending
+        on the ``ignore_no_serialization`` flag passed down.
+
+        Parameters
+        ----------
+        attr:
+            "Attribute" to retrieve
+
+        Returns
+        -------
+        Any
+            The "attribute" to be encoded in :meth:`.BaseEncoder.encode_uncached_obj()`.
+        """
+        return getattr(self, attr)
 
     @classmethod
-    @abstractmethod
-    def _from_serialization(cls, state, serial_id_to_obj_cache=None):
-        c = cls._state_class(state)
-        if not issubclass(c, cls):
-            raise ValueError(
-                "Class '%s' is trying to load a serialized '%s' object (not a subclass)!"
-                % (
-                    cls.__module__ + "." + cls.__name__,
-                    state["module"] + "." + state["class"],
-                )
-            )
-        implementing_cls = cls
-        for candidate_cls in c.__mro__:
-            if "_from_serialization" in candidate_cls.__dict__:
-                implementing_cls = candidate_cls
-                break
+    def from_decoded_attrs(cls: Type[T], attr_dict: Mapping[str, Any]) -> T:
+        """
+        Create an object from decoded attributes dictionary.
 
-        if (
-            implementing_cls == cls
-        ):  # then there's no actual derived-class implementation to call!
-            raise NotImplementedError(
-                "Class '%s' doesn't implement _from_serialization!"
-                % str(state["module"] + "." + state["class"])
-            )
-        else:
-            return c._from_serialization(state, serial_id_to_obj_cache)
+        By default, this assumes that attributes are either directly named
+        as constructor arguments, or at least are one of the arguments and
+        thus can be remapped to the proper kwarg via SERIALIZE_ATTRS_MAP.
+        This should be implemented by all Serializable subclasses that for
+        which the default behavior or mapping via SERIALIZE_ATTRS_MAP is not
+        sufficient to map decoded attributes to constructor arguments.
+
+        Parameters
+        ----------
+        attr_dict : Mapping[str, Any]
+            Dictionary of attribute names to their deserialized values.
+
+        Returns
+        -------
+        object
+            The reconstructed object.
+        """
+        # Filter out serialization metadata fields
+        metadata_fields = {
+            "encode_type",
+            "module",
+            "class",
+            "version",
+            "cache_type",
+            "cache_id",
+        }
+        filtered_dict = {
+            cls.SERIALIZE_ATTRS_MAP.get(k, k): v
+            for k, v in attr_dict.items()
+            if k not in metadata_fields
+        }
+        return cls(**filtered_dict)
 
     ## PUBLIC CLASS METHODS
     # Primarily for deserialization
 
     @classmethod
-    def from_serialization(cls, state, serial_id_to_obj_cache=None):
-        """
-        Create and initialize an object from a "nice" serialization.
-
-        A "nice" serialization here means one created by a prior call to `to_serialization` using this
-        class or a subclass of it.  Nice serializations adhere to additional rules (e.g. that dictionary
-        keys must be strings) that make them amenable to common file formats (e.g. JSON).
-
-        The `state` argument is typically a dictionary containing 'module' and 'state' keys specifying
-        the type of object that should be created.  This type must be this class or a subclass of it.
-
-        Parameters
-        ----------
-        state : object
-            An object, usually a dictionary, representing the object to de-serialize.
-
-        serial_id_to_obj_cache:
-            A dictionary of serialized id keys to object values. Note that unlike
-            `to_serialization()`, setting this to None simply initializes a new cache
-            rather than turning off caching.
-
-        Returns
-        -------
-        object
-        """
-        if serial_id_to_obj_cache is None:
-            serial_id_to_obj_cache = {}
-
-        # Try to deserialize from cache first
-        if state.get("type", "") == "cached_object_reference":
-            if serial_id_to_obj_cache is None:
-                raise RuntimeError(
-                    "Object reference found but no object cache provided."
-                )
-
-            try:
-                serial_id = state["cache_id"]
-            except KeyError:
-                raise RuntimeError(
-                    "Object reference found but no id provided."
-                )
-
-            try:
-                return serial_id_to_obj_cache[serial_id]
-            except KeyError:
-                raise RuntimeError(
-                    f"Object reference found but source {serial_id} not available."
-                )
-
-        try:
-            # Implementation note:
-            # This method is similar to _from_serialization, but will defer to the method of a derived class
-            # when once is specified in the state dictionary.  This method should thus be used when de-serializing
-            # using a potential base class, i.e.  BaseClass._from_serialization_base(state).
-            # (This method should rarely need to be overridden in derived (sub) classes.)
-            if (
-                isinstance(state, dict)
-                and state["module"] == cls.__module__
-                and state["class"] == cls.__name__
-            ):
-                # then the state is actually for this class and we should call its _from_serialization method:
-                ret = cls._from_serialization(state, serial_id_to_obj_cache)
-            else:
-                # otherwise, this call functions as a base class call that defers to the correct derived class
-                ret = Serializable._from_serialization(
-                    state, serial_id_to_obj_cache
-                )
-        except RecursionError as e:
-            raise NotImplementedError(
-                "Hit recursion limit while deserializing, usually indicating "
-                + "from_serialization was not implemented in a derived class."
-            ) from e
-
-        # Save new object in cache if it is a source
-        if state.get("type", "") == "cached_object_source":
-            try:
-                serial_id = state["cache_id"]
-            except KeyError:
-                raise RuntimeError("Object source found but no id provided.")
-
-            serial_id_to_obj_cache[serial_id] = ret
-
-        return ret
-
-    @classmethod
-    def load(cls, f, format="json"):
+    def load(
+        cls,
+        f: IO[str] | TextIOBase | h5py.File,
+        format: EncodeFormats = None,
+        use_caching: bool = True,
+        decode_cache: DecodeCache = None,
+    ) -> Encodable:
         """
         Load an object of this type, or a subclass of this type, from an input stream.
 
+        This method deserializes objects from both JSON and HDF5 formats,
+        automatically handling object caching and reference resolution.
+
         Parameters
         ----------
-        f : file-like
-            An open input stream to read from.
+        f : file-like or h5py.File
+            An open input stream or HDF5 file to read from.
 
-        format : {'json'}
-            The format of the input stream data.
+        format : {'json', 'json.gz', 'hdf5', 'h5'}, optional
+            The format of the input stream data. If None, auto-detect from file type.
+            - 'json': JSON text format
+            - 'json.gz': Gzip-compressed JSON format
+            - 'hdf5' or 'h5': HDF5 binary format
 
         Returns
         -------
-        NicelySerializable
+        Serializable
+            The deserialized object of the appropriate class.
         """
-        if format == "json":
+        # Auto-detect format if not specified
+        if format is None:
+            if isinstance(f, h5py.File):
+                format = "hdf5"
+            elif isinstance(f, TextIOBase):
+                format = "json"
+
+        assert format is not None
+
+        decode_cache = None
+        if use_caching:
+            decode_cache = decode_cache if decode_cache is not None else {}
+
+        if format in ["json", "json.gz"]:
+            # Check if it's a file-like object that supports text I/O
+            assert isinstance(f, TextIOBase)
+
+            import json
+
             state = json.load(f)
+            assert isinstance(state, dict)
+
+            decoded = Serializable.decode(
+                state, "json", decode_cache=decode_cache
+            )
+        elif format in ["hdf5", "h5"]:
+            assert isinstance(f, h5py.File)
+
+            root_group = f["root"]
+            assert isinstance(root_group, h5py.Group)
+
+            decoded = Serializable.decode(
+                root_group, "hdf5", decode_cache=decode_cache
+            )
         else:
-            raise ValueError("Invalid `format` value: %s" % str(format))
-        return cls.from_serialization(state)
+            raise ValueError(f"Invalid `format` value for load: {format}")
+
+        return decoded
 
     @classmethod
-    def loads(cls, s, format="json"):
-        """
-        Load an object of this type, or a subclass of this type, from a string.
-
-        Parameters
-        ----------
-        s : str
-            The serialized object.
-
-        format : {'json'}
-            The format of the string data.
-
-        Returns
-        -------
-        NicelySerializable
-        """
-        if format == "json":
-            state = json.loads(s)
-        else:
-            raise ValueError("Invalid `format` value: %s" % str(format))
-        return cls.from_serialization(state)
-
-    @classmethod
-    def read(cls, path, format=None):
-        """
-        Read an object of this type, or a subclass of this type, from a file.
-
-        Parameters
-        ----------
-        path : str or Path or file-like
-            The filename to open or an already open input stream.
-
-        format : {'json', 'json.gz', None}
-            The format of the file.  If `None` this is determined automatically
-            by the filename extension of a given path.
-
-        Returns
-        -------
-        NicelySerializable
-        """
+    def read(
+        cls: Type[T],
+        path: str | Path,
+        format: EncodeFormats = None,
+        use_caching: bool = True,
+        decode_cache: DecodeCache = None,
+    ) -> Encodable:
         if format is None:
             if str(path).endswith(".json"):
                 format = "json"
             elif str(path).endswith(".json.gz"):
                 format = "json.gz"
+            elif str(path).endswith(".h5") or str(path).endswith(".hdf5"):
+                format = "hdf5"
             else:
                 raise ValueError(
                     "Cannot determine format from extension of filename: %s"
                     % str(path)
                 )
 
-        if format.endswith(".gz"):
-            with gzip.open(str(path), "rt") as f:
-                # Pass in format without .gz suffix
-                return cls.load(f, format[:-3])
+        if format == "json":
+            f = open(str(path), "r")
+        elif format == "json.gz":
+            f = gzip.open(str(path), "rt")
+            format = "json"
+        elif format in ["hdf5", "h5"]:
+            f = h5py.File(str(path), "r")
+        else:
+            raise ValueError("Cannot write format")
 
-        # If no compression, open file normally
-        with open(str(path), "r") as f:
-            return cls.load(f, format)
+        loaded = cls.load(
+            f, format, use_caching=use_caching, decode_cache=decode_cache
+        )
+
+        f.close()
+
+        return loaded
 
     ## PUBLIC INSTANCE FUNCTIONS
     # Primarily for serializing
 
-    def dump(self, f, format="json", **format_kwargs):
+    def dump(
+        self,
+        f: IO[str] | TextIOBase | h5py.File,
+        format: EncodeFormats = None,
+        use_caching: bool = True,
+        encode_cache: EncodeCache = None,
+        json_format_kwargs: Mapping | None = None,
+    ) -> None:
         """
         Serializes and writes this object to a given output stream.
 
+        This method provides the core serialization functionality that supports
+        both JSON and HDF5 formats through a unified interface.
+
         Parameters
         ----------
-        f : file-like
-            A writable output stream.
+        f : file-like or h5py.File
+            A writable output stream or HDF5 file.
 
-        format : {'json', 'repr'}
-            The format to write.
+        format : {'json', 'hdf5', 'h5'}, optional
+            The format to write. If None, auto-detect from file type.
+            - 'json': JSON text format
+            - 'hdf5' or 'h5': HDF5 binary format
 
-        format_kwargs : dict, optional
-            Additional arguments specific to the format being used.
+        json_format_kwargs : dict, optional
+            Additional arguments specific to the JSON format.
             For example, the JSON format accepts `indent` as an argument
             because `json.dump` does.
 
@@ -321,86 +396,72 @@ class Serializable:
         -------
         None
         """
-        assert f is not None, "Must supply a valid `f` argument!"
-        self._dump_or_dumps(f, format, **format_kwargs)
+        # Auto-detect format if not specified
+        if format is None:
+            if isinstance(f, h5py.File):
+                format = "hdf5"
+            elif isinstance(f, TextIOBase):
+                format = "json"
 
-    def dumps(self, format="json", **format_kwargs):
-        """
-        Serializes this object and returns it as a string.
+        assert format is not None
 
-        Parameters
-        ----------
-        format : {'json', 'repr'}
-            The format to write.
+        encode_cache = None
+        if use_caching:
+            encode_cache = encode_cache if encode_cache is not None else {}
 
-        format_kwargs : dict, optional
-            Additional arguments specific to the format being used.
-            For example, the JSON format accepts `indent` as an argument
-            because `json.dump` does.
+        if format in ["json", "json.gz"]:
+            # Check if it's a file-like object that supports text I/O
+            assert isinstance(f, TextIOBase)
 
-        Returns
-        -------
-        str
-        """
-        return self._dump_or_dumps(None, format, **format_kwargs)
+            if json_format_kwargs is None:
+                json_format_kwargs = {}
+            json_format_kwargs = dict(json_format_kwargs)
 
-    def to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ):
-        """
-        Serialize this object in a way that adheres to "niceness" rules of common text file formats.
+            # Sanity check format kwargs
+            if (
+                "indent" not in json_format_kwargs
+            ):  # default indent=4 JSON argument
+                json_format_kwargs = (
+                    json_format_kwargs.copy()
+                )  # don't update caller's dict!
+                json_format_kwargs["indent"] = 4
 
-        Parameters
-        ----------
-        hash_to_serial_id_cache:
-            A dictionary of object hash keys with serialized id values.
-            Defaults to None, which disables cache usage. It is highly recommended that the
-            cache is used for serialization, and high-level functions like `write()` do so.
+            if "sort_keys" in json_format_kwargs:
+                # Sorting keys will potentially break caching on deserialization,
+                # so let's catch that here
+                raise ValueError(
+                    "Cannot use the 'sort_key' formatting option for caching reasons."
+                )
 
-        ignore_no_serialize_flags:
-            Ignore flags in objects that ignore serialization. While those are designed
-            to save space when saving to disk, serialization can also be used for
-            communicating objects (e.g. via Dask). In those cases, we want to serialize
-            all subobjects.
-
-        Returns
-        -------
-        object
-            Usually a dictionary representing the serialized object, but may also be another native
-            Python type, e.g. a string or list.
-        """
-        if hash_to_serial_id_cache is not None:
-            try:
-                cache_id = hash_to_serial_id_cache[hash(self)]
-                return {
-                    "module": self.__class__.__module__,
-                    "class": self.__class__.__name__,
-                    "version": 0,
-                    "type": "cached_object_reference",
-                    "cache_id": cache_id,
-                }
-            except KeyError:
-                # Cache miss
-                pass
-
-        state = self._to_serialization(
-            hash_to_serial_id_cache, ignore_no_serialize_flags
-        )
-
-        # Add this to the cache, if class marked as should be cached
-        if hash_to_serial_id_cache is not None and self.CACHE_ON_SERIALIZE:
-            cache_id = len(hash_to_serial_id_cache)
-            hash_to_serial_id_cache[hash(self)] = cache_id
-            state.update(
-                {
-                    "type": "cached_object_source",
-                    "cache_id": cache_id,
-                }
+            encoded = Serializable.encode(
+                self, "json", encode_cache=encode_cache, reset_encode_id=True
             )
 
-        return state
+            import json
 
-    def write(self, path, format=None, **format_kwargs):
+            json.dump(encoded, f, **json_format_kwargs)
+        elif format in ["hdf5", "h5"]:
+            assert isinstance(f, h5py.File)
+
+            root_group = f.create_group("root")
+            Serializable.encode(
+                self,
+                "hdf5",
+                encode_cache=encode_cache,
+                reset_encode_id=True,
+                h5_group=root_group,
+            )
+        else:
+            raise ValueError(f"Invalid `format` value for dump: {format}")
+
+    def write(
+        self,
+        path: str | Path,
+        format: EncodeFormats = None,
+        use_caching: bool = True,
+        encode_cache: EncodeCache = None,
+        json_format_kwargs: Mapping | None = None,
+    ) -> None:
         """
         Writes this object to a file.
 
@@ -423,242 +484,384 @@ class Serializable:
                 format = "json"
             elif str(path).endswith(".json.gz"):
                 format = "json.gz"
+            elif str(path).endswith(".h5") or str(path).endswith(".hdf5"):
+                format = "hdf5"
             else:
                 raise ValueError(
                     "Cannot determine format from extension of filename: %s"
                     % str(path)
                 )
 
-        if format.endswith(".gz"):
-            with gzip.open(str(path), "wt") as f:
-                # Pass in format without .gz suffix
-                return self.dump(f, format[:-3], **format_kwargs)
+        if format == "json":
+            f = open(str(path), "w")
+        elif format == "json.gz":
+            f = gzip.open(str(path), "wt")
+        elif format in ["hdf5", "h5"]:
+            f = h5py.File(str(path), "w")
+        else:
+            raise ValueError("Cannot write format")
 
-        with open(str(path), "w") as f:
-            self.dump(f, format, **format_kwargs)
+        self.dump(
+            f,
+            format,
+            use_caching=use_caching,
+            encode_cache=encode_cache,
+            json_format_kwargs=json_format_kwargs,
+        )
+
+        f.close()
 
     ## INTERNAL FUNCTIONS
 
-    # With hash implemented, we get a (maybe not efficient) equality check
-    def __eq__(self, other) -> bool:
-        return hash(self) == hash(other)
-
-    def _dump_or_dumps(self, f, format="json", **format_kwargs):
+    @staticmethod
+    def encode(
+        obj: Encodable,
+        format: EncodeFormats = "hdf5",
+        encode_cache: EncodeCache = None,
+        ignore_no_serialize_flags: bool = False,
+        reset_encode_id: bool = False,
+        h5_group: h5py.Group | None = None,
+    ):
         """
-        Serializes and writes this object to a given output stream.
+        Recursively encode an object to the specified format.
+
+        This method handles the recursive serialization logic for both JSON and HDF5 formats.
+        It serves as the entry point for the serialization process, automatically dispatching
+        to the appropriate encoder based on the format parameter.
 
         Parameters
         ----------
-        f : file-like
-            A writable output stream.  If `None`, then object is written
-            as a string and returned.
+        obj : Encodable
+            The object to encode. Can be a Serializable object, primitive type,
+            collection (dict, list, tuple, set), or numpy array.
 
-        format : {'json', 'repr'}
-            The format to write.
+        format : {'json', 'hdf5', 'h5'}, default: 'hdf5'
+            The target serialization format.
+            - 'json': Encode to JSON-compatible dictionary structure
+            - 'hdf5' or 'h5': Encode to HDF5 group structure
 
-        format_kwargs : dict, optional
-            Additional arguments specific to the format being used.
-            For example, the JSON format accepts `indent` as an argument
-            because `json.dump` does.
+        encode_cache : dict, optional
+            Dictionary mapping object hashes to serialization IDs for caching.
+            Enables object reference tracking and prevents duplicate serialization.
+
+        ignore_no_serialize_flags : bool, optional
+            Whether to ignore serialization flags and force serialization.
+
+        reset_encode_id : bool, optional
+            Whether to reset the global encode ID counter. Useful for starting
+            a new serialization session.
+
+        h5_group : h5py.Group, optional
+            Required for HDF5 format. The HDF5 group to write the object to.
 
         Returns
         -------
-        str or None
-            If `f` is None, then the serialized object as a string is returned.  Otherwise,
-            `None` is returned.
+        Encoded
+            The encoded object in the appropriate format:
+            - For JSON: dict with encode_type structure
+            - For HDF5: h5py.Group with appropriate attributes
+
+        Examples
+        --------
+        Basic encoding examples:
+
+        >>> from tests.internal.test_serializable import MockSerializable
+        >>> obj = MockSerializable(name="test", value=42)
+        >>>
+        >>> # JSON encoding produces a dictionary
+        >>> encoded_json = Serializable.encode(obj, format="json", reset_encode_id=True)
+        >>> isinstance(encoded_json, dict)  # Should return True
+        True
+        >>> encoded_json["encode_type"]  # Should be 'Serializable'
+        'Serializable'
         """
+        from loqs.internal.encoder import JSONEncoder, HDF5Encoder
+
         if format == "json":
-            if "indent" not in format_kwargs:  # default indent=4 JSON argument
-                format_kwargs = (
-                    format_kwargs.copy()
-                )  # don't update caller's dict!
-                format_kwargs["indent"] = 4
+            encode_uncached_obj = functools.partial(
+                JSONEncoder.encode_uncached_obj,
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+            )
+            encode_cached_obj = functools.partial(
+                JSONEncoder.encode_cached_obj, h5_group=None
+            )
+            encode_iterable = functools.partial(
+                JSONEncoder.encode_iterable,
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+            )
+            encode_dict = functools.partial(
+                JSONEncoder.encode_dict,
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+            )
+            encode_array = functools.partial(
+                JSONEncoder.encode_array, h5_group=None
+            )
+            encode_primitive = functools.partial(
+                JSONEncoder.encode_primitive, h5_group=None
+            )
+            encode_class = functools.partial(
+                JSONEncoder.encode_class, h5_group=None
+            )
+            encode_function = functools.partial(
+                JSONEncoder.encode_function, h5_group=None
+            )
 
-            if "sort_keys" in format_kwargs:
-                # Sorting keys will potentially break caching on deserialization,
-                # so let's catch that here
-                raise ValueError(
-                    "Cannot use the 'sort_key' formatting option for caching reasons."
-                )
+            if reset_encode_id:
+                JSONEncoder.ENCODE_ID = 0
+        elif format in ["hdf5", "h5"]:
+            assert (
+                h5_group is not None
+            ), "Cannot encode in HDF5 format without passing in h5_group"
+            encode_uncached_obj = functools.partial(
+                HDF5Encoder.encode_uncached_obj,
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+                h5_group=h5_group,
+            )
+            encode_cached_obj = functools.partial(
+                HDF5Encoder.encode_cached_obj, h5_group=h5_group
+            )
+            encode_iterable = functools.partial(
+                HDF5Encoder.encode_iterable,
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+                h5_group=h5_group,
+            )
+            encode_dict = functools.partial(
+                HDF5Encoder.encode_dict,
+                encode_cache=encode_cache,
+                ignore_no_serialize_flags=ignore_no_serialize_flags,
+                h5_group=h5_group,
+            )
+            encode_array = functools.partial(
+                HDF5Encoder.encode_array, h5_group=h5_group
+            )
+            encode_primitive = functools.partial(
+                HDF5Encoder.encode_primitive, h5_group=h5_group
+            )
+            encode_class = functools.partial(
+                HDF5Encoder.encode_class, h5_group=h5_group
+            )
+            encode_function = functools.partial(
+                HDF5Encoder.encode_function, h5_group=h5_group
+            )
 
-            cache = {}
-            json_dict = self.to_serialization(cache)
-            if f is not None:
-                json.dump(json_dict, f, **format_kwargs)
-            else:
-                return json.dumps(json_dict, **format_kwargs)
+            if reset_encode_id:
+                HDF5Encoder.ENCODE_ID = 0
         else:
-            raise ValueError("Invalid `format` argument: %s" % str(format))
+            raise ValueError("Invalid format for encoding")
 
-    @classmethod
-    def _state_class(cls, state, check_is_subclass=True):
-        """Returns the class specified by the given state dictionary"""
-        if (state["module"], state["class"]) in class_location_changes:
-            state["module"], state["class"] = class_location_changes[
-                state["module"], state["class"]
-            ]
-        try:
-            m = importlib.import_module(state["module"])
-            c = getattr(
-                m, state["class"]
-            )  # will raise AttributeError if class cannot be found
-        except (ModuleNotFoundError, AttributeError) as e:
-            raise ImportError(
-                (
-                    "Class or module not found when instantiating a Serializable"
-                    f" {state['module']}.{state['class']} object!  If this class has"
-                    " moved, consider adding (module, classname) mapping to"
-                    " the loqs.internal.serializable.class_location_changes dict"
-                )
-            ) from e
+        # Handle Serializable objects
+        if isinstance(obj, Serializable):
+            # Check cache first
+            try:
+                cache_id = encode_cache[id(obj)]  # type: ignore
+                # Create a reference to the cached object
+                return encode_cached_obj(cache_id)
+            except (KeyError, TypeError):
+                # Cache miss, encode and cache it
+                return encode_uncached_obj(obj)
 
-        if check_is_subclass and not issubclass(c, cls):
-            raise ValueError(
-                "Expected a subclass or instance of '%s' but state dict has '%s'!"
-                % (
-                    cls.__module__ + "." + cls.__name__,
-                    state["module"] + "." + state["class"],
-                )
-            )
-        return c
+        # Handle dictionaries
+        elif isinstance(obj, dict):
+            return encode_dict(obj)
 
-    @classmethod
-    def _check_compatible_state(cls, state):
-        if state["module"] != cls.__module__ or state["class"] != cls.__name__:
-            raise ValueError(
-                "Serialization type mismatch: %s != %s"
-                % (
-                    state["module"] + "." + state["class"],
-                    cls.__module__ + "." + cls.__name__,
-                )
-            )
+        # Handle NumPy arrays and SciPy sparse matrices
+        elif isinstance(obj, EncodableArrays):
+            return encode_array(obj)
 
-    ## PUBLIC STATIC METHODS
-    # Primarily helper functions kept in the Serializable namespace
-    # This are all basically recursive functions that act on collections
+        # Handle lists, tuples, sets
+        elif isinstance(obj, EncodableIterables):
+            return encode_iterable(obj)
 
-    @staticmethod
-    def deserialize(obj, serial_id_to_obj_cache=None):
-        """Helper function to recursively unserialize objects."""
-        if isinstance(obj, dict):
-            if "module" in obj and "class" in obj:
-                # This is a serialized class or object, try to deserialize
-                if obj.get("as_type", False):
-                    # If this is just the class, return it
-                    return Serializable._deserialize_class(obj)
-
-                # Otherwise, get the class and call its deserialization
-                cls = Serializable._state_class(obj)
-                return cls.from_serialization(obj, serial_id_to_obj_cache)
-
-            if obj.get("type", None) == "matrix":
-                # This is a matrix, deserialize
-                return Serializable._deserialize_mx(obj["data"])
-
-            # Otherwise, assume just a dict and recursively unserialize
-            deserialized = {}
-            for k, v in obj.items():
-                if isinstance(k, list):
-                    k = tuple(k)
-                elif (
-                    isinstance(k, str)
-                    and k.startswith("(")
-                    and k.endswith(")")
-                ):
-                    # This was a tuple
-                    k = make_tuple(k)
-                deserialized[k] = Serializable.deserialize(
-                    v, serial_id_to_obj_cache
-                )
-            return deserialized
-        elif isinstance(obj, (list, tuple)):
-            return [
-                Serializable.deserialize(e, serial_id_to_obj_cache)
-                for e in obj
-            ]
-        elif isinstance(obj, str) and "def " in obj:
-            # Assume this is a function definition
-            return Serializable._deserialize_function(obj)
-
-        # Otherwise, assume we are a built-in deserializable object
-        return obj
-
-    @staticmethod
-    def hash(obj) -> int:
-        """Helper function to recursively hash objects"""
-        if isinstance(obj, dict):
-            return hash(
-                (
-                    Serializable.hash(tuple(obj.keys())),
-                    Serializable.hash(tuple(obj.values())),
-                )
-            )
-        elif isinstance(obj, (tuple, list)):
-            return hash(tuple(Serializable.hash(v) for v in obj))
-        elif isinstance(obj, np.ndarray):
-            return hash((tuple(obj.shape), tuple(obj.flatten().tolist())))
-        return hash(obj)
-
-    @staticmethod
-    def serialize(
-        obj, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ):
-        """Helper function to recursively serialize objects."""
-        if isinstance(obj, dict):
-            serial_dict = {}
-            for k, v in obj.items():
-                if isinstance(k, tuple):
-                    k = str(k)
-                serial_dict[k] = Serializable.serialize(
-                    v, hash_to_serial_id_cache, ignore_no_serialize_flags
-                )
-            return serial_dict
-        elif isinstance(obj, np.ndarray) or sps.issparse(obj):
-            return {"type": "matrix", "data": Serializable._serialize_mx(obj)}
-        elif isinstance(obj, np.int64):
-            return int(obj)
-        elif isinstance(obj, (list, tuple, set)):
-            return [
-                Serializable.serialize(
-                    e, hash_to_serial_id_cache, ignore_no_serialize_flags
-                )
-                for e in obj
-            ]
+        # Handle classes/types
         elif isinstance(obj, type):
-            # This should be before function serialization,
-            # so that we do not accidentally grab the class constructor
-            # Constructor could still be initialized by explicitly serializing __init__
-            return Serializable._serialize_class(obj)
-        elif isinstance(obj, Callable):
-            return Serializable._serialize_function(obj)
-        elif isinstance(obj, Serializable):
-            return obj.to_serialization(
-                hash_to_serial_id_cache, ignore_no_serialize_flags
-            )
+            return encode_class(obj)
+
+        # Handle callable functions
+        elif callable(obj):
+            return encode_function(obj)
 
         # Otherwise, assume we are a built-in serializable object
-        return obj
+        elif isinstance(obj, EncodablePrimitives):
+            return encode_primitive(obj)
 
-    ## PRIVATE STATIC FUNCTIONS
-    # Helper functions for serializing/deserializing specific types or cache management
+        raise ValueError("Unknown type to encode")
 
     @staticmethod
-    def _deserialize_class(state: Mapping, **kwargs) -> type:
-        if state.get("as_type", False):
-            return Serializable._state_class(state, **kwargs)
+    def decode(  # noqa: C901
+        encoded: Encoded,
+        format: EncodeFormats = "hdf5",
+        decode_cache: DecodeCache = None,
+    ) -> Encodable:
+        """
+        Recursively decode a serialized object following the same pattern as encode.
 
-        raise ValueError(
-            "State does not correspond to a standalone class serialization,"
-            + "i.e. does not have as_type: True in it. To get the class of "
-            + "a serialized instance, use Serialized._state_class() instead."
+        This method handles the recursive deserialization logic for both JSON and HDF5 formats.
+        It automatically resolves object references, reconstructs complex nested structures,
+        and handles all supported data types.
+
+        Parameters
+        ----------
+        encoded : dict or h5py.Group
+            The encoded object (either JSON dict or HDF5 group).
+            - For JSON: Dictionary with 'encode_type' field
+            - For HDF5: h5py.Group with appropriate attributes
+
+        format : {'json', 'hdf5', 'h5'}, default: 'hdf5'
+            The format of the encoded data.
+            - 'json': Decode from JSON dictionary structure
+            - 'hdf5' or 'h5': Decode from HDF5 group structure
+
+        decode_cache : dict, optional
+            Dictionary mapping serialization IDs to object instances for caching.
+            Enables proper handling of object references and prevents duplicate
+            deserialization.
+
+        Returns
+        -------
+        Encodable
+            The deserialized object. Can be a Serializable object, primitive type,
+            collection (dict, list, tuple, set), or numpy array.
+
+        Examples
+        --------
+        Basic usage with primitive types:
+
+        >>> # Decode a primitive integer
+        >>> Serializable.decode({"encode_type": "primitive", "value": 42}, format="json")
+        42
+
+        >>> # Decode a primitive string
+        >>> Serializable.decode({"encode_type": "primitive", "value": "hello"}, format="json")
+        'hello'
+
+        >>> # Decode a primitive None value
+        >>> Serializable.decode({"encode_type": "primitive", "value": None}, format="json")
+        None
+        """
+        assert format is not None
+        from loqs.internal.encoder import JSONEncoder, HDF5Encoder
+
+        if decode_cache is None:
+            decode_cache = {}
+
+        # Determine format based on encoded type
+        if format in ["json", "json.gz"]:
+            # JSON format
+            decode_cached_obj = functools.partial(
+                JSONEncoder.decode_cached_obj, decode_cache=decode_cache
+            )
+            decode_uncached_obj = functools.partial(
+                JSONEncoder.decode_uncached_obj, decode_cache=decode_cache
+            )
+            decode_iterable = functools.partial(
+                JSONEncoder.decode_iterable, decode_cache=decode_cache
+            )
+            decode_dict = functools.partial(
+                JSONEncoder.decode_dict, decode_cache=decode_cache
+            )
+            decode_array = functools.partial(JSONEncoder.decode_array)
+            decode_primitive = functools.partial(JSONEncoder.decode_primitive)
+            decode_class = functools.partial(JSONEncoder.decode_class)
+            decode_function = functools.partial(JSONEncoder.decode_function)
+        elif format in ["hdf5", "h5"]:
+            # HDF5 format
+            decode_cached_obj = functools.partial(
+                HDF5Encoder.decode_cached_obj, decode_cache=decode_cache
+            )
+            decode_uncached_obj = functools.partial(
+                HDF5Encoder.decode_uncached_obj, decode_cache=decode_cache
+            )
+            decode_iterable = functools.partial(
+                HDF5Encoder.decode_iterable, decode_cache=decode_cache
+            )
+            decode_dict = functools.partial(
+                HDF5Encoder.decode_dict, decode_cache=decode_cache
+            )
+            decode_array = functools.partial(HDF5Encoder.decode_array)
+            decode_primitive = functools.partial(HDF5Encoder.decode_primitive)
+            decode_class = functools.partial(HDF5Encoder.decode_class)
+            decode_function = functools.partial(HDF5Encoder.decode_function)
+
+            # For HDF5, check if root group
+            try:
+                return HDF5Encoder.decode_root_group(encoded, decode_cache)
+            except IncorrectDecodableTypeError:
+                pass
+        else:
+            raise ValueError("Invalid format for decoding")
+
+        # Handle dicts
+        try:
+            return decode_dict(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        # Handle matrix data
+        try:
+            return decode_array(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        # Handle cached object references
+        try:
+            return decode_cached_obj(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        # Handle class type
+        try:
+            return decode_class(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        # Handle Serializable
+        try:
+            return decode_uncached_obj(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        # Handle lists/sets/tuples
+        try:
+            return decode_iterable(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        # Handle function
+        try:
+            return decode_function(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        try:
+            return decode_primitive(encoded)
+        except IncorrectDecodableTypeError:
+            pass
+
+        raise IncorrectDecodableTypeError("Unknown type to decode")
+
+    @staticmethod
+    def eval_function_str(
+        src: str, version: int = SERIALIZATION_VERSION
+    ) -> Callable:
+        # Backwards compatibility, it may have been evaluated already
+        if callable(src):
+            return src
+
+        # Before executing source, update imports for backwards compatibility
+        updated_src = Serializable._update_imports(src, version)
+        # And other known fixes
+        updated_src = Serializable._function_compatibility(
+            updated_src, version
         )
 
-    # WARNING: This is inherently unsafe
-    @staticmethod
-    def _deserialize_function(src: str) -> Callable:
-        # Execute the imports and function definition
+        # Evaluate function
         env: dict[str, Any] = {}
-        exec(src, env)
+        exec(updated_src, env)
 
         # We need to find the function name
         # Search for last def, then first paren after it
@@ -671,40 +874,10 @@ class Serializable:
         return env[key]
 
     @staticmethod
-    def _deserialize_mx(mx):
-        if mx is None:
-            decoded = None
-        elif isinstance(mx, dict):  # then a sparse mx
-            assert mx["sparse_matrix_type"] == "csr"
-            data = Serializable._deserialize_mx(mx["data"])
-            indices = Serializable._deserialize_mx(mx["indices"])
-            indptr = Serializable._deserialize_mx(mx["indptr"])
-            decoded = sps.csr_matrix(
-                (data, indices, indptr), shape=mx["shape"]
-            )
-        else:
-            basemx = np.array(mx)
-            if (
-                basemx.dtype.kind == "U"
-            ):  # character type array => complex numbers as strings
-                decoded = np.array([complex(x) for x in basemx.flat])
-                decoded = decoded.reshape(basemx.shape)
-            else:
-                decoded = basemx
-        return decoded
+    def get_function_str(func):
+        import inspect
+        import textwrap
 
-    @staticmethod
-    def _serialize_class(class_type) -> dict:
-        state = {
-            "module": class_type.__module__,
-            "class": class_type.__name__,
-            "version": 0,
-            "as_type": True,
-        }
-        return state
-
-    @staticmethod
-    def _serialize_function(func) -> str:
         # Get source code
         src = textwrap.dedent(inspect.getsource(func))
 
@@ -754,71 +927,238 @@ class Serializable:
         return imports + src
 
     @staticmethod
-    def _serialize_mx(mx):
-        if mx is None:
-            return None
-        elif sps.issparse(mx):
-            csr_mx = sps.csr_matrix(
-                mx
-            )  # convert to CSR and save in this format
-            return {
-                "sparse_matrix_type": "csr",
-                "data": Serializable._serialize_mx(csr_mx.data),
-                "indices": Serializable._serialize_mx(csr_mx.indices),
-                "indptr": Serializable._serialize_mx(csr_mx.indptr),
-                "shape": csr_mx.shape,
-            }
-        else:
-            enc = (
-                str
-                if np.iscomplexobj(mx)
-                else (
-                    (lambda x: int(x))
-                    if (mx.dtype == np.int64)
-                    else (lambda x: x)
+    def import_class(module_name, class_name, version) -> Type:
+        """Returns the class specified by the given state dictionary"""
+        location_changes = (
+            {}
+            if version == SERIALIZATION_VERSION
+            else Serializable._get_cumulative_changes(version)
+        )
+
+        if (module_name, class_name) in location_changes:
+            module_name, class_name = location_changes[module_name, class_name]
+        try:
+            m = importlib.import_module(module_name)
+            c = getattr(
+                m, class_name
+            )  # will raise AttributeError if class cannot be found
+        except (ModuleNotFoundError, AttributeError) as e:
+            raise ImportError(
+                (
+                    "Class or module not found when instantiating a Serializable"
+                    f" {module_name}.{class_name} object!  If this class has"
+                    " moved, consider adding (module, classname) mapping to"
+                    " the loqs.internal.serializable.class_location_changes dict"
                 )
+            ) from e
+
+        return c
+
+    @staticmethod
+    def _update_imports(  # noqa: C901
+        function_str, initial_version=None, loc_change=None
+    ):
+        """
+        Update Python import statements based on a dictionary of location changes.
+
+        Args:
+            function_str: String containing Python import statements
+            initial_version: Version of function_str
+            loc_change: Dictionary mapping (old_module, old_class) to (new_module, new_class)
+
+        Returns:
+            String with updated import statements, each on its own line
+        """
+        lines = function_str.split("\n")
+        result_lines = []
+
+        # Either provide initial version or the location change dict
+        if loc_change is None:
+            assert (
+                initial_version is not None
+            ), "Provide either initial_version (recommended) or loc_change (for testing)"
+            if initial_version < SERIALIZATION_VERSION:
+                loc_change = Serializable._get_cumulative_changes(
+                    initial_version
+                )
+            else:
+                assert (
+                    initial_version == SERIALIZATION_VERSION
+                ), f"Cannot handle serialization versions higher than {SERIALIZATION_VERSION}"
+                loc_change = {}
+
+        # First pass: join multi-line imports
+        processed_lines = []
+        current_import = None
+
+        for line in lines:
+            stripped_line = line.strip()
+
+            # Keep empty lines and comments as-is
+            if not stripped_line or stripped_line.startswith("#"):
+                processed_lines.append(line)
+                continue
+
+            # Check if this is the start of a multi-line import
+            if stripped_line.startswith("from") and stripped_line.endswith(
+                "("
+            ):
+                current_import = stripped_line
+                continue
+
+            # Check if this is a continuation of a multi-line import
+            if current_import is not None:
+                current_import += " " + stripped_line
+                if stripped_line.endswith(")"):
+                    # Remove parentheses and extra white space, collapsing this into single line
+                    current_import = current_import.replace("(", "").replace(
+                        ")", ""
+                    )
+                    current_import = " ".join(current_import.split())
+                    if current_import.endswith(","):
+                        current_import = current_import[:-1]
+                    processed_lines.append(current_import)
+                    current_import = None
+                continue
+
+            # Single line
+            processed_lines.append(line)
+
+        # Second pass: process imports
+        # TODO: This will probably fail if a higher-level module is used in import
+        # For example, from mod1 import cls1 instead of from mod1.mod2 import cls1,
+        # if the key in loc_changes is (mod1.mod2, cls)
+        # Should be able to check substrings in that case, but hasn't been necessary yet
+        # TODO: If any of the backends move out of loqs.backends, we may need special code here
+        updated_imported_names = {}
+        for line in processed_lines:
+            stripped_line = line.strip()
+
+            # Keep empty lines and comments as-is
+            if not stripped_line or stripped_line.startswith("#"):
+                result_lines.append(line)
+                continue
+
+            # Check if this is an import statement
+            match = re.match(r"from\s+([\w.]+)\s+import\s+(.+)", stripped_line)
+            if not match:
+                # Not an import line, keep as-is
+                result_lines.append(line)
+                continue
+
+            module = match.group(1)
+            imports_str = match.group(2)
+
+            # Split imports by comma and handle each one
+            import_items = [item.strip() for item in imports_str.split(",")]
+
+            # Check if any of the imports in this line need to be updated
+            needs_update = any(
+                (module, item.split(" as ")[0].strip()) in loc_change
+                for item in import_items
             )
-            encoded = np.array([enc(x) for x in mx.flat])
-            return encoded.reshape(mx.shape).tolist()
 
+            if needs_update:
+                # Process each import individually
+                for item in import_items:
+                    item = item.strip()
+                    if not item:
+                        continue
 
-# Provide custom serialization for Dask
-# Based on https://distributed.dask.org/en/stable/serialization.html#dask-serialization-family
-if DASK_SERIALIZE:
+                    # Check if this is an aliased import (cls as alias)
+                    alias_match = re.match(r"(\w+)\s+as\s+(\w+)", item)
+                    if alias_match:
+                        original_name = alias_match.group(1)
+                        alias = alias_match.group(2)
+                    else:
+                        original_name = item
+                        alias = None
 
-    @dask_serialize.register(Serializable)
-    def loqs_serialize(obj: Serializable) -> tuple[dict, list[bytes]]:
-        header = {}
+                    # Check if this import needs to be updated
+                    key = (module, original_name)
+                    if key in loc_change:
+                        new_module, new_name = loc_change[key]
+                        if alias:
+                            result_lines.append(
+                                f"from {new_module} import {new_name} as {alias}"
+                            )
+                        else:
+                            result_lines.append(
+                                f"from {new_module} import {new_name}"
+                            )
+                            # We may need to replace this name throughout the rest of the program
+                            if new_name != original_name:
+                                updated_imported_names[original_name] = (
+                                    new_name
+                                )
+                    else:
+                        # Keep the original import
+                        if alias:
+                            result_lines.append(
+                                f"from {module} import {original_name} as {alias}"
+                            )
+                        else:
+                            result_lines.append(
+                                f"from {module} import {original_name}"
+                            )
+            else:
+                # No updates needed, keep the original line
+                result_lines.append(line)
 
-        # Try pickle first
-        try:
-            frames = [pickle.dumps(obj)]
-        except TypeError:
-            # We've failed to pickle, go to more cumbersome Serialization fallback
-            obj_dict = obj.to_serialization(ignore_no_serialize_flags=True)
+        # Third pass: replace renamed modules throughout code
+        final_lines = []
+        for line in result_lines:
+            updated_line = line
+            for orig_name, new_name in updated_imported_names.items():
+                # Don't remap an already mapped name
+                if new_name not in line:
+                    updated_line = updated_line.replace(orig_name, new_name)
+            final_lines.append(updated_line)
 
-            # Serialize with some extra error handling to make it easy to debug
-            # which entry is failing
-            obj_str = dump_or_dumps_with_error_handling(obj_dict, None)
-            # obj_str = json.dumps(obj_dict)
+        final_result = "\n".join(final_lines)
 
-            # Finally compress to make communication smaller
-            frames = [zlib.compress(obj_str.encode())]
+        return final_result
 
-        return header, frames
+    @staticmethod
+    def _get_cumulative_changes(initial_version):
+        assert initial_version < SERIALIZATION_VERSION
 
-    @dask_deserialize.register(Serializable)
-    def loqs_deserialize(header: dict, frames: list[bytes]) -> Serializable:
-        # Concatenate frames
-        frame = b""
-        for f in frames:
-            frame += f
+        # Get cumulative changes in import locations
+        complete_location_changes = IMPORT_LOCATION_CHANGES_BY_VERSION[
+            initial_version + 1
+        ].copy()
 
-        # Try pickle first
-        try:
-            obj = pickle.loads(frame)
-        except pickle.UnpicklingError:
-            # Fallback to Serializable
-            obj_str = zlib.decompress(frame).decode()
-            obj = Serializable.loads(obj_str)
-        return obj
+        version = initial_version + 1
+        while version < SERIALIZATION_VERSION:
+            for new_k, new_v in IMPORT_LOCATION_CHANGES_BY_VERSION[
+                version
+            ].items():
+                updated_map = False
+
+                # If new_k corresponds to a value in the current location changes,
+                # it needs to be remapped. i.e. we need to handle A -> B, B-> C = A->C
+                for k, v in complete_location_changes.items():
+                    if v == new_k:
+                        complete_location_changes[k] = new_v
+                        updated_map = True
+
+                if not updated_map:
+                    # We don't collide with any existing mappings, add it in
+                    complete_location_changes[new_k] = new_v
+
+        return complete_location_changes
+
+    @staticmethod
+    def _function_compatibility(src, version):
+        """Other known backwards-compatibility fixes"""
+        if version == 0:
+            # Physical circuit instructions used _stim_available, which is now is_backend_available("stim")
+            if "_stim_available" in src:
+                src = (
+                    "from loqs.backends import is_backend_available\n"
+                    + src.replace(
+                        "_stim_available", 'is_backend_available("stim")'
+                    )
+                )
+
+        return src

@@ -7,17 +7,43 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Tools for LoQS.
+"""TODO
 """
 
-from . import dasktools
-from . import fttools
-from . import qectools
-from . import qsimtools
+from __future__ import annotations
 
-# Make pygsti import optional to allow testing without pygsti dependency
-try:
-    from . import pygstitools
-except ImportError:
-    # pygsti not available, but that's okay for basic functionality
-    pass
+from dataclasses import dataclass
+from typing import TypeAlias, TypeVar
+
+from loqs.internal import Castable, Displayable
+
+T = TypeVar("T", bound="SyndromeLabel")
+
+
+SyndromeLabelCastableTypes: TypeAlias = (
+    "str | tuple[str] | tuple[str, int] | tuple[str, int, int] | SyndromeLabel"
+)
+"""Objects that can be cast to :class:`.SyndromeLabel` objects."""
+
+
+@dataclass
+class SyndromeLabel(Castable, Displayable):
+    """Label that indicates which past outcome was a syndrome bit."""
+
+    SERIALIZE_ATTRS = ["qubit_label", "frame_idx", "outcome_idx"]
+
+    qubit_label: str | int
+    """The qubit label."""
+
+    frame_idx: int = -1
+    """The frame index.
+
+    Defaults to -1, i.e. the previous frame.
+    """
+
+    outcome_idx: int = 0
+    """The outcome index.
+
+    Defaults to 0, the first outcome on :attr:`.qubit_label`.
+    Could be >0 if multiple checks were measured on :attr:`.qubit_label`.
+    """

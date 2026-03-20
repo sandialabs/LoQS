@@ -21,6 +21,7 @@ from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
+from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
 _pygsti_available = True
@@ -81,16 +82,12 @@ def compute_qsim_bases(num_qubits: int):
 if _pygsti_available:
     PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
     """Precomputed 1- and 2-qubit basis for QSim PTMs"""
-else:
-    PYGSTI_QSIM_BASES = {}
 
-
-# Type aliases for static type checking
-if _pygsti_available:
     PyGSTiModelCastableTypes: TypeAlias = (
         ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
     )
 else:
+    PYGSTI_QSIM_BASES = {}
     PyGSTiModelCastableTypes = Any  # type: ignore
 
 """Types of pyGSTi models this backend can handle"""
@@ -107,6 +104,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     """
 
     name: ClassVar[str] = "pyGSTi"
+
+    SERIALIZE_ATTRS = ["model", "qubit_aliases"]
 
     def __init__(
         self,
@@ -131,7 +130,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         model:
             A pyGSTi model to use when looking up operations
         """
-        if not _pygsti_available:
+        from loqs.backends import is_backend_available
+
+        if not is_backend_available("pygsti_model"):
             raise ImportError(
                 "PyGSTi model backend is not available. "
                 "Please install pygsti: pip install loqs[pygsti]"
@@ -201,9 +202,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         self._gate_rep_cache = {}
         self._inst_rep_cache = {}
-
-    def __hash__(self) -> int:
-        return hash((hash(self.model), self.hash(self.qubit_aliases)))
 
     @property
     def gate_keys(self) -> list:
@@ -535,22 +533,13 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         return (rep, True), instreps[repidx]
 
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        model = Model.from_nice_serialization(state["model"])
-        qubit_aliases = state["qubit_aliases"]
-        return cls(model, qubit_aliases)
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if attr == "model":
+            return self.model.to_nice_serialization()
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
 
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "model": self.model.to_nice_serialization(),
-                "qubit_aliases": self.qubit_aliases,
-            }
-        )
-        return state
+    @classmethod
+    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        model = Model.from_nice_serialization(attr_dict["model"])
+        qubit_aliases = attr_dict["qubit_aliases"]
+        return cls(model, qubit_aliases)

@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 import warnings
 from typing import ClassVar, TypeVar, Literal
 
-from loqs.backends.circuit import BasePhysicalCircuit, STIMPhysicalCircuit
+from loqs.backends import BasePhysicalCircuit, STIMPhysicalCircuit
 from loqs.backends.model.dictmodel import (
     DictNoiseModel,
     MemberLabel,

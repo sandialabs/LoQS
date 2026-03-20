@@ -7,74 +7,15 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""TODO
-"""
-
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import TypeAlias, TypeVar
+from typing import Sequence, TypeAlias, TypeVar
 
-from loqs.internal import Castable, SeqCastable, Displayable
+from loqs.internal import SeqCastable, Displayable
 
-T = TypeVar("T", bound="SyndromeLabel")
+
 U = TypeVar("U", bound="PauliFrame")
 
-
-SyndromeLabelCastableTypes: TypeAlias = (
-    "str | tuple[str] | tuple[str, int] | tuple[str, int, int] | SyndromeLabel"
-)
-"""Objects that can be cast to :class:`.SyndromeLabel` objects."""
-
-
-@dataclass
-class SyndromeLabel(Castable, Displayable):
-    """Label that indicates which past outcome was a syndrome bit."""
-
-    qubit_label: str | int
-    """The qubit label."""
-
-    frame_idx: int = -1
-    """The frame index.
-
-    Defaults to -1, i.e. the previous frame.
-    """
-
-    outcome_idx: int = 0
-    """The outcome index.
-
-    Defaults to 0, the first outcome on :attr:`.qubit_label`.
-    Could be >0 if multiple checks were measured on :attr:`.qubit_label`.
-    """
-
-    def __hash__(self) -> int:
-        return hash((self.qubit_label, self.frame_idx, self.outcome_idx))
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        qubit_label = state["qubit_label"]
-        frame_idx = state["frame_idx"]
-        outcome_idx = state["outcome_idx"]
-        return cls(qubit_label, frame_idx, outcome_idx)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "qubit_label": self.qubit_label,
-                "frame_idx": self.frame_idx,
-                "outcome_idx": self.outcome_idx,
-            }
-        )
-        return state
-
-
-# TODO: Long term location?
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"
 """Types that can be cast into a :class:`.PauliFrame`."""
 
@@ -92,6 +33,13 @@ class PauliFrame(SeqCastable, Displayable):
 
     pauli_frame: list[str]
     """A list of Pauli errors on the given :attr:`.qubit_labels`."""
+
+    SERIALIZE_ATTRS = ["pauli_frame", "qubit_labels"]
+
+    SERIALIZE_ATTRS_MAP = {
+        "qubit_labels": "frame_or_labels",
+        "pauli_frame": "initial_paulis",
+    }
 
     def __init__(
         self,
@@ -132,9 +80,6 @@ class PauliFrame(SeqCastable, Displayable):
         s = f"PauliFrame on [{self.qubit_labels[0]},...,{self.qubit_labels[-1]}] qubits:\n"
         s += f"  Paulis: {self.pauli_frame}"
         return s
-
-    def __hash__(self) -> int:
-        return hash((tuple(self.qubit_labels), "".join(self.pauli_frame)))
 
     @property
     def num_qubits(self) -> int:
@@ -291,23 +236,3 @@ class PauliFrame(SeqCastable, Displayable):
             raise NotImplementedError(f"{clifford} is not implemented")
 
         return old_to_new
-
-    @classmethod
-    def _from_serialization(
-        cls: type[U], state: Mapping, serial_id_to_obj_cache=None
-    ) -> U:
-        qubit_labels = state["qubit_labels"]
-        pauli_frame = list(state["pauli_frame"])
-        return cls(qubit_labels, pauli_frame)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "qubit_labels": self.qubit_labels,
-                "pauli_frame": "".join(self.pauli_frame),
-            }
-        )
-        return state

@@ -51,19 +51,20 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         circuit: ListCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
+        from loqs.backends import is_backend_available
+
         try:
             from loqs.backends import PyGSTiPhysicalCircuit
-
-            _pygsti_available = True
         except ImportError:
-            _pygsti_available = False
             PyGSTiPhysicalCircuit = Any
 
         self._circuit = []
         if isinstance(circuit, ListPhysicalCircuit):
             self._circuit = circuit.circuit.copy()
             self._qubit_labels = circuit.qubit_labels
-        elif _pygsti_available and isinstance(circuit, PyGSTiPhysicalCircuit):
+        elif is_backend_available("pygsti_circuit") and isinstance(
+            circuit, PyGSTiPhysicalCircuit
+        ):
             try:
                 circuit = PyGSTiPhysicalCircuit.cast(circuit)
 

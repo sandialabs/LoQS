@@ -74,7 +74,7 @@ class TestInstruction:
         with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             ins.write(tempf.name)
 
-            ins2 = Frame.read(tempf.name)
+            ins2 = Instruction.read(tempf.name)
         
             result = ins2.apply(state=0, qubits=ins2.data["qubits"])
             assert result._data == {
@@ -101,4 +101,99 @@ class TestInstruction:
                 #'collected_params': {'state': 0, 'qubits': ins3.data["qubits"]}
             }
             assert result2.log == "test result"
+
+    def test_instruction_serialization_comprehensive(self):
+        """Comprehensive test of Instruction serialization methods."""
+        def apply_fn(state, qubits):
+            return Frame({"state": state+1, 'qubits': qubits})
+        def map_qubits_fn(qubit_mapping, qubits, **kwargs):
+            new_kwargs = kwargs.copy()
+            new_kwargs["qubits"] = [qubit_mapping[q] for q in qubits]
+            return new_kwargs
+
+        data = {"qubits": ["Q0", "Q1"], "complex": {"nested": "data"}}
+        ins = Instruction(apply_fn, data, map_qubits_fn, name="comprehensive_test")
+
+        # Test dumps/loads roundtrip
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            ins.write(tempf.name)
+            loaded_ins = Instruction.read(tempf.name)
+        assert loaded_ins.name == "comprehensive_test"
+        assert loaded_ins.data == data
+
+        # Test write/read roundtrip
+        with NamedTemporaryFile(suffix='.json', delete=False) as temp_file:
+            temp_path = temp_file.name
+
+        try:
+            ins.write(temp_path)
+            loaded_ins = Instruction.read(temp_path)
+            assert loaded_ins.name == "comprehensive_test"
+            assert loaded_ins.data == data
+        finally:
+            import os
+            os.unlink(temp_path)
+
+        # Test compressed format
+        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
+            temp_path = temp_file.name
+
+        try:
+            ins.write(temp_path)
+            loaded_ins = Instruction.read(temp_path)
+            assert loaded_ins.name == "comprehensive_test"
+            assert loaded_ins.data == data
+        finally:
+            import os
+            os.unlink(temp_path)
+
+    def test_instruction_with_complex_data(self):
+        """Test Instruction serialization with complex nested data."""
+        def apply_fn(state, qubits):
+            return Frame({"state": state})
+
+        complex_data = {
+            "nested": {
+                "deep": {"value": "test"},
+                "list": [1, 2, {"inner": "dict"}]
+            },
+            "simple": "data"
+        }
+
+        ins = Instruction(apply_fn, complex_data, name="complex_data_test")
+
+        # Test roundtrip preserves structure
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            ins.write(tempf.name)
+            loaded_ins = Instruction.read(tempf.name)
+        assert loaded_ins.data == complex_data
+
+    def test_instruction_function_serialization(self):
+        """Test that apply and map_qubits functions are serialized correctly."""
+        def apply_fn(state, qubits):
+            return Frame({"result": f"state_{state}_qubits_{'_'.join(qubits)}"})
+
+        def map_qubits_fn(qubit_mapping, qubits, **kwargs):
+            new_kwargs = kwargs.copy()
+            new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
+            return new_kwargs
+
+        data = {"qubits": ["A", "B"]}
+        ins = Instruction(apply_fn, data, map_qubits_fn, name="function_test")
+
+        # Test serialization and deserialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            ins.write(tempf.name)
+            loaded_ins = Instruction.read(tempf.name)
+
+        # Test that the deserialized instruction works the same way
+        original_result = ins.apply(state=5, qubits=["A", "B"])
+        loaded_result = loaded_ins.apply(state=5, qubits=["A", "B"])
+
+        assert original_result._data["result"] == loaded_result._data["result"]
+
+        # Test map_qubits functionality
+        mapped_ins = loaded_ins.map_qubits({"A": "X", "B": "Y"})
+        mapped_result = mapped_ins.apply(state=5, qubits=["X", "Y"])
+        assert "X_Y" in mapped_result._data["result"]
             

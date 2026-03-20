@@ -29,7 +29,7 @@ import inspect as ins
 import numpy as np
 from typing import TYPE_CHECKING, Any
 
-from loqs.backends import propagate_state
+from loqs.backends import is_backend_available, propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import (
     BaseNoiseModel,
@@ -48,18 +48,19 @@ from loqs.core.instructions.instructionstack import (
     InstructionStack,
     InstructionStackCastableTypes,
 )
-from loqs.core.qeccode import QECCode, QECCodePatch
-from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
-from loqs.core.syndrome import (
+from loqs.core.qeccode import QECCode
+from loqs.core.recordables import (
+    MeasurementOutcomes,
+    PatchDict,
     PauliFrame,
+    QECCodePatch,
+)
+from loqs.core.syndromelabel import (
     SyndromeLabel,
     SyndromeLabelCastableTypes,
 )
 
 # Conditional imports for PyGSTi
-_pygsti_available = True
-_stim_available = True
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from loqs.backends import (
@@ -72,13 +73,11 @@ else:
     try:
         from loqs.backends import PyGSTiNoiseModel
     except ImportError:
-        _pygsti_available = False
         PyGSTiNoiseModel = Any  # type: ignore
 
     try:
         from loqs.backends import STIMQuantumState, STIMPhysicalCircuit
     except ImportError:
-        _stim_available = False
         STIMQuantumState = Any  # type: ignore
         STIMPhysicalCircuit = Any  # type: ignore
 
@@ -814,7 +813,9 @@ def build_physical_circuit_instruction(
         if len(error_injections):
             data["errored_circuit"] = errored_circuit
         # TODO: Make this more general, maybe models have a "save_to_frame_attrs" or somethign
-        if _stim_available and isinstance(state, STIMQuantumState):
+        if not is_backend_available("stim_state") and isinstance(
+            state, STIMQuantumState
+        ):
             data["applied_stim_circuit_str"] = str(
                 state.latest_applied_circuit
             )

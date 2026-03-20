@@ -23,11 +23,17 @@ from .instructions import (
     InstructionStack,
 )
 
-# After Instruction
-from .syndrome import PauliFrame, SyndromeLabel
+# Before QECCodePatch
+from .qeccode import QECCode
 
-# After PauliFrame
-from .qeccode import QECCode, QECCodePatch
+# After Instruction
+from .recordables import (
+    MeasurementOutcomes,
+    QECCodePatch,
+    PauliFrame,
+    PatchDict,
+)
+from .syndromelabel import SyndromeLabel
 
 # After QECCodePatch
 from .quantumprogram import QuantumProgram

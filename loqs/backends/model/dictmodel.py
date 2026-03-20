@@ -28,6 +28,7 @@ from loqs.backends.reps import (
     ConcreteInstrumentReps,
 )
 from loqs.internal import SeqCastable
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="DictNoiseModel")
@@ -45,6 +46,8 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     name: ClassVar[str] = "gate dict"
     gate_dict: dict[MemberLabel, RepTuple]
     inst_dict: dict[MemberLabel, RepTuple]
+
+    SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
 
     def __init__(  # noqa: C901
         self,
@@ -221,17 +224,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         # TODO: Crosstalk specification?
         return
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                # NOTE: Hashing dict == bad
-                self.hash(self.gate_dict),
-                self.hash(self.inst_dict),
-                tuple([gr.value for gr in self._gatereps]),
-                tuple([ir.value for ir in self._instreps]),
-            )
-        )
-
     @property
     def gate_keys(self) -> list:
         """Gate keys this model can take in circuits."""
@@ -295,29 +287,9 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         return reps
 
     @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        # Not worth caching below this object (i.e. don't pass cache on)
-        gate_dict = cls.deserialize(state["gate_dict"])
-        assert isinstance(gate_dict, dict)
-        inst_dict = cls.deserialize(state["inst_dict"])
-        assert isinstance(inst_dict, dict)
-        gatereps = [GateRep(v) for v in state["_gatereps"]]
-        instreps = [InstrumentRep(v) for v in state["_instreps"]]
+    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        gate_dict = attr_dict["gate_dict"]
+        inst_dict = attr_dict["inst_dict"]
+        gatereps = [GateRep(v) for v in attr_dict["_gatereps"]]
+        instreps = [InstrumentRep(v) for v in attr_dict["_instreps"]]
         return cls((gate_dict, inst_dict), gatereps, instreps)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        # Not worth caching below this object (i.e. don't pass cache on)
-        state = super()._to_serialization()
-        state.update(
-            {
-                "gate_dict": self.serialize(self.gate_dict),
-                "inst_dict": self.serialize(self.inst_dict),
-                "_gatereps": [gr.value for gr in self._gatereps],
-                "_instreps": [ir.value for ir in self._instreps],
-            }
-        )
-        return state

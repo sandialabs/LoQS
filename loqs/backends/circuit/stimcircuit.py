@@ -17,10 +17,9 @@ import textwrap
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 import warnings
 
-from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends import BasePhysicalCircuit, is_backend_available
 
 # Conditional imports for STIM
-_stim_available = True
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from stim import Circuit as _Circuit
@@ -29,7 +28,6 @@ else:
     try:
         from stim import Circuit as _Circuit
     except ImportError:
-        _stim_available = False
         _Circuit = Any  # type: ignore
 
 ## Type aliases for static type checking
@@ -186,7 +184,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         qubit_labels: Sequence[QubitTypes] | None = None,
         suppress_tick_warning: bool = False,
     ) -> None:
-        if not _stim_available:
+        if not is_backend_available("stim_circuit"):
             raise ImportError(
                 "STIM backend is not available. "
                 "Please install stim: pip install loqs[stim]"

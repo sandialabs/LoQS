@@ -15,17 +15,20 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+import h5py
 import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
-from loqs.backends import GateRep
+from loqs.backends import GateRep, is_backend_available
 from loqs.backends.model.basemodel import InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
+from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.encoder.jsonencoder import JSONEncoder
+from loqs.internal.serializable import Serializable
 from loqs.types import Float
 
 # Conditional imports for STIM
-_stim_available = True
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from stim import Circuit as _Circuit
@@ -38,7 +41,6 @@ else:
         from stim import Tableau as _Tableau
         from stim import TableauSimulator as _TableauSimulator
     except ImportError:
-        _stim_available = False
         _Circuit = Any  # type: ignore
         _Tableau = Any  # type: ignore
         _TableauSimulator = Any  # type: ignore
@@ -64,6 +66,8 @@ class STIMQuantumState(BaseQuantumState):
     """Base class for an object that holds a STIM Tableau."""
 
     name: ClassVar[str] = "STIM Tableau"
+
+    SERIALIZE_ATTRS = ["qubit_labels", "seed", "_stim_state_vector"]
 
     _state: _TableauSimulator
     """Underlying state object."""
@@ -107,7 +111,7 @@ class STIMQuantumState(BaseQuantumState):
             Optional qubit labels. If not provided, the default range of ints
             is used.
         """
-        if not _stim_available:
+        if not is_backend_available("stim_state"):
             raise ImportError(
                 "STIM backend is not available. "
                 "Please install stim: pip install loqs[stim]"
@@ -161,11 +165,6 @@ class STIMQuantumState(BaseQuantumState):
         s += f"  STIM state on {self.state.num_qubits} qubits"
         s += f" ([{self.qubit_labels[0]},...,{self.qubit_labels[-1]}])\n"
         return s
-
-    def __hash__(self) -> int:
-        return hash(
-            (hash(self._state), self.hash(self.qubit_labels), self.seed)
-        )
 
     def apply_reps_inplace(
         self, reps: Sequence, reset_latest_circ: bool = True
@@ -412,13 +411,19 @@ class STIMQuantumState(BaseQuantumState):
 
         return cbit
 
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        # Retrieve STIM state vector
+        if attr == "_stim_state_vector":
+            return self.state.state_vector(endian="little")
+
+        # Otherwise fallback
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+
     @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        qubit_labels = state["qubit_labels"]
-        seed = state["seed"]
-        state_vector = cls.deserialize(state["_stim_state_vector"])
+    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        qubit_labels = attr_dict["qubit_labels"]
+        seed = attr_dict["seed"]
+        state_vector = attr_dict["_stim_state_vector"]
         assert isinstance(state_vector, np.ndarray)
 
         obj = cls(
@@ -427,21 +432,3 @@ class STIMQuantumState(BaseQuantumState):
         )
         obj.reset_seed(seed)
         return obj
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        # TODO: RNG. Maybe https://stackoverflow.com/q/63081108
-        state.update(
-            {
-                "qubit_labels": self.qubit_labels,
-                "seed": self.seed,
-                "_stim_state_vector": self.serialize(
-                    self.state.state_vector(endian="little"),
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-            }
-        )
-        return state
