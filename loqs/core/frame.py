@@ -19,6 +19,7 @@ from collections.abc import Iterator, Mapping
 from typing import TypeAlias, TypeVar
 
 from loqs.internal import MapCastable, Displayable
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="Frame")
@@ -44,6 +45,8 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
     log: str
     """Log string for better printing."""
+
+    SERIALIZE_ATTRS = ["log", "_data", "_expired_keys", "_no_serialize_keys"]
 
     def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
         """
@@ -115,16 +118,6 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
                 s += "\n"
         return s
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self.hash(self._data),
-                self.log,
-                tuple(self._expired_keys),
-                tuple(self._no_serialize_keys),
-            )
-        )
-
     def expire(self, key: str) -> None:
         """Mark a key as expired.
 
@@ -183,42 +176,20 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
         return f
 
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        data = cls.deserialize(state["_data"], serial_id_to_obj_cache)
-        assert isinstance(data, dict)
-        log = state["log"]
-        obj = cls(data, log)
-        obj._expired_keys = state["_expired_keys"]
-        obj._no_serialize_keys = state["_no_serialize_keys"]
-        return obj
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-
-        if not ignore_no_serialize_flags:
-            no_serialize_data = {
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if attr == "_data" and not ignore_no_serialize_flags:
+            # We want to replace "no serialize" objects with "NOT_SERIALIZED"
+            return {
                 k: v if k not in self._no_serialize_keys else "NOT SERIALIZED"
                 for k, v in self._data.items()
             }
-        else:
-            no_serialize_data = self._data
 
-        # Order for better display
-        state.update(
-            {
-                "log": self.log,
-                "_data": self.serialize(
-                    no_serialize_data,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "_expired_keys": self._expired_keys,
-                "_no_serialize_keys": self._no_serialize_keys,
-            }
-        )
-        return state
+        # Otherwise, do as normal
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    @classmethod
+    def from_decoded_attrs(cls, attr_dict) -> Frame:
+        obj = cls(attr_dict["_data"], attr_dict["log"])
+        obj._expired_keys = attr_dict["_expired_keys"]
+        obj._no_serialize_keys = attr_dict["_no_serialize_keys"]
+        return obj

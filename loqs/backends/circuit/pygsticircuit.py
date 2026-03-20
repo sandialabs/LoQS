@@ -19,7 +19,6 @@ from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 
 # Conditional imports for PyGSTi
-_pygsti_available = True
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from pygsti.circuits import Circuit as _Circuit
@@ -30,7 +29,6 @@ else:
         from pygsti.circuits import Circuit as _Circuit
         from pygsti.baseobjs import Label as _Label
     except ImportError:
-        _pygsti_available = False
         _Circuit = Any  # type: ignore
         _Label = Any  # type: ignore
 
@@ -71,7 +69,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         circuit: PyGSTiCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
-        if not _pygsti_available:
+        from loqs.backends import is_backend_available
+
+        if not is_backend_available("pygsti_circuit"):
             raise ImportError(
                 "PyGSTi backend is not available. "
                 "Please install pygsti: pip install loqs[pygsti]"

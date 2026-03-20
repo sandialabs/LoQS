@@ -40,7 +40,7 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.qeccode import QECCodePatch
+from loqs.core.recordables import QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 import loqs.tools.pygstitools as pt

@@ -77,8 +77,188 @@ class TestHistory:
         with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
             h.write(tempf.name)
 
-            h2 = Frame.read(tempf.name)
-        
+            h2 = History.read(tempf.name)
+
         for i, frame in enumerate(h2):
             assert frame._data == data
             assert frame.log == f"test {i+1}"
+
+    def test_history_serialization(self):
+        """Test History serialization roundtrip."""
+        # Create a history with multiple frames
+        frames = [
+            Frame({"step": 1, "state": "initial"}, log="step_1"),
+            Frame({"step": 2, "state": "middle"}, log="step_2"),
+            Frame({"step": 3, "state": "final"}, log="step_3")
+        ]
+        history = History(frames)
+
+        # Test string serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            history.write(tempf.name)
+            loaded_history = History.read(tempf.name)
+
+        # Verify structure is preserved
+        assert len(loaded_history) == 3
+        assert loaded_history[0]["step"] == 1
+        # state is an expired key, so checking not last frame should raise a warning
+        with pytest.warns(UserWarning):
+            assert loaded_history[1]["state"] == "middle"
+        assert loaded_history[2].log == "step_3"
+
+        # Test file serialization
+        with NamedTemporaryFile(suffix='.json') as f:
+            history.write(f.name)
+            loaded_history = History.read(f.name)
+            assert len(loaded_history) == 3
+            assert loaded_history[0]["step"] == 1
+
+    def test_history_hdf5_serialization(self):
+        """Test History HDF5 serialization roundtrip."""
+        # Create a history with multiple frames
+        frames = [
+            Frame({"step": 1, "state": "initial"}, log="step_1"),
+            Frame({"step": 2, "state": "middle"}, log="step_2"),
+            Frame({"step": 3, "state": "final"}, log="step_3")
+        ]
+        history = History(frames)
+
+        # Test bytes serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            history.write(tempf.name)
+            loaded_history = History.read(tempf.name)
+
+        # Verify structure is preserved
+        assert len(loaded_history) == 3
+        assert loaded_history[0]["step"] == 1
+        # state is an expired key, so checking not last frame should raise a warning
+        with pytest.warns(UserWarning):
+            assert loaded_history[1]["state"] == "middle"
+        assert loaded_history[2].log == "step_3"
+
+        # Test file serialization with .h5 extension
+        with NamedTemporaryFile(suffix='.h5') as f:
+            history.write(f.name)
+            loaded_history = History.read(f.name)
+            assert len(loaded_history) == 3
+            assert loaded_history[0]["step"] == 1
+
+        # Test file serialization with .hdf5 extension
+        with NamedTemporaryFile(suffix='.hdf5') as f:
+            history.write(f.name)
+            loaded_history = History.read(f.name)
+            assert len(loaded_history) == 3
+            assert loaded_history[0]["step"] == 1
+
+    def test_history_hdf5_with_frames(self):
+        """Test History HDF5 serialization with complex frame data."""
+        # Create frames with nested data
+        complex_frames = [
+            Frame({"data": {"nested": {"value": i}}, "index": i}, log=f"frame_{i}")
+            for i in range(3)
+        ]
+        history = History(complex_frames)
+
+        # Test HDF5 serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            history.write(tempf.name)
+            loaded_history = History.read(tempf.name)
+
+        # Verify complex data is preserved
+        assert len(loaded_history) == 3
+        assert loaded_history[0]["data"]["nested"]["value"] == 0
+        assert loaded_history[2]["index"] == 2
+
+    def test_history_with_frames(self):
+        """Test History serialization with complex frame data."""
+        # Create frames with nested data
+        complex_frames = [
+            Frame({"data": {"nested": {"value": i}}, "index": i}, log=f"frame_{i}")
+            for i in range(5)
+        ]
+        history = History(complex_frames)
+
+        # Test roundtrip
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            history.write(tempf.name)
+            loaded_history = History.read(tempf.name)
+
+        # Verify all frames are preserved with correct data
+        assert len(loaded_history) == 5
+        for i, frame in enumerate(loaded_history):
+            assert frame["data"]["nested"]["value"] == i
+            assert frame["index"] == i
+            assert frame.log == f"frame_{i}"
+
+    def test_history_compressed_serialization(self):
+        """Test History serialization with compressed format."""
+        frames = [Frame({"i": i}, log=f"step_{i}") for i in range(3)]
+        history = History(frames)
+
+        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
+            temp_path = temp_file.name
+
+        try:
+            # Write compressed
+            history.write(temp_path)
+
+            # Read compressed
+            loaded_history = History.read(temp_path)
+            assert len(loaded_history) == 3
+            assert loaded_history[0]["i"] == 0
+            assert loaded_history[2].log == "step_2"
+
+        finally:
+            import os
+            os.unlink(temp_path)
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_history_serialization_parameterized(self, format):
+        """Test History serialization roundtrip with both JSON and HDF5 formats."""
+        # Create a history with multiple frames
+        frames = [
+            Frame({"step": 1, "state": "initial"}, log="step_1"),
+            Frame({"step": 2, "state": "middle"}, log="step_2"),
+            Frame({"step": 3, "state": "final"}, log="step_3")
+        ]
+        history = History(frames)
+
+        # Test string serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            history.write(tempf.name)
+            loaded_history = History.read(tempf.name)
+
+        # Verify structure is preserved
+        assert len(loaded_history) == 3
+        assert loaded_history[0]["step"] == 1
+        # state is an expired key, so checking not last frame should raise a warning
+        with pytest.warns(UserWarning):
+            assert loaded_history[1]["state"] == "middle"
+        assert loaded_history[2].log == "step_3"
+
+        # Test file serialization
+        with NamedTemporaryFile(suffix=f'.{format}') as f:
+            history.write(f.name)
+            loaded_history = History.read(f.name)
+            assert len(loaded_history) == 3
+            assert loaded_history[0]["step"] == 1
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_history_with_frames_parameterized(self, format):
+        """Test History serialization with complex frame data using both formats."""
+        # Create frames with nested data
+        complex_frames = [
+            Frame({"data": {"nested": {"value": i}}, "index": i}, log=f"frame_{i}")
+            for i in range(3)
+        ]
+        history = History(complex_frames)
+
+        # Test serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            history.write(tempf.name)
+            loaded_history = History.read(tempf.name)
+
+        # Verify complex data is preserved
+        assert len(loaded_history) == 3
+        assert loaded_history[0]["data"]["nested"]["value"] == 0
+        assert loaded_history[2]["index"] == 2

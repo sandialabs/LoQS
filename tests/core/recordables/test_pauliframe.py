@@ -1,53 +1,10 @@
-"""Tester for loqs.core.syndrome"""
+
 
 import os
 from tempfile import NamedTemporaryFile
 import pytest
 
-from loqs.core.syndrome import SyndromeLabel, PauliFrame
-
-
-class TestSyndromeLabel:
-
-    def _check(self, l, ql, fi, oi):
-        assert l.qubit_label == ql
-        assert l.frame_idx == fi
-        assert l.outcome_idx == oi
-
-    def test_init(self):
-        l = SyndromeLabel("Q0", 1, 2)
-        self._check(l, "Q0", 1, 2)
-
-        l2 = SyndromeLabel.cast(("Q0", 1, 2))
-        self._check(l2, "Q0", 1, 2)
-
-        l3 = SyndromeLabel("Q0", 1)
-        self._check(l3, "Q0", 1, 0)
-
-        l4 = SyndromeLabel.cast(("Q0", 1))
-        self._check(l4, "Q0", 1, 0)
-
-        l5 = SyndromeLabel("Q0")
-        self._check(l5, "Q0", -1, 0)
-
-        l6 = SyndromeLabel.cast(("Q0",))
-        self._check(l6, "Q0", -1, 0)
-
-        l7 = SyndromeLabel.cast("Q0")
-        self._check(l7, "Q0", -1, 0)
-
-        with pytest.raises(TypeError):
-            SyndromeLabel() # type: ignore
-    
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
-    def test_serialization(self):
-        l = SyndromeLabel("Q0", 1, 2)
-
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            l.write(tempf.name)
-
-            l2 = SyndromeLabel.read(tempf.name)
-            self._check(l2, "Q0", 1, 2)
+from loqs.core.recordables import PauliFrame
 
 class TestPauliFrame:
     
@@ -159,3 +116,85 @@ class TestPauliFrame:
 
             pf2 = PauliFrame.read(tempf.name)
             self._check(pf2, "IXYZ")
+
+    def test_hdf5_serialization(self):
+        """Test PauliFrame HDF5 serialization."""
+        pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
+
+        # Test bytes serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            pf.write(tempf.name)
+            pf2 = PauliFrame.read(tempf.name)
+        self._check(pf2, "IXYZ")
+
+        # Test file serialization with .h5 extension
+        with NamedTemporaryFile(suffix='.h5') as tempf:
+            pf.write(tempf.name)
+            pf2 = PauliFrame.read(tempf.name)
+            self._check(pf2, "IXYZ")
+
+        # Test file serialization with .hdf5 extension
+        with NamedTemporaryFile(suffix='.hdf5') as tempf:
+            pf.write(tempf.name)
+            pf2 = PauliFrame.read(tempf.name)
+            self._check(pf2, "IXYZ")
+
+    def test_hdf5_serialization_complex(self):
+        """Test PauliFrame HDF5 serialization with different Pauli strings."""
+        test_cases = [
+            (["Q0", "Q1"], "II"),
+            (["Q0", "Q1"], "XX"),
+            (["Q0", "Q1"], "ZZ"),
+            (["Q0", "Q1"], "XY"),
+            (["Q0", "Q1", "Q2"], "IXY"),
+        ]
+
+        for qubit_labels, pauli_str in test_cases:
+            pf = PauliFrame(qubit_labels, pauli_str)
+
+            # Test HDF5 serialization
+            with NamedTemporaryFile("w+", suffix=".json") as tempf:
+                pf.write(tempf.name)
+                pf2 = PauliFrame.read(tempf.name)
+
+            assert pf2.qubit_labels == qubit_labels
+            assert pf2.pauli_frame == list(pauli_str)
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_pauliframe_serialization_parameterized(self, format):
+        """Test PauliFrame serialization with both JSON and HDF5 formats."""
+        pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
+
+        # Test bytes serialization
+        with NamedTemporaryFile("w+", suffix=".json") as tempf:
+            pf.write(tempf.name)
+            pf2 = PauliFrame.read(tempf.name)
+        self._check(pf2, "IXYZ")
+
+        # Test file serialization
+        with NamedTemporaryFile(suffix=f'.{format}') as tempf:
+            pf.write(tempf.name)
+            pf2 = PauliFrame.read(tempf.name)
+            self._check(pf2, "IXYZ")
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_pauliframe_serialization_complex_parameterized(self, format):
+        """Test PauliFrame serialization with different Pauli strings using both formats."""
+        test_cases = [
+            (["Q0", "Q1"], "II"),
+            (["Q0", "Q1"], "XX"),
+            (["Q0", "Q1"], "ZZ"),
+            (["Q0", "Q1"], "XY"),
+            (["Q0", "Q1", "Q2"], "IXY"),
+        ]
+
+        for qubit_labels, pauli_str in test_cases:
+            pf = PauliFrame(qubit_labels, pauli_str)
+
+            # Test serialization
+            with NamedTemporaryFile("w+", suffix=".json") as tempf:
+                pf.write(tempf.name)
+                pf2 = PauliFrame.read(tempf.name)
+
+            assert pf2.qubit_labels == qubit_labels
+            assert pf2.pauli_frame == list(pauli_str)

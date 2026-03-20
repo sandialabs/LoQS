@@ -3,15 +3,15 @@ __pycache__
 .pytest_cache
 .ipynb_checkpoints/
 
-.coverage
+.coverage*
 coverage.xml
 .tox
 .mypy_cache
 htmlcov
 
 .env
-.claude/*.local.*
-*.tar.gz
+.opencode
+.ignore
 
 docs/_build
 docs/**/_autosummary

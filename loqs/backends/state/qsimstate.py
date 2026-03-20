@@ -15,15 +15,15 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence, Collection
 from copy import deepcopy
+import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar
 
-import numpy as np
 
 from loqs.backends import GateRep
 from loqs.backends.model.basemodel import InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
-
+from loqs.types import Int
 
 try:
     from quantumsim.sparsedm import SparseDM as _SparseDM
@@ -50,6 +50,20 @@ class QSimQuantumState(BaseQuantumState):
     """Base class for an object that holds a QuantumSim SparseDM state."""
 
     name: ClassVar[str] = "QuantumSim"
+
+    SERIALIZE_ATTRS = [
+        "qubit_labels",
+        "_qsim_classical",
+        "_qsim_idx_in_full_dm",
+        "_qsim_dm_class",
+        "_qsim_dm_no_qubits",
+        "_qsim_dm_data",
+        "_qsim_max_bits_in_full_dm",
+        "_qsim_classical_probability",
+        "_qsim_single_ptms_to_do",
+        "_qsim_maj_vot_mask",
+        "_qsim_maj_vot_array",
+    ]
 
     _state: _SparseDM
     """Underlying state object."""
@@ -88,8 +102,8 @@ class QSimQuantumState(BaseQuantumState):
             self._state = state._state.copy()
         elif isinstance(state, _SparseDM):
             self._state = state
-        elif isinstance(state, int):
-            self._state = _SparseDM(state)
+        elif isinstance(state, Int):
+            self._state = _SparseDM(int(state))
         else:
             raise ValueError(f"Cannot initialize SparseDM from {state}")
 
@@ -115,9 +129,6 @@ class QSimQuantumState(BaseQuantumState):
         s += f"  SparseDM state on {self.state.no_qubits} qubits"
         s += f" ([{self.state.names[0]},...,{self.state.names[-1]}])\n"  # type: ignore
         return s
-
-    def __hash__(self) -> int:
-        return hash((hash(self._state), self.seed))
 
     def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
@@ -309,67 +320,61 @@ class QSimQuantumState(BaseQuantumState):
 
         return prob
 
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        # Get any needed internal state from SparseDM
+        if attr == "qubit_labels":
+            return self.state.names
+        if attr == "_qsim_classical":
+            return self.state.classical
+        if attr == "_qsim_idx_in_full_dm":
+            return self.state.idx_in_full_dm
+        if attr == "_qsim_dm_class":
+            return type(self.state.full_dm)
+        if attr == "_qsim_dm_no_qubits":
+            return self.state.full_dm.no_qubits
+        if attr == "_qsim_dm_data":
+            return self.state.full_dm.to_array()
+        if attr == "_qsim_max_bits_in_full_dm":
+            return self.state.max_bits_in_full_dm
+        if attr == "_qsim_classical_probability":
+            return self.state.classical_probability
+        if attr == "_qsim_single_ptms_to_do":
+            return self.state.single_ptms_to_do
+        if attr == "_qsim_maj_vot_mask":
+            return self.state._last_majority_vote_mask
+        if attr == "_qsim_maj_vot_array":
+            return self.state._last_majority_vote_array
+
+        # Otherwise fallback
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+
     @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        qubit_labels = state["qubit_labels"]
+    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        qubit_labels = attr_dict["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
 
         # Restore internal QuantumSim state
-        obj.state.classical = state["_qsim_classical"]
-        obj.state.idx_in_full_dm = state["_qsim_idx_in_full_dm"]
+        obj.state.classical = attr_dict["_qsim_classical"]
+        obj.state.idx_in_full_dm = attr_dict["_qsim_idx_in_full_dm"]
 
-        dm_class = cls._deserialize_class(
-            state["_qsim_dm_class"], check_is_subclass=False
-        )
-        dm_no_qubits = state["_qsim_dm_no_qubits"]
-        dm_data = cls._deserialize_mx(state["_qsim_dm_data"])
+        dm_class = attr_dict["_qsim_dm_class"]
+        dm_no_qubits = attr_dict["_qsim_dm_no_qubits"]
+        dm_data = attr_dict["_qsim_dm_data"]
         obj.state.full_dm = dm_class(dm_no_qubits, data=dm_data)
 
-        obj.state.max_bits_in_full_dm = state["_qsim_max_bits_in_full_dm"]
-        obj.state.classical_probability = state["_qsim_classical_probability"]
-        ptm_data = cls.deserialize(
-            state["_qsim_single_ptms_to_do"]
-        )  # Not worth caching here
+        obj.state.max_bits_in_full_dm = attr_dict["_qsim_max_bits_in_full_dm"]
+        obj.state.classical_probability = attr_dict[
+            "_qsim_classical_probability"
+        ]
+        ptm_data = attr_dict["_qsim_single_ptms_to_do"]
+
         assert isinstance(ptm_data, dict)
         single_ptms_to_do = defaultdict(list)
         for k, v in ptm_data.items():
             single_ptms_to_do[k] = v
         obj.state.single_ptms_to_do = single_ptms_to_do
 
-        obj.state._last_majority_vote_mask = state["_qsim_maj_vot_mask"]
-        obj.state._last_majority_vote_array = cls._deserialize_mx(
-            state["_qsim_maj_vot_array"]
-        )
-        return obj
+        obj.state._last_majority_vote_mask = attr_dict["_qsim_maj_vot_mask"]
+        obj.state._last_majority_vote_array = attr_dict["_qsim_maj_vot_array"]
 
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        # TODO: Missing RNG!
-        state.update(
-            {
-                "qubit_labels": self.state.names,
-                "_qsim_classical": self.state.classical,
-                "_qsim_idx_in_full_dm": self.state.idx_in_full_dm,
-                "_qsim_dm_class": self._serialize_class(
-                    type(self.state.full_dm)
-                ),
-                "_qsim_dm_no_qubits": self.state.full_dm.no_qubits,
-                "_qsim_dm_data": self._serialize_mx(
-                    self.state.full_dm.to_array()
-                ),
-                "_qsim_max_bits_in_full_dm": self.state.max_bits_in_full_dm,
-                "_qsim_classical_probability": self.state.classical_probability,
-                "_qsim_single_ptms_to_do": self.serialize(  # Not worth caching here
-                    self.state.single_ptms_to_do
-                ),
-                "_qsim_maj_vot_mask": self.state._last_majority_vote_mask,
-                "_qsim_maj_vot_array": self._serialize_mx(
-                    self.state._last_majority_vote_array
-                ),
-            }
-        )
-        return state
+        return obj

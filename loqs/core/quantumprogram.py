@@ -16,13 +16,16 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 import copy
 import glob
-from json import JSONDecodeError
 import json
+from json import JSONDecodeError
+import h5py
 import os
 from pathlib import Path
 import shutil
-from typing import Literal, TypeVar
+from typing import ClassVar, Literal, TypeVar
 import warnings
+
+from loqs.internal.serializable import Serializable
 
 try:
     from dask.distributed import Client
@@ -64,6 +67,20 @@ class QuantumProgram(Displayable):
     Once the :meth:`.run` command has been used, it also contains
     a collection of :class:`.History` objects for each shot.
     """
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    SERIALIZE_ATTRS = [
+        "default_noise_model",
+        "patch_types",
+        "global_instructions",
+        "initial_history",
+        "instruction_stack",
+        "default_base_seed",
+        "state_type",
+        "name",
+        "shot_histories",
+    ]
 
     def __init__(
         self,
@@ -267,21 +284,6 @@ class QuantumProgram(Displayable):
         self.shot_histories: list[History] = []
         """Record of shot :class:`.History` objects"""
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self.hash(self.initial_history),
-                hash(self.default_noise_model),
-                self.default_base_seed,
-                self.hash(self.instruction_stack),
-                self.hash(self.global_instructions),
-                hash(self.state_type),
-                self.hash(self.patch_types),
-                self.name,
-                self.hash(self.shot_histories),
-            )
-        )
-
     @classmethod
     def from_checkpoint_dir(cls, checkpoint_dir: Path | str) -> QuantumProgram:
         """Load a :class:`QuantumProgram` from a checkpoint directory.
@@ -304,26 +306,29 @@ class QuantumProgram(Displayable):
         """
         checkpoint_dir = Path(checkpoint_dir)
 
-        # Use dump directly so we can get cache for shot deserialization
-        serialization_cache: dict[int, object] = {}
-        with open(checkpoint_dir / "program.json", "r") as f:
-            json_dict = json.load(f)
-            program = QuantumProgram.from_serialization(
-                json_dict, serialization_cache
-            )
+        # Load the program first to get the cache
+        program_file = checkpoint_dir / "program.h5"
+        if not program_file.exists():
+            program_file = checkpoint_dir / "program.json"
 
-        shot_files = glob.glob(str(checkpoint_dir) + "/shot-*.json")
+        decode_cache: dict[int, Serializable] = {}
+        program = QuantumProgram.read(
+            program_file, use_caching=True, decode_cache=decode_cache
+        )
+        assert isinstance(program, QuantumProgram)
+
+        # Load all shot history files
+        shot_files = glob.glob(str(checkpoint_dir) + "/shot-*.h5") + glob.glob(
+            str(checkpoint_dir) + "/shot-*.json"
+        )
         for sf in sorted(shot_files):
             try:
-                with open(sf, "r") as f:
-                    json_dict = json.load(f)
-            except JSONDecodeError:
+                shot_history = Serializable.read(sf, decode_cache=decode_cache)
+            except (JSONDecodeError, KeyError):
                 # Checkpoint file was probably interrupted during write
                 # Skip it
                 continue
-            shot_history = History.from_serialization(
-                json_dict, serialization_cache
-            )
+            assert isinstance(shot_history, History)
             program.shot_histories.append(shot_history)
 
         return program
@@ -450,10 +455,14 @@ class QuantumProgram(Displayable):
         checkpoint_dir:
             The directory to use for checkpointing. If None (the default), no
             checkpointing is performed. The :class:`.QuantumProgram` will be written
-            to ``"checkpoint_dir/program.json"``, while shot :math:`i` will be written
-            to ``"checkpoint_dir/shot_{i}.json"``. The resulting checkpoint can be loaded
+            to ``"checkpoint_dir/program.h5"``, while shot :math:`i` will be written
+            to ``"checkpoint_dir/shot_{i}.h5"``. The resulting checkpoint can be loaded
             via :meth:`.QuantumProgram.from_checkpoint_dir`.
 
+        checkpoint_frequency:
+            How often to save checkpoints. Checkpoints are saved after every
+            ``checkpoint_frequency`` shots. Defaults to 1 (save after every shot).
+            Set to a higher value to reduce I/O overhead for large numbers of shots.
         override_checkpoints:
             Whether to error (False, default) or wipe and override (True) an existing
             checkpoint directory.
@@ -479,7 +488,7 @@ class QuantumProgram(Displayable):
             os.makedirs(checkpoint_dir, exist_ok=True)
 
             # Write the base program
-            self.write(checkpoint_dir / "program.json")
+            self.write(checkpoint_dir / "program.h5")
 
         # Take out shot histories to avoid unnecessary copies during dask.delayed
         if reset_shot_histories:
@@ -497,9 +506,9 @@ class QuantumProgram(Displayable):
         # If we are checkpointing, compute the serialization cache
         # This will save a huge amount of filesize and time writing
         # shot history checkpoint files
-        serialization_cache: dict[int, int] | None = None
+        encode_cache: dict[int, int] | None = None
         if checkpoint_dir is not None:
-            serialization_cache = {}
+            encode_cache = {}
 
             # Note that we don't care about the output here,
             # just need to compute the cache. Also note that this will
@@ -507,7 +516,12 @@ class QuantumProgram(Displayable):
             # we are computing this on the dask worker to save
             # on data being copied across and avoid any hash
             # mismatch problems
-            self.to_serialization(serialization_cache)
+            QuantumProgram.encode(
+                self,
+                format="json",
+                encode_cache=encode_cache,
+                reset_encode_id=False,
+            )
 
         # Set up tasks
         start = len(old_shot_histories)
@@ -520,11 +534,10 @@ class QuantumProgram(Displayable):
             seed_for_shot = None
             if self.default_base_seed is not None:
                 seed_for_shot = self.default_base_seed + start + i
-
             # Create per-shot checkpoint file
             checkpoint_for_shot = None
             if checkpoint_dir is not None:
-                checkpoint_for_shot = checkpoint_dir / f"shot-{start + i}.json"
+                checkpoint_for_shot = checkpoint_dir / f"shot-{start + i}.h5"
 
             tasks.append(
                 (
@@ -532,7 +545,7 @@ class QuantumProgram(Displayable):
                     max_frame_limit,
                     seed_for_shot,
                     checkpoint_for_shot,
-                    serialization_cache,
+                    encode_cache,
                 )
             )
 
@@ -596,7 +609,7 @@ class QuantumProgram(Displayable):
         max_frame_limit: int = 100,
         seed: int | None = None,
         checkpoint_file: Path | None = None,
-        serialization_cache: dict | None = None,
+        encode_cache: dict | None = None,
     ):
         num_frames = 0
 
@@ -670,11 +683,39 @@ class QuantumProgram(Displayable):
             warnings.warn(
                 f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
             )
-
         if checkpoint_file is not None:
+            # Use the new serialization API with HDF5 as default format
+            if (
+                checkpoint_file.suffix == ".h5"
+                or checkpoint_file.suffix == ".hdf5"
+            ):
+                # HDF5 format
+                with h5py.File(checkpoint_file, "w") as f:
+                    Serializable.encode(
+                        history,
+                        format="hdf5",
+                        encode_cache=encode_cache,
+                        reset_encode_id=False,
+                        h5_group=f.create_group("root"),
+                    )
+            else:
+                # JSON format (default)
+                with open(checkpoint_file, "w") as f:
+                    json_dict = Serializable.encode(
+                        history,
+                        format="json",
+                        encode_cache=encode_cache,
+                        reset_encode_id=False,
+                    )
+                    json.dump(json_dict, f, indent=4)
             # Use dump directory so we can use the program's serialized cache
             with open(checkpoint_file, "w") as f:
-                json_dict = history.to_serialization(serialization_cache)
+                json_dict = Serializable.encode(
+                    history,
+                    format="json",
+                    encode_cache=encode_cache,
+                    reset_encode_id=False,
+                )
                 json.dump(json_dict, f, indent=4)
 
         return history
@@ -945,119 +986,40 @@ class QuantumProgram(Displayable):
         ]
         return Counter(data) if return_counter else data
 
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        # ORDER MATTERS
-        # Must match serialization order for caching to work properly
-        default_noise_model = cls.deserialize(
-            state["default_noise_model"], serial_id_to_obj_cache
-        )
-        assert isinstance(default_noise_model, BaseNoiseModel | None)
-        patch_types = cls.deserialize(
-            state["patch_types"], serial_id_to_obj_cache
-        )
-        assert isinstance(patch_types, dict | None)
-        if patch_types is not None:
-            assert all([isinstance(v, QECCode) for v in patch_types.values()])
-        global_instructions = cls.deserialize(
-            state["global_instructions"], serial_id_to_obj_cache
-        )
-        assert isinstance(global_instructions, dict)
-        initial_history = cls.deserialize(
-            state["initial_history"], serial_id_to_obj_cache
-        )
-        assert isinstance(initial_history, History | None)
-        default_base_seed = state["default_base_seed"]
-        stack = cls.deserialize(
-            state["instruction_stack"], serial_id_to_obj_cache
-        )
-        assert isinstance(stack, InstructionStack)
-        state_type = cls.deserialize(
-            state["state_type"], serial_id_to_obj_cache
-        )
-        assert isinstance(state_type, type | None)
-        if state_type is not None:
-            assert issubclass(state_type, BaseQuantumState)
-        name = state["name"]
-        shot_histories = cls.deserialize(
-            state["shot_histories"], serial_id_to_obj_cache
-        )
-        assert isinstance(shot_histories, list)
-        assert all([isinstance(h, History) for h in shot_histories])
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if (
+            attr == "default_noise_model"
+            and self._noise_model_filename is not None
+        ):
+            return self._noise_model_filename
 
-        # Catch warnings about overriding globals
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    @classmethod
+    def from_decoded_attrs(cls, attr_dict) -> "QuantumProgram":
+        """Create a QuantumProgram from decoded attributes dictionary."""
+
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            obj = cls(
-                stack,
-                initial_history,
-                default_noise_model,
-                default_base_seed,
-                False,  # expiring keys should already be set in initial history
-                global_instructions,
-                state_type,
-                patch_types,
-                False,  # Don't override globals, was already processed
-                name,
+            # Filter out warnings about pre-existing Init State/Init Patch instructions
+            warnings.filterwarnings(
+                "ignore", message=".*state_type.*", category=UserWarning
             )
-        obj.shot_histories = shot_histories
+            warnings.filterwarnings(
+                "ignore", message=".*patch_types.*", category=UserWarning
+            )
+
+            obj = cls(
+                instruction_stack=attr_dict["instruction_stack"],
+                initial_history=attr_dict["initial_history"],
+                default_base_seed=attr_dict["default_base_seed"],
+                default_noise_model=attr_dict["default_noise_model"],
+                state_type=attr_dict["state_type"],
+                patch_types=attr_dict["patch_types"],
+                global_instructions=attr_dict["global_instructions"],
+                name=attr_dict.get("name", "(Unnamed quantum program)"),
+            )
+
+        # Set shot histories separately (not in constructor)
+        obj.shot_histories = attr_dict.get("shot_histories", [])
 
         return obj
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-
-        # Avoid serializing noise model if loaded from file
-        if self._noise_model_filename is not None:
-            serial_noise_model = self._noise_model_filename
-        else:
-            serial_noise_model = self.serialize(
-                self.default_noise_model,
-                hash_to_serial_id_cache,
-                ignore_no_serialize_flags,
-            )
-
-        state.update(
-            {
-                # Noise model already serialized above
-                "default_noise_model": serial_noise_model,
-                # Patch types and global instructions first to cache QEC code and instructions
-                "patch_types": self.serialize(
-                    self.patch_types,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "global_instructions": self.serialize(
-                    self.global_instructions,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "initial_history": self.serialize(
-                    self.initial_history,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "default_base_seed": self.default_base_seed,
-                "instruction_stack": self.serialize(
-                    self.instruction_stack,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "state_type": self.serialize(
-                    self.state_type,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "name": self.name,
-                "shot_histories": self.serialize(
-                    self.shot_histories,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-            }
-        )
-        return state

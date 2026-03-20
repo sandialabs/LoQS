@@ -11,13 +11,17 @@
 """
 
 from __future__ import annotations
-import textwrap
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Literal, TypeAlias, TypeVar, overload
+import h5py
+from typing import ClassVar, Literal, TypeAlias, TypeVar, overload
+import textwrap
 
 from loqs.core.frame import Frame, FrameCastableTypes
 from loqs.internal import SeqCastable, Displayable
+from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.serializable import Serializable
+from loqs.internal.encoder.jsonencoder import JSONEncoder
 
 
 T = TypeVar("T", bound="History")
@@ -46,7 +50,57 @@ class History(Sequence[Frame], SeqCastable, Displayable):
     and insertion can only occur at the end of the list.
     """
 
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    SERIALIZE_ATTRS = [
+        "_history",
+        "expiring_keys",
+        "_expiring_key_locs",
+        "propagating_keys",
+        "no_serialize_keys",
+    ]
+
+    SERIALIZE_ATTRS_MAP = {
+        "_history": "history",
+        "expiring_keys": "expiring_keys",
+        "_expiring_key_locs": "_expiring_key_locs",
+        "propagating_keys": "propagating_keys",
+        "no_serialize_keys": "no_serialize_keys",
+    }
+
     _history: list[Frame]
+
+    @classmethod
+    def from_decoded_attrs(cls, attr_dict) -> "History":
+        """
+        Create a History object from decoded attributes dictionary.
+
+        This method handles the special case where History needs to reconstruct
+        its internal state from serialized data, including the _expiring_key_locs
+        attribute that isn't part of the constructor.
+
+        Parameters
+        ----------
+        attr_dict : dict
+            Dictionary of attribute names to their deserialized values.
+
+        Returns
+        -------
+        History
+            The reconstructed History object.
+        """
+        # Create the History object with constructor parameters
+        history_obj = cls(
+            history=attr_dict["_history"],
+            expiring_keys=attr_dict["expiring_keys"],
+            propagating_keys=attr_dict["propagating_keys"],
+            no_serialize_keys=attr_dict["no_serialize_keys"],
+        )
+
+        # Set internal attributes that aren't in the constructor
+        history_obj._expiring_key_locs = attr_dict["_expiring_key_locs"]
+
+        return history_obj
 
     def __init__(
         self,
@@ -159,17 +213,6 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             s += sf + "\n"
         return s
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self.hash(self._history),
-                tuple(self.expiring_keys),
-                self.hash(self._expiring_key_locs),
-                tuple(self.propagating_keys),
-                tuple(self.no_serialize_keys),
-            )
-        )
-
     def append(self, item: FrameCastableTypes) -> None:
         """Add a :class:`.Frame` to the end of the :class:`.History`.
 
@@ -262,38 +305,3 @@ class History(Sequence[Frame], SeqCastable, Displayable):
 
         # Otherwise, return the series of objects
         return data
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        history = cls.deserialize(state["_history"], serial_id_to_obj_cache)
-        assert isinstance(history, list)
-        assert all([isinstance(f, Frame) for f in history])
-        expiring_keys = state["expiring_keys"]
-        propagating_keys = state["propagating_keys"]
-        no_serialize_keys = state["no_serialize_keys"]
-
-        obj = cls(history, expiring_keys, propagating_keys, no_serialize_keys)
-        obj._expiring_key_locs = state["_expiring_key_locs"]
-
-        return obj
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "_history": self.serialize(
-                    self._history,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "expiring_keys": list(self.expiring_keys),
-                "_expiring_key_locs": self._expiring_key_locs,
-                "propagating_keys": list(self.propagating_keys),
-                "no_serialize_keys": list(self.no_serialize_keys),
-            }
-        )
-        return state

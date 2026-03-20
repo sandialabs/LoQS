@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Literal, TypeAlias, TypeVar
+from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 from loqs.backends.state.basestate import OutcomeDict
-from loqs.core.syndrome import PauliFrame
+from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.internal import MapCastable, Displayable
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="MeasurementOutcomes")
@@ -38,6 +39,8 @@ class MeasurementOutcomes(
     or "inferred" outcomes where a :class:`.PauliFrame` has been applied
     (see :attr:`.get_inferred_outcomes`).
     """
+
+    SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
 
     outcomes: OutcomeDict
     """Dict with qubit label keys and list of 0/1 outcome values.
@@ -76,9 +79,6 @@ class MeasurementOutcomes(
 
     def __str__(self) -> str:
         return f"MeasurementOutcomes({self.outcomes})"
-
-    def __hash__(self) -> int:
-        return self.hash(self.outcomes)
 
     def map_qubits_inplace(
         self, qubit_mapping: Mapping[str | int, str | int]
@@ -141,17 +141,3 @@ class MeasurementOutcomes(
             bitflip = pauli_frame.get_bit(bitflip_basis, qubit)
             inferred_outcomes[qubit] = [(o + bitflip) % 2 for o in outs]
         return MeasurementOutcomes(inferred_outcomes)
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        outcomes = state["outcomes"]
-        return cls(outcomes)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update({"outcomes": self.outcomes})
-        return state

@@ -19,7 +19,7 @@ Examples
 Here we generate the syndrome extraction circuit
 for Surface-17 based on :cite:`tomita_lowdistance_2014`.
 
->>> from loqs.backends.circuit import PyGSTiPhysicalCircuit as PhysCirc
+>>> from loqs.backends import PyGSTiPhysicalCircuit as PhysCirc
 >>> X_template = PhysCirc([('Gh', 'aux'), ('Gcnot', 'aux', 'b'),
 ...     ('Gcnot', 'aux', 'a'), ('Gcnot', 'aux', 'd'),
 ...     ('Gcnot', 'aux', 'c'), ('Gh', 'aux'), ('Iz', 'aux')],
