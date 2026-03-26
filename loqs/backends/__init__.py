@@ -1,29 +1,141 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """Quantum simulation backends for LoQS
 """
 
+from typing import TYPE_CHECKING, Any
+from importlib import import_module
+from dataclasses import dataclass
+
 from .reps import RepEnum, GateRep, InstrumentRep, RepTuple
 
-from .circuit import (
-    BasePhysicalCircuit,
-    PyGSTiPhysicalCircuit,
-    ListPhysicalCircuit,
-    STIMPhysicalCircuit,
-)
+from .circuit import BasePhysicalCircuit, ListPhysicalCircuit
+from .model import BaseNoiseModel, DictNoiseModel, TimeDependentBaseNoiseModel
+from .state import BaseQuantumState, NumpyStatevectorQuantumState
+from .state.basestate import OutcomeDict
 
-# Needs to be after circuit import but before state so that we have OpRep
-from .model import (
-    BaseNoiseModel,
-    PyGSTiNoiseModel,
-    DictNoiseModel,
-)
 
-from .state import (
-    BaseQuantumState,
-    OutcomeDict,
-    NumpyStatevectorQuantumState,
-    QSimQuantumState,
-    STIMQuantumState,
-)
+@dataclass
+class BackendAvailability:
+    """Class to track backend availability"""
+
+    name: str
+    available: bool
+    error: str | None = None
+
+
+# Backend availability tracking
+_backend_availability: dict[str, BackendAvailability] = {}
+
+
+def _check_backend_availability(backend_name: str, import_path: str) -> bool:
+    """Check if a backend is available and update availability tracking"""
+    try:
+        import_module(import_path)
+        _backend_availability[backend_name] = BackendAvailability(
+            backend_name, True
+        )
+        return True
+    except ImportError as e:
+        _backend_availability[backend_name] = BackendAvailability(
+            backend_name, False, str(e)
+        )
+        return False
+
+
+def get_available_backends() -> list[str]:
+    """Get list of available backend names"""
+    return [
+        name
+        for name, avail in _backend_availability.items()
+        if avail.available
+    ]
+
+
+def is_backend_available(backend_name: str) -> bool:
+    """Check if a specific backend is available"""
+    return _backend_availability.get(
+        backend_name, BackendAvailability(backend_name, False)
+    ).available
+
+
+def get_backend_error(backend_name: str) -> str | None:
+    """Get the error message for an unavailable backend"""
+    return _backend_availability.get(
+        backend_name, BackendAvailability(backend_name, False)
+    ).error
+
+
+# Check availability of all backends at import time
+_check_backend_availability("pygsti_circuit", "pygsti")
+_check_backend_availability("pygsti_model", "pygsti")
+_check_backend_availability("stim_circuit", "stim")
+_check_backend_availability("stim_state", "stim")
+_check_backend_availability("qsim_state", "quantumsim")
+
+
+# Import concrete backend classes with conditional availability
+def __getattr__(name: str) -> Any:
+    """Lazy import of backend classes based on availability"""
+    if name == "PyGSTiPhysicalCircuit":
+        if is_backend_available("pygsti_circuit"):
+            from .circuit.pygsticircuit import PyGSTiPhysicalCircuit
+
+            return PyGSTiPhysicalCircuit
+        else:
+            raise ImportError(
+                f"PyGSTi circuit backend is not available. "
+                f"Error: {get_backend_error('pygsti_circuit')}"
+            )
+    elif name == "STIMPhysicalCircuit":
+        if is_backend_available("stim_circuit"):
+            from .circuit.stimcircuit import STIMPhysicalCircuit
+
+            return STIMPhysicalCircuit
+        else:
+            raise ImportError(
+                f"STIM circuit backend is not available. "
+                f"Error: {get_backend_error('stim_circuit')}"
+            )
+    elif name == "PyGSTiNoiseModel":
+        if is_backend_available("pygsti_model"):
+            from .model.pygstimodel import PyGSTiNoiseModel
+
+            return PyGSTiNoiseModel
+        else:
+            raise ImportError(
+                f"PyGSTi model backend is not available. "
+                f"Error: {get_backend_error('pygsti_model')}"
+            )
+    elif name == "STIMQuantumState":
+        if is_backend_available("stim_state"):
+            from .state.stimstate import STIMQuantumState
+
+            return STIMQuantumState
+        else:
+            raise ImportError(
+                f"STIM state backend is not available. "
+                f"Error: {get_backend_error('stim_state')}"
+            )
+    elif name == "QSimQuantumState":
+        if is_backend_available("qsim_state"):
+            from .state.qsimstate import QSimQuantumState
+
+            return QSimQuantumState
+        else:
+            raise ImportError(
+                f"QSim backend is not available. "
+                f"Error: {get_backend_error('qsim')}"
+            )
+
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
 def propagate_state(

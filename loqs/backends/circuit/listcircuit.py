@@ -1,10 +1,19 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.ListPhysicalCircuit` definition.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
 
@@ -42,13 +51,20 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         circuit: ListCircuitCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
-        from loqs.backends.circuit import PyGSTiPhysicalCircuit
+        from loqs.backends import is_backend_available
+
+        try:
+            from loqs.backends import PyGSTiPhysicalCircuit
+        except ImportError:
+            PyGSTiPhysicalCircuit = Any
 
         self._circuit = []
         if isinstance(circuit, ListPhysicalCircuit):
             self._circuit = circuit.circuit.copy()
             self._qubit_labels = circuit.qubit_labels
-        elif isinstance(circuit, PyGSTiPhysicalCircuit):
+        elif is_backend_available("pygsti_circuit") and isinstance(
+            circuit, PyGSTiPhysicalCircuit
+        ):
             try:
                 circuit = PyGSTiPhysicalCircuit.cast(circuit)
 
@@ -61,7 +77,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
                 self._circuit = layers
 
                 if qubit_labels is None:
-                    qubit_labels = circuit.circuit.line_labels
+                    qubit_labels = circuit.circuit.line_labels  # type: ignore
             except ImportError as e:
                 raise ValueError("Could not cast pyGSTi circuit") from e
         elif isinstance(circuit, Sequence):

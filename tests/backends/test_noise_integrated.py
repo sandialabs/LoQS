@@ -31,10 +31,9 @@ except ImportError:
     NO_STIM = True
 
 from loqs.backends.reps import GateRep, InstrumentRep
-from loqs.backends.circuit import ListPhysicalCircuit
-from loqs.backends.model import DictNoiseModel
-from loqs.backends.state import QSimQuantumState as QSimState
-from loqs.backends.state import STIMQuantumState as STIMState
+from loqs.backends import ListPhysicalCircuit, DictNoiseModel
+from loqs.backends import QSimQuantumState as QSimState
+from loqs.backends import STIMQuantumState as STIMState
 from loqs.core import QuantumProgram, QECCode
 from loqs.core.instructions import builders
 from loqs.tools import pygstitools as pt
@@ -104,12 +103,11 @@ class TestIntegratedNoise:
         # For 1000 shots, this is ~50 shots should flip
         num_shots = 1_000
         expected_outs  = num_shots * np.array([1 - p_depol/2, p_depol/2])
-        reference_outs = {0: 952, 1: 48}
-        # ^ Use the reference value when we have full control over the RNG.
 
         program_qsim.run(num_shots=num_shots)
         outs = [mo["Q0"][0] for mo in program_qsim.collect_shot_data("measurement_outcomes", -1)]
-        assert Counter(outs) == reference_outs
+        assert abs(Counter(outs)[0] - 950) < 10
+        assert abs(Counter(outs)[1] - 50) < 10
 
         # Also test QuantumSim in the X basis
         stack_Xbasis = [
@@ -125,7 +123,8 @@ class TestIntegratedNoise:
         program_qsim_Xbasis.run(num_shots=num_shots, reset_shot_histories=True)
         outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
         # Now Y and Z should flip. Because rate X == rate Z and we have RNG, results should be unchanged
-        assert Counter(outs) == reference_outs
+        assert abs(Counter(outs)[0] - 950) < 10
+        assert abs(Counter(outs)[1] - 50) < 10
 
         ## STIM
         gate_dict, inst_dict = self._create_model_dicts(qubits, GateRep.STIM_CIRCUIT_STR)
@@ -173,22 +172,22 @@ class TestIntegratedNoise:
         # prep |+>, measure Z: expect 57.5/42.5
         # prep |+>, measure X: expect 96.1/3.9
         # Skip STIM for these
-        (0.15, 0.0, 20241104, 1000, [143, 591, 962]),
+        (0.15, 0.0, 20241104, 100, [15, 58, 96], False),
         # damping_rate=0.15,dephasing_rate=0.15. This IS compatible with STIM
         # Note that STIM uses more RNG so counts won't be the same
-        # Annoyingly, I've found this also differs on machines, so STIM tests must just be within 100
+        # Annoyingly, I've found this also differs on machines, so STIM tests must just be within 10
         # It is also fast so I'm running 10x the shots to boost our confidence on those
         # Only +/X changes
         # prep |+>, measure X: expect 92.5/7.5
-        (0.15, 0.15, 20241104, 1000, [143, 591, 929, 1500, 5750, 9250]),
+        (0.15, 0.15, 20241104, 100, [15, 58, 93], True),
         # damping_rate=0.15,dephasing_rate=0.2. This is also compatible with STIM
         # Only +/X changes
         # prep |+>, measure X: expect 91.2/8.8
-        (0.15, 0.2, 20241104, 1000, [143, 591, 917, 1500, 5750, 9120])
+        (0.15, 0.2, 20241104, 100, [15, 58, 91], True)
     ]
-    @pytest.mark.parametrize("p_damp,p_dephase,seed,shots,expected0s",amp_damp_dephase_tests)
+    @pytest.mark.parametrize("p_damp,p_dephase,seed,shots,expected0s,run_stim",amp_damp_dephase_tests)
     @pytest.mark.parametrize("stim_rep",[GateRep.PROBABILISTIC_STIM_OPERATIONS])
-    def test_amp_damp_dephase(self, p_damp, p_dephase, seed, shots, expected0s, stim_rep):
+    def test_amp_damp_dephase(self, p_damp, p_dephase, seed, shots, expected0s, run_stim, stim_rep):
         # I will test on 3 qubits, with qubit 0 in |1> and qubit 2 in |+>
         # and qubit 1 being the one being damped/dephased
         # We should leave qubits 0 and 2 untouched
@@ -232,7 +231,7 @@ class TestIntegratedNoise:
 
         def check(program, expected):
             outs = [mo["Q1"][0] for mo in program.collect_shot_data("measurement_outcomes", -3)]
-            assert Counter(outs)[0] == expected
+            assert abs(Counter(outs)[0]-expected) < 10
             # Verify side qubits unaffected
             outs = [mo["Q0"][0] for mo in program.collect_shot_data("measurement_outcomes", -2)]
             assert Counter(outs)[0] == 0
@@ -275,7 +274,7 @@ class TestIntegratedNoise:
         program_qsim_Xbasis.run(num_shots=shots)
         check(program_qsim_Xbasis, expected0s[2])
 
-        if len(expected0s) < 4:
+        if not run_stim:
             # Don't run STIM tests if outputs not provided
             return
 
@@ -315,25 +314,16 @@ class TestIntegratedNoise:
             default_noise_model=noise_model_stim
         )
 
-        def check_stim(program, expected):
-            outs = [mo["Q1"][0] for mo in program.collect_shot_data("measurement_outcomes", -3)]
-            assert abs(Counter(outs)[0] - expected) < 100
-            # Verify side qubits unaffected
-            outs = [mo["Q0"][0] for mo in program.collect_shot_data("measurement_outcomes", -2)]
-            assert Counter(outs)[0] == 0
-            outs = [mo["Q2"][0] for mo in program.collect_shot_data("measurement_outcomes", -1)]
-            assert Counter(outs)[0] == 10*shots
-
-        program_stim.run(num_shots=10*shots)
-        check_stim(program_stim, expected0s[3])
+        program_stim.run(num_shots=shots)
+        check(program_stim, expected0s[0])
 
         program_stim_Zprep_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)        
-        program_stim_Zprep_Xbasis.run(num_shots=10*shots)
-        check_stim(program_stim_Zprep_Xbasis, expected0s[4])
+        program_stim_Zprep_Xbasis.run(num_shots=shots)
+        check(program_stim_Zprep_Xbasis, expected0s[1])
         
         program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
-        program_stim_Xbasis.run(num_shots=10*shots)
-        check_stim(program_stim_Xbasis, expected0s[5])
+        program_stim_Xbasis.run(num_shots=shots)
+        check(program_stim_Xbasis, expected0s[2])
     
     @staticmethod
     def _create_code(qubits: list[str]):

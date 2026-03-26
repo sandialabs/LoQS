@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """Functions to construct common :class:`.Instruction` objects.
 
 Each function documents both how to use it, as well
@@ -18,16 +27,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import inspect as ins
 import numpy as np
-import typing
+from typing import TYPE_CHECKING, Any
 
-from loqs.backends import propagate_state
-from loqs.backends.circuit import BasePhysicalCircuit, STIMPhysicalCircuit
+from loqs.backends import is_backend_available, propagate_state
+from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import (
     BaseNoiseModel,
     TimeDependentBaseNoiseModel,
-    PyGSTiNoiseModel,
 )
-from loqs.backends.state import BaseQuantumState, STIMQuantumState
+from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
 from loqs.core.history import History
 from loqs.core.instructions import Instruction
@@ -40,14 +48,38 @@ from loqs.core.instructions.instructionstack import (
     InstructionStack,
     InstructionStackCastableTypes,
 )
-from loqs.core.qeccode import QECCode, QECCodePatch
-from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
-from loqs.core.syndrome import (
+from loqs.core.qeccode import QECCode
+from loqs.core.recordables import (
+    MeasurementOutcomes,
+    PatchDict,
     PauliFrame,
+    QECCodePatch,
+)
+from loqs.core.syndromelabel import (
     SyndromeLabel,
     SyndromeLabelCastableTypes,
 )
+
+# Conditional imports for PyGSTi
+if TYPE_CHECKING:
+    # Type checking imports - these won't be executed at runtime
+    from loqs.backends import (
+        STIMQuantumState,
+        STIMPhysicalCircuit,
+        PyGSTiNoiseModel,
+    )
+else:
+    # Runtime imports - these will be attempted only when needed
+    try:
+        from loqs.backends import PyGSTiNoiseModel
+    except ImportError:
+        PyGSTiNoiseModel = Any  # type: ignore
+
+    try:
+        from loqs.backends import STIMQuantumState, STIMPhysicalCircuit
+    except ImportError:
+        STIMQuantumState = Any  # type: ignore
+        STIMPhysicalCircuit = Any  # type: ignore
 
 
 def build_composite_instruction(
@@ -257,9 +289,7 @@ def build_lookup_decoder_instruction(
         prev_frame_info = None
         if diff_prev_syndrome:
             for i, frame in enumerate(history[::-1]):
-                prev_syndrome = typing.cast(
-                    list[int] | None, frame.get(raw_syndrome_frame_key, None)
-                )
+                prev_syndrome = frame.get(raw_syndrome_frame_key, None)
                 if prev_syndrome is None:
                     continue
                 assert isinstance(prev_syndrome, list)
@@ -776,19 +806,16 @@ def build_physical_circuit_instruction(
 
             data["patches"] = new_patches
 
-        if (
-            isinstance(model, TimeDependentBaseNoiseModel)
-            and not isinstance(model, PyGSTiNoiseModel)
-        ) or (
-            isinstance(model, PyGSTiNoiseModel) and model.use_time_dependence
-        ):
+        if isinstance(model, TimeDependentBaseNoiseModel):
             data["current_model_time"] = model.current_time
         if len(outcomes):
             data["measurement_outcomes"] = MeasurementOutcomes(outcomes)
         if len(error_injections):
             data["errored_circuit"] = errored_circuit
         # TODO: Make this more general, maybe models have a "save_to_frame_attrs" or somethign
-        if isinstance(state, STIMQuantumState):
+        if not is_backend_available("stim_state") and isinstance(
+            state, STIMQuantumState
+        ):
             data["applied_stim_circuit_str"] = str(
                 state.latest_applied_circuit
             )

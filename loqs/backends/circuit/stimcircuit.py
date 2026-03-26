@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.STIMPhysicalCircuit` definition.
 """
 
@@ -5,15 +14,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
 import textwrap
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 import warnings
 
-from loqs.backends.circuit import BasePhysicalCircuit
+from loqs.backends import BasePhysicalCircuit, is_backend_available
 
-try:
+# Conditional imports for STIM
+if TYPE_CHECKING:
+    # Type checking imports - these won't be executed at runtime
     from stim import Circuit as _Circuit
-except ImportError as e:
-    raise ImportError("Failed import, cannot use STIM as backend") from e
+else:
+    # Runtime imports - these will be attempted only when needed
+    try:
+        from stim import Circuit as _Circuit
+    except ImportError:
+        _Circuit = Any  # type: ignore
 
 ## Type aliases for static type checking
 QubitTypes: TypeAlias = str | int
@@ -173,6 +188,11 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         qubit_labels: Sequence[QubitTypes] | None = None,
         suppress_tick_warning: bool = False,
     ) -> None:
+        if not is_backend_available("stim_circuit"):
+            raise ImportError(
+                "STIM backend is not available. "
+                "Please install stim: pip install loqs[stim]"
+            )
         if isinstance(circuit, STIMPhysicalCircuit):
             self._circuit = circuit.circuit.copy()
             self._qubit_labels = circuit.qubit_labels

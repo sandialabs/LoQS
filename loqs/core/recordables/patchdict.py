@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.PatchDict` definition.
 """
 
@@ -6,8 +15,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, MutableMapping
 from typing import ClassVar, TypeAlias, TypeVar
 
-from loqs.core import QECCodePatch
+from loqs.core.recordables.qeccodepatch import QECCodePatch
 from loqs.internal import MapCastable, Displayable
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="PatchDict")
@@ -32,6 +42,8 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
     """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    SERIALIZE_ATTRS = ["patches"]
 
     patches: dict[str, QECCodePatch]
     """Underlying dict of patch labels and :class:`.QECCodePatch` objects.
@@ -74,14 +86,6 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
         str_dict = {k: str(v) for k, v in self.patches.items()}
         return f"PatchDict({str_dict})"
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                tuple(self.patches.keys()),
-                tuple(hash(p) for p in self.patches.values()),
-            )
-        )
-
     @property
     def all_qubit_labels(self) -> list[str | int]:
         """All qubits managed by patches in this :class:`.PatchDict`."""
@@ -99,26 +103,3 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
             The copied :class:`.PatchDict`
         """
         return PatchDict(self.patches.copy())
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        patches = cls.deserialize(state["patches"], serial_id_to_obj_cache)
-        assert isinstance(patches, dict)
-        return cls(patches)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "patches": self.serialize(
-                    self.patches,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                )
-            }
-        )
-        return state

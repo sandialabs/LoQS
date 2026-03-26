@@ -1,10 +1,11 @@
-# LoQS (Public Release)
+# LoQS v1.0
 
-![pipeline](https://gitlab-ex.sandia.gov/QCVV/loqs-public/badges/main/pipeline.svg?ignore_skipped=true)
-![coverage](https://gitlab-ex.sandia.gov/QCVV/loqs-public/badges/main/coverage.svg)
+Static badges based on this [CI run](https://github.com/sandialabs/pyGSTi/actions/runs/23029812177/job/66885596222).
 
-This repository is intended to be a sanitized version of the Logical Qubit Simulator (LoQS)
-for eventual public release.
+![v1.0](https://img.shields.io/badge/v1.0-passing-brightgreen)
+![coverage](https://img.shields.io/badge/coverage-67%25-red)
+
+The *Lo*gical *Q*ubit *S*imulator (LoQS) is designed to simulate a few logical qubits with arbitrary noise models and arbitrary quantum *and* classical operations.
 
 ## Installation
 
@@ -88,18 +89,3 @@ jupytext --sync docs/markdown/*
 will synchronize all the Markdown files in `docs/markdown` with the Jupyter notebooks in `docs/notebook`. Only the 
 Markdown is committed and used for generating the JupyterBook, but the notebooks can be handy to test execution
 in an interactive way.
-
-### GitLab Autobuilt Documentation
-
-The documentation is built as part of the GitLab CI/CD Pipeline on every commit.
-Unfortunately, GitLab-EX does not have Pages it seems, so we can't view this by URL easily.
-However, it is straightforward to download the latest documentation.
-
-1. Navigate to Build > Pipelines.
-2. Find the latest Pipeline that has a green checkmark in the third circle (first is linting, second is unit tests, and third is building docs).
-3. Go over to the arrow in a tray icon, which lets you download artifacts.
-4. There should only be one artifact, which is for "Build documentation".
-5. Click on it to download the file. Unzip it to a `public` folder, and then open `index.html` in your favorite web browser.
-6. Profit! You now have the up-to-date docs.
-
-![image info](./docs/images/PipelineArtifact.png)

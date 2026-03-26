@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`InstructionLabel` definition.
 """
 
@@ -8,6 +17,7 @@ from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions.instruction import Instruction
 from loqs.internal import SeqCastable, Displayable
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="InstructionLabel")
@@ -62,6 +72,14 @@ class InstructionLabel(SeqCastable, Displayable):
     """Additional kwargs to pass on.
     """
 
+    SERIALIZE_ATTRS = [
+        "instruction",
+        "inst_label",
+        "patch_label",
+        "inst_args",
+        "inst_kwargs",
+    ]
+
     def __init__(
         self,
         inst_or_label: Instruction | str,
@@ -103,6 +121,31 @@ class InstructionLabel(SeqCastable, Displayable):
             inst_kwargs = {}
         self.inst_kwargs = dict(inst_kwargs)
 
+    @classmethod
+    def from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
+        """Create an InstructionLabel from decoded attributes dictionary."""
+        # Handle the case where instruction might be None
+        instruction = attr_dict.get("instruction")
+        inst_label = attr_dict.get("inst_label")
+
+        # Determine which one to use as the first argument
+        if instruction is not None:
+            inst_or_label: Instruction | str = instruction
+        else:
+            assert isinstance(inst_label, str)
+            inst_or_label = inst_label
+
+        obj = cls(
+            inst_or_label=inst_or_label,
+            patch_label=attr_dict.get("patch_label"),
+            inst_args=attr_dict.get("inst_args", []),
+            inst_kwargs=attr_dict.get("inst_kwargs", {}),
+        )
+
+        if inst_or_label == 0:
+            raise RuntimeError()
+        return obj
+
     def __str__(self) -> str:
         return repr(self)
 
@@ -124,17 +167,6 @@ class InstructionLabel(SeqCastable, Displayable):
                 s += ","
         s += "})\n"
         return s
-
-    def __hash__(self) -> int:
-        return hash(
-            (
-                hash(self.instruction),
-                hash(self.inst_label),
-                self.patch_label,
-                self.hash(self.inst_args),
-                self.hash(self.inst_kwargs),
-            )
-        )
 
     @classmethod
     def cast(cls, obj: object) -> InstructionLabel:
@@ -170,50 +202,3 @@ class InstructionLabel(SeqCastable, Displayable):
 
         # Assume this is a tuple of arguments, pass all in
         return cls(*obj)  # type: ignore
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        inst_label = cls.deserialize(
-            state["instruction"], serial_id_to_obj_cache
-        )
-        assert isinstance(inst_label, Instruction | None)
-        if inst_label is None:
-            inst_label = state["inst_label"]
-
-        patch_label = state["patch_label"]
-        inst_args = cls.deserialize(state["inst_args"], serial_id_to_obj_cache)
-        assert isinstance(inst_args, list)
-        inst_kwargs = cls.deserialize(
-            state["inst_kwargs"], serial_id_to_obj_cache
-        )
-        assert isinstance(inst_kwargs, dict)
-        return cls(inst_label, patch_label, inst_args, inst_kwargs)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "instruction": self.serialize(
-                    self.instruction,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "inst_label": self.inst_label,
-                "patch_label": self.patch_label,
-                "inst_args": self.serialize(
-                    self.inst_args,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "inst_kwargs": self.serialize(
-                    self.inst_kwargs,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-            }
-        )
-        return state

@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.RepTuple` and :class:`.RepEnum` definitions.
 """
 
@@ -5,12 +14,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from enum import Enum
+import h5py
+import numpy as np
 from types import NoneType
 from typing import Hashable, Literal, TypeAlias, TypeVar, Union
 import warnings
 
-import numpy as np
-
+from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.encoder.jsonencoder import JSONEncoder
+from loqs.internal.serializable import Serializable
 from loqs.types import Float, NDArray
 from loqs.internal import Castable, Displayable
 
@@ -21,23 +33,6 @@ U = TypeVar("U", bound="RepTuple")
 
 class RepEnum(Displayable, Enum):
     """Base class for all operation representation enums."""
-
-    def __hash__(self) -> int:
-        return hash((self.__class__.__name__, self.value))
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        value = state["value"]
-        return cls(value)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update({"value": self.value})
-        return state
 
 
 class GateRep(RepEnum):
@@ -152,6 +147,9 @@ class GateRep(RepEnum):
     Even when pre-computed probabilities are provided, Kraus operators should
     not be normalized, i.e. they should include the probability also.
     """
+
+
+GateRep.SERIALIZE_ATTRS = ["value"]
 
 
 class ConcreteGateReps:
@@ -284,6 +282,9 @@ class InstrumentRep(RepEnum):
     """
 
 
+InstrumentRep.SERIALIZE_ATTRS = ["value"]
+
+
 class ConcreteInstrumentReps:
     # Namespace class
 
@@ -329,6 +330,8 @@ class RepTuple(Castable, Displayable):
     reptype: RepEnum
     """Enum entry indicating how :attr:`.rep` should be interpreted."""
 
+    SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
+
     def __init__(
         self,
         rep: ConcreteGateRep | ConcreteInstrumentRep,
@@ -357,17 +360,6 @@ class RepTuple(Castable, Displayable):
     def __len__(self) -> int:
         return 3
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self.hash(
-                    self.rep
-                ),  # WAIT! self.rep isn't necessarily Hashable. See ZBASIS_OUTCOME_OPERATION_DICT_t.
-                self.hash(self.qubits),
-                self.hash(self.reptype),
-            )
-        )
-
     def __str__(self) -> str:
         return f"RepTuple({repr(self.rep)},{self.qubits},{self.reptype})"
 
@@ -389,26 +381,3 @@ class RepTuple(Castable, Displayable):
             return cls(*obj)
 
         raise ValueError(f"Cannot cast {obj} to a RepTuple")
-
-    @classmethod
-    def _from_serialization(
-        cls: type[U], state: Mapping, serial_id_to_obj_cache=None
-    ) -> U:
-        rep = cls.deserialize(state["rep"])
-        qubits = state["qubits"]
-        reptype = cls.deserialize(state["reptype"])
-        assert isinstance(reptype, RepEnum)
-        return cls(rep, qubits, reptype)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "rep": self.serialize(self.rep),
-                "qubits": self.qubits,
-                "reptype": self.serialize(self.reptype),
-            }
-        )
-        return state
