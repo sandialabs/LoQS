@@ -16,6 +16,7 @@ from collections.abc import Sequence, Mapping
 import textwrap
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 import warnings
+import re
 
 from loqs.backends import BasePhysicalCircuit, is_backend_available
 
@@ -366,8 +367,8 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         """
         other_circuit = STIMPhysicalCircuit.cast(circuit)
 
-        layers = self._unroll_repeats().split("TICK\n")
-        other_layers = other_circuit._unroll_repeats().split("TICK\n")
+        layers = self._unroll_repeats().split("\nTICK\n")
+        other_layers = other_circuit._unroll_repeats().split("\nTICK\n")
 
         # Ensure circuit is long enough for merge
         end = idx + other_circuit.depth
@@ -376,14 +377,33 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         # Perform merge
         for lidx in range(idx, end):
-            layers[lidx] += other_layers[lidx - idx]
+            
+            incoming = other_layers[lidx - idx]
+            current  = layers[lidx]
+            
+            targets_incoming = re.findall( r'\d+', incoming )
+            targets_current  = re.findall( r'\d+', current  )
 
-        self._circuit = _Circuit("TICK\n".join(layers))
+            collision = set(targets_current).intersection(targets_incoming)
+            
+            if collision := set(targets_current).intersection(targets_incoming):
+                msg  = f"Cannot merge\n{self}\nwith\n{circuit}.\n"
+                msg += f"Layer {lidx} of the candidate merge has ill-posed behavior\n"
+                msg += f"for target qubit(s) {collision}."
+                raise ValueError(msg)
+
+            layers[lidx] = current + '\n' + incoming
+
+        # Check for multiple constructions applied to the same qubit.
+
+        arg = "\nTICK\n".join(layers)
+        self._circuit = _Circuit(arg)
 
         # Also add any new qubit labels
         for other_qubit in other_circuit.qubit_labels:
             if other_qubit not in self.qubit_labels:
                 self._qubit_labels.append(other_qubit)
+        return
 
     def pad_single_qubit_idles_by_duration_inplace(
         self,
