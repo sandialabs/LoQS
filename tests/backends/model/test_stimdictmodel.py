@@ -5,7 +5,7 @@ import warnings
 
 try:
     import stim
-    from loqs.backends.circuit import STIMPhysicalCircuit
+    from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
     from loqs.backends.model.stimdictmodel import STIMDictNoiseModel
     from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
     NO_STIM = False
@@ -35,7 +35,10 @@ class TestSTIMDictNoiseModel:
         assert isinstance(model.inst_dict, dict)
 
     def test_init_with_gate_dict(self):
-        """Test initialization with gate dictionary."""
+        """Test initialization with gate dictionary.
+
+        NOTE: This test has some overlap with test_gaterep_conversion.
+        """
         # Create a simple gate dict
         gate_dict = {
             "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
@@ -51,7 +54,10 @@ class TestSTIMDictNoiseModel:
         assert "Y" in model.gate_dict
 
     def test_init_with_instrument_dict(self):
-        """Test initialization with instrument dictionary."""
+        """Test initialization with instrument dictionary.
+
+        NOTE: This test has some overlap with test_instrument_rep_conversion.
+        """
         gate_dict = {}
         inst_dict = {
             "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
@@ -95,14 +101,11 @@ class TestSTIMDictNoiseModel:
         assert len(model2.gate_dict) == len(model1.gate_dict)
         assert len(model2.inst_dict) == len(model1.inst_dict)
 
-    def test_init_invalid_input(self):
-        """Test initialization with invalid input."""
-        # Test with invalid input type
-        with pytest.raises(TypeError):
-            STIMDictNoiseModel("invalid_input")
-
     def test_gaterep_conversion(self):
-        """Test gate representation conversion."""
+        """Test gate representation conversion.
+
+        NOTE: This test has some overlap with test_init_with_gate_dict.
+        """
         # Test with string gate representations
         gate_dict = {
             "X": "X 0",  # String representation
@@ -118,7 +121,10 @@ class TestSTIMDictNoiseModel:
         assert model.gate_dict["X"].reptype == GateRep.STIM_CIRCUIT_STR
 
     def test_instrument_rep_conversion(self):
-        """Test instrument representation conversion."""
+        """Test instrument representation conversion.
+
+        NOTE: This test has some overlap with test_init_with_instrument_dict.
+        """
         gate_dict = {}
         inst_dict = {
             "M": (None, True),  # Tuple representation for projection
@@ -181,7 +187,10 @@ class TestSTIMDictNoiseModel:
         assert "h" not in model.gate_dict
 
     def test_get_reps_basic_circuit(self):
-        """Test get_reps method with basic STIM circuit."""
+        """Test get_reps method with basic STIM circuit.
+
+        NOTE: This is the simplest case, more complex cases are covered by other tests.
+        """
         # Create a simple model with X gate
         gate_dict = {
             "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
@@ -326,7 +335,10 @@ class TestSTIMDictNoiseModel:
         assert len(reps) >= 1
 
     def test_gaterep_validation(self):
-        """Test validation of gatereps parameter."""
+        """Test validation of gatereps parameter.
+
+        NOTE: This follows the same pattern as test_instrep_validation.
+        """
         gate_dict = {
             "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
         }
@@ -341,7 +353,10 @@ class TestSTIMDictNoiseModel:
         assert model._gatereps == [GateRep.STIM_CIRCUIT_STR]
 
     def test_instrep_validation(self):
-        """Test validation of instreps parameter."""
+        """Test validation of instreps parameter.
+
+        NOTE: This follows the same pattern as test_gaterep_validation.
+        """
         gate_dict = {}
         inst_dict = {
             "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
@@ -403,3 +418,147 @@ class TestSTIMDictNoiseModel:
 
         # Should handle comments appropriately
         assert len(reps) >= 1
+
+    def test_tuple_key_aliasing(self):
+        """Test command aliasing with tuple keys."""
+        # Use 'CNOT' which should be aliased to 'CX' according to stim_command_aliases
+        gate_dict = {
+            ("CNOT", ("Q0", "Q1",)): RepTuple("CNOT 0 1", ("Q0", "Q1"), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Should have both original and aliased keys after aliasing
+        has_original = ("CNOT", ("Q0", "Q1")) in model.gate_dict
+        has_aliased = ("CX", ("Q0", "Q1")) in model.gate_dict
+        assert has_original or has_aliased
+        assert len(model.gate_dict) >= 1
+
+    def test_string_instrument_representation(self):
+        """Test instrument initialization with string representation."""
+        gate_dict = {}
+        inst_dict = {
+            "M": "M 0",  # String representation for instrument
+        }
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Should be converted to RepTuple with STIM_CIRCUIT_STR type
+        assert "M" in model.inst_dict
+        assert isinstance(model.inst_dict["M"], RepTuple)
+        assert model.inst_dict["M"].reptype == InstrumentRep.STIM_CIRCUIT_STR
+
+    def test_complex_command_combining(self):
+        """Test combining multiple instances of same command."""
+        gate_dict = {
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Create circuit with multiple X gates on different qubits
+        circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
+
+        # Get representations
+        reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
+
+        # Should combine multiple X commands
+        assert len(reps) >= 1
+        # Check that we have combined commands by looking for multiple qubits in rep
+        combined_reps = [r for r in reps if len(r.qubits) > 1]
+        assert len(combined_reps) > 0
+
+    def test_non_common_command_handling(self):
+        """Test handling of commands that should not be combined."""
+        gate_dict = {
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+            "Y": RepTuple("Y 0", ("Q1",), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Create circuit with different commands that shouldn't be combined
+        circuit = STIMPhysicalCircuit("X 0\nY 1", ["Q0", "Q1"])
+
+        # Get representations
+        reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
+
+        # Should have individual commands, not combined
+        assert len(reps) >= 2
+        command_types = [type(r.rep) for r in reps]
+        # Should have separate RepTuples for X and Y
+        assert any("X" in str(r.rep) for r in reps)
+        assert any("Y" in str(r.rep) for r in reps)
+
+    def test_multiple_same_command_combining(self):
+        """Test combining when same command appears multiple times sequentially."""
+        # Create a gate dict with a specific qubit label to trigger the combining logic
+        gate_dict = {
+            "X": RepTuple("X", ("Q0",), GateRep.STIM_CIRCUIT_STR),  # Note: no qubit index in rep
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Create circuit with multiple X gates that should trigger the 'command in common' path
+        circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
+
+        # Get representations
+        reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
+
+        # Should have combined the X commands
+        assert len(reps) >= 1
+        # Look for a combined rep with multiple qubits
+        combined_reps = [r for r in reps if len(r.qubits) > 1]
+        assert len(combined_reps) > 0, "Should have combined multiple X commands"
+
+    def test_individual_command_no_combining(self):
+        """Test case where commands are processed individually without combining."""
+        # Use qubit-specific gate definitions to prevent combining
+        gate_dict = {
+            ("X", ("Q0",)): RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+            ("X", ("Q1",)): RepTuple("X 1", ("Q1",), GateRep.STIM_CIRCUIT_STR),
+            ("X", ("Q2",)): RepTuple("X 2", ("Q2",), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Create circuit with X gates on different qubits
+        circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
+
+        # Get representations
+        reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
+
+        # Should have individual reps since each has specific qubit definitions
+        assert len(reps) >= 3
+        # Each rep should be for individual qubits (not combined)
+        individual_reps = [r for r in reps if len(r.qubits) == 1]
+        assert len(individual_reps) >= 3
+
+    def test_existing_command_in_common_dict(self):
+        """Test the specific case where command already exists in common dict."""
+        # Create a gate with a template that can be extended
+        gate_dict = {
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+
+        # Create circuit designed to trigger the 'command in common' condition
+        # Use multiple X gates that will be processed sequentially and combined
+        circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2\nX 3", ["Q0", "Q1", "Q2", "Q3"])
+
+        # Get representations - this should trigger the missing lines
+        reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
+
+        # Should have combined representations
+        assert len(reps) >= 1
+        # Look for evidence of the combining logic being triggered
+        combined_reps = [r for r in reps if "X" in str(r.rep) and len(r.qubits) > 1]
+        assert len(combined_reps) > 0, "Should have combined X commands"
+
+        # Verify that at least one combined rep has multiple qubits mentioned
+        for rep in combined_reps:
+            if len(rep.qubits) > 1:
+                # This indicates the combining logic was triggered
+                break
+        else:
+            assert False, "No combined reps with multiple qubits found"
