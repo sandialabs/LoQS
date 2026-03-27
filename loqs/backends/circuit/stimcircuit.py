@@ -240,7 +240,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def qubit_labels(self) -> list[QubitTypes]:
-        assert len(self._qubit_labels) >= self.circuit.num_qubits
+        assert len(self._qubit_labels) <= self.circuit.num_qubits
+        # ^ We'd like to assert equality, but stim Circuit objects
+        #   always report num_qubits == [max index of a qubit + 1].
         return self._qubit_labels
 
     def copy(self) -> STIMPhysicalCircuit:
@@ -273,6 +275,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             if q not in qubits_to_delete:
                 qubits_to_keep.append(q)
         self._qubit_labels = qubits_to_keep
+        self._num_qubits = len(qubits_to_keep)
 
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
@@ -504,3 +507,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             start = find_first_repeat_start(unrolled_lines)
 
         return "\n".join(unrolled_lines)
+
+    @staticmethod
+    def substitute_command_aliases(s: str) -> str:
+        for k, v in STIMPhysicalCircuit.stim_command_aliases.items():
+            s = s.replace(k, v)
+        return s
