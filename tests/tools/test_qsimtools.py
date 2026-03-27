@@ -9,7 +9,7 @@ except ImportError:
     NO_QSIM = True
 
 
-from loqs.backends.state import QSimQuantumState as QSimState
+from loqs.backends.state.qsimstate import QSimQuantumState as QSimState
 from loqs.tools.qsimtools import get_state_probs_phases, print_state_probs_phases
 
 
