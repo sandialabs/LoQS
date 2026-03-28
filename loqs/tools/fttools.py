@@ -280,11 +280,16 @@ def test_program_output(
         ``True`` if all outputs match expected, ``False`` on failure
     """
     if not skip_run:
-        test_program.run(num_shots=num_shots, verbose=False)
+        program_results = test_program.run(num_shots=num_shots, verbose=False)
+    else:
+        # If we're skipping the run, we need to get the results from somewhere
+        program_results = getattr(test_program, '_last_results', None)
+        if program_results is None:
+            raise ValueError("Cannot skip run when no previous results are available")
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
-        outs = test_program.collect_shot_data(*args)
+        outs = program_results.collect_shot_data(*args)
         for out in outs[-num_shots:]:
             if out != expected:
                 if verbose:

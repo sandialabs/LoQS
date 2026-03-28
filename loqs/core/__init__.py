@@ -37,3 +37,4 @@ from .syndromelabel import SyndromeLabel
 
 # After QECCodePatch
 from .quantumprogram import QuantumProgram
+from .programresults import ProgramResults

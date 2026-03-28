@@ -32,8 +32,8 @@ class TestVersionCompatibility:
         assert loaded_program.patch_types is not None
         assert list(loaded_program.patch_types.keys())[0] == "5Q"
 
-        loaded_program.run(2)
-        assert len(loaded_program.shot_histories) == 2
+        loaded_program_results = loaded_program.run(2)
+        assert len(loaded_program_results.shot_histories) == 2
     
     def test_function_import_updates(self):
         # This is a real physical circuit instruction apply_fn from version 0
