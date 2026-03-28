@@ -1,0 +1,4 @@
+build/
+src/
+htmlcov/
+**/__pycache/
