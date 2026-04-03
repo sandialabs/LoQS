@@ -279,7 +279,7 @@ def convert_run_programs_to_dataset(
         with the desired number of shots.
 
     collect_shot_data_args:
-        The arguments to :meth:`.QuantumProgram.collect_shot_data` to extract
+        The arguments to :meth:`.ProgramResults.collect_shot_data` to extract
         outcomes from each shot. The output should be a single element per shot.
 
     Returns
@@ -293,7 +293,12 @@ def convert_run_programs_to_dataset(
 
     ds = DataSet()
     for circ, prog in zip(circs, programs):
-        counts = Counter(prog.collect_shot_data(*collect_shot_data_args))
+        # Get program results from the program
+        program_results = getattr(prog, '_last_results', None)
+        if program_results is None:
+            # If no results stored, run the program
+            program_results = prog.run()
+        counts = Counter(program_results.collect_shot_data(*collect_shot_data_args))
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)

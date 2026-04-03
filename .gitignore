@@ -11,13 +11,15 @@ htmlcov
 
 .env
 .opencode
-.ignore
+.ralph/*.json
 
 docs/_build
 docs/**/_autosummary
 docs/**/*.ipynb
 docs/**/*.json
 docs/**/*.json.gz
+
+checkpoints/
 
 .vscode
 venv*/

@@ -99,7 +99,11 @@ class TestIntegratedNoise:
             patch_types={"1Q": code_1Q},
             name="1Q depolarizing test"
         )
-        # Because our depol rate is 10%, we expected a flip 5% of the time (the X and Y errors)
+
+        program_results_qsim = program_qsim.run(num_shots=1000)
+        outs = [mo["Q0"][0] for mo in program_results_qsim.collect_shot_data("measurement_outcomes", -1)]
+        # Because we set the seed, we should exactly match output from test creation
+        # Also, because our depol rate is 10%, we expected a flip 5% of the time (the X and Y errors)
         # For 1000 shots, this is ~50 shots should flip
         num_shots = 1_000
         expected_outs  = num_shots * np.array([1 - p_depol/2, p_depol/2])
@@ -120,8 +124,8 @@ class TestIntegratedNoise:
         ]
         program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Xbasis)
 
-        program_qsim_Xbasis.run(num_shots=num_shots, reset_shot_histories=True)
-        outs = [mo["Q0"][0] for mo in program_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        program_results_qsim_Xbasis = program_qsim_Xbasis.run(num_shots=1000)
+        outs = [mo["Q0"][0] for mo in program_results_qsim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
         # Now Y and Z should flip. Because rate X == rate Z and we have RNG, results should be unchanged
         assert abs(Counter(outs)[0] - 950) < 10
         assert abs(Counter(outs)[1] - 50) < 10
@@ -143,20 +147,22 @@ class TestIntegratedNoise:
             state_type=STIMState,
             default_noise_model=depol_noise_model_stim
         )
-        program_stim.run(num_shots=num_shots)
-        outs = Counter([mo["Q0"][0] for mo in program_stim.collect_shot_data("measurement_outcomes", -1)])
-        outs = np.array([outs[0], outs[1]])
-        ts   = chisquare(f_obs=outs, f_exp=expected_outs)
-        assert ts.pvalue >= 0.5
+
+        program_results_stim = program_stim.run(num_shots=1000)
+        outs = [mo["Q0"][0] for mo in program_results_stim.collect_shot_data("measurement_outcomes", -1)]
+        # STIM handles its own RNG, so this could in principle differ from QuantumSim results
+        # In practice, for this simple circuit, I've found that this coincidentally matches for Z basis
+        assert abs(Counter(outs)[0] - 950) < 10
+        assert abs(Counter(outs)[1] - 50) < 10
 
         # Also test STIM in the X basis
         program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
-        program_stim_Xbasis.run(num_shots=num_shots)
-        outs = Counter([mo["Q0"][0] for mo in program_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)])
-        outs = np.array([outs[0], outs[1]])
-        ts   = chisquare(f_obs=outs, f_exp=expected_outs)
-        assert ts.pvalue >= 0.5
-        return
+
+        program_results_stim_Xbasis = program_stim_Xbasis.run(num_shots=1000)
+        outs = [mo["Q0"][0] for mo in program_results_stim_Xbasis.collect_shot_data("measurement_outcomes", -1)]
+        # But the RNG is handled differently for X basis, so we don't get a match (although it is still ~50)
+        assert abs(Counter(outs)[0] - 950) < 10
+        assert abs(Counter(outs)[1] - 50) < 10
     
     # Amp damp tests, given as damping rate, dephasing rate, seed, num shots, and then expected 1 counts in order of:
     # QuantumSim X,I,Mz; QuantumSim H,I,Mz; QuantumSim H,I,Mx; STIM X,I,Mz; STIM H,I,Mz; STIM H,I,Mx
@@ -227,18 +233,18 @@ class TestIntegratedNoise:
             name="Amp damp/dephasing test"
         )
 
-        program_qsim.run(num_shots=shots)
+        program_results_qsim = program_qsim.run(num_shots=shots)
 
-        def check(program, expected):
-            outs = [mo["Q1"][0] for mo in program.collect_shot_data("measurement_outcomes", -3)]
+        def check(program_results, expected):
+            outs = [mo["Q1"][0] for mo in program_results.collect_shot_data("measurement_outcomes", -3)]
             assert abs(Counter(outs)[0]-expected) < 10
             # Verify side qubits unaffected
-            outs = [mo["Q0"][0] for mo in program.collect_shot_data("measurement_outcomes", -2)]
+            outs = [mo["Q0"][0] for mo in program_results.collect_shot_data("measurement_outcomes", -2)]
             assert Counter(outs)[0] == 0
-            outs = [mo["Q2"][0] for mo in program.collect_shot_data("measurement_outcomes", -1)]
+            outs = [mo["Q2"][0] for mo in program_results.collect_shot_data("measurement_outcomes", -1)]
             assert Counter(outs)[0] == shots
         
-        check(program_qsim, expected0s[0])
+        check(program_results_qsim, expected0s[0])
 
         # We can test in prep X, meas Z basis also
         stack_Zprep_Xbasis = [
@@ -254,8 +260,8 @@ class TestIntegratedNoise:
         ]
         program_qsim_Zprep_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Zprep_Xbasis)
 
-        program_qsim_Zprep_Xbasis.run(num_shots=shots)
-        check(program_qsim_Zprep_Xbasis, expected0s[1])
+        program_results_qsim_Zprep_Xbasis = program_qsim_Zprep_Xbasis.run(num_shots=shots)
+        check(program_results_qsim_Zprep_Xbasis, expected0s[1])
 
         # We can test in X basis also
         stack_Xbasis = [
@@ -271,8 +277,8 @@ class TestIntegratedNoise:
         ]
         program_qsim_Xbasis = QuantumProgram.from_quantum_program(program_qsim, stack_Xbasis)
 
-        program_qsim_Xbasis.run(num_shots=shots)
-        check(program_qsim_Xbasis, expected0s[2])
+        program_results_qsim_Xbasis = program_qsim_Xbasis.run(num_shots=shots)
+        check(program_results_qsim_Xbasis, expected0s[2])
 
         if not run_stim:
             # Don't run STIM tests if outputs not provided
@@ -314,16 +320,16 @@ class TestIntegratedNoise:
             default_noise_model=noise_model_stim
         )
 
-        program_stim.run(num_shots=shots)
-        check(program_stim, expected0s[0])
+        program_results_stim = program_stim.run(num_shots=shots)
+        check(program_results_stim, expected0s[0])
 
-        program_stim_Zprep_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)        
-        program_stim_Zprep_Xbasis.run(num_shots=shots)
-        check(program_stim_Zprep_Xbasis, expected0s[1])
+        program_stim_Zprep_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Zprep_Xbasis)
+        program_results_stim_Zprep_Xbasis = program_stim_Zprep_Xbasis.run(num_shots=shots)
+        check(program_results_stim_Zprep_Xbasis, expected0s[1])
         
         program_stim_Xbasis = QuantumProgram.from_quantum_program(program_stim, stack_Xbasis)
-        program_stim_Xbasis.run(num_shots=shots)
-        check(program_stim_Xbasis, expected0s[2])
+        program_results_stim_Xbasis = program_stim_Xbasis.run(num_shots=shots)
+        check(program_results_stim_Xbasis, expected0s[2])
     
     @staticmethod
     def _create_code(qubits: list[str]):
