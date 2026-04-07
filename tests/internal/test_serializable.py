@@ -452,15 +452,15 @@ class TestSerializableNestedData:
         assert loaded1.name == "obj1"
         assert loaded2.name == "obj2"
 
-    def test_same_serial_id_different_instances(self):
+    def test_same_serial_hash_different_instances(self):
         """Test objects with same serializable content but different instances."""
         # Create two objects with identical content but different instances
         obj1 = MockSerializable(name="test", value=42, data={"key": "value"})
         obj2 = MockSerializable(name="test", value=42, data={"key": "value"})
         
-        # Verify they have different ids but same serial_id
+        # Verify they have different ids but same serial_hash
         assert id(obj1) != id(obj2)
-        assert Serializable.serial_id(obj1) == Serializable.serial_id(obj2)
+        assert Serializable.serial_hash(obj1) == Serializable.serial_hash(obj2)
         
         # Test serialization with caching
         cache = {}
@@ -549,7 +549,7 @@ class TestSerializableNestedData:
         cache = {}
         state1 = Serializable.encode(obj1, format="json", encode_cache=cache, reset_encode_id=True)
         
-        # Should be source since it's the first time we see this serial_id
+        # Should be source since it's the first time we see this serial_hash
         assert state1["cache_type"] == "source"
         
         # The nested obj2 should also be a source since it has different content
@@ -838,19 +838,19 @@ class TestSerializableNestedData:
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
 
-    def test_serial_id_caching(self):
-        """Test the new serial_id caching mechanism."""
-        # Create objects with identical content (should have same serial_id)
+    def test_serial_hash_caching(self):
+        """Test the new serial_hash caching mechanism."""
+        # Create objects with identical content (should have same serial_hash)
         obj1 = MockSerializable(name="same", value=42, data={"key": "value"})
         obj2 = MockSerializable(name="same", value=42, data={"key": "value"})
         
-        # Verify they have the same serial_id but different object ids
-        serial_id1 = Serializable.serial_id(obj1)
-        serial_id2 = Serializable.serial_id(obj2)
+        # Verify they have the same serial_hash but different object ids
+        serial_hash1 = Serializable.serial_hash(obj1)
+        serial_hash2 = Serializable.serial_hash(obj2)
         obj_id1 = id(obj1)
         obj_id2 = id(obj2)
         
-        assert serial_id1 == serial_id2, "Objects with identical content should have same serial_id"
+        assert serial_hash1 == serial_hash2, "Objects with identical content should have same serial_hash"
         assert obj_id1 != obj_id2, "Different object instances should have different ids"
         
         # Test serialization with caching

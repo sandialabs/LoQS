@@ -138,7 +138,7 @@ class TestInstructionLabel:
             original.write(tempf.name)
             deserialized = InstructionLabel.read(tempf.name)
 
-        # Should be equal (content-wise after serial_id removal)
+        # Should be equal (content-wise after serial_hash removal)
         assert original.patch_label == deserialized.patch_label
         assert original.instruction.name == deserialized.instruction.name
         # Check lengths and types of args/kwargs (not exact equality due to different object instances)

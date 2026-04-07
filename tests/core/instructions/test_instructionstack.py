@@ -101,7 +101,7 @@ class TestInstructionStack:
             original.write(tempf.name)
             deserialized = InstructionStack.read(tempf.name)
 
-        # Should be equal (content-wise after serial_id removal)
+        # Should be equal (content-wise after serial_hash removal)
         assert len(original) == len(deserialized)
         for i in range(len(original)):
             assert original[i].patch_label == deserialized[i].patch_label
@@ -141,7 +141,7 @@ class TestInstructionStack:
             original.write(tempf.name)
             deserialized = InstructionStack.read(tempf.name)
 
-        # Should be equal (content-wise after serial_id removal)
+        # Should be equal (content-wise after serial_hash removal)
         assert len(original) == len(deserialized)
         for i in range(len(original)):
             assert original[i].patch_label == deserialized[i].patch_label

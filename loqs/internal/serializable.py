@@ -152,7 +152,7 @@ class Serializable:
     """
 
     @staticmethod
-    def serial_id(obj: Any, _visited: set | None = None) -> int:
+    def serial_hash(obj: Any, _visited: set | None = None) -> int:
         """
         Generate a unique serial ID for an object based on its serializable content.
 
@@ -191,27 +191,28 @@ class Serializable:
                 for attr in obj.SERIALIZE_ATTRS:
                     attr_value = obj.get_encoding_attr(attr)
                     attr_ids.append(
-                        Serializable.serial_id(attr_value, _visited)
+                        Serializable.serial_hash(attr_value, _visited)
                     )
                 return hash(tuple(attr_ids))
             elif isinstance(obj, list):
                 # For lists, hash the tuple of serial IDs of each element
                 return hash(
                     tuple(
-                        Serializable.serial_id(item, _visited) for item in obj
+                        Serializable.serial_hash(item, _visited)
+                        for item in obj
                     )
                 )
             elif isinstance(obj, dict):
                 # For dicts, hash the tuple of serial IDs of keys and values
-                keys_id = Serializable.serial_id(list(obj.keys()), _visited)
-                values_id = Serializable.serial_id(
+                keys_id = Serializable.serial_hash(list(obj.keys()), _visited)
+                values_id = Serializable.serial_hash(
                     list(obj.values()), _visited
                 )
                 return hash((keys_id, values_id))
             elif isinstance(obj, np.ndarray):
                 # For numpy arrays, hash the shape and flattened data
-                shape_id = Serializable.serial_id(obj.shape, _visited)
-                data_id = Serializable.serial_id(
+                shape_id = Serializable.serial_hash(obj.shape, _visited)
+                data_id = Serializable.serial_hash(
                     obj.flatten().tolist(), _visited
                 )
                 return hash((shape_id, data_id))
@@ -732,15 +733,15 @@ class Serializable:
         # Handle Serializable objects
         if isinstance(obj, Serializable):
             # Get serial ID for this object
-            serial_id = Serializable.serial_id(obj)
+            serial_hash = Serializable.serial_hash(obj)
             object_id = id(obj)
 
             # Check if this object is already in cache
             if encode_cache is not None and obj.CACHE_ON_SERIALIZE:
                 # First check if this specific object instance is already being processed
                 # This handles circular references within the same object graph
-                if serial_id in encode_cache:
-                    cached_entries = encode_cache[serial_id]
+                if serial_hash in encode_cache:
+                    cached_entries = encode_cache[serial_hash]
                     for entry in cached_entries:
                         if entry[0] == object_id:
                             # This object is already being processed (circular reference)
@@ -752,10 +753,10 @@ class Serializable:
                                 reference_cache_id=cache_id,
                             )
 
-                # Check if serial_id exists in cache (different instances with same content)
-                if serial_id in encode_cache:
+                # Check if serial_hash exists in cache (different instances with same content)
+                if serial_hash in encode_cache:
                     # Same serial content but different instance, create a copy
-                    source_cache_id = encode_cache[serial_id][0][
+                    source_cache_id = encode_cache[serial_hash][0][
                         1
                     ]  # First entry is the source
                     new_cache_id = (
@@ -765,7 +766,7 @@ class Serializable:
                     )
 
                     # Add to cache
-                    encode_cache[serial_id].append((object_id, new_cache_id))
+                    encode_cache[serial_hash].append((object_id, new_cache_id))
 
                     # Increment encoder ID
                     if format == "json":
@@ -786,7 +787,7 @@ class Serializable:
                         if format == "json"
                         else HDF5Encoder.ENCODE_ID
                     )
-                    encode_cache[serial_id] = [(object_id, cache_id)]
+                    encode_cache[serial_hash] = [(object_id, cache_id)]
 
                     # Increment encoder ID
                     if format == "json":

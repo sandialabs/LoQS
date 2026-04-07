@@ -25,9 +25,6 @@ class MockSerializable(Serializable):
         self.name = name
         self.value = value
 
-    def _serial_id(self):
-        return hash((self.name, self.value))
-
     def __eq__(self, other):
         return (
             isinstance(other, MockSerializable)
