@@ -451,7 +451,7 @@ class ProgramResults(Displayable):
             Dictionary mapping shot indices to History objects to be written.
         """
         from loqs.internal.serializable import Serializable
-        
+
         # Find the root group (should be the only one at root level)
         if len(h5_file.keys()) != 1:
             raise ValueError(
@@ -499,32 +499,41 @@ class ProgramResults(Displayable):
         if "data" in keys_iterable_group:
             # Dataset-based storage - extend existing datasets
             existing_keys = list(keys_iterable_group["data"][()])
-            
+
             # Load existing values from groups
             existing_values = []
             for i in range(len(existing_keys)):
                 if str(i) in values_iterable_group:
                     value_group = values_iterable_group[str(i)]
-                    existing_value = Serializable.decode(value_group, format="hdf5")
+                    existing_value = Serializable.decode(
+                        value_group, format="hdf5"
+                    )
                     existing_values.append(existing_value)
-            
+
             # Merge existing and new shot histories
             existing_shot_histories = dict(zip(existing_keys, existing_values))
-            merged_shot_histories = {**existing_shot_histories, **unwritten_shot_histories}
-            
+            merged_shot_histories = {
+                **existing_shot_histories,
+                **unwritten_shot_histories,
+            }
+
             # Delete old data
             del keys_iterable_group["data"]
             for key in list(values_iterable_group.keys()):
                 del values_iterable_group[key]
-            
+
             # Write merged data
             merged_keys = list(merged_shot_histories.keys())
             keys_iterable_group.create_dataset("data", data=merged_keys)
-            
-            for i, (shot_index, history) in enumerate(merged_shot_histories.items()):
+
+            for i, (shot_index, history) in enumerate(
+                merged_shot_histories.items()
+            ):
                 value_item_group = values_iterable_group.create_group(str(i))
-                Serializable.encode(history, format="hdf5", h5_group=value_item_group)
-            
+                Serializable.encode(
+                    history, format="hdf5", h5_group=value_item_group
+                )
+
         else:
             # Group-based storage - add individual entries (legacy format)
             current_keys = list(keys_iterable_group.keys())
@@ -540,7 +549,9 @@ class ProgramResults(Displayable):
             # Add each new shot to the checkpoint
             for shot_index, history in unwritten_shot_histories.items():
                 # Add key to keys iterable using proper integer index
-                key_item_group = keys_iterable_group.create_group(str(next_index))
+                key_item_group = keys_iterable_group.create_group(
+                    str(next_index)
+                )
                 Serializable.encode(
                     shot_index, format="hdf5", h5_group=key_item_group
                 )
