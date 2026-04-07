@@ -38,7 +38,6 @@ from loqs.core.instructions import builders
 from loqs.tools import pygstitools as pt
 
 
-
 @pytest.mark.skipif(
     NO_QSIM,
     reason="Skipping integrated noise backend tests due to failed QuantumSim import"
@@ -104,10 +103,6 @@ class TestIntegratedNoise:
         # Because we set the seed, we should exactly match output from test creation
         # Also, because our depol rate is 10%, we expected a flip 5% of the time (the X and Y errors)
         # For 1000 shots, this is ~50 shots should flip
-        num_shots = 1_000
-
-        program_results_qsim = program_qsim.run(num_shots=num_shots)
-        outs = [mo["Q0"][0] for mo in program_results_qsim.collect_shot_data("measurement_outcomes", -1)]
         assert abs(Counter(outs)[0] - 950) < 10
         assert abs(Counter(outs)[1] - 50) < 10
 
@@ -139,7 +134,6 @@ class TestIntegratedNoise:
             instreps=[InstrumentRep.ZBASIS_PROJECTION]
         )
 
-        # STIM handles its own RNG, so this could in principle can differ from QuantumSim results
         program_stim = QuantumProgram.from_quantum_program(
             program_qsim,
             state_type=STIMState,
