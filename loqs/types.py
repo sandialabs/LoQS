@@ -6,5 +6,5 @@ NDArray: TypeAlias = np.ndarray
 SPSArray: TypeAlias = sps.spmatrix
 Float: TypeAlias = float | np.floating
 Int: TypeAlias = int | np.integer
-Bool: TypeAlias = bool | np.bool
+Bool: TypeAlias = bool | np.bool_
 Complex: TypeAlias = complex | np.complexfloating
