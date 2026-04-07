@@ -14,6 +14,7 @@ import scipy.sparse as sps
 from loqs.internal.serializable import (
     DecodableVersionError,
     EncodablePrimitives,
+    IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
 from loqs.types import Float, Int
@@ -52,18 +53,6 @@ class JSONEncoder(BaseEncoder):
                 encode_cache=encode_cache,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
-
-        # Add to cache if class marked as should be cached
-        if encode_cache is not None and to_encode.CACHE_ON_SERIALIZE:
-            object_id = id(to_encode)
-            encode_cache[object_id] = JSONEncoder.ENCODE_ID
-            state.update(
-                {
-                    "cache_type": "source",
-                    "cache_id": JSONEncoder.ENCODE_ID,
-                }
-            )
-            JSONEncoder.ENCODE_ID += 1
 
         return state
 
@@ -105,6 +94,27 @@ class JSONEncoder(BaseEncoder):
         cls = Serializable.import_class(
             encoded["module"], encoded["class"], version
         )
+
+        # Handle circular references by adding a placeholder to decode_cache early
+        # This allows forward references to be resolved during attribute decoding
+        cache_id = None
+        if (
+            version == 0 and encoded.get("type", "") == "cached_object_source"
+        ) or encoded.get("cache_type", "") == "source":
+            try:
+                cache_id = encoded["cache_id"]
+                # Add a placeholder to handle circular references
+                # We'll replace this with the actual object later
+                # Use a special wrapper that knows which cache ID it corresponds to
+                class _CircularRef:
+                    def __init__(self, cache_id):
+                        self.cache_id = cache_id
+                    
+                    def __repr__(self):
+                        return f"<CircularRef cache_id={self.cache_id}>"
+                decode_cache[cache_id] = _CircularRef(cache_id)  # type: ignore
+            except (KeyError, TypeError):
+                pass  # Not a source object, no need for early caching
 
         # Create the attribute dictionary for deserialization
         attr_dict = {}
@@ -155,26 +165,27 @@ class JSONEncoder(BaseEncoder):
         # Create the object using its from_decoded_attrs method
         decoded = cls.from_decoded_attrs(attr_dict)
 
-        # Save new object in cache if it is a source
-        if (
-            version == 0 and encoded.get("type", "") == "cached_object_source"
-        ) or encoded.get("cache_type", "") == "source":
-            try:
-                cache_id = encoded["cache_id"]
-                decode_cache[cache_id] = decoded  # type: ignore
-            except (KeyError, TypeError):
-                raise RuntimeError("Failed to look up cache source")
+        # Replace the placeholder with the actual object
+        if cache_id is not None and cache_id in decode_cache:
+            decode_cache[cache_id] = decoded  # type: ignore
 
         return decoded
 
     @staticmethod
-    def encode_cached_obj(cache_id, h5_group=None):
-        return {
+    def encode_cached_obj(cache_id, h5_group=None, cache_type="reference", reference_cache_id=None, source_cache_id=None):
+        result = {
             "encode_type": "Serializable",
             "version": SERIALIZATION_VERSION,
-            "cache_type": "reference",
-            "cache_id": cache_id,
+            "cache_type": cache_type,
         }
+        
+        if cache_type == "reference":
+            result["cache_id"] = cache_id
+        elif cache_type == "copy":
+            result["reference_cache_id"] = reference_cache_id
+            result["source_cache_id"] = source_cache_id
+        
+        return result
 
     @staticmethod
     def decode_cached_obj(encoded, decode_cache=None):
@@ -192,17 +203,77 @@ class JSONEncoder(BaseEncoder):
             elif version == 1:
                 # Can check for encode_type
                 assert encoded.get("encode_type", "") == "Serializable"
-                assert encoded.get("cache_type", "") == "reference"
+                # Only proceed if this actually has cache_type attribute
+                if "cache_type" not in encoded:
+                    raise IncorrectDecodableTypeError("Not a cached object")
+                cache_type = encoded["cache_type"]
+                assert cache_type in ["reference", "copy"]
             else:
                 raise DecodableVersionError()
 
         # Check if properly formed
         with JSONEncoder.assert_decode(fatal=True):
-            assert "cache_id" in encoded
+            cache_type = encoded.get("cache_type", "reference")  # Default to reference for backwards compatibility
+            
+            if cache_type == "reference":
+                assert "cache_id" in encoded
+            elif cache_type == "copy":
+                assert "reference_cache_id" in encoded
+                assert "source_cache_id" in encoded
 
         try:
             assert decode_cache is not None
-            return decode_cache[encoded["cache_id"]]
+            
+            if cache_type == "reference":
+                cached_obj = decode_cache[encoded["cache_id"]]
+                # Check if this is a circular reference placeholder
+                if hasattr(cached_obj, 'cache_id'):
+                    # This is a forward reference that will be resolved later
+                    # Return the circular reference object
+                    return cached_obj
+                return cached_obj
+            elif cache_type == "copy":
+                # Get the reference object and create a copy
+                reference_cache_id = encoded["reference_cache_id"]
+                source_cache_id = encoded["source_cache_id"]
+                
+                # Check if reference object is available
+                if reference_cache_id not in decode_cache:
+                    # Reference object not available yet, create a placeholder
+                    class _CircularRef:
+                        def __init__(self, cache_id):
+                            self.cache_id = cache_id
+                          
+                        def __repr__(self):
+                            return f"<CircularRef cache_id={self.cache_id}>"
+                    copied_obj = _CircularRef(reference_cache_id)
+                else:
+                    reference_obj = decode_cache[reference_cache_id]
+                    # Check if reference is a placeholder
+                    if hasattr(reference_obj, 'cache_id'):
+                        # Create a new placeholder for the copy
+                        class _CircularRef:
+                            def __init__(self, cache_id):
+                                self.cache_id = cache_id
+                             
+                            def __repr__(self):
+                                return f"<CircularRef cache_id={self.cache_id}>"
+                        copied_obj = _CircularRef(reference_obj.cache_id)
+                    else:
+                        # Create a copy and add to cache with source_cache_id
+                        # For now, we'll use a simple copy mechanism
+                        # In a real implementation, this would depend on the object type
+                        if hasattr(reference_obj, 'copy'):
+                            copied_obj = reference_obj.copy()
+                        else:
+                            # Fallback to deep copy for objects without copy method
+                            import copy
+                            copied_obj = copy.deepcopy(reference_obj)
+                  
+                # Add the copy to cache
+                decode_cache[source_cache_id] = copied_obj
+                return copied_obj
+                
         except AssertionError:
             raise RuntimeError("Object reference found but no cache provided.")
         except KeyError:

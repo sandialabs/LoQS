@@ -439,10 +439,9 @@ class ProgramResults(Displayable):
     ) -> None:
         """Merge new shots into an existing checkpoint file.
 
-        This method follows the standard HDF5 encoding pattern by:
-        1. Finding the existing shot_histories group structure
-        2. Adding new entries to the keys and values iterable groups
-        3. Using Serializable.encode() for proper encoding
+        This method handles both dataset-based and group-based storage formats:
+        - If iterable contains datasets (modern format), extend the datasets
+        - If iterable contains groups (legacy format), add individual entries
 
         Parameters
         ----------
@@ -451,6 +450,8 @@ class ProgramResults(Displayable):
         unwritten_shot_histories:
             Dictionary mapping shot indices to History objects to be written.
         """
+        from loqs.internal.serializable import Serializable
+        
         # Find the root group (should be the only one at root level)
         if len(h5_file.keys()) != 1:
             raise ValueError(
@@ -494,34 +495,65 @@ class ProgramResults(Displayable):
         keys_iterable_group = keys_group["iterable"]
         values_iterable_group = values_group["iterable"]
 
-        # Get current number of entries to determine next index
-        current_keys = list(keys_iterable_group.keys())
-        current_values = list(values_iterable_group.keys())
+        # Check if we have dataset-based storage (modern format)
+        if "data" in keys_iterable_group:
+            # Dataset-based storage - extend existing datasets
+            existing_keys = list(keys_iterable_group["data"][()])
+            
+            # Load existing values from groups
+            existing_values = []
+            for i in range(len(existing_keys)):
+                if str(i) in values_iterable_group:
+                    value_group = values_iterable_group[str(i)]
+                    existing_value = Serializable.decode(value_group, format="hdf5")
+                    existing_values.append(existing_value)
+            
+            # Merge existing and new shot histories
+            existing_shot_histories = dict(zip(existing_keys, existing_values))
+            merged_shot_histories = {**existing_shot_histories, **unwritten_shot_histories}
+            
+            # Delete old data
+            del keys_iterable_group["data"]
+            for key in list(values_iterable_group.keys()):
+                del values_iterable_group[key]
+            
+            # Write merged data
+            merged_keys = list(merged_shot_histories.keys())
+            keys_iterable_group.create_dataset("data", data=merged_keys)
+            
+            for i, (shot_index, history) in enumerate(merged_shot_histories.items()):
+                value_item_group = values_iterable_group.create_group(str(i))
+                Serializable.encode(history, format="hdf5", h5_group=value_item_group)
+            
+        else:
+            # Group-based storage - add individual entries (legacy format)
+            current_keys = list(keys_iterable_group.keys())
+            current_values = list(values_iterable_group.keys())
 
-        if len(current_keys) != len(current_values):
-            raise ValueError(
-                "Invalid checkpoint file - keys and values have different lengths"
-            )
+            if len(current_keys) != len(current_values):
+                raise ValueError(
+                    "Invalid checkpoint file - keys and values have different lengths"
+                )
 
-        next_index = len(current_keys)
+            next_index = len(current_keys)
 
-        # Add each new shot to the checkpoint using standard encoding
-        for shot_index, history in unwritten_shot_histories.items():
-            # Add key to keys iterable using proper integer index
-            key_item_group = keys_iterable_group.create_group(str(next_index))
-            Serializable.encode(
-                shot_index, format="hdf5", h5_group=key_item_group
-            )
+            # Add each new shot to the checkpoint
+            for shot_index, history in unwritten_shot_histories.items():
+                # Add key to keys iterable using proper integer index
+                key_item_group = keys_iterable_group.create_group(str(next_index))
+                Serializable.encode(
+                    shot_index, format="hdf5", h5_group=key_item_group
+                )
 
-            # Add value (History) to values iterable using proper integer index
-            value_item_group = values_iterable_group.create_group(
-                str(next_index)
-            )
-            Serializable.encode(
-                history, format="hdf5", h5_group=value_item_group
-            )
+                # Add value (History) to values iterable using proper integer index
+                value_item_group = values_iterable_group.create_group(
+                    str(next_index)
+                )
+                Serializable.encode(
+                    history, format="hdf5", h5_group=value_item_group
+                )
 
-            next_index += 1
+                next_index += 1
 
     def _write_full_checkpoint_structure(
         self, h5_file, shot_histories: dict[int, History]

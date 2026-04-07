@@ -211,7 +211,7 @@ class TestEncoderParameterized:
         test_list = [1, 2, 3]
 
         # TODO: Test tuple and set versions as well
-        
+
         if encoder_format == "json":
             encoded_list = {
                 "encode_type": "iterable",
@@ -226,25 +226,139 @@ class TestEncoderParameterized:
             decoded_list = JSONEncoder.decode_iterable(encoded_list)
             assert isinstance(decoded_list, list)
             assert decoded_list == [1, 2, 3]
-        
+
         else:  # hdf5
             with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
-            
+
             try:
                 with h5py.File(temp_file, "w") as h5_file:
                     root_group = h5_file.create_group("root")
                     HDF5Encoder.encode_iterable(test_list, h5_group=root_group)
-                
+
                 with h5py.File(temp_file, "r") as h5_file:
                     root_group = h5_file["root"]
                     decoded = HDF5Encoder.decode_iterable(root_group) # type: ignore
                     assert isinstance(decoded, list)
                     assert decoded == [1, 2, 3]
-            
+
             finally:
                 if os.path.exists(temp_file):
                     os.unlink(temp_file)
+
+    def test_encode_iterable_hdf5_native_optimization(self):
+        """Test that HDF5 encoder uses dataset optimization for native types."""
+        # Only test HDF5 format for this optimization
+        encoder_format = "hdf5"
+        
+        # Test with different native types
+        test_cases = [
+            ([1, 2, 3], "integers"),
+            ([1.1, 2.2, 3.3], "floats"),
+            ([True, False, True], "booleans"),
+            (["hello", "world", "test"], "strings"),
+            ([b"bytes1", b"bytes2", b"bytes3"], "bytes"),
+        ]
+        
+        for test_list, description in test_cases:
+            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+                temp_file = f.name
+
+            try:
+                with h5py.File(temp_file, "w") as h5_file:
+                    root_group = h5_file.create_group("root")
+                    encoded_group = HDF5Encoder.encode_iterable(test_list, h5_group=root_group)
+                    
+                    # Check that it used dataset format
+                    list_group = encoded_group
+                    assert "storage_format" in list_group.attrs
+                    assert list_group.attrs["storage_format"] == "dataset"
+                    assert "data" in list_group
+                    data_dataset = list_group["data"]
+                    assert isinstance(data_dataset, h5py.Dataset)
+
+                with h5py.File(temp_file, "r") as h5_file:
+                    root_group = h5_file["root"]
+                    decoded = HDF5Encoder.decode_iterable(root_group) # type: ignore
+                    assert isinstance(decoded, list)
+                    assert decoded == test_list
+
+            finally:
+                if os.path.exists(temp_file):
+                    os.unlink(temp_file)
+
+    def test_encode_iterable_mixed_types_fallback(self):
+        """Test that HDF5 encoder falls back to groups for mixed types."""
+        # Only test HDF5 format for this optimization
+        encoder_format = "hdf5"
+        
+        # Test with mixed types that should fall back to groups
+        test_list = [1, "string", 3.14, MockSerializable(name="test", value=42)]
+        
+        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            temp_file = f.name
+
+        try:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                encoded_group = HDF5Encoder.encode_iterable(test_list, h5_group=root_group)
+                
+                # Check that it used groups format (fallback)
+                list_group = encoded_group
+                assert "storage_format" in list_group.attrs
+                assert list_group.attrs["storage_format"] == "groups"
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                decoded = HDF5Encoder.decode_iterable(root_group) # type: ignore
+                assert isinstance(decoded, list)
+                assert len(decoded) == len(test_list)
+                assert decoded[0] == 1
+                assert decoded[1] == "string"
+                assert decoded[2] == 3.14
+                assert isinstance(decoded[3], MockSerializable)
+                assert decoded[3].name == "test"
+                assert decoded[3].value == 42
+
+        finally:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+
+    def test_encode_iterable_large_dataset_compression(self):
+        """Test that large datasets use compression."""
+        # Only test HDF5 format for this optimization
+        encoder_format = "hdf5"
+        
+        # Create a large list that should trigger compression
+        large_list = list(range(1500))  # More than 1000 elements
+        
+        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            temp_file = f.name
+
+        try:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                encoded_group = HDF5Encoder.encode_iterable(large_list, h5_group=root_group)
+                
+                # Check that it used dataset format with compression
+                list_group = encoded_group
+                assert "storage_format" in list_group.attrs
+                assert list_group.attrs["storage_format"] == "dataset"
+                assert "data" in list_group
+                data_dataset = list_group["data"]
+                assert isinstance(data_dataset, h5py.Dataset)
+                # Check compression filter is applied
+                assert data_dataset.compression is not None
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                decoded = HDF5Encoder.decode_iterable(root_group) # type: ignore
+                assert isinstance(decoded, list)
+                assert decoded == large_list
+
+        finally:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
 
     def test_encode_dict(self, encoder_format):
         """Test encoding of dictionaries."""
