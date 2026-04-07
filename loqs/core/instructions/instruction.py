@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.Instruction` definition.
 """
 
@@ -19,6 +28,7 @@ import warnings
 
 from loqs.core import Frame
 from loqs.internal import Displayable
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="Instruction")
@@ -146,6 +156,17 @@ class Instruction(Displayable):
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
+    SERIALIZE_ATTRS = [
+        "name",
+        "type",
+        "data",
+        "param_error_behavior",
+        "_param_priorities",
+        "_param_aliases",
+        "_serialized_apply_fn",
+        "_serialized_map_qubits_fn",
+    ]
+
     def __init__(
         self,
         apply_fn: ApplyCallable,
@@ -217,10 +238,10 @@ class Instruction(Displayable):
         # Let's serialize the functions now, when we know we have access to source code
         self._serialized_apply_fn = serialized_apply_fn
         if serialized_apply_fn is None:
-            self._serialized_apply_fn = self._serialize_function(apply_fn)
+            self._serialized_apply_fn = Serializable.get_function_str(apply_fn)
         self._serialized_map_qubits_fn = serialized_map_qubits_fn
         if serialized_map_qubits_fn is None:
-            self._serialized_map_qubits_fn = self._serialize_function(
+            self._serialized_map_qubits_fn = Serializable.get_function_str(
                 map_qubits_fn
             )
 
@@ -310,18 +331,6 @@ class Instruction(Displayable):
             s += " None\n"
         return s
 
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self._serialized_apply_fn,
-                self._serialized_map_qubits_fn,
-                self.hash(self.data),
-                self.hash(self._param_priorities),
-                self.hash(self._param_aliases),
-                self.name,
-            )
-        )
-
     @property
     def param_priorities(self) -> dict[str, Sequence[str]]:
         """The unaliased parameter priorities."""
@@ -400,55 +409,31 @@ class Instruction(Displayable):
         return new_instruction
 
     @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        serialized_apply_fn = state["_serialized_apply_fn"]
-        serialized_map_qubits_fn = state["_serialized_map_qubits_fn"]
-        apply_fn = cls._deserialize_function(
-            serialized_apply_fn,
+    def from_decoded_attrs(cls, attr_dict) -> "Instruction":
+        """Create an Instruction from decoded attributes dictionary."""
+        # Deserialize functions
+        serialized_apply_fn = attr_dict["_serialized_apply_fn"]
+        serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
+        apply_fn = Serializable.eval_function_str(
+            serialized_apply_fn, attr_dict["version"]
         )
-        map_qubits_fn = cls._deserialize_function(serialized_map_qubits_fn)
-        data = cls.deserialize(state["data"], serial_id_to_obj_cache)
-        assert isinstance(data, dict)
-        param_error_behavior = state["param_error_behavior"]
-        name = state["name"]
-        type = state["type"]
+        map_qubits_fn = Serializable.eval_function_str(
+            serialized_map_qubits_fn, attr_dict["version"]
+        )
 
+        # Create instruction
+        instruction_type = attr_dict["type"]
         obj = cls(
             apply_fn,
-            data,
+            attr_dict["data"],
             map_qubits_fn,
-            param_error_behavior=param_error_behavior,
+            param_error_behavior=attr_dict["param_error_behavior"],
             serialized_apply_fn=serialized_apply_fn,
             serialized_map_qubits_fn=serialized_map_qubits_fn,
-            name=name,
-            type=type,
+            name=attr_dict["name"],
+            type=instruction_type,
         )
-        obj._param_priorities = state["_param_priorities"]
-        obj._param_aliases = state["_param_aliases"]
+        obj._param_priorities = attr_dict["_param_priorities"]
+        obj._param_aliases = attr_dict["_param_aliases"]
 
         return obj
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        # Ordering here is to be nicer during display()
-        state.update(
-            {
-                "name": self.name,
-                "type": self.type,
-                "data": self.serialize(
-                    self.data,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "param_error_behavior": self.param_error_behavior,
-                "_param_priorities": self._param_priorities,
-                "_param_aliases": self._param_aliases,
-                "_serialized_apply_fn": self._serialized_apply_fn,
-                "_serialized_map_qubits_fn": self._serialized_map_qubits_fn,
-            }
-        )
-        return state

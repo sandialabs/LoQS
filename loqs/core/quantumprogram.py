@@ -1,18 +1,22 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`QuantumProgram` definition.
 """
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Mapping, Sequence
 import copy
-import glob
-from json import JSONDecodeError
-import json
 import os
 from pathlib import Path
-import shutil
-from typing import Literal, TypeVar
+from typing import ClassVar, Literal, TypeVar
 import warnings
 
 try:
@@ -39,6 +43,7 @@ from loqs.core.instructions.instructionstack import (
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
+from loqs.core.programresults import ProgramResults
 from loqs.internal import Displayable
 
 
@@ -55,6 +60,19 @@ class QuantumProgram(Displayable):
     Once the :meth:`.run` command has been used, it also contains
     a collection of :class:`.History` objects for each shot.
     """
+
+    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    SERIALIZE_ATTRS = [
+        "default_noise_model",
+        "patch_types",
+        "global_instructions",
+        "initial_history",
+        "instruction_stack",
+        "default_base_seed",
+        "state_type",
+        "name",
+    ]
 
     def __init__(
         self,
@@ -255,69 +273,6 @@ class QuantumProgram(Displayable):
 
         self.name = name
         """Name for logging"""
-        self.shot_histories: list[History] = []
-        """Record of shot :class:`.History` objects"""
-
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self.hash(self.initial_history),
-                hash(self.default_noise_model),
-                self.default_base_seed,
-                self.hash(self.instruction_stack),
-                self.hash(self.global_instructions),
-                hash(self.state_type),
-                self.hash(self.patch_types),
-                self.name,
-                self.hash(self.shot_histories),
-            )
-        )
-
-    @classmethod
-    def from_checkpoint_dir(cls, checkpoint_dir: Path | str) -> QuantumProgram:
-        """Load a :class:`QuantumProgram` from a checkpoint directory.
-
-        Note that this may have an incomplete list of shots,
-        which means that the RNG seeds may not be as expected.
-        Take care that all shots were completed if doing shot-by-shot
-        equality testing.
-
-        Parameters
-        ----------
-        checkpoint_dir:
-            The checkpoint directory to load from.
-            See ``checkpoint_dir`` in :meth:`.run`.
-
-        Returns
-        -------
-        QuantumProgram
-            The loaded :class:`QuantumProgram`
-        """
-        checkpoint_dir = Path(checkpoint_dir)
-
-        # Use dump directly so we can get cache for shot deserialization
-        serialization_cache: dict[int, object] = {}
-        with open(checkpoint_dir / "program.json", "r") as f:
-            json_dict = json.load(f)
-            program = QuantumProgram.from_serialization(
-                json_dict, serialization_cache
-            )
-
-        shot_files = glob.glob(str(checkpoint_dir) + "/shot-*.json")
-        for sf in sorted(shot_files):
-            try:
-                with open(sf, "r") as f:
-                    json_dict = json.load(f)
-            except JSONDecodeError:
-                # Checkpoint file was probably interrupted during write
-                # Skip it
-                continue
-            shot_history = History.from_serialization(
-                json_dict, serialization_cache
-            )
-            program.shot_histories.append(shot_history)
-
-        return program
 
     @classmethod
     def from_quantum_program(
@@ -403,15 +358,14 @@ class QuantumProgram(Displayable):
         max_frame_limit: int = 100,
         dask_client: Client | None = None,  # type: ignore
         dask_batch_size: int = 1,
-        reset_shot_histories: bool = False,
-        checkpoint_dir: Path | str | None = None,
-        override_checkpoints: bool = False,
         verbose: bool = True,
-    ):
+        checkpoint_batch_size: int | None = None,
+        checkpoint_dir: str | Path | None = None,
+        checkpoint_strategy: str = "single_file",
+    ) -> ProgramResults:
         """Execute some shots of this :class:`QuantumProgram`.
 
-        This does not return any :class:`.History` objects,
-        but instead saves these to :attr:`.shot_histories`.
+        This returns a :class:`ProgramResults` object containing the shot histories.
 
         Parameters
         ----------
@@ -434,50 +388,39 @@ class QuantumProgram(Displayable):
             There may be scheduler overhead benefits to having fewer batches
             for many (>1K) shots, at the expense of some possible load balancing.
 
-        reset_shot_histories:
-            Whether to delete any existing shot histories (``True``) or keep
-            existing shot histories (``False``, default) when running shots.
-
-        checkpoint_dir:
-            The directory to use for checkpointing. If None (the default), no
-            checkpointing is performed. The :class:`.QuantumProgram` will be written
-            to ``"checkpoint_dir/program.json"``, while shot :math:`i` will be written
-            to ``"checkpoint_dir/shot_{i}.json"``. The resulting checkpoint can be loaded
-            via :meth:`.QuantumProgram.from_checkpoint_dir`.
-
-        override_checkpoints:
-            Whether to error (False, default) or wipe and override (True) an existing
-            checkpoint directory.
-
         verbose:
             Whether to write a progress bar (``True``, default) or not (``False``)
             when running shots.
+
+        checkpoint_batch_size:
+            Number of shots to process before checkpointing. If None (default),
+            no checkpointing is performed. If set, shots will be checkpointed
+            in batches of this size.
+
+        checkpoint_dir:
+            Directory to store checkpoint files. If None (default), checkpoints
+            are stored in a temporary directory. Required if checkpoint_batch_size
+            is set.
+
+        checkpoint_strategy:
+            Strategy for checkpointing. Options are "single_file" (default)
+            where all shots are written to a single file per worker, or
+            "per_batch" where each batch gets its own checkpoint file.
+            Only used when checkpoint_batch_size is set.
+
+         Returns
+         -------
+         ProgramResults
+             A ProgramResults object containing the shot histories.
         """
-        # Checkpoint if requested
-        if checkpoint_dir is not None:
-            checkpoint_dir = Path(checkpoint_dir)
-            if checkpoint_dir.exists():
-                if not override_checkpoints:
-                    raise FileExistsError(
-                        "Checkpoint exists and override_checkpoint not True. "
-                        + "Allow override, move checkpoints, or use a different path."
-                    )
 
-                # It exists but we can wipe it
-                shutil.rmtree(checkpoint_dir)
-
-            # Create the checkpoint directory
-            os.makedirs(checkpoint_dir, exist_ok=True)
-
-            # Write the base program
-            self.write(checkpoint_dir / "program.json")
-
-        # Take out shot histories to avoid unnecessary copies during dask.delayed
-        if reset_shot_histories:
-            self.shot_histories = []
-
-        old_shot_histories = self.shot_histories
-        self.shot_histories = []
+        # Create ProgramResults object to store results
+        checkpoint_enabled = checkpoint_batch_size is not None
+        program_results = ProgramResults(
+            name=f"Results for {self.name}",
+            parent_program=self,
+            checkpoint_enabled=checkpoint_enabled,
+        )
 
         if dask_client is None:
             program = self
@@ -485,23 +428,8 @@ class QuantumProgram(Displayable):
             # Delay program data to avoid copies every time
             program = dask_client.scatter(self)
 
-        # If we are checkpointing, compute the serialization cache
-        # This will save a huge amount of filesize and time writing
-        # shot history checkpoint files
-        serialization_cache: dict[int, int] | None = None
-        if checkpoint_dir is not None:
-            serialization_cache = {}
-
-            # Note that we don't care about the output here,
-            # just need to compute the cache. Also note that this will
-            # not have shot_history, but that is OK. Also note that
-            # we are computing this on the dask worker to save
-            # on data being copied across and avoid any hash
-            # mismatch problems
-            self.to_serialization(serialization_cache)
-
         # Set up tasks
-        start = len(old_shot_histories)
+        start = 0  # Always start from 0 for new ProgramResults
         if start > 0 and verbose:
             print(f"Detecting {start} already completed shots")
 
@@ -512,24 +440,17 @@ class QuantumProgram(Displayable):
             if self.default_base_seed is not None:
                 seed_for_shot = self.default_base_seed + start + i
 
-            # Create per-shot checkpoint file
-            checkpoint_for_shot = None
-            if checkpoint_dir is not None:
-                checkpoint_for_shot = checkpoint_dir / f"shot-{start + i}.json"
-
             tasks.append(
                 (
                     program,
                     max_frame_limit,
                     seed_for_shot,
-                    checkpoint_for_shot,
-                    serialization_cache,
+                    i,  # Add shot index for tracking
                 )
             )
 
         if dask_client is None:
             # Execute serially
-            shot_results = []
             for task in tqdm(
                 tasks,
                 f"Program {self.name}",
@@ -538,7 +459,19 @@ class QuantumProgram(Displayable):
                 total=num_shots,
             ):
                 result = QuantumProgram._run_shot(*task)
-                shot_results.append(result)
+                program_results.add_shot(
+                    task[3], result
+                )  # task[3] is the shot index
+
+                # Checkpoint if needed
+                if checkpoint_batch_size is not None:
+                    self._checkpoint_if_needed(
+                        program_results,
+                        task[3],
+                        checkpoint_batch_size,
+                        checkpoint_dir,
+                        checkpoint_strategy,
+                    )
         else:
             # Launch jobs
             if dask_batch_size == 1:
@@ -553,6 +486,23 @@ class QuantumProgram(Displayable):
 
                 # Retrive results (blocks until all tasks are finished)
                 shot_results = dask_client.gather(futures)
+
+                # Add results to ProgramResults
+                for i, result in enumerate(shot_results):
+                    shot_index = tasks[i][
+                        3
+                    ]  # Get shot index from original task
+                    program_results.add_shot(shot_index, result)
+
+                    # Checkpoint if needed
+                    if checkpoint_batch_size is not None:
+                        self._checkpoint_if_needed(
+                            program_results,
+                            shot_index,
+                            checkpoint_batch_size,
+                            checkpoint_dir,
+                            checkpoint_strategy,
+                        )
             else:
                 # Split tasks into appropriate number of batches
                 batched_tasks = [
@@ -568,12 +518,60 @@ class QuantumProgram(Displayable):
                 # Retrive results (blocks until all tasks are finished)
                 batched_results = dask_client.gather(futures)
 
-                shot_results = []
+                # Add results to ProgramResults
                 for batch_results in batched_results:  # type: ignore
-                    shot_results.extend(batch_results)
+                    for i, result in enumerate(batch_results):
+                        # Find the corresponding task to get shot index
+                        task_index = len(program_results.shot_histories)
+                        if task_index < len(tasks):
+                            shot_index = tasks[task_index][3]
+                            program_results.add_shot(shot_index, result)
 
-        # Restore shot history and add new results
-        self.shot_histories = old_shot_histories + shot_results  # type: ignore
+                            # Checkpoint if needed
+                            if checkpoint_batch_size is not None:
+                                self._checkpoint_if_needed(
+                                    program_results,
+                                    shot_index,
+                                    checkpoint_batch_size,
+                                    checkpoint_dir,
+                                    checkpoint_strategy,
+                                )
+
+        return program_results
+
+    def _checkpoint_if_needed(
+        self,
+        program_results: "ProgramResults",
+        current_shot_index: int,
+        checkpoint_batch_size: int,
+        checkpoint_dir: str | Path | None,
+        checkpoint_strategy: str,
+    ) -> None:
+        """Check if checkpointing is needed and perform it if so.
+
+        Parameters
+        ----------
+        program_results:
+            The ProgramResults object to checkpoint.
+        current_shot_index:
+            The index of the shot that was just completed.
+        checkpoint_batch_size:
+            Number of shots per checkpoint batch.
+        checkpoint_dir:
+            Directory to store checkpoint files.
+        checkpoint_strategy:
+            Strategy for checkpointing ("single_file" or "per_batch").
+        """
+        # Check if we've reached a checkpoint batch boundary
+        if (current_shot_index + 1) % checkpoint_batch_size == 0:
+            # Perform checkpointing
+            program_results.checkpoint(
+                checkpoint_dir=checkpoint_dir,
+                strategy=checkpoint_strategy,
+                batch_size=checkpoint_batch_size,
+                current_batch_index=(current_shot_index + 1)
+                // checkpoint_batch_size,
+            )
 
     # Helper function to run a chunk of num_shots at once
     @staticmethod
@@ -586,8 +584,7 @@ class QuantumProgram(Displayable):
         program,
         max_frame_limit: int = 100,
         seed: int | None = None,
-        checkpoint_file: Path | None = None,
-        serialization_cache: dict | None = None,
+        shot_index: int | None = None,
     ):
         num_frames = 0
 
@@ -661,12 +658,6 @@ class QuantumProgram(Displayable):
             warnings.warn(
                 f"Terminated run due to `max_frame_limit` of {max_frame_limit}"
             )
-
-        if checkpoint_file is not None:
-            # Use dump directory so we can use the program's serialized cache
-            with open(checkpoint_file, "w") as f:
-                json_dict = history.to_serialization(serialization_cache)
-                json.dump(json_dict, f, indent=4)
 
         return history
 
@@ -931,153 +922,37 @@ class QuantumProgram(Displayable):
         # If we've made it here, nothing returned so we failed to collect
         raise RuntimeError(f"Failed to collect parameter {key} for {name}")
 
-    def collect_shot_data(
-        self,
-        key: str,
-        indices: HistoryCollectDataIndexTypes,
-        strip_none_entries: bool = False,
-        return_counter: bool = False,
-    ) -> list | Counter:
-        """Collate frame data over executed shots.
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if (
+            attr == "default_noise_model"
+            and self._noise_model_filename is not None
+        ):
+            return self._noise_model_filename
 
-        Parameters
-        ----------
-        key:
-            See ``key`` in :meth:`.History.collect_data`
-
-        indices:
-            See ``indices`` in :meth:`.History.collect_data`
-
-        strip_none_entries:
-            See ``strip_none_entries`` in :meth:`.History.collect_data`
-
-        return_counter:
-            Whether to return using a collections.Counter or not (default).
-
-        Returns
-        -------
-        list
-            List of :meth:`.History.collect_data` outputs per shot
-        """
-        data = [
-            h.collect_data(key, indices, strip_none_entries)
-            for h in self.shot_histories
-        ]
-        return Counter(data) if return_counter else data
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        # ORDER MATTERS
-        # Must match serialization order for caching to work properly
-        default_noise_model = cls.deserialize(
-            state["default_noise_model"], serial_id_to_obj_cache
-        )
-        assert isinstance(default_noise_model, BaseNoiseModel | None)
-        patch_types = cls.deserialize(
-            state["patch_types"], serial_id_to_obj_cache
-        )
-        assert isinstance(patch_types, dict | None)
-        if patch_types is not None:
-            assert all([isinstance(v, QECCode) for v in patch_types.values()])
-        global_instructions = cls.deserialize(
-            state["global_instructions"], serial_id_to_obj_cache
-        )
-        assert isinstance(global_instructions, dict)
-        initial_history = cls.deserialize(
-            state["initial_history"], serial_id_to_obj_cache
-        )
-        assert isinstance(initial_history, History | None)
-        default_base_seed = state["default_base_seed"]
-        stack = cls.deserialize(
-            state["instruction_stack"], serial_id_to_obj_cache
-        )
-        assert isinstance(stack, InstructionStack)
-        state_type = cls.deserialize(
-            state["state_type"], serial_id_to_obj_cache
-        )
-        assert isinstance(state_type, type | None)
-        if state_type is not None:
-            assert issubclass(state_type, BaseQuantumState)
-        name = state["name"]
-        shot_histories = cls.deserialize(
-            state["shot_histories"], serial_id_to_obj_cache
-        )
-        assert isinstance(shot_histories, list)
-        assert all([isinstance(h, History) for h in shot_histories])
+    def from_decoded_attrs(cls, attr_dict) -> "QuantumProgram":
+        """Create a QuantumProgram from decoded attributes dictionary."""
 
-        # Catch warnings about overriding globals
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            obj = cls(
-                stack,
-                initial_history,
-                default_noise_model,
-                default_base_seed,
-                False,  # expiring keys should already be set in initial history
-                global_instructions,
-                state_type,
-                patch_types,
-                False,  # Don't override globals, was already processed
-                name,
+            # Filter out warnings about pre-existing Init State/Init Patch instructions
+            warnings.filterwarnings(
+                "ignore", message=".*state_type.*", category=UserWarning
             )
-        obj.shot_histories = shot_histories
+            warnings.filterwarnings(
+                "ignore", message=".*patch_types.*", category=UserWarning
+            )
+
+            obj = cls(
+                instruction_stack=attr_dict["instruction_stack"],
+                initial_history=attr_dict["initial_history"],
+                default_base_seed=attr_dict["default_base_seed"],
+                default_noise_model=attr_dict["default_noise_model"],
+                state_type=attr_dict["state_type"],
+                patch_types=attr_dict["patch_types"],
+                global_instructions=attr_dict["global_instructions"],
+                name=attr_dict.get("name", "(Unnamed quantum program)"),
+            )
 
         return obj
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-
-        # Avoid serializing noise model if loaded from file
-        if self._noise_model_filename is not None:
-            serial_noise_model = self._noise_model_filename
-        else:
-            serial_noise_model = self.serialize(
-                self.default_noise_model,
-                hash_to_serial_id_cache,
-                ignore_no_serialize_flags,
-            )
-
-        state.update(
-            {
-                # Noise model already serialized above
-                "default_noise_model": serial_noise_model,
-                # Patch types and global instructions first to cache QEC code and instructions
-                "patch_types": self.serialize(
-                    self.patch_types,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "global_instructions": self.serialize(
-                    self.global_instructions,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "initial_history": self.serialize(
-                    self.initial_history,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "default_base_seed": self.default_base_seed,
-                "instruction_stack": self.serialize(
-                    self.instruction_stack,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "state_type": self.serialize(
-                    self.state_type,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-                "name": self.name,
-                "shot_histories": self.serialize(
-                    self.shot_histories,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                ),
-            }
-        )
-        return state

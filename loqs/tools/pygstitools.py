@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """A collection of tools using/for pyGSTi."""
 
 from collections.abc import Mapping, Sequence
@@ -270,7 +279,7 @@ def convert_run_programs_to_dataset(
         with the desired number of shots.
 
     collect_shot_data_args:
-        The arguments to :meth:`.QuantumProgram.collect_shot_data` to extract
+        The arguments to :meth:`.ProgramResults.collect_shot_data` to extract
         outcomes from each shot. The output should be a single element per shot.
 
     Returns
@@ -284,7 +293,12 @@ def convert_run_programs_to_dataset(
 
     ds = DataSet()
     for circ, prog in zip(circs, programs):
-        counts = Counter(prog.collect_shot_data(*collect_shot_data_args))
+        # Get program results from the program
+        program_results = getattr(prog, '_last_results', None)
+        if program_results is None:
+            # If no results stored, run the program
+            program_results = prog.run()
+        counts = Counter(program_results.collect_shot_data(*collect_shot_data_args))
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)

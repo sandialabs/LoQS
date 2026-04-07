@@ -1,19 +1,34 @@
-""":class:`.DictNoiseModel` definition.
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
+""":class:`.STIMDictNoiseModel` definition.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import warnings
-import numpy as np
-from typing import ClassVar, TypeVar
+from typing import ClassVar, TypeVar, Literal
 
-from loqs.backends.circuit import BasePhysicalCircuit, STIMPhysicalCircuit
+from loqs.backends import BasePhysicalCircuit, STIMPhysicalCircuit
 from loqs.backends.model.dictmodel import (
     DictNoiseModel,
+    MemberLabel,
     DictModelCastableTypes,
 )
-from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    RepTuple,
+    ConcreteGateReps,
+    ConcreteInstrumentReps,
+)
 
 
 T = TypeVar("T", bound="DictNoiseModel")
@@ -33,10 +48,10 @@ class STIMDictNoiseModel(DictNoiseModel):
     def __init__(
         self,
         model_or_dicts: DictModelCastableTypes,
-        gatereps: Sequence[GateRep] = [GateRep.STIM_CIRCUIT_STR],
-        instreps: Sequence[InstrumentRep] = [InstrumentRep.STIM_CIRCUIT_STR],
+        gatereps: Sequence[GateRep] = (GateRep.STIM_CIRCUIT_STR,),
+        instreps: Sequence[InstrumentRep] = (InstrumentRep.STIM_CIRCUIT_STR,),
         gaterep_array_cast_rep: GateRep | None = None,
-        instrep_cast_reset: int | None = None,
+        instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
         """Initialize a generic gate dict model.
@@ -65,18 +80,23 @@ class STIMDictNoiseModel(DictNoiseModel):
             the second argument of the rep, indicating whether outcomes
             should be kept (``True``, default) or not (``False``).
         """
-        self.gate_dict: dict[
-            str | tuple[str, tuple[str | int, ...]], object
+        # NOTE: We set self.gate_dict and self.inst_dict at the end of this
+        # function. The next two variables are like gate_dict and inst_dict,
+        # but have more lax types.
+        gate_dict: Mapping[
+            MemberLabel,
+            RepTuple
+            | ConcreteGateReps.STIM_CIRCUIT_STR_t
+            | ConcreteGateReps.PROBABILISTIC_STIM_OPERATIONS_t,
         ] = {}
-        self.inst_dict: dict[
-            str | tuple[str, tuple[str | int, ...]], object
-        ] = {}
+        inst_dict: Mapping[MemberLabel, object] = {}
+
         if isinstance(model_or_dicts, STIMDictNoiseModel):
-            self.gate_dict = model_or_dicts.gate_dict.copy()
-            self.inst_dict = model_or_dicts.inst_dict.copy()
+            gate_dict = model_or_dicts.gate_dict.copy()
+            inst_dict = model_or_dicts.inst_dict.copy()
         elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
-            self.gate_dict = dict(model_or_dicts[0])
-            self.inst_dict = dict(model_or_dicts[1])
+            gate_dict = dict(model_or_dicts[0])
+            inst_dict = dict(model_or_dicts[1])
         else:
             raise TypeError(
                 "Can only other NoiseModels or a 2-tuple of gate/inst dicts"
@@ -89,15 +109,8 @@ class STIMDictNoiseModel(DictNoiseModel):
             if not isinstance(gr, RepTuple):
                 if isinstance(gr, str):
                     return RepTuple(gr, qubits, GateRep.STIM_CIRCUIT_STR)
-                elif isinstance(gr, (tuple, list)) and all(
-                    [
-                        isinstance(el, (tuple, list))
-                        and len(el) == 2
-                        and isinstance(el[0], str)
-                        and isinstance(el[1], (float, int))
-                        for el in gr
-                    ]
-                ):
+                elif ConcreteGateReps.sequence_is_probabilisticstim_rep(gr):
+                    gr = tuple(tuple(el) for el in gr)  # cast to immutable
                     return RepTuple(
                         gr, qubits, GateRep.PROBABILISTIC_STIM_OPERATIONS
                     )
@@ -119,64 +132,47 @@ class STIMDictNoiseModel(DictNoiseModel):
                 "gaterep_array_cast_rep is set, but this option is not used by STIMDictNoiseModel"
             )
 
-        # Run through gates and upgrade everything to RepTuples
-        for k, gr in self.gate_dict.items():
+        def promoted_key_and_qubits(k):
             # By convention, choose that STIM commands should be uppercase
             if isinstance(k, str):
-                name = k.upper()
-                qubits = tuple()
-                label = name
+                return k.upper(), tuple()
             else:
-                name = k[0].upper()
-                qubits = k[1]
-                label = (name, qubits)
-            self.gate_dict[label] = convert_to_gatereptuple(gr, qubits)
+                return (k[0].upper(), k[1]), k[1]
+
+        # Run through gates and upgrade everything to RepTuples
+        for k, gr in gate_dict.items():
+            k, qubits = promoted_key_and_qubits(k)
+            gate_dict[k] = convert_to_gatereptuple(gr, qubits)
 
         # Run through instrument dict and upgrade everything to RepTuples
-        for k, ir in self.inst_dict.items():
-            # By convention, choose that STIM commands should be uppercase
-            if isinstance(k, str):
-                name = k.upper()
-                qubits = tuple()
-                label = name
-            else:
-                name = k[0].upper()
-                qubits = k[1]
-                label = (name, qubits)
+        for k, ir in inst_dict.items():
+            k, qubits = promoted_key_and_qubits(k)
+
             if not isinstance(ir, RepTuple) and isinstance(ir, str):
-                self.inst_dict[label] = RepTuple(
-                    ir, qubits, InstrumentRep.STIM_CIRCUIT_STR
-                )
-            elif (
-                not isinstance(ir, RepTuple)
-                and isinstance(ir, (tuple, list))
-                and len(ir) == 2
-                and (ir[0] is None or isinstance(ir[0], int))
-                and isinstance(ir[1], bool)
-            ):
-                self.inst_dict[label] = RepTuple(
-                    ir, qubits, InstrumentRep.ZBASIS_PROJECTION
-                )
-            elif (
-                not isinstance(ir, RepTuple)
-                and isinstance(ir, (tuple, list))
-                and len(ir) == 2
-            ):
+                rt = RepTuple(ir, qubits, InstrumentRep.STIM_CIRCUIT_STR)
+                inst_dict[k] = rt
+
+            elif ConcreteInstrumentReps.is_zbasis_projection_rep(ir):
+                rt = RepTuple(ir, qubits, InstrumentRep.ZBASIS_PROJECTION)  # type: ignore
+                inst_dict[k] = rt
+
+            elif isinstance(ir, (tuple, list)) and len(ir) == 2:
                 assert InstrumentRep.ZBASIS_PRE_POST_OPERATIONS in instreps, (
                     "Detected two ops for a pre/post operation instrument, but "
                     + "ZBASIS_PRE_POST_OPERATIONS not passed as a valid instrument rep"
                 )
-                # Assume this is a 2-tuple of PTMS that we need to turn it into a RepTuple
-                self.inst_dict[label] = RepTuple(
-                    (
-                        instrep_cast_reset,
-                        instrep_cast_include_outcomes,
-                        convert_to_gatereptuple(ir[0], qubits),
-                        convert_to_gatereptuple(ir[1], qubits),
-                    ),
+                concrep = (
+                    instrep_cast_reset,
+                    instrep_cast_include_outcomes,
+                    convert_to_gatereptuple(ir[0], qubits),
+                    convert_to_gatereptuple(ir[1], qubits),
+                )
+                inst_dict[k] = RepTuple(
+                    concrep,
                     qubits,
                     InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
                 )
+
             else:
                 assert isinstance(
                     ir, RepTuple
@@ -184,6 +180,10 @@ class STIMDictNoiseModel(DictNoiseModel):
                 assert (
                     ir.reptype in instreps
                 ), f"Provided {ir} but reptype not in instreps"
+
+        self.gate_dict: dict[MemberLabel, RepTuple] = gate_dict  # type: ignore
+        self.inst_dict: dict[MemberLabel, RepTuple] = inst_dict  # type: ignore
+        return
 
     def get_reps(  # noqa: C901
         self,

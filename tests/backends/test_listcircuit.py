@@ -2,7 +2,7 @@
 
 import pytest
 
-from loqs.backends.circuit import ListPhysicalCircuit as PhysCirc
+from loqs.backends import ListPhysicalCircuit as PhysCirc
 
 
 class TestListPhysicalCircuit:

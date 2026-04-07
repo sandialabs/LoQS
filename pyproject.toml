@@ -1,14 +1,19 @@
 [project]
 name = "loqs"
-version = "1.0-beta"
+version = "1.0"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
-    "tqdm>=4"
+    "scipy",
+    "tk",
+    "tqdm>=4",
+    "loqs[backends,dask]"
 ]
 authors = [
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
     {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
+    {name = "Antonio Russo", email = "arusso@sandia.gov"},
+    {name = "Riley Murray", email = "rjmurr@sandia.gov"},
     {name = "Daniel Hothem", email = "dhothem@sandia.gov"},
     {name = "Megan Dahlhauser"},
     {name = "Julie Campos"},
@@ -22,7 +27,16 @@ description = "Logical Qubit Simulator (LoQS)"
 readme = "README.md"
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Programming Language :: Python"
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed"
 ]
 
 [project.optional-dependencies]
@@ -44,7 +58,7 @@ docs = [
     "jupytext"
 ]
 quantumsim = ["quantumsim==0.2.0"]
-pygsti = ["pygsti[extensions]>=0.9.12", "numpy<2"]
+pygsti = ["pygsti>=0.9.12"]
 stim = [
     "stim>=1",
     "pymatching>=2"

@@ -1,9 +1,19 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.InstructionStack` definition.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import h5py
 import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
@@ -12,6 +22,9 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
 from loqs.internal import SeqCastable, Displayable
+from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.encoder.jsonencoder import JSONEncoder
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="InstructionStack")
@@ -30,6 +43,10 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
     """
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    SERIALIZE_ATTRS = ["_instructions"]
+
+    SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
 
     _instructions: list[InstructionLabel]
     """Internal list of :class:`InstructionLabels`"""
@@ -84,9 +101,6 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             return s
         else:
             return "Empty InstructionStack"
-
-    def __hash__(self) -> int:
-        return self.hash(self._instructions)
 
     def append_instruction(
         self, item: InstructionLabelCastableTypes
@@ -198,28 +212,3 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             the first element
         """
         return self._instructions[0], InstructionStack(self._instructions[1:])
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        instructions = cls.deserialize(
-            state["_instructions"], serial_id_to_obj_cache
-        )
-        assert isinstance(instructions, list)
-        return cls(instructions)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "_instructions": self.serialize(
-                    self._instructions,
-                    hash_to_serial_id_cache,
-                    ignore_no_serialize_flags,
-                )
-            }
-        )
-        return state

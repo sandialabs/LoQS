@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.BaseCircuitBackend` definition.
 """
 
@@ -6,7 +15,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Sequence, Mapping
 import textwrap
-from typing import ClassVar, Type, TypeAlias, TypeVar
+from typing import Any, ClassVar, Type, TypeVar
 
 from loqs.internal import SeqCastable, Displayable
 
@@ -23,6 +32,8 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
     """Name of circuit backend"""
 
     CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    SERIALIZE_ATTRS = ["circuit", "qubit_labels"]
 
     ## Dunder methods
     @abstractmethod
@@ -50,9 +61,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
 
     def __repr__(self) -> str:
         return f"Physical {self.name} circuit: {repr(self.circuit)}"
-
-    def __hash__(self) -> int:
-        return hash(repr(self))
 
     def __add__(self: T, other: T) -> T:
         # TODO: Should eventually be able to cast to derived class
@@ -506,26 +514,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         pass
 
     @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        qubit_labels = state["qubit_labels"]
-        circuit = cls._deserialize_circuit(state["circuit"], qubit_labels)
-        return cls(circuit, qubit_labels)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        state.update(
-            {
-                "circuit": self._serialize_circuit(),
-                "qubit_labels": self.qubit_labels,
-            }
-        )
-        return state
-
-    @classmethod
     @abstractmethod
     def _deserialize_circuit(
         cls,
@@ -547,3 +535,14 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         serialization to work.
         """
         pass
+
+    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        if attr == "circuit":
+            return self._serialize_circuit()
+        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    @classmethod
+    def from_decoded_attrs(cls, attr_dict):
+        qubit_labels = attr_dict["qubit_labels"]
+        circuit = cls._deserialize_circuit(attr_dict["circuit"], qubit_labels)
+        return cls(circuit, qubit_labels)

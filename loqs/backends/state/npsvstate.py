@@ -1,19 +1,28 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """:class:`.BaseQuantumState` definition.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
-import itertools
+import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar
 
-import numpy as np
 
 from loqs.backends.model.basemodel import GateRep, InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
+from loqs.internal.serializable import Serializable
 
 
 T = TypeVar("T", bound="NumpyStatevectorQuantumState")
@@ -41,6 +50,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str] = "NumPy Statevector"
+
+    SERIALIZE_ATTRS = ["_state", "qubit_labels", "seed"]
+
+    SERIALIZE_ATTRS_MAP = {"_state": "state"}
 
     _state: np.ndarray
     """Underlying state object."""
@@ -127,11 +140,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         s += f"  NumPy statevector on {self.state.shape[0]} qubits"
         s += f" ([{self.qubit_labels[0]},...,{self.qubit_labels[-1]}])\n"
         return s
-
-    def __hash__(self) -> int:
-        return hash(
-            (self.hash(self._state), self.hash(self.qubit_labels), self.seed)
-        )
 
     # Source - https://stackoverflow.com/a/64436208
     def _slice(self, a: np.ndarray, axis, start=None, end=None, step=1):
@@ -388,27 +396,3 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             amp = self.state[*idx]
             if amp > 1e-6:
                 print(f"{bs}: {amp}")
-
-    @classmethod
-    def _from_serialization(
-        cls: type[T], state: Mapping, serial_id_to_obj_cache=None
-    ) -> T:
-        statevector = cls.deserialize(state["_statevector"])
-        assert isinstance(statevector, np.ndarray)
-        qubit_labels = state["qubit_labels"]
-        seed = state["seed"]
-        return cls(statevector, qubit_labels, seed=seed)
-
-    def _to_serialization(
-        self, hash_to_serial_id_cache=None, ignore_no_serialize_flags=False
-    ) -> dict:
-        state = super()._to_serialization()
-        # TODO: RNG. Maybe https://stackoverflow.com/q/63081108
-        state.update(
-            {
-                "qubit_labels": self.qubit_labels,
-                "seed": self.seed,
-                "_statevector": self.serialize(self._state),
-            }
-        )
-        return state

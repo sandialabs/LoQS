@@ -1,3 +1,12 @@
+#####################################################################################################################
+# Logical Qubit Simulator (LoQS) v. 1.0                                                                             #
+# Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
+# Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
+# in compliance with the License.  You may obtain a copy of the License at                                          #
+# http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
+#####################################################################################################################
+
 """Circuit backend classes.
 
 Below use syndrome extraction circuits for the surface code
@@ -10,7 +19,7 @@ Examples
 Here we generate the syndrome extraction circuit
 for Surface-17 based on :cite:`tomita_lowdistance_2014`.
 
->>> from loqs.backends.circuit import PyGSTiPhysicalCircuit as PhysCirc
+>>> from loqs.backends import PyGSTiPhysicalCircuit as PhysCirc
 >>> X_template = PhysCirc([('Gh', 'aux'), ('Gcnot', 'aux', 'b'),
 ...     ('Gcnot', 'aux', 'a'), ('Gcnot', 'aux', 'd'),
 ...     ('Gcnot', 'aux', 'c'), ('Gh', 'aux'), ('Iz', 'aux')],
@@ -81,5 +90,3 @@ Gcnot:D4:A12Gcnot:D6:A13Gcnot:D8:A15][Gh:A9Gh:A11Gh:A14Gh:A16]\
 
 from .basecircuit import BasePhysicalCircuit
 from .listcircuit import ListPhysicalCircuit
-from .pygsticircuit import PyGSTiPhysicalCircuit
-from .stimcircuit import STIMPhysicalCircuit

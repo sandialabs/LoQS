@@ -3,20 +3,23 @@ __pycache__
 .pytest_cache
 .ipynb_checkpoints/
 
-.coverage
+.coverage*
 coverage.xml
 .tox
 .mypy_cache
 htmlcov
 
 .env
-.claude/*.local.*
+.opencode
+.ralph/*.json
 
 docs/_build
 docs/**/_autosummary
 docs/**/*.ipynb
 docs/**/*.json
 docs/**/*.json.gz
+
+checkpoints/
 
 .vscode
 venv*/

@@ -2,10 +2,7 @@
 
 import pytest
 
-from loqs.backends import GateRep
-from loqs.backends.circuit import PyGSTiPhysicalCircuit, ListPhysicalCircuit
-from loqs.backends.model import PyGSTiNoiseModel, DictNoiseModel
-from loqs.backends.state import QSimQuantumState, STIMQuantumState
+from loqs.backends import GateRep, PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 from loqs.core.recordables import MeasurementOutcomes
@@ -79,8 +76,8 @@ class Test5QCodepack:
         stack += stack_outcome[0]
 
         program = QuantumProgram.from_quantum_program(ref_program, stack)
-        program.run()
-        assert program.collect_shot_data("logical_measurement", -1)[0] == stack_outcome[1]
+        program_results = program.run()
+        assert program_results.collect_shot_data("logical_measurement", -1)[0] == stack_outcome[1]
 
     # Note that tests will be labeled stack_outcome-state-model-circuit with this stacking
     @pytest.mark.parametrize("circuit_backend", [PyGSTiPhysicalCircuit, ListPhysicalCircuit])
@@ -103,8 +100,8 @@ class Test5QCodepack:
         stack_ft += stack_outcome[0]
 
         program = QuantumProgram.from_quantum_program(ref_program, stack_ft)
-        program.run()
-        assert program.collect_shot_data("logical_measurement", -1)[0] == stack_outcome[1]
+        program_results = program.run()
+        assert program_results.collect_shot_data("logical_measurement", -1)[0] == stack_outcome[1]
     
 
     def _test_program(self, program, key, idx):
