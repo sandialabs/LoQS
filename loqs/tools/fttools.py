@@ -10,7 +10,6 @@
 """A collection of functions to help fault-tolerance testing.
 """
 
-from typing import Any
 from collections.abc import Sequence
 from copy import deepcopy
 from tqdm import tqdm
