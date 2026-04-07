@@ -5,7 +5,6 @@ representations match under the correct parameters.
 """
 
 from collections import Counter
-from scipy.stats import chisquare
 import numpy as np
 import pytest
 
