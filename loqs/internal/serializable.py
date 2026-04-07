@@ -155,18 +155,18 @@ class Serializable:
     def serial_id(obj: Any, _visited: set | None = None) -> int:
         """
         Generate a unique serial ID for an object based on its serializable content.
-        
+
         This method recursively computes a hash of an object's serializable attributes,
         allowing objects with identical content to share the same serial ID even if
         they are different instances.
-        
+
         Parameters
         ----------
         obj : Any
             The object to compute a serial ID for.
         _visited : set, optional
             Internal parameter to track visited objects and prevent circular references.
-             
+
         Returns
         -------
         int
@@ -174,36 +174,46 @@ class Serializable:
         """
         if _visited is None:
             _visited = set()
-            
+
         # Handle circular references by tracking object IDs
         obj_id = id(obj)
         if obj_id in _visited:
             # For circular references, use the object ID as a fallback
             # This ensures we don't get infinite recursion
             return hash(f"circular_ref_{obj_id}")
-            
+
         _visited.add(obj_id)
-        
+
         try:
             if isinstance(obj, Serializable):
                 # For Serializable objects, hash the tuple of serial IDs of their SERIALIZE_ATTRS
                 attr_ids = []
                 for attr in obj.SERIALIZE_ATTRS:
                     attr_value = obj.get_encoding_attr(attr)
-                    attr_ids.append(Serializable.serial_id(attr_value, _visited))
+                    attr_ids.append(
+                        Serializable.serial_id(attr_value, _visited)
+                    )
                 return hash(tuple(attr_ids))
             elif isinstance(obj, list):
                 # For lists, hash the tuple of serial IDs of each element
-                return hash(tuple(Serializable.serial_id(item, _visited) for item in obj))
+                return hash(
+                    tuple(
+                        Serializable.serial_id(item, _visited) for item in obj
+                    )
+                )
             elif isinstance(obj, dict):
                 # For dicts, hash the tuple of serial IDs of keys and values
                 keys_id = Serializable.serial_id(list(obj.keys()), _visited)
-                values_id = Serializable.serial_id(list(obj.values()), _visited)
+                values_id = Serializable.serial_id(
+                    list(obj.values()), _visited
+                )
                 return hash((keys_id, values_id))
             elif isinstance(obj, np.ndarray):
                 # For numpy arrays, hash the shape and flattened data
                 shape_id = Serializable.serial_id(obj.shape, _visited)
-                data_id = Serializable.serial_id(obj.flatten().tolist(), _visited)
+                data_id = Serializable.serial_id(
+                    obj.flatten().tolist(), _visited
+                )
                 return hash((shape_id, data_id))
             else:
                 # Base case: hash the object itself
@@ -579,7 +589,7 @@ class Serializable:
     ## INTERNAL FUNCTIONS
 
     @staticmethod
-    def encode(
+    def encode(  # noqa: C901
         obj: Encodable,
         format: EncodeFormats = "hdf5",
         encode_cache: EncodeCache = None,
@@ -724,7 +734,7 @@ class Serializable:
             # Get serial ID for this object
             serial_id = Serializable.serial_id(obj)
             object_id = id(obj)
-             
+
             # Check if this object is already in cache
             if encode_cache is not None and obj.CACHE_ON_SERIALIZE:
                 # First check if this specific object instance is already being processed
@@ -736,43 +746,61 @@ class Serializable:
                             # This object is already being processed (circular reference)
                             # Create a reference to avoid infinite recursion
                             cache_id = entry[1]
-                            return encode_cached_obj(cache_id, cache_type="reference", reference_cache_id=cache_id)
-                
+                            return encode_cached_obj(
+                                cache_id,
+                                cache_type="reference",
+                                reference_cache_id=cache_id,
+                            )
+
                 # Check if serial_id exists in cache (different instances with same content)
                 if serial_id in encode_cache:
                     # Same serial content but different instance, create a copy
-                    source_cache_id = encode_cache[serial_id][0][1]  # First entry is the source
-                    new_cache_id = JSONEncoder.ENCODE_ID if format == "json" else HDF5Encoder.ENCODE_ID
-                    
+                    source_cache_id = encode_cache[serial_id][0][
+                        1
+                    ]  # First entry is the source
+                    new_cache_id = (
+                        JSONEncoder.ENCODE_ID
+                        if format == "json"
+                        else HDF5Encoder.ENCODE_ID
+                    )
+
                     # Add to cache
                     encode_cache[serial_id].append((object_id, new_cache_id))
-                    
+
                     # Increment encoder ID
                     if format == "json":
                         JSONEncoder.ENCODE_ID += 1
                     else:
                         HDF5Encoder.ENCODE_ID += 1
-                    
-                    return encode_cached_obj(new_cache_id, cache_type="copy", reference_cache_id=source_cache_id, source_cache_id=new_cache_id)
+
+                    return encode_cached_obj(
+                        new_cache_id,
+                        cache_type="copy",
+                        reference_cache_id=source_cache_id,
+                        source_cache_id=new_cache_id,
+                    )
                 else:
                     # New serial content, create a source
-                    cache_id = JSONEncoder.ENCODE_ID if format == "json" else HDF5Encoder.ENCODE_ID
+                    cache_id = (
+                        JSONEncoder.ENCODE_ID
+                        if format == "json"
+                        else HDF5Encoder.ENCODE_ID
+                    )
                     encode_cache[serial_id] = [(object_id, cache_id)]
-                    
+
                     # Increment encoder ID
                     if format == "json":
                         JSONEncoder.ENCODE_ID += 1
                     else:
                         HDF5Encoder.ENCODE_ID += 1
-                    
+
                     # Encode as source
                     result = encode_uncached_obj(obj)
                     # Add cache info to result
                     if format == "json":
-                        result.update({
-                            "cache_type": "source",
-                            "cache_id": cache_id
-                        })
+                        result.update(
+                            {"cache_type": "source", "cache_id": cache_id}
+                        )
                     else:
                         result.attrs["cache_type"] = "source"
                         result.attrs["cache_id"] = cache_id
@@ -940,7 +968,9 @@ class Serializable:
             result = decode_uncached_obj(encoded)
             # Post-process to replace any placeholders with actual objects
             if decode_cache is not None:
-                result = Serializable._replace_placeholders(result, decode_cache)
+                result = Serializable._replace_placeholders(
+                    result, decode_cache
+                )
             return result
         except IncorrectDecodableTypeError:
             pass
@@ -1244,35 +1274,39 @@ class Serializable:
         """Recursively replace circular reference objects with actual objects from decode_cache."""
         if obj is None:
             return obj
-            
+
         # Check if this is a circular reference placeholder
-        if hasattr(obj, 'cache_id'):
+        if hasattr(obj, "cache_id"):
             # This is a circular reference, replace it with the actual object
             actual_cache_id = obj.cache_id
             if actual_cache_id in decode_cache:
                 actual_obj = decode_cache[actual_cache_id]
                 # If the actual object is still a circular reference, keep it as is
                 # (this can happen during the replacement process)
-                if not hasattr(actual_obj, 'cache_id'):
+                if not hasattr(actual_obj, "cache_id"):
                     return actual_obj
             return obj
-            
+
         # Handle Serializable objects
         if isinstance(obj, Serializable):
             # Recursively process attributes
             for attr in obj.SERIALIZE_ATTRS:
                 if hasattr(obj, attr):
                     attr_value = getattr(obj, attr)
-                    new_attr_value = Serializable._replace_placeholders(attr_value, decode_cache)
+                    new_attr_value = Serializable._replace_placeholders(
+                        attr_value, decode_cache
+                    )
                     # Handle numpy array comparison
-                    if hasattr(attr_value, '__array__') and hasattr(new_attr_value, '__array__'):
+                    if hasattr(attr_value, "__array__") and hasattr(
+                        new_attr_value, "__array__"
+                    ):
                         # For numpy arrays, check if they are different arrays
                         if not np.array_equal(attr_value, new_attr_value):
                             setattr(obj, attr, new_attr_value)
                     elif new_attr_value != attr_value:
                         setattr(obj, attr, new_attr_value)
             return obj
-            
+
         # Handle dictionaries
         elif isinstance(obj, dict):
             new_dict = {}
@@ -1280,21 +1314,23 @@ class Serializable:
                 new_v = Serializable._replace_placeholders(v, decode_cache)
                 new_dict[k] = new_v
             return new_dict
-            
+
         # Handle lists, tuples, sets
         elif isinstance(obj, (list, tuple, set)):
             new_items = []
             for item in obj:
-                new_item = Serializable._replace_placeholders(item, decode_cache)
+                new_item = Serializable._replace_placeholders(
+                    item, decode_cache
+                )
                 new_items.append(new_item)
-                
+
             if isinstance(obj, tuple):
                 return tuple(new_items)
             elif isinstance(obj, set):
                 return set(new_items)
             else:
                 return new_items
-                
+
         # Handle other types (primitives, arrays, etc.)
         else:
             return obj

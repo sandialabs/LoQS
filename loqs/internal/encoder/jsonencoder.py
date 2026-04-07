@@ -103,15 +103,17 @@ class JSONEncoder(BaseEncoder):
         ) or encoded.get("cache_type", "") == "source":
             try:
                 cache_id = encoded["cache_id"]
+
                 # Add a placeholder to handle circular references
                 # We'll replace this with the actual object later
                 # Use a special wrapper that knows which cache ID it corresponds to
                 class _CircularRef:
                     def __init__(self, cache_id):
                         self.cache_id = cache_id
-                    
+
                     def __repr__(self):
                         return f"<CircularRef cache_id={self.cache_id}>"
+
                 decode_cache[cache_id] = _CircularRef(cache_id)  # type: ignore
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
@@ -172,23 +174,29 @@ class JSONEncoder(BaseEncoder):
         return decoded
 
     @staticmethod
-    def encode_cached_obj(cache_id, h5_group=None, cache_type="reference", reference_cache_id=None, source_cache_id=None):
+    def encode_cached_obj(
+        cache_id,
+        h5_group=None,
+        cache_type="reference",
+        reference_cache_id=None,
+        source_cache_id=None,
+    ):
         result = {
             "encode_type": "Serializable",
             "version": SERIALIZATION_VERSION,
             "cache_type": cache_type,
         }
-        
+
         if cache_type == "reference":
             result["cache_id"] = cache_id
         elif cache_type == "copy":
             result["reference_cache_id"] = reference_cache_id
             result["source_cache_id"] = source_cache_id
-        
+
         return result
 
     @staticmethod
-    def decode_cached_obj(encoded, decode_cache=None):
+    def decode_cached_obj(encoded, decode_cache=None):  # noqa: C901
         # Check if right type
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
@@ -213,8 +221,10 @@ class JSONEncoder(BaseEncoder):
 
         # Check if properly formed
         with JSONEncoder.assert_decode(fatal=True):
-            cache_type = encoded.get("cache_type", "reference")  # Default to reference for backwards compatibility
-            
+            cache_type = encoded.get(
+                "cache_type", "reference"
+            )  # Default to reference for backwards compatibility
+
             if cache_type == "reference":
                 assert "cache_id" in encoded
             elif cache_type == "copy":
@@ -223,11 +233,11 @@ class JSONEncoder(BaseEncoder):
 
         try:
             assert decode_cache is not None
-            
+
             if cache_type == "reference":
                 cached_obj = decode_cache[encoded["cache_id"]]
                 # Check if this is a circular reference placeholder
-                if hasattr(cached_obj, 'cache_id'):
+                if hasattr(cached_obj, "cache_id"):
                     # This is a forward reference that will be resolved later
                     # Return the circular reference object
                     return cached_obj
@@ -236,44 +246,49 @@ class JSONEncoder(BaseEncoder):
                 # Get the reference object and create a copy
                 reference_cache_id = encoded["reference_cache_id"]
                 source_cache_id = encoded["source_cache_id"]
-                
+
                 # Check if reference object is available
                 if reference_cache_id not in decode_cache:
                     # Reference object not available yet, create a placeholder
                     class _CircularRef:
                         def __init__(self, cache_id):
                             self.cache_id = cache_id
-                          
+
                         def __repr__(self):
                             return f"<CircularRef cache_id={self.cache_id}>"
+
                     copied_obj = _CircularRef(reference_cache_id)
                 else:
                     reference_obj = decode_cache[reference_cache_id]
                     # Check if reference is a placeholder
-                    if hasattr(reference_obj, 'cache_id'):
+                    if hasattr(reference_obj, "cache_id"):
                         # Create a new placeholder for the copy
                         class _CircularRef:
                             def __init__(self, cache_id):
                                 self.cache_id = cache_id
-                             
+
                             def __repr__(self):
-                                return f"<CircularRef cache_id={self.cache_id}>"
+                                return (
+                                    f"<CircularRef cache_id={self.cache_id}>"
+                                )
+
                         copied_obj = _CircularRef(reference_obj.cache_id)
                     else:
                         # Create a copy and add to cache with source_cache_id
                         # For now, we'll use a simple copy mechanism
                         # In a real implementation, this would depend on the object type
-                        if hasattr(reference_obj, 'copy'):
+                        if hasattr(reference_obj, "copy"):
                             copied_obj = reference_obj.copy()
                         else:
                             # Fallback to deep copy for objects without copy method
                             import copy
+
                             copied_obj = copy.deepcopy(reference_obj)
-                  
+
                 # Add the copy to cache
                 decode_cache[source_cache_id] = copied_obj
                 return copied_obj
-                
+
         except AssertionError:
             raise RuntimeError("Object reference found but no cache provided.")
         except KeyError:

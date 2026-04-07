@@ -118,14 +118,16 @@ class HDF5Encoder(BaseEncoder):
         if encoded.attrs.get("cache_type", None) == "source":
             try:
                 cache_id = encoded.attrs["cache_id"]
+
                 # Add a placeholder to handle circular references
                 # Use a special wrapper that knows which cache ID it corresponds to
                 class _CircularRef:
                     def __init__(self, cache_id):
                         self.cache_id = cache_id
-                    
+
                     def __repr__(self):
                         return f"<CircularRef cache_id={self.cache_id}>"
+
                 decode_cache[cache_id] = _CircularRef(cache_id)  # type: ignore
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
@@ -157,7 +159,13 @@ class HDF5Encoder(BaseEncoder):
         return decoded
 
     @staticmethod
-    def encode_cached_obj(cache_id, h5_group=None, cache_type="reference", reference_cache_id=None, source_cache_id=None):
+    def encode_cached_obj(
+        cache_id,
+        h5_group=None,
+        cache_type="reference",
+        reference_cache_id=None,
+        source_cache_id=None,
+    ):
         assert isinstance(h5_group, h5py.Group)
 
         obj_group = h5_group.create_group(
@@ -167,13 +175,13 @@ class HDF5Encoder(BaseEncoder):
         obj_group.attrs["encode_type"] = "Serializable"
         obj_group.attrs["version"] = SERIALIZATION_VERSION
         obj_group.attrs["cache_type"] = cache_type
-        
+
         if cache_type == "reference":
             obj_group.attrs["cache_id"] = cache_id
         elif cache_type == "copy":
             obj_group.attrs["reference_cache_id"] = reference_cache_id
             obj_group.attrs["source_cache_id"] = source_cache_id
-        
+
         return obj_group
 
     @staticmethod
@@ -193,9 +201,9 @@ class HDF5Encoder(BaseEncoder):
             version = encoded.attrs.get("version", -1)
             if version != 1:
                 raise DecodableVersionError()
-            
+
             cache_type = encoded.attrs["cache_type"]
-            
+
             if cache_type == "reference":
                 assert "cache_id" in encoded.attrs
             elif cache_type == "copy":
@@ -207,7 +215,7 @@ class HDF5Encoder(BaseEncoder):
                 cache_id = encoded.attrs["cache_id"]
                 cached_obj = decode_cache[cache_id]  # type: ignore
                 # Check if this is a circular reference placeholder
-                if hasattr(cached_obj, 'cache_id'):
+                if hasattr(cached_obj, "cache_id"):
                     # This is a forward reference that will be resolved later
                     # Return the circular reference object
                     return cached_obj
@@ -216,43 +224,48 @@ class HDF5Encoder(BaseEncoder):
                 # Get the reference object and create a copy
                 reference_cache_id = int(encoded.attrs["reference_cache_id"])
                 source_cache_id = int(encoded.attrs["source_cache_id"])
-                
+
                 # Check if reference object is available
                 if reference_cache_id not in decode_cache:
                     # Reference object not available yet, create a placeholder
                     class _CircularRef:
                         def __init__(self, cache_id):
                             self.cache_id = cache_id
-                         
+
                         def __repr__(self):
                             return f"<CircularRef cache_id={self.cache_id}>"
+
                     copied_obj = _CircularRef(reference_cache_id)
                 else:
                     reference_obj = decode_cache[reference_cache_id]
-                    
+
                     # Check if reference is a circular reference placeholder
-                    if hasattr(reference_obj, 'cache_id'):
+                    if hasattr(reference_obj, "cache_id"):
                         # Create a new circular reference for the copy
                         class _CircularRef:
                             def __init__(self, cache_id):
                                 self.cache_id = cache_id
-                             
+
                             def __repr__(self):
-                                return f"<CircularRef cache_id={self.cache_id}>"
+                                return (
+                                    f"<CircularRef cache_id={self.cache_id}>"
+                                )
+
                         copied_obj = _CircularRef(reference_obj.cache_id)
                     else:
                         # Create a copy and add to cache with source_cache_id
-                        if hasattr(reference_obj, 'copy'):
+                        if hasattr(reference_obj, "copy"):
                             copied_obj = reference_obj.copy()
                         else:
                             # Fallback to deep copy for objects without copy method
                             import copy
+
                             copied_obj = copy.deepcopy(reference_obj)
-                
+
                 # Add the copy to cache
                 decode_cache[source_cache_id] = copied_obj  # type: ignore
                 return copied_obj
-                
+
         except (KeyError, TypeError):
             raise RuntimeError(
                 "Object reference found but source object not available."
@@ -282,11 +295,13 @@ class HDF5Encoder(BaseEncoder):
         list_group = h5_group.create_group("iterable")
         list_group.attrs["iterable_type"] = name
         list_group.attrs["version"] = SERIALIZATION_VERSION
-        
+
         # Check if all elements are HDF5-native types that can be stored directly as datasets
         hdf5_native_types = (int, float, bool, str, bytes)
-        can_use_dataset = all(isinstance(e, hdf5_native_types) for e in to_encode)
-        
+        can_use_dataset = all(
+            isinstance(e, hdf5_native_types) for e in to_encode
+        )
+
         if can_use_dataset and len(to_encode) > 0:
             # Additional check: all elements must be of the same type for dataset optimization
             # Sets should always use groups storage because they are unordered and
@@ -297,44 +312,60 @@ class HDF5Encoder(BaseEncoder):
             else:
                 first_element = to_encode[0]
                 first_type = type(first_element)
-                all_same_type = all(type(e) == first_type for e in to_encode)
-            
+                all_same_type = all(
+                    isinstance(e, first_type) for e in to_encode
+                )
+
             if not isinstance(to_encode, set) and all_same_type:
                 # Use HDF5 dataset for optimized storage
                 list_group.attrs["storage_format"] = "dataset"
-                
+
                 # Convert to numpy array for efficient storage
                 # Handle different iterable types (sets are not subscriptable)
                 if isinstance(to_encode, set):
                     first_element = next(iter(to_encode))
                 else:
                     first_element = to_encode[0]
-                
+
                 if isinstance(first_element, str):
                     # For strings, use fixed-length string dtype
                     # Find maximum string length to determine dtype
-                    max_len = max(len(s) for s in to_encode) if to_encode else 0
-                    dtype = f'S{max_len + 1}'  # +1 for null terminator
+                    max_len = (
+                        max(len(s) for s in to_encode) if to_encode else 0
+                    )
+                    dtype = f"S{max_len + 1}"  # +1 for null terminator
                     data = np.array(to_encode, dtype=dtype)
                     list_group.create_dataset("data", data=data, dtype=dtype)
                 elif isinstance(first_element, bytes):
                     # For bytes, use fixed-length bytes dtype
                     # Find maximum bytes length to determine dtype
-                    max_len = max(len(b) for b in to_encode) if to_encode else 0
-                    dtype = f'S{max_len + 1}'  # +1 for null terminator
-                    data = np.array([b.decode('utf-8', errors='replace') for b in to_encode], dtype=dtype)
+                    max_len = (
+                        max(len(b) for b in to_encode) if to_encode else 0
+                    )
+                    dtype = f"S{max_len + 1}"  # +1 for null terminator
+                    data = np.array(
+                        [
+                            b.decode("utf-8", errors="replace")
+                            for b in to_encode
+                        ],
+                        dtype=dtype,
+                    )
                     list_group.create_dataset("data", data=data, dtype=dtype)
                     list_group.attrs["original_type"] = "bytes"
                 else:
                     # For numeric types, determine appropriate dtype
                     data = np.array(to_encode)
                     dtype = data.dtype
-                    
+
                     # Create dataset with compression for large arrays
                     if len(to_encode) > 1000:
-                        list_group.create_dataset("data", data=data, dtype=dtype, compression="gzip")
+                        list_group.create_dataset(
+                            "data", data=data, dtype=dtype, compression="gzip"
+                        )
                     else:
-                        list_group.create_dataset("data", data=data, dtype=dtype)
+                        list_group.create_dataset(
+                            "data", data=data, dtype=dtype
+                        )
             else:
                 # Mixed native types or non-native types - fall back to groups
                 list_group.attrs["storage_format"] = "groups"
@@ -359,7 +390,7 @@ class HDF5Encoder(BaseEncoder):
                     ignore_no_serialize_flags=ignore_no_serialize_flags,
                     h5_group=item_group,
                 )
-        
+
         return list_group
 
     @staticmethod
@@ -385,31 +416,37 @@ class HDF5Encoder(BaseEncoder):
 
         # Determine storage format (default to "groups" for backwards compatibility)
         storage_format = list_group.attrs.get("storage_format", "groups")
-        
+
         if storage_format == "dataset":
             # New optimized format using HDF5 datasets
             with HDF5Encoder.assert_decode(fatal=True):
                 assert "data" in list_group
                 data_dataset = list_group["data"]
                 assert isinstance(data_dataset, h5py.Dataset)
-            
+
             # Read data from dataset
             data = data_dataset[()]
-            
+
             # Convert numpy array back to appropriate Python types
-            if data.dtype.kind in ['i', 'u']:  # integer types
+            if data.dtype.kind in ["i", "u"]:  # integer types
                 value = [int(x) for x in data.flat]
-            elif data.dtype.kind == 'f':  # float types
+            elif data.dtype.kind == "f":  # float types
                 value = [float(x) for x in data.flat]
-            elif data.dtype.kind == 'b':  # boolean types
+            elif data.dtype.kind == "b":  # boolean types
                 value = [bool(x) for x in data.flat]
-            elif data.dtype.kind in ['U', 'S']:  # string types
+            elif data.dtype.kind in ["U", "S"]:  # string types
                 # Check if original type was bytes
                 if list_group.attrs.get("original_type") == "bytes":
-                    value = [x.encode('utf-8') if isinstance(x, str) else x for x in data.flat]
+                    value = [
+                        x.encode("utf-8") if isinstance(x, str) else x
+                        for x in data.flat
+                    ]
                 else:
-                    value = [str(x, 'utf-8') if isinstance(x, bytes) else str(x) for x in data.flat]
-            elif data.dtype.kind == 'O':  # object types (could be mixed)
+                    value = [
+                        str(x, "utf-8") if isinstance(x, bytes) else str(x)
+                        for x in data.flat
+                    ]
+            elif data.dtype.kind == "O":  # object types (could be mixed)
                 # Handle object arrays which might contain strings, bytes, etc.
                 value = []
                 for x in data.flat:
@@ -545,26 +582,32 @@ class HDF5Encoder(BaseEncoder):
             data_size = len(csr_mx.data)
             indices_size = len(csr_mx.indices)
             indptr_size = len(csr_mx.indptr)
-            
+
             if data_size > 1000:
-                matrix_group.create_dataset("data", data=csr_mx.data, compression="gzip")
+                matrix_group.create_dataset(
+                    "data", data=csr_mx.data, compression="gzip"
+                )
             else:
                 matrix_group.create_dataset("data", data=csr_mx.data)
-                
+
             if indices_size > 1000:
-                matrix_group.create_dataset("indices", data=csr_mx.indices, compression="gzip")
+                matrix_group.create_dataset(
+                    "indices", data=csr_mx.indices, compression="gzip"
+                )
             else:
                 matrix_group.create_dataset("indices", data=csr_mx.indices)
-                
+
             if indptr_size > 1000:
-                matrix_group.create_dataset("indptr", data=csr_mx.indptr, compression="gzip")
+                matrix_group.create_dataset(
+                    "indptr", data=csr_mx.indptr, compression="gzip"
+                )
             else:
                 matrix_group.create_dataset("indptr", data=csr_mx.indptr)
         elif isinstance(to_encode, NDArray):
             # Determine if array is large enough for compression and chunking
             total_elements = to_encode.size
             use_compression = total_elements > 1000
-            
+
             if np.iscomplexobj(to_encode):
                 # Handle complex numbers by storing real and imaginary parts separately
                 matrix_group.attrs["array_type"] = "dense_complex"
@@ -574,28 +617,50 @@ class HDF5Encoder(BaseEncoder):
                     # Calculate reasonable chunk size - aim for ~100KB chunks
                     element_size = to_encode.dtype.itemsize
                     target_chunk_elements = max(1000, 100000 // element_size)
-                    chunk_shape = tuple(min(dim, target_chunk_elements) for dim in to_encode.shape)
-                    
-                    matrix_group.create_dataset("real", data=np.real(to_encode), 
-                                              compression="gzip", chunks=chunk_shape)
-                    matrix_group.create_dataset("imag", data=np.imag(to_encode),
-                                              compression="gzip", chunks=chunk_shape)
+                    chunk_shape = tuple(
+                        min(dim, target_chunk_elements)
+                        for dim in to_encode.shape
+                    )
+
+                    matrix_group.create_dataset(
+                        "real",
+                        data=np.real(to_encode),
+                        compression="gzip",
+                        chunks=chunk_shape,
+                    )
+                    matrix_group.create_dataset(
+                        "imag",
+                        data=np.imag(to_encode),
+                        compression="gzip",
+                        chunks=chunk_shape,
+                    )
                 else:
-                    matrix_group.create_dataset("real", data=np.real(to_encode))
-                    matrix_group.create_dataset("imag", data=np.imag(to_encode))
+                    matrix_group.create_dataset(
+                        "real", data=np.real(to_encode)
+                    )
+                    matrix_group.create_dataset(
+                        "imag", data=np.imag(to_encode)
+                    )
             else:
                 # For real-valued arrays, store directly as dataset
                 matrix_group.attrs["array_type"] = "dense_real"
-                
+
                 # Apply compression and chunking for large arrays
                 if use_compression:
                     # Calculate reasonable chunk size - aim for ~100KB chunks
                     element_size = to_encode.dtype.itemsize
                     target_chunk_elements = max(1000, 100000 // element_size)
-                    chunk_shape = tuple(min(dim, target_chunk_elements) for dim in to_encode.shape)
-                    
-                    matrix_group.create_dataset("data", data=to_encode,
-                                              compression="gzip", chunks=chunk_shape)
+                    chunk_shape = tuple(
+                        min(dim, target_chunk_elements)
+                        for dim in to_encode.shape
+                    )
+
+                    matrix_group.create_dataset(
+                        "data",
+                        data=to_encode,
+                        compression="gzip",
+                        chunks=chunk_shape,
+                    )
                 else:
                     matrix_group.create_dataset("data", data=to_encode)
         else:
