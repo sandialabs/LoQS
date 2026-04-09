@@ -1,7 +1,7 @@
 """Tester for loqs.core.instructions.instruction"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 
 import pytest
@@ -71,7 +71,7 @@ class TestInstruction:
 
         ins = Instruction(apply_fn, data, map_qubits_fn, name="test")
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             ins.write(tmp.name)
             tmp_path = tmp.name
 
@@ -92,7 +92,7 @@ class TestInstruction:
         # We should be able to do it a second time also
         # This is because we cache the serialization the first time,
         # so even though the second time we don't have access to the source code, it works
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             ins2.write(tmp.name)
             tmp_path = tmp.name
 
@@ -123,7 +123,7 @@ class TestInstruction:
         ins = Instruction(apply_fn, data, map_qubits_fn, name="comprehensive_test")
 
         # Test dumps/loads roundtrip
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             ins.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -134,7 +134,7 @@ class TestInstruction:
             os.unlink(tmp_path)
 
         # Test write/read roundtrip
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as temp_file:
+        with NamedTemporaryFile(delete=False, suffix='.json') as temp_file:
             temp_path = temp_file.name
 
         try:
@@ -146,7 +146,7 @@ class TestInstruction:
             os.unlink(temp_path)
 
         # Test compressed format
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
+        with NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
             temp_path = temp_file.name
 
         try:
@@ -173,7 +173,7 @@ class TestInstruction:
         ins = Instruction(apply_fn, complex_data, name="complex_data_test")
 
         # Test roundtrip preserves structure
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             ins.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -196,7 +196,7 @@ class TestInstruction:
         ins = Instruction(apply_fn, data, map_qubits_fn, name="function_test")
 
         # Test serialization and deserialization
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             ins.write(tmp.name)
             tmp_path = tmp.name
         try:

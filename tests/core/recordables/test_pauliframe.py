@@ -1,7 +1,7 @@
  
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
 
@@ -111,7 +111,7 @@ class TestPauliFrame:
     def test_serialization(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             pf.write(tmp.name)
             tmp_path = tmp.name
 

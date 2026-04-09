@@ -1,7 +1,7 @@
 """Tester for loqs.core.recordables.patchdict"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
 
@@ -31,7 +31,7 @@ class TestMeasurementOutcomes:
         patch2 = code.create_patch(["D1", "A1"])
         patches = PatchDict({"L0": patch1, "L1": patch2})
         
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             patches.write(tmp.name)
             tmp_path = tmp.name
 

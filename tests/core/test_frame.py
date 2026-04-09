@@ -1,9 +1,10 @@
 """Tester for loqs.core.frame"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
+import h5py
 
 from loqs.core.frame import Frame
 from loqs.internal.encoder.jsonencoder import JSONEncoder
@@ -77,7 +78,7 @@ class TestFrame:
         f2 = Frame({"c": 3, "other": f1}, "test")
         f2.no_serialize("c")
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             f2.write(tmp.name)
             tmp_path = tmp.name
 
@@ -120,9 +121,8 @@ class TestFrame:
         original_frame = Frame({"state": "initial", "qubits": ["Q0", "Q1"], "count": 42}, log="test_frame")
 
         # Test HDF5 serialization using new API
-        import tempfile
         import h5py
-        with tempfile.NamedTemporaryFile(suffix='.h5') as f:
+        with NamedTemporaryFile(suffix='.h5') as f:
             h5file = h5py.File(f.name, 'w')
             root_group = h5file.create_group("root")
             serialized = Serializable.encode(original_frame, format="hdf5", h5_group=root_group, reset_encode_id=True)
@@ -154,9 +154,9 @@ class TestFrame:
         frame.expire("b")
 
         # Serialize and deserialize with HDF5 using new API
-        import tempfile
+        from tempfile import NamedTemporaryFile
         import h5py
-        with tempfile.NamedTemporaryFile(suffix='.h5') as f:
+        with NamedTemporaryFile(suffix='.h5') as f:
             h5file = h5py.File(f.name, 'w')
             root_group = h5file.create_group("root")
             serialized = Serializable.encode(frame, format="hdf5", h5_group=root_group, reset_encode_id=True)
@@ -173,9 +173,7 @@ class TestFrame:
         frame.no_serialize("b")
 
         # Serialize and deserialize with HDF5 using new API
-        import tempfile
-        import h5py
-        with tempfile.NamedTemporaryFile(suffix='.h5') as f:
+        with NamedTemporaryFile(suffix='.h5') as f:
             h5file = h5py.File(f.name, 'w')
             root_group = h5file.create_group("root")
             serialized = Serializable.encode(frame, format="hdf5", h5_group=root_group, reset_encode_id=True)
@@ -196,9 +194,7 @@ class TestFrame:
         # Test serialization using new API
         if format == "hdf5":
             # HDF5 format requires a file and group
-            import tempfile
-            import h5py
-            with tempfile.NamedTemporaryFile(suffix='.h5') as f:
+            with NamedTemporaryFile(suffix='.h5') as f:
                 h5file = h5py.File(f.name, 'w')
                 root_group = h5file.create_group("root")
                 serialized = Serializable.encode(original_frame, format=format, h5_group=root_group, reset_encode_id=True)
@@ -230,9 +226,9 @@ class TestFrame:
         # Serialize and deserialize using new API
         if format == "hdf5":
             # HDF5 format requires a file and group
-            import tempfile
+            from tempfile import NamedTemporaryFile
             import h5py
-            with tempfile.NamedTemporaryFile(suffix='.h5') as f:
+            with NamedTemporaryFile(suffix='.h5') as f:
                 h5file = h5py.File(f.name, 'w')
                 root_group = h5file.create_group("root")
                 serialized = Serializable.encode(frame, format=format, h5_group=root_group, reset_encode_id=True)
@@ -256,9 +252,7 @@ class TestFrame:
         # Serialize and deserialize using new API
         if format == "hdf5":
             # HDF5 format requires a file and group
-            import tempfile
-            import h5py
-            with tempfile.NamedTemporaryFile(suffix='.h5') as f:
+            with NamedTemporaryFile(suffix='.h5') as f:
                 h5file = h5py.File(f.name, 'w')
                 root_group = h5file.create_group("root")
                 serialized = Serializable.encode(frame, format=format, h5_group=root_group, reset_encode_id=True)

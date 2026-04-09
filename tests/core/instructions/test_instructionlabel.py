@@ -1,7 +1,7 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 
 import pytest
@@ -75,7 +75,7 @@ class TestInstructionLabel:
         # Test string version
         ilbl = InstructionLabel("Label", "L0", self.args, self.kwargs)
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             ilbl.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -87,7 +87,7 @@ class TestInstructionLabel:
         # And instruction version
         ilbl3 = InstructionLabel(self.ins, "L0", self.args, self.kwargs)
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             ilbl3.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -102,7 +102,7 @@ class TestInstructionLabel:
         label = InstructionLabel(self.ins, "L1", self.args, self.kwargs)
 
         # Test string serialization
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             label.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -112,7 +112,7 @@ class TestInstructionLabel:
             os.unlink(tmp_path)
 
         # Test file serialization
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, suffix='.json') as tmp:
             label.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -122,7 +122,7 @@ class TestInstructionLabel:
             os.unlink(tmp_path)
 
         # Test compressed format
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
+        with NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
             temp_path = temp_file.name
 
         try:
@@ -137,7 +137,7 @@ class TestInstructionLabel:
         # Test label without instruction
         label = InstructionLabel(self.ins, "L0")
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             label.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -151,7 +151,7 @@ class TestInstructionLabel:
         original = InstructionLabel(self.ins, "L2", self.args)
 
         # Serialize and deserialize
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             original.write(tmp.name)
             tmp_path = tmp.name
         try:

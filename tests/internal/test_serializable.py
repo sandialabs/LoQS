@@ -2,7 +2,7 @@
 
 import gzip
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import pytest
 from tempfile import NamedTemporaryFile
 from pathlib import Path
@@ -185,7 +185,7 @@ class TestSerializableParameterized:
             assert state1_again["cache_type"] == "reference"
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
+            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
                 temp_file = f.name
 
             try:
@@ -229,7 +229,7 @@ class TestSerializableParameterized:
             assert obj == loaded_obj
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
+            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
                 temp_file = f.name
 
             try:
@@ -291,7 +291,7 @@ class TestSerializableParameterized:
             assert "set" in loaded_obj.data
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
+            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
                 temp_file = f.name
 
             try:

@@ -1,7 +1,7 @@
 """Tester for loqs.core.history"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
 
@@ -74,7 +74,7 @@ class TestHistory:
         f = Frame(data, "test 1")
         h = History([f, f.update(new_log="test 2"), f.update(new_log="test 3")])
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             h.write(tmp.name)
             tmp_path = tmp.name
 

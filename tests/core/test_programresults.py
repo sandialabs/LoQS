@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from tempfile import NamedTemporaryFile
 import shutil
 from pathlib import Path
 import pytest
@@ -701,7 +702,7 @@ class TestProgramResults:
             
             if format_name == "hdf5":
                 # For HDF5, handle everything in one file context
-                with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as temp_file:
+                with NamedTemporaryFile(suffix=".h5", delete=False) as temp_file:
                     temp_path = temp_file.name
                 
                 try:

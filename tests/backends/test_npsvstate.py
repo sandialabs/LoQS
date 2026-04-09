@@ -1,7 +1,7 @@
 """Tester for loqs.backends.state.qsimstate"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 
 import mock
@@ -259,7 +259,7 @@ class TestNumPyStatevectorQuantumState:
         test, _ = state10.apply_reps([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
         test.apply_reps_inplace([RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY)])
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             test.write(tmp.name)
             tmp_path = tmp.name
 

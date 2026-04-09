@@ -1,7 +1,7 @@
 """Tester for loqs.backends.state.qsimstate"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 
 import mock
@@ -260,7 +260,7 @@ class TestQSimQuantumState:
         # Don't force propagation here
         # So serialization should both serialize DM and operations to be applied
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             test.write(tmp.name)
             tmp_path = tmp.name
 

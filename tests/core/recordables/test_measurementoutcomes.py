@@ -1,7 +1,7 @@
 """Tester for loqs.core.recordables.measurementoutcomes"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
 
@@ -55,7 +55,7 @@ class TestMeasurementOutcomes:
         expected = {"Q0": [0, 1], "Q1": [1]}
         m = MeasurementOutcomes(outcomes)
 
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             m.write(tmp.name)
             tmp_path = tmp.name
 

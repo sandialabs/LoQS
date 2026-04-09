@@ -1,7 +1,7 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
 
@@ -58,7 +58,7 @@ class TestInstructionStack:
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Create and write, but keep file closed before re-opening
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             s.write(tmp.name)
             tmp_path = tmp.name
 
@@ -75,7 +75,7 @@ class TestInstructionStack:
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             stack.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -85,7 +85,7 @@ class TestInstructionStack:
             os.unlink(tmp_path)
 
         # Test file serialization
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, suffix='.json') as tmp:
             stack.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -95,7 +95,7 @@ class TestInstructionStack:
             os.unlink(tmp_path)
 
         # Test compressed format
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
+        with NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
             temp_path = temp_file.name
 
         try:
@@ -110,7 +110,7 @@ class TestInstructionStack:
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             original.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -137,7 +137,7 @@ class TestInstructionStack:
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             stack.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -147,7 +147,7 @@ class TestInstructionStack:
             os.unlink(tmp_path)
 
         # Test file serialization
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{format}') as tmp:
+        with NamedTemporaryFile(delete=False, suffix=f'.{format}') as tmp:
             stack.write(tmp.name)
             tmp_path = tmp.name
         try:
@@ -162,7 +162,7 @@ class TestInstructionStack:
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
             original.write(tmp.name)
             tmp_path = tmp.name
         try:

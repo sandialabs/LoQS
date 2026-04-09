@@ -1,7 +1,7 @@
 """Tester for loqs.core.qeccode"""
 
 import os
-import tempfile
+from tempfile import NamedTemporaryFile
 import json
 import pytest
 
@@ -46,7 +46,7 @@ class TestQECCodeAndPatch:
         patch = code.create_patch(["D0", "A0"])
 
         # Patch should serialize code, so just do that
-        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
             patch.write(tmp.name)
             tmp_path = tmp.name
 

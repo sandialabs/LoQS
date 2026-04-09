@@ -8,7 +8,7 @@ Tests file size and compute time for various scenarios:
 """
 
 import copy
-import tempfile
+from tempfile import NamedTemporaryFile
 import os
 import time
 import numpy as np
@@ -172,7 +172,7 @@ def create_history_with_repeated_objects(config):
 def _test_json_serialization(history, config):
     """Test JSON serialization performance (helper function)."""
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+    with NamedTemporaryFile(suffix=".json", delete=False) as f:
         temp_file = f.name
 
     try:
@@ -197,7 +197,7 @@ def _test_json_serialization(history, config):
 def _test_hdf5_serialization(history, config):
     """Test HDF5 serialization performance (helper function)."""
 
-    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+    with NamedTemporaryFile(suffix=".h5", delete=False) as f:
         temp_file = f.name
 
     try:
@@ -232,7 +232,7 @@ def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
-    with tempfile.NamedTemporaryFile(suffix=".json") as f:
+    with NamedTemporaryFile(suffix=".json") as f:
         temp_file = f.name
 
         history.write(temp_file, format="json")
@@ -244,7 +244,7 @@ def verify_deserialization(history):
         # Frame uses _data attribute
         assert str(loaded_json[0]._data.keys()) == str(history[0]._data.keys())
 
-    with tempfile.NamedTemporaryFile(suffix=".h5") as f:
+    with NamedTemporaryFile(suffix=".h5") as f:
         temp_file = f.name
         history.write(temp_file, format="hdf5")
         loaded_hdf5 = History.read(temp_file)
