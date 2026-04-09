@@ -1,13 +1,13 @@
 [project]
 name = "loqs"
-version = "1.0"
+version = "1.0+"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "scipy",
     "tk",
     "tqdm>=4",
-    "loqs[backends,dask]"
+    "h5py"
 ]
 authors = [
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
@@ -32,7 +32,6 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: Unix",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
