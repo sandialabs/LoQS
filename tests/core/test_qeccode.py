@@ -1,7 +1,8 @@
 """Tester for loqs.core.qeccode"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 import pytest
@@ -40,16 +41,17 @@ class TestQECCodeAndPatch:
         }
         assert result.log == "test result"
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
         patch = code.create_patch(["D0", "A0"])
 
         # Patch should serialize code, so just do that
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            patch.write(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            patch.write(tmp.name)
+            tmp_path = tmp.name
 
-            patch2 = Frame.read(tempf.name)
+        try:
+            patch2 = Frame.read(tmp_path)
         
             ins2 = patch2["ins"]
             result = ins2.apply(state=0, qubits=ins2.data["qubits"])
@@ -60,6 +62,8 @@ class TestQECCodeAndPatch:
                 #'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
             }
             assert result.log == "test result"
+        finally:
+            os.unlink(tmp_path)
 
     def test_qeccode_serialization(self):
         """Test QECCode serialization roundtrip."""

@@ -1,7 +1,8 @@
 """Tester for loqs.core.frame"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 from loqs.core.frame import Frame
@@ -68,7 +69,6 @@ class TestFrame:
         assert f4.log == "test"
         assert f4._expired_keys == ["b"]
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         f1 = Frame({"a": 1, "b": 2})
         f1.expire("b")
@@ -77,16 +77,20 @@ class TestFrame:
         f2 = Frame({"c": 3, "other": f1}, "test")
         f2.no_serialize("c")
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            f2.write(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            f2.write(tmp.name)
+            tmp_path = tmp.name
 
-            f3 = Frame.read(tempf.name)
-        
-        assert f3["c"] == "NOT SERIALIZED"
-        # Real data should come back, even for expired keys
-        assert f3["other"]._data == {'a': 1, 'b': 2}
-        assert f3["other"]._expired_keys == ["b"]
-        assert f3.log == "test"
+        try:
+            f3 = Frame.read(tmp_path)
+
+            assert f3["c"] == "NOT SERIALIZED"
+            # Real data should come back, even for expired keys
+            assert f3["other"]._data == {'a': 1, 'b': 2}
+            assert f3["other"]._expired_keys == ["b"]
+            assert f3.log == "test"
+        finally:
+            os.unlink(tmp_path)
 
     def test_frame_serialization_roundtrip(self):
         """Test basic Frame serialization roundtrip."""

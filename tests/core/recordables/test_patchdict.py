@@ -1,7 +1,8 @@
 """Tester for loqs.core.recordables.patchdict"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 from loqs.core.recordables import PatchDict
@@ -24,15 +25,18 @@ class TestMeasurementOutcomes:
         with pytest.raises(AssertionError):
             PatchDict({"key": "not a patch"}) # type: ignore
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         code = QECCode({}, ["Q0", "Q1"], ["Q0"])
         patch1 = code.create_patch(["D0", "A0"])
         patch2 = code.create_patch(["D1", "A1"])
         patches = PatchDict({"L0": patch1, "L1": patch2})
         
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            patches.write(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            patches.write(tmp.name)
+            tmp_path = tmp.name
 
-            patches2 = PatchDict.read(tempf.name)
+        try:
+            patches2 = PatchDict.read(tmp_path)
             assert patches2.all_qubit_labels == ["D0", "A0", "D1", "A1"]
+        finally:
+            os.unlink(tmp_path)

@@ -1,7 +1,8 @@
 """Tester for loqs.core.history"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 from loqs.core.frame import Frame
@@ -67,21 +68,24 @@ class TestHistory:
         assert h2[2]["state"] == 2 # No warning, this one is up to date
         assert h2._expiring_key_locs["state"] == 2
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         data = {"a": 1, "b": 2}
 
         f = Frame(data, "test 1")
         h = History([f, f.update(new_log="test 2"), f.update(new_log="test 3")])
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            h.write(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            h.write(tmp.name)
+            tmp_path = tmp.name
 
-            h2 = History.read(tempf.name)
+        try:
+            h2 = History.read(tmp_path)
 
-        for i, frame in enumerate(h2):
-            assert frame._data == data
-            assert frame.log == f"test {i+1}"
+            for i, frame in enumerate(h2):
+                assert frame._data == data
+                assert frame.log == f"test {i+1}"
+        finally:
+            os.unlink(tmp_path)
 
     def test_history_serialization(self):
         """Test History serialization roundtrip."""

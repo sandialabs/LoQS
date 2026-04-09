@@ -1,7 +1,8 @@
 """Tester for loqs.core.recordables.measurementoutcomes"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 from loqs.core.recordables import MeasurementOutcomes
@@ -49,17 +50,20 @@ class TestMeasurementOutcomes:
         m3 = m.get_inferred_outcomes(pf, "Z")
         self._check(m3, Z_expected)
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         outcomes = {"Q0": [0, 1], "Q1": 1}
         expected = {"Q0": [0, 1], "Q1": [1]}
         m = MeasurementOutcomes(outcomes)
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            m.write(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            m.write(tmp.name)
+            tmp_path = tmp.name
 
-            m2 = MeasurementOutcomes.read(tempf.name)
+        try:
+            m2 = MeasurementOutcomes.read(tmp_path)
             self._check(m2, expected)
+        finally:
+            os.unlink(tmp_path)
 
     def test_hdf5_serialization(self):
         """Test MeasurementOutcomes HDF5 serialization."""

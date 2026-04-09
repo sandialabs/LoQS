@@ -1,11 +1,12 @@
 """Tester for loqs.backends.state.qsimstate"""
 
 import os
+import tempfile
+import json
 
 import mock
 import numpy as np
 import pytest
-from tempfile import NamedTemporaryFile
 
 try:
     from quantumsim.sparsedm import SparseDM as _SparseDM
@@ -238,7 +239,6 @@ class TestQSimQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         # Start in the 10 state
         state10 = QSimState(2, ["Q0", "Q1"])
@@ -260,10 +260,14 @@ class TestQSimQuantumState:
         # Don't force propagation here
         # So serialization should both serialize DM and operations to be applied
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            test.write(tempf.name)
-            
-            test2: QSimState = QSimState.read(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            test.write(tmp.name)
+            tmp_path = tmp.name
+
+        try:
+            test2: QSimState = QSimState.read(tmp_path)
+        finally:
+            os.unlink(tmp_path)
         
         # And finish applying
         test2.apply_reps_inplace([RepTuple(h_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR)])

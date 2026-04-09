@@ -1,7 +1,8 @@
-
+ 
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 from loqs.core.recordables import PauliFrame
@@ -107,15 +108,18 @@ class TestPauliFrame:
         pf9 = pf.update_from_transversal_clifford("K")
         self._check(pf9, "IYZX")
         
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            pf.write(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
+            pf.write(tmp.name)
+            tmp_path = tmp.name
 
-            pf2 = PauliFrame.read(tempf.name)
+        try:
+            pf2 = PauliFrame.read(tmp_path)
             self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tmp_path)
 
     def test_hdf5_serialization(self):
         """Test PauliFrame HDF5 serialization."""

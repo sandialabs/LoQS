@@ -1,7 +1,8 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 import pytest
@@ -53,15 +54,20 @@ class TestInstructionStack:
         assert ilbl.patch_label == "L0"
         self._check(s5, ["L1"])
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            s.write(tempf.name)
+        # Create and write, but keep file closed before re-opening
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+            s.write(tmp.name)
+            tmp_path = tmp.name
 
-            s2 = InstructionStack.read(tempf.name)
+        # Now safe to open/read/remove on Windows
+        try:
+            s2 = InstructionStack.read(tmp_path)
             self._check(s2, ["L0", "L1"])
+        finally:
+            os.unlink(tmp_path)
 
     def test_instruction_stack_serialization_comprehensive(self):
         """Comprehensive test of InstructionStack serialization methods."""
@@ -69,19 +75,27 @@ class TestInstructionStack:
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            stack.write(tempf.name)
-            loaded_stack = InstructionStack.read(tempf.name)
-        self._check(loaded_stack, ["L0", "L1", "L0"])
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+            stack.write(tmp.name)
+            tmp_path = tmp.name
+        try:
+            loaded_stack = InstructionStack.read(tmp_path)
+            self._check(loaded_stack, ["L0", "L1", "L0"])
+        finally:
+            os.unlink(tmp_path)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix='.json') as f:
-            stack.write(f.name)
-            loaded_stack = InstructionStack.read(f.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as tmp:
+            stack.write(tmp.name)
+            tmp_path = tmp.name
+        try:
+            loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
+        finally:
+            os.unlink(tmp_path)
 
         # Test compressed format
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
             temp_path = temp_file.name
 
         try:
@@ -89,7 +103,6 @@ class TestInstructionStack:
             loaded_stack = InstructionStack.read(temp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
         finally:
-            import os
             os.unlink(temp_path)
 
     def test_instruction_stack_equality_after_serialization(self):
@@ -97,9 +110,13 @@ class TestInstructionStack:
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = InstructionStack.read(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+            original.write(tmp.name)
+            tmp_path = tmp.name
+        try:
+            deserialized = InstructionStack.read(tmp_path)
+        finally:
+            os.unlink(tmp_path)
 
         # Should be equal (content-wise after serial_id removal)
         assert len(original) == len(deserialized)
@@ -120,16 +137,24 @@ class TestInstructionStack:
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            stack.write(tempf.name)
-            loaded_stack = InstructionStack.read(tempf.name)
-        self._check(loaded_stack, ["L0", "L1", "L0"])
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+            stack.write(tmp.name)
+            tmp_path = tmp.name
+        try:
+            loaded_stack = InstructionStack.read(tmp_path)
+            self._check(loaded_stack, ["L0", "L1", "L0"])
+        finally:
+            os.unlink(tmp_path)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            stack.write(f.name)
-            loaded_stack = InstructionStack.read(f.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{format}') as tmp:
+            stack.write(tmp.name)
+            tmp_path = tmp.name
+        try:
+            loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
+        finally:
+            os.unlink(tmp_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_instruction_stack_equality_after_serialization_parameterized(self, format):
@@ -137,9 +162,13 @@ class TestInstructionStack:
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = InstructionStack.read(tempf.name)
+        with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
+            original.write(tmp.name)
+            tmp_path = tmp.name
+        try:
+            deserialized = InstructionStack.read(tmp_path)
+        finally:
+            os.unlink(tmp_path)
 
         # Should be equal (content-wise after serial_id removal)
         assert len(original) == len(deserialized)
