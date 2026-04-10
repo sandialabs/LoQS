@@ -53,7 +53,7 @@ dev = [
 ]
 docs = [
     "sphinx",
-    "jupyter-book",
+    "jupyter-book<2",
     "jupytext"
 ]
 quantumsim = ["quantumsim==0.2.0"]
