@@ -7,7 +7,7 @@ dependencies = [
     "scipy",
     "tk",
     "tqdm>=4",
-    "loqs[backends,dask]"
+    "h5py"
 ]
 authors = [
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
@@ -32,7 +32,6 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: Unix",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
@@ -54,7 +53,7 @@ dev = [
 ]
 docs = [
     "sphinx",
-    "jupyter-book",
+    "jupyter-book<2",
     "jupytext"
 ]
 quantumsim = ["quantumsim==0.2.0"]

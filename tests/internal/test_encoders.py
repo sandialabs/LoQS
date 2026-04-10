@@ -2,7 +2,7 @@
 
 import inspect
 import json
-import tempfile
+from tempfile import NamedTemporaryFile
 import os
 import numpy as np
 import scipy.sparse as sps
@@ -64,7 +64,7 @@ class TestEncoderParameterized:
             assert "value" in encoded
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -96,7 +96,7 @@ class TestEncoderParameterized:
             assert decoded == obj
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -130,7 +130,7 @@ class TestEncoderParameterized:
             assert encoded["cache_id"] == cache_id
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -158,7 +158,7 @@ class TestEncoderParameterized:
             assert decoded is obj
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -191,7 +191,7 @@ class TestEncoderParameterized:
             assert len(encoded_list["items"]) == 3
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -228,7 +228,7 @@ class TestEncoderParameterized:
             assert decoded_list == [1, 2, 3]
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -258,7 +258,7 @@ class TestEncoderParameterized:
             assert "key2" in encoded["items"]
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -292,7 +292,7 @@ class TestEncoderParameterized:
             assert decoded["key2"] == 42
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -322,7 +322,7 @@ class TestEncoderParameterized:
             assert "version" in encoded
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -350,7 +350,7 @@ class TestEncoderParameterized:
             assert decoded is MockSerializable
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -378,7 +378,7 @@ class TestEncoderParameterized:
             assert "source" in encoded
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -409,7 +409,7 @@ class TestEncoderParameterized:
             # Cannot test function execution from source code
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -467,7 +467,7 @@ class TestEncoderParameterized:
         
         else:  # hdf5
             # Test HDF5 primitive encoding
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -549,7 +549,7 @@ class TestEncoderParameterized:
         
         else:  # hdf5
             # Test HDF5 primitive decoding
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -636,7 +636,7 @@ class TestEncoderIntegration:
         json_decoded = JSONEncoder.decode_uncached_obj(json_encoded)
         
         # Test HDF5 encoder
-        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+        with NamedTemporaryFile(suffix=".h5", delete=False) as f:
             temp_file = f.name
         
         try:
@@ -675,7 +675,7 @@ class TestEncoderIntegration:
         assert json_decoded.value == 999
         
         # Test HDF5 roundtrip
-        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+        with NamedTemporaryFile(suffix=".h5", delete=False) as f:
             temp_file = f.name
         
         try:
@@ -729,7 +729,7 @@ class TestComprehensiveArrayEncoding:
                 print(f"✓ JSON {name}: {arr.shape}")
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -802,7 +802,7 @@ class TestComprehensiveArrayEncoding:
             print("✓ JSON sparse_csr decoding")
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
@@ -862,7 +862,7 @@ class TestComprehensiveArrayEncoding:
                 print(f"✓ JSON {name} roundtrip")
         
         else:  # hdf5
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+            with NamedTemporaryFile(suffix=".h5", delete=False) as f:
                 temp_file = f.name
             
             try:
