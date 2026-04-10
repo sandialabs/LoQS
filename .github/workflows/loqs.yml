@@ -25,11 +25,11 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     needs: unit-tests
-    # Run only on PRs or pushes into main (temp bugfix-actions)
+    # Run only on PRs or pushes into main
     if: >
       ${{
         (github.event_name == 'pull_request' && github.base_ref == 'main') ||
-        (github.event_name == 'push' && github.ref == 'refs/heads/bugfix-actions')
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
       }}
     steps:
     - uses: actions/checkout@v4
