@@ -1,7 +1,7 @@
 # LoQS v1.0
 
-[![tests](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml/badge.svg?branch=feature-cov-badge)](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml)
-[![coverage](https://coveralls.io/sandialabs/LoQS/badge.svg?branch=feature-cov-badge)](https://coveralls.io/sandialabs/LoQS?branch=feature-cov-badge)
+[![tests](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml/badge.svg)](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml)
+[![coverage](https://coveralls.io/repos/github/sandialabs/LoQS/badge.svg?branch=main)](https://coveralls.io/github/sandialabs/LoQS?branch=main)
 
 The *Lo*gical *Q*ubit *S*imulator (LoQS) is designed to simulate a few logical qubits with arbitrary noise models and arbitrary quantum *and* classical operations.
 
