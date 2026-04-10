@@ -1,7 +1,8 @@
 """Tester for loqs.core.syndromelabel"""
 
-from tempfile import NamedTemporaryFile
+import tempfile
 import pytest
+import os
 
 from loqs.core.syndromelabel import SyndromeLabel
 
@@ -41,11 +42,14 @@ class TestSyndromeLabel:
     def test_serialization(self):
         l = SyndromeLabel("Q0", 1, 2)
 
-        with NamedTemporaryFile("w+", suffix='.json') as tempf:
-            l.write(tempf.name)
-
-            l2 = SyndromeLabel.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            l.write(tempf_path)
+            l2 = SyndromeLabel.read(tempf_path)
             self._check(l2, "Q0", 1, 2)
+        finally:
+            os.unlink(tempf_path)
 
     def test_syndrome_label_serialization_comprehensive(self):
         """Comprehensive test of SyndromeLabel serialization methods."""
@@ -53,60 +57,78 @@ class TestSyndromeLabel:
         label = SyndromeLabel("Q5", 10, 3)
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label.write(tempf.name)
-            loaded_label = SyndromeLabel.read(tempf.name)
-        self._check(loaded_label, "Q5", 10, 3)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            label.write(tempf_path)
+            loaded_label = SyndromeLabel.read(tempf_path)
+            self._check(loaded_label, "Q5", 10, 3)
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix='.json') as f:
-            label.write(f.name)
-            loaded_label = SyndromeLabel.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            label.write(f_path)
+            loaded_label = SyndromeLabel.read(f_path)
             self._check(loaded_label, "Q5", 10, 3)
+        finally:
+            os.unlink(f_path)
 
         # Test compressed format
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-            temp_path = temp_file.name
-
+        fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
+        os.close(fd)
         try:
             label.write(temp_path)
             loaded_label = SyndromeLabel.read(temp_path)
             self._check(loaded_label, "Q5", 10, 3)
         finally:
-            import os
             os.unlink(temp_path)
 
     def test_syndrome_label_with_defaults(self):
         """Test SyndromeLabel serialization with default parameters."""
         # Test with default frame_idx and outcome_idx
         label1 = SyndromeLabel("A3")
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label1.write(tempf.name)
-            loaded1 = SyndromeLabel.read(tempf.name)
-        self._check(loaded1, "A3", -1, 0)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            label1.write(tempf_path)
+            loaded1 = SyndromeLabel.read(tempf_path)
+            self._check(loaded1, "A3", -1, 0)
+        finally:
+            os.unlink(tempf_path)
 
         # Test with default outcome_idx only
         label2 = SyndromeLabel("B2", 5)
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label2.write(tempf.name)
-            loaded2 = SyndromeLabel.read(tempf.name)
-        self._check(loaded2, "B2", 5, 0)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            label2.write(tempf_path)
+            loaded2 = SyndromeLabel.read(tempf_path)
+            self._check(loaded2, "B2", 5, 0)
+        finally:
+            os.unlink(tempf_path)
 
     def test_syndrome_label_equality_after_serialization(self):
         """Test that SyndromeLabel equality is preserved after serialization."""
         original = SyndromeLabel("X1", 7, 2)
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = SyndromeLabel.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            original.write(tempf_path)
+            deserialized = SyndromeLabel.read(tempf_path)
 
-        # Should be equal
-        assert original == deserialized
+            # Should be equal
+            assert original == deserialized
 
-        # Different label should not be equal
-        different = SyndromeLabel("X1", 7, 1)
-        assert original != different
+            # Different label should not be equal
+            different = SyndromeLabel("X1", 7, 3)
+            assert original != different
+        finally:
+            os.unlink(tempf_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_syndrome_label_serialization_comprehensive_parameterized(self, format):
@@ -115,33 +137,49 @@ class TestSyndromeLabel:
         label = SyndromeLabel("Q5", 10, 3)
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label.write(tempf.name)
-            loaded_label = SyndromeLabel.read(tempf.name)
-        self._check(loaded_label, "Q5", 10, 3)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            label.write(tempf_path)
+            loaded_label = SyndromeLabel.read(tempf_path)
+            self._check(loaded_label, "Q5", 10, 3)
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            label.write(f.name)
-            loaded_label = SyndromeLabel.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix=f'.{format}')
+        os.close(fd)
+        try:
+            label.write(f_path)
+            loaded_label = SyndromeLabel.read(f_path)
             self._check(loaded_label, "Q5", 10, 3)
+        finally:
+            os.unlink(f_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_syndrome_label_with_defaults_parameterized(self, format):
         """Test SyndromeLabel serialization with default parameters using both formats."""
         # Test with default frame_idx and outcome_idx
         label1 = SyndromeLabel("A3")
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label1.write(tempf.name)
-            loaded1 = SyndromeLabel.read(tempf.name)
-        self._check(loaded1, "A3", -1, 0)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            label1.write(tempf_path)
+            loaded1 = SyndromeLabel.read(tempf_path)
+            self._check(loaded1, "A3", -1, 0)
+        finally:
+            os.unlink(tempf_path)
 
         # Test with default outcome_idx only
         label2 = SyndromeLabel("B2", 5)
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label2.write(tempf.name)
-            loaded2 = SyndromeLabel.read(tempf.name)
-        self._check(loaded2, "B2", 5, 0)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            label2.write(tempf_path)
+            loaded2 = SyndromeLabel.read(tempf_path)
+            self._check(loaded2, "B2", 5, 0)
+        finally:
+            os.unlink(tempf_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_syndrome_label_equality_after_serialization_parameterized(self, format):
@@ -149,15 +187,19 @@ class TestSyndromeLabel:
         original = SyndromeLabel("X1", 7, 2)
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = SyndromeLabel.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            original.write(tempf_path)
+            deserialized = SyndromeLabel.read(tempf_path)
 
-        # Should be equal
-        assert original == deserialized
+            # Should be equal
+            assert original == deserialized
 
-        # Different label should not be equal
-        different = SyndromeLabel("X1", 7, 3)
-        assert original != different
+            # Different label should not be equal
+            different = SyndromeLabel("X1", 7, 3)
+            assert original != different
+        finally:
+            os.unlink(tempf_path)
 
 

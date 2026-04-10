@@ -1,7 +1,7 @@
 """Tester for loqs.core.quantumprogram"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
 import pytest
 
 from loqs.backends import QSimQuantumState, STIMQuantumState
@@ -90,25 +90,31 @@ class TestQuantumProgram:
         assert len(new_program_results.shot_histories) == 1  # Should have more frames after running
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=f".{format}") as tempf:
-            program.write(tempf.name)
-            loaded_program = QuantumProgram.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix=f".{format}")
+        os.close(fd)
+        try:
+            program.write(tempf_path)
+            loaded_program = QuantumProgram.read(tempf_path)
             assert isinstance(loaded_program, QuantumProgram)
 
-        # Verify program structure is preserved
-        
-        loaded_program_results = loaded_program.run()
-        assert len(loaded_program_results.shot_histories) == 1  # Should have more frames after running
-        assert loaded_program.name == "Trivial counter test"
-        assert len(loaded_program.instruction_stack) == len(stack)  # Stack should be preserved
-        assert loaded_program.state_type == state_type
-        assert loaded_program.patch_types is not None
-        assert len(loaded_program.patch_types) == len(patch_types)
+            # Verify program structure is preserved
+
+            loaded_program_results = loaded_program.run()
+            assert len(loaded_program_results.shot_histories) == 1  # Should have more frames after running
+            assert loaded_program.name == "Trivial counter test"
+            assert len(loaded_program.instruction_stack) == len(stack)  # Stack should be preserved
+            assert loaded_program.state_type == state_type
+            assert loaded_program.patch_types is not None
+            assert len(loaded_program.patch_types) == len(patch_types)
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            loaded_program.write(f.name)
-            loaded_program2 = QuantumProgram.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix=f'.{format}')
+        os.close(fd)
+        try:
+            loaded_program.write(f_path)
+            loaded_program2 = QuantumProgram.read(f_path)
             assert isinstance(loaded_program2, QuantumProgram)
 
             # Verify program structure is preserved
@@ -125,3 +131,5 @@ class TestQuantumProgram:
             # But now it should
             loaded_program2_results3 = loaded_program2.run(num_shots=2)
             assert len(loaded_program2_results3.shot_histories) == 2
+        finally:
+            os.unlink(f_path)

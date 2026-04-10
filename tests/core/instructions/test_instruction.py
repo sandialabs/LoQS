@@ -1,7 +1,8 @@
 """Tester for loqs.core.instructions.instruction"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 
 import pytest
 
@@ -58,7 +59,6 @@ class TestInstruction:
         assert ins3.param_alias("state") == "state_name_in_program"
 
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         def apply_fn(state, qubits):
             return Frame({"state": state+1, 'qubits': qubits})
@@ -66,16 +66,17 @@ class TestInstruction:
             new_kwargs = kwargs.copy()
             new_kwargs["qubits"] = [qubit_mapping[q] for q in qubits]
             return new_kwargs
-    
+
         data= {"qubits": ["Q0", "Q1"]}
 
         ins = Instruction(apply_fn, data, map_qubits_fn, name="test")
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            ins.write(tempf.name)
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            ins.write(tmp_path)
+            ins2 = Instruction.read(tmp_path)
 
-            ins2 = Instruction.read(tempf.name)
-        
             result = ins2.apply(state=0, qubits=ins2.data["qubits"])
             assert result._data == {
                 'state': 1,
@@ -84,15 +85,18 @@ class TestInstruction:
                 #'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
             }
             assert result.log == "test result"
+        finally:
+            os.unlink(tmp_path)
 
         # We should be able to do it a second time also
         # This is because we cache the serialization the first time,
         # so even though the second time we don't have access to the source code, it works
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            ins2.write(tempf.name)
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            ins2.write(tmp_path)
+            ins3 = Frame.read(tmp_path)
 
-            ins3 = Frame.read(tempf.name)
-        
             result2 = ins3.apply(state=0, qubits=ins3.data["qubits"])
             assert result2._data == {
                 'state': 1,
@@ -101,6 +105,8 @@ class TestInstruction:
                 #'collected_params': {'state': 0, 'qubits': ins3.data["qubits"]}
             }
             assert result2.log == "test result"
+        finally:
+            os.unlink(tmp_path)
 
     def test_instruction_serialization_comprehensive(self):
         """Comprehensive test of Instruction serialization methods."""
@@ -115,36 +121,36 @@ class TestInstruction:
         ins = Instruction(apply_fn, data, map_qubits_fn, name="comprehensive_test")
 
         # Test dumps/loads roundtrip
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            ins.write(tempf.name)
-            loaded_ins = Instruction.read(tempf.name)
-        assert loaded_ins.name == "comprehensive_test"
-        assert loaded_ins.data == data
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            ins.write(tmp_path)
+            loaded_ins = Instruction.read(tmp_path)
+            assert loaded_ins.name == "comprehensive_test"
+            assert loaded_ins.data == data
+        finally:
+            os.unlink(tmp_path)
 
         # Test write/read roundtrip
-        with NamedTemporaryFile(suffix='.json', delete=False) as temp_file:
-            temp_path = temp_file.name
-
+        fd, temp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
         try:
             ins.write(temp_path)
             loaded_ins = Instruction.read(temp_path)
             assert loaded_ins.name == "comprehensive_test"
             assert loaded_ins.data == data
         finally:
-            import os
             os.unlink(temp_path)
 
         # Test compressed format
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-            temp_path = temp_file.name
-
+        fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
+        os.close(fd)
         try:
             ins.write(temp_path)
             loaded_ins = Instruction.read(temp_path)
             assert loaded_ins.name == "comprehensive_test"
             assert loaded_ins.data == data
         finally:
-            import os
             os.unlink(temp_path)
 
     def test_instruction_with_complex_data(self):
@@ -163,10 +169,14 @@ class TestInstruction:
         ins = Instruction(apply_fn, complex_data, name="complex_data_test")
 
         # Test roundtrip preserves structure
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            ins.write(tempf.name)
-            loaded_ins = Instruction.read(tempf.name)
-        assert loaded_ins.data == complex_data
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            ins.write(tmp_path)
+            loaded_ins = Instruction.read(tmp_path)
+            assert loaded_ins.data == complex_data
+        finally:
+            os.unlink(tmp_path)
 
     def test_instruction_function_serialization(self):
         """Test that apply and map_qubits functions are serialized correctly."""
@@ -182,9 +192,13 @@ class TestInstruction:
         ins = Instruction(apply_fn, data, map_qubits_fn, name="function_test")
 
         # Test serialization and deserialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            ins.write(tempf.name)
-            loaded_ins = Instruction.read(tempf.name)
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            ins.write(tmp_path)
+            loaded_ins = Instruction.read(tmp_path)
+        finally:
+            os.unlink(tmp_path)
 
         # Test that the deserialized instruction works the same way
         original_result = ins.apply(state=5, qubits=["A", "B"])

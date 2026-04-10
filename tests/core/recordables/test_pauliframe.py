@@ -1,7 +1,8 @@
-
+ 
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 from loqs.core.recordables import PauliFrame
@@ -107,37 +108,51 @@ class TestPauliFrame:
         pf9 = pf.update_from_transversal_clifford("K")
         self._check(pf9, "IYZX")
         
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
     def test_serialization(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            pf.write(tempf.name)
-
-            pf2 = PauliFrame.read(tempf.name)
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            pf.write(tmp_path)
+            pf2 = PauliFrame.read(tmp_path)
             self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tmp_path)
 
     def test_hdf5_serialization(self):
         """Test PauliFrame HDF5 serialization."""
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
         # Test bytes serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            pf.write(tempf.name)
-            pf2 = PauliFrame.read(tempf.name)
-        self._check(pf2, "IXYZ")
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            pf.write(tempf_path)
+            pf2 = PauliFrame.read(tempf_path)
+            self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization with .h5 extension
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            pf.write(tempf.name)
-            pf2 = PauliFrame.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            pf.write(tempf_path)
+            pf2 = PauliFrame.read(tempf_path)
             self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization with .hdf5 extension
-        with NamedTemporaryFile(suffix='.hdf5') as tempf:
-            pf.write(tempf.name)
-            pf2 = PauliFrame.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix='.hdf5')
+        os.close(fd)
+        try:
+            pf.write(tempf_path)
+            pf2 = PauliFrame.read(tempf_path)
             self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tempf_path)
 
     def test_hdf5_serialization_complex(self):
         """Test PauliFrame HDF5 serialization with different Pauli strings."""
@@ -153,12 +168,16 @@ class TestPauliFrame:
             pf = PauliFrame(qubit_labels, pauli_str)
 
             # Test HDF5 serialization
-            with NamedTemporaryFile("w+", suffix=".json") as tempf:
-                pf.write(tempf.name)
-                pf2 = PauliFrame.read(tempf.name)
+            fd, tempf_path = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            try:
+                pf.write(tempf_path)
+                pf2 = PauliFrame.read(tempf_path)
 
-            assert pf2.qubit_labels == qubit_labels
-            assert pf2.pauli_frame == list(pauli_str)
+                assert pf2.qubit_labels == qubit_labels
+                assert pf2.pauli_frame == list(pauli_str)
+            finally:
+                os.unlink(tempf_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_pauliframe_serialization_parameterized(self, format):
@@ -166,16 +185,24 @@ class TestPauliFrame:
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
 
         # Test bytes serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            pf.write(tempf.name)
-            pf2 = PauliFrame.read(tempf.name)
-        self._check(pf2, "IXYZ")
+        fd, tempf_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            pf.write(tempf_path)
+            pf2 = PauliFrame.read(tempf_path)
+            self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as tempf:
-            pf.write(tempf.name)
-            pf2 = PauliFrame.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix=f'.{format}')
+        os.close(fd)
+        try:
+            pf.write(tempf_path)
+            pf2 = PauliFrame.read(tempf_path)
             self._check(pf2, "IXYZ")
+        finally:
+            os.unlink(tempf_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_pauliframe_serialization_complex_parameterized(self, format):
@@ -192,9 +219,13 @@ class TestPauliFrame:
             pf = PauliFrame(qubit_labels, pauli_str)
 
             # Test serialization
-            with NamedTemporaryFile("w+", suffix=".json") as tempf:
-                pf.write(tempf.name)
-                pf2 = PauliFrame.read(tempf.name)
+            fd, tempf_path = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            try:
+                pf.write(tempf_path)
+                pf2 = PauliFrame.read(tempf_path)
 
-            assert pf2.qubit_labels == qubit_labels
-            assert pf2.pauli_frame == list(pauli_str)
+                assert pf2.qubit_labels == qubit_labels
+                assert pf2.pauli_frame == list(pauli_str)
+            finally:
+                os.unlink(tempf_path)

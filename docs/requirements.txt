@@ -1,2 +1,2 @@
-jupyter-book
-pygsti
+jupyter-book<2
+sphinx
