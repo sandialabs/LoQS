@@ -14,8 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest] #[ubuntu-latest, windows-latest] # No Mac for speed
-        python-version: ['3.14'] #['3.11', '3.14']
+        os: [ubuntu-latest, windows-latest]  # No Mac for speed
+        python-version: ['3.11', '3.13'] # Staying on 3.13 for now to avoid lengthy Windows 3.14 wheel builds
         loqs-optional: ["all"]
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run minimal LoQS tests
@@ -34,9 +34,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest] # No Mac for speed
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.11', '3.12', '3.13', '3.14']
-        loqs-optional: ["all"] # Need to include "test" or some minimal too
+        loqs-optional: ["test", "all"] # Test is no backends/dask for minimal install testing
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run complete LoQS tests
     with:
