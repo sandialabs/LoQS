@@ -9,12 +9,11 @@
 
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-import inspect
-import traceback
 from typing import Callable, ClassVar
 import h5py
 
 from loqs.internal.serializable import (
+    DeferredRef,
     Serializable,
     Encoded,
     EncodeCache,
@@ -76,7 +75,7 @@ class BaseEncoder(ABC):
     @abstractmethod
     def decode_uncached_obj(
         encoded: Encoded, decode_cache: DecodeCache = None
-    ) -> Serializable:
+    ) -> Serializable | DeferredRef:
         raise NotImplementedError()
 
     @staticmethod
@@ -90,7 +89,7 @@ class BaseEncoder(ABC):
     @abstractmethod
     def decode_cached_obj(
         encoded: Encoded, decode_cache: DecodeCache = None
-    ) -> Serializable:
+    ) -> Serializable | DeferredRef:
         raise NotImplementedError()
 
     @staticmethod

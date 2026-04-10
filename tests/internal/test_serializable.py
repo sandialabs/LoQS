@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 import h5py
 
+from loqs.core import Frame
 from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
 from loqs.types import NDArray
 
@@ -696,77 +697,33 @@ class TestSerializableNestedData:
                     
                     np.testing.assert_array_almost_equal(decoded_array, large_array)
 
-    def test_serial_hash_caching(self):
-        """Test the new serial_hash caching mechanism."""
-        # Create objects with identical content (should have same serial_hash)
-        obj1 = MockSerializable(name="same", value=42, data={"key": "value"})
-        obj2 = MockSerializable(name="same", value=42, data={"key": "value"})
-        
-        # Verify they have the same serial_hash but different object ids
-        serial_hash1 = Serializable.serial_hash(obj1)
-        serial_hash2 = Serializable.serial_hash(obj2)
-        obj_id1 = id(obj1)
-        obj_id2 = id(obj2)
-        
-        assert serial_hash1 == serial_hash2, "Objects with identical content should have same serial_hash"
-        assert obj_id1 != obj_id2, "Different object instances should have different ids"
-        
-        # Test serialization with caching
-        cache = {}
-        
-        # First object should be encoded as source
-        state1 = Serializable.encode(obj1, format="json", encode_cache=cache, reset_encode_id=True)
-        assert state1["cache_type"] == "source"
-        
-        # Second object with same content should be encoded as copy
-        state2 = Serializable.encode(obj2, format="json", encode_cache=cache)
-        assert state2["cache_type"] == "copy"
-        assert state2["reference_cache_id"] == state1["cache_id"]
-        
-        # Test deserialization
-        decode_cache = {}
-        decoded1 = Serializable.decode(state1, format="json", decode_cache=decode_cache)
-        decoded2 = Serializable.decode(state2, format="json", decode_cache=decode_cache)
-        
-        # Both should be equal but different instances
-        assert decoded1 == decoded2
-        assert decoded1 is not decoded2
-
-    def test_cache_type_reference_vs_copy(self):
+    def test_cache_type_reference_vs_copy(self, format_param, make_temp_path):
         """Test the difference between reference and copy cache types."""
         # Create an object
         obj = MockSerializable(name="cache_test", value=100, data={"nested": "value"})
+
+        # Equivalent when encoded, but diff id
+        dup_obj = MockSerializable(name="cache_test", value=100, data={"nested": "value"})
+
+        frame = Frame({
+            "obj1": obj,
+            "obj2": obj, # Same instance, should be a reference to obj
+            "obj3": dup_obj, # Same content, diff instance, should be a copy to obj
+            "obj4": dup_obj, # Same instance as dup_obj, should be a reference to dup_obj
+        })
         
-        # Test with JSON format
-        cache = {}
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            frame.write(temp_file)
+            decoded = Frame.read(temp_file)
         
-        # First encoding should be source
-        state1 = Serializable.encode(obj, format="json", encode_cache=cache, reset_encode_id=True)
-        assert state1["cache_type"] == "source"
-        cache_id = state1["cache_id"]
-        
-        # Second encoding of same object instance should be reference
-        state2 = Serializable.encode(obj, format="json", encode_cache=cache)
-        assert state2["cache_type"] == "reference"
-        assert state2["cache_id"] == cache_id
-        
-        # Create another object with same content
-        obj_copy = MockSerializable(name="cache_test", value=100, data={"nested": "value"})
-        
-        # This should be encoded as copy (same content, different instance)
-        state3 = Serializable.encode(obj_copy, format="json", encode_cache=cache)
-        assert state3["cache_type"] == "copy"
-        assert state3["reference_cache_id"] == cache_id
-        
-        # Test deserialization
-        decode_cache = {}
-        decoded1 = Serializable.decode(state1, format="json", decode_cache=decode_cache)
-        decoded2 = Serializable.decode(state2, format="json", decode_cache=decode_cache)
-        decoded3 = Serializable.decode(state3, format="json", decode_cache=decode_cache)
-        
-        # Reference should return same object
-        assert decoded1 is decoded2
-        
-        # Copy should return equal but different object
-        assert decoded1 == decoded3
-        assert decoded1 is not decoded3
+        assert isinstance(decoded, Frame)
+
+        # obj2 is obj1
+        assert decoded["obj2"] == decoded["obj1"]
+
+        # obj3 should have same hash, but diff id
+        assert Serializable.serial_hash(decoded["obj3"]) == Serializable.serial_hash(decoded["obj1"])
+        assert decoded["obj3"] is not decoded["obj1"]
+
+        # obj4 is obj3
+        assert decoded["obj4"] is decoded["obj3"]

@@ -7,12 +7,14 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
+import copy
 import h5py
 import numpy as np
 import scipy.sparse as sps
 
 from loqs.internal.serializable import (
     DecodableVersionError,
+    DeferredRef,
     EncodablePrimitives,
     IncorrectDecodableTypeError,
     MisformedDecodableError,
@@ -104,17 +106,7 @@ class JSONEncoder(BaseEncoder):
             try:
                 cache_id = encoded["cache_id"]
 
-                # Add a placeholder to handle circular references
-                # We'll replace this with the actual object later
-                # Use a special wrapper that knows which cache ID it corresponds to
-                class _CircularRef:
-                    def __init__(self, cache_id):
-                        self.cache_id = cache_id
-
-                    def __repr__(self):
-                        return f"<CircularRef cache_id={self.cache_id}>"
-
-                decode_cache[cache_id] = _CircularRef(cache_id)  # type: ignore
+                decode_cache[cache_id] = DeferredRef(cache_id) # type: ignore
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
 
@@ -236,10 +228,9 @@ class JSONEncoder(BaseEncoder):
 
             if cache_type == "reference":
                 cached_obj = decode_cache[encoded["cache_id"]]
-                # Check if this is a circular reference placeholder
-                if hasattr(cached_obj, "cache_id"):
+                if isinstance(cached_obj, DeferredRef):
                     # This is a forward reference that will be resolved later
-                    # Return the circular reference object
+                    # Return the deferred reference object
                     return cached_obj
                 return cached_obj
             elif cache_type == "copy":
@@ -250,40 +241,15 @@ class JSONEncoder(BaseEncoder):
                 # Check if reference object is available
                 if reference_cache_id not in decode_cache:
                     # Reference object not available yet, create a placeholder
-                    class _CircularRef:
-                        def __init__(self, cache_id):
-                            self.cache_id = cache_id
-
-                        def __repr__(self):
-                            return f"<CircularRef cache_id={self.cache_id}>"
-
-                    copied_obj = _CircularRef(reference_cache_id)
+                    copied_obj = DeferredRef(reference_cache_id)
                 else:
                     reference_obj = decode_cache[reference_cache_id]
                     # Check if reference is a placeholder
-                    if hasattr(reference_obj, "cache_id"):
+                    if isinstance(reference_obj, DeferredRef):
                         # Create a new placeholder for the copy
-                        class _CircularRef:
-                            def __init__(self, cache_id):
-                                self.cache_id = cache_id
-
-                            def __repr__(self):
-                                return (
-                                    f"<CircularRef cache_id={self.cache_id}>"
-                                )
-
-                        copied_obj = _CircularRef(reference_obj.cache_id)
+                        copied_obj = DeferredRef(reference_obj.cache_id)
                     else:
-                        # Create a copy and add to cache with source_cache_id
-                        # For now, we'll use a simple copy mechanism
-                        # In a real implementation, this would depend on the object type
-                        if hasattr(reference_obj, "copy"):
-                            copied_obj = reference_obj.copy()
-                        else:
-                            # Fallback to deep copy for objects without copy method
-                            import copy
-
-                            copied_obj = copy.deepcopy(reference_obj)
+                        copied_obj = copy.deepcopy(reference_obj)
 
                 # Add the copy to cache
                 decode_cache[source_cache_id] = copied_obj

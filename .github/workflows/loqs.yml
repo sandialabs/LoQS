@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]  # No Mac for speed
-        python-version: ['3.11', '3.13'] # Staying on 3.13 for now to avoid lengthy Windows 3.14 wheel builds
+        python-version: ['3.12'] # stim 1.15 only has 3.12 Windows wheels, pymatching 2.3.1 only has 3.13 Windows wheels
         loqs-optional: ["all"]
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run minimal LoQS tests

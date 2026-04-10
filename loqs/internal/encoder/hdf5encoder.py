@@ -9,6 +9,7 @@
 
 from typing import ClassVar
 
+import copy
 import h5py
 import numpy as np
 import scipy.sparse as sps
@@ -16,6 +17,7 @@ import scipy.sparse as sps
 from loqs.internal.serializable import (
     DecodableVersionError,
     DecodeCache,
+    DeferredRef,
     Encodable,
     EncodableArrays,
     EncodableIterables,
@@ -115,20 +117,10 @@ class HDF5Encoder(BaseEncoder):
 
         # Handle circular references by adding a placeholder to decode_cache early
         cache_id = None
-        if encoded.attrs.get("cache_type", None) == "source":
+        if encoded.attrs.get("cache_type", None) == "source" and decode_cache is not None:
             try:
-                cache_id = encoded.attrs["cache_id"]
-
-                # Add a placeholder to handle circular references
-                # Use a special wrapper that knows which cache ID it corresponds to
-                class _CircularRef:
-                    def __init__(self, cache_id):
-                        self.cache_id = cache_id
-
-                    def __repr__(self):
-                        return f"<CircularRef cache_id={self.cache_id}>"
-
-                decode_cache[cache_id] = _CircularRef(cache_id)  # type: ignore
+                cache_id = int(encoded.attrs["cache_id"]) # type: ignore
+                decode_cache[cache_id] = DeferredRef(cache_id)
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
 
@@ -153,7 +145,7 @@ class HDF5Encoder(BaseEncoder):
         decoded = cls.from_decoded_attrs(attr_dict)
 
         # Replace the placeholder with the actual object
-        if cache_id is not None and cache_id in decode_cache:
+        if decode_cache is not None and cache_id is not None and cache_id in decode_cache:
             decode_cache[cache_id] = decoded  # type: ignore
 
         return decoded
@@ -196,6 +188,8 @@ class HDF5Encoder(BaseEncoder):
             cache_type = encoded.attrs["cache_type"]
             assert cache_type in ["reference", "copy"]
 
+            assert decode_cache is not None
+
         # Check if properly formed
         with HDF5Encoder.assert_decode(fatal=True):
             version = encoded.attrs.get("version", -1)
@@ -212,59 +206,25 @@ class HDF5Encoder(BaseEncoder):
 
         try:
             if cache_type == "reference":
-                cache_id = encoded.attrs["cache_id"]
-                cached_obj = decode_cache[cache_id]  # type: ignore
-                # Check if this is a circular reference placeholder
-                if hasattr(cached_obj, "cache_id"):
-                    # This is a forward reference that will be resolved later
-                    # Return the circular reference object
-                    return cached_obj
+                cache_id = int(encoded.attrs["cache_id"]) # type: ignore
+                cached_obj = decode_cache[cache_id]
                 return cached_obj
-            elif cache_type == "copy":
-                # Get the reference object and create a copy
-                reference_cache_id = int(encoded.attrs["reference_cache_id"])
-                source_cache_id = int(encoded.attrs["source_cache_id"])
+            
+            # Get the reference object and create a copy
+            reference_cache_id = int(encoded.attrs["reference_cache_id"]) # type: ignore
+            source_cache_id = int(encoded.attrs["source_cache_id"]) # type: ignore
 
-                # Check if reference object is available
-                if reference_cache_id not in decode_cache:
-                    # Reference object not available yet, create a placeholder
-                    class _CircularRef:
-                        def __init__(self, cache_id):
-                            self.cache_id = cache_id
+            # Check if reference object is available
+            if reference_cache_id not in decode_cache:
+                # Reference object not available yet, create a placeholder
+                copied_obj = DeferredRef(reference_cache_id)
+            else:
+                reference_obj = decode_cache[reference_cache_id]
+                copied_obj = copy.deepcopy(reference_obj)
 
-                        def __repr__(self):
-                            return f"<CircularRef cache_id={self.cache_id}>"
-
-                    copied_obj = _CircularRef(reference_cache_id)
-                else:
-                    reference_obj = decode_cache[reference_cache_id]
-
-                    # Check if reference is a circular reference placeholder
-                    if hasattr(reference_obj, "cache_id"):
-                        # Create a new circular reference for the copy
-                        class _CircularRef:
-                            def __init__(self, cache_id):
-                                self.cache_id = cache_id
-
-                            def __repr__(self):
-                                return (
-                                    f"<CircularRef cache_id={self.cache_id}>"
-                                )
-
-                        copied_obj = _CircularRef(reference_obj.cache_id)
-                    else:
-                        # Create a copy and add to cache with source_cache_id
-                        if hasattr(reference_obj, "copy"):
-                            copied_obj = reference_obj.copy()
-                        else:
-                            # Fallback to deep copy for objects without copy method
-                            import copy
-
-                            copied_obj = copy.deepcopy(reference_obj)
-
-                # Add the copy to cache
-                decode_cache[source_cache_id] = copied_obj  # type: ignore
-                return copied_obj
+            # Add the copy to cache
+            decode_cache[source_cache_id] = copied_obj
+            return copied_obj
 
         except (KeyError, TypeError):
             raise RuntimeError(

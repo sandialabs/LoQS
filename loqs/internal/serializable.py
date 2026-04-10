@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import functools
 import gzip
 import importlib
@@ -30,7 +31,6 @@ from typing import (
     Type,
     TypeAlias,
     TypeVar,
-    Union,
 )
 
 from loqs.types import Bool, Complex, Float, Int, NDArray, SPSArray
@@ -91,6 +91,12 @@ SERIALIZATION_VERSION = 1
 1: HDF5 encoding now available. Backwards compatible to version 0.
 """
 
+@dataclass
+class DeferredRef():
+    """Helper class to keep track of deferred references.
+    """
+    cache_id: int
+
 # Encoding types
 EncodableArrays: TypeAlias = NDArray | SPSArray
 EncodableIterables: TypeAlias = list | tuple | set
@@ -103,7 +109,7 @@ Encodable: TypeAlias = (
 Encoded: TypeAlias = dict | h5py.Group
 EncodeFormats: TypeAlias = Literal["json", "json.gz", "hdf5", "h5"] | None
 EncodeCache: TypeAlias = dict[int, list[tuple[int, int]]] | None
-DecodeCache: TypeAlias = dict[int, "Serializable"] | None
+DecodeCache: TypeAlias = dict[int, "Serializable | DeferredRef"] | None
 
 
 # Generic type variable to stand-in for derived class below
@@ -1261,14 +1267,14 @@ class Serializable:
             return obj
 
         # Check if this is a circular reference placeholder
-        if hasattr(obj, "cache_id"):
+        if isinstance(obj, DeferredRef):
             # This is a circular reference, replace it with the actual object
             actual_cache_id = obj.cache_id
             if actual_cache_id in decode_cache:
                 actual_obj = decode_cache[actual_cache_id]
                 # If the actual object is still a circular reference, keep it as is
                 # (this can happen during the replacement process)
-                if not hasattr(actual_obj, "cache_id"):
+                if not isinstance(actual_obj, DeferredRef):
                     return actual_obj
             return obj
 
