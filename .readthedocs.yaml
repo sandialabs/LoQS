@@ -4,13 +4,6 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.11"
-
-python:
-  install:
-    - requirements: docs/requirements.txt
-
-formats: []  # (optional) disable pdf/epub if you only want HTML
-
-mkdocs:
-  configuration: docs/_config.yml
-  fail_on_warning: true
+  commands:
+    - pip install -r docs/requirements.txt
+    - jupyter-book build docs --path-output $READTHEDOCS_OUTPUT
