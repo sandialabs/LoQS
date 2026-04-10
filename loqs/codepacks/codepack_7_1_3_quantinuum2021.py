@@ -354,12 +354,12 @@ def create_qec_code(
         else:
             X_circ_padded = X_circ
             Z_circ_padded = Z_circ
-        instructions[f"Unflagged S{i+1} Check"] = (
+        instructions[f"Unflagged S{i + 1} Check"] = (
             builders.build_physical_circuit_instruction(
                 X_circ_padded, name=f"Unflagged S{i+1} Check"
             )
         )
-        instructions[f"Unflagged S{i+4} Check"] = (
+        instructions[f"Unflagged S{i + 4} Check"] = (
             builders.build_physical_circuit_instruction(
                 Z_circ_padded, name=f"Unflagged S{i+1} Check"
             )

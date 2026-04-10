@@ -48,7 +48,7 @@ dask = [
 ]
 dev = [
     "pre-commit",
-    "black>=24",
+    "black==24.1.0",
     "flake8>=7",
     "mypy>=1",
     "snakeviz"
@@ -87,6 +87,7 @@ build-backend = "setuptools.build_meta"
 [tool.black]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'
+required-version = "24.1.0"
 force-exclude = '''
 /(
       \.git
