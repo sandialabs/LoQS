@@ -64,8 +64,9 @@ jobs:
       run: |
         python -m pytest --cov=loqs --cov-branch --cov-report term-missing --cov-report xml:coverage.xml tests
     
-    - name: Upload coverage to Coveralls
+    - name: Upload coverage to Coveralls (only one matrix element)
       uses: coverallsapp/github-action@v2
+      if: ${{ inputs.os == 'ubuntu-latest' && inputs.python-version == '3.11' && inputs.loqs-optional == 'all' }}
       with:
         format: cobertura
         file: coverage.xml
