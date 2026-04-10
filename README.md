@@ -1,9 +1,7 @@
 # LoQS v1.0
 
-Static badges based on this [CI run](https://github.com/sandialabs/pyGSTi/actions/runs/23029812177/job/66885596222).
-
-![v1.0](https://img.shields.io/badge/v1.0-passing-brightgreen)
-![coverage](https://img.shields.io/badge/coverage-67%25-red)
+[![tests](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml/badge.svg?branch=feature-cov-badge)](https://github.com/sandialabs/LoQS/actions/workflows/loqs.yml)
+[![coverage](https://coveralls.io/sandialabs/LoQS/badge.svg?branch=feature-cov-badge)](https://coveralls.io/sandialabs/LoQS?branch=feature-cov-badge)
 
 The *Lo*gical *Q*ubit *S*imulator (LoQS) is designed to simulate a few logical qubits with arbitrary noise models and arbitrary quantum *and* classical operations.
 
