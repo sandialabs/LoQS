@@ -46,15 +46,15 @@ jobs:
     - name: Linting
       run: |
         # Format check, allow failure
-        black --check loqs || true
+        python -m black --check loqs || true
         
         # Standard PEP8, allowed to fail since exit-zero treats all errors as warnings
-        flake8 loqs --exit-zero --statistics
+        python -m flake8 loqs --exit-zero --statistics
     
     - name: Type checking
       run: |
         # Allow to fail
-        mypy loqs || true
+        python -m mypy loqs || true
     
     - name: Docstring tests
       run: |
