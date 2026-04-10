@@ -34,17 +34,15 @@ jobs:
       with:
         arch: x64
     
-    - name: Verify MSVC is on PATH
+    - name: Windows build env setup
       if: ${{ inputs.os == 'windows-latest' }}
       shell: pwsh
       run: |
-        where.exe cl
-        cl /Bv
-        where.exe cmake
-        cmake --version
-
         python -m pip install --upgrade pip
         python -m pip install cmake ninja
+
+        git config --system core.longpaths true
+        reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f
   
     - name: Cache pip environments
       uses: actions/cache@v4
@@ -69,9 +67,6 @@ jobs:
       shell: pwsh
       env:
         CMAKE_GENERATOR: Ninja
-        CMAKE_BUILD_PARALLEL_LEVEL: 1
-        CMAKE_ARGS: >-
-          -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
         CC: cl
         CXX: cl
       run: |
