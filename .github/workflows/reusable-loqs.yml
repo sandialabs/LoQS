@@ -69,7 +69,7 @@ jobs:
       shell: pwsh
       env:
         CMAKE_GENERATOR: Ninja
-        CMAKE_ARGS: -DCMAKE_C_FLAGS=/Z7 -DCMAKE_CXX_FLAGS=/Z7
+        CMAKE_BUILD_PARALLEL_LEVEL: 1
         CC: cl
         CXX: cl
       run: |
