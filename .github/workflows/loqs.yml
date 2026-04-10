@@ -18,7 +18,7 @@ jobs:
         python-version: ['3.11', '3.14']
         loqs-optional: ["all"]
     uses: ./.github/workflows/reusable-loqs.yml
-    name: Run LoQS tests
+    name: Run minimal LoQS tests
     with:
       os: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
@@ -38,7 +38,7 @@ jobs:
         python-version: ['3.11', '3.12', '3.13', '3.14']
         loqs-optional: ["all"] # Need to include "test" or some minimal too
     uses: ./.github/workflows/reusable-loqs.yml
-    name: Run LoQS tests
+    name: Run complete LoQS tests
     with:
       os: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
