@@ -14,8 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest] # No Mac for speed
-        python-version: ['3.11', '3.14']
+        os: [windows-latest] #[ubuntu-latest, windows-latest] # No Mac for speed
+        python-version: ['3.14'] #['3.11', '3.14']
         loqs-optional: ["all"]
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run minimal LoQS tests

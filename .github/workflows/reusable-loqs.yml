@@ -16,7 +16,7 @@ on:
         type: string
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ${{ inputs.os }}
     steps:
     - uses: actions/checkout@v4
@@ -69,6 +69,7 @@ jobs:
       shell: pwsh
       env:
         CMAKE_GENERATOR: Ninja
+        CMAKE_ARGS: -DCMAKE_C_FLAGS=/Z7 -DCMAKE_CXX_FLAGS=/Z7
         CC: cl
         CXX: cl
       run: |
