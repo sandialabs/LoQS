@@ -56,9 +56,9 @@ jobs:
         # Allow to fail
         mypy loqs || true
     
-    - name: Docstring tests (currently allowed to pass)
+    - name: Docstring tests
       run: |
-        python -m pytest loqs || true
+        python -m pytest loqs
     
     - name: Unit tests (with coverage)
       run: |

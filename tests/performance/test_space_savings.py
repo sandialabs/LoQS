@@ -31,10 +31,7 @@ def main():
     # Homogeneous data (should use dataset optimization)
     homogeneous_data = list(range(1000))
     
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file1 = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file1:
         with h5py.File(temp_file1, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             Serializable.encode(homogeneous_data, format="hdf5", h5_group=root_group)
@@ -49,10 +46,7 @@ def main():
     # Heterogeneous data (should use groups storage)
     heterogeneous_data = [1, "string", 3.14] * 333
     
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file2 = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file2:
         with h5py.File(temp_file2, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             Serializable.encode(heterogeneous_data, format="hdf5", h5_group=root_group)
@@ -73,10 +67,7 @@ def main():
     obj2 = MockSerializable(name="same", value=42, data={"key": "value"})
     
     # Without caching
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file3 = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file3:
         with h5py.File(temp_file3, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             Serializable.encode(obj1, format="hdf5", h5_group=root_group, encode_cache=None, reset_encode_id=True)
@@ -90,10 +81,7 @@ def main():
             os.unlink(temp_file3)
     
     # With caching
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file4 = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file4:
         with h5py.File(temp_file4, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             cache = {}
@@ -114,10 +102,7 @@ def main():
     # Large array (should use compression)
     large_array = np.random.random((500, 500))
     
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file5 = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file5:
         with h5py.File(temp_file5, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             Serializable.encode(large_array, format="hdf5", h5_group=root_group)
@@ -132,10 +117,7 @@ def main():
     # Small array (should not use compression)
     small_array = np.random.random((10, 10))
     
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file6 = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file6:
         with h5py.File(temp_file6, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             Serializable.encode(small_array, format="hdf5", h5_group=root_group)

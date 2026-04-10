@@ -217,19 +217,15 @@ class TestSTIMQuantumState:
         outcomes4 = outs["Q0"]
         assert outcomes4 == outcomes1
 
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         # Test bell state
         test = STIMState([1, 0], ["Q0", "Q1"])
         test.state.cx(0, 1)
 
-        fd, tmp_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as tmp_path:
             test.write(tmp_path)
             test2 = STIMState.read(tmp_path)
             self._check(test, test2)
-        finally:
-            os.unlink(tmp_path)
 
 # class TestSTIMQuantumStateFailedImport:
 #         # Mock not having stim available

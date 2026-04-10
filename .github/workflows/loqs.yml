@@ -8,13 +8,35 @@ on:
   workflow_dispatch: # Allow manual running from GitHub
 
 jobs:
-  unit-tests:
+  minimal-unit-tests:
+    # Run only on feature branches
+    if: ${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest] # No Mac for speed
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11', '3.14']
         loqs-optional: ["all"]
+    uses: ./.github/workflows/reusable-loqs.yml
+    name: Run LoQS tests
+    with:
+      os: ${{ matrix.os }}
+      python-version: ${{ matrix.python-version }}
+      loqs-optional: ${{ matrix.loqs-optional }}
+    
+  full-unit-tests:
+     # Run only on PRs or pushes into main
+    if: >
+      ${{
+        (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest] # No Mac for speed
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+        loqs-optional: ["test", "all"]
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run LoQS tests
     with:
@@ -24,7 +46,7 @@ jobs:
   
   docs:
     runs-on: ubuntu-latest
-    needs: unit-tests
+    needs: full-unit-tests
     # Run only on PRs or pushes into main
     if: >
       ${{

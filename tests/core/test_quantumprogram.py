@@ -1,7 +1,6 @@
 """Tester for loqs.core.quantumprogram"""
 
 import os
-import tempfile
 import pytest
 
 from loqs.backends import QSimQuantumState, STIMQuantumState
@@ -57,7 +56,7 @@ class TestQuantumProgram:
         assert len(history) > 0  # Should have multiple frames from the instructions
 
     @pytest.mark.parametrize("format", ["json", "json.gz", "hdf5"])
-    def test_program_serialization_parameterized(self, format):
+    def test_program_serialization_parameterized(self, format, make_temp_path):
         """Test QuantumProgram serialization with different formats using parameterization."""
         # Create a simple program for testing using the trivial codepack
         trivial_code = trivial_codepack.create_qec_code()
@@ -90,9 +89,7 @@ class TestQuantumProgram:
         assert len(new_program_results.shot_histories) == 1  # Should have more frames after running
 
         # Test string serialization
-        fd, tempf_path = tempfile.mkstemp(suffix=f".{format}")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=f".{format}") as tempf_path:
             program.write(tempf_path)
             loaded_program = QuantumProgram.read(tempf_path)
             assert isinstance(loaded_program, QuantumProgram)
@@ -106,13 +103,8 @@ class TestQuantumProgram:
             assert loaded_program.state_type == state_type
             assert loaded_program.patch_types is not None
             assert len(loaded_program.patch_types) == len(patch_types)
-        finally:
-            os.unlink(tempf_path)
 
-        # Test file serialization
-        fd, f_path = tempfile.mkstemp(suffix=f'.{format}')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=f'.{format}') as f_path:
             loaded_program.write(f_path)
             loaded_program2 = QuantumProgram.read(f_path)
             assert isinstance(loaded_program2, QuantumProgram)
@@ -131,5 +123,3 @@ class TestQuantumProgram:
             # But now it should
             loaded_program2_results3 = loaded_program2.run(num_shots=2)
             assert len(loaded_program2_results3.shot_histories) == 2
-        finally:
-            os.unlink(f_path)

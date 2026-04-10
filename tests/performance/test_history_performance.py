@@ -51,7 +51,7 @@ def create_test_history(num_frames=10, array_size=50):
         frames.append(frame)
     
     # Create history
-    history = History(frames=frames)
+    history = History(frames)
     return history
 
 
@@ -75,10 +75,7 @@ def test_history_serialization():
         # Test JSON serialization
         start_time = time.time()
         
-        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
-            temp_file_json = f.name
-        
-        try:
+        with make_temp_path(suffix='.json') as temp_file_json:
             history.write(temp_file_json, format="json")
             json_time = time.time() - start_time
             json_size = get_file_size(temp_file_json)
@@ -92,10 +89,7 @@ def test_history_serialization():
         # Test HDF5 serialization with caching
         start_time = time.time()
         
-        with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-            temp_file_hdf5 = f.name
-        
-        try:
+        with make_temp_path(suffix='.h5') as temp_file_hdf5:
             history.write(temp_file_hdf5, format="hdf5")
             hdf5_time = time.time() - start_time
             hdf5_size = get_file_size(temp_file_hdf5)
@@ -119,10 +113,7 @@ def test_mock_object_caching():
     mock_obj2 = MockSerializable(name="identical_object", value=42, data={"key": "value"})
     
     # Test serialization with caching
-    with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as f:
-        temp_file = f.name
-    
-    try:
+    with make_temp_path(suffix='.h5') as temp_file:
         with h5py.File(temp_file, 'w') as h5_file:
             root_group = h5_file.create_group('root')
             cache = {}
@@ -146,11 +137,12 @@ def test_mock_object_caching():
         with h5py.File(temp_file, 'r') as h5_file:
             root_read = h5_file['root']
             decoded_objects = []
+            decode_cache = {}
             
             # Decode all objects
             for key in root_read.keys():
                 object_group = root_read[key]
-                decoded_object = Serializable.decode(object_group, format="hdf5")
+                decoded_object = Serializable.decode(object_group, format="hdf5", decode_cache=decode_cache)
                 decoded_objects.append(decoded_object)
             
             # Verify we got the right number of objects

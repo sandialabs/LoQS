@@ -1,8 +1,5 @@
 """Tester for loqs.core.history"""
 
-import os
-import tempfile
-import json
 import pytest
 
 from loqs.core.frame import Frame
@@ -68,25 +65,22 @@ class TestHistory:
         assert h2[2]["state"] == 2 # No warning, this one is up to date
         assert h2._expiring_key_locs["state"] == 2
     
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         data = {"a": 1, "b": 2}
 
         f = Frame(data, "test 1")
         h = History([f, f.update(new_log="test 2"), f.update(new_log="test 3")])
 
-        fd, tmp_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as tmp_path:
             h.write(tmp_path)
             h2 = History.read(tmp_path)
+            assert isinstance(h2, History)
 
             for i, frame in enumerate(h2):
                 assert frame._data == data
                 assert frame.log == f"test {i+1}"
-        finally:
-            os.unlink(tmp_path)
 
-    def test_history_serialization(self):
+    def test_history_serialization(self, make_temp_path):
         """Test History serialization roundtrip."""
         # Create a history with multiple frames
         frames = [
@@ -97,34 +91,27 @@ class TestHistory:
         history = History(frames)
 
         # Test string serialization
-        fd, tempf_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tempf_path:
             history.write(tempf_path)
             loaded_history = History.read(tempf_path)
 
             # Verify structure is preserved
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
             # state is an expired key, so checking not last frame should raise a warning
             with pytest.warns(UserWarning):
                 assert loaded_history[1]["state"] == "middle"
             assert loaded_history[2].log == "step_3"
-        finally:
-            os.unlink(tempf_path)
 
-        # Test file serialization
-        fd, f_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as f_path:
             history.write(f_path)
             loaded_history = History.read(f_path)
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
-        finally:
-            os.unlink(f_path)
 
-    def test_history_hdf5_serialization(self):
+    def test_history_hdf5_serialization(self, make_temp_path):
         """Test History HDF5 serialization roundtrip."""
         # Create a history with multiple frames
         frames = [
@@ -135,45 +122,34 @@ class TestHistory:
         history = History(frames)
 
         # Test bytes serialization
-        fd, tempf_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tempf_path:
             history.write(tempf_path)
             loaded_history = History.read(tempf_path)
 
             # Verify structure is preserved
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
             # state is an expired key, so checking not last frame should raise a warning
             with pytest.warns(UserWarning):
                 assert loaded_history[1]["state"] == "middle"
             assert loaded_history[2].log == "step_3"
-        finally:
-            os.unlink(tempf_path)
 
-        # Test file serialization with .h5 extension
-        fd, f_path = tempfile.mkstemp(suffix='.h5')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.h5') as f_path:
             history.write(f_path)
             loaded_history = History.read(f_path)
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
-        finally:
-            os.unlink(f_path)
 
-        # Test file serialization with .hdf5 extension
-        fd, f_path = tempfile.mkstemp(suffix='.hdf5')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.hdf5') as f_path:
             history.write(f_path)
             loaded_history = History.read(f_path)
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
-        finally:
-            os.unlink(f_path)
 
-    def test_history_hdf5_with_frames(self):
+    def test_history_hdf5_with_frames(self, make_temp_path):
         """Test History HDF5 serialization with complex frame data."""
         # Create frames with nested data
         complex_frames = [
@@ -183,20 +159,19 @@ class TestHistory:
         history = History(complex_frames)
 
         # Test HDF5 serialization
-        fd, tempf_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tempf_path:
             history.write(tempf_path)
             loaded_history = History.read(tempf_path)
 
             # Verify complex data is preserved
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
-            assert loaded_history[0]["data"]["nested"]["value"] == 0
+            loaded_data = loaded_history[0]["data"]
+            assert isinstance(loaded_data, dict)
+            assert loaded_data["nested"]["value"] == 0
             assert loaded_history[2]["index"] == 2
-        finally:
-            os.unlink(tempf_path)
 
-    def test_history_with_frames(self):
+    def test_history_with_frames(self, make_temp_path):
         """Test History serialization with complex frame data."""
         # Create frames with nested data
         complex_frames = [
@@ -206,43 +181,39 @@ class TestHistory:
         history = History(complex_frames)
 
         # Test roundtrip
-        fd, tempf_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tempf_path:
             history.write(tempf_path)
             loaded_history = History.read(tempf_path)
 
             # Verify all frames are preserved with correct data
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 5
             for i, frame in enumerate(loaded_history):
-                assert frame["data"]["nested"]["value"] == i
+                fdata = frame["data"]
+                assert isinstance(fdata, dict)
+                assert fdata["nested"]["value"] == i
                 assert frame["index"] == i
                 assert frame.log == f"frame_{i}"
-        finally:
-            os.unlink(tempf_path)
 
-    def test_history_compressed_serialization(self):
+    def test_history_compressed_serialization(self, make_temp_path):
         """Test History serialization with compressed format."""
         frames = [Frame({"i": i}, log=f"step_{i}") for i in range(3)]
         history = History(frames)
 
-        fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json.gz') as temp_path:
             # Write compressed
             history.write(temp_path)
 
             # Read compressed
             loaded_history = History.read(temp_path)
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["i"] == 0
             assert loaded_history[2].log == "step_2"
 
-        finally:
-            os.unlink(temp_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_history_serialization_parameterized(self, format):
+    def test_history_serialization_parameterized(self, format, make_temp_path):
         """Test History serialization roundtrip with both JSON and HDF5 formats."""
         # Create a history with multiple frames
         frames = [
@@ -253,35 +224,28 @@ class TestHistory:
         history = History(frames)
 
         # Test string serialization
-        fd, tempf_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tempf_path:
             history.write(tempf_path)
             loaded_history = History.read(tempf_path)
 
             # Verify structure is preserved
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
             # state is an expired key, so checking not last frame should raise a warning
             with pytest.warns(UserWarning):
                 assert loaded_history[1]["state"] == "middle"
             assert loaded_history[2].log == "step_3"
-        finally:
-            os.unlink(tempf_path)
 
-        # Test file serialization
-        fd, f_path = tempfile.mkstemp(suffix=f'.{format}')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=f'.{format}') as f_path:
             history.write(f_path)
             loaded_history = History.read(f_path)
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
             assert loaded_history[0]["step"] == 1
-        finally:
-            os.unlink(f_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_history_with_frames_parameterized(self, format):
+    def test_history_with_frames_parameterized(self, format, make_temp_path):
         """Test History serialization with complex frame data using both formats."""
         # Create frames with nested data
         complex_frames = [
@@ -291,15 +255,14 @@ class TestHistory:
         history = History(complex_frames)
 
         # Test serialization
-        fd, tempf_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=f".{format}") as tempf_path:
             history.write(tempf_path)
             loaded_history = History.read(tempf_path)
 
             # Verify complex data is preserved
+            assert isinstance(loaded_history, History)
             assert len(loaded_history) == 3
-            assert loaded_history[0]["data"]["nested"]["value"] == 0
+            fdata = loaded_history[0]["data"]
+            assert isinstance(fdata, dict)
+            assert fdata["nested"]["value"] == 0
             assert loaded_history[2]["index"] == 2
-        finally:
-            os.unlink(tempf_path)

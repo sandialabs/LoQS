@@ -172,9 +172,7 @@ def create_history_with_repeated_objects(config):
 def _test_json_serialization(history, config):
     """Test JSON serialization performance (helper function)."""
 
-    fd, temp_file = tempfile.mkstemp(suffix=".json")
-    os.close(fd)
-    try:
+    with make_temp_path(suffix=".json") as temp_file:
         # Time the serialization
         start_time = time.time()
 
@@ -196,9 +194,7 @@ def _test_json_serialization(history, config):
 def _test_hdf5_serialization(history, config):
     """Test HDF5 serialization performance (helper function)."""
 
-    fd, temp_file = tempfile.mkstemp(suffix=".h5")
-    os.close(fd)
-    try:
+    with make_temp_path(suffix=".h5") as temp_file:
         # Time the serialization
         start_time = time.time()
         
@@ -230,9 +226,7 @@ def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
-    fd, temp_file = tempfile.mkstemp(suffix=".json")
-    os.close(fd)
-    try:
+    with make_temp_path(suffix=".json") as temp_file:
         history.write(temp_file, format="json")
         loaded_json = History.read(temp_file)
         assert isinstance(loaded_json, History)
@@ -245,9 +239,7 @@ def verify_deserialization(history):
         if os.path.exists(temp_file):
             os.unlink(temp_file)
 
-    fd, temp_file = tempfile.mkstemp(suffix=".h5")
-    os.close(fd)
-    try:
+    with make_temp_path(suffix=".h5") as temp_file:
         history.write(temp_file, format="hdf5")
         loaded_hdf5 = History.read(temp_file)
         assert isinstance(loaded_hdf5, History)

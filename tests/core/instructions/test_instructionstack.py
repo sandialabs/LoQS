@@ -54,70 +54,48 @@ class TestInstructionStack:
         assert ilbl.patch_label == "L0"
         self._check(s5, ["L1"])
     
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Create and write, but keep file closed before re-opening
-        fd, tmp_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tmp_path:
             s.write(tmp_path)
             
             # Now safe to open/read/remove on Windows
             s2 = InstructionStack.read(tmp_path)
             self._check(s2, ["L0", "L1"])
-        finally:
-            os.unlink(tmp_path)
 
-    def test_instruction_stack_serialization_comprehensive(self):
+    def test_instruction_stack_serialization_comprehensive(self, make_temp_path):
         """Comprehensive test of InstructionStack serialization methods."""
         # Create a more complex instruction stack
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        fd, tmp_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tmp_path:
             stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
-        finally:
-            os.unlink(tmp_path)
 
-        # Test file serialization
-        fd, tmp_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as tmp_path:
             stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
-        finally:
-            os.unlink(tmp_path)
 
-        # Test compressed format
-        fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json.gz') as temp_path:
             stack.write(temp_path)
             loaded_stack = InstructionStack.read(temp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
-        finally:
-            os.unlink(temp_path)
 
-    def test_instruction_stack_equality_after_serialization(self):
+    def test_instruction_stack_equality_after_serialization(self, make_temp_path):
         """Test that InstructionStack equality is preserved after serialization."""
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        fd, tmp_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tmp_path:
             original.write(tmp_path)
             deserialized = InstructionStack.read(tmp_path)
-        finally:
-            os.unlink(tmp_path)
+            assert isinstance(deserialized, InstructionStack)
 
-        # Should be equal (content-wise after serial_hash removal)
         assert len(original) == len(deserialized)
         for i in range(len(original)):
             assert original[i].patch_label == deserialized[i].patch_label
@@ -130,46 +108,33 @@ class TestInstructionStack:
             assert original[i].patch_label == deserialized[i].patch_label
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_instruction_stack_serialization_comprehensive_parameterized(self, format):
+    def test_instruction_stack_serialization_comprehensive_parameterized(self, format, make_temp_path):
         """Comprehensive test of InstructionStack serialization methods with both formats."""
         # Create a more complex instruction stack
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        fd, tmp_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=".json") as tmp_path:
             stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
-        finally:
-            os.unlink(tmp_path)
 
-        # Test file serialization
-        fd, tmp_path = tempfile.mkstemp(suffix=f'.{format}')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=f'.{format}') as tmp_path:
             stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
-        finally:
-            os.unlink(tmp_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_instruction_stack_equality_after_serialization_parameterized(self, format):
+    def test_instruction_stack_equality_after_serialization_parameterized(self, format, make_temp_path):
         """Test that InstructionStack equality is preserved after serialization with both formats."""
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        fd, tmp_path = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        try:
+        with make_temp_path(suffix=f".{format}") as tmp_path:
             original.write(tmp_path)
             deserialized = InstructionStack.read(tmp_path)
-        finally:
-            os.unlink(tmp_path)
+            assert isinstance(deserialized, InstructionStack)
 
-        # Should be equal (content-wise after serial_hash removal)
         assert len(original) == len(deserialized)
         for i in range(len(original)):
             assert original[i].patch_label == deserialized[i].patch_label

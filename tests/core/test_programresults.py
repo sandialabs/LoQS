@@ -2,8 +2,7 @@
 
 import os
 import tempfile
-from tempfile import NamedTemporaryFile
-import shutil
+
 from pathlib import Path
 import pytest
 import h5py
@@ -501,7 +500,7 @@ class TestProgramResults:
                 history = new_results.shot_histories[i]
                 frame = history[0]
                 assert frame["int_data"] == i
-                assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6
+                assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6 # type: ignore
                 assert frame["string_data"] == f"string_{i}"
                 assert frame["bool_data"] == (i % 2 == 0)
                 # Array data might be converted to list
@@ -509,7 +508,7 @@ class TestProgramResults:
                 if isinstance(array_data, list):
                     assert array_data == [i, i+1, i+2]
                 else:
-                    assert np.array_equal(array_data, np.array([i, i+1, i+2]))
+                    assert np.array_equal(array_data, np.array([i, i+1, i+2])) # type: ignore
 
     def test_checkpoint_error_handling(self):
         """Test error handling in checkpoint operations."""
@@ -676,7 +675,7 @@ class TestProgramResults:
             )
             assert len(consolidated_results.shot_histories) == 4
 
-    def test_comprehensive_serialization(self):
+    def test_comprehensive_serialization(self, make_temp_path):
         """Test comprehensive ProgramResults serialization with different formats and edge cases."""
         
         def test_serialization_format(format_name):
@@ -702,10 +701,7 @@ class TestProgramResults:
             
             if format_name == "hdf5":
                 # For HDF5, handle everything in one file context
-                with NamedTemporaryFile(suffix=".h5", delete=False) as temp_file:
-                    temp_path = temp_file.name
-                
-                try:
+                with make_temp_path(suffix=".h5") as temp_path:
                     with h5py.File(temp_path, 'w') as h5_file:
                         root_group = h5_file.create_group('root')
                         
@@ -739,7 +735,7 @@ class TestProgramResults:
                             frame = history[0]
                             
                             assert frame["int_data"] == i
-                            assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6
+                            assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6 # type: ignore
                             assert frame["string_data"] == f"test_string_{i}"
                             assert frame["bool_data"] == (i % 2 == 0)
                             assert frame["list_data"] == [i, i+1, i+2]
@@ -753,9 +749,6 @@ class TestProgramResults:
                         assert re_decoded.name == "Comprehensive Serialization Test"
                         assert len(re_decoded.shot_histories) == 3
                         assert len(re_decoded._unwritten_shots) == 2
-                finally:
-                    if os.path.exists(temp_path):
-                        os.unlink(temp_path)
             else:
                 # Test encoding
                 encoded = Serializable.encode(results, format=format_name, reset_encode_id=True)
@@ -791,7 +784,7 @@ class TestProgramResults:
                     frame = history[0]
                     
                     assert frame["int_data"] == i
-                    assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6
+                    assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6 # type: ignore
                     assert frame["string_data"] == f"test_string_{i}"
                     assert frame["bool_data"] == (i % 2 == 0)
                     assert frame["list_data"] == [i, i+1, i+2]

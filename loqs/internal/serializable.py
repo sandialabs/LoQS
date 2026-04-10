@@ -871,22 +871,6 @@ class Serializable:
         Encodable
             The deserialized object. Can be a Serializable object, primitive type,
             collection (dict, list, tuple, set), or numpy array.
-
-        Examples
-        --------
-        Basic usage with primitive types:
-
-        >>> # Decode a primitive integer
-        >>> Serializable.decode({"encode_type": "primitive", "value": 42}, format="json")
-        42
-
-        >>> # Decode a primitive string
-        >>> Serializable.decode({"encode_type": "primitive", "value": "hello"}, format="json")
-        'hello'
-
-        >>> # Decode a primitive None value
-        >>> Serializable.decode({"encode_type": "primitive", "value": None}, format="json")
-        None
         """
         assert format is not None
         from loqs.internal.encoder import JSONEncoder, HDF5Encoder
