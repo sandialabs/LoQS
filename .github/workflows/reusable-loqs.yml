@@ -70,9 +70,12 @@ jobs:
       env:
         CMAKE_GENERATOR: Ninja
         CMAKE_BUILD_PARALLEL_LEVEL: 1
+        CMAKE_ARGS: >-
+          -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
         CC: cl
         CXX: cl
       run: |
+        python -m pip install pymatching
         python -m pip install ".[${{ inputs.loqs-optional }}]"
   
     - name: Linting
