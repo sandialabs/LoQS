@@ -1,28 +1,14 @@
 """Tester for loqs.backends.state.stimstate"""
 
-import os
-import tempfile
-import json
-
-import mock
 import pytest
 import numpy as np
 
-try:
-    import stim
-
-    NO_STIM = False
-except ImportError:
-    NO_STIM = True
+stim = pytest.importorskip("stim")
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
 from loqs.backends import STIMQuantumState as STIMState
 
 
-@pytest.mark.skipif(
-    NO_STIM,
-    reason="Skipping stim backend tests due to failed import"
-)
 class TestSTIMQuantumState:
 
     def _check(self, state, expected_state):

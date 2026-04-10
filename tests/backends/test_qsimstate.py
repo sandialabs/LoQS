@@ -8,22 +8,13 @@ import mock
 import numpy as np
 import pytest
 
-try:
-    from quantumsim.sparsedm import SparseDM as _SparseDM
-    from quantumsim import ptm as _ptm
-    
-    NO_QSIM = False
-except ImportError:
-    NO_QSIM = True
+quantumsim = pytest.importorskip("quantumsim")
+from quantumsim.sparsedm import SparseDM as _SparseDM
+from quantumsim import ptm as _ptm
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
 from loqs.backends import QSimQuantumState as QSimState
 
-
-@pytest.mark.skipif(
-    NO_QSIM,
-    reason="Skipping quantumsim backend tests due to failed import"
-)
 class TestQSimQuantumState:
 
     def _check(self, state, expected_state):

@@ -8,26 +8,12 @@ from collections import Counter
 import numpy as np
 import pytest
 
-try:
-    from quantumsim import ptm as _ptm
-    
-    NO_QSIM = False
-except ImportError:
-    NO_QSIM = True
+quantumsim = pytest.importorskip("quantumsim")
+from quantumsim import ptm as _ptm
 
-try:
-    import pygsti
-    
-    NO_PYGSTI = False
-except ImportError:
-    NO_PYGSTI = True
+pygsti = pytest.importorskip("pygsti")
 
-try:
-    import stim
-
-    NO_STIM = False
-except ImportError:
-    NO_STIM = True
+stim = pytest.importorskip("stim")
 
 from loqs.backends.reps import GateRep, InstrumentRep
 from loqs.backends import ListPhysicalCircuit, DictNoiseModel
@@ -38,18 +24,6 @@ from loqs.core.instructions import builders
 from loqs.tools import pygstitools as pt
 
 
-@pytest.mark.skipif(
-    NO_QSIM,
-    reason="Skipping integrated noise backend tests due to failed QuantumSim import"
-)
-@pytest.mark.skipif(
-    NO_PYGSTI,
-    reason="Skipping integrated noise backend tests due to failed pyGSTi import"
-)
-@pytest.mark.skipif(
-    NO_STIM,
-    reason="Skipping integrated noise backend tests due to failed STIM import"
-)
 class TestIntegratedNoise:
 
     def test_1q_depolarizing(self):

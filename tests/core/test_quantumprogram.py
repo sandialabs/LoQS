@@ -3,6 +3,10 @@
 import os
 import pytest
 
+# TODO: Rework to run with native backend only if failure to import
+quantumsim = pytest.importorskip("quantumsim")
+stim = pytest.importorskip("stim")
+
 from loqs.backends import QSimQuantumState, STIMQuantumState
 from loqs.core import QuantumProgram
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack

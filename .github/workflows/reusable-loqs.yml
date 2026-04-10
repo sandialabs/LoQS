@@ -33,6 +33,18 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: x64
+    
+    - name: Verify MSVC is on PATH
+      if: ${{ inputs.os == 'windows-latest' }}
+      shell: pwsh
+      run: |
+        where.exe cl
+        cl /Bv
+        where.exe cmake
+        cmake --version
+
+        python -m pip install --upgrade pip
+        python -m pip install cmake ninja
   
     - name: Cache pip environments
       uses: actions/cache@v4
@@ -45,9 +57,21 @@ jobs:
     
     # TODO: This can be simplified and made more consistent by using existing tox config with tox-gh
     
-    - name: Install loqs[${{ inputs.loqs-optional }}]
+    - name: Install non-Windows loqs[${{ inputs.loqs-optional }}]
+      if: ${{ inputs.os != 'windows-latest' }}
       run: |
         python -m pip install --upgrade pip
+        python -m pip install ".[${{ inputs.loqs-optional }}]"
+    
+    # Set up CMake environment in case we need to build wheels
+    - name: Install Windows loqs[${{ inputs.loqs-optional }}]
+      if: ${{ inputs.os == 'windows-latest' }}
+      shell: pwsh
+      env:
+        CMAKE_GENERATOR: Ninja
+        CC: cl
+        CXX: cl
+      run: |
         python -m pip install ".[${{ inputs.loqs-optional }}]"
   
     - name: Linting
