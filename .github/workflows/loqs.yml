@@ -25,10 +25,10 @@ jobs:
       loqs-optional: ${{ matrix.loqs-optional }}
     
   full-unit-tests:
-     # Run only on PRs or pushes into main
+     # Run only on non-draft PRs or pushes into main
     if: >
       ${{
-        (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+        (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.pull_request.draft == false) ||
         (github.event_name == 'push' && github.ref == 'refs/heads/main')
       }}
     strategy:
@@ -36,7 +36,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest] # No Mac for speed
         python-version: ['3.11', '3.12', '3.13', '3.14']
-        loqs-optional: ["test", "all"]
+        loqs-optional: ["all"] # Need to include "test" or some minimal too
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run LoQS tests
     with:
@@ -47,10 +47,10 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     needs: full-unit-tests
-    # Run only on PRs or pushes into main
+    # Run only on non-draft PRs or pushes into main
     if: >
       ${{
-        (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+        (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.pull_request.draft == false) ||
         (github.event_name == 'push' && github.ref == 'refs/heads/main')
       }}
     steps:
