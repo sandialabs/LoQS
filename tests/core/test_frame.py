@@ -1,7 +1,7 @@
 """Tester for loqs.core.frame"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
 import json
 import pytest
 import h5py
@@ -78,11 +78,10 @@ class TestFrame:
         f2 = Frame({"c": 3, "other": f1}, "test")
         f2.no_serialize("c")
 
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
-            f2.write(tmp.name)
-            tmp_path = tmp.name
-
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
         try:
+            f2.write(tmp_path)
             f3 = Frame.read(tmp_path)
 
             assert f3["c"] == "NOT SERIALIZED"
@@ -98,11 +97,15 @@ class TestFrame:
         original_frame = Frame({"state": "initial", "qubits": ["Q0", "Q1"], "count": 42}, log="test_frame")
 
         # Test file serialization
-        with NamedTemporaryFile(suffix='.json') as f:
-            original_frame.write(f.name)
-            loaded_frame = Frame.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        try:
+            original_frame.write(f_path)
+            loaded_frame = Frame.read(f_path)
             assert loaded_frame.log == "test_frame"
             assert loaded_frame["state"] == "initial"
+        finally:
+            os.unlink(f_path)
 
     def test_frame_with_expired_keys(self):
         """Test Frame serialization with expired keys."""
@@ -122,31 +125,43 @@ class TestFrame:
 
         # Test HDF5 serialization using new API
         import h5py
-        with NamedTemporaryFile(suffix='.h5') as f:
-            h5file = h5py.File(f.name, 'w')
+        fd, f_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            h5file = h5py.File(f_path, 'w')
             root_group = h5file.create_group("root")
             serialized = Serializable.encode(original_frame, format="hdf5", h5_group=root_group, reset_encode_id=True)
             loaded_frame = Serializable.decode(serialized, format="hdf5")
             h5file.close()
 
-        assert loaded_frame.log == "test_frame"
-        assert loaded_frame["state"] == "initial"
-        assert loaded_frame["qubits"] == ["Q0", "Q1"]
-        assert loaded_frame["count"] == 42
+            assert loaded_frame.log == "test_frame"
+            assert loaded_frame["state"] == "initial"
+            assert loaded_frame["qubits"] == ["Q0", "Q1"]
+            assert loaded_frame["count"] == 42
+        finally:
+            os.unlink(f_path)
 
         # Test file serialization with .h5 extension
-        with NamedTemporaryFile(suffix='.h5') as f:
-            original_frame.write(f.name)
-            loaded_frame = Frame.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            original_frame.write(f_path)
+            loaded_frame = Frame.read(f_path)
             assert loaded_frame.log == "test_frame"
             assert loaded_frame["state"] == "initial"
+        finally:
+            os.unlink(f_path)
 
         # Test file serialization with .hdf5 extension
-        with NamedTemporaryFile(suffix='.hdf5') as f:
-            original_frame.write(f.name)
-            loaded_frame = Frame.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix='.hdf5')
+        os.close(fd)
+        try:
+            original_frame.write(f_path)
+            loaded_frame = Frame.read(f_path)
             assert loaded_frame.log == "test_frame"
             assert loaded_frame["state"] == "initial"
+        finally:
+            os.unlink(f_path)
 
     def test_frame_hdf5_with_expired_keys(self):
         """Test Frame HDF5 serialization with expired keys."""
@@ -154,18 +169,21 @@ class TestFrame:
         frame.expire("b")
 
         # Serialize and deserialize with HDF5 using new API
-        from tempfile import NamedTemporaryFile
         import h5py
-        with NamedTemporaryFile(suffix='.h5') as f:
-            h5file = h5py.File(f.name, 'w')
+        fd, f_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            h5file = h5py.File(f_path, 'w')
             root_group = h5file.create_group("root")
             serialized = Serializable.encode(frame, format="hdf5", h5_group=root_group, reset_encode_id=True)
             loaded_frame = Serializable.decode(serialized, format="hdf5")
             h5file.close()
 
-        # Check that expired keys are handled correctly
-        assert loaded_frame["a"] == 1
-        assert loaded_frame["c"] == 3
+            # Check that expired keys are handled correctly
+            assert loaded_frame["a"] == 1
+            assert loaded_frame["c"] == 3
+        finally:
+            os.unlink(f_path)
 
     def test_frame_hdf5_with_no_serialize_keys(self):
         """Test Frame HDF5 serialization with no_serialize keys."""
@@ -173,18 +191,22 @@ class TestFrame:
         frame.no_serialize("b")
 
         # Serialize and deserialize with HDF5 using new API
-        with NamedTemporaryFile(suffix='.h5') as f:
-            h5file = h5py.File(f.name, 'w')
+        fd, f_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            h5file = h5py.File(f_path, 'w')
             root_group = h5file.create_group("root")
             serialized = Serializable.encode(frame, format="hdf5", h5_group=root_group, reset_encode_id=True)
             loaded_frame = Serializable.decode(serialized, format="hdf5")
             h5file.close()
 
-        # Check that no_serialize keys are handled correctly
-        assert loaded_frame["a"] == 1
-        assert loaded_frame["c"] == 3
-        assert loaded_frame["b"] == "NOT SERIALIZED"
-        assert loaded_frame["c"] == 3
+            # Check that no_serialize keys are handled correctly
+            assert loaded_frame["a"] == 1
+            assert loaded_frame["c"] == 3
+            assert loaded_frame["b"] == "NOT SERIALIZED"
+            assert loaded_frame["c"] == 3
+        finally:
+            os.unlink(f_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_frame_serialization_roundtrip_parameterized(self, format):
@@ -194,12 +216,16 @@ class TestFrame:
         # Test serialization using new API
         if format == "hdf5":
             # HDF5 format requires a file and group
-            with NamedTemporaryFile(suffix='.h5') as f:
-                h5file = h5py.File(f.name, 'w')
+            fd, f_path = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
+            try:
+                h5file = h5py.File(f_path, 'w')
                 root_group = h5file.create_group("root")
                 serialized = Serializable.encode(original_frame, format=format, h5_group=root_group, reset_encode_id=True)
                 loaded_frame = Serializable.decode(serialized, format=format)
                 h5file.close()
+            finally:
+                os.unlink(f_path)
         else:
             # JSON format
             serialized = Serializable.encode(original_frame, format=format, reset_encode_id=True)
@@ -211,11 +237,15 @@ class TestFrame:
         assert loaded_frame["count"] == 42
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            original_frame.write(f.name)
-            loaded_frame = Frame.read(f.name)
+        fd, f_path = tempfile.mkstemp(suffix=f'.{format}')
+        os.close(fd)
+        try:
+            original_frame.write(f_path)
+            loaded_frame = Frame.read(f_path)
             assert loaded_frame.log == "test_frame"
             assert loaded_frame["state"] == "initial"
+        finally:
+            os.unlink(f_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_frame_with_expired_keys_parameterized(self, format):
@@ -226,14 +256,17 @@ class TestFrame:
         # Serialize and deserialize using new API
         if format == "hdf5":
             # HDF5 format requires a file and group
-            from tempfile import NamedTemporaryFile
             import h5py
-            with NamedTemporaryFile(suffix='.h5') as f:
-                h5file = h5py.File(f.name, 'w')
+            fd, f_path = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
+            try:
+                h5file = h5py.File(f_path, 'w')
                 root_group = h5file.create_group("root")
                 serialized = Serializable.encode(frame, format=format, h5_group=root_group, reset_encode_id=True)
                 loaded_frame = Serializable.decode(serialized, format=format)
                 h5file.close()
+            finally:
+                os.unlink(f_path)
         else:
             # JSON format
             serialized = Serializable.encode(frame, format=format, reset_encode_id=True)
@@ -252,12 +285,16 @@ class TestFrame:
         # Serialize and deserialize using new API
         if format == "hdf5":
             # HDF5 format requires a file and group
-            with NamedTemporaryFile(suffix='.h5') as f:
-                h5file = h5py.File(f.name, 'w')
+            fd, f_path = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
+            try:
+                h5file = h5py.File(f_path, 'w')
                 root_group = h5file.create_group("root")
                 serialized = Serializable.encode(frame, format=format, h5_group=root_group, reset_encode_id=True)
                 loaded_frame = Serializable.decode(serialized, format=format)
                 h5file.close()
+            finally:
+                os.unlink(f_path)
         else:
             # JSON format
             serialized = Serializable.encode(frame, format=format, reset_encode_id=True)
@@ -320,9 +357,8 @@ class TestFrame:
         """Test Frame serialization with compressed format."""
         frame = Frame({"data": "compressed_test", "value": 123}, log="compress_test")
 
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-            temp_path = temp_file.name
-
+        fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
+        os.close(fd)
         try:
             # Write compressed
             frame.write(temp_path)
@@ -335,5 +371,4 @@ class TestFrame:
             assert loaded_frame["value"] == 123
 
         finally:
-            import os
             os.unlink(temp_path)

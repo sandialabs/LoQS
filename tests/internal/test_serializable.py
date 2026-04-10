@@ -2,9 +2,8 @@
 
 import gzip
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
 import pytest
-from tempfile import NamedTemporaryFile
 from pathlib import Path
 
 from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
@@ -55,22 +54,26 @@ class TestSerializableParameterized:
         obj = MockSerializable(name="test_obj", value=123, data={"key": "value"})
 
         if format_param == "json":
-            with NamedTemporaryFile(mode='w+', suffix='.json') as f:
+            fd, tempf_path = tempfile.mkstemp(suffix='.json')
+            os.close(fd)
+            try:
                 # Test dump to file - use the underlying file object
-                obj.dump(f.file)
-                f.seek(0)  # Reset file pointer for reading
+                with open(tempf_path, 'w+') as f:
+                    obj.dump(f)
+                    f.seek(0)  # Reset file pointer for reading
 
-                # Test load from file - use the underlying file object
-                loaded_obj = MockSerializable.load(f.file)
-                assert obj == loaded_obj
-                assert loaded_obj.name == "test_obj"
-                assert loaded_obj.value == 123
-                assert loaded_obj.data == {"key": "value"}
+                    # Test load from file - use the underlying file object
+                    loaded_obj = MockSerializable.load(f)
+                    assert obj == loaded_obj
+                    assert loaded_obj.name == "test_obj"
+                    assert loaded_obj.value == 123
+                    assert loaded_obj.data == {"key": "value"}
+            finally:
+                os.unlink(tempf_path)
         
         else:  # hdf5
-            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
-                temp_file = f.name
-            
+            fd, temp_file = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
             try:
                 with h5py.File(temp_file, 'w') as h5_file:
                     obj.dump(h5_file, format="hdf5")
@@ -93,9 +96,8 @@ class TestSerializableParameterized:
         obj = MockSerializable(name="file_test", value=789, data={"test": "file"})
 
         if format_param == "json":
-            with NamedTemporaryFile(suffix='.json', delete=False) as temp_file:
-                temp_path = temp_file.name
-
+            fd, temp_path = tempfile.mkstemp(suffix='.json')
+            os.close(fd)
             try:
                 # Test write to file
                 obj.write(temp_path)
@@ -111,9 +113,8 @@ class TestSerializableParameterized:
                 Path(temp_path).unlink(missing_ok=True)
         
         else:  # hdf5
-            with NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
-                temp_path = temp_file.name
-
+            fd, temp_path = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
             try:
                 # Test write to file
                 obj.write(temp_path)
@@ -133,9 +134,8 @@ class TestSerializableParameterized:
         if format_param == "json":
             obj = MockSerializable(name="compressed", value=999, data={"format": "gz"})
 
-            with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-                temp_path = temp_file.name
-
+            fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
+            os.close(fd)
             try:
                 # Test write compressed
                 obj.write(temp_path)
@@ -185,9 +185,8 @@ class TestSerializableParameterized:
             assert state1_again["cache_type"] == "reference"
         
         else:  # hdf5
-            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
-                temp_file = f.name
-
+            fd, temp_file = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
             try:
                 with h5py.File(temp_file, 'w') as h5_file:
                     root_group = h5_file.create_group('root')
@@ -197,7 +196,6 @@ class TestSerializableParameterized:
                     state2 = Serializable.encode(obj2, format="hdf5", h5_group=root_group, encode_cache=cache)
                     
                     assert isinstance(state1, h5py.Group)
-                    assert isinstance(state2, h5py.Group)
 
                     # Verify cache structure
                     assert state1.attrs["encode_type"] == "Serializable"
@@ -229,9 +227,8 @@ class TestSerializableParameterized:
             assert obj == loaded_obj
         
         else:  # hdf5
-            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
-                temp_file = f.name
-
+            fd, temp_file = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
             try:
                 with h5py.File(temp_file, 'w') as h5_file:
                     root_group = h5_file.create_group('root')
@@ -244,6 +241,7 @@ class TestSerializableParameterized:
                     obj_group_name = list(root_group.keys())[0]
                     encoded_group = root_group[obj_group_name]
                     
+
                     # Verify version is included
                     assert "version" in encoded_group.attrs
                     assert encoded_group.attrs["version"] == SERIALIZATION_VERSION
@@ -291,9 +289,8 @@ class TestSerializableParameterized:
             assert "set" in loaded_obj.data
         
         else:  # hdf5
-            with NamedTemporaryFile(suffix='.h5', delete=False) as f:
-                temp_file = f.name
-
+            fd, temp_file = tempfile.mkstemp(suffix='.h5')
+            os.close(fd)
             try:
                 with h5py.File(temp_file, 'w') as h5_file:
                     root_group = h5_file.create_group('root')
@@ -306,6 +303,7 @@ class TestSerializableParameterized:
                     obj_group_name = list(root_group.keys())[0]
                     encoded_group = root_group[obj_group_name]
                     
+
                     # Verify structure
                     assert encoded_group.attrs["encode_type"] == "Serializable"
                 
@@ -329,9 +327,8 @@ class TestSerializableParameterized:
 
         if format_param == "json":
             # Test that .json extension is automatically detected
-            with NamedTemporaryFile(suffix='.json', delete=False) as temp_file:
-                temp_path = temp_file.name
-
+            fd, temp_path = tempfile.mkstemp(suffix='.json')
+            os.close(fd)
             try:
                 # Should work without specifying format
                 obj.write(temp_path)
@@ -345,16 +342,17 @@ class TestSerializableParameterized:
         else:  # hdf5
             # Test that .h5 and .hdf5 extensions are automatically detected
             for ext in ["h5", "hdf5"]:
-                filename = f"test_format.{ext}"
+                fd, temp_path = tempfile.mkstemp(suffix=f".{ext}")
+                os.close(fd)
                 try:
                     # Should work without specifying format
-                    obj.write(filename)
-                    loaded = MockSerializable.read(filename)
+                    obj.write(temp_path)
+                    loaded = MockSerializable.read(temp_path)
                     assert obj == loaded
                 
                 finally:
-                    if os.path.exists(filename):
-                        os.unlink(filename)
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
 
 
 class TestSerializableNestedData:

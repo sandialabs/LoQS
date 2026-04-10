@@ -1,7 +1,7 @@
 """Tester for loqs.backends.state.stimstate"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
 import json
 
 import mock
@@ -222,11 +222,10 @@ class TestSTIMQuantumState:
         test = STIMState([1, 0], ["Q0", "Q1"])
         test.state.cx(0, 1)
 
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
-            test.write(tmp.name)
-            tmp_path = tmp.name
-
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
         try:
+            test.write(tmp_path)
             test2 = STIMState.read(tmp_path)
             self._check(test, test2)
         finally:

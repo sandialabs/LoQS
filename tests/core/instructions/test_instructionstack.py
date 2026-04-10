@@ -1,7 +1,7 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
 import json
 import pytest
 
@@ -58,12 +58,12 @@ class TestInstructionStack:
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Create and write, but keep file closed before re-opening
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
-            s.write(tmp.name)
-            tmp_path = tmp.name
-
-        # Now safe to open/read/remove on Windows
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
+            s.write(tmp_path)
+            
+            # Now safe to open/read/remove on Windows
             s2 = InstructionStack.read(tmp_path)
             self._check(s2, ["L0", "L1"])
         finally:
@@ -75,29 +75,28 @@ class TestInstructionStack:
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
-            stack.write(tmp.name)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
+            stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
         finally:
             os.unlink(tmp_path)
 
         # Test file serialization
-        with NamedTemporaryFile(delete=False, suffix='.json') as tmp:
-            stack.write(tmp.name)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
         try:
+            stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
         finally:
             os.unlink(tmp_path)
 
         # Test compressed format
-        with NamedTemporaryFile(delete=False, suffix='.json.gz') as temp_file:
-            temp_path = temp_file.name
-
+        fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
+        os.close(fd)
         try:
             stack.write(temp_path)
             loaded_stack = InstructionStack.read(temp_path)
@@ -110,10 +109,10 @@ class TestInstructionStack:
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
-            original.write(tmp.name)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
+            original.write(tmp_path)
             deserialized = InstructionStack.read(tmp_path)
         finally:
             os.unlink(tmp_path)
@@ -137,20 +136,20 @@ class TestInstructionStack:
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
-            stack.write(tmp.name)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
+            stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
         finally:
             os.unlink(tmp_path)
 
         # Test file serialization
-        with NamedTemporaryFile(delete=False, suffix=f'.{format}') as tmp:
-            stack.write(tmp.name)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix=f'.{format}')
+        os.close(fd)
         try:
+            stack.write(tmp_path)
             loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
         finally:
@@ -162,10 +161,10 @@ class TestInstructionStack:
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix=".json") as tmp:
-            original.write(tmp.name)
-            tmp_path = tmp.name
+        fd, tmp_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
         try:
+            original.write(tmp_path)
             deserialized = InstructionStack.read(tmp_path)
         finally:
             os.unlink(tmp_path)

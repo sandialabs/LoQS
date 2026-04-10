@@ -1,7 +1,7 @@
 """Tester for loqs.core.recordables.measurementoutcomes"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
 import json
 import pytest
 
@@ -55,11 +55,10 @@ class TestMeasurementOutcomes:
         expected = {"Q0": [0, 1], "Q1": [1]}
         m = MeasurementOutcomes(outcomes)
 
-        with NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", suffix='.json') as tmp:
-            m.write(tmp.name)
-            tmp_path = tmp.name
-
+        fd, tmp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
         try:
+            m.write(tmp_path)
             m2 = MeasurementOutcomes.read(tmp_path)
             self._check(m2, expected)
         finally:
@@ -73,24 +72,36 @@ class TestMeasurementOutcomes:
 
         # Test file serialization with HDF5
         import h5py
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            with h5py.File(tempf.name, 'w') as h5f:
+        fd, tempf_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            with h5py.File(tempf_path, 'w') as h5f:
                 m.dump(h5f)
-            with h5py.File(tempf.name, 'r') as h5f:
+            with h5py.File(tempf_path, 'r') as h5f:
                 m2 = MeasurementOutcomes.load(h5f)
             self._check(m2, expected)
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization with .h5 extension
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            m.write(tempf.name)
-            m2 = MeasurementOutcomes.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            m.write(tempf_path)
+            m2 = MeasurementOutcomes.read(tempf_path)
             self._check(m2, expected)
+        finally:
+            os.unlink(tempf_path)
 
         # Test file serialization with .hdf5 extension
-        with NamedTemporaryFile(suffix='.hdf5') as tempf:
-            m.write(tempf.name)
-            m2 = MeasurementOutcomes.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix='.hdf5')
+        os.close(fd)
+        try:
+            m.write(tempf_path)
+            m2 = MeasurementOutcomes.read(tempf_path)
             self._check(m2, expected)
+        finally:
+            os.unlink(tempf_path)
 
     def test_hdf5_serialization_complex(self):
         """Test MeasurementOutcomes HDF5 serialization with complex data."""
@@ -105,15 +116,19 @@ class TestMeasurementOutcomes:
 
         # Test HDF5 serialization
         import h5py
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            with h5py.File(tempf.name, 'w') as h5f:
+        fd, tempf_path = tempfile.mkstemp(suffix='.h5')
+        os.close(fd)
+        try:
+            with h5py.File(tempf_path, 'w') as h5f:
                 m.dump(h5f)
-            with h5py.File(tempf.name, 'r') as h5f:
+            with h5py.File(tempf_path, 'r') as h5f:
                 m2 = MeasurementOutcomes.load(h5f)
 
-        # Check all outcomes are preserved
-        for qubit in outcomes:
-            assert m2[qubit] == outcomes[qubit]
+            # Check all outcomes are preserved
+            for qubit in outcomes:
+                assert m2[qubit] == outcomes[qubit]
+        finally:
+            os.unlink(tempf_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_measurementoutcomes_serialization_parameterized(self, format):
@@ -124,24 +139,37 @@ class TestMeasurementOutcomes:
 
         # Test bytes serialization
         if format == "json":
-            with NamedTemporaryFile(mode="w+", suffix=".json") as tempf:
-                m.dump(tempf.file)
-                tempf.seek(0)
-                m2 = MeasurementOutcomes.load(tempf.file)
+            fd, tempf_path = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            try:
+                with open(tempf_path, "w+") as tempf:
+                    m.dump(tempf)
+                    tempf.seek(0)
+                    m2 = MeasurementOutcomes.load(tempf)
+            finally:
+                os.unlink(tempf_path)
         else:  # hdf5
             import h5py
-            with NamedTemporaryFile(suffix=".h5") as tempf:
-                with h5py.File(tempf.name, "w") as h5f:
+            fd, tempf_path = tempfile.mkstemp(suffix=".h5")
+            os.close(fd)
+            try:
+                with h5py.File(tempf_path, "w") as h5f:
                     m.dump(h5f)
-                with h5py.File(tempf.name, "r") as h5f:
+                with h5py.File(tempf_path, "r") as h5f:
                     m2 = MeasurementOutcomes.load(h5f)
+            finally:
+                os.unlink(tempf_path)
         self._check(m2, expected)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as tempf:
-            m.write(tempf.name)
-            m2 = MeasurementOutcomes.read(tempf.name)
+        fd, tempf_path = tempfile.mkstemp(suffix=f'.{format}')
+        os.close(fd)
+        try:
+            m.write(tempf_path)
+            m2 = MeasurementOutcomes.read(tempf_path)
             self._check(m2, expected)
+        finally:
+            os.unlink(tempf_path)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_measurementoutcomes_serialization_complex_parameterized(self, format):
@@ -157,17 +185,26 @@ class TestMeasurementOutcomes:
 
         # Test serialization
         if format == "json":
-            with NamedTemporaryFile(mode="w+", suffix=".json") as tempf:
-                m.dump(tempf.file)
-                tempf.seek(0)
-                m2 = MeasurementOutcomes.load(tempf.file)
+            fd, tempf_path = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            try:
+                with open(tempf_path, "w+") as tempf:
+                    m.dump(tempf)
+                    tempf.seek(0)
+                    m2 = MeasurementOutcomes.load(tempf)
+            finally:
+                os.unlink(tempf_path)
         else:  # hdf5
             import h5py
-            with NamedTemporaryFile(suffix=".h5") as tempf:
-                with h5py.File(tempf.name, "w") as h5f:
+            fd, tempf_path = tempfile.mkstemp(suffix=".h5")
+            os.close(fd)
+            try:
+                with h5py.File(tempf_path, "w") as h5f:
                     m.dump(h5f)
-                with h5py.File(tempf.name, "r") as h5f:
+                with h5py.File(tempf_path, "r") as h5f:
                     m2 = MeasurementOutcomes.load(h5f)
+            finally:
+                os.unlink(tempf_path)
 
         # Check all outcomes are preserved
         for qubit in outcomes:
