@@ -34,13 +34,20 @@ jobs:
       with:
         arch: x64
     
+    - name: Shorten temp paths (Windows)
+      if: ${{ inputs.os == 'windows-latest' }}
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force C:\t | Out-Null
+        New-Item -ItemType Directory -Force C:\p | Out-Null
+        "TEMP=C:\t" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "TMP=C:\t"  | Out-File -FilePath $env:GITHUB_ENV -Append
+        "PIP_CACHE_DIR=C:\p" | Out-File -FilePath $env:GITHUB_ENV -Append
+
     - name: Windows build env setup
       if: ${{ inputs.os == 'windows-latest' }}
       shell: pwsh
       run: |
-        git config --system core.longpaths true
-        reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f  
-      
         python -m pip install --upgrade pip
         python -m pip install cmake ninja
   
@@ -67,11 +74,9 @@ jobs:
       shell: pwsh
       env:
         CMAKE_GENERATOR: Ninja
-        CMAKE_OBJECT_PATH_MAX: 512
         CMAKE_ARGS: >-
-          -DCMAKE_OBJECT_PATH_MAX=512
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=
+          -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
         CC: cl
         CXX: cl
       run: |
