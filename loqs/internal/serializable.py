@@ -400,6 +400,9 @@ class Serializable:
             )
         else:
             raise ValueError(f"Invalid `format` value for load: {format}")
+        
+        # At this point, at least outer object should not be a deferred reference
+        assert not isinstance(decoded, DeferredRef)
 
         return decoded
 
@@ -596,7 +599,7 @@ class Serializable:
     ## INTERNAL FUNCTIONS
 
     @staticmethod
-    def encode(  # noqa: C901
+    def encode(
         obj: Encodable,
         format: EncodeFormats = "hdf5",
         encode_cache: EncodeCache = None,
@@ -738,83 +741,13 @@ class Serializable:
 
         # Handle Serializable objects
         if isinstance(obj, Serializable):
-            # Get serial ID for this object
-            serial_hash = Serializable.serial_hash(obj)
-            object_id = id(obj)
-
-            # Check if this object is already in cache
-            if encode_cache is not None and obj.CACHE_ON_SERIALIZE:
-                # First check if this specific object instance is already being processed
-                # This handles circular references within the same object graph
-                if serial_hash in encode_cache:
-                    cached_entries = encode_cache[serial_hash]
-                    for entry in cached_entries:
-                        if entry[0] == object_id:
-                            # This object is already being processed (circular reference)
-                            # Create a reference to avoid infinite recursion
-                            cache_id = entry[1]
-                            return encode_cached_obj(
-                                cache_id,
-                                cache_type="reference",
-                                reference_cache_id=cache_id,
-                            )
-
-                # Check if serial_hash exists in cache (different instances with same content)
-                if serial_hash in encode_cache:
-                    # Same serial content but different instance, create a copy
-                    source_cache_id = encode_cache[serial_hash][0][
-                        1
-                    ]  # First entry is the source
-                    new_cache_id = (
-                        JSONEncoder.ENCODE_ID
-                        if format == "json"
-                        else HDF5Encoder.ENCODE_ID
-                    )
-
-                    # Add to cache
-                    encode_cache[serial_hash].append((object_id, new_cache_id))
-
-                    # Increment encoder ID
-                    if format == "json":
-                        JSONEncoder.ENCODE_ID += 1
-                    else:
-                        HDF5Encoder.ENCODE_ID += 1
-
-                    return encode_cached_obj(
-                        new_cache_id,
-                        cache_type="copy",
-                        reference_cache_id=source_cache_id,
-                        source_cache_id=new_cache_id,
-                    )
-                else:
-                    # New serial content, create a source
-                    cache_id = (
-                        JSONEncoder.ENCODE_ID
-                        if format == "json"
-                        else HDF5Encoder.ENCODE_ID
-                    )
-                    encode_cache[serial_hash] = [(object_id, cache_id)]
-
-                    # Increment encoder ID
-                    if format == "json":
-                        JSONEncoder.ENCODE_ID += 1
-                    else:
-                        HDF5Encoder.ENCODE_ID += 1
-
-                    # Encode as source
-                    result = encode_uncached_obj(obj)
-                    # Add cache info to result
-                    if format == "json":
-                        result.update(
-                            {"cache_type": "source", "cache_id": cache_id}
-                        )
-                    else:
-                        result.attrs["cache_type"] = "source"
-                        result.attrs["cache_id"] = cache_id
-                    return result
-            else:
-                # No caching, just encode normally
-                return encode_uncached_obj(obj)
+            return Serializable._encode_Serializable(
+                obj,
+                format,
+                encode_cache,
+                encode_cached_obj,
+                encode_uncached_obj
+            )
 
         # Handle dictionaries
         elif isinstance(obj, dict):
@@ -842,12 +775,13 @@ class Serializable:
 
         raise ValueError("Unknown type to encode")
 
+
     @staticmethod
     def decode(  # noqa: C901
         encoded: Encoded,
         format: EncodeFormats = "hdf5",
         decode_cache: DecodeCache = None,
-    ) -> Encodable:
+    ) -> Encodable | DeferredRef:
         """
         Recursively decode a serialized object following the same pattern as encode.
 
@@ -1094,6 +1028,79 @@ class Serializable:
             ) from e
 
         return c
+    
+    @staticmethod
+    def _encode_Serializable(obj, format: str, encode_cache: EncodeCache, encode_cached_obj: Callable, encode_uncached_obj: Callable) -> Encoded:
+        from loqs.internal.encoder import JSONEncoder, HDF5Encoder
+
+        # Get serial ID for this object
+        serial_hash = Serializable.serial_hash(obj)
+        object_id = id(obj)
+
+        # Short-circuit on no cache behavior
+        if encode_cache is None or not obj.CACHE_ON_SERIALIZE:
+            return encode_uncached_obj(obj)
+
+        # First check if this specific object instance is already being processed
+        # This handles circular references within the same object graph
+        if serial_hash in encode_cache:
+            cached_entries = encode_cache[serial_hash]
+            for entry in cached_entries:
+                if entry[0] == object_id:
+                    # This object is already being processed (circular reference)
+                    # Create a reference to avoid infinite recursion
+                    cache_id = entry[1]
+                    return encode_cached_obj(
+                        cache_id,
+                        cache_type="reference",
+                        reference_cache_id=cache_id,
+                    )
+        
+        # Proceed with caching, look up id
+        cache_id = (
+            JSONEncoder.ENCODE_ID
+            if format == "json"
+            else HDF5Encoder.ENCODE_ID
+        )
+
+        # Increment encoder ID
+        if format == "json":
+            JSONEncoder.ENCODE_ID += 1
+        else:
+            HDF5Encoder.ENCODE_ID += 1
+
+        # Check if serial_hash exists in cache (different instances with same content)
+        if serial_hash in encode_cache:
+            # Same serial content but different instance, create a copy
+            # First entry in list is the source object
+            source_cache_id = encode_cache[serial_hash][0][1]
+            
+            # Add to cache (all other entries in list are copy objects)
+            encode_cache[serial_hash].append((object_id, cache_id))
+
+            return encode_cached_obj(
+                cache_id,
+                cache_type="copy",
+                reference_cache_id=source_cache_id,
+                source_cache_id=cache_id,
+            )
+        
+        # Otherwise, cache-miss so we create a new source
+        encode_cache[serial_hash] = [(object_id, cache_id)]
+
+        # Encode as source
+        result = encode_uncached_obj(obj)
+
+        # Add cache info to result
+        if format == "json":
+            result.update(
+                {"cache_type": "source", "cache_id": cache_id}
+            )
+        else:
+            result.attrs["cache_type"] = "source"
+            result.attrs["cache_id"] = cache_id
+        
+        return result
 
     @staticmethod
     def _update_imports(  # noqa: C901

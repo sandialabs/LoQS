@@ -719,7 +719,7 @@ class TestSerializableNestedData:
         assert isinstance(decoded, Frame)
 
         # obj2 is obj1
-        assert decoded["obj2"] == decoded["obj1"]
+        assert decoded["obj2"] is decoded["obj1"]
 
         # obj3 should have same hash, but diff id
         assert Serializable.serial_hash(decoded["obj3"]) == Serializable.serial_hash(decoded["obj1"])

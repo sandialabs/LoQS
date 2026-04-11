@@ -256,92 +256,68 @@ class HDF5Encoder(BaseEncoder):
         list_group.attrs["iterable_type"] = name
         list_group.attrs["version"] = SERIALIZATION_VERSION
 
+        # Short circuit empty list
+        if len(to_encode) == 0:
+            list_group.attrs["storage_format"] = "groups"
+            return list_group
+
+        # Cast to list so we can handle sets
+        to_encode_list = list(to_encode)
+
         # Check if all elements are HDF5-native types that can be stored directly as datasets
+        # Not exactly EncodablePrimitives because of Nones
         hdf5_native_types = (int, float, bool, str, bytes)
-        can_use_dataset = all(
-            isinstance(e, hdf5_native_types) for e in to_encode
-        )
+        first_element = to_encode_list[0]
+        first_type = type(first_element)
+        if first_type in hdf5_native_types and all(
+            isinstance(e, first_type) for e in to_encode
+        ):
+            # Use HDF5 dataset for optimized storage
+            list_group.attrs["storage_format"] = "dataset"
 
-        if can_use_dataset and len(to_encode) > 0:
-            # Additional check: all elements must be of the same type for dataset optimization
-            # Sets should always use groups storage because they are unordered and
-            # converting them to arrays creates object arrays which HDF5 can't handle
-            if isinstance(to_encode, set):
-                # Sets always fall back to groups storage
-                can_use_dataset = False
-            else:
-                first_element = to_encode[0]
-                first_type = type(first_element)
-                all_same_type = all(
-                    isinstance(e, first_type) for e in to_encode
+            if isinstance(first_element, str):
+                # For strings, use fixed-length string dtype
+                # Find maximum string length to determine dtype
+                max_len = (
+                    max(len(s) for s in to_encode_list) if to_encode_list else 0
                 )
-
-            if not isinstance(to_encode, set) and all_same_type:
-                # Use HDF5 dataset for optimized storage
-                list_group.attrs["storage_format"] = "dataset"
-
-                # Convert to numpy array for efficient storage
-                # Handle different iterable types (sets are not subscriptable)
-                if isinstance(to_encode, set):
-                    first_element = next(iter(to_encode))
-                else:
-                    first_element = to_encode[0]
-
-                if isinstance(first_element, str):
-                    # For strings, use fixed-length string dtype
-                    # Find maximum string length to determine dtype
-                    max_len = (
-                        max(len(s) for s in to_encode) if to_encode else 0
-                    )
-                    dtype = f"S{max_len + 1}"  # +1 for null terminator
-                    data = np.array(to_encode, dtype=dtype)
-                    list_group.create_dataset("data", data=data, dtype=dtype)
-                elif isinstance(first_element, bytes):
-                    # For bytes, use fixed-length bytes dtype
-                    # Find maximum bytes length to determine dtype
-                    max_len = (
-                        max(len(b) for b in to_encode) if to_encode else 0
-                    )
-                    dtype = f"S{max_len + 1}"  # +1 for null terminator
-                    data = np.array(
-                        [
-                            b.decode("utf-8", errors="replace")
-                            for b in to_encode
-                        ],
-                        dtype=dtype,
-                    )
-                    list_group.create_dataset("data", data=data, dtype=dtype)
-                    list_group.attrs["original_type"] = "bytes"
-                else:
-                    # For numeric types, determine appropriate dtype
-                    data = np.array(to_encode)
-                    dtype = data.dtype
-
-                    # Create dataset with compression for large arrays
-                    if len(to_encode) > 1000:
-                        list_group.create_dataset(
-                            "data", data=data, dtype=dtype, compression="gzip"
-                        )
-                    else:
-                        list_group.create_dataset(
-                            "data", data=data, dtype=dtype
-                        )
+                dtype = f"S{max_len + 1}"  # +1 for null terminator
+                data = np.array(to_encode_list, dtype=dtype)
+                list_group.create_dataset("data", data=data, dtype=dtype)
+            elif isinstance(first_element, bytes):
+                # For bytes, use fixed-length bytes dtype
+                # Find maximum bytes length to determine dtype
+                max_len = (
+                    max(len(b) for b in to_encode_list) if to_encode_list else 0
+                )
+                dtype = f"S{max_len + 1}"  # +1 for null terminator
+                data = np.array(
+                    [
+                        b.decode("utf-8", errors="replace")
+                        for b in to_encode_list
+                    ],
+                    dtype=dtype,
+                )
+                list_group.create_dataset("data", data=data, dtype=dtype)
+                list_group.attrs["original_type"] = "bytes"
             else:
-                # Mixed native types or non-native types - fall back to groups
-                list_group.attrs["storage_format"] = "groups"
-                for i, e in enumerate(to_encode):
-                    item_group = list_group.create_group(str(i))
-                    Serializable.encode(
-                        e,
-                        format="hdf5",
-                        encode_cache=encode_cache,
-                        ignore_no_serialize_flags=ignore_no_serialize_flags,
-                        h5_group=item_group,
+                # For numeric types, determine appropriate dtype
+                data = np.array(to_encode_list)
+                dtype = data.dtype
+
+                # Create dataset with compression for large arrays
+                if len(to_encode_list) > 1000:
+                    list_group.create_dataset(
+                        "data", data=data, dtype=dtype, compression="gzip"
+                    )
+                else:
+                    list_group.create_dataset(
+                        "data", data=data, dtype=dtype
                     )
         else:
-            # Fall back to individual groups for complex objects
+            # Mixed native types or non-native types - fall back to groups
             list_group.attrs["storage_format"] = "groups"
-            for i, e in enumerate(to_encode):
+            for i, e in enumerate(to_encode_list):
                 item_group = list_group.create_group(str(i))
                 Serializable.encode(
                     e,
