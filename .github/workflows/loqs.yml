@@ -5,6 +5,7 @@ name: LoQS Tests + Docs
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, review_requested]
   workflow_dispatch: # Allow manual running from GitHub
 
 jobs:
