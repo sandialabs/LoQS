@@ -1,28 +1,14 @@
 """Tester for loqs.backends.state.stimstate"""
 
-import os
-import tempfile
-import json
-
-import mock
 import pytest
 import numpy as np
 
-try:
-    import stim
-
-    NO_STIM = False
-except ImportError:
-    NO_STIM = True
+stim = pytest.importorskip("stim")
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
 from loqs.backends import STIMQuantumState as STIMState
 
 
-@pytest.mark.skipif(
-    NO_STIM,
-    reason="Skipping stim backend tests due to failed import"
-)
 class TestSTIMQuantumState:
 
     def _check(self, state, expected_state):
@@ -217,19 +203,15 @@ class TestSTIMQuantumState:
         outcomes4 = outs["Q0"]
         assert outcomes4 == outcomes1
 
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         # Test bell state
         test = STIMState([1, 0], ["Q0", "Q1"])
         test.state.cx(0, 1)
 
-        fd, tmp_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as tmp_path:
             test.write(tmp_path)
             test2 = STIMState.read(tmp_path)
             self._check(test, test2)
-        finally:
-            os.unlink(tmp_path)
 
 # class TestSTIMQuantumStateFailedImport:
 #         # Mock not having stim available

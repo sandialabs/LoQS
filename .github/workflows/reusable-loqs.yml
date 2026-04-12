@@ -16,7 +16,7 @@ on:
         type: string
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ${{ inputs.os }}
     steps:
     - uses: actions/checkout@v4
@@ -26,6 +26,24 @@ jobs:
       with:
         python-version: ${{ inputs.python-version }}
     
+    # On Windows, set up MSVC
+    # Originally needed because no pymatching 3.14 wheels
+    - name: Set up MSVC
+      if: ${{ inputs.os == 'windows-latest' }}
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+    
+    - name: Shorten temp paths (Windows)
+      if: ${{ inputs.os == 'windows-latest' }}
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force C:\t | Out-Null
+        New-Item -ItemType Directory -Force C:\p | Out-Null
+        "TEMP=C:\t" | Out-File -FilePath $env:GITHUB_ENV -Append
+        "TMP=C:\t"  | Out-File -FilePath $env:GITHUB_ENV -Append
+        "PIP_CACHE_DIR=C:\p" | Out-File -FilePath $env:GITHUB_ENV -Append
+  
     - name: Cache pip environments
       uses: actions/cache@v4
       id: pip-cache-id
@@ -37,28 +55,42 @@ jobs:
     
     # TODO: This can be simplified and made more consistent by using existing tox config with tox-gh
     
-    - name: Install loqs[${{ inputs.loqs-optional }}]
+    - name: Install non-Windows loqs[${{ inputs.loqs-optional }}]
+      if: ${{ inputs.os != 'windows-latest' }}
       run: |
         python -m pip install --upgrade pip
         python -m pip install ".[${{ inputs.loqs-optional }}]"
-        python -m pip install black==24.4.0 # Pin black version
+    
+    # Set up CMake environment in case we need to build wheels
+    - name: Install Windows loqs[${{ inputs.loqs-optional }}]
+      if: ${{ inputs.os == 'windows-latest' }}
+      shell: pwsh
+      env:
+        CMAKE_GENERATOR: Visual Studio 17 2022
+        CMAKE_ARGS: >-
+          -DCMAKE_BUILD_TYPE=Release
+        CC: cl
+        CXX: cl
+      run: |
+        python -m pip install ".[${{ inputs.loqs-optional }}]"
   
     - name: Linting
       run: |
         # Format check, allow failure
-        black --check loqs || true
+        python -m black --check loqs || true
         
         # Standard PEP8, allowed to fail since exit-zero treats all errors as warnings
-        flake8 loqs --exit-zero --statistics
+        python -m flake8 loqs --exit-zero --statistics
     
     - name: Type checking
       run: |
         # Allow to fail
-        mypy loqs || true
+        python -m mypy loqs || true
     
-    - name: Docstring tests (currently allowed to pass)
+    - name: Docstring tests
+      if: ${{ inputs.loqs-optional == 'all' }}
       run: |
-        python -m pytest loqs || true
+        python -m pytest loqs
     
     - name: Unit tests (with coverage)
       run: |

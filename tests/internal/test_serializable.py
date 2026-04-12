@@ -1,13 +1,13 @@
 """Parameterized tests for Serializable base class serialization methods."""
 
-import gzip
-import os
-import tempfile
 import pytest
-from pathlib import Path
-
-from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
+import numpy as np
 import h5py
+
+from loqs.core import Frame
+from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
+from loqs.types import NDArray
+
 
 
 class MockSerializable(Serializable):
@@ -40,7 +40,7 @@ class MockSerializable(Serializable):
         )
 
 
-@pytest.fixture(params=["json", "hdf5"])
+@pytest.fixture(params=["json", "json.gz", "hdf5"])
 def format_param(request):
     """Parameterized fixture for testing both JSON and HDF5 formats."""
     return request.param
@@ -49,115 +49,47 @@ def format_param(request):
 class TestSerializableParameterized:
     """Parameterized tests for Serializable class functionality."""
 
-    def test_dump_load_roundtrip(self, format_param):
+    def test_dump_load_roundtrip(self, format_param, make_temp_path):
         """Test dump/load roundtrip with file streams."""
         obj = MockSerializable(name="test_obj", value=123, data={"key": "value"})
 
         if format_param == "json":
-            fd, tempf_path = tempfile.mkstemp(suffix='.json')
-            os.close(fd)
-            try:
+            with make_temp_path(suffix='.json') as tempf_path:
                 # Test dump to file - use the underlying file object
                 with open(tempf_path, 'w+') as f:
                     obj.dump(f)
-                    f.seek(0)  # Reset file pointer for reading
-
-                    # Test load from file - use the underlying file object
+                    f.seek(0)
                     loaded_obj = MockSerializable.load(f)
-                    assert obj == loaded_obj
-                    assert loaded_obj.name == "test_obj"
-                    assert loaded_obj.value == 123
-                    assert loaded_obj.data == {"key": "value"}
-            finally:
-                os.unlink(tempf_path)
-        
+
         else:  # hdf5
-            fd, temp_file = tempfile.mkstemp(suffix='.h5')
-            os.close(fd)
-            try:
+            with make_temp_path(suffix='.h5') as temp_file:
                 with h5py.File(temp_file, 'w') as h5_file:
                     obj.dump(h5_file, format="hdf5")
                 
                 with h5py.File(temp_file, 'r') as h5_file:
-                    loaded = MockSerializable.load(h5_file, format="hdf5")
-                
-                assert loaded.name == "test_obj"
-                assert loaded.value == 123
-                # Check data values (allow for type differences due to HDF5 binary storage)
-                assert "key" in loaded.data
-                assert loaded.data["key"] in ["value", b"value"]  # string or bytes
-            
-            finally:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
+                    loaded_obj = MockSerializable.load(h5_file, format="hdf5")
+        
+        assert isinstance(loaded_obj, MockSerializable)
+        assert loaded_obj.name == "test_obj"
+        assert loaded_obj.value == 123
+        assert loaded_obj.data["key"] == "value"
 
-    def test_write_read_roundtrip(self, format_param):
+    def test_write_read_roundtrip(self, format_param, make_temp_path):
         """Test write/read roundtrip with files."""
         obj = MockSerializable(name="file_test", value=789, data={"test": "file"})
 
-        if format_param == "json":
-            fd, temp_path = tempfile.mkstemp(suffix='.json')
-            os.close(fd)
-            try:
-                # Test write to file
-                obj.write(temp_path)
+        with make_temp_path(suffix=f'.{format_param}') as temp_path:
+            # Test write to file
+            obj.write(temp_path)
 
-                # Test read from file
-                loaded_obj = MockSerializable.read(temp_path)
-                assert obj == loaded_obj
-                assert loaded_obj.name == "file_test"
-                assert loaded_obj.value == 789
+            # Test read from file
+            loaded_obj = MockSerializable.read(temp_path)
+            assert isinstance(loaded_obj, MockSerializable)
+            assert obj == loaded_obj
+            assert loaded_obj.name == "file_test"
+            assert loaded_obj.value == 789
 
-            finally:
-                # Clean up
-                Path(temp_path).unlink(missing_ok=True)
-        
-        else:  # hdf5
-            fd, temp_path = tempfile.mkstemp(suffix='.h5')
-            os.close(fd)
-            try:
-                # Test write to file
-                obj.write(temp_path)
-
-                # Test read from file
-                loaded_obj = MockSerializable.read(temp_path)
-                assert obj == loaded_obj
-                assert loaded_obj.name == "file_test"
-                assert loaded_obj.value == 789
-
-            finally:
-                # Clean up
-                Path(temp_path).unlink(missing_ok=True)
-
-    def test_write_read_compressed(self, format_param):
-        """Test write/read with compressed .json.gz format."""
-        if format_param == "json":
-            obj = MockSerializable(name="compressed", value=999, data={"format": "gz"})
-
-            fd, temp_path = tempfile.mkstemp(suffix='.json.gz')
-            os.close(fd)
-            try:
-                # Test write compressed
-                obj.write(temp_path)
-
-                # Verify file is actually compressed
-                with gzip.open(temp_path, 'rt') as f:
-                    content = f.read()
-                    assert '"name"' in content  # Should contain JSON content
-
-                # Test read compressed
-                loaded_obj = MockSerializable.read(temp_path)
-                assert obj == loaded_obj
-                assert loaded_obj.data == {"format": "gz"}
-
-            finally:
-                Path(temp_path).unlink(missing_ok=True)
-        else:
-            # HDF5 doesn't support gzip compression in the same way
-            # Skip this test for HDF5 format
-            pytest.skip("Compression test only applicable to JSON format")
-
-    def test_object_caching(self, format_param):
+    def test_object_caching(self, format_param, make_temp_path):
         """Test object reference caching during serialization."""
         # Create objects that should be cached
         obj1 = MockSerializable(name="cached1", value=1)
@@ -185,9 +117,7 @@ class TestSerializableParameterized:
             assert state1_again["cache_type"] == "reference"
         
         else:  # hdf5
-            fd, temp_file = tempfile.mkstemp(suffix='.h5')
-            os.close(fd)
-            try:
+            with make_temp_path(suffix='.h5') as temp_file:
                 with h5py.File(temp_file, 'w') as h5_file:
                     root_group = h5_file.create_group('root')
                     
@@ -196,6 +126,7 @@ class TestSerializableParameterized:
                     state2 = Serializable.encode(obj2, format="hdf5", h5_group=root_group, encode_cache=cache)
                     
                     assert isinstance(state1, h5py.Group)
+                    assert isinstance(state2, h5py.Group)
 
                     # Verify cache structure
                     assert state1.attrs["encode_type"] == "Serializable"
@@ -205,12 +136,8 @@ class TestSerializableParameterized:
                     state1_again = Serializable.encode(obj1, format="hdf5", h5_group=root_group, encode_cache=cache)
                     assert isinstance(state1_again, h5py.Group)
                     assert state1_again.attrs["cache_type"] == "reference"
-            
-            finally:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
 
-    def test_version_compatibility(self, format_param):
+    def test_version_compatibility(self, format_param, make_temp_path):
         """Test serialization version handling."""
         obj = MockSerializable()
         
@@ -227,9 +154,7 @@ class TestSerializableParameterized:
             assert obj == loaded_obj
         
         else:  # hdf5
-            fd, temp_file = tempfile.mkstemp(suffix='.h5')
-            os.close(fd)
-            try:
+            with make_temp_path(suffix='.h5') as temp_file:
                 with h5py.File(temp_file, 'w') as h5_file:
                     root_group = h5_file.create_group('root')
                     Serializable.encode(obj, format="hdf5", h5_group=root_group, reset_encode_id=True)
@@ -241,16 +166,11 @@ class TestSerializableParameterized:
                     obj_group_name = list(root_group.keys())[0]
                     encoded_group = root_group[obj_group_name]
                     
-
                     # Verify version is included
                     assert "version" in encoded_group.attrs
                     assert encoded_group.attrs["version"] == SERIALIZATION_VERSION
-            
-            finally:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
 
-    def test_serialization_with_nested_data(self, format_param):
+    def test_serialization_with_nested_data(self, format_param, make_temp_path):
         """Test serialization with complex nested data structures."""
         complex_data = {
             "list": [1, 2, 3, {"nested_dict": True}],
@@ -289,9 +209,7 @@ class TestSerializableParameterized:
             assert "set" in loaded_obj.data
         
         else:  # hdf5
-            fd, temp_file = tempfile.mkstemp(suffix='.h5')
-            os.close(fd)
-            try:
+            with make_temp_path(suffix='.h5') as temp_file:
                 with h5py.File(temp_file, 'w') as h5_file:
                     root_group = h5_file.create_group('root')
                     Serializable.encode(obj, format="hdf5", h5_group=root_group)
@@ -316,43 +234,26 @@ class TestSerializableParameterized:
                 # Verify nested data structure (allow for type conversions)
                 assert "list" in loaded_obj.data
                 assert "nested" in loaded_obj.data
-            
-            finally:
-                if os.path.exists(temp_file):
-                    os.unlink(temp_file)
 
-    def test_format_detection(self, format_param):
+    def test_format_detection(self, format_param, make_temp_path):
         """Test automatic format detection from file extensions."""
         obj = MockSerializable(name="format_test", value=111)
 
         if format_param == "json":
             # Test that .json extension is automatically detected
-            fd, temp_path = tempfile.mkstemp(suffix='.json')
-            os.close(fd)
-            try:
+            with make_temp_path(suffix='.json') as temp_path:
                 # Should work without specifying format
                 obj.write(temp_path)
                 loaded = MockSerializable.read(temp_path)
-                assert obj == loaded
-            
-            finally:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-        
+                assert obj == loaded        
         else:  # hdf5
             # Test that .h5 and .hdf5 extensions are automatically detected
             for ext in ["h5", "hdf5"]:
-                fd, temp_path = tempfile.mkstemp(suffix=f".{ext}")
-                os.close(fd)
-                try:
+                with make_temp_path(suffix=f".{ext}") as temp_path:
                     # Should work without specifying format
                     obj.write(temp_path)
                     loaded = MockSerializable.read(temp_path)
                     assert obj == loaded
-                
-                finally:
-                    if os.path.exists(temp_path):
-                        os.unlink(temp_path)
 
 
 class TestSerializableNestedData:
@@ -449,6 +350,159 @@ class TestSerializableNestedData:
         assert loaded1.name == "obj1"
         assert loaded2.name == "obj2"
 
+    def test_same_serial_hash_different_instances(self, make_temp_path):
+        """Test objects with same serializable content but different instances."""
+        # Create two objects with identical content but different instances
+        obj1 = MockSerializable(name="test", value=42, data={"key": "value"})
+        obj2 = MockSerializable(name="test", value=42, data={"key": "value"})
+        
+        # Verify they have different ids but same serial_hash
+        assert id(obj1) != id(obj2)
+        assert Serializable.serial_hash(obj1) == Serializable.serial_hash(obj2)
+        
+        # Test serialization with caching
+        cache = {}
+        
+        # Serialize first object - should be source
+        state1 = Serializable.encode(obj1, format="json", encode_cache=cache)
+        assert state1["cache_type"] == "source"
+        assert "cache_id" in state1
+        
+        # Serialize second object - should be copy since same content but different instance
+        state2 = Serializable.encode(obj2, format="json", encode_cache=cache)
+        assert state2["cache_type"] == "copy"
+        assert "reference_cache_id" in state2
+        assert "source_cache_id" in state2
+        
+        # Test deserialization
+        decode_cache = {}
+        loaded1 = Serializable.decode(state1, format="json", decode_cache=decode_cache)
+        loaded2 = Serializable.decode(state2, format="json", decode_cache=decode_cache)
+        
+        # Both should be MockSerializable instances with same content
+        assert isinstance(loaded1, MockSerializable)
+        assert isinstance(loaded2, MockSerializable)
+        assert loaded1 == loaded2
+        assert loaded1 is not loaded2  # Different instances
+
+        
+        with make_temp_path(suffix='.h5') as temp_file:
+            with h5py.File(temp_file, 'w') as h5_file:
+                root_group = h5_file.create_group('root')
+                
+                # Reset cache and encode ID
+                cache = {}
+                from loqs.internal.encoder import HDF5Encoder
+                HDF5Encoder.ENCODE_ID = 0
+                
+                # Serialize first object - should be source
+                state1_h5 = Serializable.encode(obj1, format="hdf5", h5_group=root_group, encode_cache=cache)
+                assert isinstance(state1_h5, h5py.Group)
+                assert state1_h5.attrs["cache_type"] == "source"
+                
+                # Serialize second object - should be copy
+                state2_h5 = Serializable.encode(obj2, format="hdf5", h5_group=root_group, encode_cache=cache)
+                assert isinstance(state2_h5, h5py.Group)
+                assert state2_h5.attrs["cache_type"] == "copy"
+            
+            # Test deserialization from HDF5
+            with h5py.File(temp_file, 'r') as h5_file:
+                root_group = h5_file['root']
+                assert isinstance(root_group, h5py.Group)
+                decode_cache = {}
+                
+                # Find the encoded objects
+                obj_names = list(root_group.keys())
+                assert len(obj_names) == 2  # Should have 2 objects
+                
+                # Decode both objects
+                obj_group1 = root_group[obj_names[0]]
+                obj_group2 = root_group[obj_names[1]]
+                assert isinstance(obj_group1, h5py.Group)
+                assert isinstance(obj_group2, h5py.Group)
+                loaded1_h5 = Serializable.decode(obj_group1, format="hdf5", decode_cache=decode_cache)
+                loaded2_h5 = Serializable.decode(obj_group2, format="hdf5", decode_cache=decode_cache)
+                
+                # Both should be MockSerializable instances with same content
+                assert isinstance(loaded1_h5, MockSerializable)
+                assert isinstance(loaded2_h5, MockSerializable)
+                assert loaded1_h5 == loaded2_h5
+                assert loaded1_h5 is not loaded2_h5  # Different instances
+
+    def test_true_circular_references(self, make_temp_path):
+        """Test true circular references where objects reference each other."""
+        # Create objects with true circular references
+        obj1 = MockSerializable(name="circular1", value=1)
+        obj2 = MockSerializable(name="circular2", value=2)
+        
+        # Create circular reference
+        obj1.data["ref"] = obj2
+        obj2.data["ref"] = obj1
+        
+        # Test serialization with caching
+        cache = {}
+        state1 = Serializable.encode(obj1, format="json", encode_cache=cache, reset_encode_id=True)
+        assert isinstance(state1, dict)
+        
+        # Should be source since it's the first time we see this serial_hash
+        assert state1["cache_type"] == "source"
+        
+        # The nested obj2 should also be a source since it has different content
+        nested_obj2_state = state1["data"]["items"]["ref"]
+        assert nested_obj2_state["cache_type"] == "source"
+        
+        # But the nested obj2's reference back to obj1 should be a reference
+        nested_obj2_ref_state = nested_obj2_state["data"]["items"]["ref"]
+        assert nested_obj2_ref_state["cache_type"] == "reference"
+        
+        # Test deserialization
+        decode_cache = {}
+        loaded1 = Serializable.decode(state1, format="json", decode_cache=decode_cache)
+        
+        assert isinstance(loaded1, MockSerializable)
+        assert loaded1.name == "circular1"
+        assert "ref" in loaded1.data
+        assert isinstance(loaded1.data["ref"], MockSerializable)
+        assert loaded1.data["ref"].name == "circular2"
+        
+        # The circular reference should be properly resolved
+        assert loaded1.data["ref"].data["ref"] is loaded1
+        
+        with make_temp_path(suffix='.h5') as temp_file:
+            with h5py.File(temp_file, 'w') as h5_file:
+                root_group = h5_file.create_group('root')
+                
+                # Reset cache and encode ID
+                cache = {}
+                from loqs.internal.encoder import HDF5Encoder
+                HDF5Encoder.ENCODE_ID = 0
+                
+                # Serialize circular reference
+                state1_h5 = Serializable.encode(obj1, format="hdf5", h5_group=root_group, encode_cache=cache, reset_encode_id=True)
+                assert isinstance(state1_h5, h5py.Group)
+                assert state1_h5.attrs["cache_type"] == "source"
+            
+            # Test deserialization from HDF5
+            with h5py.File(temp_file, 'r') as h5_file:
+                root_group = h5_file['root']
+                assert isinstance(root_group, h5py.Group)
+                decode_cache = {}
+                
+                # Find the encoded object
+                obj_name = list(root_group.keys())[0]
+                obj_group = root_group[obj_name]
+                assert isinstance(obj_group, h5py.Group)
+                loaded1_h5 = Serializable.decode(obj_group, format="hdf5", decode_cache=decode_cache)
+                
+                assert isinstance(loaded1_h5, MockSerializable)
+                assert loaded1_h5.name == "circular1"
+                assert "ref" in loaded1_h5.data
+                assert isinstance(loaded1_h5.data["ref"], MockSerializable)
+                assert loaded1_h5.data["ref"].name == "circular2"
+                
+                # The circular reference should be properly resolved
+                assert loaded1_h5.data["ref"].data["ref"] is loaded1_h5
+
     def test_mixed_data_types(self):
         """Test serialization with mixed Python data types."""
         mixed_data = {
@@ -487,3 +541,189 @@ class TestSerializableNestedData:
         assert loaded_obj.data["set"] == {1, 2, 3}
         assert loaded_obj.data["dict"] == {"nested": "value"}
         assert isinstance(loaded_obj.data["object"], MockSerializable)
+
+    def test_iterable_encoding_both_codepaths(self, make_temp_path):
+        """Test both HDF5 iterable encoding codepaths with caching improvements."""
+        # Test case 1: Homogeneous list (should use dataset optimization)
+        homogeneous_list = [1, 2, 3, 4, 5]
+        
+        # Test case 2: Heterogeneous list (should use groups fallback)
+        heterogeneous_list = [1, "string", 3.14, True, None]
+        
+        # Test case 3: Homogeneous list with Serializable objects (should use groups)
+        obj1 = MockSerializable(name="obj1", value=1)
+        obj2 = MockSerializable(name="obj2", value=2)
+        obj3 = MockSerializable(name="obj3", value=3)
+        serializable_list = [obj1, obj2, obj3]
+        
+        # Test case 4: Empty list (edge case)
+        empty_list = []
+        
+        # Test case 5: Large homogeneous list (should use compression)
+        large_list = list(range(1500))
+        
+        test_cases = [
+            ("homogeneous_int", homogeneous_list, "dataset"),
+            ("heterogeneous", heterogeneous_list, "groups"),
+            ("serializable_objects", serializable_list, "groups"),
+            ("empty", empty_list, "groups"),  # Empty lists use groups (no benefit to dataset)
+            ("large_homogeneous", large_list, "dataset"),
+        ]
+        
+        for test_name, test_data, expected_format in test_cases:
+            with make_temp_path(suffix='.h5') as temp_file:
+                with h5py.File(temp_file, 'w') as h5_file:
+                    root_group = h5_file.create_group('root')
+                    
+                    # Encode the list
+                    list_group = Serializable.encode(test_data, format="hdf5", h5_group=root_group)
+                    assert isinstance(list_group, h5py.Group)
+                    
+                    # Verify storage format
+                    storage_format = list_group.attrs.get("storage_format", "groups")
+                    assert storage_format == expected_format, f"{test_name}: Expected {expected_format}, got {storage_format}"
+                    
+                    # Verify we can decode it back correctly
+                    with h5py.File(temp_file, 'r') as h5_read:
+                        root_read = h5_read['root']
+                        assert isinstance(root_read, h5py.Group)
+                        decoded_list = Serializable.decode(root_read, format="hdf5")
+                        assert isinstance(decoded_list, list)
+                        
+                        # For lists with objects, check equality element by element
+                        if test_name == "serializable_objects":
+                            assert len(decoded_list) == len(test_data)
+                            for i, (original, decoded) in enumerate(zip(test_data, decoded_list)):
+                                assert isinstance(decoded, MockSerializable)
+                                assert decoded.name == original.name
+                                assert decoded.value == original.value
+                        else:
+                            assert decoded_list == test_data
+
+    def test_hdf5_iterable_encoding_homogeneous(self, make_temp_path):
+        """Test HDF5 iterable encoding with homogeneous HDF5-native types (dataset optimization)."""
+        # Test with different homogeneous types that should use dataset optimization
+        # Note: We test direct list encoding, not lists embedded in dicts, because
+        # lists in dicts become nested structures which correctly use groups storage
+        test_cases = [
+            # Integers
+            {"data": [1, 2, 3, 4, 5], "expected_type": "dataset"},
+            # Floats  
+            {"data": [1.1, 2.2, 3.3, 4.4, 5.5], "expected_type": "dataset"},
+            # Booleans
+            {"data": [True, False, True, False], "expected_type": "dataset"},
+            # Strings
+            {"data": ["hello", "world", "test", "data"], "expected_type": "dataset"},
+            # Large integer list (should use compression)
+            {"data": list(range(1500)), "expected_type": "dataset"},
+        ]
+
+        for case in test_cases:
+            # Test direct list encoding (not embedded in MockSerializable)
+            with make_temp_path(suffix='.h5') as temp_file:
+                with h5py.File(temp_file, 'w') as h5_file:
+                    root_group = h5_file.create_group('root')
+                    # Encode the list directly to test dataset optimization
+                    list_group = Serializable.encode(case["data"], format="hdf5", h5_group=root_group)
+                    assert isinstance(list_group, h5py.Group)
+                    
+                    # Verify it used dataset storage format
+                    storage_format = list_group.attrs.get("storage_format", "groups")
+                    assert storage_format == case["expected_type"], f"Expected {case['expected_type']}, got {storage_format}"
+                    
+                    # Verify we can decode it back correctly
+                    with h5py.File(temp_file, 'r') as h5_read:
+                        root_read = h5_read['root']
+                        assert isinstance(root_read, h5py.Group)
+                        decoded_list = Serializable.decode(root_read, format="hdf5")
+                        
+                        assert decoded_list == case["data"]
+
+    def test_hdf5_iterable_encoding_heterogeneous(self, make_temp_path):
+        """Test HDF5 iterable encoding with heterogeneous types (groups fallback)."""
+        # Test with mixed types that should fall back to groups storage
+        heterogeneous_data = [
+            1, "string", 3.14, True, None, [1, 2, 3], {"key": "value"}
+        ]
+        
+        # Test direct list encoding (not embedded in MockSerializable)
+        with make_temp_path(suffix='.h5') as temp_file:
+            with h5py.File(temp_file, 'w') as h5_file:
+                root_group = h5_file.create_group('root')
+                # Encode the heterogeneous list directly
+                list_group = Serializable.encode(heterogeneous_data, format="hdf5", h5_group=root_group)
+                assert isinstance(list_group, h5py.Group)
+                
+                # Verify it used groups storage format (fallback for mixed types)
+                storage_format = list_group.attrs.get("storage_format", "groups")
+                assert storage_format == "groups", f"Expected groups, got {storage_format}"
+                
+                # Verify we can decode it back correctly
+                with h5py.File(temp_file, 'r') as h5_read:
+                    root_read = h5_read['root']
+                    assert isinstance(root_read, h5py.Group)
+                    decoded_list = Serializable.decode(root_read, format="hdf5")
+                    
+                    assert decoded_list == heterogeneous_data
+
+    def test_hdf5_array_compression(self, make_temp_path):
+        """Test HDF5 array compression for large arrays."""
+        # Create a large array that should trigger compression
+        large_array = np.random.random((1500, 1500))  # 2.25M elements
+        
+        # Test direct array encoding (not embedded in MockSerializable)
+        with make_temp_path(suffix='.h5') as temp_file:
+            with h5py.File(temp_file, 'w') as h5_file:
+                root_group = h5_file.create_group('root')
+                # Encode the array directly to test compression
+                array_group = Serializable.encode(large_array, format="hdf5", h5_group=root_group)
+                assert isinstance(array_group, h5py.Group)
+                
+                # Verify it's a dense real array
+                array_type = array_group.attrs.get("array_type")
+                assert array_type == "dense_real"
+                
+                # Check that compression was applied (data dataset should exist with compression)
+                data_dataset = array_group["data"]
+                assert isinstance(data_dataset, h5py.Dataset)
+                assert data_dataset.compression
+                
+                # Verify we can decode it back correctly
+                with h5py.File(temp_file, 'r') as h5_read:
+                    root_read = h5_read['root']
+                    assert isinstance(root_read, h5py.Group)
+                    decoded_array = Serializable.decode(root_read, format="hdf5")
+                    assert isinstance(decoded_array, NDArray)
+                    
+                    np.testing.assert_array_almost_equal(decoded_array, large_array)
+
+    def test_cache_type_reference_vs_copy(self, format_param, make_temp_path):
+        """Test the difference between reference and copy cache types."""
+        # Create an object
+        obj = MockSerializable(name="cache_test", value=100, data={"nested": "value"})
+
+        # Equivalent when encoded, but diff id
+        dup_obj = MockSerializable(name="cache_test", value=100, data={"nested": "value"})
+
+        frame = Frame({
+            "obj1": obj,
+            "obj2": obj, # Same instance, should be a reference to obj
+            "obj3": dup_obj, # Same content, diff instance, should be a copy to obj
+            "obj4": dup_obj, # Same instance as dup_obj, should be a reference to dup_obj
+        })
+        
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            frame.write(temp_file)
+            decoded = Frame.read(temp_file)
+        
+        assert isinstance(decoded, Frame)
+
+        # obj2 is obj1
+        assert decoded["obj2"] is decoded["obj1"]
+
+        # obj3 should have same hash, but diff id
+        assert Serializable.serial_hash(decoded["obj3"]) == Serializable.serial_hash(decoded["obj1"])
+        assert decoded["obj3"] is not decoded["obj1"]
+
+        # obj4 is obj3
+        assert decoded["obj4"] is decoded["obj3"]

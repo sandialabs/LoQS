@@ -5,18 +5,41 @@ name: LoQS Tests + Docs
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, review_requested]
   workflow_dispatch: # Allow manual running from GitHub
 
 jobs:
-  unit-tests:
+  minimal-unit-tests:
+    # Run only on feature branches
+    if: ${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest] # No Mac for speed
-        python-version: ['3.11', '3.12']
+        os: [ubuntu-latest, windows-latest]  # No Mac for speed
+        python-version: ['3.12'] # stim 1.15 only has 3.12 Windows wheels, pymatching 2.3.1 only has 3.13 Windows wheels
         loqs-optional: ["all"]
     uses: ./.github/workflows/reusable-loqs.yml
-    name: Run LoQS tests
+    name: Run minimal LoQS tests
+    with:
+      os: ${{ matrix.os }}
+      python-version: ${{ matrix.python-version }}
+      loqs-optional: ${{ matrix.loqs-optional }}
+    
+  full-unit-tests:
+     # Run only on non-draft PRs or pushes into main
+    if: >
+      ${{
+        (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.pull_request.draft == false) ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+        loqs-optional: ["test", "all"] # Test is no backends/dask for minimal install testing
+    uses: ./.github/workflows/reusable-loqs.yml
+    name: Run complete LoQS tests
     with:
       os: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
@@ -24,11 +47,11 @@ jobs:
   
   docs:
     runs-on: ubuntu-latest
-    needs: unit-tests
-    # Run only on PRs or pushes into main
+    needs: full-unit-tests
+    # Run only on non-draft PRs or pushes into main
     if: >
       ${{
-        (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+        (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.pull_request.draft == false) ||
         (github.event_name == 'push' && github.ref == 'refs/heads/main')
       }}
     steps:

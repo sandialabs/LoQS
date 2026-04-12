@@ -2,6 +2,12 @@
 
 import pytest
 
+# TODO: Rework to run with native backend only if failure to import
+quantumsim = pytest.importorskip("quantumsim")
+pygsti = pytest.importorskip("pygsti")
+stim = pytest.importorskip("stim")
+
+
 from loqs.backends import GateRep, PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane

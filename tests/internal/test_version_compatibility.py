@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+quantumsim = pytest.importorskip("quantumsim")
+
 from loqs.backends.state.qsimstate import QSimQuantumState
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal.serializable import IMPORT_LOCATION_CHANGES_BY_VERSION, Serializable

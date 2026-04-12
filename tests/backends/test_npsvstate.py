@@ -246,7 +246,7 @@ class TestNumPyStatevectorQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         # Start in the 10 state
         state10 = SVState([1, 0], ["Q0", "Q1"])
         
@@ -259,15 +259,12 @@ class TestNumPyStatevectorQuantumState:
         test, _ = state10.apply_reps([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
         test.apply_reps_inplace([RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY)])
 
-        fd, tmp_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as tmp_path:
             test.write(tmp_path)
-            test2: SVState = SVState.read(tmp_path)
-        finally:
-            os.unlink(tmp_path)
+            test2 = SVState.read(tmp_path)
         
         # And finish applying
+        assert isinstance(test2, SVState)
         test2.apply_reps_inplace([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
         
         # The expected 11 state

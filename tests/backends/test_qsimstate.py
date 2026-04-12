@@ -8,22 +8,13 @@ import mock
 import numpy as np
 import pytest
 
-try:
-    from quantumsim.sparsedm import SparseDM as _SparseDM
-    from quantumsim import ptm as _ptm
-    
-    NO_QSIM = False
-except ImportError:
-    NO_QSIM = True
+quantumsim = pytest.importorskip("quantumsim")
+from quantumsim.sparsedm import SparseDM as _SparseDM
+from quantumsim import ptm as _ptm
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
 from loqs.backends import QSimQuantumState as QSimState
 
-
-@pytest.mark.skipif(
-    NO_QSIM,
-    reason="Skipping quantumsim backend tests due to failed import"
-)
 class TestQSimQuantumState:
 
     def _check(self, state, expected_state):
@@ -239,7 +230,7 @@ class TestQSimQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         # Start in the 10 state
         state10 = QSimState(2, ["Q0", "Q1"])
         state10.state.set_bit("Q0", 1)
@@ -260,15 +251,12 @@ class TestQSimQuantumState:
         # Don't force propagation here
         # So serialization should both serialize DM and operations to be applied
 
-        fd, tmp_path = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        try:
+        with make_temp_path(suffix='.json') as tmp_path:
             test.write(tmp_path)
-            test2: QSimState = QSimState.read(tmp_path)
-        finally:
-            os.unlink(tmp_path)
+            test2 = QSimState.read(tmp_path)
         
         # And finish applying
+        assert isinstance(test2, QSimState)
         test2.apply_reps_inplace([RepTuple(h_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR)])
         test2.state.combine_and_apply_single_ptm("Q0") # Actually force propogation
         test2.state.combine_and_apply_single_ptm("Q1") # Actually force propogation
