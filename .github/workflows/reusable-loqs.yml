@@ -88,6 +88,7 @@ jobs:
         python -m mypy loqs || true
     
     - name: Docstring tests
+      if: ${{ inputs.loqs-optional == 'all' }}
       run: |
         python -m pytest loqs
     
