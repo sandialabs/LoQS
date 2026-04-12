@@ -67,7 +67,6 @@ class BaseEncoder(ABC):
         to_encode: Serializable,
         encode_cache: EncodeCache = None,
         ignore_no_serialize_flags: bool = False,
-        h5_group: h5py.Group | None = None,
     ):
         raise NotImplementedError()
 
@@ -80,9 +79,7 @@ class BaseEncoder(ABC):
 
     @staticmethod
     @abstractmethod
-    def encode_cached_obj(
-        cache_id: int, h5_group: h5py.Group | None = None
-    ) -> Encoded:
+    def encode_cached_obj(cache_id: int) -> Encoded:
         raise RuntimeError()
 
     @staticmethod
@@ -98,7 +95,6 @@ class BaseEncoder(ABC):
         to_encode: EncodableIterables,
         encode_cache: EncodeCache = None,
         ignore_no_serialize_flags: bool = False,
-        h5_group: h5py.Group | None = None,
     ) -> Encoded:
         raise NotImplementedError()
 
@@ -115,7 +111,6 @@ class BaseEncoder(ABC):
         to_encode: dict,
         encode_cache: EncodeCache = None,
         ignore_no_serialize_flags: bool = False,
-        h5_group: h5py.Group | None = None,
     ) -> Encoded:
         raise NotImplementedError()
 
@@ -128,9 +123,7 @@ class BaseEncoder(ABC):
 
     @staticmethod
     @abstractmethod
-    def encode_array(
-        to_encode: EncodableArrays, h5_group: h5py.Group | None = None
-    ):
+    def encode_array(to_encode: EncodableArrays):
         raise NotImplementedError()
 
     @staticmethod
@@ -140,7 +133,7 @@ class BaseEncoder(ABC):
 
     @staticmethod
     @abstractmethod
-    def encode_class(to_encode: type, h5_group: h5py.Group | None = None):
+    def encode_class(to_encode: type):
         raise NotImplementedError()
 
     @staticmethod
@@ -150,9 +143,7 @@ class BaseEncoder(ABC):
 
     @staticmethod
     @abstractmethod
-    def encode_function(
-        to_encode: Callable, h5_group: h5py.Group | None = None
-    ) -> Encoded:
+    def encode_function(to_encode: Callable) -> Encoded:
         pass
 
     @staticmethod
@@ -162,9 +153,7 @@ class BaseEncoder(ABC):
 
     @staticmethod
     @abstractmethod
-    def encode_primitive(
-        to_encode: EncodablePrimitives, h5_group: h5py.Group | None = None
-    ):
+    def encode_primitive(to_encode: EncodablePrimitives):
         raise NotImplementedError()
 
     @staticmethod

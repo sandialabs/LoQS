@@ -91,11 +91,13 @@ SERIALIZATION_VERSION = 1
 1: HDF5 encoding now available. Backwards compatible to version 0.
 """
 
+
 @dataclass
-class DeferredRef():
-    """Helper class to keep track of deferred references.
-    """
+class DeferredRef:
+    """Helper class to keep track of deferred references."""
+
     cache_id: int
+
 
 # Encoding types
 EncodableArrays: TypeAlias = NDArray | SPSArray
@@ -400,7 +402,7 @@ class Serializable:
             )
         else:
             raise ValueError(f"Invalid `format` value for load: {format}")
-        
+
         # At this point, at least outer object should not be a deferred reference
         assert not isinstance(decoded, DeferredRef)
 
@@ -662,15 +664,13 @@ class Serializable:
         """
         from loqs.internal.encoder import JSONEncoder, HDF5Encoder
 
-        if format == "json":
+        if format in ["json", "json.gz"]:
             encode_uncached_obj = functools.partial(
                 JSONEncoder.encode_uncached_obj,
                 encode_cache=encode_cache,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
-            encode_cached_obj = functools.partial(
-                JSONEncoder.encode_cached_obj, h5_group=None
-            )
+            encode_cached_obj = JSONEncoder.encode_cached_obj
             encode_iterable = functools.partial(
                 JSONEncoder.encode_iterable,
                 encode_cache=encode_cache,
@@ -681,18 +681,10 @@ class Serializable:
                 encode_cache=encode_cache,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
-            encode_array = functools.partial(
-                JSONEncoder.encode_array, h5_group=None
-            )
-            encode_primitive = functools.partial(
-                JSONEncoder.encode_primitive, h5_group=None
-            )
-            encode_class = functools.partial(
-                JSONEncoder.encode_class, h5_group=None
-            )
-            encode_function = functools.partial(
-                JSONEncoder.encode_function, h5_group=None
-            )
+            encode_array = JSONEncoder.encode_array
+            encode_primitive = JSONEncoder.encode_primitive
+            encode_class = JSONEncoder.encode_class
+            encode_function = JSONEncoder.encode_function
 
             if reset_encode_id:
                 JSONEncoder.ENCODE_ID = 0
@@ -746,7 +738,7 @@ class Serializable:
                 format,
                 encode_cache,
                 encode_cached_obj,
-                encode_uncached_obj
+                encode_uncached_obj,
             )
 
         # Handle dictionaries
@@ -774,7 +766,6 @@ class Serializable:
             return encode_primitive(obj)
 
         raise ValueError("Unknown type to encode")
-
 
     @staticmethod
     def decode(  # noqa: C901
@@ -1028,9 +1019,15 @@ class Serializable:
             ) from e
 
         return c
-    
+
     @staticmethod
-    def _encode_Serializable(obj, format: str, encode_cache: EncodeCache, encode_cached_obj: Callable, encode_uncached_obj: Callable) -> Encoded:
+    def _encode_Serializable(
+        obj,
+        format: str,
+        encode_cache: EncodeCache,
+        encode_cached_obj: Callable,
+        encode_uncached_obj: Callable,
+    ) -> Encoded:
         from loqs.internal.encoder import JSONEncoder, HDF5Encoder
 
         # Get serial ID for this object
@@ -1055,7 +1052,7 @@ class Serializable:
                         cache_type="reference",
                         reference_cache_id=cache_id,
                     )
-        
+
         # Proceed with caching, look up id
         cache_id = (
             JSONEncoder.ENCODE_ID
@@ -1074,7 +1071,7 @@ class Serializable:
             # Same serial content but different instance, create a copy
             # First entry in list is the source object
             source_cache_id = encode_cache[serial_hash][0][1]
-            
+
             # Add to cache (all other entries in list are copy objects)
             encode_cache[serial_hash].append((object_id, cache_id))
 
@@ -1084,7 +1081,7 @@ class Serializable:
                 reference_cache_id=source_cache_id,
                 source_cache_id=cache_id,
             )
-        
+
         # Otherwise, cache-miss so we create a new source
         encode_cache[serial_hash] = [(object_id, cache_id)]
 
@@ -1093,13 +1090,11 @@ class Serializable:
 
         # Add cache info to result
         if format == "json":
-            result.update(
-                {"cache_type": "source", "cache_id": cache_id}
-            )
+            result.update({"cache_type": "source", "cache_id": cache_id})
         else:
             result.attrs["cache_type"] = "source"
             result.attrs["cache_id"] = cache_id
-        
+
         return result
 
     @staticmethod

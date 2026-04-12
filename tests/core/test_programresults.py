@@ -251,14 +251,14 @@ class TestProgramResults:
             checkpoint_dir.mkdir()
             
             # Create multiple ProgramResults with different shots
-            results1 = ProgramResults(name="Worker 1")
+            results1 = ProgramResults(name="Worker 1", lazy_loading_enabled=False)
             for i in range(3):
                 history = History()
                 frame = Frame({"worker": 1, "shot": i})
                 history.append(frame)
                 results1.add_shot(i, history)
             
-            results2 = ProgramResults(name="Worker 2")
+            results2 = ProgramResults(name="Worker 2", lazy_loading_enabled=False)
             for i in range(3, 6):
                 history = History()
                 frame = Frame({"worker": 2, "shot": i})

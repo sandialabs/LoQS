@@ -31,7 +31,6 @@ class JSONEncoder(BaseEncoder):
         to_encode,
         encode_cache=None,
         ignore_no_serialize_flags=False,
-        h5_group=None,
     ):
         assert isinstance(to_encode, Serializable)
 
@@ -106,7 +105,7 @@ class JSONEncoder(BaseEncoder):
             try:
                 cache_id = encoded["cache_id"]
 
-                decode_cache[cache_id] = DeferredRef(cache_id) # type: ignore
+                decode_cache[cache_id] = DeferredRef(cache_id)  # type: ignore
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
 
@@ -168,7 +167,6 @@ class JSONEncoder(BaseEncoder):
     @staticmethod
     def encode_cached_obj(
         cache_id,
-        h5_group=None,
         cache_type="reference",
         reference_cache_id=None,
         source_cache_id=None,
@@ -267,7 +265,6 @@ class JSONEncoder(BaseEncoder):
         to_encode,
         encode_cache=None,
         ignore_no_serialize_flags=False,
-        h5_group=None,
     ):
         if isinstance(to_encode, list):
             name = "list"
@@ -287,7 +284,6 @@ class JSONEncoder(BaseEncoder):
                 format="json",
                 encode_cache=encode_cache,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
-                h5_group=None,
             )
             encoded_items.append(encoded_item)
 
@@ -346,7 +342,6 @@ class JSONEncoder(BaseEncoder):
         to_encode,
         encode_cache=None,
         ignore_no_serialize_flags=False,
-        h5_group=None,
     ):
         """
         Encode a dictionary (JSON version).
@@ -355,8 +350,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         d : dict
             The dictionary to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
         encode_cache : dict
             Dictionary mapping object hashes to serialization IDs.
         ignore_no_serialize_flags : bool
@@ -439,7 +432,7 @@ class JSONEncoder(BaseEncoder):
         return decoded_dict
 
     @staticmethod
-    def encode_array(to_encode, h5_group=None):
+    def encode_array(to_encode):
 
         def _serialize_matrix_component(arr):
             """Inline helper for serializing matrix components."""
@@ -565,7 +558,7 @@ class JSONEncoder(BaseEncoder):
         return decoded
 
     @staticmethod
-    def encode_class(to_encode, h5_group=None):
+    def encode_class(to_encode):
         """
         Encode a class/type (JSON version).
 
@@ -573,8 +566,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         to_encode : type
             The class/type to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
 
         Returns
         -------
@@ -627,7 +618,7 @@ class JSONEncoder(BaseEncoder):
         )
 
     @staticmethod
-    def encode_function(to_encode, h5_group=None):
+    def encode_function(to_encode):
         """
         Encode a callable function (JSON version).
 
@@ -635,8 +626,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         func : callable
             The function to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
 
         Returns
         -------
@@ -651,7 +640,7 @@ class JSONEncoder(BaseEncoder):
         }
 
     @staticmethod
-    def decode_function(encoded, h5_group=None):
+    def decode_function(encoded):
         """
         Decode a callable function (JSON version).
 
@@ -690,7 +679,7 @@ class JSONEncoder(BaseEncoder):
         return Serializable.eval_function_str(source, version)
 
     @staticmethod
-    def encode_primitive(to_encode, h5_group=None):
+    def encode_primitive(to_encode):
         """
         Encode a primitive value (JSON version).
 
@@ -698,8 +687,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         to_encode : Any
             The primitive value to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
 
         Returns
         -------

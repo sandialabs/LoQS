@@ -117,9 +117,12 @@ class HDF5Encoder(BaseEncoder):
 
         # Handle circular references by adding a placeholder to decode_cache early
         cache_id = None
-        if encoded.attrs.get("cache_type", None) == "source" and decode_cache is not None:
+        if (
+            encoded.attrs.get("cache_type", None) == "source"
+            and decode_cache is not None
+        ):
             try:
-                cache_id = int(encoded.attrs["cache_id"]) # type: ignore
+                cache_id = int(encoded.attrs["cache_id"])  # type: ignore
                 decode_cache[cache_id] = DeferredRef(cache_id)
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
@@ -145,7 +148,11 @@ class HDF5Encoder(BaseEncoder):
         decoded = cls.from_decoded_attrs(attr_dict)
 
         # Replace the placeholder with the actual object
-        if decode_cache is not None and cache_id is not None and cache_id in decode_cache:
+        if (
+            decode_cache is not None
+            and cache_id is not None
+            and cache_id in decode_cache
+        ):
             decode_cache[cache_id] = decoded  # type: ignore
 
         return decoded
@@ -206,13 +213,13 @@ class HDF5Encoder(BaseEncoder):
 
         try:
             if cache_type == "reference":
-                cache_id = int(encoded.attrs["cache_id"]) # type: ignore
+                cache_id = int(encoded.attrs["cache_id"])  # type: ignore
                 cached_obj = decode_cache[cache_id]
                 return cached_obj
-            
+
             # Get the reference object and create a copy
-            reference_cache_id = int(encoded.attrs["reference_cache_id"]) # type: ignore
-            source_cache_id = int(encoded.attrs["source_cache_id"]) # type: ignore
+            reference_cache_id = int(encoded.attrs["reference_cache_id"])  # type: ignore
+            source_cache_id = int(encoded.attrs["source_cache_id"])  # type: ignore
 
             # Check if reference object is available
             if reference_cache_id not in decode_cache:
@@ -274,46 +281,12 @@ class HDF5Encoder(BaseEncoder):
         ):
             # Use HDF5 dataset for optimized storage
             list_group.attrs["storage_format"] = "dataset"
-
-            if isinstance(first_element, str):
-                # For strings, use fixed-length string dtype
-                # Find maximum string length to determine dtype
-                max_len = (
-                    max(len(s) for s in to_encode_list) if to_encode_list else 0
-                )
-                dtype = f"S{max_len + 1}"  # +1 for null terminator
-                data = np.array(to_encode_list, dtype=dtype)
-                list_group.create_dataset("data", data=data, dtype=dtype)
-            elif isinstance(first_element, bytes):
-                # For bytes, use fixed-length bytes dtype
-                # Find maximum bytes length to determine dtype
-                max_len = (
-                    max(len(b) for b in to_encode_list) if to_encode_list else 0
-                )
-                dtype = f"S{max_len + 1}"  # +1 for null terminator
-                data = np.array(
-                    [
-                        b.decode("utf-8", errors="replace")
-                        for b in to_encode_list
-                    ],
-                    dtype=dtype,
-                )
-                list_group.create_dataset("data", data=data, dtype=dtype)
-                list_group.attrs["original_type"] = "bytes"
-            else:
-                # For numeric types, determine appropriate dtype
-                data = np.array(to_encode_list)
-                dtype = data.dtype
-
-                # Create dataset with compression for large arrays
-                if len(to_encode_list) > 1000:
-                    list_group.create_dataset(
-                        "data", data=data, dtype=dtype, compression="gzip"
-                    )
-                else:
-                    list_group.create_dataset(
-                        "data", data=data, dtype=dtype
-                    )
+            # By default, these are fixed-size
+            # Users can replace them with extendable ones as needed
+            # by overriding the dataset with _encode_iterable_dataset(..., ..., True)
+            HDF5Encoder._encode_iterable_dataset(
+                list_group, to_encode_list, False
+            )
         else:
             # Mixed native types or non-native types - fall back to groups
             list_group.attrs["storage_format"] = "groups"
@@ -328,6 +301,48 @@ class HDF5Encoder(BaseEncoder):
                 )
 
         return list_group
+
+    @staticmethod
+    def _encode_iterable_dataset(
+        list_group, to_encode_list, extendable_dataset
+    ):
+        first_element = to_encode_list[0]
+        if isinstance(first_element, (str, bytes)):
+            # Find maximum str/bytes length to determine dtype
+            max_len = (
+                max(len(b) for b in to_encode_list) if to_encode_list else 0
+            )
+            dtype = f"S{max_len + 1}"  # +1 for null terminator
+
+            if isinstance(first_element, bytes):
+                data = np.array(
+                    [
+                        b.decode("utf-8", errors="replace")
+                        for b in to_encode_list
+                    ],
+                    dtype=dtype,
+                )
+                list_group.attrs["original_type"] = "bytes"
+            else:
+                data = np.array(to_encode_list, dtype=dtype)
+        else:
+            # For numeric types, determine appropriate dtype
+            data = np.array(to_encode_list)
+            dtype = data.dtype
+
+        # If either one of these are triggered, chunking is also silently used
+        # We let HDF5 guess for chunk size (i.e. we don't provide a size)
+        shape = data.shape
+        maxshape = (None, *shape[1:]) if extendable_dataset else None
+        compression = "gzip" if len(to_encode_list) > 1000 else None
+
+        list_group.create_dataset(
+            "data",
+            data=data,
+            dtype=dtype,
+            compression=compression,
+            maxshape=maxshape,
+        )
 
     @staticmethod
     def decode_iterable(encoded, decode_cache=None):
