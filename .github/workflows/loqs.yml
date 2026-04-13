@@ -45,15 +45,24 @@ jobs:
       python-version: ${{ matrix.python-version }}
       loqs-optional: ${{ matrix.loqs-optional }}
   
-  docs:
+  # This is just so we can have a check for ALL matrix tests passing on PRs
+  all-tests-passed:
     runs-on: ubuntu-latest
     needs: full-unit-tests
-    # Run only on non-draft PRs or pushes into main
     if: >
       ${{
         (github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.pull_request.draft == false) ||
         (github.event_name == 'push' && github.ref == 'refs/heads/main')
       }}
+    steps:
+      - name: Check matrix results
+        run: |
+          result="${{ needs.full-unit-tests.result }}"
+          if [ "$result" == "success" ]; then exit 0; else exit 1; fi
+  
+  docs:
+    runs-on: ubuntu-latest
+    needs: full-unit-tests
     steps:
     - uses: actions/checkout@v4
 
