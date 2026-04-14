@@ -1,0 +1,36 @@
+
+site_name: LoQS Documentation
+nav:
+  - index.md
+  - Getting Started:
+    - getting-started/install.md
+    - getting-started/overview.md
+    - getting-started/workflow.md
+  - Object Quickstart:
+    - Histories:
+      - object-quickstart/history.md
+      - object-quickstart/frame.md
+      - object-quickstart/recordables.md
+    - Instructions:
+      - object-quickstart/instructions.md
+      - object-quickstart/stack.md
+      - object-quickstart/builders.md
+    - Codes:
+      - object-quickstart/codes.md
+      - object-quickstart/codepacks.md
+    - object-quickstart/program.md
+    - object-quickstart/backends.md
+  - Tutorials:
+    - tutorials/buildinstruction.md
+    - tutorials/buildqeccode.md
+    - tutorials/daskparallelism.md
+  - Examples:
+    - examples/runlogst.md
+    - examples/fttests.md
+    - examples/timedepmodel.md
+  - Developer Zone:
+    - dev-zone/devguide.md
+theme: readthedocs
+plugins:
+  - marimo:
+      display_code: true

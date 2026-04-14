@@ -106,3 +106,7 @@ exclude = [
     "**/pycache",
     "**/venv"
 ]
+
+[tool.marimo.runtime]
+on_cell_change = "lazy"
+auto_reload = "lazy"

@@ -1,15 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
-kernelspec:
-  display_name: Python 3
-  language: python
-  name: python3
+title: Stack
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # Instruction Labels and Stack
 
@@ -44,7 +40,7 @@ It is implemented this way so that previous stacks (which are commonly stored in
 
 We have already implicitly seen the `InstructionStack` at work in the [workflow example](/markdown/workflow), but we can highlight some more of its features here.
 
-```{code-cell}
+```python {marimo}
 from loqs.core import InstructionStack
 
 # Here we take the stack from the workflow example
@@ -60,7 +56,7 @@ print(stack1)
 
 The `QuantumProgram` will pop instructions off the `InstructionStack` to execute them.
 
-```{code-cell}
+```python {marimo}
 inst_label, stack2 = stack1.pop_instruction()
 print(inst_label)
 print(stack2)
@@ -68,7 +64,7 @@ print(stack2)
 
 Adaptive instructions may prepend new instructions to the `InstructionStack`.
 
-```{code-cell}
+```python {marimo}
 stack3 = stack2.insert_instruction(0, ("New Instruction Label", "L0"))
 print(stack3)
 ```

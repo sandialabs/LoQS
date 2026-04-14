@@ -1,15 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
-kernelspec:
-  display_name: Python 3
-  language: python
-  name: python3
+title: History
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # History
 
@@ -25,7 +21,7 @@ You can initialize a `History` from a list of `Frame` objects, including an empt
 We will cover the `Frame` in the next section, but for now we pass in some dummy data/log string purely for demonstrative purposes.
 ```
 
-```{code-cell}
+```python {marimo}
 from loqs.core import History, Frame
 
 test_frames = [Frame({"index": i}, f"Title {i}") for i in range(5)]
@@ -35,14 +31,14 @@ history = History(test_frames)
 
 Printing a `History` will also print all the underlying `Frame` objects.
 
-```{code-cell}
+```python {marimo}
 print(history)
 ```
 
 The core editing operation for a `History` is `append`, which adds a new `Frame`.
 This operation returns a new `History`, maintaining the objects' immutability.
 
-```{code-cell}
+```python {marimo}
 new_frame = Frame({"index": 5}, "New frame")
 history.append(new_frame)
 print(history)
@@ -51,9 +47,8 @@ print(history)
 The `History` uses `collections.abc.Sequence` as a base, rather than `collections.abc.MutableSequence`.
 As a result, trying to set/override an existing `Frame` will error.
 
-```{code-cell}
-:tags: [raises-exception]
-
+```python {marimo}
+# Cell tags: raises-exception
 # TypeError expected!
 history[0] = new_frame
 ```
@@ -79,12 +74,10 @@ If the key exists in the new `Frame`, the `History` goes back and expires that k
 
 To showcase this, let's build our previous `History` example iteratively, but set `index` to be expiring. This means only the latest `index` should be available.
 
-```{code-cell}
-expiring_history = History(None, expiring_keys=["index"])
-
-for tf in test_frames:
-    expiring_history.append(tf)
-
+```python {marimo}
+expiring_history = History([], expiring_keys=['index'])
+for _tf in test_frames:
+    expiring_history.append(_tf)
 print(expiring_history)
 ```
 
@@ -102,15 +95,13 @@ If a key is not available, the `Frame` is updated with the previous frame's valu
 To showcase this, let's build our previous `History` example iteratively, but this time add a `'data'` key that we want to propagate.
 We'll set this on frames 0 and 3 so we can see cases where the key both exists and doesn't exist.
 
-```{code-cell}
+```python {marimo}
 # This Frame functionality is covered in the next section
-test_frames[0] = test_frames[0].update({"data": "Dummy data 1"})
-test_frames[3] = test_frames[3].update({"data": "Dummy data 2"})
-
-propagating_history = History([], propagating_keys=["data"])
-for tf in test_frames:
-    propagating_history.append(tf)
-
+test_frames[0] = test_frames[0].update({'data': 'Dummy data 1'})
+test_frames[3] = test_frames[3].update({'data': 'Dummy data 2'})
+propagating_history = History([], propagating_keys=['data'])
+for _tf in test_frames:
+    propagating_history.append(_tf)
 print(propagating_history)
 ```
 
@@ -121,13 +112,13 @@ Organizing the data by `Frame` makes a lot of sense during program execution;
 however, for post-run analysis, we often want to pull out certain pieces of data from a `Frame` (or all of them).
 One can use `History.collect_data()` for this purpose, which takes a frame key and frame index/set of indices (including the special argument `"all"`) and returns the object/list of objects, respectively.
 
-```{code-cell}
+```python {marimo}
 # We can pull an entry from the last frame
 last_index = propagating_history.collect_data("index", -1)
 print(last_index)
 ```
 
-```{code-cell}
+```python {marimo}
 # We can also pull an entry from all frames (or any subset)
 all_data = propagating_history.collect_data("data", "all")
 print(all_data)

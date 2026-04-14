@@ -1,11 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
+title: Codes
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # QEC Codes and Patches
 

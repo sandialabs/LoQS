@@ -1,15 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
-kernelspec:
-  display_name: Python 3
-  language: python
-  name: python3
+title: Buildinstruction
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # Building a Complex Instruction
 
@@ -33,7 +29,7 @@ Branches in the flowchart will turn into `if/else` statements in the code that i
 
 We will use the `PyGSTiPhysicalCircuit` as our [circuit backend](circuit-backends).
 
-```{code-cell}
+```python {marimo}
 from collections.abc import Sequence
 from typing import Mapping
 
@@ -52,7 +48,7 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 ```
 
-```{code-cell}
+```python {marimo}
 # We will need to define a set to template qubits for physical circuits
 template_qubits = ["A0", "A1"] + [f"D{i}" for i in range(5)]
 
@@ -70,7 +66,7 @@ Our part I `Instruction` is going to:
     - Requires the stack and patch label
     - Generate a new stack
 
-```{code-cell}
+```python {marimo}
 def partI_apply_fn(
     circuit: BasePhysicalCircuit,
     model: BaseNoiseModel,
@@ -105,10 +101,10 @@ def partI_apply_fn(
     return Frame(frame_data)
 ```
 
-Now we consider what data we want to store with this `Instruction`. 
+Now we consider what data we want to store with this `Instruction`.
 Similar to other physical circuit instructions, we will store the physical circuit as well as any flags we pass in (just `inplace` in this case).
 
-```{code-cell}
+```python {marimo}
 measI_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -132,7 +128,7 @@ partI_data = {
 Since we are keeping a physical circuit in the `data`, we need to ensure that our `map_qubits_fn` maps this appropriately.
 Looking ahead, it turns out that this `map_qubits_fn` will be sufficient for all of the `Instruction` implementations, so we'll name it without a suffix.
 
-```{code-cell}
+```python {marimo}
 def map_qubits_fn(
     qubit_mapping: Mapping[str, str],
     circuit: BasePhysicalCircuit,
@@ -145,7 +141,7 @@ def map_qubits_fn(
 
 Finally we have all the components to define the entire instruction!
 
-```{code-cell}
+```python {marimo}
 instructions["Adaptive Measure Part I"] = Instruction(
     partI_apply_fn,
     partI_data,
@@ -160,7 +156,7 @@ We can follow a similar pattern part II with one major difference: in this case,
 
 Here, we choose to use a parameter alias to showcase that functionality.
 
-```{code-cell}
+```python {marimo}
 def partII_apply_fn(
     circuit: BasePhysicalCircuit,
     model: BaseNoiseModel,
@@ -204,7 +200,7 @@ def partII_apply_fn(
     return Frame(frame_data)
 ```
 
-```{code-cell}
+```python {marimo}
 measII_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -225,12 +221,12 @@ partII_data = {
 }
 ```
 
-```{code-cell}
+```python {marimo}
 # This step is new for Part II!
 paramII_aliases = {"previous_outcome": "measurement_outcomes"}
 ```
 
-```{code-cell}
+```python {marimo}
 # Remember that this key must match what Part I put for instruction label
 instructions["Adaptive Measure Part II"] = Instruction(
     partII_apply_fn,
@@ -247,7 +243,7 @@ We again follow a similar pattern, except that this time a further modification 
 we need the past *two* measurement outcomes to do our conditional logic.
 We will achieve this by also modifying our parameter priorities.
 
-```{code-cell}
+```python {marimo}
 def partIII_apply_fn(
     circuit: BasePhysicalCircuit,
     model: BaseNoiseModel,
@@ -291,7 +287,7 @@ def partIII_apply_fn(
     return Frame(frame_data)
 ```
 
-```{code-cell}
+```python {marimo}
 measIII_circ = PyGSTiPhysicalCircuit(
     [
         ("Gh", "A0"),
@@ -312,14 +308,14 @@ partIII_data = {
 }
 ```
 
-```{code-cell}
+```python {marimo}
 paramIII_aliases = {"previous_outcomes": "measurement_outcomes"}
 
 # This part is new for Part III!
 paramIII_priorities = {"previous_outcomes": ["history[-2,-1]"]}
 ```
 
-```{code-cell}
+```python {marimo}
 # Make sure our key matches the forward reference in part II
 instructions["Adaptive Measure Part III"] = Instruction(
     partIII_apply_fn,
@@ -336,7 +332,7 @@ instructions["Adaptive Measure Part III"] = Instruction(
 The "decoder" circuit, or the $\ket{-}$ state unprep circuit, is simply a physical circuit instruction.
 In this case, we can just use the builder directly.
 
-```{code-cell}
+```python {marimo}
 state_unprep_circ = PyGSTiPhysicalCircuit(
     [
         [("Gcphase", "D0", "D4")],
@@ -373,14 +369,14 @@ instructions["Non-FT Minus Unprep"] = (
 
 Finally, we have our termination. In this case, we are just returning the previous outcome as the measurement.
 
-```{code-cell}
+```python {marimo}
 def term_apply_fn(measurement_outcomes: MeasurementOutcomes, meas_qubit: str) -> Frame:
     return Frame({"logical_measurement": measurement_outcomes[meas_qubit][0]})
 ```
 
 The caveat is that which qubit of the measured outcomes to return is dependent on the template qubits, so we need to store this as data.
 
-```{code-cell}
+```python {marimo}
 term_data = {"meas_qubit": "A0"}
 
 def term_map_qubits_fn(
@@ -391,7 +387,7 @@ def term_map_qubits_fn(
 
 We can keep the default parameter prioirities and have assigned no aliases, so can go straight to `Instruction` definition.
 
-```{code-cell}
+```python {marimo}
 # Make sure this key matches forward references from previous parts
 instructions["Adaptive Measure Termination"] = Instruction(
     term_apply_fn,

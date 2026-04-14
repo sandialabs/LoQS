@@ -11,6 +11,3 @@ This primary goal is supported by two subgoals:
 2. Allow for a flexible API to make defining new QEC operations as simple as possible
 
 In the rest of this documentation, we will describe how these subgoals have influenced the design philosophies of `LoQS` and showcase how to perform logical qubit simulations with `LoQS`.
-
-```{tableofcontents}
-```

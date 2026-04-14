@@ -1,11 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
+title: Builders
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # (Advanced) Instruction Builders
 
@@ -34,9 +34,7 @@ Rather than have constant forward references, we will only talk about the builde
 ```
 
 The documentation for the builders can be found in the [API documentation](/_autosummary/loqs.core.instructions.builders), and includes both the parameters to the builder function, as well as a short overview of the returned `Instruction`, including the apply function, the map qubits function (if needed), and any parameter aliases/priorities that need to be set.
-
-+++
-
+<!---->
 ## What's next?
 
 As mentioned above, consider seeing many of the builders in action in the ["Building a QEC Code" tutorial](/markdown/buildqeccode).

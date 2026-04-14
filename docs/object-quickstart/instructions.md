@@ -1,15 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
-kernelspec:
-  display_name: Python 3
-  language: python
-  name: python3
+title: Instructions
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # Instructions
 
@@ -36,7 +32,7 @@ Users are not intended to call `Instruction.apply()` directly like this.
 For the remainder of this section, we will be using an adder as an example `Instruction`.
 This will take an integer `data_val`(which would normally be provided from the last frame) and increment it by `add_val`.
 
-```{code-cell}
+```python {marimo}
 from loqs.core import Frame, Instruction
 
 def my_apply_fn1(data_val: int, add_val: int) -> Frame:
@@ -59,7 +55,7 @@ This can be stored in the `Instruction.data` attribute and set by the constructo
 
 In the case of our example, maybe we want to set the `add_val` to be part of the instruction data.
 
-```{code-cell}
+```python {marimo}
 # Define our Instruction with add_val as part of the data
 adder3 = Instruction(
     apply_fn=my_apply_fn1,
@@ -80,7 +76,7 @@ By default, the `map_qubits_fn` is a passthrough assuming no qubit labels need t
 The default has been good for our adder `Instruction` thus far, but we can make it not the case to show what happens when qubits need to be mapped.
 Instead of returning a bare `int`, let's return a dict with qubit label keys and store what that label is in `data`.
 
-```{code-cell}
+```python {marimo}
 from collections.abc import Mapping
 
 
@@ -111,7 +107,7 @@ print(frame4)
 
 Now that we have defined the `map_qubits_fn`, we should be able to use the `Instrument.map_qubits()` function to get a new `Instruction` with the new qubit labels.
 
-```{code-cell}
+```python {marimo}
 mapped_adder4 = adder4.map_qubits({"Q0": "Q1"})
 
 mapped_frame4 = mapped_adder4.apply(
@@ -175,7 +171,7 @@ The `Instruction.param_priorities` property does the aliasing when needed.
 We can make a version of our adder with custom priorities and aliases to showcase these features.
 Note that full use of this machinery requires context from a `QuantumProgram`, so we cannot show the full functionality here.
 
-```{code-cell}
+```python {marimo}
 # Define this with argument names that don't match frame/data keys
 def my_apply_fn3(dval: int, aval: int, qubit_label: str) -> Frame:
     new_val = dval + aval
@@ -204,13 +200,13 @@ adder5 = Instruction(
 print(adder5.param_priorities)
 ```
 
-```{code-cell}
+```python {marimo}
 # Similar to last example, manually extract from data for standalone example
-# Note that we are still using the aliased values here
+# Note that we need to use the original parameter names (dval, aval) not the aliased ones
 frame5 = adder5.apply(
-    data_val=2,
-    add_val=adder5.data["add_val"],
-    qubit_label=adder4.data["qubit_label"])
+    dval=2,
+    aval=adder5.data["add_val"],
+    qubit_label=adder5.data["qubit_label"])
 print(frame5)
 ```
 

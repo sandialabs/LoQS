@@ -1,15 +1,11 @@
 ---
-jupytext:
-  text_representation:
-    extension: .md
-    format_name: myst
-    format_version: 0.13
-    jupytext_version: 1.16.1
-kernelspec:
-  display_name: Python 3
-  language: python
-  name: python3
+title: Frame
+marimo-version: 0.23.1
 ---
+
+```python {marimo}
+import marimo as mo
+```
 
 # Frames
 
@@ -20,7 +16,7 @@ This allows for users to store any type of information that they want in a `Fram
 
 As we have already seen in the [History tutorial](/markdown/history), a `Frame` can be created from any `collections.abc.Mapping` object, most often a `dict`.
 
-```{code-cell}
+```python {marimo}
 from loqs.core import Frame
 
 frame = Frame({"int": 0, "data": "Dummy data"}, log="Log string for frame")
@@ -29,16 +25,16 @@ print(frame)
 
 The data in a `Frame` cannot be changed, but an updated copy of the `Frame` can be created with the `update()` function.
 
-```{code-cell}
-new_frame = frame.update({'int': 1})
-print(new_frame)
+```python {marimo}
+_new_frame = frame.update({'int': 1})
+print(_new_frame)
 ```
 
 By default, the log string is not changed during an update, but it can also be set if desired.
 
-```{code-cell}
-new_frame = frame.update({'int': 1}, new_log="With updated log")
-print(new_frame)
+```python {marimo}
+_new_frame = frame.update({'int': 1}, new_log='With updated log')
+print(_new_frame)
 ```
 
 ### Expired Keys
@@ -46,13 +42,12 @@ print(new_frame)
 Sometimes objects are updated in-place and we want to indicate that this key is no longer valid in an existing `Frame`.
 We can use the `expire()` function for this.
 
-
 ```{note}
 This will rarely need to be called by the user;
 instead, set `expiring_keys` in the relevant `History` constructor as described in the [History tutorial](history-expiring-keys).
 ```
 
-```{code-cell}
+```python {marimo}
 frame.expire("data")
 print(frame)
 ```

@@ -2,6 +2,7 @@
 __pycache__
 .pytest_cache
 .ipynb_checkpoints/
+__marimo__/
 
 .coverage*
 coverage.xml
