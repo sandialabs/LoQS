@@ -19,6 +19,9 @@ docs/**/_autosummary
 docs/**/*.ipynb
 docs/**/*.json
 docs/**/*.json.gz
+docs/.refcache
+site/
+docs/_gen_md
 
 checkpoints/
 

@@ -1,0 +1,46 @@
+site_name: LoQS API Reference
+
+nav:
+  - Reference: SUMMARY.md
+
+theme:
+  name: material
+  logo: logo_icon.png
+  custom_dir: docs/overrides
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+
+extra:
+  main_site_url: /
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - attr_list
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs_scripts/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_source: false
+            show_signature_annotations: true
+            separate_signature: true
+            heading_level: 2
+            members_order: source
+  - mkdocs-simple-hooks:
+      hooks:
+        on_post_page: docs_scripts.hooks:on_post_page

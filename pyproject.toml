@@ -54,9 +54,7 @@ dev = [
     "snakeviz"
 ]
 docs = [
-    "sphinx",
-    "jupyter-book<2",
-    "jupytext"
+    "mkdocs<2",
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]

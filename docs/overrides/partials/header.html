@@ -1,0 +1,42 @@
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="{{ lang.t('header') }}">
+
+    {# Drawer toggle (kept) #}
+    <label class="md-header__button md-icon" for="__drawer">
+      {% include ".icons/material/menu.svg" %}
+    </label>
+
+    {# Force logo link to main site #}
+    {% set main_url = config.extra.main_site_url | default('/') %}
+    <a href="{{ main_url }}" class="md-header__button md-logo" aria-label="{{ config.site_name }}">
+      {% if config.theme.logo %}
+        <img src="{{ config.theme.logo | url }}" alt="{{ config.site_name }}">
+      {% else %}
+        {% include ".icons/material/book-open-page-variant.svg" %}
+      {% endif %}
+    </a>
+
+    {# Force site title link to main site #}
+    <a href="{{ main_url }}" class="md-header__title" aria-label="{{ config.site_name }}">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            {{ config.site_name }}
+          </span>
+        </div>
+      </div>
+    </a>
+
+    {# Keep the rest of Material header controls #}
+    <div class="md-header__option" data-md-component="palette">
+      {% include "partials/palette.html" %}
+    </div>
+
+    <div class="md-header__option" data-md-component="search">
+      {% include "partials/search.html" %}
+    </div>
+
+    {% include "partials/header-actions.html" ignore missing %}
+
+  </nav>
+</header>
