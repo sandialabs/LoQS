@@ -53,3 +53,6 @@ plugins:
   - search
   - marimo:
       display_code: true
+  - mkdocs-simple-hooks:
+      hooks:
+        on_page_markdown: docs_scripts.main_hooks:on_page_markdown

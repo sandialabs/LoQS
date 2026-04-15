@@ -1,8 +1,8 @@
-# Documentation system overview (two-stage MkDocs + generated API reference)
+# Documentation system overview
 
 This repository builds documentation in two stages and merges them into a single site:
 
-1) Main documentation site (`mkdocs.yml`) — narrative docs and interactive Marimo content  
+1) Main documentation site (`mkdocs.yml`) — narrative docs and interactive Marimo content
 2) API reference site (`mkdocs-api-ref.yml`) — auto-generated API reference
 
 The merged site mounts the API reference under `/reference/`. The main site includes a nav entry pointing there: `API Reference: /reference`.
@@ -11,7 +11,7 @@ The merged site mounts the API reference under `/reference/`. The main site incl
 
 ## Stage 1: Main documentation site (Marimo-first)
 
-Config: `mkdocs.yml`  
+Config: `mkdocs.yml`
 Purpose: User-facing docs, tutorials, and interactive content.
 
 Key traits:
@@ -31,7 +31,7 @@ Why this stage exists:
 
 ## Stage 2: API reference site (generated, mkdocstrings-driven)
 
-Config: `mkdocs-api-ref.yml`  
+Config: `mkdocs-api-ref.yml`
 Purpose: A comprehensive, navigable API reference that stays in sync with the codebase.
 
 Key traits:
@@ -51,7 +51,7 @@ Why this stage exists:
 
 This split enables both:
 
-1) Interactive tutorials (Marimo) without compromising local edit/run workflows.  
+1) Interactive tutorials (Marimo) without compromising local edit/run workflows.
 2) A high-quality API reference (mkdocstrings) that is automatically generated, complete (including `__init__.py` content), and consistently structured.
 
 In practice: the main site is optimized for learning/onboarding; the API site is optimized for lookup/completeness.
@@ -85,8 +85,9 @@ For class and module member variables, the API reference uses an AST-based pass 
 
 - name
 - type hint string (for class members, `ClassVar[T]` is displayed as `T`)
-- value (or `*unset*`)
+- value (or `unset`)
 - a doc “hint” convention: a string literal immediately after the declaration
+- inherited members are included and are marked as `(inherited)`
 
 This is done because mkdocstrings does not reliably surface “variable docs” in the same way, and this repository relies on conventions that are easier to capture from source.
 
@@ -104,6 +105,44 @@ A small hook (`docs_scripts/hooks.py`) removes repeated mkdocstrings intro parag
 
 ---
 
+## Cross-linking between docs and API: `api:` links
+
+This repository supports a custom link shorthand so the main docs (and API docs) can link into the generated API reference using progressive qualification, without writing full URLs.
+
+Authoring format:
+
+- Inline links: `[Text](api:Target)`
+- (Optionally) reference-style links: `[Text][api:Target]`
+
+Examples:
+
+- `[Serializable](api:Serializable)`
+- `[Serializable](api:internal.serializable.Serializable)`
+- `[encode](api:Serializable.encode())`  (parentheses are allowed)
+- `[SERIALIZATION_VERSION](api:Serializable.SERIALIZATION_VERSION)`
+- `[get_available_backends](api:get_available_backends)`
+
+Progressive qualification rules:
+
+- A short target like `api:Serializable` resolves only if it is unique.
+- If ambiguous, the build fails and you must add more qualification, e.g. `api:serializable.Serializable` or `api:internal.serializable.Serializable`.
+- Fully-qualified names (`api:loqs.internal.serializable.Serializable`) always resolve when present.
+
+Build behavior:
+
+- Missing or ambiguous `api:` targets are a hard build failure.
+
+How it works:
+
+- The API build generates an inventory file at `docs/_api_inventory.json` containing:
+  - all resolvable API anchors (modules/classes/functions/methods/attributes)
+  - a suffix index to enable progressive qualification
+- Both the main docs build and the API docs build rewrite `api:` links using this inventory.
+
+Note: `docs/_api_inventory.json` is treated as a generated artifact and is cleaned up by `serve.py` after each build.
+
+---
+
 ## Local build/preview workflow (merged two-stage site)
 
 A single helper script supports both interactive local preview (serve) and build-only output.
@@ -117,9 +156,9 @@ A single helper script supports both interactive local preview (serve) and build
 
 It always mounts the API reference under `/reference/`.
 
-#### Serve mode (default)
+Serve mode (default):
 
-Run: `python serve.py`
+- Run: `python serve.py`
 
 This builds into a temporary directory and starts a local HTTP server. It prints URLs like:
 
@@ -128,18 +167,9 @@ This builds into a temporary directory and starts a local HTTP server. It prints
 
 Stop with Ctrl+C. Re-run the script to rebuild.
 
-Useful options:
+Build-only mode:
 
-- `--docs-config mkdocs.yml`
-- `--ref-config mkdocs-api-ref.yml`
-- `--ref-mount reference`
-- `--host 127.0.0.1`
-- `--port 0` (auto-pick)
-- `--port-start 8000`
-
-#### Build-only mode (`--build-only`)
-
-Run: `python serve.py --build-only --clean`
+- Run: `python serve.py --build-only --clean`
 
 This builds and merges into a persistent output directory (defaults to `./site`) and does not start a server.
 
@@ -156,17 +186,23 @@ You can override the output directory:
 
 ## Files to know
 
-- `mkdocs.yml`  
+- `mkdocs.yml`
   Main documentation site (Marimo-first tutorials and narrative docs).
 
-- `mkdocs-api-ref.yml`  
+- `mkdocs-api-ref.yml`
   API reference site (auto-generated).
 
-- `docs_scripts/gen_ref_pages.py`  
-  Generates API Markdown pages and `SUMMARY.md`.
+- `docs_scripts/gen_ref_pages.py`
+  Generates API Markdown pages, `SUMMARY.md`, and the `docs/_api_inventory.json` inventory.
 
-- `docs_scripts/hooks.py`  
-  Minimal cleanup and TOC pruning for generated API pages.
+- `docs_scripts/api_hooks.py`
+  Minimal HTML cleanup and TOC pruning for generated API pages.
 
-- `serve.py`  
-  Builds both sites, merges them, and either serves locally or writes to `site/` with `--build-only`.
+- `docs_scripts/main_hooks.py`
+  Main docs hook: rewrites `api:` links to point to `/reference/...` URLs. Hard-fails on missing/ambiguous targets.
+
+- `docs_scripts/api_inventory.py`
+  Inventory format + progressive qualification resolver used by hooks.
+
+- `serve.py`
+  Builds both sites, merges them, and either serves locally or writes to `site/` with `--build-only`. It also cleans up the generated `docs/_api_inventory.json` file after builds.

@@ -44,4 +44,5 @@ plugins:
             members_order: alphabetical
   - mkdocs-simple-hooks:
       hooks:
-        on_post_page: docs_scripts.hooks:on_post_page
+        on_post_page: docs_scripts.api_hooks:on_post_page
+        on_page_markdown: docs_scripts.api_hooks:on_page_markdown

@@ -22,6 +22,9 @@ Markers used:
 from __future__ import annotations
 
 import re
+from pathlib import Path
+
+from docs_scripts.api_inventory import ApiInventory, rewrite_api_links
 
 # ----------------------------------------------------------------------
 #  Block markers
@@ -159,3 +162,24 @@ def on_post_page(output: str, page, config) -> str:
     output = _strip_specific_toc_entries(output, anchors_to_remove)
 
     return output
+
+def on_page_markdown(markdown: str, page, config, files) -> str:
+    """
+    API docs hook: rewrite [text](api:Target) into URLs local to the API site.
+
+    Here the inventory URLs are already relative to the API site root, so url_prefix="".
+    """
+    # api_inventory.json is generated into the docs build by gen-files; however during
+    # markdown processing we can read it from the site_dir staging directory only if present.
+    # Easiest: require a copy in docs_dir via gen-files too. We generate it at project root,
+    # so we look relative to config_dir (repo root) as a stable location.
+    cfg_dir = Path(config["config_file_path"]).resolve().parent
+    inv_path = cfg_dir / "docs" / "_api_inventory.json"
+    if not inv_path.exists():
+        # In most builds, gen-files writes it into the virtual files; but hooks run before output.
+        # So we require it to exist alongside mkdocs-api-ref.yml by generating it there.
+        raise RuntimeError(f"API inventory not found at {inv_path} (expected during API build).")
+
+    inv = ApiInventory.load(inv_path)
+    src = getattr(page.file, "src_path", "") if hasattr(page, "file") else ""
+    return rewrite_api_links(markdown, inv, url_prefix="", page_src=src)

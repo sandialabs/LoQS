@@ -3,14 +3,19 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import json
 import re
 from pathlib import Path
 from typing import Any
 
 import mkdocs_gen_files
 
+from docs_scripts.api_inventory import build_suffix_index
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PKG_DIR = REPO_ROOT / "loqs"
+
+INVENTORY_PATH = "api_inventory.json"  # generated into API site output root
 
 
 def _is_public_method(name: str) -> bool:
@@ -25,10 +30,6 @@ _ALL_CAPS_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def _var_sort_key(row: dict) -> tuple[int, str]:
-    """
-    Sort: ALL_CAPS (underscores/digits allowed) first, then others;
-    alphabetical within each group (case-insensitive).
-    """
     name = (row.get("name") or "")
     return (0 if _ALL_CAPS_RE.fullmatch(name) else 1, name.lower())
 
@@ -43,7 +44,6 @@ def _unparse(node: ast.AST | None) -> str:
 
 
 def _doc_hint_from_next_stmt(body: list[ast.stmt], i: int) -> str:
-    """Grab the first line of a string literal placed immediately after a statement."""
     if i + 1 >= len(body):
         return ""
     nxt = body[i + 1]
@@ -77,43 +77,22 @@ def _has_doc(obj: Any) -> bool:
 
 
 def _method_owner_for_docs(cls: type, name: str) -> type:
-    """
-    If `cls` overrides `name` but provides no docstring, return the first base
-    class in the MRO that defines `name` with a docstring. Otherwise return `cls`.
-    """
     if name not in getattr(cls, "__dict__", {}):
         return cls
-
     obj = cls.__dict__.get(name)
     if obj is None:
         return cls
-
     if _has_doc(obj):
         return cls
-
     for base in cls.__mro__[1:]:
         if name in getattr(base, "__dict__", {}):
             base_obj = base.__dict__.get(name)
             if base_obj is not None and _has_doc(base_obj):
                 return base
-
     return cls
-
-def _row_score(r: dict) -> tuple[int, int, int]:
-    """Prefer rows that have a value, then a type, then a doc."""
-    has_value = 1 if (r.get("value") or "").strip() else 0
-    has_type = 1 if (r.get("type") or "").strip() else 0
-    has_doc = 1 if (r.get("doc") or "").strip() else 0
-    return (has_value, has_type, has_doc)
 
 
 def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
-    """
-    Public API declared *in this file* (AST-based):
-      - classes defined here
-      - functions defined here
-      - module variables/type aliases/typevars declared here
-    """
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
     except SyntaxError:
@@ -136,13 +115,10 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
             value_s = _unparse(node.value).strip() if node.value is not None else ""
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and _is_public_var(tgt.id):
+                    is_tv = _is_typevar_call(node.value)
+                    kind = "type variable" if is_tv else "variable"
                     rows.append(
-                        {
-                            "name": tgt.id,
-                            "type": "TypeVar" if _is_typevar_call(node.value) else "",
-                            "value": value_s,
-                            "doc": doc,
-                        }
+                        {"name": tgt.id, "kind": kind, "type": "TypeVar" if is_tv else "", "value": value_s, "doc": doc}
                     )
 
         elif isinstance(node, ast.AnnAssign):
@@ -152,23 +128,26 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
                 value_s = _unparse(node.value).strip() if node.value is not None else ""
 
                 is_alias = _is_typealias_ann(node.annotation)
+                kind = "type alias" if is_alias else "variable"
 
                 rows.append(
-                    {
-                        "name": node.target.id,
-                        "type": "TypeAlias" if is_alias else ann_s,
-                        "value": value_s,
-                        "doc": doc,
-                    }
+                    {"name": node.target.id, "kind": kind, "type": "TypeAlias" if is_alias else ann_s, "value": value_s, "doc": doc}
                 )
 
     classes.sort(key=str.lower)
     funcs.sort(key=str.lower)
 
+    def score(r: dict) -> tuple[int, int, int]:
+        return (
+            1 if (r.get("value") or "").strip() else 0,
+            1 if (r.get("type") or "").strip() else 0,
+            1 if (r.get("doc") or "").strip() else 0,
+        )
+
     by_name: dict[str, dict] = {}
     for r in rows:
         prev = by_name.get(r["name"])
-        if prev is None or _row_score(r) > _row_score(prev):
+        if prev is None or score(r) > score(prev):
             by_name[r["name"]] = r
     rows = sorted(by_name.values(), key=lambda d: d["name"].lower())
 
@@ -176,10 +155,6 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
 
 
 def _classvar_inner(type_s: str) -> str:
-    """
-    If annotation contains 'ClassVar[T]', return just 'T'. Otherwise return the original string.
-    Best-effort bracket parsing.
-    """
     s = (type_s or "").strip()
     if not s or "ClassVar[" not in s:
         return s
@@ -207,12 +182,6 @@ def _classvar_inner(type_s: str) -> str:
 
 
 def _class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: str) -> dict[str, dict]:
-    """
-    Parse a file and return mapping:
-      var_name -> row dict with keys:
-        name, type, owner, value, doc
-    based on assignments/annotations in the class body and the "next stmt string literal" doc hint.
-    """
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
     except SyntaxError:
@@ -235,44 +204,19 @@ def _class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident:
             value_s = _unparse(node.value).strip() if node.value is not None else ""
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and _is_public_var(tgt.id):
-                    out[tgt.id] = {
-                        "name": tgt.id,
-                        "type": "",          # no annotation on plain Assign
-                        "owner": owner_ident,
-                        "value": value_s,
-                        "doc": doc,
-                    }
+                    out[tgt.id] = {"name": tgt.id, "type": "", "owner": owner_ident, "value": value_s, "doc": doc}
 
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
                 doc = _doc_hint_from_next_stmt(body, i)
                 ann_s = _unparse(node.annotation).strip()
                 value_s = _unparse(node.value).strip() if node.value is not None else ""
-                out[node.target.id] = {
-                    "name": node.target.id,
-                    "type": ann_s,
-                    "owner": owner_ident,
-                    "value": value_s,
-                    "doc": doc,
-                }
+                out[node.target.id] = {"name": node.target.id, "type": ann_s, "owner": owner_ident, "value": value_s, "doc": doc}
 
     return out
 
 
 def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
-    """
-    Build member-variable rows from:
-      - derived class AST vars
-      - base class AST vars (in MRO order), including ones not redeclared in derived
-
-    Resolution by name:
-      - derived overrides bases on name conflict.
-      - if derived defines it but has missing doc/type/value, fill from first base that has it.
-      - inherited-only vars are included from nearest base in MRO.
-
-    Sorting:
-      - ALL_CAPS first, then others; alphabetical within group.
-    """
     derived_ident = _qualname_to_ident(cls_obj)
     derived_map = _class_var_info_map_from_ast(derived_py_file, cls_obj.__name__, owner_ident=derived_ident)
 
@@ -302,22 +246,17 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
         if not base_map:
             continue
 
-        # Fill missing fields for vars explicitly declared in derived_map
         for name, drow in derived_map.items():
             brow = base_map.get(name)
             if not brow:
                 continue
-
             if not (drow.get("doc") or "").strip() and (brow.get("doc") or "").strip():
                 drow["doc"] = brow["doc"]
-
             if not (drow.get("type") or "").strip() and (brow.get("type") or "").strip():
                 drow["type"] = brow["type"]
-
             if not (drow.get("value") or "").strip() and (brow.get("value") or "").strip():
                 drow["value"] = brow["value"]
 
-        # Add inherited-only vars
         for name, brow in base_map.items():
             if name in derived_map:
                 continue
@@ -334,10 +273,6 @@ def class_methods_from_introspection(
     class_name: str,
     mod_ident: str,
 ) -> tuple[type | None, list[str], list[str], list[str], dict[str, str], list[str]]:
-    """
-    Introspect class methods and return:
-      class_obj, inst, clsm, stat, owner_override, toc_remove_anchors(derived+bases)
-    """
     try:
         mod = importlib.import_module(mod_ident)
     except Exception:
@@ -381,14 +316,26 @@ def class_methods_from_introspection(
     return cls, inst, clsm, stat, owner_override, toc_remove_anchors
 
 
-def write_class_members_table(f, rows: list[dict], *, derived_ident: str) -> None:
+def write_class_members_table(
+    f,
+    rows: list[dict],
+    *,
+    derived_ident: str,
+    class_anchor_prefix: str,
+    inv_objects: dict[str, str],
+    page_url: str,
+) -> None:
     if not rows:
         return
+
     f.write("| Name | Type | Value | Doc |\n")
     f.write("|---|---|---|---|\n")
     for r in rows:
         nm = r["name"]
-        name_cell = f"`{nm}`"
+        anchor_id = f"{class_anchor_prefix}.{nm}"
+        inv_objects[anchor_id] = f"{page_url}#{anchor_id}"
+
+        name_cell = f'<a id="{anchor_id}"></a>`{nm}`'
         if (r.get("owner") or "") != derived_ident:
             name_cell += "<br><em>(inherited)</em>"
 
@@ -405,14 +352,6 @@ def write_class_members_table(f, rows: list[dict], *, derived_ident: str) -> Non
         doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
 
         f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
-    f.write("\n")
-
-
-def write_obj(f, ident: str, *, members: bool | None = None) -> None:
-    f.write(f"::: {ident}\n")
-    if members is not None:
-        f.write("    options:\n")
-        f.write(f"      members: {str(members).lower()}\n")
     f.write("\n")
 
 
@@ -434,10 +373,6 @@ def write_class_member_block(f, owner_ident: str, member_name: str) -> None:
 
 
 def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
-    """
-    Render module functions as selected module members, to reliably get signatures.
-    Wrap in a marker so hooks.py can strip the module docstring <p> if desired.
-    """
     f.write(f"<!-- API_MODULE_MEMBERS owner={mod_ident} -->\n\n")
     f.write(f"::: {mod_ident}\n")
     f.write("    options:\n")
@@ -448,48 +383,71 @@ def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
     f.write("\n")
 
 
+def write_module_members_table(
+    f,
+    mod_ident: str,
+    page_url: str,
+    rows: list[dict],
+    inv_objects: dict[str, str],
+) -> None:
+    if not rows:
+        return
+
+    f.write("| Name | Type | Value | Doc |\n")
+    f.write("|---|---|---|---|\n")
+    for r in rows:
+        nm = r["name"]
+        anchor_id = f"{mod_ident}.{nm}"
+        inv_objects[anchor_id] = f"{page_url}#{anchor_id}"
+
+        name_cell = f'<a id="{anchor_id}"></a>`{nm}`'
+        typ = (r.get("type") or "").replace("\n", " ").replace("|", "\\|")
+
+        val = r.get("value")
+        if val is None or str(val).strip() == "":
+            val_s = "*unset*"
+        else:
+            val_s = str(val).replace("\n", " ").replace("|", "\\|")
+            val_s = f"`{val_s}`"
+
+        doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
+        f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
+    f.write("\n")
+
+
 def write_module_page(
     path: Path,
     title: str,
     mod_ident: str,
+    page_url: str,
     *,
     rows: list[dict],
     funcs: list[str],
     classes: list[str],
+    inv_objects: dict[str, str],
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
 
         if rows:
             f.write("## Members\n\n")
-            f.write("| Name | Type | Value | Doc |\n")
-            f.write("|---|---|---|---|\n")
-            for r in rows:
-                nm = f"`{r['name']}`"
+            write_module_members_table(f, mod_ident, page_url, rows, inv_objects)
 
-                typ = (r.get("type") or "").replace("\n", " ").replace("|", "\\|")
-
-                val = r.get("value")
-                if val is None or str(val).strip() == "":
-                    val_s = "*unset*"
-                else:
-                    val_s = str(val).replace("\n", " ").replace("|", "\\|")
-                    val_s = f"`{val_s}`"
-
-                doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
-                f.write(f"| {nm} | {typ} | {val_s} | {doc} |\n")
-            f.write("\n")
-        
         if funcs:
+            f.write("## Functions\n\n")
             write_module_functions_block(f, mod_ident, funcs)
 
-        
+        if classes:
+            f.write("## Classes\n\n")
+            for cls in classes:
+                f.write(f"- [`{cls}`]({cls}/)\n")
 
 
 def write_class_page(
     path: Path,
     title: str,
     cls_ident: str,
+    page_url: str,
     *,
     var_rows: list[dict],
     instance_methods: list[str],
@@ -497,6 +455,7 @@ def write_class_page(
     static_methods: list[str],
     owner_override: dict[str, str],
     toc_remove_anchors: list[str],
+    inv_objects: dict[str, str],
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
@@ -508,19 +467,23 @@ def write_class_page(
 
         if var_rows:
             f.write("## Members\n\n")
-            write_class_members_table(f, var_rows, derived_ident=cls_ident)
+            write_class_members_table(
+                f,
+                var_rows,
+                derived_ident=cls_ident,
+                class_anchor_prefix=cls_ident,
+                inv_objects=inv_objects,
+                page_url=page_url,
+            )
 
         if static_methods or class_methods or instance_methods:
             f.write("## Methods\n\n")
-
             for m in static_methods:
                 owner = owner_override.get(m, cls_ident)
                 write_class_member_block(f, owner, m)
-
             for m in class_methods:
                 owner = owner_override.get(m, cls_ident)
                 write_class_member_block(f, owner, m)
-
             for m in instance_methods:
                 owner = owner_override.get(m, cls_ident)
                 write_class_member_block(f, owner, m)
@@ -528,20 +491,22 @@ def write_class_page(
 
 def main() -> None:
     nav = mkdocs_gen_files.Nav()
+    inv_objects: dict[str, str] = {}
 
     nav[("loqs",)] = "loqs/index.md"
     with mkdocs_gen_files.open("loqs/index.md", "w") as f:
         f.write("# `loqs`\n\n")
         f.write("Package reference. Use the sidebar to browse.\n")
 
+    def api_page_url(mod_parts: tuple[str, ...]) -> str:
+        return "/" + "/".join(mod_parts) + "/"
+
     for py in sorted(PKG_DIR.rglob("*.py")):
         rel = py.relative_to(PKG_DIR)
         parts = rel.with_suffix("").parts
 
-        # Always parse file-local API, including __init__.py
         classes, funcs, rows = module_public_api(py)
 
-        # __init__.py maps to the package, not a "__init__" module
         if py.name == "__init__.py":
             mod_parts = ("loqs",) + parts[:-1]
             mod_ident = "loqs" + ("" if len(mod_parts) == 1 else "." + ".".join(mod_parts[1:]))
@@ -553,17 +518,35 @@ def main() -> None:
         nav_key = mod_parts
         label = mod_parts[-1]
 
+        mod_page_url = api_page_url(mod_parts)
+
+        inv_objects[mod_ident] = f"{mod_page_url}#{mod_ident}"
+        for fn in funcs:
+            inv_objects[f"{mod_ident}.{fn}"] = f"{mod_page_url}#{mod_ident}.{fn}"
+        for cls_name in classes:
+            inv_objects[f"{mod_ident}.{cls_name}"] = f"{mod_page_url}#{mod_ident}.{cls_name}"
+
         nav[nav_key] = page.as_posix()
-        write_module_page(page, title=label, mod_ident=mod_ident, rows=rows, funcs=funcs, classes=classes)
+        write_module_page(
+            page,
+            title=label,
+            mod_ident=mod_ident,
+            page_url=mod_page_url,
+            rows=rows,
+            funcs=funcs,
+            classes=classes,
+            inv_objects=inv_objects,
+        )
 
         for cls_name in classes:
             cls_ident = f"{mod_ident}.{cls_name}"
             cls_page = Path(*mod_parts) / f"{cls_name}.md"
             nav[(*nav_key, cls_name)] = cls_page.as_posix()
 
-            cls_obj, inst, clsm, stat, owner_override, toc_remove_anchors = class_methods_from_introspection(
-                cls_name, mod_ident
-            )
+            cls_obj, inst, clsm, stat, owner_override, toc_remove_anchors = class_methods_from_introspection(cls_name, mod_ident)
+
+            for m in stat + clsm + inst:
+                inv_objects[f"{cls_ident}.{m}"] = f"{mod_page_url}#{cls_ident}.{m}"
 
             if cls_obj is not None:
                 var_rows = class_var_rows_with_mro(py, cls_obj)
@@ -571,16 +554,19 @@ def main() -> None:
                 derived_map = _class_var_info_map_from_ast(py, cls_name, owner_ident=cls_ident)
                 var_rows = sorted(derived_map.values(), key=_var_sort_key)
 
+            cls_page_url = mod_page_url + f"{cls_name}/"
             write_class_page(
                 cls_page,
                 title=cls_name,
                 cls_ident=cls_ident,
+                page_url=cls_page_url,
                 var_rows=var_rows,
                 instance_methods=inst,
                 class_methods=clsm,
                 static_methods=stat,
                 owner_override=owner_override,
                 toc_remove_anchors=toc_remove_anchors,
+                inv_objects=inv_objects,
             )
 
     with mkdocs_gen_files.open("index.md", "w") as f:
@@ -592,5 +578,16 @@ def main() -> None:
         for line in nav.build_literate_nav():
             f.write("  " + line)
 
+    suffix_index = build_suffix_index(inv_objects, package="loqs")
+    with mkdocs_gen_files.open(INVENTORY_PATH, "w") as f:
+        json.dump({"objects": inv_objects, "suffix_index": suffix_index}, f, indent=2, sort_keys=True)
+    
+    # ALSO write to disk so api_hooks.py can load it during the same build
+    # serve.py will clean it
+    disk_path = REPO_ROOT / 'docs' / f'_{INVENTORY_PATH}'
+    disk_path.write_text(
+        json.dumps({"objects": inv_objects, "suffix_index": suffix_index}, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 main()
