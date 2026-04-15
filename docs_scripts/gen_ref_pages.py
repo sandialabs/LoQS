@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import ast
+import importlib
+import inspect
+import re
+from pathlib import Path
+from typing import Any
+
 import mkdocs_gen_files
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +21,18 @@ def _is_public_var(name: str) -> bool:
     return not name.startswith("_") and not name.startswith("__")
 
 
+_ALL_CAPS_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _var_sort_key(row: dict) -> tuple[int, str]:
+    """
+    Sort: ALL_CAPS (underscores/digits allowed) first, then others;
+    alphabetical within each group (case-insensitive).
+    """
+    name = (row.get("name") or "")
+    return (0 if _ALL_CAPS_RE.fullmatch(name) else 1, name.lower())
+
+
 def _unparse(node: ast.AST | None) -> str:
     if node is None:
         return ""
@@ -26,6 +43,7 @@ def _unparse(node: ast.AST | None) -> str:
 
 
 def _doc_hint_from_next_stmt(body: list[ast.stmt], i: int) -> str:
+    """Grab the first line of a string literal placed immediately after a statement."""
     if i + 1 >= len(body):
         return ""
     nxt = body[i + 1]
@@ -50,16 +68,52 @@ def _is_typealias_ann(annotation: ast.AST | None) -> bool:
     return bool(ann) and ann.split(".")[-1] == "TypeAlias"
 
 
-def _decorator_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    names: set[str] = set()
-    for d in fn.decorator_list:
-        s = _unparse(d).strip()
-        if s:
-            names.add(s.split(".")[-1])
-    return names
+def _qualname_to_ident(obj: Any) -> str:
+    return f"{obj.__module__}.{obj.__qualname__}"
+
+
+def _has_doc(obj: Any) -> bool:
+    return bool(inspect.getdoc(obj))
+
+
+def _method_owner_for_docs(cls: type, name: str) -> type:
+    """
+    If `cls` overrides `name` but provides no docstring, return the first base
+    class in the MRO that defines `name` with a docstring. Otherwise return `cls`.
+    """
+    if name not in getattr(cls, "__dict__", {}):
+        return cls
+
+    obj = cls.__dict__.get(name)
+    if obj is None:
+        return cls
+
+    if _has_doc(obj):
+        return cls
+
+    for base in cls.__mro__[1:]:
+        if name in getattr(base, "__dict__", {}):
+            base_obj = base.__dict__.get(name)
+            if base_obj is not None and _has_doc(base_obj):
+                return base
+
+    return cls
+
+def _row_score(r: dict) -> tuple[int, int, int]:
+    """Prefer rows that have a value, then a type, then a doc."""
+    has_value = 1 if (r.get("value") or "").strip() else 0
+    has_type = 1 if (r.get("type") or "").strip() else 0
+    has_doc = 1 if (r.get("doc") or "").strip() else 0
+    return (has_value, has_type, has_doc)
 
 
 def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
+    """
+    Public API declared *in this file* (AST-based):
+      - classes defined here
+      - functions defined here
+      - module variables/type aliases/typevars declared here
+    """
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
     except SyntaxError:
@@ -79,33 +133,90 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
 
         elif isinstance(node, ast.Assign):
             doc = _doc_hint_from_next_stmt(body, i)
+            value_s = _unparse(node.value).strip() if node.value is not None else ""
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and _is_public_var(tgt.id):
-                    kind = "type variable" if _is_typevar_call(node.value) else "variable"
-                    rows.append({"name": tgt.id, "kind": kind, "doc": doc})
+                    rows.append(
+                        {
+                            "name": tgt.id,
+                            "type": "TypeVar" if _is_typevar_call(node.value) else "",
+                            "value": value_s,
+                            "doc": doc,
+                        }
+                    )
 
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
                 doc = _doc_hint_from_next_stmt(body, i)
-                kind = "type alias" if _is_typealias_ann(node.annotation) else "variable"
-                rows.append({"name": node.target.id, "kind": kind, "doc": doc})
+                ann_s = _unparse(node.annotation).strip()
+                value_s = _unparse(node.value).strip() if node.value is not None else ""
+
+                is_alias = _is_typealias_ann(node.annotation)
+
+                rows.append(
+                    {
+                        "name": node.target.id,
+                        "type": "TypeAlias" if is_alias else ann_s,
+                        "value": value_s,
+                        "doc": doc,
+                    }
+                )
 
     classes.sort(key=str.lower)
     funcs.sort(key=str.lower)
 
     by_name: dict[str, dict] = {}
     for r in rows:
-        by_name[r["name"]] = r
+        prev = by_name.get(r["name"])
+        if prev is None or _row_score(r) > _row_score(prev):
+            by_name[r["name"]] = r
     rows = sorted(by_name.values(), key=lambda d: d["name"].lower())
 
     return classes, funcs, rows
 
 
-def class_api(py_file: Path, class_name: str) -> tuple[list[dict], list[str], list[str], list[str]]:
+def _classvar_inner(type_s: str) -> str:
+    """
+    If annotation contains 'ClassVar[T]', return just 'T'. Otherwise return the original string.
+    Best-effort bracket parsing.
+    """
+    s = (type_s or "").strip()
+    if not s or "ClassVar[" not in s:
+        return s
+
+    start = s.find("ClassVar[")
+    if start < 0:
+        return s
+
+    i = start + len("ClassVar[")
+    depth = 1
+    inner_chars: list[str] = []
+    while i < len(s):
+        ch = s[i]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                break
+        inner_chars.append(ch)
+        i += 1
+
+    inner = "".join(inner_chars).strip()
+    return inner or s
+
+
+def _class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: str) -> dict[str, dict]:
+    """
+    Parse a file and return mapping:
+      var_name -> row dict with keys:
+        name, type, owner, value, doc
+    based on assignments/annotations in the class body and the "next stmt string literal" doc hint.
+    """
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
     except SyntaxError:
-        return [], [], [], []
+        return {}
 
     cls: ast.ClassDef | None = None
     for n in tree.body:
@@ -113,97 +224,266 @@ def class_api(py_file: Path, class_name: str) -> tuple[list[dict], list[str], li
             cls = n
             break
     if cls is None:
-        return [], [], [], []
+        return {}
 
-    var_rows: list[dict] = []
-    inst: list[str] = []
-    clsm: list[str] = []
-    stat: list[str] = []
-
+    out: dict[str, dict] = {}
     body = cls.body
+
     for i, node in enumerate(body):
         if isinstance(node, ast.Assign):
             doc = _doc_hint_from_next_stmt(body, i)
+            value_s = _unparse(node.value).strip() if node.value is not None else ""
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and _is_public_var(tgt.id):
-                    kind = "type variable" if _is_typevar_call(node.value) else "variable"
-                    var_rows.append({"name": tgt.id, "kind": kind, "doc": doc})
+                    out[tgt.id] = {
+                        "name": tgt.id,
+                        "type": "",          # no annotation on plain Assign
+                        "owner": owner_ident,
+                        "value": value_s,
+                        "doc": doc,
+                    }
 
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
                 doc = _doc_hint_from_next_stmt(body, i)
-                kind = "type alias" if _is_typealias_ann(node.annotation) else "variable"
-                var_rows.append({"name": node.target.id, "kind": kind, "doc": doc})
+                ann_s = _unparse(node.annotation).strip()
+                value_s = _unparse(node.value).strip() if node.value is not None else ""
+                out[node.target.id] = {
+                    "name": node.target.id,
+                    "type": ann_s,
+                    "owner": owner_ident,
+                    "value": value_s,
+                    "doc": doc,
+                }
 
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            name = node.name
-            if not _is_public_method(name):
+    return out
+
+
+def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
+    """
+    Build member-variable rows from:
+      - derived class AST vars
+      - base class AST vars (in MRO order), including ones not redeclared in derived
+
+    Resolution by name:
+      - derived overrides bases on name conflict.
+      - if derived defines it but has missing doc/type/value, fill from first base that has it.
+      - inherited-only vars are included from nearest base in MRO.
+
+    Sorting:
+      - ALL_CAPS first, then others; alphabetical within group.
+    """
+    derived_ident = _qualname_to_ident(cls_obj)
+    derived_map = _class_var_info_map_from_ast(derived_py_file, cls_obj.__name__, owner_ident=derived_ident)
+
+    inherited_map: dict[str, dict] = {}
+
+    for base in cls_obj.__mro__[1:]:
+        if base is object:
+            continue
+        if getattr(base, "__module__", "") == "builtins":
+            continue
+
+        try:
+            src = inspect.getsourcefile(base)
+        except TypeError:
+            continue
+        except Exception:
+            continue
+        if not src:
+            continue
+
+        base_file = Path(src)
+        if not base_file.exists():
+            continue
+
+        base_ident = _qualname_to_ident(base)
+        base_map = _class_var_info_map_from_ast(base_file, base.__name__, owner_ident=base_ident)
+        if not base_map:
+            continue
+
+        # Fill missing fields for vars explicitly declared in derived_map
+        for name, drow in derived_map.items():
+            brow = base_map.get(name)
+            if not brow:
                 continue
-            decs = _decorator_names(node)
-            if "staticmethod" in decs:
-                stat.append(name)
-            elif "classmethod" in decs:
-                clsm.append(name)
-            else:
-                inst.append(name)
 
-    by_name: dict[str, dict] = {}
-    for r in var_rows:
-        by_name[r["name"]] = r
-    var_rows = sorted(by_name.values(), key=lambda d: d["name"].lower())
+            if not (drow.get("doc") or "").strip() and (brow.get("doc") or "").strip():
+                drow["doc"] = brow["doc"]
+
+            if not (drow.get("type") or "").strip() and (brow.get("type") or "").strip():
+                drow["type"] = brow["type"]
+
+            if not (drow.get("value") or "").strip() and (brow.get("value") or "").strip():
+                drow["value"] = brow["value"]
+
+        # Add inherited-only vars
+        for name, brow in base_map.items():
+            if name in derived_map:
+                continue
+            inherited_map.setdefault(name, brow)
+
+    merged: dict[str, dict] = {}
+    merged.update(inherited_map)
+    merged.update(derived_map)
+
+    return sorted(merged.values(), key=_var_sort_key)
+
+
+def class_methods_from_introspection(
+    class_name: str,
+    mod_ident: str,
+) -> tuple[type | None, list[str], list[str], list[str], dict[str, str], list[str]]:
+    """
+    Introspect class methods and return:
+      class_obj, inst, clsm, stat, owner_override, toc_remove_anchors(derived+bases)
+    """
+    try:
+        mod = importlib.import_module(mod_ident)
+    except Exception:
+        return None, [], [], [], {}, []
+
+    cls = getattr(mod, class_name, None)
+    if cls is None or not isinstance(cls, type):
+        return None, [], [], [], {}, []
+
+    toc_remove_anchors: list[str] = [_qualname_to_ident(cls)]
+    for base in cls.__mro__[1:]:
+        if base is object:
+            continue
+        toc_remove_anchors.append(_qualname_to_ident(base))
+
+    inst: list[str] = []
+    clsm: list[str] = []
+    stat: list[str] = []
+    owner_override: dict[str, str] = {}
+
+    for name, val in getattr(cls, "__dict__", {}).items():
+        if not _is_public_method(name):
+            continue
+
+        if isinstance(val, staticmethod):
+            stat.append(name)
+        elif isinstance(val, classmethod):
+            clsm.append(name)
+        elif inspect.isfunction(val):
+            inst.append(name)
+        else:
+            continue
+
+        doc_owner = _method_owner_for_docs(cls, name)
+        owner_override[name] = _qualname_to_ident(doc_owner)
 
     inst.sort(key=str.lower)
     clsm.sort(key=str.lower)
     stat.sort(key=str.lower)
-    return var_rows, inst, clsm, stat
+
+    return cls, inst, clsm, stat, owner_override, toc_remove_anchors
 
 
-def write_members_table(f, rows: list[dict]) -> None:
+def write_class_members_table(f, rows: list[dict], *, derived_ident: str) -> None:
     if not rows:
         return
-    f.write("| Name | Type | Doc |\n")
-    f.write("|---|---|---|\n")
+    f.write("| Name | Type | Value | Doc |\n")
+    f.write("|---|---|---|---|\n")
     for r in rows:
-        name = f"`{r['name']}`"
-        kind = r["kind"]
+        nm = r["name"]
+        name_cell = f"`{nm}`"
+        if (r.get("owner") or "") != derived_ident:
+            name_cell += "<br><em>(inherited)</em>"
+
+        typ_raw = (r.get("type") or "")
+        typ = _classvar_inner(typ_raw).replace("\n", " ").replace("|", "\\|")
+
+        val = r.get("value")
+        if val is None or str(val).strip() == "":
+            val_s = "*unset*"
+        else:
+            val_s = str(val).replace("\n", " ").replace("|", "\\|")
+            val_s = f"`{val_s}`"
+
         doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
-        f.write(f"| {name} | {kind} | {doc} |\n")
+
+        f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
     f.write("\n")
 
 
-def write_obj(f, ident: str, *, members: bool) -> None:
+def write_obj(f, ident: str, *, members: bool | None = None) -> None:
     f.write(f"::: {ident}\n")
-    f.write("    options:\n")
-    f.write(f"      members: {str(members).lower()}\n")
+    if members is not None:
+        f.write("    options:\n")
+        f.write(f"      members: {str(members).lower()}\n")
     f.write("\n")
 
 
-def write_class_member_block(f, cls_ident: str, member_name: str) -> None:
-    f.write(f"<!-- API_METHOD owner={cls_ident} member={member_name} -->\n\n")
+def write_class_intro(f, cls_ident: str) -> None:
     f.write(f"::: {cls_ident}\n")
+    f.write("    options:\n")
+    f.write("      members: false\n")
+    f.write("      inherited_members: false\n")
+    f.write("\n")
+
+
+def write_class_member_block(f, owner_ident: str, member_name: str) -> None:
+    f.write(f"<!-- API_METHOD owner={owner_ident} member={member_name} -->\n\n")
+    f.write(f"::: {owner_ident}\n")
     f.write("    options:\n")
     f.write("      members:\n")
     f.write(f"        - {member_name}\n")
     f.write("      inherited_members: false\n")
 
 
-def write_module_page(path: Path, title: str, mod_ident: str, *, rows: list[dict], funcs: list[str], classes: list[str]) -> None:
+def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
+    """
+    Render module functions as selected module members, to reliably get signatures.
+    Wrap in a marker so hooks.py can strip the module docstring <p> if desired.
+    """
+    f.write(f"<!-- API_MODULE_MEMBERS owner={mod_ident} -->\n\n")
+    f.write(f"::: {mod_ident}\n")
+    f.write("    options:\n")
+    f.write("      members:\n")
+    for fn in funcs:
+        f.write(f"        - {fn}\n")
+    f.write("      inherited_members: false\n")
+    f.write("\n")
+
+
+def write_module_page(
+    path: Path,
+    title: str,
+    mod_ident: str,
+    *,
+    rows: list[dict],
+    funcs: list[str],
+    classes: list[str],
+) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
 
         if rows:
             f.write("## Members\n\n")
-            write_members_table(f, rows)
+            f.write("| Name | Type | Value | Doc |\n")
+            f.write("|---|---|---|---|\n")
+            for r in rows:
+                nm = f"`{r['name']}`"
 
+                typ = (r.get("type") or "").replace("\n", " ").replace("|", "\\|")
+
+                val = r.get("value")
+                if val is None or str(val).strip() == "":
+                    val_s = "*unset*"
+                else:
+                    val_s = str(val).replace("\n", " ").replace("|", "\\|")
+                    val_s = f"`{val_s}`"
+
+                doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
+                f.write(f"| {nm} | {typ} | {val_s} | {doc} |\n")
+            f.write("\n")
+        
         if funcs:
-            f.write("## Functions\n\n")
-            for fn in funcs:
-                write_obj(f, f"{mod_ident}.{fn}", members=True)
+            write_module_functions_block(f, mod_ident, funcs)
 
-        if classes:
-            f.write("## Classes\n\n")
-            for cls in classes:
-                f.write(f"- [`{cls}`]({cls}/)\n")
+        
 
 
 def write_class_page(
@@ -215,29 +495,35 @@ def write_class_page(
     instance_methods: list[str],
     class_methods: list[str],
     static_methods: list[str],
+    owner_override: dict[str, str],
+    toc_remove_anchors: list[str],
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
 
+        if toc_remove_anchors:
+            f.write(f"<!-- API_TOC_REMOVE {' '.join(toc_remove_anchors)} -->\n\n")
+
+        write_class_intro(f, cls_ident)
+
         if var_rows:
             f.write("## Members\n\n")
-            write_members_table(f, var_rows)
+            write_class_members_table(f, var_rows, derived_ident=cls_ident)
 
-        # These headings remain (TOC-friendly); no per-method H3s
-        if instance_methods:
-            f.write("## Instance methods\n\n")
-            for m in instance_methods:
-                write_class_member_block(f, cls_ident, m)
+        if static_methods or class_methods or instance_methods:
+            f.write("## Methods\n\n")
 
-        if class_methods:
-            f.write("## Class methods\n\n")
-            for m in class_methods:
-                write_class_member_block(f, cls_ident, m)
-
-        if static_methods:
-            f.write("## Static methods\n\n")
             for m in static_methods:
-                write_class_member_block(f, cls_ident, m)
+                owner = owner_override.get(m, cls_ident)
+                write_class_member_block(f, owner, m)
+
+            for m in class_methods:
+                owner = owner_override.get(m, cls_ident)
+                write_class_member_block(f, owner, m)
+
+            for m in instance_methods:
+                owner = owner_override.get(m, cls_ident)
+                write_class_member_block(f, owner, m)
 
 
 def main() -> None:
@@ -251,44 +537,50 @@ def main() -> None:
     for py in sorted(PKG_DIR.rglob("*.py")):
         rel = py.relative_to(PKG_DIR)
         parts = rel.with_suffix("").parts
-        is_pkg = py.name == "__init__.py"
 
-        if is_pkg:
+        # Always parse file-local API, including __init__.py
+        classes, funcs, rows = module_public_api(py)
+
+        # __init__.py maps to the package, not a "__init__" module
+        if py.name == "__init__.py":
             mod_parts = ("loqs",) + parts[:-1]
             mod_ident = "loqs" + ("" if len(mod_parts) == 1 else "." + ".".join(mod_parts[1:]))
-            page = Path(*mod_parts) / "index.md"
-            nav_key = mod_parts
-            label = mod_parts[-1]
-
-            classes: list[str] = []
-            funcs: list[str] = []
-            rows: list[dict] = []
         else:
             mod_parts = ("loqs",) + parts
             mod_ident = "loqs." + ".".join(mod_parts[1:])
-            page = Path(*mod_parts) / "index.md"
-            nav_key = mod_parts
-            label = mod_parts[-1]
 
-            classes, funcs, rows = module_public_api(py)
+        page = Path(*mod_parts) / "index.md"
+        nav_key = mod_parts
+        label = mod_parts[-1]
 
         nav[nav_key] = page.as_posix()
         write_module_page(page, title=label, mod_ident=mod_ident, rows=rows, funcs=funcs, classes=classes)
 
-        for cls in classes:
-            cls_ident = f"{mod_ident}.{cls}"
-            cls_page = Path(*mod_parts) / f"{cls}.md"
-            nav[(*nav_key, cls)] = cls_page.as_posix()
+        for cls_name in classes:
+            cls_ident = f"{mod_ident}.{cls_name}"
+            cls_page = Path(*mod_parts) / f"{cls_name}.md"
+            nav[(*nav_key, cls_name)] = cls_page.as_posix()
 
-            var_rows, inst, clsm, stat = class_api(py, cls)
+            cls_obj, inst, clsm, stat, owner_override, toc_remove_anchors = class_methods_from_introspection(
+                cls_name, mod_ident
+            )
+
+            if cls_obj is not None:
+                var_rows = class_var_rows_with_mro(py, cls_obj)
+            else:
+                derived_map = _class_var_info_map_from_ast(py, cls_name, owner_ident=cls_ident)
+                var_rows = sorted(derived_map.values(), key=_var_sort_key)
+
             write_class_page(
                 cls_page,
-                title=cls,
+                title=cls_name,
                 cls_ident=cls_ident,
                 var_rows=var_rows,
                 instance_methods=inst,
                 class_methods=clsm,
                 static_methods=stat,
+                owner_override=owner_override,
+                toc_remove_anchors=toc_remove_anchors,
             )
 
     with mkdocs_gen_files.open("index.md", "w") as f:

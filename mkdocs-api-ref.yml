@@ -37,10 +37,11 @@ plugins:
           options:
             docstring_style: numpy
             show_source: false
+            show_signature: true
             show_signature_annotations: true
             separate_signature: true
             heading_level: 2
-            members_order: source
+            members_order: alphabetical
   - mkdocs-simple-hooks:
       hooks:
         on_post_page: docs_scripts.hooks:on_post_page

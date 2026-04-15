@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Sequence, Mapping
 import textwrap
-from typing import Any, ClassVar, Type, TypeVar
+from typing import ClassVar, Type, TypeVar
 
 from loqs.internal import SeqCastable, Displayable
 

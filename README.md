@@ -61,29 +61,16 @@ to get the 0.9.12 release of pyGSTi, which will be located in `src`.
 Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
 if you are working off of a feature branch.
 
-### Visualization
-
-LoQS now has some capability to turn circuit diagrams into LaTeX via the quantikz package.
-This requires `pdflatex`, commonly from the a TeX installation, as well as `loqs[visualization]`.
-
 ## Documentation
 
-This project uses JupyterBook for documentation.
-Assuming the `docs` requirements have been installed, the documentation can be generated via:
+This project uses Marimo notebooks and MkDocs for documentation.
 
-```
-jupyterbook build docs
-```
+To interactively edit and run the notebooks locally, run: `marimo edit docs`
 
-and then viewed by opening `docs/_build/html/index.html` in a browser.
+To build and serve the documentation, run: `python docs/serve.py`
 
-### Jupytext Notebooks
+Both commands will launch local servers that can be navigated to in your web browser of choice.
+Marimo will auto-open the browser, while `serve.py` will simply tell you the URL
+(typically `localhost:8000`).
 
-For users who want executable versions of the MyST Markdown can use Jupytext to turn them into IPython/Jupyter notebooks.
-```
-jupytext --sync docs/markdown/*
-```
-
-will synchronize all the Markdown files in `docs/markdown` with the Jupyter notebooks in `docs/notebook`. Only the 
-Markdown is committed and used for generating the JupyterBook, but the notebooks can be handy to test execution
-in an interactive way.
+More details are available in (docs/DOCS_README.md)[docs/DOCS_README.md].
