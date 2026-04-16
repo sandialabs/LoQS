@@ -146,8 +146,8 @@ def propagate_state(
 ) -> tuple[BaseQuantumState, OutcomeDict]:
     """Given a circuit and model, propagate a state forward in time.
 
-    This is a wrapper for :meth:`.BaseNoiseModel.get_reps`
-    and :meth:`.BaseQuantumState.apply_reps_inplace` (or
+    This is a wrapper for (BaseNoiseModel.get_reps)[api:BaseNoiseModel.get_reps]
+    and (BaseQuantumState.apply_reps_inplace)[api:BaseQuantumState.apply_reps_inplace] (or
     the non-inplace version if ``inplace=False``).
     It does also try to find compatible reptypes by
     searching for a match in output reps from ``model``
@@ -173,9 +173,11 @@ def propagate_state(
     Returns
     -------
     BaseQuantumState, OutcomeDict
-        The output of :meth:`.BaseQuantumState.apply_reps`.
+        The output of (BaseQuantumState.apply_reps)[api:BaseQuantumState.apply_reps].
         If ``inplace=True``, then the state is also returned
         to provide a consistent API.
+        
+    REVIEW_SPHINX_REFERENCE
     """
     # Find a compatible model/state oprep
     opreps = []

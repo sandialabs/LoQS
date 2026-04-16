@@ -1,0 +1,236 @@
+# Ralph Tasks
+
+- [x] `backends.__init__.propagate_state` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.append` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.delete_qubits` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.from_circuit_tiling` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.from_decoded_attrs` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.basecircuit.get_encoding_attr` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.basecircuit.insert` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.map_qubit_labels` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.merge` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.merge_inplace` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.pad_single_qubit_idles` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.pad_single_qubit_idles_by_duration` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.set_qubit_labels` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.basecircuit.set_qubit_labels_inplace` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.listcircuit.circuit` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.copy` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.delete_qubits_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.depth` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.get_possible_discrete_error_locations` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.insert_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.map_qubit_labels_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.merge_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.pad_single_qubit_idles_by_duration_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.process_label` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.qubit_labels` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.listcircuit.set_qubit_labels_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.circuit` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.copy` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.delete_qubits_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.depth` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.get_possible_discrete_error_locations` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.insert_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.map_qubit_labels_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.merge_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.pad_single_qubit_idles_by_duration_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.qubit_labels` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.pygsticircuit.set_qubit_labels_inplace` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.stimcircuit.circuit` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.copy` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.delete_qubits_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.depth` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.find_first_repeat_start` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.find_last_repeat_end` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.get_possible_discrete_error_locations` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.map_qubit_labels_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.merge_inplace` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] `backends.circuit.stimcircuit.pad_single_qubit_idles_by_duration_inplace` - **no_docstring**: Public function has no docstring
+- [x] `backends.circuit.stimcircuit.qubit_labels` - **no_docstring**: Public function has no docstring
+- [x] Fix backend docstrings
+    - [x] `backends.circuit.stimcircuit.set_qubit_labels_inplace` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.basemodel.add_gate_duration_to_layer` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.basemodel.add_layer_duration_to_current_time` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.basemodel.get_reps` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `backends.model.dictmodel.convert_to_gatereptuple` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.dictmodel.from_decoded_attrs` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.dictmodel.get_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.dictmodel.output_gate_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.dictmodel.output_instrument_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.from_decoded_attrs` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.gate_keys` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.get_encoding_attr` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.get_gate_duration` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.get_instrument_duration` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.get_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.instrument_keys` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.output_gate_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.pygstimodel.output_instrument_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.stimdictmodel.convert_to_gatereptuple` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.stimdictmodel.get_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.model.stimdictmodel.promoted_key_and_qubits` - **no_docstring**: Public function has no docstring
+    - [x] `backends.reps.cast` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `backends.reps.is_zbasis_projection_rep` - **no_docstring**: Public function has no docstring
+    - [x] `backends.reps.sequence_is_krausop_rep` - **no_docstring**: Public function has no docstring
+    - [x] `backends.reps.sequence_is_probabilisticstim_rep` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.basestate.apply_reps` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `backends.state.npsvstate.apply_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.npsvstate.apply_reps_inplace` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.npsvstate.copy` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.npsvstate.input_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.npsvstate.print_bitstring_amplitudes` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.npsvstate.state` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.apply_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.apply_reps_inplace` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.copy` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.from_decoded_attrs` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.get_encoding_attr` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.input_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.reset_seed` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.qsimstate.state` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.apply_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.apply_reps_inplace` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.copy` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.from_decoded_attrs` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.get_encoding_attr` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.input_reps` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.reset_seed` - **no_docstring**: Public function has no docstring
+    - [x] `backends.state.stimstate.state` - **no_docstring**: Public function has no docstring
+- [x] Fix codepack docstrings
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.classical_decoder_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.compute_decoded_bitstring` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.create_ideal_model` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.create_qec_code` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.flagged_feedforward_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.flagged_feedforward_map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.nonft_logical_meas_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.partIII_feedforward_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.partII_feedforward_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_5_1_3_quantinuum2022.partI_feedforward_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.QEC_decoder_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.QEC_decoder_map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.QEC_flagged_feedforward_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.QEC_flagged_feedforward_map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.create_ideal_model` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.create_qec_code` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.data_decode` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.data_decode` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.hook_decode` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.logical_meas_apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_7_1_3_quantinuum2021.logical_meas_map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `codepacks.codepack_trivial_counter.create_qec_code` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] Fix core docstrings
+    - [x] `core.frame.expire` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.frame.from_decoded_attrs` - **no_docstring**: Public function has no docstring
+    - [x] `core.frame.get_encoding_attr` - **no_docstring**: Public function has no docstring
+    - [x] `core.frame.update` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.history.append` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.history.collect_data` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.apply_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.build_composite_instruction` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.instructions.builders.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.builders.map_qubits_fn` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.instruction.apply` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.instructions.instruction.copy` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.instructions.instruction.map_qubits` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.instructions.instruction.param_alias` - **no_docstring**: Public function has no docstring
+    - [x] `core.instructions.instructionlabel.cast` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.programresults.collect_shot_data` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.qeccode.create_patch` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.quantumprogram.from_quantum_program` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.quantumprogram.get_encoding_attr` - **no_docstring**: Public function has no docstring
+    - [x] `core.quantumprogram.run` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.measurementoutcomes.get_inferred_outcomes` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.patchdict.all_qubit_labels` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.patchdict.copy` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.copy` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.get_bit` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.map_frame` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.num_qubits` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.update_from_clifford_conjugation` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.update_from_pauli_str` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `core.recordables.pauliframe.update_from_transversal_clifford` - **sphinx_reference**: Docstring contains Sphinx-like reference
+- [x] Fix internal docstrings
+    - [x] `internal.castable.cast` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `internal.castable.cast` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `internal.encoder.baseencoder.assert_decode` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_array` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_cached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_class` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_dict` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_function` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_iterable` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_primitive` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.decode_uncached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_array` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_cached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_class` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_dict` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_function` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_iterable` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_primitive` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.baseencoder.encode_uncached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_cached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_class` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_dict` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_function` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_iterable` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_primitive` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_root_group` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.decode_uncached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.encode_cached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.encode_dict` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.encode_iterable` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.encode_primitive` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.hdf5encoder.encode_uncached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.decode_cached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.decode_dict` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.decode_iterable` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.decode_uncached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.encode_array` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.encode_cached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.encode_iterable` - **no_docstring**: Public function has no docstring
+    - [x] `internal.encoder.jsonencoder.encode_uncached_obj` - **no_docstring**: Public function has no docstring
+    - [x] `internal.serializable.eval_function_str` - **no_docstring**: Public function has no docstring
+    - [x] `internal.serializable.get_encoding_attr` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `internal.serializable.get_function_str` - **no_docstring**: Public function has no docstring
+    - [x] `internal.serializable.read` - **no_docstring**: Public function has no docstring
+- [x] Fix tool docstrings
+    - [x] `tools.dasktools.run_program_list` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.fttools.build_discrete_error_injection_programs` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.fttools.insert_1q_error` - **no_docstring**: Public function has no docstring
+    - [x] `tools.fttools.insert_2q_error` - **no_docstring**: Public function has no docstring
+    - [x] `tools.fttools.run_discrete_error_injected_programs` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.fttools.test_program_output` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.pygstitools.can_place_in_layer` - **no_docstring**: Public function has no docstring
+    - [x] `tools.pygstitools.convert_circuit_to_image` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.pygstitools.convert_circuit_to_qiskit_draw` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.pygstitools.convert_circuit_to_quantikz` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.pygstitools.convert_edesign_to_programs` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.pygstitools.convert_run_programs_to_dataset` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.pygstitools.get_kraus_rep_from_ptm` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.qectools.compose_pstr_lists` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.qectools.compose_pstrs` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.qectools.get_hook_errors_in_flagged_check` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.qectools.get_syndrome_dict_from_stabilizers_and_pstrs` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.qectools.get_weight_1_errors` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.qsimtools.get_bitstring_dict` - **no_docstring**: Public function has no docstring
+    - [x] `tools.qsimtools.print_state_probs_phases` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.reptools.compose_kraus_reptuples` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.reptools.create_1Q_amp_damp_kraus_rep` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.reptools.create_depolarizing_kraus_rep` - **sphinx_reference**: Docstring contains Sphinx-like reference
+    - [x] `tools.reptools.dedup_K` - **no_docstring**: Public function has no docstring

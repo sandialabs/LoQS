@@ -128,6 +128,36 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         self._instreps = list(instreps)
 
         def convert_to_gatereptuple(gr, qubits) -> RepTuple:
+            """Convert a gate representation to a RepTuple.
+
+            This helper function converts various gate representation formats
+            to the standard RepTuple format used by the model.
+
+            Parameters
+            ----------
+            gr : object
+                Gate representation to convert. Can be a RepTuple, numpy array,
+                string, or sequence.
+
+            qubits : tuple
+                Tuple of qubit labels that this gate operates on.
+
+            Returns
+            -------
+            RepTuple
+                Converted gate representation in RepTuple format.
+
+            Raises
+            ------
+            AssertionError
+                If the input cannot be converted to a valid RepTuple or if the
+                resulting RepTuple's reptype is not in the allowed gatereps.
+
+            Notes
+            -----
+            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+            previously had no documentation. Please review and update as needed.
+            """
             if not isinstance(gr, RepTuple):
                 if isinstance(gr, np.ndarray):
                     # matrix for dense rep
@@ -236,10 +266,34 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
+        """Get the list of gate representations this model can output.
+
+        Returns
+        -------
+        list[GateRep]
+            List of gate representations that this model can output.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         return self._gatereps
 
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
+        """Get the list of instrument representations this model can output.
+
+        Returns
+        -------
+        list[InstrumentRep]
+            List of instrument representations that this model can output.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         return self._instreps
 
     def get_reps(
@@ -248,6 +302,32 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
+        """Get list of operator representations that can be applied.
+
+        This method processes a circuit and returns a list of operation representations
+        (RepTuples) that can be applied to a quantum state.
+
+        Parameters
+        ----------
+        circuit : BasePhysicalCircuit
+            Physical circuit to get the representations for.
+
+        gatereps : Sequence[GateRep]
+            Output representations for gate operations.
+
+        instreps : Sequence[InstrumentRep]
+            Output representations for instrument operations.
+
+        Returns
+        -------
+        list[RepTuple]
+            List of operation representations for the circuit.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         # Get builtin circuit for easy processing
         circuit = ListPhysicalCircuit.cast(circuit)
 
@@ -288,6 +368,27 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @classmethod
     def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        """Create a DictNoiseModel from decoded attributes.
+
+        This class method reconstructs a DictNoiseModel instance from a dictionary
+        of decoded attributes, typically used during deserialization.
+
+        Parameters
+        ----------
+        attr_dict : Mapping
+            Dictionary containing the decoded attributes. Expected to have keys:
+            'gate_dict', 'inst_dict', '_gatereps', and '_instreps'.
+
+        Returns
+        -------
+        T
+            A new DictNoiseModel instance initialized with the provided attributes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         gate_dict = attr_dict["gate_dict"]
         inst_dict = attr_dict["inst_dict"]
         gatereps = [GateRep(v) for v in attr_dict["_gatereps"]]

@@ -170,9 +170,9 @@ class InstructionLabel(SeqCastable, Displayable):
 
     @classmethod
     def cast(cls, obj: object) -> InstructionLabel:
-        """Cast to a :class:`InstructionLabel` object.
+        """Cast to a (InstructionLabel)[api:InstructionLabel] object.
 
-        Unlike most castable objects, :class:`InstructionLabel`
+        Unlike most castable objects, (InstructionLabel)[api:InstructionLabel]
         requires at least two inputs. This version of cast additionally
         allows a tuple/list variant for the multiple arguments and
         disallows a single object being passed in.
@@ -181,15 +181,15 @@ class InstructionLabel(SeqCastable, Displayable):
         ----------
         obj:
             A castable object that is either:
-            - Already a :class:`InstructionLabel` object,
+            - Already a (InstructionLabel)[api:InstructionLabel] object,
             in which case `obj` is returned
             - A kwarg dict that is passed into the constructor
             - A sequence of the arguments of the
-            :class:`InstructionLabel` constructor
+            (InstructionLabel)[api:InstructionLabel] constructor
 
         Returns
         -------
-            A :class:`SyndromeExtraction` object
+            A (InstructionLabel)[api:InstructionLabel] object
         """
         if isinstance(obj, InstructionLabel):
             # We are already the correct class, perform no copy

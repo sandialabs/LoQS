@@ -211,20 +211,22 @@ def create_depolarizing_kraus_rep(
     """Create a depolarizing Kraus RepTuple.
 
     This is a convenience function that wraps
-    :meth:`create_pauli_stochastic_kraus_reps`.
+    (create_pauli_stochastic_kraus_reps)[api:create_pauli_stochastic_kraus_reps].
 
     Parameters
     ----------
-    rate:
+    rate : Float
         The depolarizing rate.
 
-    qubits:
+    qubits : Sequence[str | int]
         The targeted qubits (needed for RepTuple construction)
 
     Returns
     -------
     RepTuple
         A Pauli-stochasic Kraus RepTuple
+
+    REVIEW_SPHINX_REFERENCE
     """
     N = 4 ** len(qubits)
     return create_pauli_stochastic_kraus_rep(
@@ -237,16 +239,18 @@ def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> RepTuple:
 
     Parameters
     ----------
-    prob:
+    prob : Float
         Probability of damping
 
-    qubit:
-        Target qubit (for :class:`RepTuple` construction)
+    qubit : str | int
+        Target qubit (for (RepTuple)[api:RepTuple] construction)
 
     Returns
     -------
     RepTuple
         The amplitude damping channel
+
+    REVIEW_SPHINX_REFERENCE
     """
     # Sanity checks
     assert prob >= 0 and prob <= 1
@@ -303,6 +307,15 @@ def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
     normalized_Ks = []
 
     def dedup_K(Krep):
+        """Deduplicate a Kraus operator representation.
+
+        Parameters
+        ----------
+        Krep : tuple[np.ndarray, float]
+            A Kraus operator representation as (operator_matrix, probability)
+
+        REVIEW_NO_DOCSTRING
+        """
         Knormed = Krep[0] / np.sqrt(Krep[1])
 
         matched = False
@@ -335,7 +348,7 @@ def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
 def compose_kraus_reptuples(
     rt1: RepTuple, rt2: RepTuple, dedup: bool = True
 ) -> RepTuple:
-    r"""Compose two Kraus :class:`RepTuple`s together.
+    r"""Compose two Kraus (RepTuple)[api:RepTuple]s together.
 
     Essentially just foils them out:
 
@@ -352,20 +365,22 @@ def compose_kraus_reptuples(
 
     Parameters
     ----------
-    rt1:
-        The first :class:`RepTuple`.
+    rt1 : RepTuple
+        The first (RepTuple)[api:RepTuple].
 
-    rt2:
-        The second :class:`RepTuple`.
+    rt2 : RepTuple
+        The second (RepTuple)[api:RepTuple].
 
-    dedup:
+    dedup : bool, optional
         Whether (True, default) or not (False) to deduplicate
-        the output Kraus channel.
+        the output Kraus channel, by default True
 
     Returns
     -------
     RepTuple
         The output channel
+
+    REVIEW_SPHINX_REFERENCE
     """
     assert rt1.qubits == rt2.qubits
 

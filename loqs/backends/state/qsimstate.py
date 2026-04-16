@@ -70,10 +70,42 @@ class QSimQuantumState(BaseQuantumState):
 
     @property
     def state(self) -> _SparseDM:
+        """Get the underlying QuantumSim state object.
+
+        Returns
+        -------
+        _SparseDM
+            The internal QuantumSim state object that represents the quantum state.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This property provides access to the raw QuantumSim state object, which
+        contains the actual quantum state representation and related metadata.
+        """
         return self._state
 
     @property
     def input_reps(self) -> list[GateRep | InstrumentRep]:
+        """Get the list of supported operation representation types.
+
+        Returns
+        -------
+        list[GateRep | InstrumentRep]
+            List of operation representation types that this quantum state backend
+            can process and apply.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        The QSim backend supports QSIM superoperators, Z-basis projections,
+        Z-basis pre/post operations, and Z-basis outcome operation dictionaries
+        as input representations.
+        """
         return [
             GateRep.QSIM_SUPEROPERATOR,
             InstrumentRep.ZBASIS_PROJECTION,
@@ -131,6 +163,36 @@ class QSimQuantumState(BaseQuantumState):
         return s
 
     def apply_reps_inplace(self, reps: Sequence) -> OutcomeDict:
+        """Apply operation representations to the quantum state in-place.
+
+        This method applies a sequence of operation representations (RepTuples)
+        directly to the current quantum state, modifying it in-place, and returns
+        any measurement outcomes.
+
+        Parameters
+        ----------
+        reps : Sequence
+            Sequence of operation representations to apply to the state.
+
+        Returns
+        -------
+        OutcomeDict
+            Dictionary of measurement outcomes from applying the operations.
+            Outcomes can be empty if no measurements were performed.
+
+        Raises
+        ------
+        NotImplementedError
+            If an unknown or unsupported operation representation type is encountered.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method processes both gate operations (which modify the state directly)
+        and instrument operations (which may produce measurement outcomes).
+        """
         outcomes: OutcomeDict = defaultdict(list)
 
         for reptuple in reps:
@@ -153,14 +215,72 @@ class QSimQuantumState(BaseQuantumState):
     def apply_reps(
         self, reps: Sequence
     ) -> tuple[QSimQuantumState, OutcomeDict]:
+        """Apply operation representations to the quantum state.
+
+        This method applies a sequence of operation representations (RepTuples)
+        to the quantum state and returns a new state with the operations applied
+        along with any measurement outcomes.
+
+        Parameters
+        ----------
+        reps : Sequence
+            Sequence of operation representations to apply to the state.
+
+        Returns
+        -------
+        tuple[QSimQuantumState, OutcomeDict]
+            A tuple containing a new quantum state with the operations applied
+            and a dictionary of measurement outcomes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method delegates to the parent class implementation for the actual
+        operation application logic.
+        """
         return super().apply_reps(reps)
 
     def copy(self) -> QSimQuantumState:
+        """Create a deep copy of the quantum state.
+
+        Returns
+        -------
+        QSimQuantumState
+            A new quantum state object that is a deep copy of the current state,
+            including the state vector, random number generator state, and all
+            other attributes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method creates a complete independent copy of the quantum state,
+        ensuring that modifications to the copy do not affect the original state.
+        """
         new_state = QSimQuantumState(deepcopy(self.state), seed=self.seed)
         new_state._rng = deepcopy(self._rng)
         return new_state
 
     def reset_seed(self, new_seed: int | None) -> None:
+        """Reset the random seed for the quantum state.
+
+        Parameters
+        ----------
+        new_seed : int | None
+            The new random seed to use. If None, the random number generator
+            will use its default seeding behavior.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method updates both the stored seed value and the internal random
+        number generator, ensuring reproducible behavior when the same seed is used.
+        """
         self.seed = new_seed
         self._rng = np.random.default_rng(new_seed)
 
@@ -321,6 +441,35 @@ class QSimQuantumState(BaseQuantumState):
         return prob
 
     def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        """Get an attribute for encoding/serialization purposes.
+
+        This method retrieves specific attributes from the quantum state that are
+        needed for serialization, including both standard attributes and internal
+        QuantumSim state information.
+
+        Parameters
+        ----------
+        attr : str
+            The name of the attribute to retrieve.
+
+        ignore_no_serialize_flags : bool, optional
+            Whether to ignore serialization flags. Default is False.
+
+        Returns
+        -------
+        object
+            The value of the requested attribute, or the result from the parent
+            class if the attribute is not found in this class.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method handles retrieval of various internal QuantumSim attributes
+        that are needed for proper serialization and deserialization of the
+        quantum state.
+        """
         # Get any needed internal state from SparseDM
         if attr == "qubit_labels":
             return self.state.names
@@ -350,6 +499,31 @@ class QSimQuantumState(BaseQuantumState):
 
     @classmethod
     def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        """Create a quantum state from decoded attributes.
+
+        This class method reconstructs a quantum state object from a dictionary
+        of decoded attributes, typically used during deserialization.
+
+        Parameters
+        ----------
+        attr_dict : Mapping
+            Dictionary containing the decoded attributes needed to reconstruct
+            the quantum state.
+
+        Returns
+        -------
+        T
+            A new quantum state object initialized with the provided attributes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method is typically used during deserialization to reconstruct a
+        quantum state from stored data, including qubit labels and internal
+        QuantumSim state information.
+        """
         qubit_labels = attr_dict["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
 

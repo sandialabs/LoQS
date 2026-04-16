@@ -104,27 +104,105 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def circuit(self) -> _Circuit:
+        """Get the underlying PyGSTi circuit object.
+
+        Returns
+        -------
+        _Circuit
+            The underlying pygsti.circuits.Circuit object.
+
+        REVIEW_NO_DOCSTRING
+        """
         return self._circuit
 
     @property
     def depth(self) -> int:
+        """The depth of the circuit.
+
+        Returns the number of layers in the circuit.
+
+        Returns
+        -------
+        int
+            The number of layers in the circuit.
+
+        REVIEW_NO_DOCSTRING
+        """
         return self._circuit.depth
 
     @property
     def qubit_labels(self) -> Sequence[QubitTypes]:
+        """Get the qubit labels of an underlying circuit.
+
+        Returns
+        -------
+        Sequence[QubitTypes]
+            Qubit labels of the circuit.
+
+        REVIEW_NO_DOCSTRING
+        """
         return self.circuit.line_labels
 
     def copy(self) -> PyGSTiPhysicalCircuit:
+        """Create a copy of this circuit.
+
+        Returns
+        -------
+        PyGSTiPhysicalCircuit
+            A copy of this circuit.
+
+        REVIEW_NO_DOCSTRING
+        """
         return PyGSTiPhysicalCircuit(self.circuit, self.qubit_labels)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
     ) -> None:
+        """Delete qubits from the circuit in place.
+
+        Removes all operations involving the specified qubits and updates the qubit labels.
+
+        Parameters
+        ----------
+        qubits_to_delete : Sequence[QubitTypes]
+            Sequence of qubit labels to delete from the circuit.
+
+        REVIEW_NO_DOCSTRING
+        """
         self.circuit.delete_lines(qubits_to_delete, delete_straddlers=True)
 
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
     ) -> list[tuple[int, int | tuple[int, ...]]]:
+        """Get possible locations for discrete error injection in the circuit.
+
+        This method identifies potential locations where discrete errors could be
+        injected into the circuit. The behavior depends on the `post_twoq_gates`
+        parameter.
+
+        Parameters
+        ----------
+        post_twoq_gates : bool, optional
+            If True, only consider locations after two-qubit gates and return qubit
+            indices as tuples. If False (default), consider all gates and return
+            individual qubit indices.
+
+        Returns
+        -------
+        list[tuple[int, int | tuple[int, ...]]]
+            A list of tuples where each tuple contains:
+            - The layer index (int)
+            - Either a single qubit index (int) or a tuple of qubit indices
+              (tuple[int, ...]) depending on the `post_twoq_gates` parameter
+
+        Notes
+        -----
+        When `post_twoq_gates` is True, the layer indices are incremented by 1 to
+        represent positions after the gates. When False, layer indices represent
+        the actual layer positions.
+
+        REVIEW_NO_DOCSTRING
+        """
         circuit_locations: list[tuple[int, int | tuple[int, ...]]] = []
         for lidx in range(self._circuit.depth):
             for comp in self._circuit._layer_components(lidx):
@@ -144,12 +222,37 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return circuit_locations
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
+        """Insert another circuit to this circuit.
+
+        Parameters
+        ----------
+        circuit : BasePhysicalCircuit
+            Circuit to insert
+
+        idx : int
+            Starting index to begin insert. If -1, append to the end.
+
+        REVIEW_NO_DOCSTRING
+        """
         other_circuit: _Circuit = PyGSTiPhysicalCircuit.cast(circuit).circuit
         self.circuit.insert_circuit_inplace(other_circuit, idx)
 
     def map_qubit_labels_inplace(
         self, qubit_mapping: Mapping[QubitTypes, QubitTypes]
     ) -> None:
+        """Map qubit labels in place according to the provided mapping.
+
+        This method updates the qubit labels in the circuit by applying the given
+        qubit mapping. Any qubits not specified in the mapping will remain unchanged.
+
+        Parameters
+        ----------
+        qubit_mapping : Mapping[QubitTypes, QubitTypes]
+            A mapping from current qubit labels to new qubit labels. This defines
+            how each qubit should be relabeled in the circuit.
+
+        REVIEW_NO_DOCSTRING
+        """
         # Pass through any unspecified qubits
         complete_mapping = {
             q: qubit_mapping.get(q, q) for q in self.circuit.line_labels
@@ -158,6 +261,22 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         self.circuit.map_state_space_labels_inplace(complete_mapping)
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
+        """Merge another circuit to this circuit.
+
+        While (insert_inplace)[api:BasePhysicalCircuit.insert_inplace] adds new layers,
+        (merge_inplace)[api:BasePhysicalCircuit.merge_inplace] will try to add operations to
+        existing layers.
+
+        Parameters
+        ----------
+        circuit : BasePhysicalCircuit
+            Circuit to merge.
+
+        idx : int
+            Layer index to start merge.
+
+        REVIEW_NO_DOCSTRING
+        """
         other_circuit: _Circuit = PyGSTiPhysicalCircuit.cast(circuit).circuit
         end = idx + other_circuit.depth
 
@@ -181,6 +300,25 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         default_duration: int | float | None = None,
         empty_layer_idle: str | None = None,
     ) -> None:
+        """Pad single qubit idles by duration in place.
+
+        This method pads single qubit idles by duration in the circuit.
+        It ensures that all qubits have operations in each layer by inserting
+        idle operations where necessary.
+
+        Parameters
+        ----------
+        idle_names : Mapping[int | float, str]
+            A mapping from durations to idle operation names.
+        durations : Mapping[str, int | float]
+            A mapping from operation names to their durations.
+        default_duration : int | float | None, optional
+            The default duration to use if an operation's duration is not specified.
+        empty_layer_idle : str | None, optional
+            The idle operation to use for empty layers.
+
+        REVIEW_NO_DOCSTRING
+        """
         for lidx in range(self._circuit.depth):
             comps = self._circuit._layer_components(lidx)
 
@@ -230,12 +368,14 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         This only adds or deletes qubits from the circuit,
         but does not modify the qubit labels of operations.
         For a complete change of qubit labels, see
-        :meth:`map_qubit_labels_inplace` instead.
+        (map_qubit_labels_inplace)[api:PyGSTiPhysicalCircuit.map_qubit_labels_inplace] instead.
 
         Parameters
         ----------
-        qubit_labels:
+        qubit_labels : Sequence[QubitTypes]
             Qubit labels to assign to circuit.
+
+        REVIEW_SPHINX_REFERENCE
         """
         self.circuit.line_labels = qubit_labels
 

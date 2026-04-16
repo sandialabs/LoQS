@@ -106,6 +106,36 @@ class STIMDictNoiseModel(DictNoiseModel):
         self._instreps = list(instreps)
 
         def convert_to_gatereptuple(gr, qubits):
+            """Convert a gate representation to a RepTuple for STIM circuits.
+
+            This helper function converts various gate representation formats
+            to the standard RepTuple format used by STIM noise models.
+
+            Parameters
+            ----------
+            gr : object
+                Gate representation to convert. Can be a RepTuple, string, or
+                probabilistic STIM operations sequence.
+
+            qubits : tuple
+                Tuple of qubit labels that this gate operates on.
+
+            Returns
+            -------
+            RepTuple
+                Converted gate representation in RepTuple format suitable for STIM.
+
+            Raises
+            ------
+            AssertionError
+                If the input cannot be converted to a valid RepTuple or if the
+                resulting RepTuple's reptype is not in the allowed gatereps.
+
+            Notes
+            -----
+            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+            previously had no documentation. Please review and update as needed.
+            """
             if not isinstance(gr, RepTuple):
                 if isinstance(gr, str):
                     return RepTuple(gr, qubits, GateRep.STIM_CIRCUIT_STR)
@@ -133,6 +163,32 @@ class STIMDictNoiseModel(DictNoiseModel):
             )
 
         def promoted_key_and_qubits(k):
+            """Promote a key to the standard format used by STIM models.
+
+            This helper function converts dictionary keys to the standard format
+            used by STIM noise models, ensuring STIM commands are uppercase
+            and properly formatted.
+
+            Parameters
+            ----------
+            k : str or tuple
+                The key to promote. Can be a string (command name) or a tuple
+                of (command_name, qubit_tuple).
+
+            Returns
+            -------
+            tuple
+                A tuple of (promoted_key, qubits) where promoted_key is the
+                standardized key format and qubits is the tuple of qubit labels.
+
+            Notes
+            -----
+            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+            previously had no documentation. Please review and update as needed.
+
+            STIM commands are conventionally uppercase, so this function ensures
+            that command names are converted to uppercase for consistency.
+            """
             # By convention, choose that STIM commands should be uppercase
             if isinstance(k, str):
                 return k.upper(), tuple()
@@ -191,6 +247,46 @@ class STIMDictNoiseModel(DictNoiseModel):
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
+        """Get operation representations for a STIM circuit.
+
+        This method processes a STIM circuit and generates a list of operation
+        representations (RepTuples) that describe the circuit's operations,
+        including gates and instruments, with appropriate noise models applied.
+
+        Parameters
+        ----------
+        circuit : BasePhysicalCircuit
+            The STIM circuit to process. Must be an instance of STIMPhysicalCircuit.
+
+        gatereps : Sequence[GateRep]
+            Sequence of gate representations that the output should use.
+
+        instreps : Sequence[InstrumentRep]
+            Sequence of instrument representations that the output should use.
+
+        Returns
+        -------
+        list[RepTuple]
+            List of operation representations describing the circuit's operations
+            with noise models applied.
+
+        Raises
+        ------
+        AssertionError
+            If the circuit is not a STIMPhysicalCircuit instance.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method handles STIM-specific circuit processing including:
+        - Unrolling circuit repeats
+        - Mapping qubit labels
+        - Applying noise models from gate and instrument dictionaries
+        - Combining common operations for efficient STIM processing
+        - Warning about conflicting noise applications
+        """
         assert isinstance(
             circuit, STIMPhysicalCircuit
         ), "Only designed for STIM circuits"

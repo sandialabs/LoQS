@@ -88,18 +88,18 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
 
     @property
     def all_qubit_labels(self) -> list[str | int]:
-        """All qubits managed by patches in this :class:`.PatchDict`."""
+        """All qubits managed by patches in this (PatchDict)[api:PatchDict]."""
         qubits: list[str | int] = []
         for patch in self.patches.values():
             qubits.extend(patch.qubits)
         return qubits
 
     def copy(self) -> PatchDict:
-        """Return a copy of this :class:`.PatchDict`.
+        """Return a copy of this (PatchDict)[api:PatchDict].
 
         Returns
         -------
         PatchDict
-            The copied :class:`.PatchDict`
+            The copied (PatchDict)[api:PatchDict]
         """
         return PatchDict(self.patches.copy())

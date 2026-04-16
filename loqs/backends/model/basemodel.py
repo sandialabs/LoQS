@@ -76,16 +76,18 @@ class BaseNoiseModel(Castable, Displayable):
 
         gatereps:
             Output representations for gate operations.
-            For more details, look at :class:`GateRep`.
+            For more details, look at (GateRep)[api:loqs.backends.reps.GateRep].
 
         instreps:
             Output representations for instrument operations.
-            For more details, look at :class:`InstrumentRep`.
+            For more details, look at (InstrumentRep)[api:loqs.backends.reps.InstrumentRep].
 
         Returns
         -------
         list
             List of operation representations for the circuit
+
+        REVIEW_SPHINX_REFERENCE
         """
         pass
 
@@ -109,11 +111,36 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
     """
 
     def add_gate_duration_to_layer(self, gate_duration):
+        """Add a gate duration to the current layer duration.
+
+        This method updates the current layer duration by taking the maximum
+        of the existing layer duration and the provided gate duration.
+
+        Parameters
+        ----------
+        gate_duration : float
+            Duration of the gate to add to the current layer.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         self._local_layer_duration = max(
             self._local_layer_duration, gate_duration
         )
 
     def add_layer_duration_to_current_time(self):
+        """Add the current layer duration to the total simulation time.
+
+        This method updates the current simulation time by adding the duration
+        of the current layer, then resets the layer duration to zero.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         self.current_time += self._local_layer_duration
         self._local_layer_duration = 0.0
 

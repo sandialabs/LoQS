@@ -59,6 +59,38 @@ class JSONEncoder(BaseEncoder):
 
     @staticmethod
     def decode_uncached_obj(encoded, decode_cache=None) -> Serializable | dict:  # type: ignore
+        """Decode a Serializable object from JSON format.
+
+        Deserializes a Serializable object that was not previously cached.
+        This method handles the core deserialization logic for Serializable objects,
+        including attribute reconstruction, circular reference handling, and
+        backwards compatibility with version 0 serialization format.
+
+        Parameters
+        ----------
+        encoded : dict
+            The JSON dictionary containing the encoded Serializable object.
+            Should have 'encode_type' field set to 'Serializable' and
+            contain keys for each serialized attribute.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects. Used to handle
+            circular references and object caching during deserialization.
+
+        Returns
+        -------
+        Serializable | dict
+            The decoded Serializable object of the appropriate class, or
+            the raw dictionary if it's a pygsti object (for backwards compatibility).
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid Serializable object.
+        DecodableVersionError
+            If the serialization version is not supported.
+        ImportError
+            If the class cannot be imported from the specified module.
+        """
         # Check if right type
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
@@ -171,6 +203,29 @@ class JSONEncoder(BaseEncoder):
         reference_cache_id=None,
         source_cache_id=None,
     ):
+        """Encode a cached object reference in JSON format.
+
+        This method creates a reference to an object that has already been serialized,
+        avoiding duplicate storage of identical objects. Used for implementing object
+        caching during serialization to improve efficiency and handle circular references.
+
+        Parameters
+        ----------
+        cache_id : int
+            The cache ID for this reference.
+        cache_type : str, optional
+            Type of cache reference, either 'reference' (multiple references to same object)
+            or 'copy' (copy of an existing object). Default is 'reference'.
+        reference_cache_id : int, optional
+            For copy-type caching, the cache ID of the reference object.
+        source_cache_id : int, optional
+            For copy-type caching, the cache ID to assign to the copied object.
+
+        Returns
+        -------
+        dict
+            The JSON dictionary containing the encoded cached object reference.
+        """
         result = {
             "encode_type": "Serializable",
             "version": SERIALIZATION_VERSION,
@@ -187,6 +242,40 @@ class JSONEncoder(BaseEncoder):
 
     @staticmethod
     def decode_cached_obj(encoded, decode_cache=None):  # noqa: C901
+        """Decode a cached object reference from JSON format.
+
+        This method handles the deserialization of object references that were
+        cached during encoding to avoid duplicate serialization of identical objects.
+        It supports both reference-type caching (where multiple references point to
+        the same object) and copy-type caching (where objects with identical content
+        are stored once and copied).
+
+        Parameters
+        ----------
+        encoded : dict
+            The JSON dictionary containing the encoded cached object reference.
+            Should have 'encode_type' field set to 'Serializable' and
+            'cache_type' field indicating the type of cache reference.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects. Used to resolve
+            object references and handle circular references.
+
+        Returns
+        -------
+        Serializable | DeferredRef
+            The decoded object. If the referenced object is not yet available
+            in the cache, returns a DeferredRef placeholder that will be
+            resolved later.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid cached object reference.
+        DecodableVersionError
+            If the serialization version is not supported.
+        RuntimeError
+            If object references cannot be resolved due to missing source objects.
+        """
         # Check if right type
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
@@ -433,6 +522,27 @@ class JSONEncoder(BaseEncoder):
 
     @staticmethod
     def encode_array(to_encode):
+        """Encode NumPy arrays and SciPy sparse matrices to JSON format.
+
+        Serializes array data to JSON-compatible structures. Handles both dense
+        and sparse matrices, with special handling for complex numbers and
+        type preservation.
+
+        Parameters
+        ----------
+        to_encode : EncodableArrays
+            The array to encode. Can be a NumPy array (np.ndarray) or SciPy sparse matrix.
+
+        Returns
+        -------
+        dict
+            The JSON dictionary containing the encoded array data.
+
+        Raises
+        ------
+        ValueError
+            If the array type is not supported.
+        """
 
         def _serialize_matrix_component(arr):
             """Inline helper for serializing matrix components."""

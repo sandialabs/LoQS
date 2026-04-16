@@ -25,10 +25,15 @@ from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
 
 def create_qec_code():
     """Create a trivial QECCode for testing.
+    
     This codepack implements a simple counter with an increment instruction.
+    
     Returns
     -------
-        A :class:`.QECCode` implementing the trivial counter code.
+    QECCode
+        A (QECCode)[api:QECCode] implementing the trivial counter code.
+    
+    REVIEW_SPHINX_REFERENCE
     """
     # We don't need actual qubits for this trivial example
     # but we'll define a minimal template structure
@@ -71,16 +76,27 @@ def create_ideal_model(
     instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
 ):
     """Create an ideal (noiseless) model for the trivial code.
+    
     Since this is a trivial classical counter, we return an empty model.
+    
     Parameters
     ----------
-    qubits:
+    qubits : Sequence[str]
         List of qubit labels to use (not actually used in this trivial case).
-    model_backend:
+    model_backend : type[BaseNoiseModel], optional
         The model backend to use (not actually used in this trivial case).
+        Default is (DictNoiseModel)[api:DictNoiseModel].
+    gaterep : GateRep, optional
+        Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
+    instrep : InstrumentRep, optional
+        Instrument representation to use. Default is InstrumentRep.ZBASIS_PROJECTION.
+    
     Returns
     -------
-        An empty dict representing no operations needed for this trivial code.
+    BaseNoiseModel
+        An empty (DictNoiseModel)[api:DictNoiseModel] representing no operations needed for this trivial code.
+    
+    REVIEW_SPHINX_REFERENCE
     """
     # For this trivial classical counter, we don't need any quantum operations
     # Return an empty DictNoiseModel

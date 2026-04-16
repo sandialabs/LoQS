@@ -331,21 +331,35 @@ class Instruction(Displayable):
         return self._param_priorities
 
     def param_alias(self, key: str) -> str:
+        """Get the parameter alias for a given key.
+
+        Parameters
+        ----------
+        key : str
+            The parameter key to look up.
+
+        Returns
+        -------
+        str
+            The aliased parameter name, or the original key if no alias exists.
+
+        REVIEW_NO_DOCSTRING
+        """
         return self._param_aliases.get(key, key)
 
     def apply(self, **kwargs) -> Frame:
-        """Apply this :class:`.Instruction` to get a new :class:`.Frame`.
+        """Apply this (Instruction)[api:Instruction] to get a new (Frame)[api:Frame].
 
         Parameters
         ----------
         **kwargs:
-            Parameters to pass on to :attr:`.apply_fn`.
+            Parameters to pass on to (apply_fn)[api:Instruction.apply_fn].
 
         Returns
         -------
         Frame
-            The output :class:`.Frame` of :attr:`.apply_fn`, with this
-            :class:`Instruction` and the input parameters appended for
+            The output (Frame)[api:Frame] of (apply_fn)[api:Instruction.apply_fn], with this
+            (Instruction)[api:Instruction] and the input parameters appended for
             informational/debugging purposes
         """
         # Pull out only kwargs we need
@@ -363,7 +377,7 @@ class Instruction(Displayable):
         return output_frame
 
     def copy(self) -> Instruction:
-        """Return a copy of this :class:`.Instruction`."""
+        """Return a copy of this (Instruction)[api:Instruction]."""
         return Instruction(
             apply_fn=self.apply_fn,
             data=deepcopy(self.data),
@@ -391,7 +405,7 @@ class Instruction(Displayable):
         Returns
         -------
         Instruction
-            A copy of the :class:`Instruction` with mapped qubits
+            A copy of the (Instruction)[api:Instruction] with mapped qubits
         """
         new_instruction = self.copy()
         # Map qubits on all data

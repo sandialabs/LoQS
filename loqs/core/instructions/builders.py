@@ -7,15 +7,15 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Functions to construct common :class:`.Instruction` objects.
+"""Functions to construct common (Instruction)[api:Instruction] objects.
 
 Each function documents both how to use it, as well
 as providing the following information about the created
-:class:`.Instruction`:
+(Instruction)[api:Instruction]:
 
 - The apply function
     - The parameters it pulls, including the typical source
-    - What keys are in the returned :class:`.Frame`
+    - What keys are in the returned (Frame)[api:Frame]
 - The map qubits function (if needed)
 - The parameter priorities (if not default)
 - The parameter aliases (if provided)
@@ -98,12 +98,12 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - ``patch_label``, usually from the :attr:`.InstructionLabel.patch_label`
-    - `stack`, usually from the :class:`.QuantumProgram`
-    - `instructions`, usually from the :attr:`.Instruction.data`
+    - ``patch_label``, usually from the (patch_label)[api:InstructionLabel.patch_label]
+    - `stack`, usually from the QuantumProgram
+    - `instructions`, usually from the (data)[api:Instruction.data]
 
-    It returns a :class:`.Frame` where ``instructions`` have been inserted
-    onto the front of :class:`.InstructionStack` stored at ``"stack"``.
+    It returns a (Frame)[api:Frame] where ``instructions`` have been inserted
+    onto the front of InstructionStack stored at ``"stack"``.
 
     There is a map qubits function, which calls the map qubits
     functions for the underlying `instructions`.
@@ -128,6 +128,28 @@ def build_composite_instruction(
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> Frame:
+        """Apply function for composite instruction.
+        
+        Inserts instructions into the instruction stack and returns updated frame.
+        
+        Parameters
+        ----------
+        patch_label : str | None
+            Patch label for the instruction.
+        stack : InstructionStack
+            Current instruction stack.
+        instructions : Sequence[Instruction | InstructionLabel]
+            Instructions to insert into the stack.
+        **kwargs
+            Additional keyword arguments for the instructions.
+            
+        Returns
+        -------
+        Frame
+            Updated frame with modified instruction stack.
+            
+        REVIEW_NO_DOCSTRING
+        """
         for i, inst_or_label in enumerate(instructions):
             if isinstance(inst_or_label, Instruction):
                 new_label = InstructionLabel(
@@ -158,6 +180,26 @@ def build_composite_instruction(
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for composite instruction.
+        
+        Maps qubits in the instruction sequence according to the provided mapping.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        instructions : Sequence[Instruction | InstructionLabel]
+            Instructions to map qubits for.
+        **kwargs
+            Additional keyword arguments to preserve.
+            
+        Returns
+        -------
+        KwargDict
+            Dictionary containing updated instructions with mapped qubits.
+            
+        REVIEW_NO_DOCSTRING
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["instructions"] = [
             (
@@ -267,6 +309,32 @@ def build_lookup_decoder_instruction(
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
         history: History,
     ) -> Frame:
+        """Apply lookup table decoder instruction.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch to apply corrections to.
+        lookup_table : dict[str, str]
+            Mapping from syndrome strings to correction Pauli strings.
+        syndrome_labels : list[SyndromeLabel]
+            List of syndrome labels describing measurement outcomes.
+        raw_syndrome_frame_key : str
+            Key for storing raw syndrome information in the output frame.
+        diff_prev_syndrome : bool
+            Whether to XOR with previous syndrome (True) or use current syndrome directly (False).
+        patches : PatchDict
+            Dictionary of patches containing Pauli frames.
+        syndrome_outcomes : list[MeasurementOutcomes] | MeasurementOutcomes
+            Measurement outcomes from previous frames.
+        history : History
+            History of previous frames for reference.
+
+        Returns
+        -------
+        Frame
+            Updated frame with corrected Pauli frame and syndrome information.
+        """
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
             syndrome_outcomes = [syndrome_outcomes]
 
@@ -357,6 +425,24 @@ def build_lookup_decoder_instruction(
         syndrome_labels: list[SyndromeLabel],
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for lookup decoder instruction.
+
+        Updates syndrome labels to reflect new qubit mapping.
+
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        syndrome_labels : list[SyndromeLabel]
+            List of syndrome labels to be updated.
+        **kwargs : dict
+            Additional keyword arguments to preserve.
+
+        Returns
+        -------
+        KwargDict
+            Dictionary containing updated syndrome labels and preserved kwargs.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["syndrome_labels"] = [
             SyndromeLabel(
@@ -431,6 +517,23 @@ def build_object_builder_instruction(
     # This is also an odd apply_fn because we do not know the args a priori
     # Here we define the generic apply_fn using variadic kwargs
     def apply_fn(**kwargs) -> Frame:
+        """Apply object builder instruction.
+
+        This function takes variadic kwargs since the constructor arguments
+        are not known until runtime. It constructs an object of the specified
+        class and stores it in a frame.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Must contain 'frame_key' (str) and 'obj_class' (type), plus any
+            additional arguments required by the obj_class constructor.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary.
+        """
         frame_key = kwargs.pop("frame_key")
         obj_class = kwargs.pop("obj_class")
         try:
@@ -510,6 +613,28 @@ def build_patch_builder_instruction(
         qec_code: QECCode,
         patches: PatchDict | None,
     ) -> Frame:
+        """Apply patch builder instruction.
+
+        Creates a new patch from the QEC code and adds it to the patches dictionary.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label for the new patch.
+        qubits : Sequence[str]
+            List of qubit labels for the new patch.
+        qec_code : QECCode
+            Quantum error correction code to use for creating the patch.
+        patches : PatchDict | None
+            Existing patches dictionary, or None to create a new one.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary.
+
+        REVIEW_NO_DOCSTRING
+        """
         if patches is None:
             patches = PatchDict()
 
@@ -578,6 +703,24 @@ def build_patch_remover_instruction(
         patch_label: str,
         patches: PatchDict,
     ) -> Frame:
+        """Apply patch remover instruction.
+
+        Removes a patch from the patches dictionary.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch to remove.
+        patches : PatchDict
+            Dictionary of patches to remove from.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary.
+
+        REVIEW_NO_DOCSTRING
+        """
         assert (
             patch_label in patches
         ), f"Patch remover failed, could not find patch {patch_label}"
@@ -630,6 +773,24 @@ def build_patch_permute_instruction(
         mapping: Mapping[str | int, str | int],
         patches: PatchDict,
     ) -> Frame:
+        """Apply patch permute instruction.
+
+        Permutes the qubits in a patch according to the provided mapping.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch to permute.
+        mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        patches : PatchDict
+            Dictionary of patches containing the patch to permute.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary with permuted patch.
+        """
         assert (
             patch_label in patches
         ), f"Patch permute failed, could not find patch {patch_label}"
@@ -656,6 +817,22 @@ def build_patch_permute_instruction(
         qubit_mapping: Mapping[str | int, str | int],
         mapping: Mapping[str | int, str | int],
     ) -> KwargDict:
+        """Map qubits function for patch permute instruction.
+
+        Updates the qubit mapping to reflect the new qubit labels.
+
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        mapping : Mapping[str | int, str | int]
+            Original mapping to be updated.
+
+        Returns
+        -------
+        KwargDict
+            Dictionary containing the updated mapping.
+        """
         new_mapping = {
             qubit_mapping[k]: qubit_mapping[v] for k, v in mapping.items()
         }
@@ -742,6 +919,34 @@ def build_physical_circuit_instruction(
         patch_label: str,
         patches: PatchDict,
     ) -> Frame:
+        """Apply physical circuit instruction.
+
+        Executes a physical circuit on the quantum state and updates the Pauli frame.
+
+        Parameters
+        ----------
+        model : BaseNoiseModel
+            Noise model to use for circuit execution.
+        circuit : BasePhysicalCircuit
+            Physical circuit to execute.
+        state : BaseQuantumState
+            Quantum state to operate on.
+        inplace : bool
+            Whether to modify the state in-place.
+        error_injections : list[tuple[int, str, int]] | None
+            List of error injections to apply to the circuit.
+        pauli_frame_update : str | list[str] | dict[str, str] | None
+            Pauli frame update to apply after circuit execution.
+        patch_label : str
+            Label of the patch to update.
+        patches : PatchDict
+            Dictionary of patches containing the patch to update.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated state and patches.
+        """
 
         # Modify circuit for injected errors
         qubits = circuit.qubit_labels
@@ -838,6 +1043,24 @@ def build_physical_circuit_instruction(
         circuit: BasePhysicalCircuit,
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for physical circuit instruction.
+
+        Updates the circuit to reflect new qubit mapping.
+
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        circuit : BasePhysicalCircuit
+            Circuit to be updated with new qubit labels.
+        **kwargs : dict
+            Additional keyword arguments to preserve.
+
+        Returns
+        -------
+        KwargDict
+            Dictionary containing updated circuit and preserved kwargs.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["circuit"] = circuit.map_qubit_labels(qubit_mapping)
         return new_kwargs
@@ -921,6 +1144,34 @@ def build_repeat_until_success_instruction(
         max_repeats: int,
         stack: InstructionStack,
     ) -> Frame:
+        """Apply repeat-until-success instruction.
+
+        Repeats the underlying instruction until it succeeds or max_repeats is reached.
+
+        Parameters
+        ----------
+        observed : object
+            Observed outcome from the instruction execution.
+        expected : object
+            Expected outcome for successful execution.
+        rus_key : str
+            Key for the repeat-until-success instruction.
+        patch_label : str
+            Label of the patch being operated on.
+        repeat_count : int
+            Current repeat count.
+        instructions : InstructionStackCastableTypes
+            Instructions to execute.
+        max_repeats : int
+            Maximum number of repeats before giving up.
+        stack : InstructionStack
+            Current instruction stack.
+
+        Returns
+        -------
+        Frame
+            Frame containing success status and repeat count information.
+        """
         # If we were successful, return empty frame (with debug info)
         # TODO: If these are measurement_outcomes, how do we get inferred_outcomes from Pauli frame?
         if observed == expected:
@@ -969,6 +1220,26 @@ def build_repeat_until_success_instruction(
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for repeat-until-success instruction.
+        
+        Maps qubits in the instruction sequence and expected outcomes.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        instructions : Sequence[Instruction | InstructionLabel]
+            Instructions to map qubits for.
+        **kwargs
+            Additional keyword arguments including expected outcomes.
+            
+        Returns
+        -------
+        KwargDict
+            Dictionary containing updated instructions and expected outcomes with mapped qubits.
+            
+        REVIEW_NO_DOCSTRING
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["instructions"] = [
             (

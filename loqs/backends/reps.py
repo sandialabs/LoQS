@@ -170,6 +170,35 @@ class ConcreteGateReps:
     def sequence_is_krausop_rep(
         gr: Sequence, tp_check_abstol: Float = TP_CHECK_TOL
     ) -> bool:
+        """Check if a sequence is a valid Kraus operator representation.
+
+        Parameters
+        ----------
+        gr : Sequence
+            The sequence to check for Kraus operator representation format.
+
+        tp_check_abstol : Float, optional
+            Absolute tolerance for trace-preserving check. If finite, performs
+            a trace-preserving check on the Kraus operators. Default is TP_CHECK_TOL.
+
+        Returns
+        -------
+        bool
+            True if the sequence is a valid Kraus operator representation,
+            False otherwise.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        A valid Kraus operator representation is a sequence where each element is
+        a tuple or list with exactly 2 elements: a numpy array (the Kraus operator)
+        and a float or None (the probability or weight).
+
+        If tp_check_abstol is finite, this function also checks if the Kraus
+        operators form a trace-preserving channel and issues a warning if they don't.
+        """
         if len(gr) == 0:
             return False
         for el in gr:
@@ -194,6 +223,28 @@ class ConcreteGateReps:
 
     @staticmethod
     def sequence_is_probabilisticstim_rep(gr: Sequence) -> bool:
+        """Check if a sequence is a valid probabilistic STIM operation representation.
+
+        Parameters
+        ----------
+        gr : Sequence
+            The sequence to check for probabilistic STIM operation representation format.
+
+        Returns
+        -------
+        bool
+            True if the sequence is a valid probabilistic STIM operation representation,
+            False otherwise.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        A valid probabilistic STIM operation representation is a sequence where each
+        element is a tuple or list with exactly 2 elements: a STIM circuit string
+        and a probability value (float, int, or numpy floating type).
+        """
         if len(gr) == 0:
             return False
         for el in gr:
@@ -301,6 +352,28 @@ class ConcreteInstrumentReps:
 
     @staticmethod
     def is_zbasis_projection_rep(ir) -> bool:
+        """Check if an instrument representation is a Z-basis projection representation.
+
+        Parameters
+        ----------
+        ir : object
+            The instrument representation to check.
+
+        Returns
+        -------
+        bool
+            True if the representation is a valid Z-basis projection representation,
+            False otherwise.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        A Z-basis projection representation is valid if it is a tuple or list with
+        exactly 2 elements where the first element is an integer or None, and the
+        second element is a boolean.
+        """
         if not isinstance(ir, (tuple, list)):
             return False
         if len(ir) != 2:
@@ -365,10 +438,15 @@ class RepTuple(Castable, Displayable):
 
     @classmethod
     def cast(cls: type[RepTuple], obj: object) -> RepTuple:
-        """Cast this object to a :class:`RepTuple`.
+        """Cast this object to a (RepTuple)[api:RepTuple].
 
         This is specialized because lists/tuples with up to 3 entries
         should be unpacked into the three arguments.
+
+        Notes
+        -----
+        REVIEW_SPHINX_REFERENCE: This docstring was updated to replace Sphinx references
+        with MkDocs format. Please review the new format.
         """
         if isinstance(obj, cls):
             # We are already the correct class, perform no copy

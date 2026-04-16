@@ -88,22 +88,22 @@ class QECCode(Displayable):
         qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes | None = None,
     ) -> QECCodePatch:
-        """Create a :class:`.QECCodePatch` based on this :class:`QECCode`.
+        """Create a (QECCodePatch)[api:QECCodePatch] based on this (QECCode)[api:QECCode].
 
         Parameters
         ----------
         qubits:
-            Qubit labels to replace :attr:`.template_qubits`.
+            Qubit labels to replace (template_qubits)[api:QECCode.template_qubits].
 
         pauli_frame:
-            An initial :class:`.PauliFrame` to assign to the patch.
+            An initial (PauliFrame)[api:PauliFrame] to assign to the patch.
             Defaults to ``None``, which assigns the trivial Pauli frame
             of all ``"I"`` entries.
 
         Returns
         -------
         QECCodePatch
-            The constructed :class:`.QECCodePatch`
+            The constructed (QECCodePatch)[api:QECCodePatch]
         """
         if pauli_frame is None:
             # Map template data qubits to real qubits

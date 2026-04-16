@@ -63,10 +63,42 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @property
     def state(self) -> np.ndarray:
+        """Get the underlying quantum state vector.
+
+        Returns
+        -------
+        np.ndarray
+            The quantum state vector as a numpy array.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This property provides access to the raw state vector representing the
+        quantum state. The state vector is a complex numpy array where each
+        element corresponds to the amplitude of a particular bitstring.
+        """
         return self._state
 
     @property
     def input_reps(self) -> list[GateRep | InstrumentRep]:
+        """Get the list of supported operation representation types.
+
+        Returns
+        -------
+        list[GateRep | InstrumentRep]
+            List of operation representation types that this quantum state backend
+            can process and apply.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        The numpy statevector backend supports unitary gates, Kraus operators,
+        Z-basis projections, and Z-basis pre/post operations as input representations.
+        """
         return [
             GateRep.UNITARY,
             GateRep.KRAUS_OPERATORS,
@@ -149,9 +181,64 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     def apply_reps(
         self, reps: Sequence[RepTuple]
     ) -> tuple[NumpyStatevectorQuantumState, OutcomeDict]:
+        """Apply operation representations to the quantum state.
+
+        This method applies a sequence of operation representations (RepTuples)
+        to the quantum state and returns a new state with the operations applied
+        along with any measurement outcomes.
+
+        Parameters
+        ----------
+        reps : Sequence[RepTuple]
+            Sequence of operation representations to apply to the state.
+
+        Returns
+        -------
+        tuple[NumpyStatevectorQuantumState, OutcomeDict]
+            A tuple containing a new quantum state with the operations applied
+            and a dictionary of measurement outcomes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method delegates to the parent class implementation for the actual
+        operation application logic.
+        """
         return super().apply_reps(reps)
 
     def apply_reps_inplace(self, reps: Sequence[RepTuple]) -> OutcomeDict:
+        """Apply operation representations to the quantum state in-place.
+
+        This method applies a sequence of operation representations (RepTuples)
+        directly to the current quantum state, modifying it in-place, and returns
+        any measurement outcomes.
+
+        Parameters
+        ----------
+        reps : Sequence[RepTuple]
+            Sequence of operation representations to apply to the state.
+
+        Returns
+        -------
+        OutcomeDict
+            Dictionary of measurement outcomes from applying the operations.
+            Outcomes can be empty if no measurements were performed.
+
+        Raises
+        ------
+        ValueError
+            If an unknown or unsupported operation representation type is encountered.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method processes both gate operations (which modify the state directly)
+        and instrument operations (which may produce measurement outcomes).
+        """
         outcomes: OutcomeDict = defaultdict(list)
 
         for reptuple in reps:
@@ -379,6 +466,23 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return cbit
 
     def copy(self) -> NumpyStatevectorQuantumState:
+        """Create a deep copy of the quantum state.
+
+        Returns
+        -------
+        NumpyStatevectorQuantumState
+            A new quantum state object that is a deep copy of the current state,
+            including the state vector, qubit labels, random number generator state,
+            and all other attributes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        This method creates a complete independent copy of the quantum state,
+        ensuring that modifications to the copy do not affect the original state.
+        """
         new_state = NumpyStatevectorQuantumState(
             deepcopy(self.state),
             qubit_labels=self.qubit_labels,
@@ -388,6 +492,20 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return new_state
 
     def print_bitstring_amplitudes(self):
+        """Print the amplitudes of all bitstrings in the quantum state.
+
+        This method prints the qubit labels and then iterates through all possible
+        bitstrings, displaying those with amplitudes greater than a threshold (1e-6).
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+
+        The method prints each bitstring and its corresponding amplitude, providing
+        a human-readable representation of the quantum state. Only amplitudes with
+        magnitude greater than 1e-6 are displayed to avoid clutter from negligible values.
+        """
         n_qubits = len(self.qubit_labels)
         print(self.qubit_labels)
         for i in range(2**n_qubits):

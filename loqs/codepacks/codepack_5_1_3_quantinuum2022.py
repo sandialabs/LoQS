@@ -59,39 +59,41 @@ def create_qec_code(
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
 ):
     """Create a QECCode implementing the [[5,1,3]] code.
-
+    
     Parameters
     ----------
-    ft_state_prep_max_repeats:
+    ft_state_prep_max_repeats : int, optional
         The number of max repeats to include in the repeat-until-success
-        fault-tolerant state prep instruction.
-
-    include_idles:
-        Whether to include (``True``) or not (``False``, default) idle gates
+        fault-tolerant state prep instruction. Default is 100.
+    
+    include_idles : bool, optional
+        Whether to include (True) or not (False, default) idle gates
         in physical circuits.
-
-    gate_durations:
-        Mapping from gate names to durations. Defaults to ``None``, which uses
+    
+    gate_durations : dict[str, int | float] | None, optional
+        Mapping from gate names to durations. Defaults to None, which uses
         dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
         measurements, respectively.
         See ``durations`` from
-        :meth:`.BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace`
+        (BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)[api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace]
         for more details.
-
-    idle_gates:
-        Mapping from gate duration to idle gate names. Defaults to ``None``,
+    
+    idle_gates : dict[int | float, str] | None, optional
+        Mapping from gate duration to idle gate names. Defaults to None,
         which maps the dummy values from ``gate_durations`` to ``"Gi1Q"``,
         ``"Gi2Q"``, and ``"GiMCM"``, respectively.
         See ``idle_names`` from
-        :meth:`.BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace`
+        (BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)[api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace]
         for more details.
-
-    circuit_backend:
+    
+    circuit_backend : type[BasePhysicalCircuit], optional
         The circuit backend to use when generating physical circuits.
-
+        Default is (PyGSTiPhysicalCircuit)[api:PyGSTiPhysicalCircuit].
+    
     Returns
     -------
-        A :class:`.QECCode` implementing the [[5,1,3]] code.
+    QECCode
+        A (QECCode)[api:QECCode] implementing the [[5,1,3]] code.
     """
 
     # Template qubits for defining one patch
@@ -390,6 +392,40 @@ def create_qec_code(
         patches: PatchDict,
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
+        """Apply function for non-fault-tolerant logical measurement.
+        
+        Computes the logical measurement outcome from raw measurement outcomes
+        using the Pauli frame to infer corrections. This function implements
+        the non-fault-tolerant logical measurement for the [[5,1,3]] code.
+        
+        The logical measurement is computed by summing the inferred bitstring
+        values modulo 2, where an odd parity corresponds to logical 0 and
+        even parity corresponds to logical 1.
+        
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch being measured.
+        patches : PatchDict
+            Dictionary of patches containing Pauli frame information for
+            tracking Pauli corrections.
+        measurement_outcomes : MeasurementOutcomes
+            Raw measurement outcomes from the physical qubits, used to infer
+            corrected outcomes based on the Pauli frame.
+        
+        Returns
+        -------
+        Frame
+            Frame containing the computed logical measurement value:
+            - logical_measurement : int
+                The final logical measurement value (0 or 1) after applying
+                Pauli frame corrections and parity computation.
+        
+        Notes
+        -----
+        This function is used in composite instructions for non-fault-tolerant
+        logical Z and X measurements after transforming to the prime basis.
+        """
         # Get pauli frame
         pauli_frame = patches[patch_label].pauli_frame
 
@@ -505,25 +541,32 @@ def create_ideal_model(  # noqa: C901
     instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
 ):
     """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
-
+    
     This model will contain all the instructions needed to run the
-    physical circuits in the :class:`QECCode` returned by :meth:`create_qec_code()`.
-
-
+    physical circuits in the (QECCode)[api:QECCode] returned by (create_qec_code)[api:create_qec_code].
+    
     Parameters
     ----------
-    qubits:
+    qubits : Sequence[str]
         List of qubit labels to use. It should be have 7 entries,
         and the first two qubits should be the auxiliary qubits.
-
-    model_backend:
+    
+    model_backend : type[BaseNoiseModel], optional
         The model backend to use when generating operations.
-        Currently, only :class:`PyGSTiNoiseModel` is allowed.
-
+        Currently, only (PyGSTiNoiseModel)[api:PyGSTiNoiseModel] is allowed.
+        Default is (PyGSTiNoiseModel)[api:PyGSTiNoiseModel].
+    
+    gaterep : GateRep, optional
+        Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
+    
+    instrep : InstrumentRep, optional
+        Instrument representation to use. Default is InstrumentRep.ZBASIS_PROJECTION.
+    
     Returns
     -------
-        A noiseless model for the `QECCode` returned by
-        :meth:`create_qec_code`
+    BaseNoiseModel
+        A noiseless model for the (QECCode)[api:QECCode] returned by
+        (create_qec_code)[api:create_qec_code].
     """
     assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
     model_qubits = [f"Q{i}" for i in range(7)]
@@ -718,6 +761,64 @@ def _create_adaptive_measure_instruction(
         flagged_check: str | None,
         flagged_check_order: list[int] | None,
     ) -> Frame:
+        """Apply function for classical decoder in fault-tolerant logical measurement.
+        
+        Performs classical syndrome computation and decoding to determine
+        error corrections for logical measurement outcomes. This function
+        implements the classical decoder described in Appendix B.2 of
+        arxiv:1705.02329 for the [[5,1,3]] quantum error correcting code.
+        
+        The decoder computes syndromes from stabilizer measurements, looks up
+        potential error corrections, applies classical error correction, and
+        computes the final logical measurement outcome based on parity.
+        
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch being decoded.
+        patches : PatchDict
+            Dictionary of patches containing Pauli frame information for
+            tracking Pauli corrections.
+        measurement_outcomes : MeasurementOutcomes
+            Raw measurement outcomes from the physical qubits, used to infer
+            corrected outcomes based on the Pauli frame.
+        flagged_check : str | None
+            Name of the flagged check that failed (e.g., "XZIIZ"), or None 
+            if no flag failure occurred.
+        flagged_check_order : list[int] | None
+            Order of qubits in the flagged check, or None if no flag failure.
+            Used to determine hook errors when a flag check fails.
+        
+        Returns
+        -------
+        Frame
+            Frame containing decoded information including:
+            - logical_measurement : int
+                The final logical measurement value (0 or 1) after error correction.
+            - stage : str
+                Stage identifier ("Classical Decoder").
+            - precorrected_inferred_outcomes : list[int]
+                Inferred measurement outcomes before error correction.
+            - possible_predecoded_errors : list[str]
+                List of possible error Pauli strings before decoding.
+            - possible_decoded_errors : list[str]
+                List of possible error Pauli strings after decoding.
+            - classical_syndrome : tuple[int, ...]
+                Computed syndrome from stabilizer measurements.
+            - classical_correction : str
+                Applied classical error correction Pauli string.
+            - corrected_outcomes : list[int]
+                Final corrected measurement outcomes after error correction.
+        
+        Notes
+        -----
+        The decoder handles two cases:
+        1. Measurement mismatches (flagged_check is None): Corrects all weight-1 data errors
+        2. Flag failures (flagged_check provided): Corrects hook errors based on failed check
+        
+        An odd parity of corrected outcomes corresponds to logical 0,
+        while even parity corresponds to logical 1.
+        """
 
         # Get pauli frame
         pauli_frame = patches[patch_label].pauli_frame
@@ -750,6 +851,34 @@ def _create_adaptive_measure_instruction(
             )
 
         def compute_decoded_bitstring(pstr: str) -> str:
+            """Compute the decoded bitstring from a Pauli string.
+            
+            This function implements the decoding logic for the [[5,1,3]] code by
+            propagating Pauli errors through the decoding circuit. It handles X, Y, and Z
+            errors according to the error propagation rules of the code.
+            
+            Parameters
+            ----------
+            pstr : str
+                Input Pauli string to decode (e.g., "IXZXI" for a 5-qubit string).
+                Each character represents a Pauli operator on one qubit.
+            
+            Returns
+            -------
+            str
+                Decoded bitstring representing the corrected Pauli string after
+                error propagation through the decoding circuit.
+            
+            Notes
+            -----
+            Error propagation rules:
+            - X errors: Trigger X errors on adjacent qubits (with periodic boundary conditions)
+            - Z errors: Trigger X errors on the same qubit
+            - Y errors: Trigger X-like and Z-like errors (X on adjacent and same qubit)
+            
+            The function uses periodic boundary conditions, so qubit 0 is adjacent to
+            qubit 4, and qubit 4 is adjacent to qubit 0.
+            """
             decoded_pstr = "I" * len(pstr)
             for i, p in enumerate(pstr):
                 if p == "X":
@@ -884,7 +1013,54 @@ def _create_adaptive_measure_instruction_part_I(
         stack: InstructionStack,
         measurement_outcomes: MeasurementOutcomes,
         qubits: list[str],
-    ) -> Frame:
+        ) -> Frame:
+        """Apply function for Part I feedforward in fault-tolerant logical X measurement.
+        
+        Processes measurement outcomes and determines next instructions based on
+        flag qubit results. This function implements the first stage of the
+        three-part adaptive measurement protocol described in Fig 13 of arxiv:2208.01863.
+        
+        The function evaluates the flag qubit F1 to determine the next steps:
+        - If F1 == 0: Proceeds to Part II of the measurement protocol
+        - If F1 == 1: Triggers the classical decoder with flag failure information
+        
+        When a flag failure occurs, it passes the flagged check name ("XZIIZ")
+        and qubit order ([4, 0, 1]) to help the decoder identify hook errors.
+        
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch being measured.
+        patches : PatchDict
+            Dictionary of patches containing Pauli frame information for
+            tracking Pauli corrections.
+        stack : InstructionStack
+            Current instruction stack for feedforward operations that will
+            be modified to include next instructions.
+        measurement_outcomes : MeasurementOutcomes
+            Raw measurement outcomes from the physical qubits, containing
+            both measurement and flag results.
+        qubits : list[str]
+            List of qubit labels involved in the measurement, where
+            qubits[0] is the measurement qubit and qubits[1] is the flag qubit.
+        
+        Returns
+        -------
+        Frame
+            Frame containing updated instruction stack with next instructions
+            and measurement information including:
+            - stack : InstructionStack (with Part II or decoder instructions)
+            - F1 : int (flag qubit value)
+            - raw_M1 : int (raw measurement from Part I)
+            - inferred_M1 : int (inferred measurement from Part I)
+        
+        Notes
+        -----
+        This function implements Part I of the three-part adaptive measurement
+        protocol for fault-tolerant logical X measurements. The protocol uses
+        flag qubits to detect fault-tolerant violations and adaptively chooses
+        between continuing the measurement or triggering error correction.
+        """
         pauli_frame = patches[patch_label].pauli_frame
 
         # Pull out measurement and flag
@@ -954,6 +1130,32 @@ def _create_adaptive_measure_instruction_part_I(
         qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for Part I feedforward instruction.
+        
+        Remaps qubit labels according to the provided mapping.
+        This function enables the Part I feedforward instruction to work with
+        different qubit label schemes by translating between them.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        qubits : Sequence[str]
+            Original qubit labels to be remapped (typically measurement and flag qubits).
+        **kwargs : dict
+            Additional keyword arguments to preserve unchanged.
+        
+        Returns
+        -------
+        KwargDict
+            Updated keyword arguments with remapped qubits list,
+            preserving all other arguments.
+        
+        Notes
+        -----
+        This function is used as the map_qubits_fn parameter when creating
+        Instruction objects that need to support qubit relabeling.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
         return new_kwargs
@@ -1007,6 +1209,55 @@ def _create_adaptive_measure_instruction_part_II(
         qubits: list[str],
         inferred_M1: int,
     ) -> Frame:
+        """Apply function for Part II feedforward in fault-tolerant logical X measurement.
+        
+        Processes measurement outcomes from Part II and determines next instructions
+        in the adaptive measurement protocol. This function implements the second stage
+        of the three-part protocol described in Fig 13 of arxiv:2208.01863.
+        
+        The function evaluates flag and syndrome outcomes to determine the next steps:
+        - If flag F2 != 0: Terminates with logical measurement from M1
+        - If inferred_M1 == inferred_M2: Proceeds to Part III
+        - Otherwise: Triggers classical decoder for error correction
+        
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch being measured.
+        patches : PatchDict
+            Dictionary of patches containing Pauli frame information.
+        stack : InstructionStack
+            Current instruction stack for feedforward operations that will
+            be modified to include next instructions.
+        measurement_outcomes : MeasurementOutcomes
+            Raw measurement outcomes from the physical qubits, containing
+            both measurement and flag results.
+        qubits : list[str]
+            List of qubit labels involved in the measurement, where
+            qubits[0] is the measurement qubit and qubits[1] is the flag qubit.
+        inferred_M1 : int
+            Inferred measurement outcome from Part I (0 or 1), retrieved
+            from history[-2] frame using param_priorities.
+        
+        Returns
+        -------
+        Frame
+            Frame containing either:
+            - Updated instruction stack with next instructions (Part III or decoder)
+            - Final logical measurement outcome and termination information
+            
+            When continuing, includes updated stack. When terminating, includes:
+            - logical_measurement : int (final logical value from M1)
+            - stage : str (termination reason)
+            - F2 : int (flag qubit value)
+            - raw_M2 : int (raw measurement from Part II)
+            - inferred_M2 : int (inferred measurement from Part II)
+        
+        Notes
+        -----
+        This function implements Part II of the three-part adaptive measurement
+        protocol for fault-tolerant logical X measurements.
+        """
         pauli_frame = patches[patch_label].pauli_frame
 
         # Pull out measurement and flag
@@ -1083,6 +1334,32 @@ def _create_adaptive_measure_instruction_part_II(
         qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for Part II feedforward instruction.
+        
+        Remaps qubit labels according to the provided mapping.
+        This function enables the Part II feedforward instruction to work with
+        different qubit label schemes by translating between them.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        qubits : Sequence[str]
+            Original qubit labels to be remapped (typically measurement and flag qubits).
+        **kwargs : dict
+            Additional keyword arguments to preserve unchanged.
+        
+        Returns
+        -------
+        KwargDict
+            Updated keyword arguments with remapped qubits list,
+            preserving all other arguments.
+        
+        Notes
+        -----
+        This function is used as the map_qubits_fn parameter when creating
+        Instruction objects that need to support qubit relabeling.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
         return new_kwargs
@@ -1094,11 +1371,34 @@ def _create_adaptive_measure_instruction_part_II(
         param_priorities={
             "inferred_M1": ["history[-2]"]  # Look back 2 frames for M1
         },
-        name="FT Logical X Measure Part II Feed-Forward",
+            name="FT Logical X Measure Part II Feed-Forward",
     )
 
-
-def _create_adaptive_measure_instruction_part_III(
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str | int, str | int],
+        qubits: Sequence[str],
+        **kwargs,
+    ) -> KwargDict:
+        """Map qubits function for Part II feedforward instruction.
+        
+        Remaps qubit labels according to the provided mapping.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        qubits : Sequence[str]
+            Original qubit labels to be remapped.
+        **kwargs : dict
+            Additional keyword arguments to preserve.
+        
+        Returns
+        -------
+        KwargDict
+            Updated keyword arguments with remapped qubit labels.
+        
+        REVIEW_NO_DOCSTRING
+        """
     instructions,
     qubits,
     include_idles,
@@ -1140,6 +1440,61 @@ def _create_adaptive_measure_instruction_part_III(
         inferred_M1: int,
         inferred_M2: int,
     ) -> Frame:
+        """Apply function for Part III feedforward in fault-tolerant logical X measurement.
+        
+        Processes measurement outcomes from Part III and determines final logical outcome
+        or triggers error correction procedures. This function implements the final stage
+        of the adaptive measurement protocol described in Fig 13 of arxiv:2208.01863.
+        
+        The function evaluates three conditions to determine the next steps:
+        1. Flag qubit F3 = 0 (no flag error)
+        2. Inferred measurements M1 == M2 (consistency between parts I and II)
+        3. Inferred measurements M1 != M3 (discrepancy with part III)
+        
+        When all three conditions are met, it triggers the classical decoder for
+        error correction. Otherwise, it terminates with the logical measurement
+        value from M1.
+        
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch being measured.
+        patches : PatchDict
+            Dictionary of patches containing Pauli frame information.
+        stack : InstructionStack
+            Current instruction stack for feedforward operations that will
+            be modified to include next instructions.
+        measurement_outcomes : MeasurementOutcomes
+            Raw measurement outcomes from the physical qubits, containing
+            both measurement and flag results.
+        qubits : list[str]
+            List of qubit labels involved in the measurement, where
+            qubits[0] is the measurement qubit and qubits[1] is the flag qubit.
+        inferred_M1 : int
+            Inferred measurement outcome from Part I (0 or 1).
+        inferred_M2 : int
+            Inferred measurement outcome from Part II (0 or 1).
+        
+        Returns
+        -------
+        Frame
+            Frame containing either:
+            - Updated instruction stack with decoder instructions (when conditions met)
+            - Final logical measurement outcome and termination information (otherwise)
+            
+            The frame includes:
+            - stack : InstructionStack (when continuing)
+            - logical_measurement : int (when terminating)
+            - stage : str (termination reason)
+            - F3 : int (flag qubit value)
+            - raw_M3 : int (raw measurement from Part III)
+            - inferred_M3 : int (inferred measurement from Part III)
+        
+        Notes
+        -----
+        This function implements Part III of the three-part adaptive measurement
+        protocol for fault-tolerant logical X measurements.
+        """
         pauli_frame = patches[patch_label].pauli_frame
 
         # Pull out measurement and flag
@@ -1220,14 +1575,61 @@ def _create_adaptive_measure_instruction_part_III(
         qubits: Sequence[str],
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for Part III feedforward instruction.
+        
+        Remaps qubit labels according to the provided mapping.
+        This function enables the Part III feedforward instruction to work with
+        different qubit label schemes by translating between them.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        qubits : Sequence[str]
+            Original qubit labels to be remapped (typically measurement and flag qubits).
+        **kwargs : dict
+            Additional keyword arguments to preserve unchanged.
+        
+        Returns
+        -------
+        KwargDict
+            Updated keyword arguments with remapped qubits list,
+            preserving all other arguments.
+        
+        Notes
+        -----
+        This function is used as the map_qubits_fn parameter when creating
+        Instruction objects that need to support qubit relabeling.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
         return new_kwargs
 
-    instructions["FT Logical X Measure Part III Feed-Forward"] = Instruction(
-        partIII_feedforward_apply_fn,
-        {"qubits": qubits},
-        map_qubits_fn,
+    def map_qubits_fn(
+        qubit_mapping: Mapping[str | int, str | int],
+        qubits: Sequence[str],
+        **kwargs,
+    ) -> KwargDict:
+        """Map qubits function for Part III feedforward instruction.
+        
+        Remaps qubit labels according to the provided mapping.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        qubits : Sequence[str]
+            Original qubit labels to be remapped.
+        **kwargs : dict
+            Additional keyword arguments to preserve.
+        
+        Returns
+        -------
+        KwargDict
+            Updated keyword arguments with remapped qubit labels.
+        
+        REVIEW_NO_DOCSTRING
+        """
         param_priorities={
             "inferred_M1": ["history[-4]"],  # Look back 4 frames for M1
             "inferred_M2": ["history[-2]"],  # and 2 frames for M2
@@ -1609,6 +2011,49 @@ def _create_flagged_QEC_instruction(
         stack: InstructionStack,
         patch_label: str,
     ):
+        """Apply function for flagged feedforward in stabilizer measurements.
+        
+        Processes flag and syndrome outcomes to determine next error correction instructions
+        in the fault-tolerant quantum error correction protocol. This function implements
+        the flag-based feedforward logic for the [[5,1,3]] code.
+        
+        When a flag qubit indicates a potential error (flag=1), the function triggers
+        unflagged stabilizer measurements followed by a flagged decoder. When the flag
+        indicates no error (flag=0) and syndrome is 0, it proceeds to check the next
+        stabilizer. Otherwise, it triggers the appropriate error correction procedure.
+        
+        Parameters
+        ----------
+        stabilizer : str
+            Current stabilizer being checked (e.g., "XZZXI", "IXZZX").
+        next_stabilizer : str
+            Next stabilizer to check if current one passes.
+        syndrome_qubit : str
+            Label of the syndrome qubit used for error detection.
+        flag_qubit : str
+            Label of the flag qubit used to detect fault-tolerant violations.
+        measurement_outcomes : MeasurementOutcomes
+            Raw measurement outcomes from the physical qubits, containing
+            both syndrome and flag measurement results.
+        stack : InstructionStack
+            Current instruction stack for feedforward operations that will
+            be modified to include next instructions.
+        patch_label : str
+            Label of the patch being measured.
+        
+        Returns
+        -------
+        Frame
+            Frame containing the updated instruction stack with the next
+            instructions to execute based on the flag and syndrome outcomes.
+        
+        Notes
+        -----
+        The function implements the following logic:
+        - flag=1: Trigger unflagged measurements + flagged decoder
+        - flag=0, syndrome=0: Proceed to next stabilizer check
+        - flag=0, syndrome=1: Trigger error correction procedure
+        """
         # Pull out flag and syndrome from previous frame
         flag = measurement_outcomes[flag_qubit][0]
         syndrome = measurement_outcomes[syndrome_qubit][0]
@@ -1661,6 +2106,34 @@ def _create_flagged_QEC_instruction(
         syndrome_qubit: str,
         **kwargs,
     ):
+        """Map qubits function for flagged feedforward instruction.
+        
+        Remaps flag and syndrome qubit labels according to the provided mapping.
+        This function enables the flagged feedforward instruction to work with
+        different qubit label schemes by translating between them.
+        
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        flag_qubit : str
+            Original flag qubit label to be remapped.
+        syndrome_qubit : str
+            Original syndrome qubit label to be remapped.
+        **kwargs : dict
+            Additional keyword arguments to preserve unchanged.
+        
+        Returns
+        -------
+        KwargDict
+            Updated keyword arguments with remapped flag_qubit and syndrome_qubit
+            labels, preserving all other arguments.
+        
+        Notes
+        -----
+        This function is used as the map_qubits_fn parameter when creating
+        Instruction objects that need to support qubit relabeling.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["flag_qubit"] = qubit_mapping[flag_qubit]
         new_kwargs["syndrome_qubit"] = qubit_mapping[syndrome_qubit]

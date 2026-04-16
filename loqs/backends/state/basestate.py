@@ -84,7 +84,7 @@ class BaseQuantumState(Castable, Displayable):
         Parameters
         ----------
         reps:
-            See :meth:`.apply_reps_inplace`.
+            See (apply_reps_inplace)[api:apply_reps_inplace].
 
         Returns
         -------
@@ -92,6 +92,11 @@ class BaseQuantumState(Castable, Displayable):
             A copy of the state with reps applied, and
             dictionary of outcomes. Outcomes can be empty if no
             measurements were performed.
+
+        Notes
+        -----
+        REVIEW_SPHINX_REFERENCE: This docstring was updated to replace Sphinx references
+        with MkDocs format. Please review the new format.
         """
         new_state = self.copy()
         outputs = new_state.apply_reps_inplace(reps)

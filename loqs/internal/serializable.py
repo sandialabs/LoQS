@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.Serializable` definition.
+"""(Serializable)[api:Serializable] definition.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class IncorrectDecodableTypeError(Exception):
     """Exception raised when an BaseEncoder function cannot handle an object.
 
     This is a recoverable error (to a point), signaling that a different
-    :class:`.BaseEncoder` function should be tried.
+    (BaseEncoder)[api:BaseEncoder] function should be tried.
     """
 
     pass
@@ -252,18 +252,18 @@ class Serializable:
     """Attributes to serialize.
 
     If encoding requires a different access pattern
-    than :meth:`getattr()`, derived classes should
-    implement :meth:`.get_encoding_attrs`.
+    than getattr(), derived classes should
+    implement (get_encoding_attr)[api:Serializable.get_encoding_attr].
     """
 
     SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
-    """Attribute map to use in :meth:`.from_decoded_attrs()`.
+    """Attribute map to use in (from_decoded_attrs)[api:Serializable.from_decoded_attrs].
 
     Useful when internal (e.g. _<attr>) attributes are
     serialized, but they are named differently (e.g. <attr>)
     in class constructors. If decoding requires more complex
     state management than the class constructor, derived
-    classes should implement :meth:`.from_decoded_attrs`.
+    classes should implement (from_decoded_attrs)[api:Serializable.from_decoded_attrs].
     """
 
     ## ABSTRACT METHODS
@@ -277,10 +277,10 @@ class Serializable:
 
         By default, this assumes all requested attributes are available
         via getattr.
-        This should be implemented in all Serializable-derived classes
+        This should be implemented in all (Serializable)[api:Serializable]-derived classes
         that required objects for encoding where this is not true,
         e.g. state backends. This is also true for the Frame object,
-        which may modify the :attr:`.Frame.data` attribute depending
+        which may modify the (Frame.data)[api:Frame.data] attribute depending
         on the ``ignore_no_serialization`` flag passed down.
 
         Parameters
@@ -291,7 +291,7 @@ class Serializable:
         Returns
         -------
         Any
-            The "attribute" to be encoded in :meth:`.BaseEncoder.encode_uncached_obj()`.
+            The "attribute" to be encoded in (BaseEncoder.encode_uncached_obj)[api:BaseEncoder.encode_uncached_obj].
         """
         return getattr(self, attr)
 
@@ -416,6 +416,34 @@ class Serializable:
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
     ) -> Encodable:
+        """Read and deserialize an object from a file.
+
+        Convenience method that combines file opening with deserialization.
+        Automatically detects the serialization format from the file extension
+        and delegates to the appropriate loading mechanism.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the file containing the serialized object.
+        format : EncodeFormats, optional
+            The serialization format. If None, automatically detected from file extension.
+            Supported extensions: .json, .json.gz, .h5, .hdf5.
+        use_caching : bool, optional
+            Whether to use object caching during deserialization. Default is True.
+        decode_cache : DecodeCache, optional
+            Existing decode cache to use for reference resolution.
+
+        Returns
+        -------
+        Encodable
+            The deserialized object.
+
+        Raises
+        ------
+        ValueError
+            If the format cannot be determined from the file extension.
+        """
         if format is None:
             if str(path).endswith(".json"):
                 format = "json"
@@ -914,6 +942,31 @@ class Serializable:
     def eval_function_str(
         src: str, version: int = SERIALIZATION_VERSION
     ) -> Callable:
+        """Evaluate a function from its source code string.
+
+        Reconstructs a callable function from its source code, handling
+        backwards compatibility issues and import updates for different
+        serialization versions.
+
+        Parameters
+        ----------
+        src : str
+            The source code string containing the function definition.
+        version : int, optional
+            The serialization version of the function source. Used to apply
+            appropriate backwards compatibility transformations.
+
+        Returns
+        -------
+        callable
+            The reconstructed function object.
+
+        Raises
+        ------
+        Exception
+            If the function source code cannot be evaluated or if the function
+            name cannot be extracted.
+        """
         # Backwards compatibility, it may have been evaluated already
         if callable(src):
             return src
@@ -941,6 +994,28 @@ class Serializable:
 
     @staticmethod
     def get_function_str(func):
+        """Extract the source code and necessary imports for a function.
+
+        Retrieves the complete source code of a function including its definition
+        and any required import statements. This is used for serialization of
+        callable functions.
+
+        Parameters
+        ----------
+        func : callable
+            The function to extract source code from.
+
+        Returns
+        -------
+        str
+            The complete source code string including function definition and
+            necessary imports.
+
+        Notes
+        -----
+        If the source file cannot be accessed or if import extraction fails,
+        only the function definition is returned.
+        """
         import inspect
         import textwrap
 

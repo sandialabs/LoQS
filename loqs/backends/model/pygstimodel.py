@@ -205,6 +205,19 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def gate_keys(self) -> list:
+        """Get the list of gate keys this model can take in circuits.
+
+        Returns
+        -------
+        list
+            List of gate keys, where each key is a tuple of (gate_name, qubit_labels)
+            or (gate_name,) for gates without specific qubit labels.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         keys = []
         for key in self.gate_dict.keys():
             name = key.name
@@ -220,6 +233,18 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def instrument_keys(self) -> list:
+        """Get the list of instrument keys this model can take in circuits.
+
+        Returns
+        -------
+        list
+            List of instrument keys, where each key is a tuple of (instrument_name, qubit_labels).
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         keys = []
         for key in self.inst_dict.keys():
             name = key.name
@@ -229,6 +254,18 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
+        """Get the list of gate representations this model can output.
+
+        Returns
+        -------
+        list[GateRep]
+            List of gate representations that this model can output.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         return [
             GateRep.UNITARY,
             GateRep.KRAUS_OPERATORS,
@@ -240,12 +277,53 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     # depending on whether instruments are defined or not
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
+        """Get the list of instrument representations this model can output.
+
+        Returns
+        -------
+        list[InstrumentRep]
+            List of instrument representations that this model can output.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         return [
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
         ]
 
     def get_gate_duration(self, gate_label) -> int | float:
+        """Get the duration of a gate operation.
+
+        This method retrieves the duration of a gate operation from either the gate label
+        itself (if time-dependent) or from the default gate durations mapping.
+
+        Parameters
+        ----------
+        gate_label : Label | str
+            The gate label to get the duration for.
+
+        Returns
+        -------
+        int | float
+            Duration of the gate operation.
+
+        Raises
+        ------
+        ValueError
+            If time dependence is not enabled and no default gate durations are provided,
+            or if a LayerTupTupWithTime is unexpectedly provided.
+
+        KeyError
+            If the gate label is not found in the default gate durations.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         if not self.use_time_dependence:
             return 0
 
@@ -278,6 +356,36 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         return duration
 
     def get_instrument_duration(self, inst_label) -> int | float:
+        """Get the duration of an instrument operation.
+
+        This method retrieves the duration of an instrument operation from either the
+        instrument label itself (if time-dependent) or from the default instrument
+        durations mapping.
+
+        Parameters
+        ----------
+        inst_label : Label | str
+            The instrument label to get the duration for.
+
+        Returns
+        -------
+        int | float
+            Duration of the instrument operation.
+
+        Raises
+        ------
+        ValueError
+            If time dependence is not enabled and no default instrument durations are provided,
+            or if a LayerTupTupWithTime is unexpectedly provided.
+
+        KeyError
+            If the instrument label is not found in the default instrument durations.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         if not self.use_time_dependence:
             return 0
 
@@ -315,6 +423,32 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
+        """Get list of operator representations that can be applied.
+
+        This method processes a circuit and returns a list of operation representations
+        (RepTuples) that can be applied to a quantum state.
+
+        Parameters
+        ----------
+        circuit : BasePhysicalCircuit
+            Physical circuit to get the representations for.
+
+        gatereps : Sequence[GateRep]
+            Output representations for gate operations.
+
+        instreps : Sequence[InstrumentRep]
+            Output representations for instrument operations.
+
+        Returns
+        -------
+        list[RepTuple]
+            List of operation representations for the circuit.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         # Get bare circuit
         from loqs.backends import PyGSTiPhysicalCircuit
 
@@ -534,12 +668,56 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         return (rep, True), instreps[repidx]
 
     def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        """Get the encoding attribute for serialization.
+
+        This method returns the serialized representation of the model attribute
+        for encoding purposes.
+
+        Parameters
+        ----------
+        attr : str
+            Name of the attribute to encode.
+
+        ignore_no_serialize_flags : bool, optional
+            Whether to ignore no-serialize flags during encoding. Default is False.
+
+        Returns
+        -------
+        object
+            Serialized representation of the requested attribute.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         if attr == "model":
             return self.model.to_nice_serialization()
         return super().get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
     def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+        """Create a PyGSTiNoiseModel from decoded attributes.
+
+        This class method reconstructs a PyGSTiNoiseModel instance from a dictionary
+        of decoded attributes, typically used during deserialization.
+
+        Parameters
+        ----------
+        attr_dict : Mapping
+            Dictionary containing the decoded attributes. Expected to have keys:
+            'model' and 'qubit_aliases'.
+
+        Returns
+        -------
+        T
+            A new PyGSTiNoiseModel instance initialized with the provided attributes.
+
+        Notes
+        -----
+        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
+        previously had no documentation. Please review and update as needed.
+        """
         model = Model.from_nice_serialization(attr_dict["model"])
         qubit_aliases = attr_dict["qubit_aliases"]
         return cls(model, qubit_aliases)

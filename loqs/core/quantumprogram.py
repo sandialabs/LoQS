@@ -286,38 +286,38 @@ class QuantumProgram(Displayable):
         patch_types: Mapping[str, QECCode] | None = None,
         name: str | None = None,
     ) -> QuantumProgram:
-        """Create a copy of a :class:`QuantumProgram` with some options updated.
+        """Create a copy of a (QuantumProgram)[api:QuantumProgram] with some options updated.
 
         Parameters
         ----------
         other:
-            The base :class:`QuantumProgram` to copy
+            The base (QuantumProgram)[api:QuantumProgram] to copy
 
         instruction_stack:
-            See ``instruction_stack`` in :meth:`.__init__`
+            See ``instruction_stack`` in (__init__)[api:QuantumProgram.__init__]
 
         default_noise_model:
-            See ``default_noise_model`` in :meth:`.__init__`
+            See ``default_noise_model`` in (__init__)[api:QuantumProgram.__init__]
 
         default_base_seed:
-            See ``default_base_seed`` in :meth:`.__init__`
+            See ``default_base_seed`` in (__init__)[api:QuantumProgram.__init__]
 
         global_instructions:
-            See ``global_instructions`` in :meth:`.__init__`
+            See ``global_instructions`` in (__init__)[api:QuantumProgram.__init__]
 
         state_type:
-            See ``state_type`` in :meth:`.__init__`
+            See ``state_type`` in (__init__)[api:QuantumProgram.__init__]
 
         patch_types:
-            See ``patch_types`` in :meth:`.__init__`
+            See ``patch_types`` in (__init__)[api:QuantumProgram.__init__]
 
         name:
-            See ``name`` in :meth:`.__init__`
+            See ``name`` in (__init__)[api:QuantumProgram.__init__]
 
         Returns
         -------
         QuantumProgram
-            The copied and updated :class:`QuantumProgram`
+            The copied and updated (QuantumProgram)[api:QuantumProgram]
         """
         if instruction_stack is None:
             instruction_stack = other.instruction_stack
@@ -363,9 +363,9 @@ class QuantumProgram(Displayable):
         checkpoint_dir: str | Path | None = None,
         checkpoint_strategy: str = "single_file",
     ) -> ProgramResults:
-        """Execute some shots of this :class:`QuantumProgram`.
+        """Execute some shots of this (QuantumProgram)[api:QuantumProgram].
 
-        This returns a :class:`ProgramResults` object containing the shot histories.
+        This returns a (ProgramResults)[api:ProgramResults] object containing the shot histories.
 
         Parameters
         ----------
@@ -411,7 +411,7 @@ class QuantumProgram(Displayable):
          Returns
          -------
          ProgramResults
-             A ProgramResults object containing the shot histories.
+             A (ProgramResults)[api:ProgramResults] object containing the shot histories.
         """
 
         # Create ProgramResults object to store results
@@ -894,6 +894,22 @@ class QuantumProgram(Displayable):
         raise RuntimeError(f"Failed to collect parameter {key} for {name}")
 
     def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        """Get the encoding attribute for serialization.
+
+        Parameters
+        ----------
+        attr : str
+            The attribute name to get for encoding.
+        ignore_no_serialize_flags : bool, optional
+            Whether to ignore no-serialize flags, by default False.
+
+        Returns
+        -------
+        object
+            The value of the attribute for encoding.
+
+        REVIEW_NO_DOCSTRING
+        """
         if (
             attr == "default_noise_model"
             and self._noise_model_filename is not None

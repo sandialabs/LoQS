@@ -36,37 +36,39 @@ def build_discrete_error_injection_programs(
 ) -> list[QuantumProgram]:
     """Create a series of programs with one discrete error injected each.
 
-    This will take a (presumably physical circuit) :class:`.Instruction`,
-    use :meth:`.BasePhysicalCircuit.get_possible_discrete_error_locations`
+    This will take a (presumably physical circuit) (Instruction)[api:Instruction],
+    use (BasePhysicalCircuit.get_possible_discrete_error_locations)[api:BasePhysicalCircuit.get_possible_discrete_error_locations]
     to collect the possible error locations, and then create new programs
     where the error will be injected via ``error_injections`` (see
-    :meth:`.build_physical_circuit_instruction` for more) as a kwarg
-    to the relevant :class:`.InstructionLabel`.
+    ``build_physical_circuit_instruction`` for more) as a kwarg
+    to the relevant (InstructionLabel)[api:InstructionLabel].
 
     Parameters
     ----------
-    base_program:
+    base_program : QuantumProgram
         The base program to modify
 
-    instruction_to_analyze:
-        The :class:`.Instruction` to get all possible discrete errors for
+    instruction_to_analyze : Instruction
+        The (Instruction)[api:Instruction] to get all possible discrete errors for
 
-    stack_idx_to_modify:
-        The entry in the :class:`.InstructionStack` of the ``base_program``
+    stack_idx_to_modify : int
+        The entry in the (InstructionStack)[api:InstructionStack] of the ``base_program``
         to modify with ``error_injections`` as a label kwarg.
 
-    error_circuit_labels:
+    error_circuit_labels : Sequence[str]
         The labels for possible errors to insert.
 
-    post_twoq_gates:
+    post_twoq_gates : bool, optional
         Whether to inject weight-1 errors before every gate (``False``, default)
         or all weight-2 errors after 2Q gates (``True``). Also see
-        :meth:`.BasePhysicalCircuit.get_possible_discrete_error_locations`.
+        (BasePhysicalCircuit.get_possible_discrete_error_locations)[api:BasePhysicalCircuit.get_possible_discrete_error_locations], by default False
 
     Returns
     -------
     list[QuantumProgram]
         A list of programs, one for each possible discrete error
+
+    REVIEW_SPHINX_REFERENCE
     """
     # Get possible circuit locations
     try:
@@ -88,6 +90,27 @@ def build_discrete_error_injection_programs(
 
     # TODO: Split these out so we can inject one error at will at a higher level of API
     def insert_2q_error(layer, eclabel1, eclabel2, qubit1, qubit2):
+        """Insert a two-qubit error into a program.
+
+        Parameters
+        ----------
+        layer : int
+            The circuit layer where the error should be injected
+
+        eclabel1 : str
+            The first error circuit label to inject
+
+        eclabel2 : str
+            The second error circuit label to inject
+
+        qubit1 : int
+            The first qubit index where the error should be applied
+
+        qubit2 : int
+            The second qubit index where the error should be applied
+
+        REVIEW_NO_DOCSTRING
+        """
         new_label = deepcopy(instruction_label)
 
         # Inject a weight-2 error
@@ -115,6 +138,24 @@ def build_discrete_error_injection_programs(
         errored_programs.append(new_program)
 
     def insert_1q_error(layer, eclabel, qubit, end=False):
+        """Insert a single-qubit error into a program.
+
+        Parameters
+        ----------
+        layer : int
+            The circuit layer where the error should be injected
+
+        eclabel : str
+            The error circuit label to inject
+
+        qubit : int
+            The qubit index where the error should be applied
+
+        end : bool, optional
+            Whether to inject the error at the end of the circuit, by default False
+
+        REVIEW_NO_DOCSTRING
+        """
         new_label = deepcopy(instruction_label)
 
         # Inject a weight-1 error
@@ -182,24 +223,24 @@ def run_discrete_error_injected_programs(
     num_shots: int = 1,
     dask_client: Client | None = None,  # type: ignore
 ) -> list[QuantumProgram]:
-    """Call :meth:`.test_program_output` on many programs.
+    """Call (test_program_output)[api:test_program_output] on many programs.
 
     Parameters
     ----------
-    errored_programs:
+    errored_programs : Sequence[QuantumProgram]
         A list of programs to test, usually the output of
-        :meth:`.build_discrete_error_injection_programs`.
+        (build_discrete_error_injection_programs)[api:build_discrete_error_injection_programs].
 
-    collect_shot_data_args:
-        See :meth:`.test_program_output`.
+    collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
+        See (test_program_output)[api:test_program_output].
 
-    expected_outcomes:
-        See :meth:`.test_program_output`.
+    expected_outcomes : Sequence
+        See (test_program_output)[api:test_program_output].
 
-    num_shots:
-        See :meth:`.test_program_output`.
+    num_shots : int, optional
+        See (test_program_output)[api:test_program_output], by default 1
 
-    dask_client:
+    dask_client : Client | None, optional
         A Dask client to use for parallelizing over programs
         (as this is likely a better strategy than parallelizing
         over small number of shots per program).
@@ -209,6 +250,8 @@ def run_discrete_error_injected_programs(
     -------
     list[QuantumProgram]
         The failed programs
+
+    REVIEW_SPHINX_REFERENCE
     """
     failed = []
 
@@ -256,28 +299,34 @@ def test_program_output(
 
     Parameters
     ----------
-    test_program:
-        The :class:`.QuantumProgram` to test
+    test_program : QuantumProgram
+        The (QuantumProgram)[api:QuantumProgram] to test
 
-    collect_shot_data_args:
-        A list of arguments to :meth:`.History.collect_shot_data`.
+    collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
+        A list of arguments to (History.collect_shot_data)[api:History.collect_shot_data].
 
-    expected_outcomes:
+    expected_outcomes : Sequence
         A list of the expected results to the
-        :meth:`.History.collect_shot_data` calls.
+        (History.collect_shot_data)[api:History.collect_shot_data] calls.
 
-    num_shots:
-        The number of shots to run and test.
+    num_shots : int, optional
+        The number of shots to run and test, by default 1
 
-    verbose:
+    verbose : bool, optional
         Whether to print the failed entry, if one occurs.
         Will only print the first failed entry, if more than
-        one fails.
+        one fails, by default False
+
+    skip_run : bool, optional
+        Whether to skip running the program and use previous results,
+        by default False
 
     Returns
     -------
     bool
         ``True`` if all outputs match expected, ``False`` on failure
+
+    REVIEW_SPHINX_REFERENCE
     """
     if not skip_run:
         program_results = test_program.run(num_shots=num_shots, verbose=False)
