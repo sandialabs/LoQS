@@ -1374,31 +1374,7 @@ def _create_adaptive_measure_instruction_part_II(
             name="FT Logical X Measure Part II Feed-Forward",
     )
 
-    def map_qubits_fn(
-        qubit_mapping: Mapping[str | int, str | int],
-        qubits: Sequence[str],
-        **kwargs,
-    ) -> KwargDict:
-        """Map qubits function for Part II feedforward instruction.
-        
-        Remaps qubit labels according to the provided mapping.
-        
-        Parameters
-        ----------
-        qubit_mapping : Mapping[str | int, str | int]
-            Mapping from old qubit labels to new qubit labels.
-        qubits : Sequence[str]
-            Original qubit labels to be remapped.
-        **kwargs : dict
-            Additional keyword arguments to preserve.
-        
-        Returns
-        -------
-        KwargDict
-            Updated keyword arguments with remapped qubit labels.
-        
-        REVIEW_NO_DOCSTRING
-        """
+def _create_adaptive_measure_instruction_part_III(
     instructions,
     qubits,
     include_idles,
@@ -1605,31 +1581,10 @@ def _create_adaptive_measure_instruction_part_II(
         new_kwargs["qubits"] = [qubit_mapping.get(q, q) for q in qubits]
         return new_kwargs
 
-    def map_qubits_fn(
-        qubit_mapping: Mapping[str | int, str | int],
-        qubits: Sequence[str],
-        **kwargs,
-    ) -> KwargDict:
-        """Map qubits function for Part III feedforward instruction.
-        
-        Remaps qubit labels according to the provided mapping.
-        
-        Parameters
-        ----------
-        qubit_mapping : Mapping[str | int, str | int]
-            Mapping from old qubit labels to new qubit labels.
-        qubits : Sequence[str]
-            Original qubit labels to be remapped.
-        **kwargs : dict
-            Additional keyword arguments to preserve.
-        
-        Returns
-        -------
-        KwargDict
-            Updated keyword arguments with remapped qubit labels.
-        
-        REVIEW_NO_DOCSTRING
-        """
+    instructions["FT Logical X Measure Part III Feed-Forward"] = Instruction(
+        partIII_feedforward_apply_fn,
+        {"qubits": qubits},
+        map_qubits_fn,
         param_priorities={
             "inferred_M1": ["history[-4]"],  # Look back 4 frames for M1
             "inferred_M2": ["history[-2]"],  # and 2 frames for M2

@@ -54,17 +54,17 @@ def create_qec_code(
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
 ):
     """Create a QECCode implementing the [[7,1,3]] code.
-    
+
     Parameters
     ----------
     ft_state_prep_max_repeats : int, optional
         The number of max repeats to include in the repeat-until-success
         fault-tolerant state prep instruction. Default is 100.
-    
+
     include_idles : bool, optional
         Whether to include (True) or not (False, default) idle gates
         in physical circuits.
-    
+
     gate_durations : dict[str, int | float] | None, optional
         Mapping from gate names to durations. Defaults to None, which uses
         dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
@@ -72,7 +72,7 @@ def create_qec_code(
         See ``durations`` from
         (BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)[api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace]
         for more details.
-    
+
     idle_gates : dict[int | float, str] | None, optional
         Mapping from gate duration to idle gate names. Defaults to None,
         which maps the dummy values from ``gate_durations`` to ``"Gi1Q"``,
@@ -80,16 +80,16 @@ def create_qec_code(
         See ``idle_names`` from
         (BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)[api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace]
         for more details.
-    
+
     circuit_backend : type[BasePhysicalCircuit], optional
         The circuit backend to use when generating physical circuits.
         Default is (PyGSTiPhysicalCircuit)[api:PyGSTiPhysicalCircuit].
-    
+
     Returns
     -------
     QECCode
         A (QECCode)[api:QECCode] implementing the [[7,1,3]] code.
-    
+
     REVIEW_SPHINX_REFERENCE
     """
 
@@ -449,10 +449,10 @@ def create_qec_code(
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
         """Apply function for logical measurement in the [[7,1,3]] code.
-        
+
         Computes the logical measurement outcome from raw data qubit measurements
         using classical syndrome computation and Pauli frame corrections.
-        
+
         Parameters
         ----------
         patch_label : str
@@ -465,12 +465,12 @@ def create_qec_code(
             Basis of measurement ('X' or 'Z').
         measurement_outcomes : MeasurementOutcomes
             Raw measurement outcomes from the physical qubits.
-        
+
         Returns
         -------
         Frame
             Frame containing logical measurement outcome and related information.
-            
+
         REVIEW_NUMPY_FORMAT
         """
         # Get the logical pauli frame
@@ -495,14 +495,14 @@ def create_qec_code(
         # by the algorithm in Fig 21
         def data_decode(sd, pf_idx):
             """Decode data qubit errors based on syndrome.
-            
+
             Parameters
             ----------
             sd : list[int]
                 Syndrome data for decoding.
             pf_idx : int
                 Pauli frame index to update.
-            
+
             REVIEW_NUMPY_FORMAT
             """
             if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
@@ -531,9 +531,9 @@ def create_qec_code(
         **kwargs,
     ) -> KwargDict:
         """Map qubits function for logical measurement instruction.
-        
+
         Remaps data qubit labels according to the provided mapping.
-        
+
         Parameters
         ----------
         qubit_mapping : Mapping[str | int, str | int]
@@ -542,12 +542,12 @@ def create_qec_code(
             Original data qubit labels to be remapped.
         **kwargs : dict
             Additional keyword arguments to preserve.
-        
+
         Returns
         -------
         KwargDict
             Updated keyword arguments with remapped qubit labels.
-            
+
         REVIEW_NUMPY_FORMAT
         """
         new_kwargs = kwargs.copy()
@@ -635,10 +635,10 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         stack: InstructionStack,
     ) -> Frame:
         """Apply function for flagged feedforward in QEC cycle.
-        
+
         Processes flag qubit outcomes to determine next instructions in the
         error correction procedure.
-        
+
         Parameters
         ----------
         patch_label : str
@@ -653,12 +653,12 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             Whether this is the first flagged check in the cycle.
         stack : InstructionStack
             Current instruction stack for feedforward operations.
-        
+
         Returns
         -------
         Frame
             Frame containing updated stack, patches, and syndrome information.
-            
+
         REVIEW_NUMPY_FORMAT
         """
         # Get last syndromes (or default to trivial)
@@ -723,9 +723,9 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         **kwargs,
     ) -> KwargDict:
         """Map qubits function for flagged feedforward instruction.
-        
+
         Remaps flag qubit labels according to the provided mapping.
-        
+
         Parameters
         ----------
         qubit_mapping : Mapping[str | int, str | int]
@@ -734,12 +734,12 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             Original flag qubit labels to be remapped.
         **kwargs : dict
             Additional keyword arguments to preserve.
-        
+
         Returns
         -------
         KwargDict
             Updated keyword arguments with remapped qubit labels.
-            
+
         REVIEW_NUMPY_FORMAT
         """
         new_kwargs = kwargs.copy()
@@ -773,10 +773,10 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         Z_qubits: list[str],
     ) -> Frame:
         """Apply function for QEC decoder in error correction cycle.
-        
+
         Performs full syndrome decoding including both data qubit errors
         and hook errors, updating the logical Pauli frame accordingly.
-        
+
         Parameters
         ----------
         patch_label : str
@@ -791,12 +791,12 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             List of qubit labels for X-basis measurements.
         Z_qubits : list[str]
             List of qubit labels for Z-basis measurements.
-        
+
         Returns
         -------
         Frame
             Frame containing decoded syndrome information and updated patches.
-            
+
         REVIEW_NUMPY_FORMAT
         """
         # Get last syndromes (or default to trivial)
@@ -825,14 +825,14 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         # by the algorithm in Fig 21
         def data_decode(sd, pf_idx):
             """Decode data qubit errors based on syndrome.
-            
+
             Parameters
             ----------
             sd : list[int]
                 Syndrome data for decoding.
             pf_idx : int
                 Pauli frame index to update.
-            
+
             REVIEW_NUMPY_FORMAT
             """
             if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
@@ -845,7 +845,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         # by a modified version of the algorithm in Fig 22
         def hook_decode(sd, fsd, pf_idx):
             """Decode hook errors based on syndrome and flag syndrome differences.
-            
+
             Parameters
             ----------
             sd : list[int]
@@ -854,7 +854,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
                 Flag syndrome differences.
             pf_idx : int
                 Pauli frame index to update.
-            
+
             REVIEW_NUMPY_FORMAT
             """
             if (fsd, sd) in [
@@ -895,9 +895,9 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         **kwargs,
     ) -> KwargDict:
         """Map qubits function for QEC decoder instruction.
-        
+
         Remaps X and Z qubit labels according to the provided mapping.
-        
+
         Parameters
         ----------
         qubit_mapping : Mapping[str | int, str | int]
@@ -908,12 +908,12 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             Original Z qubit labels to be remapped.
         **kwargs : dict
             Additional keyword arguments to preserve.
-        
+
         Returns
         -------
         KwargDict
             Updated keyword arguments with remapped qubit labels.
-            
+
         REVIEW_NUMPY_FORMAT
         """
         new_kwargs = kwargs.copy()
@@ -944,33 +944,33 @@ def create_ideal_model(  # noqa: C901
     instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
 ):
     """Create an ideal (i.e. noiseless) model for the [[7,1,3]] code.
-    
+
     This model will contain all the instructions needed to run the
     physical circuits in the (QECCode)[api:QECCode] returned by (create_qec_code)[api:create_qec_code].
-    
+
     Parameters
     ----------
     qubits : Sequence[str]
         List of qubit labels to use. It should be have 10 entries,
         and the first three qubits should be the auxiliary qubits.
-    
+
     model_backend : type[BaseNoiseModel], optional
         The model backend to use when generating operations.
         Currently, only (PyGSTiNoiseModel)[api:PyGSTiNoiseModel] is allowed.
         Default is (PyGSTiNoiseModel)[api:PyGSTiNoiseModel].
-    
+
     gaterep : GateRep, optional
         Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
-    
+
     instrep : InstrumentRep, optional
         Instrument representation to use. Default is InstrumentRep.ZBASIS_PROJECTION.
-    
+
     Returns
     -------
     BaseNoiseModel
         A noiseless model for the (QECCode)[api:QECCode] returned by
         (create_qec_code)[api:create_qec_code].
-    
+
     REVIEW_SPHINX_REFERENCE
     """
     # assert len(qubits) == 10, "Must provide exactly 10 qubit labels"

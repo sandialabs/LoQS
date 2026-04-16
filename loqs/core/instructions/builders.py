@@ -129,9 +129,9 @@ def build_composite_instruction(
         **kwargs,
     ) -> Frame:
         """Apply function for composite instruction.
-        
+
         Inserts instructions into the instruction stack and returns updated frame.
-        
+
         Parameters
         ----------
         patch_label : str | None
@@ -142,12 +142,12 @@ def build_composite_instruction(
             Instructions to insert into the stack.
         **kwargs
             Additional keyword arguments for the instructions.
-            
+
         Returns
         -------
         Frame
             Updated frame with modified instruction stack.
-            
+
         REVIEW_NO_DOCSTRING
         """
         for i, inst_or_label in enumerate(instructions):
@@ -181,9 +181,9 @@ def build_composite_instruction(
         **kwargs,
     ) -> KwargDict:
         """Map qubits function for composite instruction.
-        
+
         Maps qubits in the instruction sequence according to the provided mapping.
-        
+
         Parameters
         ----------
         qubit_mapping : Mapping[str | int, str | int]
@@ -192,12 +192,12 @@ def build_composite_instruction(
             Instructions to map qubits for.
         **kwargs
             Additional keyword arguments to preserve.
-            
+
         Returns
         -------
         KwargDict
             Dictionary containing updated instructions with mapped qubits.
-            
+
         REVIEW_NO_DOCSTRING
         """
         new_kwargs = kwargs.copy()
@@ -1221,9 +1221,9 @@ def build_repeat_until_success_instruction(
         **kwargs,
     ) -> KwargDict:
         """Map qubits function for repeat-until-success instruction.
-        
+
         Maps qubits in the instruction sequence and expected outcomes.
-        
+
         Parameters
         ----------
         qubit_mapping : Mapping[str | int, str | int]
@@ -1232,12 +1232,12 @@ def build_repeat_until_success_instruction(
             Instructions to map qubits for.
         **kwargs
             Additional keyword arguments including expected outcomes.
-            
+
         Returns
         -------
         KwargDict
             Dictionary containing updated instructions and expected outcomes with mapped qubits.
-            
+
         REVIEW_NO_DOCSTRING
         """
         new_kwargs = kwargs.copy()

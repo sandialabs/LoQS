@@ -176,7 +176,7 @@ def propagate_state(
         The output of (BaseQuantumState.apply_reps)[api:BaseQuantumState.apply_reps].
         If ``inplace=True``, then the state is also returned
         to provide a consistent API.
-        
+
     REVIEW_SPHINX_REFERENCE
     """
     # Find a compatible model/state oprep

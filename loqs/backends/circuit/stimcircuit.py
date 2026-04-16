@@ -600,20 +600,20 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         def find_first_repeat_start(lines):
             """Find the first REPEAT statement in a list of circuit lines.
-            
+
             This function searches through a list of circuit lines and returns the index
             of the first line that contains a REPEAT statement.
-            
+
             Parameters
             ----------
             lines : list[str]
                 List of circuit lines to search through.
-                
+
             Returns
             -------
             int or None
                 Index of the first REPEAT statement, or None if no REPEAT statement is found.
-                
+
             Notes
             -----
             REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
@@ -627,20 +627,20 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         def find_last_repeat_end(lines):
             """Find the last REPEAT end statement in a list of circuit lines.
-            
+
             This function searches through a list of circuit lines in reverse order and returns the index
             of the last line that contains a closing brace '}' for a REPEAT block.
-            
+
             Parameters
             ----------
             lines : list[str]
                 List of circuit lines to search through.
-                
+
             Returns
             -------
             int or None
                 Index of the last REPEAT end statement, or None if no REPEAT end statement is found.
-                
+
             Notes
             -----
             REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that

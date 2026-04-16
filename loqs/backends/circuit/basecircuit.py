@@ -104,7 +104,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             to keep circuit scheduling at the edges of patches, e.g. weight-2 and weight-4
             stabilizer checks in the surface code have the same schedule pattern to
             allow for full parallelization between the stabilizers.
-            
+
             REVIEW_SPHINX_REFERENCE
 
         merge_offsets:
@@ -318,16 +318,16 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
     def map_qubit_labels(self: T, qubit_mapping: Mapping) -> T:
         """Substitute qubit labels in underlying circuit objects.
 
-         Parameters
-         ----------
-         qubit_mapping:
-             See (map_qubit_labels_inplace)[api:BasePhysicalCircuit.map_qubit_labels_inplace]
+        Parameters
+        ----------
+        qubit_mapping:
+            See (map_qubit_labels_inplace)[api:BasePhysicalCircuit.map_qubit_labels_inplace]
 
-         Returns
-         -------
-         BasePhysicalCircuit
-             A copy of the circuit with mapped qubits.
-         """
+        Returns
+        -------
+        BasePhysicalCircuit
+            A copy of the circuit with mapped qubits.
+        """
         # Providing a default implementation for circuits
         # that can be modified in-place
         modified_circuit = self.copy()
