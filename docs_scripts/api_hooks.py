@@ -2,21 +2,54 @@
 # -*- coding: utf-8 -*-
 
 """
-MkDocs post‑process hook.
+MkDocs post-processing hooks for the LoQS API reference site.
 
-Cleans generated mkdocstrings blocks and prunes the right-hand TOC.
+This module is used only by the API-reference build (``mkdocs-api-ref.yml``).
+It runs after mkdocstrings has rendered docstrings to HTML and performs several
+cleanup and rewrite passes that are difficult or impossible to do reliably in
+Markdown space.
 
-Markers used:
+Responsibilities
+----------------
+- Clean mkdocstrings-rendered HTML blocks:
 
-- <!-- API_METHOD owner=<cls_ident> member=<name> -->
-  Used for per-method blocks on class pages.
+  - Remove stray ``<a id="..."></a>`` anchors that can appear between the outer
+    mkdocstrings container and the ``doc-contents first`` region.
+  - Strip leading introductory paragraphs and leading doctest/code highlight
+    blocks that would otherwise be duplicated across many per-member renders.
 
-- <!-- API_MODULE_MEMBERS owner=<mod_ident> -->
-  Used for module "selected members" blocks (e.g., Functions section rendered
-  as members of the module for reliable signatures).
+  Cleanup is applied only to blocks preceded by one of the generator markers:
 
-- <!-- API_TOC_REMOVE <anchors...> -->
-  List of class anchors to remove from the right-hand TOC (derived + bases).
+  - ``<!-- API_METHOD owner=<cls_ident> member=<name> -->``
+  - ``<!-- API_MODULE_MEMBERS owner=<mod_ident> -->``
+
+- Prune the right-hand "On this page" TOC:
+
+  - Remove anchors listed in ``<!-- API_TOC_REMOVE ... -->``. These are emitted
+    by the reference-page generator to suppress redundant base-class entries.
+
+- Rewrite API cross-references emitted in docstrings:
+
+  - Convert ``href="api:Target"`` links (produced by mkdocstrings Markdown
+    rendering) into concrete URLs using the generated API inventory
+    (``docs/_api_inventory.json``). The API site is mounted under
+    ``/reference`` in the merged documentation build, so rewritten links are
+    prefixed accordingly.
+
+- Rewrite citations in rendered docstrings:
+
+  - Convert Pandoc-style citations like ``[@key]`` (and ``[@k1; @k2]``) into
+    hyperlinks targeting the global bibliography page (e.g.
+    ``/reference/bib/#fn:key``).
+
+Notes
+-----
+- These hooks operate on *HTML* (``on_post_page``) because mkdocstrings renders
+  docstrings late in the pipeline; earlier hooks like ``on_page_markdown`` do
+  not see the fully expanded docstring content.
+- The inventory file is generated during the API build by
+  ``docs_scripts/gen_ref_pages.py`` and written to ``docs/_api_inventory.json``
+  so it can be loaded during the same build.
 """
 
 from __future__ import annotations
@@ -24,7 +57,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from docs_scripts.api_inventory import ApiInventory, rewrite_api_links
+from docs_scripts.api_inventory import ApiInventory
 
 # ----------------------------------------------------------------------
 #  Block markers
@@ -74,7 +107,6 @@ API_HREF_RE = re.compile(r'''href=(["'])api:(?P<target>[^"'>\s]+)\1''', re.IGNOR
 
 # Pandoc-style citations in rendered HTML text (from docstrings), e.g. [@key] or [@k1; @k2]
 CITE_BRACKET_RE = re.compile(r"\[@(?P<keys>[^\]]+)\]")
-
 
 def _find(pat: re.Pattern, s: str, start: int = 0) -> re.Match | None:
     return pat.search(s, start)
@@ -158,7 +190,7 @@ def _clean_marked_blocks(output: str, mark_re: re.Pattern) -> str:
     last = 0
     for i, mk in enumerate(marks):
         start = mk.start()
-        end = marks[i + 1].start() if i + 1 < len(output) and i + 1 < len(marks) else len(output)
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(output)
 
         parts.append(output[last:start])
         block = output[start:end]
@@ -198,7 +230,7 @@ def on_post_page(output: str, page, config) -> str:
         try:
             rel = inv.resolve(target)  # e.g. "/loqs/.../#loqs...."
         except KeyError as e:
-            raise RuntimeError(f"{src}: {e}") from None
+            return m.group(0)  # leave href="api:..." unchanged for external/unindexed targets
 
         url = ("/reference" + rel) if rel.startswith("/") else ("/reference/" + rel)
         quote = m.group(1)
@@ -207,7 +239,7 @@ def on_post_page(output: str, page, config) -> str:
     output = API_HREF_RE.sub(_repl_api_href, output)
 
     # 5) Rewrite Pandoc-style citations in docstring HTML into links to the global bibliography page.
-    #    Example: [@tomita_lowdistance_2014] -> [<a href="/reference/bibliography/#tomita_lowdistance_2014">tomita_lowdistance_2014</a>]
+    #    Example: [@tomita_lowdistance_2014] -> [<a href="/reference/bib/#fn:tomita_lowdistance_2014">tomita_lowdistance_2014</a>]
     def _repl_cite(m: re.Match) -> str:
         keys_raw = m.group("keys")
         # split on ';' (pandoc allows [@a; @b]) and normalize
@@ -225,7 +257,6 @@ def on_post_page(output: str, page, config) -> str:
 
         links = []
         for k in keys:
-            # This path assumes your merged site mounts API under /reference
             href = f"/reference/bib/#fn:{k}"
             links.append(f'<a class="citation" href="{href}">{k}</a>')
 

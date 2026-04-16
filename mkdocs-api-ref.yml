@@ -15,6 +15,11 @@ theme:
 
 extra:
   main_site_url: /
+extra_css:
+  - assets/stylesheets/toc-toggle.css
+  - assets/stylesheets/api-extra.css
+extra_javascript:
+  - assets/javascripts/toc-toggle.js
 
 markdown_extensions:
   - footnotes

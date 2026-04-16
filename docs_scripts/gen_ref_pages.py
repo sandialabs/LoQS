@@ -286,11 +286,21 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
                 drow["type"] = brow["type"]
             if not (drow.get("value") or "").strip() and (brow.get("value") or "").strip():
                 drow["value"] = brow["value"]
+        
+        def _score_row(r: dict) -> tuple[int, int, int]:
+            return (
+                1 if (r.get("value") or "").strip() else 0,
+                1 if (r.get("type") or "").strip() else 0,
+                1 if (r.get("doc") or "").strip() else 0,
+            )
 
         for name, brow in base_map.items():
             if name in derived_map:
                 continue
-            inherited_map.setdefault(name, brow)
+
+            prev = inherited_map.get(name)
+            if prev is None or _score_row(brow) > _score_row(prev):
+                inherited_map[name] = brow
 
     merged: dict[str, dict] = {}
     merged.update(inherited_map)
@@ -354,6 +364,49 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str) -> list
         )
 
     return sorted(rows, key=_var_sort_key)
+
+
+def inherited_only_methods(cls_obj: type, *, declared: set[str]) -> dict[str, tuple[str, str]]:
+    """
+    Return mapping: member_name -> (kind, base_ident) for methods present via inheritance
+    but not declared on cls_obj.__dict__.
+
+    kind in {"static", "class", "instance"}
+    """
+    out: dict[str, tuple[str, str]] = {}
+
+    for name in dir(cls_obj):
+        if not _is_public_method(name):
+            continue
+        if name in declared:
+            continue
+
+        # Find defining class in MRO
+        for base in cls_obj.__mro__[1:]:
+            if base is object:
+                continue
+            if name not in getattr(base, "__dict__", {}):
+                continue
+
+            base_val = base.__dict__.get(name)
+
+            # Skip properties (handled elsewhere)
+            if isinstance(base_val, property):
+                break
+
+            if isinstance(base_val, staticmethod):
+                kind = "static"
+            elif isinstance(base_val, classmethod):
+                kind = "class"
+            elif inspect.isfunction(base_val):
+                kind = "instance"
+            else:
+                break
+
+            out[name] = (kind, _qualname_to_ident(base))
+            break
+
+    return out
 
 
 def class_members_from_introspection(
@@ -465,21 +518,53 @@ def write_class_member_block(f, owner_ident: str, member_name: str) -> None:
     f.write(f"<!-- API_METHOD owner={owner_ident} member={member_name} -->\n\n")
     f.write(f"::: {owner_ident}\n")
     f.write("    options:\n")
+    f.write("      heading_level: 3\n")
     f.write("      members:\n")
     f.write(f"        - {member_name}\n")
-    f.write("      inherited_members: false\n")
+    f.write("      inherited_members: false\n\n")
+
+
+def write_inherited_method_stub(f, *, derived_cls_ident: str, method_name: str, base_ident: str) -> None:
+    """
+    Emit a heading so it appears on the page and in the TOC, but do not render docs here.
+    The anchor matches the inventory key: {derived_cls_ident}.{method_name}
+
+    If base_ident is inside loqs.*, link with api:.
+    Otherwise link to external documentation (best-effort).
+    """
+    anchor_id = f"{derived_cls_ident}.{method_name}"
+    f.write(f'### {method_name} {{: #{anchor_id} }}\n')
+
+    # Choose link target
+    if base_ident.startswith("loqs."):
+        f.write(f'Inherited from [{base_ident}](api:{base_ident}).\n\n')
+        return
+
+    # Best-effort external links
+    # - stdlib: docs.python.org with module#qualname
+    if base_ident.startswith(("collections.", "typing.", "pathlib.", "dataclasses.", "abc.", "enum.")):
+        mod = base_ident.rsplit(".", 1)[0]
+        url = f"https://docs.python.org/3/library/{mod}.html#{base_ident}"
+        f.write(f'Inherited from [`{base_ident}`]({url}).\n\n')
+        return
+
+    # Fallback: link to a search query
+    url = f"https://www.google.com/search?q={base_ident}"
+    f.write(f'Inherited from [`{base_ident}`]({url}).\n\n')
 
 
 def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
-    f.write(f"<!-- API_MODULE_MEMBERS owner={mod_ident} -->\n\n")
-    f.write(f"::: {mod_ident}\n")
-    f.write("    options:\n")
-    f.write("      members:\n")
-    for fn in funcs:
+    
+    for i, fn in enumerate(funcs):
+        f.write(f"<!-- API_MODULE_MEMBERS owner={mod_ident} -->\n\n")
+        f.write(f"::: {mod_ident}\n")
+        f.write("    options:\n")
+        f.write("      heading_level: 3\n")
+        f.write("      members:\n")
         f.write(f"        - {fn}\n")
-    f.write("      inherited_members: false\n")
-    f.write("\n")
+        f.write("      inherited_members: false\n\n")
 
+        f.write("---\n\n")
 
 def write_module_members_table(
     f,
@@ -558,6 +643,7 @@ def write_class_page(
     page_url: str,
     *,
     var_rows: list[dict],
+    inherited_method_stubs: dict[str, tuple[str, str]],
     instance_methods: list[str],
     class_methods: list[str],
     static_methods: list[str],
@@ -584,17 +670,38 @@ def write_class_page(
                 page_url=page_url,
             )
 
-        if static_methods or class_methods or instance_methods:
-            f.write("## Methods\n")
-            for m in static_methods:
-                owner = owner_override.get(m, cls_ident)
-                write_class_member_block(f, owner, m)
-            for m in class_methods:
-                owner = owner_override.get(m, cls_ident)
-                write_class_member_block(f, owner, m)
-            for m in instance_methods:
-                owner = owner_override.get(m, cls_ident)
-                write_class_member_block(f, owner, m)
+        # --- Methods: group (H2) -> method (H3) ---
+        if static_methods or class_methods or instance_methods or inherited_method_stubs:
+            inherited_method_stubs = inherited_method_stubs or {}
+
+            def emit_group(group_title: str, kind: str, declared: list[str]) -> None:
+                inherited = [n for n, (k, _base) in inherited_method_stubs.items() if k == kind]
+                names = sorted(set(declared) | set(inherited), key=str.lower)
+                if not names:
+                    return
+
+                f.write(f"## {group_title}\n\n")
+                declared_set = set(declared)
+
+                for m in names:
+                    if m in declared_set:
+                        owner = owner_override.get(m, cls_ident)
+                        write_class_member_block(f, owner, m)
+                    else:
+                        _k, base_ident = inherited_method_stubs[m]
+                        write_inherited_method_stub(
+                            f,
+                            derived_cls_ident=cls_ident,
+                            method_name=m,
+                            base_ident=base_ident,
+                        )
+                    
+                    f.write("\n---\n\n") # Make <hr> between entries
+                f.write("\n")
+
+            emit_group("Static methods", "static", static_methods)
+            emit_group("Class methods", "class", class_methods)
+            emit_group("Instance methods", "instance", instance_methods)
 
 
 def main() -> None:
@@ -666,10 +773,18 @@ def main() -> None:
                 toc_remove_anchors,
             ) = class_members_from_introspection(cls_name, mod_ident)
 
+            declared = set(getattr(cls_obj, "__dict__", {}).keys()) if cls_obj is not None else set()
+            inherited_missing: dict[str, tuple[str, str]] = {}
+            if cls_obj is not None:
+                inherited_missing = inherited_only_methods(cls_obj, declared=declared)
+
             cls_page_url = mod_page_url + f"{cls_name}/"
 
             # Inventory entries for methods should point at the class page
             for m in stat + clsm + inst:
+                inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
+            # Also stub inherited but not declared
+            for m in inherited_missing.keys():
                 inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
 
             if cls_obj is not None:
@@ -693,6 +808,7 @@ def main() -> None:
                 cls_ident=cls_ident,
                 page_url=cls_page_url,
                 var_rows=var_rows,
+                inherited_method_stubs=inherited_missing,
                 instance_methods=inst,
                 class_methods=clsm,
                 static_methods=stat,
