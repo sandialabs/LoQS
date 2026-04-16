@@ -10,13 +10,10 @@
 """A LoQS QEC codepack for the [[7,1,3]] color code.
 
 This implementation is based on the 2021 implementation from
-Quantinuum in :cite:`ryananderson_realizing_2021`.
+Quantinuum in [@ryananderson_realizing_2021].
 
 We require three auxiliary qubits for stabilizer checks.
 Thus, we will have 10 qubits total: 7 data and 3 auxiliary.
-
-.. bibliography::
-    :filter: docname in docnames
 """
 
 from collections.abc import Sequence
@@ -70,7 +67,7 @@ def create_qec_code(
         dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
         measurements, respectively.
         See ``durations`` from
-        (BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)[api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace]
+        [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     idle_gates : dict[int | float, str] | None, optional
@@ -78,17 +75,17 @@ def create_qec_code(
         which maps the dummy values from ``gate_durations`` to ``"Gi1Q"``,
         ``"Gi2Q"``, and ``"GiMCM"``, respectively.
         See ``idle_names`` from
-        (BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)[api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace]
+        [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     circuit_backend : type[BasePhysicalCircuit], optional
         The circuit backend to use when generating physical circuits.
-        Default is (PyGSTiPhysicalCircuit)[api:PyGSTiPhysicalCircuit].
+        Default is [PyGSTiPhysicalCircuit](api:PyGSTiPhysicalCircuit).
 
     Returns
     -------
     QECCode
-        A (QECCode)[api:QECCode] implementing the [[7,1,3]] code.
+        A [QECCode](api:QECCode) implementing the [[7,1,3]] code.
 
     REVIEW_SPHINX_REFERENCE
     """
@@ -946,7 +943,7 @@ def create_ideal_model(  # noqa: C901
     """Create an ideal (i.e. noiseless) model for the [[7,1,3]] code.
 
     This model will contain all the instructions needed to run the
-    physical circuits in the (QECCode)[api:QECCode] returned by (create_qec_code)[api:create_qec_code].
+    physical circuits in the [QECCode](api:QECCode) returned by [create_qec_code](api:codepack_7_1_3_quantinuum2021.create_qec_code).
 
     Parameters
     ----------
@@ -956,8 +953,8 @@ def create_ideal_model(  # noqa: C901
 
     model_backend : type[BaseNoiseModel], optional
         The model backend to use when generating operations.
-        Currently, only (PyGSTiNoiseModel)[api:PyGSTiNoiseModel] is allowed.
-        Default is (PyGSTiNoiseModel)[api:PyGSTiNoiseModel].
+        Currently, only [PyGSTiNoiseModel](api:PyGSTiNoiseModel) is allowed.
+        Default is [PyGSTiNoiseModel](api:PyGSTiNoiseModel).
 
     gaterep : GateRep, optional
         Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
@@ -968,8 +965,8 @@ def create_ideal_model(  # noqa: C901
     Returns
     -------
     BaseNoiseModel
-        A noiseless model for the (QECCode)[api:QECCode] returned by
-        (create_qec_code)[api:create_qec_code].
+        A noiseless model for the [QECCode](api:QECCode) returned by
+        [create_qec_code](api:codepack_7_1_3_quantinuum2021.create_qec_code).
 
     REVIEW_SPHINX_REFERENCE
     """

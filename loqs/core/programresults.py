@@ -195,13 +195,13 @@ class ProgramResults(Displayable):
         Parameters
         ----------
         key:
-            See ``key`` in (History.collect_data)[api:History.collect_data]
+            See ``key`` in [History.collect_data](api:History.collect_data)
 
         indices:
-            See ``indices`` in (History.collect_data)[api:History.collect_data]
+            See ``indices`` in [History.collect_data](api:History.collect_data)
 
         strip_none_entries:
-            See ``strip_none_entries`` in (History.collect_data)[api:History.collect_data]
+            See ``strip_none_entries`` in [History.collect_data](api:History.collect_data)
 
         return_counter:
             Whether to return using a collections.Counter or not (default).
@@ -209,7 +209,7 @@ class ProgramResults(Displayable):
         Returns
         -------
         list
-            List of (History.collect_data)[api:History.collect_data] outputs per shot
+            List of [History.collect_data](api:History.collect_data) outputs per shot
         """
         data = [
             h.collect_data(key, indices, strip_none_entries)

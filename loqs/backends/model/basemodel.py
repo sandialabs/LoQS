@@ -76,11 +76,11 @@ class BaseNoiseModel(Castable, Displayable):
 
         gatereps:
             Output representations for gate operations.
-            For more details, look at (GateRep)[api:loqs.backends.reps.GateRep].
+            For more details, look at [GateRep](api:loqs.backends.reps.GateRep).
 
         instreps:
             Output representations for instrument operations.
-            For more details, look at (InstrumentRep)[api:loqs.backends.reps.InstrumentRep].
+            For more details, look at [InstrumentRep](api:loqs.backends.reps.InstrumentRep).
 
         Returns
         -------

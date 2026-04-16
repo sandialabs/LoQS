@@ -430,8 +430,8 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         """Merge another circuit to this circuit.
 
-        While (insert_inplace)[api:STIMPhysicalCircuit.insert_inplace] adds new layers,
-        (merge_inplace)[api:STIMPhysicalCircuit.merge_inplace] will try to add operations to
+        While [insert_inplace](api:STIMPhysicalCircuit.insert_inplace) adds new layers,
+        [merge_inplace](api:STIMPhysicalCircuit.merge_inplace) will try to add operations to
         existing layers.
 
         Note that for STIM circuits, this will first unroll repeat blocks

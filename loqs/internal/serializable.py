@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""(Serializable)[api:Serializable] definition.
+"""[Serializable](api:Serializable) definition.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class IncorrectDecodableTypeError(Exception):
     """Exception raised when an BaseEncoder function cannot handle an object.
 
     This is a recoverable error (to a point), signaling that a different
-    (BaseEncoder)[api:BaseEncoder] function should be tried.
+    [BaseEncoder](api:BaseEncoder) function should be tried.
     """
 
     pass
@@ -253,17 +253,17 @@ class Serializable:
 
     If encoding requires a different access pattern
     than getattr(), derived classes should
-    implement (get_encoding_attr)[api:Serializable.get_encoding_attr].
+    implement [get_encoding_attr](api:Serializable.get_encoding_attr).
     """
 
     SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
-    """Attribute map to use in (from_decoded_attrs)[api:Serializable.from_decoded_attrs].
+    """Attribute map to use in [from_decoded_attrs](api:Serializable.from_decoded_attrs).
 
     Useful when internal (e.g. _<attr>) attributes are
     serialized, but they are named differently (e.g. <attr>)
     in class constructors. If decoding requires more complex
     state management than the class constructor, derived
-    classes should implement (from_decoded_attrs)[api:Serializable.from_decoded_attrs].
+    classes should implement [from_decoded_attrs](api:Serializable.from_decoded_attrs).
     """
 
     ## ABSTRACT METHODS
@@ -277,10 +277,10 @@ class Serializable:
 
         By default, this assumes all requested attributes are available
         via getattr.
-        This should be implemented in all (Serializable)[api:Serializable]-derived classes
+        This should be implemented in all [Serializable](api:Serializable)-derived classes
         that required objects for encoding where this is not true,
         e.g. state backends. This is also true for the Frame object,
-        which may modify the (Frame.data)[api:Frame.data] attribute depending
+        which may modify the underlying data depending
         on the ``ignore_no_serialization`` flag passed down.
 
         Parameters
@@ -291,7 +291,7 @@ class Serializable:
         Returns
         -------
         Any
-            The "attribute" to be encoded in (BaseEncoder.encode_uncached_obj)[api:BaseEncoder.encode_uncached_obj].
+            The "attribute" to be encoded in [BaseEncoder.encode_uncached_obj](api:BaseEncoder.encode_uncached_obj).
         """
         return getattr(self, attr)
 

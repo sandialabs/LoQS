@@ -135,7 +135,7 @@ def kraus_to_ptm(Ks: Sequence[np.ndarray]) -> np.ndarray:
 def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
     """Convert a Pauli transfer matrix into
 
-    In contrast to (ptm_to_kraus)[api:ptm_to_kraus], this method *does*
+    In contrast to [ptm_to_kraus](api:ptm_to_kraus), this method *does*
     check the noise channel for Pauli stochastic-ness and returns
     textbook Kraus operators in that case.
     This also precomputes the probabilities for the Kraus operator
@@ -220,7 +220,7 @@ def convert_edesign_to_programs(
     ],
     **kwargs,
 ) -> list[QuantumProgram]:
-    """Convert a pyGSTi edesign to (QuantumProgram)[api:QuantumProgram] objects.
+    """Convert a pyGSTi edesign to [QuantumProgram](api:QuantumProgram) objects.
 
     Parameters
     ----------
@@ -233,12 +233,12 @@ def convert_edesign_to_programs(
 
     physical_to_logical : Mapping[str | tuple, list[InstructionLabelCastableTypes]]
         A mapping from pyGSTi physical circuit labels to
-        (InstructionStackCastableTypes)[api:InstructionStackCastableTypes] to build up
-        the (InstructionStack)[api:InstructionStack] for each program.
+        [InstructionStackCastableTypes](api:InstructionStackCastableTypes) to build up
+        the [InstructionStack](api:InstructionStack) for each program.
 
     **kwargs : Any
         Any additional kwargs that should be passed to the
-        (QuantumProgram)[api:QuantumProgram].
+        [QuantumProgram](api:QuantumProgram).
 
     Returns
     -------
@@ -273,17 +273,17 @@ def convert_run_programs_to_dataset(
         -1,
     ),
 ) -> DataSet:
-    """Convert (QuantumProgram)[api:QuantumProgram] objects to a pyGSTi ``DataSet``.
+    """Convert [QuantumProgram](api:QuantumProgram) objects to a pyGSTi ``DataSet``.
 
     Parameters
     ----------
     programs : Sequence[QuantumProgram]
         List of programs, one per circuit in ``edesign.all_circuits_needing_data``,
-        with (QuantumProgram.run)[api:QuantumProgram.run] having been called on the programs
+        with [QuantumProgram.run](api:QuantumProgram.run) having been called on the programs
         with the desired number of shots.
 
     collect_shot_data_args : HistoryCollectDataArgsType, optional
-        The arguments to (ProgramResults.collect_shot_data)[api:ProgramResults.collect_shot_data] to extract
+        The arguments to [ProgramResults.collect_shot_data](api:ProgramResults.collect_shot_data) to extract
         outcomes from each shot. The output should be a single element per shot, by default ("logical_measurement", -1)
 
     Returns
@@ -331,16 +331,16 @@ def convert_circuit_to_image(
     ----------
     circuit : Circuit
         pyGSTi ``Circuit`` to convert. Attainable via
-        (PyGSTiPhysicalCircuit.circuit)[api:PyGSTiPhysicalCircuit.circuit].
+        [PyGSTiPhysicalCircuit.circuit](api:PyGSTiPhysicalCircuit.circuit).
 
     gatename_conversion : Mapping[str, str | Sequence[str]]
-        See (convert_circuit_to_quantikz)[api:convert_circuit_to_quantikz].
+        See [convert_circuit_to_quantikz](api:convert_circuit_to_quantikz).
 
     lstick_values : Sequence[str | None] | None, optional
-        See (convert_circuit_to_quantikz)[api:convert_circuit_to_quantikz], by default None
+        See [convert_circuit_to_quantikz](api:convert_circuit_to_quantikz), by default None
 
     include_qubits_in_lsticks : bool, optional
-        See (convert_circuit_to_quantikz)[api:convert_circuit_to_quantikz], by default True
+        See [convert_circuit_to_quantikz](api:convert_circuit_to_quantikz), by default True
 
     REVIEW_SPHINX_REFERENCE
     """
@@ -403,7 +403,7 @@ def convert_circuit_to_qiskit_draw(
     ----------
     circuit : Circuit
         pyGSTi ``Circuit`` to convert. Attainable via
-        (PyGSTiPhysicalCircuit.circuit)[api:PyGSTiPhysicalCircuit.circuit].
+        [PyGSTiPhysicalCircuit.circuit](api:PyGSTiPhysicalCircuit.circuit).
 
     gatename_conversion : Mapping[str, str] | None, optional
         See ``pygsti.circuits.Circuit.convert_to_openqasm``, by default None
@@ -472,7 +472,7 @@ def convert_circuit_to_quantikz(
     ----------
     circuit : Circuit
         pyGSTi ``Circuit`` to convert. Attainable via
-        (PyGSTiPhysicalCircuit.circuit)[api:PyGSTiPhysicalCircuit.circuit].
+        [PyGSTiPhysicalCircuit.circuit](api:PyGSTiPhysicalCircuit.circuit).
 
     gatename_conversion : Mapping[str, str | Sequence[str]]
         A conversion between gate labels and the corresponding

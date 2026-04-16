@@ -7,15 +7,15 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Functions to construct common (Instruction)[api:Instruction] objects.
+"""Functions to construct common [Instruction](api:Instruction) objects.
 
 Each function documents both how to use it, as well
 as providing the following information about the created
-(Instruction)[api:Instruction]:
+[Instruction](api:Instruction):
 
 - The apply function
     - The parameters it pulls, including the typical source
-    - What keys are in the returned (Frame)[api:Frame]
+    - What keys are in the returned [Frame](api:Frame)
 - The map qubits function (if needed)
 - The parameter priorities (if not default)
 - The parameter aliases (if provided)
@@ -98,11 +98,11 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - ``patch_label``, usually from the (patch_label)[api:InstructionLabel.patch_label]
+    - ``patch_label``, usually from the [patch_label](api:InstructionLabel.patch_label)
     - `stack`, usually from the QuantumProgram
-    - `instructions`, usually from the (data)[api:Instruction.data]
+    - `instructions`, usually from the [data](api:Instruction.data)
 
-    It returns a (Frame)[api:Frame] where ``instructions`` have been inserted
+    It returns a [Frame](api:Frame) where ``instructions`` have been inserted
     onto the front of InstructionStack stored at ``"stack"``.
 
     There is a map qubits function, which calls the map qubits

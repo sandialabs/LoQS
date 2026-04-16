@@ -32,12 +32,12 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
     """A record of the state of the simulation at a given time.
 
     The core functionality is a ``dict`` that relates keys to stateful objects.
-    It is highly recommended that users not modify (_data)[api:Frame._data] directly,
-    and instead use (update)[api:Frame.update] to return an updated copy instead.
+    It is highly recommended that users not modify Frame._data directly,
+    and instead use [update](api:Frame.update) to return an updated copy instead.
 
-    The (log)[api:Frame.log] can be accessed with the key ``"log"``,
+    The [log](api:Frame.log) can be accessed with the key ``"log"``,
     and any expired key will instead return the string ``"EXPIRED"``
-    (although the object could still be retrieved from (_data)[api:Frame._data]).
+    (although the object could still be retrieved from the underlying Frame._data).
     """
 
     _data: dict
@@ -57,7 +57,7 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
             which initializes an empty frame.
 
         log:
-            See (log)[api:Frame.log].
+            See [log](api:Frame.log).
         """
         if data is None:
             data = {}
@@ -123,7 +123,7 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
         This will cause the key to return
         ``"EXPIRED"`` instead of the stored object,
-        although the object is still stored in (Frame._data)[api:Frame._data].
+        although the object is still stored internally.
 
         Parameters
         ----------
@@ -151,10 +151,10 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         new_data: Mapping[str, object] | None = None,
         new_log: str | None = None,
     ) -> Frame:
-        """Create a new (Frame)[api:Frame] with updated data and log.
+        """Create a new [Frame](api:Frame) with updated data and log.
 
         Any data/log that is unchanged will be carried over
-        from the current (Frame)[api:Frame].
+        from the current [Frame](api:Frame).
 
         Parameters
         ----------
@@ -164,7 +164,7 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
         new_log : str | None
             A new log string. Defaults to ``None``,
-            which keeps the old (Frame.log)[api:Frame.log].
+            which keeps the old [Frame.log](api:Frame.log).
 
         Returns
         -------

@@ -55,6 +55,10 @@ CHILDREN_OPEN_RE = re.compile(r'<div class="doc doc-children"[^>]*>', re.IGNOREC
 # ----------------------------------------------------------------------
 LEADING_P_RE = re.compile(r"^\s*<p\b[^>]*>.*?</p>\s*", re.IGNORECASE | re.DOTALL)
 CLASS_TOC_ANCHOR_RE = re.compile(r'<a\s+id="[^"]*"\s*></a>\s*', re.IGNORECASE)
+LEADING_HIGHLIGHT_RE = re.compile(
+    r'^\s*<div class="highlight"[^>]*>.*?</div>\s*',
+    re.IGNORECASE | re.DOTALL,
+)
 
 # ----------------------------------------------------------------------
 #  TOC <li> entry matcher (Material theme)
@@ -65,6 +69,11 @@ TOC_LI_RE = re.compile(
     r"</li>",
     re.DOTALL | re.IGNORECASE,
 )
+
+API_HREF_RE = re.compile(r'''href=(["'])api:(?P<target>[^"'>\s]+)\1''', re.IGNORECASE)
+
+# Pandoc-style citations in rendered HTML text (from docstrings), e.g. [@key] or [@k1; @k2]
+CITE_BRACKET_RE = re.compile(r"\[@(?P<keys>[^\]]+)\]")
 
 
 def _find(pat: re.Pattern, s: str, start: int = 0) -> re.Match | None:
@@ -99,18 +108,32 @@ def _strip_intro_from_block(block: str) -> str:
     # Strip leading <p> blocks immediately inside contents-first, up to doc-children
     mid = block[m_contents.end() : m_children.start()]
     while True:
+        m_h = LEADING_HIGHLIGHT_RE.match(mid)
+        if m_h:
+            mid = mid[m_h.end() :]
+            continue
+
         m_p = LEADING_P_RE.match(mid)
-        if not m_p:
-            break
-        mid = mid[m_p.end() :]
+        if m_p:
+            mid = mid[m_p.end() :]
+            continue
+
+        break
 
     # Now strip leading <p> blocks at start of doc-children region
     after_children = block[m_children.start() :]
     while True:
+        m_h = LEADING_HIGHLIGHT_RE.match(after_children)
+        if m_h:
+            after_children = after_children[m_h.end() :]
+            continue
+
         m_p = LEADING_P_RE.match(after_children)
-        if not m_p:
-            break
-        after_children = after_children[m_p.end() :]
+        if m_p:
+            after_children = after_children[m_p.end() :]
+            continue
+
+        break
 
     return prefix + mid + after_children
 
@@ -161,25 +184,54 @@ def on_post_page(output: str, page, config) -> str:
     # 3) Remove derived/base class TOC entries by exact anchor match
     output = _strip_specific_toc_entries(output, anchors_to_remove)
 
-    return output
-
-def on_page_markdown(markdown: str, page, config, files) -> str:
-    """
-    API docs hook: rewrite [text](api:Target) into URLs local to the API site.
-
-    Here the inventory URLs are already relative to the API site root, so url_prefix="".
-    """
-    # api_inventory.json is generated into the docs build by gen-files; however during
-    # markdown processing we can read it from the site_dir staging directory only if present.
-    # Easiest: require a copy in docs_dir via gen-files too. We generate it at project root,
-    # so we look relative to config_dir (repo root) as a stable location.
+    # 4) Rewrite rendered HTML links: href="api:Target" -> href="...resolved..."
     cfg_dir = Path(config["config_file_path"]).resolve().parent
     inv_path = cfg_dir / "docs" / "_api_inventory.json"
     if not inv_path.exists():
-        # In most builds, gen-files writes it into the virtual files; but hooks run before output.
-        # So we require it to exist alongside mkdocs-api-ref.yml by generating it there.
         raise RuntimeError(f"API inventory not found at {inv_path} (expected during API build).")
 
     inv = ApiInventory.load(inv_path)
     src = getattr(page.file, "src_path", "") if hasattr(page, "file") else ""
-    return rewrite_api_links(markdown, inv, url_prefix="", page_src=src)
+
+    def _repl_api_href(m: re.Match) -> str:
+        target = m.group("target")
+        try:
+            rel = inv.resolve(target)  # e.g. "/loqs/.../#loqs...."
+        except KeyError as e:
+            raise RuntimeError(f"{src}: {e}") from None
+
+        url = ("/reference" + rel) if rel.startswith("/") else ("/reference/" + rel)
+        quote = m.group(1)
+        return f'href={quote}{url}{quote}'
+    
+    output = API_HREF_RE.sub(_repl_api_href, output)
+
+    # 5) Rewrite Pandoc-style citations in docstring HTML into links to the global bibliography page.
+    #    Example: [@tomita_lowdistance_2014] -> [<a href="/reference/bibliography/#tomita_lowdistance_2014">tomita_lowdistance_2014</a>]
+    def _repl_cite(m: re.Match) -> str:
+        keys_raw = m.group("keys")
+        # split on ';' (pandoc allows [@a; @b]) and normalize
+        keys = []
+        for part in keys_raw.split(";"):
+            part = part.strip()
+            if part.startswith("@"):
+                part = part[1:]
+            if not part:
+                continue
+            keys.append(part)
+
+        if not keys:
+            return m.group(0)
+
+        links = []
+        for k in keys:
+            # This path assumes your merged site mounts API under /reference
+            href = f"/reference/bib/#fn:{k}"
+            links.append(f'<a class="citation" href="{href}">{k}</a>')
+
+        # keep bracketed formatting
+        return "[" + "; ".join(links) + "]"
+
+    output = CITE_BRACKET_RE.sub(_repl_cite, output)
+
+    return output

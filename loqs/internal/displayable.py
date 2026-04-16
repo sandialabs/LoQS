@@ -29,7 +29,7 @@ class Displayable(Serializable):
     """Base class for all interactively displayable objects.
 
     This uses the dict version of objects output by
-    (to_serialization)[api:Serializable.to_serialization] and a tkinter ``Treeview`` to have
+    [to_serialization](api:Serializable.encode) and a tkinter ``Treeview`` to have
     an interactive navigatable window.
     """
 
@@ -39,7 +39,7 @@ class Displayable(Serializable):
         This launches a separate process for Tkinter,
         making it non-blocking.
         """
-        data = self.to_serialization()
+        data = Displayable.encode(self)
 
         title = f"{self.__class__.__name__} "
         obj_name = getattr(self, "name", None)
@@ -55,14 +55,14 @@ class Displayable(Serializable):
 
 
 class DisplayableViewer(tk.Tk):
-    """A tkinter widget to display (Displayable)[api:Displayable] objects."""
+    """A tkinter widget to display [Displayable](api:Displayable) objects."""
 
     def __init__(self, data: Mapping, title: str = "LoQS Object Viewer"):
         """
         Parameters
         ----------
         data:
-            The output of a (Serializable.to_serialization)[api:Serializable.to_serialization] call.
+            The output of a [Serializable.encode](api:Serializable.encode) call.
 
         title:
             String for logging

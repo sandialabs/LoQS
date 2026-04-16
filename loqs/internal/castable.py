@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""(Castable)[api:Castable] definition.
+"""[Castable](api:Castable) definition.
 """
 
 from __future__ import annotations
@@ -25,17 +25,17 @@ V = TypeVar("V", bound="MapCastable")
 class Castable:
     """Utility class for objects that are "castable".
 
-    By default, a (Castable)[api:Castable] object is one that can be
+    By default, a [Castable](api:Castable) object is one that can be
     initialized from a single argument, i.e. the object
     can be passed as the first argument to the constructor and any
     remaining arguments have sensible defaults.
-    They also have a (cast)[api:Castable.cast] function, which either does nothing
+    They also have a [cast](api:Castable.cast) function, which either does nothing
     if the object matches the correct type, or initializes it by calling
     the constructor by passing the object as the first parameter.
     """
 
     def __init__(self, obj: object) -> None:
-        """Construct a (Castable)[api:Castable] object.
+        """Construct a [Castable](api:Castable) object.
 
         Parameters
         ----------
@@ -82,13 +82,13 @@ class Castable:
 
 
 class SeqCastable(Castable):
-    """(Castable)[api:Castable] object whose first argument is a ``list`` or ``tuple``."""
+    """[Castable](api:Castable) object whose first argument is a ``list`` or ``tuple``."""
 
     @classmethod
     def cast(cls: type[U], obj: object) -> U:
         """Cast to the derived class.
 
-        The difference from (Castable.cast)[api:Castable.cast] is that we are
+        The difference from [Castable.cast](api:Castable.cast) is that we are
         expecting the first arg to be a ``Sequence``, so we skip
         the args list logic.
 
@@ -118,13 +118,13 @@ class SeqCastable(Castable):
 
 
 class MapCastable(Castable):
-    """(Castable)[api:Castable] object whose first argument is a ``dict``."""
+    """[Castable](api:Castable) object whose first argument is a ``dict``."""
 
     @classmethod
     def cast(cls: type[V], obj: object) -> V:
         """Cast to the derived class.
 
-        The difference from (Castable.cast)[api:Castable.cast] is that we are
+        The difference from [Castable.cast](api:Castable.cast) is that we are
         expecting the first arg to be a ``Mapping``, so we skip
         the kwargs dict logic.
 

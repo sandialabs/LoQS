@@ -70,7 +70,7 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
     pstrs: Sequence[str],
     default_pstr: str | Literal["auto"] | None = "auto",
 ) -> dict[str, list[str]]:
-    """Call (get_syndrome_from_stabilizers_and_pstr)[api:get_syndrome_from_stabilizers_and_pstr] for many Pauli strings.
+    """Call [get_syndrome_from_stabilizers_and_pstr](api:get_syndrome_from_stabilizers_and_pstr) for many Pauli strings.
 
     The output of this function can be used as a lookup table
     decoder if there is only a single entry -- i.e. data error --
@@ -79,11 +79,11 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
     Parameters
     ----------
     stabilizers : Sequence[str]
-        See (get_syndrome_from_stabilizers_and_pstr)[api:get_syndrome_from_stabilizers_and_pstr].
+        See [get_syndrome_from_stabilizers_and_pstr](api:get_syndrome_from_stabilizers_and_pstr).
 
     pstrs : Sequence[str]
         List of Pauli strings, see
-        (get_syndrome_from_stabilizers_and_pstr)[api:get_syndrome_from_stabilizers_and_pstr].
+        [get_syndrome_from_stabilizers_and_pstr](api:get_syndrome_from_stabilizers_and_pstr).
 
     default_pstr : str | Literal["auto"] | None, optional
         A default Pauli string to use for syndromes that do not
@@ -132,11 +132,11 @@ def get_weight_1_errors(num_qubits: int) -> list[str]:
     """Compute Pauli strings for weight-1 errors.
 
     The output of this can serve as the ``pstrs`` input to
-    (get_syndrome_dict_from_stabilizers_and_pstrs)[api:get_syndrome_dict_from_stabilizers_and_pstrs]
+    [get_syndrome_dict_from_stabilizers_and_pstrs](api:get_syndrome_dict_from_stabilizers_and_pstrs)
     for the purpose of computing lookup tables for correcting
     data errors.
     For an example, see the ``"Unflagged Decoder"`` instruction
-    in (codepack_5_1_3_quantinuum2022)[api:codepack_5_1_3_quantinuum2022].
+    in [codepack_5_1_3_quantinuum2022](api:codepack_5_1_3_quantinuum2022).
 
     Parameters
     ----------
@@ -171,11 +171,11 @@ def get_hook_errors_in_flagged_check(
     the data errors in Fig. 2d of arXiv:1705.02329.
 
     The output of this can serve as the ``pstrs`` input to
-    (get_syndrome_dict_from_stabilizers_and_pstrs)[api:get_syndrome_dict_from_stabilizers_and_pstrs]
+    [get_syndrome_dict_from_stabilizers_and_pstrs](api:get_syndrome_dict_from_stabilizers_and_pstrs)
     for the purpose of computing lookup tables for correcting
     measurement errors that result in hook errors.
     For an example, see the ``"Flagged <stab> Decoder"`` instructions
-    in (codepack_5_1_3_quantinuum2022)[api:codepack_5_1_3_quantinuum2022].
+    in [codepack_5_1_3_quantinuum2022](api:codepack_5_1_3_quantinuum2022).
 
     Parameters
     ----------
@@ -231,9 +231,9 @@ def compose_pstrs(pstr1: str, pstr2: str) -> str:
 
     Among other uses, it can be used to apply Pauli string
     corrections to a frame. Mathematically, it is the same
-    as (PauliFrame.update_from_pauli_str)[api:PauliFrame.update_from_pauli_str], but without
+    as [PauliFrame.update_from_pauli_str](api:PauliFrame.update_from_pauli_str), but without
     requiring one of the Pauli strings to be wrapped up in
-    a (PauliFrame)[api:PauliFrame].
+    a [PauliFrame](api:PauliFrame).
 
     Parameters
     ----------
@@ -271,7 +271,7 @@ def compose_pstrs(pstr1: str, pstr2: str) -> str:
 def compose_pstr_lists(
     pstr_list1: Sequence[str], pstr_list2: Sequence[str]
 ) -> list[str]:
-    """Perform (compose_pstrs)[api:compose_pstrs] on two sets of Pauli strings.
+    """Perform [compose_pstrs](api:compose_pstrs) on two sets of Pauli strings.
 
     Parameters
     ----------

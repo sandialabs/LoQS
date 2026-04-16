@@ -19,9 +19,6 @@ import textwrap
 
 from loqs.core.frame import Frame, FrameCastableTypes
 from loqs.internal import SeqCastable, Displayable
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
-from loqs.internal.serializable import Serializable
-from loqs.internal.encoder.jsonencoder import JSONEncoder
 
 
 T = TypeVar("T", bound="History")
@@ -29,24 +26,24 @@ T = TypeVar("T", bound="History")
 HistoryCastableTypes: TypeAlias = (
     "History | FrameCastableTypes | Sequence[FrameCastableTypes] | None"
 )
-"""Things that can be cast to (History)[api:History]."""
+"""Things that can be cast to [History](api:History)."""
 
 HistoryCollectDataIndexTypes: TypeAlias = (
     int | slice | Sequence[int] | Literal["all"]
 )
-"""Types that can be passed into ``indices`` for (collect_data)[api:History.collect_data]"""
+"""Types that can be passed into ``indices`` for [collect_data](api:History.collect_data)"""
 
 HistoryCollectDataArgsType: TypeAlias = tuple[
     str, HistoryCollectDataIndexTypes
 ]
-"""Type alias for arguments to (collect_data)[api:History.collect_data]"""
+"""Type alias for arguments to [collect_data](api:History.collect_data)"""
 
 
 class History(Sequence[Frame], SeqCastable, Displayable):
-    """A semi-mutable list of (Frame)[api:Frame] objects.
+    """A semi-mutable list of [Frame](api:Frame) objects.
 
     The intention is to provide a list-like object where existing
-    (Frame)[api:Frame] objects cannot be changed or removed,
+    [Frame](api:Frame) objects cannot be changed or removed,
     and insertion can only occur at the end of the list.
     """
 
@@ -121,15 +118,15 @@ class History(Sequence[Frame], SeqCastable, Displayable):
 
         expiring_keys:
             A list of keys that should "expire" when a new
-            (Frame)[api:Frame] is added. Specifically, it calls
-            (expire)[api:Frame.expire] on old frames when a new
+            [Frame](api:Frame) is added. Specifically, it calls
+            [expire](api:Frame.expire) on old frames when a new
             frame containing that key is added.
             It defaults to ``["state"]``, assuming that the
             quantum state is being propagated in-place.
 
         propagating_keys:
             A list of keys that should be added to an
-            incoming (Frame)[api:Frame] if it does not already
+            incoming [Frame](api:Frame) if it does not already
             have it.
             The default is ``["state", "patches"]``, ensuring
             that the most up-to-date BaseQuantumState
@@ -140,8 +137,8 @@ class History(Sequence[Frame], SeqCastable, Displayable):
 
         no_serialize_keys:
             A list of keys that should not be serialized by
-            each (Frame)[api:Frame]. Specifically, it calls
-            (no_serialize)[api:Frame.no_serialize] on frames as they
+            each [Frame](api:Frame). Specifically, it calls
+            [no_serialize](api:Frame.no_serialize) on frames as they
             are added.
             It defaults to ``None``, but a common choice would
             also be ``["state"]`` in cases where the quantum
@@ -214,7 +211,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         return s
 
     def append(self, item: FrameCastableTypes) -> None:
-        """Add a (Frame)[api:Frame] to the end of the (History)[api:History].
+        """Add a [Frame](api:Frame) to the end of the [History](api:History).
 
         Parameters
         ----------
@@ -259,12 +256,12 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         indices: HistoryCollectDataIndexTypes,
         strip_none_entries: bool = False,
     ) -> list | object:
-        """Pull data by key out of one or several stored (Frame)[api:Frame] objects.
+        """Pull data by key out of one or several stored [Frame](api:Frame) objects.
 
         Parameters
         ----------
         key : str
-            The key into each (Frame)[api:Frame] corresponding to the desired data.
+            The key into each [Frame](api:Frame) corresponding to the desired data.
 
         indices : HistoryCollectDataIndexTypes
             Frame indices to look for ``key`` in. This can either be an int for a single frame,

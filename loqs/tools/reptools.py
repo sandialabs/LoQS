@@ -211,7 +211,7 @@ def create_depolarizing_kraus_rep(
     """Create a depolarizing Kraus RepTuple.
 
     This is a convenience function that wraps
-    (create_pauli_stochastic_kraus_reps)[api:create_pauli_stochastic_kraus_reps].
+    [create_pauli_stochastic_kraus_rep](api:create_pauli_stochastic_kraus_rep).
 
     Parameters
     ----------
@@ -243,7 +243,7 @@ def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> RepTuple:
         Probability of damping
 
     qubit : str | int
-        Target qubit (for (RepTuple)[api:RepTuple] construction)
+        Target qubit [for (RepTuple](api:RepTuple) construction)
 
     Returns
     -------
@@ -348,7 +348,7 @@ def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
 def compose_kraus_reptuples(
     rt1: RepTuple, rt2: RepTuple, dedup: bool = True
 ) -> RepTuple:
-    r"""Compose two Kraus (RepTuple)[api:RepTuple]s together.
+    r"""Compose two Kraus [RepTuple](api:RepTuple)s together.
 
     Essentially just foils them out:
 
@@ -366,10 +366,10 @@ def compose_kraus_reptuples(
     Parameters
     ----------
     rt1 : RepTuple
-        The first (RepTuple)[api:RepTuple].
+        The first [RepTuple](api:RepTuple).
 
     rt2 : RepTuple
-        The second (RepTuple)[api:RepTuple].
+        The second [RepTuple](api:RepTuple).
 
     dedup : bool, optional
         Whether (True, default) or not (False) to deduplicate

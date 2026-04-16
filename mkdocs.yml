@@ -31,6 +31,7 @@ nav:
   - Developer Zone:
       - Dev Guide: dev-zone/devguide.md
   - API Reference: /reference
+  - Bibliography: references.md
 
 theme:
   name: material
@@ -43,6 +44,7 @@ theme:
     - content.code.copy
 
 markdown_extensions:
+  - footnotes
   - toc:
       permalink: true
   - attr_list
@@ -53,6 +55,9 @@ plugins:
   - search
   - marimo:
       display_code: true
+  - bibtex:
+      bib_file: docs/references.bib
+      csl_file: docs/american-physical-society-et-al.csl
   - mkdocs-simple-hooks:
       hooks:
         on_page_markdown: docs_scripts.main_hooks:on_page_markdown

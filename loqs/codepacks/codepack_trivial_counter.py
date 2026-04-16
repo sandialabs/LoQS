@@ -31,7 +31,7 @@ def create_qec_code():
     Returns
     -------
     QECCode
-        A (QECCode)[api:QECCode] implementing the trivial counter code.
+        A [QECCode](api:QECCode) implementing the trivial counter code.
 
     REVIEW_SPHINX_REFERENCE
     """
@@ -85,7 +85,7 @@ def create_ideal_model(
         List of qubit labels to use (not actually used in this trivial case).
     model_backend : type[BaseNoiseModel], optional
         The model backend to use (not actually used in this trivial case).
-        Default is (DictNoiseModel)[api:DictNoiseModel].
+        Default is [DictNoiseModel](api:DictNoiseModel).
     gaterep : GateRep, optional
         Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
     instrep : InstrumentRep, optional
@@ -94,7 +94,7 @@ def create_ideal_model(
     Returns
     -------
     BaseNoiseModel
-        An empty (DictNoiseModel)[api:DictNoiseModel] representing no operations needed for this trivial code.
+        An empty [DictNoiseModel](api:DictNoiseModel) representing no operations needed for this trivial code.
 
     REVIEW_SPHINX_REFERENCE
     """

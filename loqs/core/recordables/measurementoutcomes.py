@@ -118,12 +118,12 @@ class MeasurementOutcomes(
         pauli_frame: PauliFrame | None = None,
         basis: Literal["Z"] | Literal["X"] = "Z",
     ) -> MeasurementOutcomes:
-        """Apply a (PauliFrame)[api:PauliFrame] to get inferred outcomes.
+        """Apply a [PauliFrame](api:PauliFrame) to get inferred outcomes.
 
         Parameters
         ----------
         pauli_frame:
-            The (PauliFrame)[api:PauliFrame] to apply. Defaults to ``None``,
+            The [PauliFrame](api:PauliFrame) to apply. Defaults to ``None``,
             in which case this just returns a copy.
 
         basis:

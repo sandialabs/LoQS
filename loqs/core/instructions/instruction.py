@@ -161,6 +161,35 @@ class Instruction(Displayable):
         "_serialized_map_qubits_fn",
     ]
 
+    data: dict
+    """Data to keep with this [Instruction](api:Instruction).
+
+    NOTE: There is currently a limitation that this data
+    cannot store functions due to serialization issues.
+    """
+
+    apply_fn: ApplyCallable
+    """A user-defined function called in [apply](api:Instruction.apply).
+
+    It must conform to the [ApplyCallable](api:ApplyCallable) protocol.
+    """
+
+    map_qubits_fn: MapQubitsCallable | None
+    """A user-defined function called in [map_qubits](api:Instruction.map_qubits).
+
+    It must conform to the [MapQubitsCallable](api:MapQubitsCallable] protocol.
+    """
+
+    param_error_behavior: Literal["continue", "warn", "raise"]
+    """Error behaviour when processing [apply_fn](api:Instruction.apply_fn) parameters.
+    """
+
+    name: str
+    """Name for logging"""
+
+    type: str
+    """Type for logging"""
+
     def __init__(
         self,
         apply_fn: ApplyCallable,
@@ -218,16 +247,8 @@ class Instruction(Displayable):
             See :attr:`.type`.
         """
         self.apply_fn = apply_fn
-        """A user-defined function called in :meth:`.apply`.
-
-        It must conform to the :attr:`.ApplyCallable` protocol.
-        """
 
         self.map_qubits_fn = map_qubits_fn
-        """A user-defined function called in :meth:`.map_qubits`.
-
-        It must conform to the :attr:`.MapQubitsCallable` protocol.
-        """
 
         # Let's serialize the functions now, when we know we have access to source code
         self._serialized_apply_fn = serialized_apply_fn
@@ -242,21 +263,12 @@ class Instruction(Displayable):
         if data is None:
             data = {}
         self.data = deepcopy(dict(data))
-        """Data to keep with this :class:`.Instruction`.
-
-        NOTE: There is currently a limitation that this data
-        cannot store functions due to serialization issues.
-        """
 
         # Introspect to ensure we set priorities for every arg needed
         if param_priorities is None:
             param_priorities = {}
         assert param_error_behavior in ["continue", "warn", "raise"]
         self.param_error_behavior = param_error_behavior
-        """Error behaviour when processing :attr:`.apply_fn` parameters.
-
-        Must be one of ``["continue", "warn", "raise"]``.
-        """
 
         self._param_priorities = {}
         sig = ins.signature(self.apply_fn)
@@ -284,10 +296,8 @@ class Instruction(Displayable):
         self._param_aliases = dict(param_aliases)
 
         self.name = name
-        """Name for logging"""
 
         self.type = type
-        """Type for logging"""
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
@@ -348,18 +358,18 @@ class Instruction(Displayable):
         return self._param_aliases.get(key, key)
 
     def apply(self, **kwargs) -> Frame:
-        """Apply this (Instruction)[api:Instruction] to get a new (Frame)[api:Frame].
+        """Apply this [Instruction](api:Instruction) to get a new [Frame](api:Frame).
 
         Parameters
         ----------
         **kwargs:
-            Parameters to pass on to (apply_fn)[api:Instruction.apply_fn].
+            Parameters to pass on to [apply_fn](api:Instruction.apply_fn).
 
         Returns
         -------
         Frame
-            The output (Frame)[api:Frame] of (apply_fn)[api:Instruction.apply_fn], with this
-            (Instruction)[api:Instruction] and the input parameters appended for
+            The output [Frame](api:Frame) of [apply_fn](api:Instruction.apply_fn), with this
+            [Instruction](api:Instruction) and the input parameters appended for
             informational/debugging purposes
         """
         # Pull out only kwargs we need
@@ -377,7 +387,7 @@ class Instruction(Displayable):
         return output_frame
 
     def copy(self) -> Instruction:
-        """Return a copy of this (Instruction)[api:Instruction]."""
+        """Return a copy of this [Instruction](api:Instruction)."""
         return Instruction(
             apply_fn=self.apply_fn,
             data=deepcopy(self.data),
@@ -405,7 +415,7 @@ class Instruction(Displayable):
         Returns
         -------
         Instruction
-            A copy of the (Instruction)[api:Instruction] with mapped qubits
+            A copy of the [Instruction](api:Instruction) with mapped qubits
         """
         new_instruction = self.copy()
         # Map qubits on all data

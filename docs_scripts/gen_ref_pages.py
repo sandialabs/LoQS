@@ -1,3 +1,4 @@
+# docs_scripts/gen_ref_pages.py
 from __future__ import annotations
 
 import ast
@@ -24,6 +25,10 @@ def _is_public_method(name: str) -> bool:
 
 def _is_public_var(name: str) -> bool:
     return not name.startswith("_") and not name.startswith("__")
+
+
+def _is_public_property(name: str) -> bool:
+    return _is_public_method(name)
 
 
 _ALL_CAPS_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -82,13 +87,26 @@ def _method_owner_for_docs(cls: type, name: str) -> type:
     obj = cls.__dict__.get(name)
     if obj is None:
         return cls
-    if _has_doc(obj):
-        return cls
+
+    # For properties, check fget docstring (and fset/fdel if desired later)
+    if isinstance(obj, property):
+        if obj.fget is not None and _has_doc(obj.fget):
+            return cls
+    else:
+        if _has_doc(obj):
+            return cls
+
     for base in cls.__mro__[1:]:
         if name in getattr(base, "__dict__", {}):
             base_obj = base.__dict__.get(name)
-            if base_obj is not None and _has_doc(base_obj):
-                return base
+            if base_obj is None:
+                continue
+            if isinstance(base_obj, property):
+                if base_obj.fget is not None and _has_doc(base_obj.fget):
+                    return base
+            else:
+                if _has_doc(base_obj):
+                    return base
     return cls
 
 
@@ -131,7 +149,13 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
                 kind = "type alias" if is_alias else "variable"
 
                 rows.append(
-                    {"name": node.target.id, "kind": kind, "type": "TypeAlias" if is_alias else ann_s, "value": value_s, "doc": doc}
+                    {
+                        "name": node.target.id,
+                        "kind": kind,
+                        "type": "TypeAlias" if is_alias else ann_s,
+                        "value": value_s,
+                        "doc": doc,
+                    }
                 )
 
     classes.sort(key=str.lower)
@@ -211,7 +235,13 @@ def _class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident:
                 doc = _doc_hint_from_next_stmt(body, i)
                 ann_s = _unparse(node.annotation).strip()
                 value_s = _unparse(node.value).strip() if node.value is not None else ""
-                out[node.target.id] = {"name": node.target.id, "type": ann_s, "owner": owner_ident, "value": value_s, "doc": doc}
+                out[node.target.id] = {
+                    "name": node.target.id,
+                    "type": ann_s,
+                    "owner": owner_ident,
+                    "value": value_s,
+                    "doc": doc,
+                }
 
     return out
 
@@ -269,18 +299,82 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
     return sorted(merged.values(), key=_var_sort_key)
 
 
-def class_methods_from_introspection(
+def property_rows_from_introspection(cls_obj: type, *, owner_ident: str) -> list[dict]:
+    """
+    Build "member variable" rows for @property descriptors.
+
+    Table mapping:
+      - Type column: inferred return type annotation of the property's fget (if any)
+      - Value column: *property* / *read-only property* (+ *(abstract)* if applicable)
+    """
+    rows: list[dict] = []
+    for name, val in getattr(cls_obj, "__dict__", {}).items():
+        if not _is_public_property(name):
+            continue
+        if not isinstance(val, property):
+            continue
+
+        # Type column: return annotation on fget if present
+        typ = ""
+        fget = val.fget
+        if fget is not None:
+            try:
+                ann = inspect.signature(fget).return_annotation
+            except (TypeError, ValueError):
+                ann = inspect.Signature.empty
+
+            if ann is not inspect.Signature.empty:
+                # Prefer a readable type string
+                if isinstance(ann, str):
+                    typ = ann
+                else:
+                    typ = getattr(ann, "__name__", None) or str(ann)
+
+        # Value column: property kind + abstract marker
+        kind = "*read-only property*" if val.fset is None else "*property*"
+        is_abstract = bool(getattr(fget, "__isabstractmethod__", False)) if fget is not None else False
+        val_s = kind + (" *(abstract)*" if is_abstract else "")
+
+        # Doc column: first line of fget docstring (if any)
+        doc = ""
+        if fget is not None:
+            d = inspect.getdoc(fget) or ""
+            d = d.strip()
+            if d:
+                doc = d.splitlines()[0]
+
+        rows.append(
+            {
+                "name": name,
+                "type": typ,
+                "owner": owner_ident,
+                "value": val_s,
+                "doc": doc,
+            }
+        )
+
+    return sorted(rows, key=_var_sort_key)
+
+
+def class_members_from_introspection(
     class_name: str,
     mod_ident: str,
-) -> tuple[type | None, list[str], list[str], list[str], dict[str, str], list[str]]:
+) -> tuple[
+    type | None,
+    list[str],  # instance methods
+    list[str],  # class methods
+    list[str],  # static methods
+    dict[str, str],  # owner_override
+    list[str],  # toc_remove_anchors
+]:
     try:
         mod = importlib.import_module(mod_ident)
     except Exception:
-        return None, [], [], [], {}, []
+        return None, [], [], {}, []
 
     cls = getattr(mod, class_name, None)
     if cls is None or not isinstance(cls, type):
-        return None, [], [], [], {}, []
+        return None, [], [], {}, []
 
     toc_remove_anchors: list[str] = [_qualname_to_ident(cls)]
     for base in cls.__mro__[1:]:
@@ -304,6 +398,7 @@ def class_methods_from_introspection(
         elif inspect.isfunction(val):
             inst.append(name)
         else:
+            # NOTE: properties intentionally excluded from "Methods"
             continue
 
         doc_owner = _method_owner_for_docs(cls, name)
@@ -347,7 +442,10 @@ def write_class_members_table(
             val_s = "*unset*"
         else:
             val_s = str(val).replace("\n", " ").replace("|", "\\|")
-            val_s = f"`{val_s}`"
+
+            # If the value already contains Markdown (e.g., *property*), don't wrap in code ticks.
+            if "*" not in val_s and "_" not in val_s:
+                val_s = f"`{val_s}`"
 
         doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
 
@@ -407,7 +505,7 @@ def write_module_members_table(
         if val is None or str(val).strip() == "":
             val_s = "*unset*"
         else:
-            val_s = str(val).replace("\n", " ").replace("|", "\\|")
+            val_s = str(val).replace("\n", " ")#.replace("|", "\\|")
             val_s = f"`{val_s}`"
 
         doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
@@ -428,19 +526,29 @@ def write_module_page(
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
-
-        if rows:
-            f.write("## Members\n\n")
-            write_module_members_table(f, mod_ident, page_url, rows, inv_objects)
-
-        if funcs:
-            f.write("## Functions\n\n")
-            write_module_functions_block(f, mod_ident, funcs)
+        
+        # Always render the module/package docstring
+        f.write(f"::: {mod_ident}\n")
+        f.write("    options:\n")
+        f.write("      members: false\n")
+        f.write("      inherited_members: false\n\n")
 
         if classes:
             f.write("## Classes\n\n")
             for cls in classes:
                 f.write(f"- [`{cls}`]({cls}/)\n")
+            f.write("\n\n\n")
+
+        if rows:
+            f.write("## Members\n\n")
+            write_module_members_table(f, mod_ident, page_url, rows, inv_objects)
+            f.write("\n\n\n")
+
+        if funcs:
+            f.write("## Methods\n\n")
+            write_module_functions_block(f, mod_ident, funcs)
+            f.write("\n\n\n")
+
 
 
 def write_class_page(
@@ -466,7 +574,7 @@ def write_class_page(
         write_class_intro(f, cls_ident)
 
         if var_rows:
-            f.write("## Members\n\n")
+            f.write("## Members\n")
             write_class_members_table(
                 f,
                 var_rows,
@@ -477,7 +585,7 @@ def write_class_page(
             )
 
         if static_methods or class_methods or instance_methods:
-            f.write("## Methods\n\n")
+            f.write("## Methods\n")
             for m in static_methods:
                 owner = owner_override.get(m, cls_ident)
                 write_class_member_block(f, owner, m)
@@ -492,6 +600,12 @@ def write_class_page(
 def main() -> None:
     nav = mkdocs_gen_files.Nav()
     inv_objects: dict[str, str] = {}
+
+    # Global references page for citations in docstrings
+    nav[("Bibliography",)] = "bib.md"
+    with mkdocs_gen_files.open("bib.md", "w") as f:
+        f.write("# Bibliography\n\n")
+        f.write("\\full_bibliography\n")
 
     nav[("loqs",)] = "loqs/index.md"
     with mkdocs_gen_files.open("loqs/index.md", "w") as f:
@@ -543,18 +657,36 @@ def main() -> None:
             cls_page = Path(*mod_parts) / f"{cls_name}.md"
             nav[(*nav_key, cls_name)] = cls_page.as_posix()
 
-            cls_obj, inst, clsm, stat, owner_override, toc_remove_anchors = class_methods_from_introspection(cls_name, mod_ident)
+            (
+                cls_obj,
+                inst,
+                clsm,
+                stat,
+                owner_override,
+                toc_remove_anchors,
+            ) = class_members_from_introspection(cls_name, mod_ident)
 
+            cls_page_url = mod_page_url + f"{cls_name}/"
+
+            # Inventory entries for methods should point at the class page
             for m in stat + clsm + inst:
-                inv_objects[f"{cls_ident}.{m}"] = f"{mod_page_url}#{cls_ident}.{m}"
+                inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
 
             if cls_obj is not None:
                 var_rows = class_var_rows_with_mro(py, cls_obj)
+
+                # Add @property descriptors to the Members table (as "member variables")
+                prop_rows = property_rows_from_introspection(cls_obj, owner_ident=cls_ident)
+
+                # Merge (prefer var_rows entries if name collides)
+                by_name = {r["name"]: r for r in prop_rows}
+                for r in var_rows:
+                    by_name[r["name"]] = r
+                var_rows = sorted(by_name.values(), key=_var_sort_key)
             else:
                 derived_map = _class_var_info_map_from_ast(py, cls_name, owner_ident=cls_ident)
                 var_rows = sorted(derived_map.values(), key=_var_sort_key)
 
-            cls_page_url = mod_page_url + f"{cls_name}/"
             write_class_page(
                 cls_page,
                 title=cls_name,
@@ -574,6 +706,7 @@ def main() -> None:
         f.write("Use the sidebar to browse.\n")
 
     with mkdocs_gen_files.open("SUMMARY.md", "w") as f:
+        f.write("* [Home](/)\n")
         f.write("* [API Reference](index.md)\n")
         for line in nav.build_literate_nav():
             f.write("  " + line)
@@ -581,13 +714,14 @@ def main() -> None:
     suffix_index = build_suffix_index(inv_objects, package="loqs")
     with mkdocs_gen_files.open(INVENTORY_PATH, "w") as f:
         json.dump({"objects": inv_objects, "suffix_index": suffix_index}, f, indent=2, sort_keys=True)
-    
+
     # ALSO write to disk so api_hooks.py can load it during the same build
     # serve.py will clean it
-    disk_path = REPO_ROOT / 'docs' / f'_{INVENTORY_PATH}'
+    disk_path = REPO_ROOT / "docs" / f"_{INVENTORY_PATH}"
     disk_path.write_text(
         json.dumps({"objects": inv_objects, "suffix_index": suffix_index}, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
 
 main()

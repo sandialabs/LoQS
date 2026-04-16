@@ -263,8 +263,8 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         """Merge another circuit to this circuit.
 
-        While (insert_inplace)[api:BasePhysicalCircuit.insert_inplace] adds new layers,
-        (merge_inplace)[api:BasePhysicalCircuit.merge_inplace] will try to add operations to
+        While [insert_inplace](api:BasePhysicalCircuit.insert_inplace) adds new layers,
+        [merge_inplace](api:BasePhysicalCircuit.merge_inplace) will try to add operations to
         existing layers.
 
         Parameters
@@ -368,7 +368,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         This only adds or deletes qubits from the circuit,
         but does not modify the qubit labels of operations.
         For a complete change of qubit labels, see
-        (map_qubit_labels_inplace)[api:PyGSTiPhysicalCircuit.map_qubit_labels_inplace] instead.
+        [map_qubit_labels_inplace](api:PyGSTiPhysicalCircuit.map_qubit_labels_inplace) instead.
 
         Parameters
         ----------

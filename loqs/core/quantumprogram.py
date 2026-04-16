@@ -286,38 +286,38 @@ class QuantumProgram(Displayable):
         patch_types: Mapping[str, QECCode] | None = None,
         name: str | None = None,
     ) -> QuantumProgram:
-        """Create a copy of a (QuantumProgram)[api:QuantumProgram] with some options updated.
+        """Create a copy of a [QuantumProgram](api:QuantumProgram) with some options updated.
 
         Parameters
         ----------
         other:
-            The base (QuantumProgram)[api:QuantumProgram] to copy
+            The base [QuantumProgram](api:QuantumProgram) to copy
 
         instruction_stack:
-            See ``instruction_stack`` in (__init__)[api:QuantumProgram.__init__]
+            See ``instruction_stack`` in [__init__](api:QuantumProgram)
 
         default_noise_model:
-            See ``default_noise_model`` in (__init__)[api:QuantumProgram.__init__]
+            See ``default_noise_model`` in [__init__](api:QuantumProgram)
 
         default_base_seed:
-            See ``default_base_seed`` in (__init__)[api:QuantumProgram.__init__]
+            See ``default_base_seed`` in [__init__](api:QuantumProgram)
 
         global_instructions:
-            See ``global_instructions`` in (__init__)[api:QuantumProgram.__init__]
+            See ``global_instructions`` in [__init__](api:QuantumProgram)
 
         state_type:
-            See ``state_type`` in (__init__)[api:QuantumProgram.__init__]
+            See ``state_type`` in [__init__](api:QuantumProgram)
 
         patch_types:
-            See ``patch_types`` in (__init__)[api:QuantumProgram.__init__]
+            See ``patch_types`` in [__init__](api:QuantumProgram)
 
         name:
-            See ``name`` in (__init__)[api:QuantumProgram.__init__]
+            See ``name`` in [__init__](api:QuantumProgram)
 
         Returns
         -------
         QuantumProgram
-            The copied and updated (QuantumProgram)[api:QuantumProgram]
+            The copied and updated [QuantumProgram](api:QuantumProgram)
         """
         if instruction_stack is None:
             instruction_stack = other.instruction_stack
@@ -363,9 +363,9 @@ class QuantumProgram(Displayable):
         checkpoint_dir: str | Path | None = None,
         checkpoint_strategy: str = "single_file",
     ) -> ProgramResults:
-        """Execute some shots of this (QuantumProgram)[api:QuantumProgram].
+        """Execute some shots of this [QuantumProgram](api:QuantumProgram).
 
-        This returns a (ProgramResults)[api:ProgramResults] object containing the shot histories.
+        This returns a [ProgramResults](api:ProgramResults) object containing the shot histories.
 
         Parameters
         ----------
@@ -411,7 +411,7 @@ class QuantumProgram(Displayable):
          Returns
          -------
          ProgramResults
-             A (ProgramResults)[api:ProgramResults] object containing the shot histories.
+             A [ProgramResults](api:ProgramResults) object containing the shot histories.
         """
 
         # Create ProgramResults object to store results

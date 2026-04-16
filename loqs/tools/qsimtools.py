@@ -111,9 +111,9 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
 
 
 def print_state_probs_phases(qsim_state: QSimQuantumState):
-    """Pretty-print the output of (get_state_probs_phases)[api:get_state_probs_phases].
+    """Pretty-print the output of [get_state_probs_phases](api:get_state_probs_phases).
 
-    Refer to (get_state_probs_phases)[api:get_state_probs_phases] for documentation.
+    Refer to [get_state_probs_phases](api:get_state_probs_phases) for documentation.
 
     REVIEW_SPHINX_REFERENCE
     """

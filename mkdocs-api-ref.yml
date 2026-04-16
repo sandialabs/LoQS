@@ -17,6 +17,7 @@ extra:
   main_site_url: /
 
 markdown_extensions:
+  - footnotes
   - toc:
       permalink: true
   - attr_list
@@ -42,7 +43,9 @@ plugins:
             separate_signature: true
             heading_level: 2
             members_order: alphabetical
+  - bibtex:
+      bib_file: docs/references.bib
+      csl_file: docs/american-physical-society-et-al.csl
   - mkdocs-simple-hooks:
       hooks:
         on_post_page: docs_scripts.api_hooks:on_post_page
-        on_page_markdown: docs_scripts.api_hooks:on_page_markdown

@@ -42,6 +42,18 @@ class QECCode(Displayable):
         "name",
     ]
 
+    instructions: dict[str, Instruction]
+    """A mapping from name keys to [Instruction](api:Instruction) values."""
+
+    template_qubits: list[str | int]
+    """All template qubits used in [instructions](api:QECCode.instructions)."""
+
+    template_data_qubits: list[str | int]
+    """The entries of [template_qubits](api:QECCode.template_qubits) corresponding to data qubits."""
+
+    name: str = "(Unnamed QEC code)"
+    """Name for logging"""
+
     def __init__(
         self,
         instructions: Mapping[str, Instruction],
@@ -53,32 +65,28 @@ class QECCode(Displayable):
         Parameters
         ----------
         instructions:
-            See :attr:`.instructions`.
+            See [instructions](api:QECCode.instructions).
 
         template_qubits:
-            See :attr:`.template_qubits`.
+            See [template_qubits](api:QECCode.template_qubits).
 
         template_data_qubits:
-            See :attr:`.template_data_qubits`.
+        See [template_data_qubits](api:QECCode.template_data_qubits).
 
         name:
-            See :attr:`.name`.
+            See [name](api:QECCode.name).
         """
         self.instructions = dict(instructions)
-        """A mapping from name keys to :class:`.Instruction` values."""
 
         self.template_qubits = list(template_qubits)
-        """All template qubits used in :attr:`instructions`."""
 
         self.template_data_qubits = list(template_data_qubits)
-        """The entries of :attr:`template_qubits` corresponding to data qubits."""
 
         assert all(
             [tdq in self.template_qubits for tdq in self.template_data_qubits]
         ), "Data qubits must a subset of all template qubits"
 
         self.name = name
-        """Name for logging"""
 
     def __str__(self) -> str:
         return f"QECCode {self.name}"
@@ -88,22 +96,22 @@ class QECCode(Displayable):
         qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes | None = None,
     ) -> QECCodePatch:
-        """Create a (QECCodePatch)[api:QECCodePatch] based on this (QECCode)[api:QECCode].
+        """Create a [QECCodePatch](api:QECCodePatch) based on this [QECCode](api:QECCode).
 
         Parameters
         ----------
         qubits:
-            Qubit labels to replace (template_qubits)[api:QECCode.template_qubits].
+            Qubit labels to replace [template_qubits](api:QECCode.template_qubits).
 
         pauli_frame:
-            An initial (PauliFrame)[api:PauliFrame] to assign to the patch.
+            An initial [PauliFrame](api:PauliFrame) to assign to the patch.
             Defaults to ``None``, which assigns the trivial Pauli frame
             of all ``"I"`` entries.
 
         Returns
         -------
         QECCodePatch
-            The constructed (QECCodePatch)[api:QECCodePatch]
+            The constructed [QECCodePatch](api:QECCodePatch)
         """
         if pauli_frame is None:
             # Map template data qubits to real qubits

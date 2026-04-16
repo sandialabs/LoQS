@@ -42,10 +42,10 @@ def run_program_list(
 
     num_shots_per_program : int | Sequence[int]
         The number of shots to execute per program.
-        See (QuantumProgram.run)[api:QuantumProgram.run].
+        See [QuantumProgram.run](api:QuantumProgram.run).
 
     max_frame_limit : int, optional
-        See (QuantumProgram.run)[api:QuantumProgram.run], by default 100
+        See [QuantumProgram.run](api:QuantumProgram.run), by default 100
 
     REVIEW_SPHINX_REFERENCE
     """

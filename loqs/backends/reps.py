@@ -438,7 +438,7 @@ class RepTuple(Castable, Displayable):
 
     @classmethod
     def cast(cls: type[RepTuple], obj: object) -> RepTuple:
-        """Cast this object to a (RepTuple)[api:RepTuple].
+        """Cast this object to a [RepTuple](api:RepTuple).
 
         This is specialized because lists/tuples with up to 3 entries
         should be unpacked into the three arguments.

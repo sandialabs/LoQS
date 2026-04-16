@@ -36,12 +36,12 @@ def build_discrete_error_injection_programs(
 ) -> list[QuantumProgram]:
     """Create a series of programs with one discrete error injected each.
 
-    This will take a (presumably physical circuit) (Instruction)[api:Instruction],
-    use (BasePhysicalCircuit.get_possible_discrete_error_locations)[api:BasePhysicalCircuit.get_possible_discrete_error_locations]
+    This will take a (presumably physical circuit) [Instruction](api:Instruction),
+    use [BasePhysicalCircuit.get_possible_discrete_error_locations](api:BasePhysicalCircuit.get_possible_discrete_error_locations)
     to collect the possible error locations, and then create new programs
     where the error will be injected via ``error_injections`` (see
     ``build_physical_circuit_instruction`` for more) as a kwarg
-    to the relevant (InstructionLabel)[api:InstructionLabel].
+    to the relevant [InstructionLabel](api:InstructionLabel).
 
     Parameters
     ----------
@@ -49,10 +49,10 @@ def build_discrete_error_injection_programs(
         The base program to modify
 
     instruction_to_analyze : Instruction
-        The (Instruction)[api:Instruction] to get all possible discrete errors for
+        The [Instruction](api:Instruction) to get all possible discrete errors for
 
     stack_idx_to_modify : int
-        The entry in the (InstructionStack)[api:InstructionStack] of the ``base_program``
+        The entry in the [InstructionStack](api:InstructionStack) of the ``base_program``
         to modify with ``error_injections`` as a label kwarg.
 
     error_circuit_labels : Sequence[str]
@@ -61,7 +61,7 @@ def build_discrete_error_injection_programs(
     post_twoq_gates : bool, optional
         Whether to inject weight-1 errors before every gate (``False``, default)
         or all weight-2 errors after 2Q gates (``True``). Also see
-        (BasePhysicalCircuit.get_possible_discrete_error_locations)[api:BasePhysicalCircuit.get_possible_discrete_error_locations], by default False
+        [BasePhysicalCircuit.get_possible_discrete_error_locations](api:BasePhysicalCircuit.get_possible_discrete_error_locations), by default False
 
     Returns
     -------
@@ -223,22 +223,22 @@ def run_discrete_error_injected_programs(
     num_shots: int = 1,
     dask_client: Client | None = None,  # type: ignore
 ) -> list[QuantumProgram]:
-    """Call (test_program_output)[api:test_program_output] on many programs.
+    """Call [test_program_output](api:test_program_output) on many programs.
 
     Parameters
     ----------
     errored_programs : Sequence[QuantumProgram]
         A list of programs to test, usually the output of
-        (build_discrete_error_injection_programs)[api:build_discrete_error_injection_programs].
+        [build_discrete_error_injection_programs](api:build_discrete_error_injection_programs).
 
     collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
-        See (test_program_output)[api:test_program_output].
+        See [test_program_output](api:test_program_output).
 
     expected_outcomes : Sequence
-        See (test_program_output)[api:test_program_output].
+        See [test_program_output](api:test_program_output).
 
     num_shots : int, optional
-        See (test_program_output)[api:test_program_output], by default 1
+        See [test_program_output](api:test_program_output), by default 1
 
     dask_client : Client | None, optional
         A Dask client to use for parallelizing over programs
@@ -300,14 +300,14 @@ def test_program_output(
     Parameters
     ----------
     test_program : QuantumProgram
-        The (QuantumProgram)[api:QuantumProgram] to test
+        The [QuantumProgram](api:QuantumProgram) to test
 
     collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
-        A list of arguments to (History.collect_shot_data)[api:History.collect_shot_data].
+        A list of arguments to [ProgramResults.collect_shot_data](api:ProgramResults.collect_shot_data).
 
     expected_outcomes : Sequence
         A list of the expected results to the
-        (History.collect_shot_data)[api:History.collect_shot_data] calls.
+        [ProgramResults.collect_shot_data](api:ProgramResults.collect_shot_data) calls.
 
     num_shots : int, optional
         The number of shots to run and test, by default 1

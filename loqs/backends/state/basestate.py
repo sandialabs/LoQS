@@ -84,7 +84,7 @@ class BaseQuantumState(Castable, Displayable):
         Parameters
         ----------
         reps:
-            See (apply_reps_inplace)[api:apply_reps_inplace].
+            See [apply_reps_inplace](api:BaseQuantumState.apply_reps_inplace).
 
         Returns
         -------
