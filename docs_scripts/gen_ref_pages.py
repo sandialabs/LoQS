@@ -1,4 +1,53 @@
 # docs_scripts/gen_ref_pages.py
+"""
+Generate the LoQS API reference pages and an API symbol inventory for link resolution.
+
+This script is executed by the MkDocs API-reference build via the ``mkdocs-gen-files``
+plugin. It walks the ``loqs`` package source tree and writes a documentation page for
+each module and each public class into the virtual MkDocs file system. It also writes
+a ``SUMMARY.md`` file consumed by ``mkdocs-literate-nav`` to populate the left
+navigation.
+
+High-level behavior
+-------------------
+- Discover public API surface:
+
+  - Parse each ``.py`` file with ``ast`` to identify public classes, functions, and
+    module-level variables/type aliases/type variables.
+  - For each public class, use runtime introspection to enumerate methods and to
+    determine the defining class for documentation ownership (e.g., prefer base-class
+    docstrings when the derived override is undocumented).
+  - Collect class-body “member variables” across the class MRO and merge type/value/doc
+    information so inherited rows are populated as fully as possible.
+
+- Emit reference pages:
+
+  - For modules: write a module index page containing a “Members” table (variables) and
+    a “Functions” section rendered via mkdocstrings.
+  - For classes: write a class page containing the class docstring, a “Members” table
+    (class variables and properties treated as member variables), and grouped method
+    sections (static/class/instance). Each method is rendered with mkdocstrings using
+    per-block options (e.g., ``heading_level``) to control heading hierarchy. Methods
+    inherited from external bases may be represented by lightweight stubs that link to
+    the owning base class (internal) or upstream documentation (external).
+
+- Build an API inventory for ``api:`` links:
+
+  - Create a mapping from fully-qualified API identifiers (e.g.,
+    ``loqs.pkg.mod.Class.method``) to the generated page URL + anchor.
+  - Build a suffix index to support progressively-qualified ``api:`` targets in
+    documentation (e.g., resolving ``api:Class.method`` when unambiguous).
+  - Write the inventory both into the build output and to ``docs/_api_inventory.json``
+    on disk so MkDocs hooks can resolve and rewrite ``api:`` links during the same
+    build.
+
+Notes
+-----
+This generator intentionally separates *discovery* (AST/introspection) from *rendering*
+(mkdocstrings directives) so that navigation, anchors, and cross-reference resolution
+remain stable and predictable across the documentation set.
+"""
+
 from __future__ import annotations
 
 import ast
@@ -423,11 +472,11 @@ def class_members_from_introspection(
     try:
         mod = importlib.import_module(mod_ident)
     except Exception:
-        return None, [], [], {}, []
+        return None, [], [], [], {}, []
 
     cls = getattr(mod, class_name, None)
     if cls is None or not isinstance(cls, type):
-        return None, [], [], {}, []
+        return None, [], [], [], {}, []
 
     toc_remove_anchors: list[str] = [_qualname_to_ident(cls)]
     for base in cls.__mro__[1:]:
@@ -471,6 +520,7 @@ def write_class_members_table(
     derived_ident: str,
     class_anchor_prefix: str,
     inv_objects: dict[str, str],
+    inv_kinds: dict[str, str],
     page_url: str,
 ) -> None:
     if not rows:
@@ -491,6 +541,10 @@ def write_class_members_table(
         typ = _classvar_inner(typ_raw).replace("\n", " ").replace("|", "\\|")
 
         val = r.get("value")
+        if "property" in val:  # type:ignore
+            inv_kinds[anchor_id] = "property"
+        else:
+            inv_kinds[anchor_id] = "variable"
         if val is None or str(val).strip() == "":
             val_s = "*unset*"
         else:
@@ -572,6 +626,7 @@ def write_module_members_table(
     page_url: str,
     rows: list[dict],
     inv_objects: dict[str, str],
+    inv_kinds: dict[str, str],
 ) -> None:
     if not rows:
         return
@@ -582,6 +637,7 @@ def write_module_members_table(
         nm = r["name"]
         anchor_id = f"{mod_ident}.{nm}"
         inv_objects[anchor_id] = f"{page_url}#{anchor_id}"
+        inv_kinds[anchor_id] = "variable"
 
         name_cell = f'<a id="{anchor_id}"></a>`{nm}`'
         typ = (r.get("type") or "").replace("\n", " ").replace("|", "\\|")
@@ -608,9 +664,13 @@ def write_module_page(
     funcs: list[str],
     classes: list[str],
     inv_objects: dict[str, str],
+    inv_kinds: dict[str, str],
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
+
+        # Strip module/package entries from the TOC
+        f.write(f"<!-- API_TOC_REMOVE {mod_ident} -->\n\n")
         
         # Always render the module/package docstring
         f.write(f"::: {mod_ident}\n")
@@ -626,7 +686,7 @@ def write_module_page(
 
         if rows:
             f.write("## Members\n\n")
-            write_module_members_table(f, mod_ident, page_url, rows, inv_objects)
+            write_module_members_table(f, mod_ident, page_url, rows, inv_objects, inv_kinds)
             f.write("\n\n\n")
 
         if funcs:
@@ -650,6 +710,7 @@ def write_class_page(
     owner_override: dict[str, str],
     toc_remove_anchors: list[str],
     inv_objects: dict[str, str],
+    inv_kinds: dict[str, str],
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
@@ -667,6 +728,7 @@ def write_class_page(
                 derived_ident=cls_ident,
                 class_anchor_prefix=cls_ident,
                 inv_objects=inv_objects,
+                inv_kinds=inv_kinds,
                 page_url=page_url,
             )
 
@@ -707,6 +769,7 @@ def write_class_page(
 def main() -> None:
     nav = mkdocs_gen_files.Nav()
     inv_objects: dict[str, str] = {}
+    inv_kinds: dict[str, str] = {}
 
     # Global references page for citations in docstrings
     nav[("Bibliography",)] = "bib.md"
@@ -742,10 +805,13 @@ def main() -> None:
         mod_page_url = api_page_url(mod_parts)
 
         inv_objects[mod_ident] = f"{mod_page_url}#{mod_ident}"
+        inv_kinds[mod_ident] = "module"
         for fn in funcs:
             inv_objects[f"{mod_ident}.{fn}"] = f"{mod_page_url}#{mod_ident}.{fn}"
+            inv_kinds[f"{mod_ident}.{fn}"] = "function"
         for cls_name in classes:
             inv_objects[f"{mod_ident}.{cls_name}"] = f"{mod_page_url}#{mod_ident}.{cls_name}"
+            inv_kinds[f"{mod_ident}.{cls_name}"] = "class"
 
         nav[nav_key] = page.as_posix()
         write_module_page(
@@ -757,6 +823,7 @@ def main() -> None:
             funcs=funcs,
             classes=classes,
             inv_objects=inv_objects,
+            inv_kinds=inv_kinds
         )
 
         for cls_name in classes:
@@ -783,9 +850,11 @@ def main() -> None:
             # Inventory entries for methods should point at the class page
             for m in stat + clsm + inst:
                 inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
+                inv_kinds[f"{cls_ident}.{m}"] = "method"
             # Also stub inherited but not declared
             for m in inherited_missing.keys():
                 inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
+                inv_kinds[f"{cls_ident}.{m}"] = "method"
 
             if cls_obj is not None:
                 var_rows = class_var_rows_with_mro(py, cls_obj)
@@ -815,6 +884,7 @@ def main() -> None:
                 owner_override=owner_override,
                 toc_remove_anchors=toc_remove_anchors,
                 inv_objects=inv_objects,
+                inv_kinds=inv_kinds
             )
 
     with mkdocs_gen_files.open("index.md", "w") as f:
@@ -829,13 +899,13 @@ def main() -> None:
 
     suffix_index = build_suffix_index(inv_objects, package="loqs")
     with mkdocs_gen_files.open(INVENTORY_PATH, "w") as f:
-        json.dump({"objects": inv_objects, "suffix_index": suffix_index}, f, indent=2, sort_keys=True)
+        json.dump({"objects": inv_objects, "suffix_index": suffix_index, "kinds": inv_kinds}, f, indent=2, sort_keys=True)
 
     # ALSO write to disk so api_hooks.py can load it during the same build
     # serve.py will clean it
     disk_path = REPO_ROOT / "docs" / f"_{INVENTORY_PATH}"
     disk_path.write_text(
-        json.dumps({"objects": inv_objects, "suffix_index": suffix_index}, indent=2, sort_keys=True),
+        json.dumps({"objects": inv_objects, "suffix_index": suffix_index, "kinds": inv_kinds}, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 

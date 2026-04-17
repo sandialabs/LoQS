@@ -5,11 +5,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-# Inline Markdown links: [text](api:Target)
-_API_LINK_RE = re.compile(r"\]\(api:(?P<target>[^)\s]+)\)")
+# Inline Markdown links: [text](api:Target) or [](api:Target)
+_API_LINK_RE = re.compile(r"\[(?P<text>[^\]]*)\]\(\s*api:(?P<target>[^)\s]+)\s*\)")
 
-# Reference-style: [text][api:Target]  -> rewritten to [text](URL)
-_API_REF_RE = re.compile(r"\]\[api:(?P<target>[^\]\s]+)\]")
+# Reference-style: [text][api:Target] or [][api:Target]
+_API_REF_RE = re.compile(r"\[(?P<text>[^\]]*)\]\[\s*api:(?P<target>[^\]\s]+)\s*\]")
 
 
 def normalize_target(t: str) -> str:
@@ -31,39 +31,39 @@ class ApiInventory:
     """
     objects: map from fully qualified anchor id -> URL (relative to API site root)
     suffix_index: map from suffix string -> list of fully qualified anchor ids
+    kinds: map from fully qualified anchor id -> kind string
+           (e.g. module/class/function/method/property/variable/type_alias/type_variable)
     """
     objects: dict[str, str]
     suffix_index: dict[str, list[str]]
+    kinds: dict[str, str]
 
     @classmethod
     def load(cls, path: Path) -> "ApiInventory":
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(objects=data["objects"], suffix_index=data["suffix_index"])
+        return cls(
+            objects=data["objects"],
+            suffix_index=data["suffix_index"],
+            kinds=data.get("kinds", {}),
+        )
 
-    def resolve(self, target: str) -> str:
+    def resolve_fqn(self, target: str) -> str:
         """
-        Resolve progressive qualification:
-
-        - If target starts with "loqs.": must match exactly in objects
-        - Else:
-            1) if suffix_index has exact key, use if unique
-            2) else try objects["loqs."+target]
-            3) else fail
+        Resolve progressive qualification and return the fully-qualified inventory key.
         """
         t = normalize_target(target)
 
         # Exact FQN
         if t.startswith("loqs."):
-            url = self.objects.get(t)
-            if not url:
+            if t not in self.objects:
                 raise KeyError(f"Unresolved api target (no such API object): {t}")
-            return url
+            return t
 
         # Exact suffix match
         hits = self.suffix_index.get(t)
         if hits:
             if len(hits) == 1:
-                return self.objects[hits[0]]
+                return hits[0]
             opts = "\n  - ".join(hits)
             raise KeyError(
                 f"Ambiguous api target: {t}\n"
@@ -73,15 +73,33 @@ class ApiInventory:
 
         # Package-relative exact
         fqn2 = "loqs." + t
-        url2 = self.objects.get(fqn2)
-        if url2:
-            return url2
+        if fqn2 in self.objects:
+            return fqn2
 
         raise KeyError(
             f"Unresolved api target: {t}\n"
             "Try qualifying it further (e.g. api:internal.serializable.Serializable) "
             "or using a full FQN (api:loqs....)."
         )
+
+    def resolve(self, target: str) -> str:
+        """
+        Resolve progressive qualification and return the URL.
+        """
+        fqn = self.resolve_fqn(target)
+        return self.objects[fqn]
+
+    def kind_of(self, target: str, *, default: str = "") -> str:
+        """
+        Return the kind for a target if known (empty string if unknown).
+
+        Accepts the same target forms as `resolve`.
+        """
+        try:
+            fqn = self.resolve_fqn(target)
+        except KeyError:
+            return default
+        return (self.kinds.get(fqn) or default)
 
 
 def build_suffix_index(objects: dict[str, str], *, package: str = "loqs") -> dict[str, list[str]]:
@@ -134,16 +152,52 @@ def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page
             return url_prefix + rel
         return url_prefix + rel
 
-    # Reference-style: [text][api:Target] -> [text](URL)
-    def repl_ref(m: re.Match) -> str:
-        url = resolve_url(m.group("target"))
-        return f"]({url})"
+    # 1) Convert reference-style to inline-style so the same logic handles both.
+    def ref_to_inline(m: re.Match) -> str:
+        text = m.group("text") or ""
+        target = m.group("target")
+        return f"[{text}](api:{target})"
+
+    out = _API_REF_RE.sub(ref_to_inline, markdown)
 
     # Inline: [text](api:Target) -> [text](URL)
     def repl_inline(m: re.Match) -> str:
-        url = resolve_url(m.group("target"))
-        return f"]({url})"
+        target = m.group("target")
+        raw_text = (m.group("text") or "").strip()
 
-    out = _API_REF_RE.sub(repl_ref, markdown)
+        url = resolve_url(target)
+
+        # Resolve to canonical inventory key so we can classify kind accurately
+        fqn = inv.resolve_fqn(target)
+        kind = (inv.kinds.get(fqn) or "").lower()
+
+        # Choose display text
+        if not raw_text:
+            # Use resolved object name as a guaranteed non-empty display
+            base = fqn.split(".")[-1]
+            display = base
+        else:
+            display = raw_text
+            # Strip one layer of backticks if present; we'll reapply consistently below
+            if display.startswith("`") and display.endswith("`") and len(display) >= 2:
+                display = display[1:-1].strip()
+
+        display = display.strip()
+        if not display:
+            # Absolute fallback (should never happen)
+            display = fqn.split(".")[-1]
+
+        # Append () for callables (even when text is qualified), unless already present
+        if kind in {"function", "method"}:
+            if not display.endswith("()"):
+                display = display + "()"
+
+        # Backtick everything (consistently)
+        display = display.strip()
+        if not (display.startswith("`") and display.endswith("`")):
+            display = f"`{display}`"
+
+        return f"[{display}]({url})"
+
     out = _API_LINK_RE.sub(repl_inline, out)
     return out

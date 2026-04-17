@@ -92,6 +92,10 @@ LEADING_HIGHLIGHT_RE = re.compile(
     r'^\s*<div class="highlight"[^>]*>.*?</div>\s*',
     re.IGNORECASE | re.DOTALL,
 )
+LEADING_ADMONITION_RE = re.compile(
+    r'^\s*<div class="admonition\b[^"]*"[^>]*>.*?</div>\s*',
+    re.IGNORECASE | re.DOTALL,
+)
 
 # ----------------------------------------------------------------------
 #  TOC <li> entry matcher (Material theme)
@@ -103,7 +107,10 @@ TOC_LI_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-API_HREF_RE = re.compile(r'''href=(["'])api:(?P<target>[^"'>\s]+)\1''', re.IGNORECASE)
+API_A_TAG_RE = re.compile(
+    r'<a(?P<attrs>[^>]*?)\s+href=(?P<q>["\'])api:(?P<target>[^"\'>\s]+)(?P=q)(?P<attrs2>[^>]*)>(?P<body>.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
 
 # Pandoc-style citations in rendered HTML text (from docstrings), e.g. [@key] or [@k1; @k2]
 CITE_BRACKET_RE = re.compile(r"\[@(?P<keys>[^\]]+)\]")
@@ -140,6 +147,11 @@ def _strip_intro_from_block(block: str) -> str:
     # Strip leading <p> blocks immediately inside contents-first, up to doc-children
     mid = block[m_contents.end() : m_children.start()]
     while True:
+        m_adm = LEADING_ADMONITION_RE.match(mid)
+        if m_adm:
+            mid = mid[m_adm.end() :]
+            continue
+
         m_h = LEADING_HIGHLIGHT_RE.match(mid)
         if m_h:
             mid = mid[m_h.end() :]
@@ -155,6 +167,11 @@ def _strip_intro_from_block(block: str) -> str:
     # Now strip leading <p> blocks at start of doc-children region
     after_children = block[m_children.start() :]
     while True:
+        m_adm = LEADING_ADMONITION_RE.match(after_children)
+        if m_adm:
+            after_children = after_children[m_adm.end() :]
+            continue
+
         m_h = LEADING_HIGHLIGHT_RE.match(after_children)
         if m_h:
             after_children = after_children[m_h.end() :]
@@ -225,18 +242,31 @@ def on_post_page(output: str, page, config) -> str:
     inv = ApiInventory.load(inv_path)
     src = getattr(page.file, "src_path", "") if hasattr(page, "file") else ""
 
-    def _repl_api_href(m: re.Match) -> str:
+    def _repl_api_a(m: re.Match) -> str:
         target = m.group("target")
         try:
-            rel = inv.resolve(target)  # e.g. "/loqs/.../#loqs...."
+            rel = inv.resolve(target)
         except KeyError as e:
-            return m.group(0)  # leave href="api:..." unchanged for external/unindexed targets
+            raise RuntimeError(f"{src}: {e}") from None
 
         url = ("/reference" + rel) if rel.startswith("/") else ("/reference/" + rel)
-        quote = m.group(1)
-        return f'href={quote}{url}{quote}'
-    
-    output = API_HREF_RE.sub(_repl_api_href, output)
+
+        body = m.group("body") or ""
+        if body.strip() == "":
+            # Fill empty link text with a sensible default
+            try:
+                fqn = inv.resolve_fqn(target)
+            except Exception:
+                fqn = target
+            name = fqn.split(".")[-1]
+            k = (inv.kinds.get(fqn) or "").lower()
+            if k in {"function", "method"} and not name.endswith("()"):
+                name = name + "()"
+            body = f"<code>{name}</code>"
+
+        return f'<a{m.group("attrs")} href="{url}"{m.group("attrs2")}>{body}</a>'
+
+    output = API_A_TAG_RE.sub(_repl_api_a, output)
 
     # 5) Rewrite Pandoc-style citations in docstring HTML into links to the global bibliography page.
     #    Example: [@tomita_lowdistance_2014] -> [<a href="/reference/bib/#fn:tomita_lowdistance_2014">tomita_lowdistance_2014</a>]

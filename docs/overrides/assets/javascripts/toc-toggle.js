@@ -23,8 +23,8 @@
       exp.className = "toc-expander";
       exp.textContent = open ? "[-]" : "[+]";
 
-      // Put expander before the link text
-      link.prepend(exp);
+      // Put expander after the link text
+      link.append(exp);
 
       exp.addEventListener("click", (e) => {
         e.preventDefault();

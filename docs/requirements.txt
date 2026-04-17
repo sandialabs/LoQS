@@ -1,3 +1,2 @@
-mkdocs
-mkdocs-marimo
-pymdown-extensions
+# Point to pyproject.toml so we can't get out of sync
+-e .[docs]
