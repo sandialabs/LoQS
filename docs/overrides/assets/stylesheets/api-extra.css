@@ -1,6 +1,27 @@
+/* Make hrules between functions more visible */
 .md-typeset hr {
   border: 0;
   border-top: 3px solid var(--md-primary-fg-color);
   margin: 1.5rem 0;
   opacity: 0.35; /* tweak as desired */
+}
+
+/* Make TOC panel scrollable */
+.md-sidebar--secondary .md-sidebar__scrollwrap {
+  max-height: calc(100vh - 7rem);
+  overflow: auto;
+}
+
+/* Simple [+]/[-] styling */
+.md-sidebar--secondary .toc-expander {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  margin-right: 0.25rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Inherited entries in the right-hand TOC */
+.md-sidebar--secondary a.md-nav__link.api-inherited-toc {
+  font-style: italic;
+  opacity: 0.6;
 }

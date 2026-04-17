@@ -54,10 +54,11 @@ Notes
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
-from docs_scripts.api_inventory import ApiInventory
+from docs_scripts.api_inventory import ApiInventory, external_api_url
 
 # ----------------------------------------------------------------------
 #  Block markers
@@ -108,16 +109,27 @@ TOC_LI_RE = re.compile(
 )
 
 API_A_TAG_RE = re.compile(
-    r'<a(?P<attrs>[^>]*?)\s+href=(?P<q>["\'])api:(?P<target>[^"\'>\s]+)(?P=q)(?P<attrs2>[^>]*)>(?P<body>.*?)</a>',
+    r'<a(?P<pre>[^>]*?)\s+href=(?P<q>["\'])api:(?P<target>[^"\'>\s]+)(?P=q)(?P<post>[^>]*)>(?P<body>.*?)</a>',
     re.IGNORECASE | re.DOTALL,
 )
 
 # Pandoc-style citations in rendered HTML text (from docstrings), e.g. [@key] or [@k1; @k2]
 CITE_BRACKET_RE = re.compile(r"\[@(?P<keys>[^\]]+)\]")
 
+# Markers for inherited stub headings (emitted by gen_ref_pages.py)
+INHERITED_MARK_RE = re.compile(r"<!--\s*API_INHERITED_HEADING\s+([^\s]+)\s*-->")
+
+RIGHT_TOC_OPEN = '<nav class="md-nav md-nav--secondary" aria-label="Table of contents">'
+
+TOC_ELLIPSIS_RE = re.compile(
+    r'(<a href="#(?P<anchor>[^"]+)" class="md-nav__link">.*?'
+    r'<span class="md-ellipsis">\s*)(?P<label>.*?)(\s*</span>)',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _find(pat: re.Pattern, s: str, start: int = 0) -> re.Match | None:
     return pat.search(s, start)
-
 
 def _strip_intro_from_block(block: str) -> str:
     """
@@ -217,6 +229,32 @@ def _clean_marked_blocks(output: str, mark_re: re.Pattern) -> str:
     parts.append(output[last:])
     return "".join(parts)
 
+def _italicize_inherited_in_right_toc(html: str, inherited_anchors: set[str]) -> str:
+    if not inherited_anchors:
+        return html
+
+    nav_start = html.find(RIGHT_TOC_OPEN)
+    if nav_start < 0:
+        return html
+
+    nav_end = html.find("</nav>", nav_start)
+    if nav_end < 0:
+        return html
+    nav_end += len("</nav>")
+
+    frag = html[nav_start:nav_end]
+
+    def repl(m: re.Match) -> str:
+        anchor = m.group("anchor")
+        if anchor not in inherited_anchors:
+            return m.group(0)
+
+        label = m.group("label")
+        return m.group(1) + f'<span class="api-inherited-toc">{label}</span>' + m.group(4)
+
+    frag2 = TOC_ELLIPSIS_RE.sub(repl, frag)
+    return html[:nav_start] + frag2 + html[nav_end:]
+
 
 def on_post_page(output: str, page, config) -> str:
     # 1) Gather TOC anchors to remove for this page; remove marker from output.
@@ -243,28 +281,53 @@ def on_post_page(output: str, page, config) -> str:
     src = getattr(page.file, "src_path", "") if hasattr(page, "file") else ""
 
     def _repl_api_a(m: re.Match) -> str:
-        target = m.group("target")
-        try:
-            rel = inv.resolve(target)
-        except KeyError as e:
-            raise RuntimeError(f"{src}: {e}") from None
+        target = m.group("target").strip()
 
-        url = ("/reference" + rel) if rel.startswith("/") else ("/reference/" + rel)
+        # ----------------------------
+        # Resolve URL
+        # ----------------------------
+        if target.startswith("loqs."):
+            # Internal targets: resolve via inventory (hard error if missing)
+            try:
+                rel = inv.resolve(target)
+            except KeyError as e:
+                raise RuntimeError(f"{src}: {e}") from None
+            url = ("/reference" + rel) if rel.startswith("/") else ("/reference/" + rel)
+        else:
+            # External targets: known mapping or fallback
+            url = external_api_url(target)
+            if url is None:
+                q = target.replace('"', "").replace("'", "")
+                url = f"https://www.google.com/search?q={q}"
 
-        body = m.group("body") or ""
-        if body.strip() == "":
-            # Fill empty link text with a sensible default
+        # ----------------------------
+        # Normalize link body:
+        # - fill if empty
+        # - wrap plain text in <code>...</code>
+        # - append () for methods/functions when known
+        # ----------------------------
+        body = (m.group("body") or "").strip()
+
+        if not body:
+            # Default display name from target
+            body = target.split(".")[-1]
+
+        # Only wrap if it appears to be plain text (no nested tags)
+        if "<" not in body and ">" not in body:
+            name = body
+
+            # Append () only when we can determine callable kind from the inventory
             try:
                 fqn = inv.resolve_fqn(target)
+                kind = (inv.kinds.get(fqn) or "").lower()
+                if kind in {"function", "method"} and not name.endswith("()"):
+                    name = name + "()"
             except Exception:
-                fqn = target
-            name = fqn.split(".")[-1]
-            k = (inv.kinds.get(fqn) or "").lower()
-            if k in {"function", "method"} and not name.endswith("()"):
-                name = name + "()"
+                pass
+
             body = f"<code>{name}</code>"
 
-        return f'<a{m.group("attrs")} href="{url}"{m.group("attrs2")}>{body}</a>'
+        return f'<a{m.group("pre")} href="{url}"{m.group("post")}>{body}</a>'
 
     output = API_A_TAG_RE.sub(_repl_api_a, output)
 
@@ -294,5 +357,17 @@ def on_post_page(output: str, page, config) -> str:
         return "[" + "; ".join(links) + "]"
 
     output = CITE_BRACKET_RE.sub(_repl_cite, output)
+
+    # 6) Italicize inherited functions in TOC for distinctiveness
+    inherited_anchors = set(INHERITED_MARK_RE.findall(output))
+    output = INHERITED_MARK_RE.sub("", output)
+    output = _italicize_inherited_in_right_toc(output, inherited_anchors)
+
+    if inherited_anchors:
+        payload = json.dumps(sorted(inherited_anchors))
+        output = output.replace(
+            "</body>",
+            f'<script id="api-inherited-anchors" type="application/json">{payload}</script>\n</body>',
+        )
 
     return output

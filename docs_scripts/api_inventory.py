@@ -26,6 +26,32 @@ def normalize_target(t: str) -> str:
     return t
 
 
+def external_api_url(target: str) -> str | None:
+    """
+    Map non-loqs api: targets to an external documentation URL.
+
+    Return None if no mapping is known.
+    """
+    t = normalize_target(target)
+
+    # pyGSTi: pygsti.<module>.<Name> -> RTD autoapi anchor
+    if t.startswith("pygsti."):
+        parts = t.split(".")
+        if len(parts) >= 3:
+            cls = parts[-1]
+            mod = ".".join(parts[:-1])      # e.g. pygsti.models.model
+            mod_path = "/".join(parts[:-1]) # e.g. pygsti/models/model
+            return f"https://pygsti.readthedocs.io/en/latest/autoapi/{mod_path}/index.html#{mod}.{cls}"
+
+    # Python stdlib (best-effort): module page + qualified anchor
+    stdlib_prefixes = ("collections.", "collections.abc.", "typing.", "pathlib.", "dataclasses.", "abc.", "enum.")
+    if t.startswith(stdlib_prefixes) and "." in t:
+        mod = t.rsplit(".", 1)[0]
+        return f"https://docs.python.org/3/library/{mod}.html#{t}"
+
+    return None
+
+
 @dataclass(frozen=True)
 class ApiInventory:
     """

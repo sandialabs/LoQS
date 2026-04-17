@@ -6,20 +6,6 @@ nav:
       - Install: getting-started/install.md
       - Overview: getting-started/overview.md
       - Workflow: getting-started/workflow.md
-  # - Object Quickstart:
-  #   - Histories:
-  #     - object-quickstart/history.md
-  #     - object-quickstart/frame.md
-  #     - object-quickstart/recordables.md
-  #   - Instructions:
-  #     - object-quickstart/instructions.md
-  #     - object-quickstart/stack.md
-  #     - object-quickstart/builders.md
-  #   - Codes:
-  #     - object-quickstart/codes.md
-  #     - object-quickstart/codepacks.md
-  #   - object-quickstart/program.md
-  #   - object-quickstart/backends.md
   # - Tutorials:
   #   - tutorials/buildinstruction.md
   #   - tutorials/buildqeccode.md

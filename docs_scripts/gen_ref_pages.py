@@ -159,9 +159,58 @@ def _method_owner_for_docs(cls: type, name: str) -> type:
     return cls
 
 
+def _collect_import_aliases(tree: ast.AST) -> dict[str, str]:
+    """
+    Collect local import aliases from a module AST.
+
+    Includes imports nested under if/try blocks (e.g. TYPE_CHECKING patterns),
+    since we walk the full tree.
+    """
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    # import pkg.mod as alias  -> alias: pkg.mod
+                    out[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom):
+            if not node.module:
+                continue
+            mod = node.module
+            for a in node.names:
+                if a.asname:
+                    # from pkg.mod import Name as alias -> alias: pkg.mod.Name
+                    out[a.asname] = f"{mod}.{a.name}"
+                else:
+                    # from pkg.mod import Name -> Name: pkg.mod.Name
+                    # (this helps Example 2)
+                    out[a.name] = f"{mod}.{a.name}"
+    return out
+
+
+def _expand_type_aliases(type_s: str, aliases: dict[str, str]) -> str:
+    """
+    Expand imported names/aliases inside an annotation string.
+
+    Replaces whole identifier tokens only, and prefers longer keys first.
+    """
+    s = (type_s or "").strip()
+    if not s or not aliases:
+        return s
+
+    # Only attempt replacement on identifier-like tokens
+    keys = sorted(aliases.keys(), key=len, reverse=True)
+    for k in keys:
+        v = aliases[k]
+        # whole-token replace
+        s = re.sub(rf"\b{re.escape(k)}\b", v, s)
+    return s
+
+
 def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
+        aliases = _collect_import_aliases(tree)
     except SyntaxError:
         return [], [], []
 
@@ -191,8 +240,8 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
                 doc = _doc_hint_from_next_stmt(body, i)
-                ann_s = _unparse(node.annotation).strip()
-                value_s = _unparse(node.value).strip() if node.value is not None else ""
+                ann_s = _expand_type_aliases(_unparse(node.annotation).strip(), aliases)
+                value_s = _expand_type_aliases(_unparse(node.value).strip() if node.value is not None else "", aliases)
 
                 is_alias = _is_typealias_ann(node.annotation)
                 kind = "type alias" if is_alias else "variable"
@@ -257,6 +306,7 @@ def _classvar_inner(type_s: str) -> str:
 def _class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: str) -> dict[str, dict]:
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
+        aliases = _collect_import_aliases(tree)
     except SyntaxError:
         return {}
 
@@ -282,8 +332,8 @@ def _class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident:
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
                 doc = _doc_hint_from_next_stmt(body, i)
-                ann_s = _unparse(node.annotation).strip()
-                value_s = _unparse(node.value).strip() if node.value is not None else ""
+                ann_s = _expand_type_aliases(_unparse(node.annotation).strip(), aliases)
+                value_s = _expand_type_aliases(_unparse(node.value).strip() if node.value is not None else "", aliases)
                 out[node.target.id] = {
                     "name": node.target.id,
                     "type": ann_s,
@@ -358,7 +408,7 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
     return sorted(merged.values(), key=_var_sort_key)
 
 
-def property_rows_from_introspection(cls_obj: type, *, owner_ident: str) -> list[dict]:
+def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases: dict[str, str]) -> list[dict]:
     """
     Build "member variable" rows for @property descriptors.
 
@@ -388,6 +438,7 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str) -> list
                     typ = ann
                 else:
                     typ = getattr(ann, "__name__", None) or str(ann)
+        typ = _expand_type_aliases(typ, aliases)
 
         # Value column: property kind + abstract marker
         kind = "*read-only property*" if val.fset is None else "*property*"
@@ -578,33 +629,33 @@ def write_class_member_block(f, owner_ident: str, member_name: str) -> None:
     f.write("      inherited_members: false\n\n")
 
 
-def write_inherited_method_stub(f, *, derived_cls_ident: str, method_name: str, base_ident: str) -> None:
+def write_inherited_method_stub(
+    f,
+    *,
+    derived_cls_ident: str,
+    method_name: str,
+    base_ident: str,
+) -> None:
     """
-    Emit a heading so it appears on the page and in the TOC, but do not render docs here.
-    The anchor matches the inventory key: {derived_cls_ident}.{method_name}
+    Emit a lightweight stub for inherited methods that are not declared on the derived class.
 
-    If base_ident is inside loqs.*, link with api:.
-    Otherwise link to external documentation (best-effort).
+    This creates a heading/anchor on the derived class page and links to the method's
+    defining class documentation. The link uses the api: scheme and is resolved later
+    (internal inventory for loqs.*, external_api_url() fallback for third-party/stdlib).
     """
     anchor_id = f"{derived_cls_ident}.{method_name}"
+
+    # Make it visually obvious in the TOC/content that this is inherited
+    f.write(f"<!-- API_INHERITED_HEADING {anchor_id} -->\n")
     f.write(f'### {method_name} {{: #{anchor_id} }}\n')
 
-    # Choose link target
+    # Prefer linking to the defining method when the base is internal; for externals,
+    # link to the base type (method anchors are not stable across external docs).
     if base_ident.startswith("loqs."):
-        f.write(f'Inherited from [{base_ident}](api:{base_ident}).\n\n')
-        return
-
-    # Best-effort external links
-    # - stdlib: docs.python.org with module#qualname
-    if base_ident.startswith(("collections.", "typing.", "pathlib.", "dataclasses.", "abc.", "enum.")):
-        mod = base_ident.rsplit(".", 1)[0]
-        url = f"https://docs.python.org/3/library/{mod}.html#{base_ident}"
-        f.write(f'Inherited from [`{base_ident}`]({url}).\n\n')
-        return
-
-    # Fallback: link to a search query
-    url = f"https://www.google.com/search?q={base_ident}"
-    f.write(f'Inherited from [`{base_ident}`]({url}).\n\n')
+        base_link_text = f"{base_ident.split('.')[-1]}.{method_name}"
+        f.write(f'Inherited from [{base_link_text}](api:{base_ident}.{method_name}).\n\n')
+    else:
+        f.write(f'Inherited from [](api:{base_ident}).\n\n')
 
 
 def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
@@ -667,7 +718,7 @@ def write_module_page(
     inv_kinds: dict[str, str],
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
-        f.write(f"# `{title}`\n\n")
+        f.write(f"# `{mod_ident}`\n\n")
 
         # Strip module/package entries from the TOC
         f.write(f"<!-- API_TOC_REMOVE {mod_ident} -->\n\n")
@@ -685,7 +736,7 @@ def write_module_page(
             f.write("\n\n\n")
 
         if rows:
-            f.write("## Members\n\n")
+            f.write("## Member Variables\n\n")
             write_module_members_table(f, mod_ident, page_url, rows, inv_objects, inv_kinds)
             f.write("\n\n\n")
 
@@ -721,7 +772,7 @@ def write_class_page(
         write_class_intro(f, cls_ident)
 
         if var_rows:
-            f.write("## Members\n")
+            f.write("## Member Variables\n")
             write_class_members_table(
                 f,
                 var_rows,
@@ -859,8 +910,14 @@ def main() -> None:
             if cls_obj is not None:
                 var_rows = class_var_rows_with_mro(py, cls_obj)
 
+                try:
+                    tree = ast.parse(py.read_text(encoding="utf-8", errors="ignore"))
+                    aliases = _collect_import_aliases(tree)
+                except SyntaxError:
+                    aliases = {}
+
                 # Add @property descriptors to the Members table (as "member variables")
-                prop_rows = property_rows_from_introspection(cls_obj, owner_ident=cls_ident)
+                prop_rows = property_rows_from_introspection(cls_obj, owner_ident=cls_ident, aliases=aliases)
 
                 # Merge (prefer var_rows entries if name collides)
                 by_name = {r["name"]: r for r in prop_rows}
