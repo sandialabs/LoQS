@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -51,9 +50,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "NumPy Statevector"
 
-    SERIALIZE_ATTRS = ["_state", "qubit_labels", "seed"]
+    _SERIALIZE_ATTRS = ["_state", "qubit_labels", "seed"]
 
-    SERIALIZE_ATTRS_MAP = {"_state": "state"}
+    __SERIALIZE_ATTRS_MAP = {"_state": "state"}
 
     _state: np.ndarray
     """Underlying state object."""

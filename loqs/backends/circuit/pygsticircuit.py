@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.PyGSTiPhysicalCircuit` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -62,7 +61,7 @@ a string and a list of operations/layers).
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
-    """Circuit backend for handling ``pygsti.circuits.Circuit`` objects."""
+    """Circuit backend for handling `pygsti.circuits.Circuit` objects."""
 
     def __init__(
         self,

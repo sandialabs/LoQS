@@ -28,7 +28,7 @@ There are various optional requirements that are available, including:
 - `dask`: Enables usage of Dask for parallelizing over shots.
 - `dev`: Allows the use of `black` and `flake8` prior to committing
 (see Code Formatting and Linting below).
-- `docs`: Allows building of the JupyterBook documentation (see Documentation below).
+- `docs`: Allows building of the documentation (see Documentation below).
 - `quantumsim`: Enables the QuantumSim (state) backend.
 - `pygsti`: Enables the PyGSTi (circuit, model, state) backend.
 - `stim`: Enables the STIM (state) backend.
@@ -64,6 +64,7 @@ if you are working off of a feature branch.
 ## Documentation
 
 This project uses Marimo notebooks and MkDocs for documentation.
+In order to use these features, do at least a installation of `loqs[docs]`.
 
 To interactively edit and run the notebooks locally, run: `marimo edit docs`
 

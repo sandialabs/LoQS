@@ -3,7 +3,7 @@
   border: 0;
   border-top: 3px solid var(--md-primary-fg-color);
   margin: 1.5rem 0;
-  opacity: 0.35; /* tweak as desired */
+  opacity: 0.35;
 }
 
 /* Make TOC panel scrollable */
@@ -12,16 +12,16 @@
   overflow: auto;
 }
 
-/* Simple [+]/[-] styling */
-.md-sidebar--secondary .toc-expander {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  margin-right: 0.25rem;
-  cursor: pointer;
-  user-select: none;
-}
-
 /* Inherited entries in the right-hand TOC */
-.md-sidebar--secondary a.md-nav__link.api-inherited-toc {
+.md-sidebar--secondary .api-inherited-toc {
   font-style: italic;
   opacity: 0.6;
+}
+
+/* Unresolved external api: links shown but not clickable */
+.md-typeset a.api-unresolved-external {
+  font-style: italic;
+  opacity: 0.75;
+  pointer-events: none;
+  cursor: default;
 }

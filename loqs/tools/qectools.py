@@ -25,7 +25,7 @@ def get_syndrome_from_stabilizers_and_pstr(
     """Compute a syndrome for a Pauli string given stabilizers.
 
     The computation here is as follows: for each stabilizer,
-    check how many entries of ``pstr`` anticommute with the
+    check how many entries of `pstr` anticommute with the
     corresponding entry in the stabilizer. If there are an even
     number of anticommutations, the stabilizer will measure 0;
     otherwise, it will measure 1. Repeat for each stabilizer
@@ -42,7 +42,7 @@ def get_syndrome_from_stabilizers_and_pstr(
     Returns
     -------
     str
-        Syndrome bitstring as a string of ``"0"``s and ``"1"``s
+        Syndrome bitstring as a string of `"0"`s and `"1"`s
     """
     assert all([len(s) == len(pstr) for s in stabilizers])
     for stab in stabilizers:
@@ -87,10 +87,10 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
 
     default_pstr : str | Literal["auto"] | None, optional
         A default Pauli string to use for syndromes that do not
-        have a corresponding entry in ``pstrs``. Can be a Pauli
-        string, ``None`` to add no default, or ``"auto"``, where
-        a Pauli string of all ``"I"`` of the correct length is
-        used. Defaults to ``"auto"``.
+        have a corresponding entry in `pstrs`. Can be a Pauli
+        string, `None` to add no default, or `"auto"`, where
+        a Pauli string of all `"I"` of the correct length is
+        used. Defaults to `"auto"`.
 
     Returns
     -------
@@ -131,11 +131,11 @@ def get_syndrome_dict_from_stabilizers_and_pstrs(
 def get_weight_1_errors(num_qubits: int) -> list[str]:
     """Compute Pauli strings for weight-1 errors.
 
-    The output of this can serve as the ``pstrs`` input to
+    The output of this can serve as the `pstrs` input to
     [get_syndrome_dict_from_stabilizers_and_pstrs](api:get_syndrome_dict_from_stabilizers_and_pstrs)
     for the purpose of computing lookup tables for correcting
     data errors.
-    For an example, see the ``"Unflagged Decoder"`` instruction
+    For an example, see the `"Unflagged Decoder"` instruction
     in [codepack_5_1_3_quantinuum2022](api:codepack_5_1_3_quantinuum2022).
 
     Parameters
@@ -170,11 +170,11 @@ def get_hook_errors_in_flagged_check(
     This is an automated version of the calculation performed to get
     the data errors in Fig. 2d of arXiv:1705.02329.
 
-    The output of this can serve as the ``pstrs`` input to
+    The output of this can serve as the `pstrs` input to
     [get_syndrome_dict_from_stabilizers_and_pstrs](api:get_syndrome_dict_from_stabilizers_and_pstrs)
     for the purpose of computing lookup tables for correcting
     measurement errors that result in hook errors.
-    For an example, see the ``"Flagged <stab> Decoder"`` instructions
+    For an example, see the `"Flagged <stab> Decoder"` instructions
     in [codepack_5_1_3_quantinuum2022](api:codepack_5_1_3_quantinuum2022).
 
     Parameters

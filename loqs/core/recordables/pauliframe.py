@@ -17,7 +17,7 @@ from loqs.internal import SeqCastable, Displayable
 U = TypeVar("U", bound="PauliFrame")
 
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"
-"""Types that can be cast into a :class:`.PauliFrame`."""
+"""Types that can be cast into a [](api:PauliFrame)."""
 
 
 class PauliFrame(SeqCastable, Displayable):
@@ -25,18 +25,18 @@ class PauliFrame(SeqCastable, Displayable):
 
     Commonly this is used to track data errors without applying
     active correction, and can be used in conjunction with
-    :class:`.MeasurementOutcomes` to provide inferred outcomes.
+    [](api:MeasurementOutcomes) to provide inferred outcomes.
     """
 
     qubit_labels: list[str | int]
-    """Qubit labels being tracked by this :class:`.PauliFrame`."""
+    """Qubit labels being tracked by this [](api:PauliFrame)."""
 
     pauli_frame: list[str]
     """A list of Pauli errors on the given :attr:`.qubit_labels`."""
 
-    SERIALIZE_ATTRS = ["pauli_frame", "qubit_labels"]
+    _SERIALIZE_ATTRS = ["pauli_frame", "qubit_labels"]
 
-    SERIALIZE_ATTRS_MAP = {
+    __SERIALIZE_ATTRS_MAP = {
         "qubit_labels": "frame_or_labels",
         "pauli_frame": "initial_paulis",
     }
@@ -50,15 +50,15 @@ class PauliFrame(SeqCastable, Displayable):
         Parameters
         ----------
         frame_or_labels:
-            Either an existing :class:`.PauliFrame` or a set of
+            Either an existing [](api:PauliFrame) or a set of
             qubit labels to be used for :attr:`.qubit_labels`.
-            If qubit labels and no ``initial_paulis``, the frame
-            is initialized to all ``"I"``.
+            If qubit labels and no `initial_paulis`, the frame
+            is initialized to all `"I"`.
 
         initial_paulis:
             An initial set of Pauli corrections to track. If
-            ``frame_or_labels`` was an existing :class:`.PauliFrame`,
-            then ``initial_paulis`` will override the copied value of
+            `frame_or_labels` was an existing [](api:PauliFrame),
+            then `initial_paulis` will override the copied value of
             :attr:`.pauli_frame`.
         """
         if isinstance(frame_or_labels, PauliFrame):
@@ -96,7 +96,7 @@ class PauliFrame(SeqCastable, Displayable):
         Parameters
         ----------
         type:
-            One of ``["X", "Z"]``, indicating which basis to return.
+            One of `["X", "Z"]`, indicating which basis to return.
 
         qubit:
             The qubit label to check.
@@ -104,7 +104,7 @@ class PauliFrame(SeqCastable, Displayable):
         Returns
         -------
         int
-            The bit value of [pauli_frame](api:PauliFrame.pauli_frame) in basis ``type`` on qubit ``qubit``
+            The bit value of [pauli_frame](api:PauliFrame.pauli_frame) in basis `type` on qubit `qubit`
         """
         type = type.upper()
         assert type in ("X", "Z"), "Can only get X or Z type bits"
@@ -122,7 +122,7 @@ class PauliFrame(SeqCastable, Displayable):
         ----------
         map:
             A dict with current Paulis as keys and new Paulis
-            as values. Both keys and values should be in ``'IXYZ'``.
+            as values. Both keys and values should be in `'IXYZ'`.
         """
         new_paulis = [map[P] for P in self.pauli_frame]
         return PauliFrame(self.qubit_labels, new_paulis)
@@ -135,7 +135,7 @@ class PauliFrame(SeqCastable, Displayable):
 
         Formally, we are doing :math:`F \rightarrow F P`, where
         :math:`F` is the [pauli_frame](api:PauliFrame.pauli_frame) and :math:`P` is the
-        multi-qubit Pauli represented by ``pstr``.
+        multi-qubit Pauli represented by `pstr`.
 
         Parameters
         ----------
@@ -163,7 +163,7 @@ class PauliFrame(SeqCastable, Displayable):
 
         Formally, we are doing :math:`F_i \rightarrow C_i^{-1} F_i C_i`, where
         :math:`F_i` is element :math:`i` of the [pauli_frame](api:PauliFrame.pauli_frame) and
-        :math:`C_i` is element :math:`i` of the ``cliffords``.
+        :math:`C_i` is element :math:`i` of the `cliffords`.
 
         Parameters
         ----------
@@ -193,7 +193,7 @@ class PauliFrame(SeqCastable, Displayable):
 
         Formally, we are doing :math:`F_i \rightarrow C^{-1} F_i C`, where
         :math:`F_i` is element :math:`i` of the [pauli_frame](api:PauliFrame.pauli_frame) and
-        :math:`C` is the ``clifford``.
+        :math:`C` is the `clifford`.
 
         Parameters
         ----------

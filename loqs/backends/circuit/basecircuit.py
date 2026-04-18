@@ -7,9 +7,6 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseCircuitBackend` definition.
-"""
-
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -31,9 +28,9 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = ["circuit", "qubit_labels"]
+    _SERIALIZE_ATTRS = ["circuit", "qubit_labels"]
 
     ## Dunder methods
     @abstractmethod
@@ -112,8 +109,8 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             given, it is applied to all tiles. This defaults to 0, which stacks
             all circuits vertically (i.e. they all start at the same time). A value of
             [depth](api:BasePhysicalCircuit.depth) would result in each tile being appended,
-            i.e. with no overlap. Negative values are computed from ``circuit.depth``,
-            i.e. an offset of -1 is equivalent to ``circuit.depth-1``.
+            i.e. with no overlap. Negative values are computed from `circuit.depth`,
+            i.e. an offset of -1 is equivalent to `circuit.depth-1`.
 
         Returns
         -------
@@ -179,7 +176,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
 
     @property
     @abstractmethod
-    def qubit_labels(self) -> Sequence:
+    def qubit_labels(self) -> list:
         """Get the qubit labels of an underlying circuit.
 
         Returns
@@ -267,8 +264,8 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         Parameters
         ----------
         post_twoq_gates:
-            If ``False`` (default), this function returns error locations as single qubit
-            locations before every gate. If ``True``, this function instead returns error
+            If `False` (default), this function returns error locations as single qubit
+            locations before every gate. If `True`, this function instead returns error
             locations after only two qubit gates.
 
         Returns
@@ -555,7 +552,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         """
         pass
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         """Extract the attributes needed for encoding to a dictionary.
 
         This method extends the base implementation to handle the special case
@@ -579,10 +576,10 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         """
         if attr == "circuit":
             return self._serialize_circuit()
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict):
+    def _from_decoded_attrs(cls, attr_dict):
         """Create a circuit from decoded attributes.
 
         Parameters

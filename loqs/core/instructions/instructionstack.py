@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.InstructionStack` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -32,7 +31,7 @@ T = TypeVar("T", bound="InstructionStack")
 InstructionStackCastableTypes: TypeAlias = (
     "InstructionStack | InstructionLabelCastableTypes | Sequence[InstructionLabelCastableTypes] | None"
 )
-"""Objects that can be cast to a :class:`.InstructionStack`."""
+"""Objects that can be cast to a [](api:InstructionStack)."""
 
 
 class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
@@ -42,11 +41,11 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
     objects to execute. Stack manipulations return a modified copy.
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = ["_instructions"]
+    _SERIALIZE_ATTRS = ["_instructions"]
 
-    SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
+    __SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
 
     _instructions: list[InstructionLabel]
     """Internal list of :class:`InstructionLabels`"""
@@ -59,7 +58,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         ----------
         instructions:
             A sequence of :class:`InstructionLabel` castable things.
-            Defaults to ``None``, which creates an empty list.
+            Defaults to `None`, which creates an empty list.
         """
         self._instructions = []
         if isinstance(instructions, InstructionStack):

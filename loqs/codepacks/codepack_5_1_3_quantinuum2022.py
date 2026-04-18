@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""A LoQS QEC codepack for the 5-qubit code.
+"""A `LoQS` QEC codepack for the 5-qubit code.
 
 This implementation is based on the 2022 implementation from
 Quantinuum in [@ryananderson_implementing_2022], which is in turn
@@ -71,15 +71,15 @@ def create_qec_code(
         Mapping from gate names to durations. Defaults to None, which uses
         dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
         measurements, respectively.
-        See ``durations`` from
+        See `durations` from
         [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     idle_gates : dict[int | float, str] | None, optional
         Mapping from gate duration to idle gate names. Defaults to None,
-        which maps the dummy values from ``gate_durations`` to ``"Gi1Q"``,
-        ``"Gi2Q"``, and ``"GiMCM"``, respectively.
-        See ``idle_names`` from
+        which maps the dummy values from `gate_durations` to `"Gi1Q"`,
+        `"Gi2Q"`, and `"GiMCM"`, respectively.
+        See `idle_names` from
         [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 

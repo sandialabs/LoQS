@@ -127,19 +127,21 @@ class Serializable:
     define their serialization behavior.
 
     Key Features:
+
     - Support for both JSON and HDF5 serialization formats
     - Automatic object caching and reference tracking
     - Recursive serialization of complex nested structures
     - Format-agnostic API for easy switching between formats
 
     Derived classes should implement:
-    - `from_decoded_attrs()`: Create object from decoded attributes
+    
+    - `_from_decoded_attrs()`: Create object from decoded attributes
 
     Example:
         >>> # Define a simple serializable class
         >>> class SimpleClass(Serializable):
-        ...     CACHE_ON_SERIALIZE = True
-        ...     SERIALIZE_ATTRS = ["name", "value"]
+        ...     _CACHE_ON_SERIALIZE = True
+        ...     _SERIALIZE_ATTRS = ["name", "value"]
         ...
         ...     def __init__(self, name, value):
         ...         self.name = name
@@ -147,7 +149,7 @@ class Serializable:
         ...
         ...
         ...     @classmethod
-        ...     def from_decoded_attrs(cls, attr_dict):
+        ...     def _from_decoded_attrs(cls, attr_dict):
         ...         return cls(**attr_dict)
 
         >>> # Create and serialize an object
@@ -160,7 +162,7 @@ class Serializable:
     """
 
     @staticmethod
-    def serial_hash(obj: Any, _visited: set | None = None) -> int:
+    def _serial_hash(obj: Any, _visited: set | None = None) -> int:
         """
         Generate a unique serial ID for an object based on its serializable content.
 
@@ -194,33 +196,33 @@ class Serializable:
 
         try:
             if isinstance(obj, Serializable):
-                # For Serializable objects, hash the tuple of serial IDs of their SERIALIZE_ATTRS
+                # For Serializable objects, hash the tuple of serial IDs of their _SERIALIZE_ATTRS
                 attr_ids = []
-                for attr in obj.SERIALIZE_ATTRS:
-                    attr_value = obj.get_encoding_attr(attr)
+                for attr in obj._SERIALIZE_ATTRS:
+                    attr_value = obj._get_encoding_attr(attr)
                     attr_ids.append(
-                        Serializable.serial_hash(attr_value, _visited)
+                        Serializable._serial_hash(attr_value, _visited)
                     )
                 return hash(tuple(attr_ids))
             elif isinstance(obj, list):
                 # For lists, hash the tuple of serial IDs of each element
                 return hash(
                     tuple(
-                        Serializable.serial_hash(item, _visited)
+                        Serializable._serial_hash(item, _visited)
                         for item in obj
                     )
                 )
             elif isinstance(obj, dict):
                 # For dicts, hash the tuple of serial IDs of keys and values
-                keys_id = Serializable.serial_hash(list(obj.keys()), _visited)
-                values_id = Serializable.serial_hash(
+                keys_id = Serializable._serial_hash(list(obj.keys()), _visited)
+                values_id = Serializable._serial_hash(
                     list(obj.values()), _visited
                 )
                 return hash((keys_id, values_id))
             elif isinstance(obj, np.ndarray):
                 # For numpy arrays, hash the shape and flattened data
-                shape_id = Serializable.serial_hash(obj.shape, _visited)
-                data_id = Serializable.serial_hash(
+                shape_id = Serializable._serial_hash(obj.shape, _visited)
+                data_id = Serializable._serial_hash(
                     obj.flatten().tolist(), _visited
                 )
                 return hash((shape_id, data_id))
@@ -235,7 +237,7 @@ class Serializable:
             _visited.remove(obj_id)
 
     # Class attributes
-    CACHE_ON_SERIALIZE: ClassVar[bool] = False
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = False
     """Flag to indicate whether this class should be cached.
 
     Every Serializable object _can_ be cached, but caching does
@@ -248,28 +250,28 @@ class Serializable:
     QECCodePatch, any backend objects, etc.
     """
 
-    SERIALIZE_ATTRS: ClassVar[list[str]] = []
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = []
     """Attributes to serialize.
 
     If encoding requires a different access pattern
     than getattr(), derived classes should
-    implement [get_encoding_attr](api:Serializable.get_encoding_attr).
+    implement [_get_encoding_attr](api:Serializable._get_encoding_attr).
     """
 
-    SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
-    """Attribute map to use in [from_decoded_attrs](api:Serializable.from_decoded_attrs).
+    __SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
+    """Attribute map to use in [_from_decoded_attrs](api:Serializable._from_decoded_attrs).
 
     Useful when internal (e.g. _<attr>) attributes are
     serialized, but they are named differently (e.g. <attr>)
     in class constructors. If decoding requires more complex
     state management than the class constructor, derived
-    classes should implement [from_decoded_attrs](api:Serializable.from_decoded_attrs).
+    classes should implement [_from_decoded_attrs](api:Serializable._from_decoded_attrs).
     """
 
     ## ABSTRACT METHODS
     # Implement these in derived classes
 
-    def get_encoding_attr(
+    def _get_encoding_attr(
         self, attr: str, ignore_no_serialize_flags: bool = False
     ) -> Any:
         """
@@ -281,7 +283,7 @@ class Serializable:
         that required objects for encoding where this is not true,
         e.g. state backends. This is also true for the Frame object,
         which may modify the underlying data depending
-        on the ``ignore_no_serialization`` flag passed down.
+        on the `ignore_no_serialization` flag passed down.
 
         Parameters
         ----------
@@ -296,15 +298,15 @@ class Serializable:
         return getattr(self, attr)
 
     @classmethod
-    def from_decoded_attrs(cls: Type[T], attr_dict: Mapping[str, Any]) -> T:
+    def _from_decoded_attrs(cls: Type[T], attr_dict: Mapping[str, Any]) -> T:
         """
         Create an object from decoded attributes dictionary.
 
         By default, this assumes that attributes are either directly named
         as constructor arguments, or at least are one of the arguments and
-        thus can be remapped to the proper kwarg via SERIALIZE_ATTRS_MAP.
+        thus can be remapped to the proper kwarg via __SERIALIZE_ATTRS_MAP.
         This should be implemented by all Serializable subclasses that for
-        which the default behavior or mapping via SERIALIZE_ATTRS_MAP is not
+        which the default behavior or mapping via __SERIALIZE_ATTRS_MAP is not
         sufficient to map decoded attributes to constructor arguments.
 
         Parameters
@@ -327,7 +329,7 @@ class Serializable:
             "cache_id",
         }
         filtered_dict = {
-            cls.SERIALIZE_ATTRS_MAP.get(k, k): v
+            cls.__SERIALIZE_ATTRS_MAP.get(k, k): v
             for k, v in attr_dict.items()
             if k not in metadata_fields
         }
@@ -939,7 +941,7 @@ class Serializable:
         raise IncorrectDecodableTypeError("Unknown type to decode")
 
     @staticmethod
-    def eval_function_str(
+    def _eval_function_str(
         src: str, version: int = SERIALIZATION_VERSION
     ) -> Callable:
         """Evaluate a function from its source code string.
@@ -993,7 +995,7 @@ class Serializable:
         return env[key]
 
     @staticmethod
-    def get_function_str(func):
+    def _get_function_str(func):
         """Extract the source code and necessary imports for a function.
 
         Retrieves the complete source code of a function including its definition
@@ -1068,7 +1070,7 @@ class Serializable:
         return imports + src
 
     @staticmethod
-    def import_class(module_name, class_name, version) -> Type:
+    def _import_class(module_name, class_name, version) -> Type:
         """Returns the class specified by the given state dictionary"""
         location_changes = (
             {}
@@ -1106,17 +1108,17 @@ class Serializable:
         from loqs.internal.encoder import JSONEncoder, HDF5Encoder
 
         # Get serial ID for this object
-        serial_hash = Serializable.serial_hash(obj)
+        _serial_hash = Serializable._serial_hash(obj)
         object_id = id(obj)
 
         # Short-circuit on no cache behavior
-        if encode_cache is None or not obj.CACHE_ON_SERIALIZE:
+        if encode_cache is None or not obj._CACHE_ON_SERIALIZE:
             return encode_uncached_obj(obj)
 
         # First check if this specific object instance is already being processed
         # This handles circular references within the same object graph
-        if serial_hash in encode_cache:
-            cached_entries = encode_cache[serial_hash]
+        if _serial_hash in encode_cache:
+            cached_entries = encode_cache[_serial_hash]
             for entry in cached_entries:
                 if entry[0] == object_id:
                     # This object is already being processed (circular reference)
@@ -1141,14 +1143,14 @@ class Serializable:
         else:
             HDF5Encoder.ENCODE_ID += 1
 
-        # Check if serial_hash exists in cache (different instances with same content)
-        if serial_hash in encode_cache:
+        # Check if _serial_hash exists in cache (different instances with same content)
+        if _serial_hash in encode_cache:
             # Same serial content but different instance, create a copy
             # First entry in list is the source object
-            source_cache_id = encode_cache[serial_hash][0][1]
+            source_cache_id = encode_cache[_serial_hash][0][1]
 
             # Add to cache (all other entries in list are copy objects)
-            encode_cache[serial_hash].append((object_id, cache_id))
+            encode_cache[_serial_hash].append((object_id, cache_id))
 
             return encode_cached_obj(
                 cache_id,
@@ -1158,7 +1160,7 @@ class Serializable:
             )
 
         # Otherwise, cache-miss so we create a new source
-        encode_cache[serial_hash] = [(object_id, cache_id)]
+        encode_cache[_serial_hash] = [(object_id, cache_id)]
 
         # Encode as source
         result = encode_uncached_obj(obj)
@@ -1358,7 +1360,7 @@ class Serializable:
         # Handle Serializable objects
         if isinstance(obj, Serializable):
             # Recursively process attributes
-            for attr in obj.SERIALIZE_ATTRS:
+            for attr in obj._SERIALIZE_ATTRS:
                 if hasattr(obj, attr):
                     attr_value = getattr(obj, attr)
                     new_attr_value = Serializable._replace_placeholders(

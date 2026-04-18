@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMPhysicalCircuit` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -165,7 +164,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """STIM noise channels.
 
     These should probably not be part of a circuit
-    prior to it going through a :class:`.BaseNoiseModel`,
+    prior to it going through a [](api:BaseNoiseModel),
     but currently they will just pass through.
     """
 
@@ -175,7 +174,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """STIM 1Q, 2Q, and measurement gates.
 
     These are the STIM instructions that will be treated
-    as possible keys into a :class:`.STIMDictNoiseModel`.
+    as possible keys into a [](api:STIMDictNoiseModel).
     """
 
     def __init__(

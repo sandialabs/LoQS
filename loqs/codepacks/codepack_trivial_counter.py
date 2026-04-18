@@ -6,7 +6,7 @@
 # in compliance with the License.  You may obtain a copy of the License at                                          #
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
-"""A trivial LoQS QEC codepack for testing purposes.
+"""A trivial `LoQS` QEC codepack for testing purposes.
 This implementation provides a simple counter-like behavior where a "state"
 value can be incremented. This is purely for demonstration and testing purposes.
 """

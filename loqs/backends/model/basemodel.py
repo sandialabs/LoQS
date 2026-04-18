@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseNoiseModel` and :class:`.BaseTimeDependentNoiseModel` definitions.
-"""
+
 
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ class BaseNoiseModel(Castable, Displayable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __str__(self) -> str:
         return f"Physical {self.name} noise model\n"

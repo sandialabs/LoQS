@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.DictNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -47,7 +46,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     gate_dict: dict[MemberLabel, RepTuple]
     inst_dict: dict[MemberLabel, RepTuple]
 
-    SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
+    _SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
 
     def __init__(  # noqa: C901
         self,
@@ -73,16 +72,16 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
         instrep_cast_include_outcomes:
             If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to :class:`.RepTuples`, this will be used as
+            are being cast up to [](api:RepTuples), this will be used as
             the first argument of the rep, indicating which state to reset
-            to (``0`` or ``1``) or whether to not reset (``None``, default).
+            to (`0` or `1`) or whether to not reset (`None`, default).
 
         instrep_cast_include_outcomes:
             If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
             :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to :class:`.RepTuples`, this will be used as
+            being cast up to [](api:RepTuples), this will be used as
             the second argument of the rep, indicating whether outcomes
-            should be kept (``True``, default) or not (``False``).
+            should be kept (`True`, default) or not (`False`).
         """
 
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
@@ -367,7 +366,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         return reps
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         """Create a DictNoiseModel from decoded attributes.
 
         This class method reconstructs a DictNoiseModel instance from a dictionary

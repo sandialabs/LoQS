@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.Displayable` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ class Displayable(Serializable):
     """Base class for all interactively displayable objects.
 
     This uses the dict version of objects output by
-    [to_serialization](api:Serializable.encode) and a tkinter ``Treeview`` to have
+    [to_serialization](api:Serializable.encode) and a tkinter `Treeview` to have
     an interactive navigatable window.
     """
 
@@ -75,7 +74,7 @@ class DisplayableViewer(tk.Tk):
         self.create_widgets()
 
     def create_widgets(self):
-        """Add the ``Treeview`` into the scene."""
+        """Add the `Treeview` into the scene."""
         self.tree = ttk.Treeview(self)
         self.tree.pack(expand=True, fill="both")
 

@@ -39,8 +39,8 @@ def build_discrete_error_injection_programs(
     This will take a (presumably physical circuit) [Instruction](api:Instruction),
     use [BasePhysicalCircuit.get_possible_discrete_error_locations](api:BasePhysicalCircuit.get_possible_discrete_error_locations)
     to collect the possible error locations, and then create new programs
-    where the error will be injected via ``error_injections`` (see
-    ``build_physical_circuit_instruction`` for more) as a kwarg
+    where the error will be injected via `error_injections` (see
+    `build_physical_circuit_instruction` for more) as a kwarg
     to the relevant [InstructionLabel](api:InstructionLabel).
 
     Parameters
@@ -52,15 +52,15 @@ def build_discrete_error_injection_programs(
         The [Instruction](api:Instruction) to get all possible discrete errors for
 
     stack_idx_to_modify : int
-        The entry in the [InstructionStack](api:InstructionStack) of the ``base_program``
-        to modify with ``error_injections`` as a label kwarg.
+        The entry in the [InstructionStack](api:InstructionStack) of the `base_program`
+        to modify with `error_injections` as a label kwarg.
 
     error_circuit_labels : Sequence[str]
         The labels for possible errors to insert.
 
     post_twoq_gates : bool, optional
-        Whether to inject weight-1 errors before every gate (``False``, default)
-        or all weight-2 errors after 2Q gates (``True``). Also see
+        Whether to inject weight-1 errors before every gate (`False`, default)
+        or all weight-2 errors after 2Q gates (`True`). Also see
         [BasePhysicalCircuit.get_possible_discrete_error_locations](api:BasePhysicalCircuit.get_possible_discrete_error_locations), by default False
 
     Returns
@@ -244,7 +244,7 @@ def run_discrete_error_injected_programs(
         A Dask client to use for parallelizing over programs
         (as this is likely a better strategy than parallelizing
         over small number of shots per program).
-        Defaults to ``None``, which runs shots in serial.
+        Defaults to `None`, which runs shots in serial.
 
     Returns
     -------
@@ -324,7 +324,7 @@ def test_program_output(
     Returns
     -------
     bool
-        ``True`` if all outputs match expected, ``False`` on failure
+        `True` if all outputs match expected, `False` on failure
 
     REVIEW_SPHINX_REFERENCE
     """

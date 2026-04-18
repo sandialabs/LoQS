@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ class BaseQuantumState(Castable, Displayable):
     name: ClassVar[str]
     """Name of state backend"""
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"

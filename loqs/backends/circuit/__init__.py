@@ -9,13 +9,44 @@
 
 """Circuit backend classes.
 
-Below use syndrome extraction circuits for the surface code
-as an example for how to generate complex tiled circuits
-from simple templates.
+For LoQS, a circuit is essentially a list of layers that are lists of gate names and target qubits.
+Qubit labels are assumed to be either a `str` or `int`.
+
+The circuit backend interface is enforced by the abstract [](api:BasePhysicalCircuit) class,
+which generally has the capabilities:
+
+- Property getters for:
+    - The underlying circuit
+    - Circuit depth
+    - Qubit labels
+- Append circuit (in-place and copy)
+- Delete qubits (in-place and copy)
+- Insert circuit (in-place and copy)
+- Map qubit labels (in-place and copy)
+- Merge, i.e. layer combination (in-place and copy)
+- Set qubit labels (in-place and copy)
+
+The packages currently available as circuit backends:
+
+- Native `list` via [](api:ListPhysicalCircuit)
+- `pygsti` via [](api:PyGSTiPhysicalCircuit) (requires `loqs[pygsti]`)
+- `stim` via [](api:STIMPhysicalCircuit) (requires `loqs[stim]`)
+
+!!! warning
+
+    For backends that depend on optional third-party packages,
+    it is recommended to not import from the module/class file directly.
+    Instead, try to import from [](api:loqs.backends), which dynamically checks
+    if that backend is available.
 
 Examples
 --------
 
+Below use syndrome extraction circuits for the surface code
+as an example for how to generate complex tiled circuits
+from simple templates.
+
+TODO: This should probably be shifted to a codepack?
 Here we generate the syndrome extraction circuit
 for Surface-17 based on [@tomita_lowdistance_2014].
 

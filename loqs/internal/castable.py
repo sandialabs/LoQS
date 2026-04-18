@@ -82,14 +82,14 @@ class Castable:
 
 
 class SeqCastable(Castable):
-    """[Castable](api:Castable) object whose first argument is a ``list`` or ``tuple``."""
+    """[Castable](api:Castable) object whose first argument is a `list` or `tuple`."""
 
     @classmethod
     def cast(cls: type[U], obj: object) -> U:
         """Cast to the derived class.
 
         The difference from [Castable.cast](api:Castable.cast) is that we are
-        expecting the first arg to be a ``Sequence``, so we skip
+        expecting the first arg to be a `Sequence`, so we skip
         the args list logic.
 
         Parameters
@@ -118,14 +118,14 @@ class SeqCastable(Castable):
 
 
 class MapCastable(Castable):
-    """[Castable](api:Castable) object whose first argument is a ``dict``."""
+    """[Castable](api:Castable) object whose first argument is a `dict`."""
 
     @classmethod
     def cast(cls: type[V], obj: object) -> V:
         """Cast to the derived class.
 
         The difference from [Castable.cast](api:Castable.cast) is that we are
-        expecting the first arg to be a ``Mapping``, so we skip
+        expecting the first arg to be a `Mapping`, so we skip
         the kwargs dict logic.
 
         Parameters

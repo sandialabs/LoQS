@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.PyGSTiNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -94,18 +93,22 @@ else:
 
 
 class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
-    """Model backend for handling ``pygsti.model.OpModel`` objects.
+    """Model backend for handling [](api:pygsti.models.model.OpModel) objects.
 
     PyGSTi models are inherently time-dependent, so this inherits from
-    :class:`TimeDependentBaseNoiseModel` rather than
-    :class:`BaseNoiseModel`.
+    [](api:TimeDependentBaseNoiseModel) rather than
+    [](api:BaseNoiseModel).
     However, time-dependent features are opt-in and require the user
-    to specify ``use_time_dependence=True`` during initialization.
+    to specify `use_time_dependence=True` during initialization.
     """
 
     name: ClassVar[str] = "pyGSTi"
 
-    SERIALIZE_ATTRS = ["model", "qubit_aliases"]
+    _SERIALIZE_ATTRS = ["model", "qubit_aliases"]
+
+    model: ExplicitOpModel | ImplicitOpModel
+    """Underlying [](api:pygsti.models.explicitmodel.ExplicitOpModel) or [](api:pygsti.models.implicitmodel.ImplicitOpModel)
+    """
 
     def __init__(
         self,
@@ -667,7 +670,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         return (rep, True), instreps[repidx]
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         """Get the encoding attribute for serialization.
 
         This method returns the serialized representation of the model attribute
@@ -693,10 +696,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         """
         if attr == "model":
             return self.model.to_nice_serialization()
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         """Create a PyGSTiNoiseModel from decoded attributes.
 
         This class method reconstructs a PyGSTiNoiseModel instance from a dictionary

@@ -15,8 +15,8 @@ from loqs.types import NDArray, SPSArray
 class MockSerializable(Serializable):
     """A simple Serializable class for testing encoders."""
 
-    CACHE_ON_SERIALIZE = True
-    SERIALIZE_ATTRS = ["name", "value"]
+    _CACHE_ON_SERIALIZE = True
+    _SERIALIZE_ATTRS = ["name", "value"]
 
     def __init__(self, name="test", value=42):
         self.name = name
@@ -30,7 +30,7 @@ class MockSerializable(Serializable):
         )
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict):
+    def _from_decoded_attrs(cls, attr_dict):
         return cls(name=attr_dict["name"], value=attr_dict["value"])
 
 
@@ -324,7 +324,7 @@ class TestEncoderParameterized:
                     "source": source_code
                 }
                 decoded = JSONEncoder.decode_function(encoded)
-                # get_function_str returns source code as string
+                # _get_function_str returns source code as string
                 # Cannot test function execution from source code
             
             else:  # hdf5

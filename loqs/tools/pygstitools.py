@@ -225,11 +225,11 @@ def convert_edesign_to_programs(
     Parameters
     ----------
     edesign : ExperimentDesign
-        pyGSTi ``ExperimentDesign`` to convert
+        pyGSTi `ExperimentDesign` to convert
 
     model : ExplicitOpModel
         pyGSTi model for the edesign. Currently only used
-        for ``model.complete_circuit``, to be removed soon.
+        for `model.complete_circuit`, to be removed soon.
 
     physical_to_logical : Mapping[str | tuple, list[InstructionLabelCastableTypes]]
         A mapping from pyGSTi physical circuit labels to
@@ -244,7 +244,7 @@ def convert_edesign_to_programs(
     -------
     list[QuantumProgram]
         List of programs, one per circuit in
-        ``edesign.all_circuits_needing_data``
+        `edesign.all_circuits_needing_data`
 
     REVIEW_SPHINX_REFERENCE
     """
@@ -273,12 +273,12 @@ def convert_run_programs_to_dataset(
         -1,
     ),
 ) -> DataSet:
-    """Convert [QuantumProgram](api:QuantumProgram) objects to a pyGSTi ``DataSet``.
+    """Convert [QuantumProgram](api:QuantumProgram) objects to a pyGSTi `DataSet`.
 
     Parameters
     ----------
     programs : Sequence[QuantumProgram]
-        List of programs, one per circuit in ``edesign.all_circuits_needing_data``,
+        List of programs, one per circuit in `edesign.all_circuits_needing_data`,
         with [QuantumProgram.run](api:QuantumProgram.run) having been called on the programs
         with the desired number of shots.
 
@@ -289,7 +289,7 @@ def convert_run_programs_to_dataset(
     Returns
     -------
     DataSet
-        A pyGSTi ``DataSet`` with outcomes stripped from the programs.
+        A pyGSTi `DataSet` with outcomes stripped from the programs.
 
     REVIEW_SPHINX_REFERENCE
     """
@@ -323,14 +323,14 @@ def convert_circuit_to_image(
     lstick_values: Sequence[str | None] | None = None,
     include_qubits_in_lsticks: bool = True,
 ):  # Returns an Image but don't want to import that just for hinting as it's optional
-    """Convert a pyGSTi ``Circuit`` to a PNG image.
+    """Convert a pyGSTi `Circuit` to a PNG image.
 
-    Requires ``loqs[visualization]`` and ``pdflatex``.
+    Requires `loqs[visualization]` and `pdflatex`.
 
     Parameters
     ----------
     circuit : Circuit
-        pyGSTi ``Circuit`` to convert. Attainable via
+        pyGSTi `Circuit` to convert. Attainable via
         [PyGSTiPhysicalCircuit.circuit](api:PyGSTiPhysicalCircuit.circuit).
 
     gatename_conversion : Mapping[str, str | Sequence[str]]
@@ -395,27 +395,27 @@ def convert_circuit_to_qiskit_draw(
     gatename_conversion: Mapping[str, str] | None = None,
     placeholder_gate: str = "Gi",
 ) -> str:
-    """Convert a pyGSTi ``Circuit`` to a Qiskit ``draw()`` string.
+    """Convert a pyGSTi `Circuit` to a Qiskit `draw()` string.
 
-    Requires ``loqs[visualization]``.
+    Requires `loqs[visualization]`.
 
     Parameters
     ----------
     circuit : Circuit
-        pyGSTi ``Circuit`` to convert. Attainable via
+        pyGSTi `Circuit` to convert. Attainable via
         [PyGSTiPhysicalCircuit.circuit](api:PyGSTiPhysicalCircuit.circuit).
 
     gatename_conversion : Mapping[str, str] | None, optional
-        See ``pygsti.circuits.Circuit.convert_to_openqasm``, by default None
+        See `pygsti.circuits.Circuit.convert_to_openqasm`, by default None
 
     placeholder_gate : str, optional
-        Gate label to use if not provided in ``gatename_conversion``,
+        Gate label to use if not provided in `gatename_conversion`,
         by default "Gi"
 
     Returns
     -------
     str
-        The output of ``qiskit.QuantumCircuit.draw()``
+        The output of `qiskit.QuantumCircuit.draw()`
 
     REVIEW_SPHINX_REFERENCE
     """
@@ -466,47 +466,47 @@ def convert_circuit_to_quantikz(
     include_qubits_in_lsticks: bool = True,
     full_document: bool = False,
 ) -> str:
-    """Convert a pyGSTi ``Circuit`` to a quantikz string.
+    """Convert a pyGSTi `Circuit` to a quantikz string.
 
     Parameters
     ----------
     circuit : Circuit
-        pyGSTi ``Circuit`` to convert. Attainable via
+        pyGSTi `Circuit` to convert. Attainable via
         [PyGSTiPhysicalCircuit.circuit](api:PyGSTiPhysicalCircuit.circuit).
 
     gatename_conversion : Mapping[str, str | Sequence[str]]
         A conversion between gate labels and the corresponding
         quantikz input.
         For single qubit gates, this should just be the gate
-        name to appear in gate boxes. Note that ``"X"`` gates
-        are replaced with ``\\targ{}`` automatically.
+        name to appear in gate boxes. Note that `"X"` gates
+        are replaced with `\\targ{}` automatically.
         For two-qubit gates, this should be a list of strings,
-        where entries in ``["ctrl", "octrl", "targ"]`` are a
+        where entries in `["ctrl", "octrl", "targ"]` are a
         control, open control, or target, respectively. Any other
         entry is just treated as a gate name for a controlled gate.
         For measurements, this is a string with the format:
-        ``"meter [<basis>] [reset <ket value>]"``. Starting with
-        ``"meter"`` puts the ``\\meter{}`` in quantikz. The second
+        `"meter [<basis>] [reset <ket value>]"`. Starting with
+        `"meter"` puts the `\\meter{}` in quantikz. The second
         argument is an optional basis label that is inserted above
         the meter symbol. Also optional is reset, which will insert
         a new line with a ket label that contains the value of
-        ``<ket value>``. If ``"reset"`` is provided, the ket value
+        `<ket value>`. If `"reset"` is provided, the ket value
         must be provided.
 
     lstick_values : Sequence[str | None] | None, optional
-        Strings to include in the starting ``\\lstick{}`` entries.
-        Entries can be ``None`` to skip that line, allowing later
+        Strings to include in the starting `\\lstick{}` entries.
+        Entries can be `None` to skip that line, allowing later
         entries to be set without setting them all, by default None
 
     include_qubits_in_lsticks : bool, optional
-        Whether to include qubit labels (``True``, the default)
-        or not (``False``) in the starting ``\\lstick{}`` entries,
+        Whether to include qubit labels (`True`, the default)
+        or not (`False`) in the starting `\\lstick{}` entries,
         by default True
 
     full_document : bool, optional
-        Whether to include a document preamble (``True``) or just
-        the quantikz code (``False``, default) when generating
-        the final string. The ``True`` option is useful if you
+        Whether to include a document preamble (`True`) or just
+        the quantikz code (`False`, default) when generating
+        the final string. The `True` option is useful if you
         want a self-contained TeX string that can be compiled,
         by default False
 

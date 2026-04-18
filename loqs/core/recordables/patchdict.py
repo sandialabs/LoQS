@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.PatchDict` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -25,28 +24,28 @@ T = TypeVar("T", bound="PatchDict")
 PatchDictCastableTypes: TypeAlias = (
     "PatchDict | Mapping[str, QECCodePatch] | None"
 )
-"""Objects that can be cast to a :class:`.PatchDict`."""
+"""Objects that can be cast to a [](api:PatchDict)."""
 
 
 class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
-    """A collection of :class:`.QECCodePatch` objects.
+    """A collection of [](api:QECCodePatch) objects.
 
     This is a dict-like object where the keys are patch labels (literally,
-    as any ``patch_label`` usage in an :class:`.Instruction` apply function
-    refers to these keys) and the values are :class:`.QECCodePatch` objects.
+    as any `patch_label` usage in an [](api:Instruction) apply function
+    refers to these keys) and the values are [](api:QECCodePatch) objects.
 
-    Unlike many other LoQS objects, this is a mutable object to make it easy
+    Unlike many other `LoQS` objects, this is a mutable object to make it easy
     to manipulate patches. Users should be careful to first use :attr:`.copy`
-    to avoid messing up previous :class:`.Frame` objects (or use
+    to avoid messing up previous [](api:Frame) objects (or use
     :meth:`.Frame.expire` properly).
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = ["patches"]
+    _SERIALIZE_ATTRS = ["patches"]
 
     patches: dict[str, QECCodePatch]
-    """Underlying dict of patch labels and :class:`.QECCodePatch` objects.
+    """Underlying dict of patch labels and [](api:QECCodePatch) objects.
     """
 
     def __init__(self, patches: PatchDictCastableTypes = None) -> None:
@@ -54,8 +53,8 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
         Parameters
         ----------
         patches:
-            See :attr:`.patches`. Defaults to ``None``, which uses
-            an empty ``dict``.
+            See :attr:`.patches`. Defaults to `None`, which uses
+            an empty `dict`.
         """
         if patches is None:
             patches = {}

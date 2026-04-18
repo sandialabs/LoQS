@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.QECCode` and :class:`.QECCodePatch` definitions.
-"""
+
 
 from __future__ import annotations
 
@@ -26,16 +25,16 @@ T = TypeVar("T", bound="QECCode")
 
 
 class QECCode(Displayable):
-    """A set of :class:`.Instruction` objects that implement a QEC code.
+    """A set of [](api:Instruction) objects that implement a QEC code.
 
     All qubit-specific quantities are defined with respect to a set of
     template qubits that can then be replaced with real qubit labels
     at runtime.
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "instructions",
         "template_qubits",
         "template_data_qubits",
@@ -105,8 +104,8 @@ class QECCode(Displayable):
 
         pauli_frame:
             An initial [PauliFrame](api:PauliFrame) to assign to the patch.
-            Defaults to ``None``, which assigns the trivial Pauli frame
-            of all ``"I"`` entries.
+            Defaults to `None`, which assigns the trivial Pauli frame
+            of all `"I"` entries.
 
         Returns
         -------
@@ -124,7 +123,7 @@ class QECCode(Displayable):
         return QECCodePatch(self, qubits, pauli_frame)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "QECCode":
+    def _from_decoded_attrs(cls, attr_dict) -> "QECCode":
         """Create a QECCode from decoded attributes dictionary."""
         return cls(
             attr_dict["instructions"],

@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.RepTuple` and :class:`.RepEnum` definitions.
-"""
+
 
 from __future__ import annotations
 
@@ -68,9 +67,9 @@ class GateRep(RepEnum):
     """STIM circuit string
 
     The expected rep type is a STIM circuit string with placeholder
-    qubit labels. The string can include both gates (e.g. ``"H"``,
-    ``"CX"``) and noise specifications (e.g. ``"X_ERROR(<rate>)"``,
-    ``"DEPOLARIZE1(<rate>)"``). However, this should not include
+    qubit labels. The string can include both gates (e.g. `"H"`,
+    `"CX"`) and noise specifications (e.g. `"X_ERROR(<rate>)"`,
+    `"DEPOLARIZE1(<rate>)"`). However, this should not include
     measurement or reset gates; for those, use
     :attr:`.InstrumentRep.STIM_CIRCUIT_STR` instead.
 
@@ -137,7 +136,7 @@ class GateRep(RepEnum):
     and thus works even when the probability is state-dependent.
 
     This unraveling of non-unital channels can even be done with a
-    :class:`.STIMQuantumState`, enabling fast stabilizer simulation
+    [](api:STIMQuantumState), enabling fast stabilizer simulation
     with amplitude damping.
 
     The expected rep type is a list of 2-tuples with the first entry as
@@ -149,7 +148,7 @@ class GateRep(RepEnum):
     """
 
 
-GateRep.SERIALIZE_ATTRS = ["value"]
+GateRep._SERIALIZE_ATTRS = ["value"]
 
 
 class ConcreteGateReps:
@@ -291,18 +290,18 @@ class InstrumentRep(RepEnum):
     Z-basis projection sandwiched by two noisy operations.
     The expected rep is a 4-tuple where the first two elements are
     the unpacking of some :attr:`.InstrumentRep.ZBASIS_PROJECTION`,
-    and then two :class:`.RepTuple` objects with a :class:`.GateRep`
-    ``reptype``.
+    and then two [](api:RepTuple) objects with a [](api:GateRep)
+    `reptype`.
     """
 
     ZBASIS_OUTCOME_OPERATION_DICT = 3
     """Dict with MCM outcome labels and CP map operation keys.
 
     For when a mid-circuit measurement can be modeled by a
-    ``pyGSTi``-like quantum instrument.
+    `pyGSTi`-like quantum instrument.
     The expected rep is a 2-tuple where the first entry is a
-    dict with tuple of outcome keys and :class:`.RepTuple` objects
-    with a :class:`.GateRep` ``reptype`` for values, and the second
+    dict with tuple of outcome keys and [](api:RepTuple) objects
+    with a [](api:GateRep) `reptype` for values, and the second
     entry is a bool which indicates whether the outcome should be recorded,
     e.g. ({...}, False) would look like a noisy reset.
     """
@@ -333,7 +332,7 @@ class InstrumentRep(RepEnum):
     """
 
 
-InstrumentRep.SERIALIZE_ATTRS = ["value"]
+InstrumentRep._SERIALIZE_ATTRS = ["value"]
 
 
 class ConcreteInstrumentReps:
@@ -403,7 +402,7 @@ class RepTuple(Castable, Displayable):
     reptype: RepEnum
     """Enum entry indicating how :attr:`.rep` should be interpreted."""
 
-    SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
+    _SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
 
     def __init__(
         self,

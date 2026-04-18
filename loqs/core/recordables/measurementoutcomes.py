@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.MeasurementOutcomes` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ T = TypeVar("T", bound="MeasurementOutcomes")
 MeasurementOutcomesCastableTypes: TypeAlias = (
     "MeasurementOutcomes | Mapping[str | int, int | Sequence[int]]"
 )
-"Things that can be cast to :class:`.MeasurementOutcomes`."
+"Things that can be cast to [](api:MeasurementOutcomes)."
 
 
 class MeasurementOutcomes(
@@ -36,11 +35,11 @@ class MeasurementOutcomes(
 
     This is a dict-like object with qubit label keys and lists of 0/1
     outcome values. These can represent both raw measurement outcomes
-    or "inferred" outcomes where a :class:`.PauliFrame` has been applied
+    or "inferred" outcomes where a [](api:PauliFrame) has been applied
     (see :attr:`.get_inferred_outcomes`).
     """
 
-    SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
 
     outcomes: OutcomeDict
     """Dict with qubit label keys and list of 0/1 outcome values.
@@ -123,12 +122,12 @@ class MeasurementOutcomes(
         Parameters
         ----------
         pauli_frame:
-            The [PauliFrame](api:PauliFrame) to apply. Defaults to ``None``,
+            The [PauliFrame](api:PauliFrame) to apply. Defaults to `None`,
             in which case this just returns a copy.
 
         basis:
-            Which measurement basis to use when applying the ``pauli_frame``.
-            Must be one of ``["X", "Z"]``, and defaults to ``"Z"``.
+            Which measurement basis to use when applying the `pauli_frame`.
+            Must be one of `["X", "Z"]`, and defaults to `"Z"`.
         """
         if pauli_frame is None:
             return MeasurementOutcomes(self.outcomes.copy())

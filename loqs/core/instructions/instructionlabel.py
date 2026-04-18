@@ -25,11 +25,11 @@ T = TypeVar("T", bound="InstructionLabel")
 InstructionLabelCastableTypes: TypeAlias = (
     "Instruction | str | tuple[Instruction | str, str | None] | tuple[Instruction | str, str | None, Sequence | None] | tuple[Instruction | str, str | None, Sequence | None, Mapping | None] | InstructionLabel"
 )
-"""Objects that can be cast to a :class:`.InstructionLabel`."""
+"""Objects that can be cast to a [](api:InstructionLabel)."""
 
 
 class InstructionLabel(SeqCastable, Displayable):
-    """Instruction labels intended to be elements of an :class:`.InstructionStack`.
+    """Instruction labels intended to be elements of an [](api:InstructionStack).
 
     These are also castable from 1- to 4-tuples, so users
     can just specify a stack as a list of tuples and labels
@@ -72,7 +72,7 @@ class InstructionLabel(SeqCastable, Displayable):
     """Additional kwargs to pass on.
     """
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "instruction",
         "inst_label",
         "patch_label",
@@ -95,14 +95,14 @@ class InstructionLabel(SeqCastable, Displayable):
             one of :attr:`.instruction` or :attr:`.inst_label`.
 
         patch_label:
-            See :attr:`.patch_label`. Defaults to ``None``.
+            See :attr:`.patch_label`. Defaults to `None`.
 
         inst_args:
-            See :attr:`.inst_args`. Default to ``None``, which
+            See :attr:`.inst_args`. Default to `None`, which
             just sets it to be an empty list.
 
         inst_kwargs:
-            See :attr:`.inst_kwargs`. Default to ``None``, which
+            See :attr:`.inst_kwargs`. Default to `None`, which
             just sets it to be an empty dict.
         """
         self.instruction = None
@@ -122,7 +122,7 @@ class InstructionLabel(SeqCastable, Displayable):
         self.inst_kwargs = dict(inst_kwargs)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
+    def _from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
         """Create an InstructionLabel from decoded attributes dictionary."""
         # Handle the case where instruction might be None
         instruction = attr_dict.get("instruction")

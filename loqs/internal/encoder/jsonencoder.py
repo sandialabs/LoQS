@@ -42,8 +42,8 @@ class JSONEncoder(BaseEncoder):
         }
 
         # Encode attributes using the standard JSON encode method
-        for serial_attr in to_encode.SERIALIZE_ATTRS:
-            attr_value = to_encode.get_encoding_attr(
+        for serial_attr in to_encode._SERIALIZE_ATTRS:
+            attr_value = to_encode._get_encoding_attr(
                 serial_attr,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
@@ -124,7 +124,7 @@ class JSONEncoder(BaseEncoder):
             return encoded
 
         # Get the class
-        cls = Serializable.import_class(
+        cls = Serializable._import_class(
             encoded["module"], encoded["class"], version
         )
 
@@ -187,8 +187,8 @@ class JSONEncoder(BaseEncoder):
             if version == 0:
                 attr_dict["type"] = encoded["type"]
 
-        # Create the object using its from_decoded_attrs method
-        decoded = cls.from_decoded_attrs(attr_dict)
+        # Create the object using its _from_decoded_attrs method
+        decoded = cls._from_decoded_attrs(attr_dict)
 
         # Replace the placeholder with the actual object
         if cache_id is not None and cache_id in decode_cache:
@@ -723,7 +723,7 @@ class JSONEncoder(BaseEncoder):
             assert "module" in encoded
             assert "class" in encoded
 
-        return Serializable.import_class(
+        return Serializable._import_class(
             encoded["module"], encoded["class"], version
         )
 
@@ -746,7 +746,7 @@ class JSONEncoder(BaseEncoder):
         return {
             "encode_type": "function",
             "version": SERIALIZATION_VERSION,
-            "source": Serializable.get_function_str(to_encode),
+            "source": Serializable._get_function_str(to_encode),
         }
 
     @staticmethod
@@ -786,7 +786,7 @@ class JSONEncoder(BaseEncoder):
                 source = encoded.get("source", None)  # type: ignore
 
         assert isinstance(source, str)
-        return Serializable.eval_function_str(source, version)
+        return Serializable._eval_function_str(source, version)
 
     @staticmethod
     def encode_primitive(to_encode):

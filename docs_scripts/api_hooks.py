@@ -27,6 +27,8 @@ Responsibilities
 
   - Remove anchors listed in ``<!-- API_TOC_REMOVE ... -->``. These are emitted
     by the reference-page generator to suppress redundant base-class entries.
+  - Italicize inherited-method entries marked by
+    ``<!-- API_INHERITED_HEADING <anchor> -->``.
 
 - Rewrite API cross-references emitted in docstrings:
 
@@ -54,7 +56,6 @@ Notes
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -74,6 +75,14 @@ MODULE_MEMBERS_MARK_RE = re.compile(
 )
 
 TOC_REMOVE_RE = re.compile(r"<!--\s*API_TOC_REMOVE\s+([^>]+?)\s*-->", re.IGNORECASE)
+
+# Markers for inherited stub headings emitted by gen_ref_pages.py
+INHERITED_MARK_RE = re.compile(r"<!--\s*API_INHERITED_HEADING\s+([^\s]+)\s*-->")
+
+CONSTRUCTOR_HEADING_RE = re.compile(
+    r"<!--\s*API_CONSTRUCTOR_HEADING\s+([^\s]+)\s+([^\s]+)\s*-->",
+    re.IGNORECASE,
+)
 
 # ----------------------------------------------------------------------
 #  DIV boundaries created by mkdocstrings
@@ -108,6 +117,13 @@ TOC_LI_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
+RIGHT_TOC_OPEN = '<nav class="md-nav md-nav--secondary" aria-label="Table of contents">'
+
+TOC_LINK_TEXT_RE = re.compile(
+    r'(<a[^>]*href="#(?P<anchor>[^"]+)"[^>]*>\s*<span class="md-ellipsis">)\s*.*?\s*(</span>\s*</a>)',
+    re.IGNORECASE | re.DOTALL,
+)
+
 API_A_TAG_RE = re.compile(
     r'<a(?P<pre>[^>]*?)\s+href=(?P<q>["\'])api:(?P<target>[^"\'>\s]+)(?P=q)(?P<post>[^>]*)>(?P<body>.*?)</a>',
     re.IGNORECASE | re.DOTALL,
@@ -116,47 +132,42 @@ API_A_TAG_RE = re.compile(
 # Pandoc-style citations in rendered HTML text (from docstrings), e.g. [@key] or [@k1; @k2]
 CITE_BRACKET_RE = re.compile(r"\[@(?P<keys>[^\]]+)\]")
 
-# Markers for inherited stub headings (emitted by gen_ref_pages.py)
-INHERITED_MARK_RE = re.compile(r"<!--\s*API_INHERITED_HEADING\s+([^\s]+)\s*-->")
-
-RIGHT_TOC_OPEN = '<nav class="md-nav md-nav--secondary" aria-label="Table of contents">'
-
-TOC_ELLIPSIS_RE = re.compile(
-    r'(<a href="#(?P<anchor>[^"]+)" class="md-nav__link">.*?'
-    r'<span class="md-ellipsis">\s*)(?P<label>.*?)(\s*</span>)',
-    re.IGNORECASE | re.DOTALL,
-)
-
 
 def _find(pat: re.Pattern, s: str, start: int = 0) -> re.Match | None:
     return pat.search(s, start)
+
 
 def _strip_intro_from_block(block: str) -> str:
     """
     Clean a single marked block (class or module):
 
-    - Remove stray <a id="..."></a> that can sit between outer div and contents-first div
-    - Strip leading <p> blocks inside the "doc-contents first" region (module/class doc blurb)
-    - Strip leading <p> blocks at start of the "doc-children" region (repeated base/doc blurb)
+    - Remove stray <a id="..."></a> tags that can sit between the outer
+      mkdocstrings container and the "doc-contents first" region.
+    - Strip leading paragraphs, admonitions, and highlight blocks inside the
+      "doc-contents first" region.
+    - Strip leading paragraphs, admonitions, and highlight blocks at the start
+      of the "doc-children" region.
     """
     m_doc = _find(DOC_CLASS_OPEN_RE, block, 0) or _find(DOC_MODULE_OPEN_RE, block, 0)
     if not m_doc:
         return block
+
     m_contents = _find(CONTENTS_FIRST_OPEN_RE, block, m_doc.end())
     if not m_contents:
         return block
+
     m_children = _find(CHILDREN_OPEN_RE, block, m_contents.end())
     if not m_children:
         return block
 
-    # Drop stray <a id="..."></a> between doc-object open and contents-first open.
+    # Drop stray <a id="..."></a> tags between doc-object open and contents-first open.
     pre = block[m_doc.end() : m_contents.start()]
     pre = CLASS_TOC_ANCHOR_RE.sub("", pre)
 
-    # Up through the end of the opening contents-first tag
+    # Prefix through end of opening "contents-first" tag.
     prefix = block[: m_doc.end()] + pre + block[m_contents.start() : m_contents.end()]
 
-    # Strip leading <p> blocks immediately inside contents-first, up to doc-children
+    # Region between contents-first open and children open: strip leading intro material.
     mid = block[m_contents.end() : m_children.start()]
     while True:
         m_adm = LEADING_ADMONITION_RE.match(mid)
@@ -176,30 +187,36 @@ def _strip_intro_from_block(block: str) -> str:
 
         break
 
-    # Now strip leading <p> blocks at start of doc-children region
-    after_children = block[m_children.start() :]
+    # Children region: keep the <div class="doc doc-children"...> open tag,
+    # then strip leading material immediately inside it.
+    child_open = block[m_children.start() : m_children.end()]
+    child_body = block[m_children.end() :]
+
     while True:
-        m_adm = LEADING_ADMONITION_RE.match(after_children)
+        m_adm = LEADING_ADMONITION_RE.match(child_body)
         if m_adm:
-            after_children = after_children[m_adm.end() :]
+            child_body = child_body[m_adm.end() :]
             continue
 
-        m_h = LEADING_HIGHLIGHT_RE.match(after_children)
+        m_h = LEADING_HIGHLIGHT_RE.match(child_body)
         if m_h:
-            after_children = after_children[m_h.end() :]
+            child_body = child_body[m_h.end() :]
             continue
 
-        m_p = LEADING_P_RE.match(after_children)
+        m_p = LEADING_P_RE.match(child_body)
         if m_p:
-            after_children = after_children[m_p.end() :]
+            child_body = child_body[m_p.end() :]
             continue
 
         break
 
-    return prefix + mid + after_children
+    return prefix + mid + child_open + child_body
 
 
 def _strip_specific_toc_entries(html: str, anchors_to_remove: set[str]) -> str:
+    """
+    Remove exact-anchor entries from the right-hand TOC HTML fragment.
+    """
     if not anchors_to_remove:
         return html
 
@@ -211,6 +228,10 @@ def _strip_specific_toc_entries(html: str, anchors_to_remove: set[str]) -> str:
 
 
 def _clean_marked_blocks(output: str, mark_re: re.Pattern) -> str:
+    """
+    Apply `_strip_intro_from_block` to each region starting at a matching marker
+    and ending at the next such marker or end of page output.
+    """
     marks = list(mark_re.finditer(output))
     if not marks:
         return output
@@ -229,51 +250,97 @@ def _clean_marked_blocks(output: str, mark_re: re.Pattern) -> str:
     parts.append(output[last:])
     return "".join(parts)
 
+def _rewrite_constructor_headings(html: str) -> str:
+    """
+    Rewrite constructor signature names from ``__init__`` to ``ClassName`` while
+    preserving the mkdocstrings-generated heading and anchor.
+
+    The generator emits:
+      <!-- API_CONSTRUCTOR_HEADING <anchor_id> <ClassName> -->
+
+    immediately before the mkdocstrings block for a declared constructor.
+    """
+    out = html
+
+    while True:
+        m = CONSTRUCTOR_HEADING_RE.search(out)
+        if not m:
+            break
+
+        anchor_id = m.group(1)
+        cls_name = m.group(2)
+
+        sig_pat = re.compile(
+            rf'(<h2 id="{re.escape(anchor_id)}" class="doc doc-heading">.*?</h2>\s*'
+            rf'<div class="doc-signature highlight"><pre><span></span><code><span class="nf">)'
+            rf'__init__'
+            rf'(</span>)',
+            re.IGNORECASE | re.DOTALL,
+        )
+
+        out = out.replace(m.group(0), "", 1)
+        out = sig_pat.sub(
+            lambda m2: m2.group(1) + cls_name + m2.group(2),
+            out,
+            count=1,
+        )
+
+    return out
+
+
 def _italicize_inherited_in_right_toc(html: str, inherited_anchors: set[str]) -> str:
+    """
+    Wrap labels for inherited-method entries in the right-hand TOC only, so CSS
+    can style them distinctly.
+    """
     if not inherited_anchors:
         return html
 
-    nav_start = html.find(RIGHT_TOC_OPEN)
-    if nav_start < 0:
+    m = re.search(
+        r'(<div class="md-sidebar md-sidebar--secondary"[^>]*>.*?</div>\s*</div>)',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
         return html
 
-    nav_end = html.find("</nav>", nav_start)
-    if nav_end < 0:
-        return html
-    nav_end += len("</nav>")
+    frag = m.group(1)
 
-    frag = html[nav_start:nav_end]
-
-    def repl(m: re.Match) -> str:
-        anchor = m.group("anchor")
+    def repl(m2: re.Match) -> str:
+        anchor = m2.group("anchor")
         if anchor not in inherited_anchors:
-            return m.group(0)
+            return m2.group(0)
 
-        label = m.group("label")
-        return m.group(1) + f'<span class="api-inherited-toc">{label}</span>' + m.group(4)
+        label = anchor.rsplit(".", 1)[-1]
+        return (
+            m2.group(1)
+            + f'<span class="api-inherited-toc">{label}</span>'
+            + m2.group(3)
+        )
 
-    frag2 = TOC_ELLIPSIS_RE.sub(repl, frag)
-    return html[:nav_start] + frag2 + html[nav_end:]
+    frag2 = TOC_LINK_TEXT_RE.sub(repl, frag)
+    return html[: m.start(1)] + frag2 + html[m.end(1) :]
 
 
 def on_post_page(output: str, page, config) -> str:
-    # 1) Gather TOC anchors to remove for this page; remove marker from output.
+    # 1) Gather TOC anchors to remove for this page, then remove the markers.
     anchors_to_remove: set[str] = set()
-    m = TOC_REMOVE_RE.search(output)
-    if m:
-        anchors_to_remove = set(m.group(1).split())
-        output = TOC_REMOVE_RE.sub("", output)
+    for m in TOC_REMOVE_RE.finditer(output):
+        anchors_to_remove |= set((m.group(1) or "").split())
+    output = TOC_REMOVE_RE.sub("", output)
 
-    # 2) Clean marked blocks
+    # 2) Clean marked mkdocstrings blocks.
     output = _clean_marked_blocks(output, MARK_RE)
     output = _clean_marked_blocks(output, MODULE_MEMBERS_MARK_RE)
 
-    # 3) Remove derived/base class TOC entries by exact anchor match
+    # Rewrite declared constructor headings from __init__ to ClassName().
+    output = _rewrite_constructor_headings(output)
+
+    # 3) Remove derived/base class TOC entries by exact anchor match.
     output = _strip_specific_toc_entries(output, anchors_to_remove)
 
     # 4) Rewrite rendered HTML links: href="api:Target" -> href="...resolved..."
-    cfg_dir = Path(config["config_file_path"]).resolve().parent
-    inv_path = cfg_dir / "docs" / "_api_inventory.json"
+    inv_path = Path(config["docs_dir"]) / "_api_inventory.json"
     if not inv_path.exists():
         raise RuntimeError(f"API inventory not found at {inv_path} (expected during API build).")
 
@@ -283,40 +350,32 @@ def on_post_page(output: str, page, config) -> str:
     def _repl_api_a(m: re.Match) -> str:
         target = m.group("target").strip()
 
-        # ----------------------------
-        # Resolve URL
-        # ----------------------------
-        if target.startswith("loqs."):
-            # Internal targets: resolve via inventory (hard error if missing)
-            try:
-                rel = inv.resolve(target)
-            except KeyError as e:
-                raise RuntimeError(f"{src}: {e}") from None
+        # Resolve URL.
+        try:
+            rel = inv.resolve(target)
+        except KeyError:
+            rel = None
+
+        if rel is not None:
             url = ("/reference" + rel) if rel.startswith("/") else ("/reference/" + rel)
         else:
-            # External targets: known mapping or fallback
+            # External targets: use known mapping when available; otherwise keep
+            # the original api: href and mark it for styling.
             url = external_api_url(target)
-            if url is None:
-                q = target.replace('"', "").replace("'", "")
-                url = f"https://www.google.com/search?q={q}"
 
-        # ----------------------------
         # Normalize link body:
         # - fill if empty
         # - wrap plain text in <code>...</code>
         # - append () for methods/functions when known
-        # ----------------------------
         body = (m.group("body") or "").strip()
 
         if not body:
-            # Default display name from target
             body = target.split(".")[-1]
 
-        # Only wrap if it appears to be plain text (no nested tags)
+        # Only wrap if it appears to be plain text (no nested tags).
         if "<" not in body and ">" not in body:
             name = body
 
-            # Append () only when we can determine callable kind from the inventory
             try:
                 fqn = inv.resolve_fqn(target)
                 kind = (inv.kinds.get(fqn) or "").lower()
@@ -327,16 +386,28 @@ def on_post_page(output: str, page, config) -> str:
 
             body = f"<code>{name}</code>"
 
+        if url is None:
+            return (
+                f'<a{m.group("pre")} href="{target}" class="api-unresolved-external"{m.group("post")}>'
+                f"{body}</a>"
+            )
+
         return f'<a{m.group("pre")} href="{url}"{m.group("post")}>{body}</a>'
 
     output = API_A_TAG_RE.sub(_repl_api_a, output)
 
-    # 5) Rewrite Pandoc-style citations in docstring HTML into links to the global bibliography page.
-    #    Example: [@tomita_lowdistance_2014] -> [<a href="/reference/bib/#fn:tomita_lowdistance_2014">tomita_lowdistance_2014</a>]
+    # 5) Italicize inherited methods in the right-hand TOC.
+    inherited_anchors = set(INHERITED_MARK_RE.findall(output))
+    output = INHERITED_MARK_RE.sub("", output)
+    output = _italicize_inherited_in_right_toc(output, inherited_anchors)
+
+    # 6) Rewrite Pandoc-style citations in rendered docstring HTML into links
+    #    to the global bibliography page.
     def _repl_cite(m: re.Match) -> str:
         keys_raw = m.group("keys")
-        # split on ';' (pandoc allows [@a; @b]) and normalize
-        keys = []
+        keys: list[str] = []
+
+        # Pandoc allows [@a; @b]; split on ';' and normalize.
         for part in keys_raw.split(";"):
             part = part.strip()
             if part.startswith("@"):
@@ -353,21 +424,9 @@ def on_post_page(output: str, page, config) -> str:
             href = f"/reference/bib/#fn:{k}"
             links.append(f'<a class="citation" href="{href}">{k}</a>')
 
-        # keep bracketed formatting
+        # Keep bracketed formatting.
         return "[" + "; ".join(links) + "]"
 
     output = CITE_BRACKET_RE.sub(_repl_cite, output)
-
-    # 6) Italicize inherited functions in TOC for distinctiveness
-    inherited_anchors = set(INHERITED_MARK_RE.findall(output))
-    output = INHERITED_MARK_RE.sub("", output)
-    output = _italicize_inherited_in_right_toc(output, inherited_anchors)
-
-    if inherited_anchors:
-        payload = json.dumps(sorted(inherited_anchors))
-        output = output.replace(
-            "</body>",
-            f'<script id="api-inherited-anchors" type="application/json">{payload}</script>\n</body>',
-        )
 
     return output

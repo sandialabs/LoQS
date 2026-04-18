@@ -34,7 +34,7 @@ class BaseEncoder(ABC):
     ENCODE_ID: ClassVar[int] = 0
     """Internal counter to ensure unique encoding ids.
 
-    This is set back to 0 if ``reset_encode_id=True`` in
+    This is set back to 0 if `reset_encode_id=True` in
     :meth:`.Serializable.encode`. Internally, this is
     only happens in :meth:`.Serializable.dump`.
     Nothing bad happens if it is not reset, but the cache ids

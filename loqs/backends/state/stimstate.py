@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -67,7 +66,7 @@ class STIMQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "STIM Tableau"
 
-    SERIALIZE_ATTRS = ["qubit_labels", "seed", "_stim_state_vector"]
+    _SERIALIZE_ATTRS = ["qubit_labels", "seed", "_stim_state_vector"]
 
     _state: _TableauSimulator
     """Underlying state object."""
@@ -540,7 +539,7 @@ class STIMQuantumState(BaseQuantumState):
 
         return cbit
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         """Get an attribute for encoding/serialization purposes.
 
         This method retrieves specific attributes from the quantum state that are
@@ -574,10 +573,10 @@ class STIMQuantumState(BaseQuantumState):
             return self.state.state_vector(endian="little")
 
         # Otherwise fallback
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         """Create a quantum state from decoded attributes.
 
         This class method reconstructs a quantum state object from a dictionary

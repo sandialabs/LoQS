@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.Instruction` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -41,7 +40,7 @@ KwargDict: TypeAlias = dict[str, object]
 class ApplyCallable(Protocol[P]):
     """The protocol a user-defined apply function must follow.
 
-    Specifically, it must return a :class:`.Frame`.
+    Specifically, it must return a [](api:Frame).
     """
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Frame: ...  # noqa
@@ -50,7 +49,7 @@ class ApplyCallable(Protocol[P]):
 class MapQubitsCallable(Protocol[P]):
     """The protocol a user-defined map qubits function must follow.
 
-    Specifically, it must take a qubit_mapping ``dict[str,str]`` as the
+    Specifically, it must take a qubit_mapping `dict[str,str]` as the
     the first argument, and return the mapped :attr:`.KwargDict`.
     """
 
@@ -75,11 +74,11 @@ DEFAULT_PRIORITIES = ["label", "instruction", "program", "history[-1]"]
 class Instruction(Displayable):
     """An object that moves the state of the simulation forward.
 
-    This is the possibly the most important LoQS object.
+    This is the possibly the most important `LoQS` object.
     It was designed to be maximally flexible: it can take in any
     data it needs from the current state of the simulation,
     perform any transformation on that data, and output any
-    information to be used by a downstream :class:`.Instruction`.
+    information to be used by a downstream [](api:Instruction).
 
     NOTE: The :class:`Instruction` is flexible and powerful; however,
     with that flexibility comes complexity, and we are aware
@@ -88,22 +87,22 @@ class Instruction(Displayable):
     Tutorials > Building a Complex Instruction for more,
     or at :mod:`.builders` for concrete examples.
 
-    At its core, an :class:`.Instruction` is defined by five
+    At its core, an [](api:Instruction) is defined by five
     pieces of user-defined information:
 
     - An apply function that takes in simulation information and
-      outputs a new :class:`.Frame`
+      outputs a new [](api:Frame)
     - Data that is needed for the apply function but will
       not be provided by another source
     - A map qubits function that can change any
-      :class:`.Instruction` data that has qubit labels in it
+      [](api:Instruction) data that has qubit labels in it
       (needed to make the apply function qubit/patch agnostic)
     - A set of parameter priorities for apply function input
       collection
     - A set of parameter aliases between apply function kwargs
       and what to look for during input collection
 
-    The :class:`.Instruction` is then used in the following ways:
+    The [](api:Instruction) is then used in the following ways:
 
     - A :class:`QECCode` will define these with respect to a
       template set of qubits
@@ -113,16 +112,16 @@ class Instruction(Displayable):
     - The :class:`QuantumProgram` will use the data and parameter
       priorities/aliases to collect the right simulation information,
       and then call :meth:`.Instruction.apply` to generate the next
-      :class:`.Frame` (using the user-defined apply function)
+      [](api:Frame) (using the user-defined apply function)
 
     NOTE: The :class:`Instruction` is annoying to serialize because it
-    contains user-defined code. The way LoQS handles this is by
+    contains user-defined code. The way `LoQS` handles this is by
     storing the function definitions as strings for serialization,
     and re-executing them during deserialization. This has several
     important caveats:
 
     1. THIS HAS OBVIOUS SECURITY IMPLICATIONS. DO NOT DESERIALIZE
-       INSTRUMENT-CONTAINING LOQS OBJECTS THAT YOU DO NOT TRUST.
+       INSTRUMENT-CONTAINING `LoQS` OBJECTS THAT YOU DO NOT TRUST.
        The good news is that because the function is stored in plain text,
        you can verify whether it is doing anything malicious.
     2. The serialized versions are computed at construction time
@@ -148,9 +147,9 @@ class Instruction(Displayable):
        The latter is preferred, but both should work.
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "name",
         "type",
         "data",
@@ -210,7 +209,7 @@ class Instruction(Displayable):
             See :attr:`.apply_fn`
 
         data:
-            See :attr:`.data`. Defaults to ``None``, which uses an empty ``dict``.
+            See :attr:`.data`. Defaults to `None`, which uses an empty `dict`.
 
         map_qubits_fn:
             See :attr:`.map_qubits_fn`. Defaults to :meth:`.default_map_qubits`.
@@ -218,12 +217,12 @@ class Instruction(Displayable):
         param_priorities:
             A mapping of :attr:`.apply_fn` parameter names to lists of priorities
             to using during parameter collection with
-            :meth:`.QuantumProgram._collect_kwarg`. Defaults to ``None``,
+            :meth:`.QuantumProgram._collect_kwarg`. Defaults to `None`,
             which sets every parameter's priority to :attr:`.DEFAULT_PARAMETERS`.
             For an example, see :meth:`.builders.build_lookup_decoder_instruction`.
 
         param_error_behavior:
-            See :attr:`.param_error_behavior`. Defaults to ``"warn"``.
+            See :attr:`.param_error_behavior`. Defaults to `"warn"`.
 
         param_aliases:
             A mapping from `.apply_fn` parameter names to names to use during
@@ -231,12 +230,12 @@ class Instruction(Displayable):
             For an example, see :meth:`.builders.build_lookup_decoder_instruction`.
 
         serialized_apply_fn:
-            A serialized version of :attr:`.apply_fn`. Defaults to ``None``,
+            A serialized version of :attr:`.apply_fn`. Defaults to `None`,
             which sets this by calling :meth:`.serialize` on :attr:`.apply_fn`.
             Not intended to be set by the user, see caveats above.
 
         serialized_map_qubits_fn:
-            A serialized version of :attr:`.map_qubits_fn`. Defaults to ``None``,
+            A serialized version of :attr:`.map_qubits_fn`. Defaults to `None`,
             which sets this by calling :meth:`.serialize` on :attr:`.map_qubits_fn`.
             Not intended to be set by the user, see caveats above.
 
@@ -253,10 +252,10 @@ class Instruction(Displayable):
         # Let's serialize the functions now, when we know we have access to source code
         self._serialized_apply_fn = serialized_apply_fn
         if serialized_apply_fn is None:
-            self._serialized_apply_fn = Serializable.get_function_str(apply_fn)
+            self._serialized_apply_fn = Serializable._get_function_str(apply_fn)
         self._serialized_map_qubits_fn = serialized_map_qubits_fn
         if serialized_map_qubits_fn is None:
-            self._serialized_map_qubits_fn = Serializable.get_function_str(
+            self._serialized_map_qubits_fn = Serializable._get_function_str(
                 map_qubits_fn
             )
 
@@ -427,15 +426,15 @@ class Instruction(Displayable):
         return new_instruction
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "Instruction":
+    def _from_decoded_attrs(cls, attr_dict) -> "Instruction":
         """Create an Instruction from decoded attributes dictionary."""
         # Deserialize functions
         serialized_apply_fn = attr_dict["_serialized_apply_fn"]
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
-        apply_fn = Serializable.eval_function_str(
+        apply_fn = Serializable._eval_function_str(
             serialized_apply_fn, attr_dict["version"]
         )
-        map_qubits_fn = Serializable.eval_function_str(
+        map_qubits_fn = Serializable._eval_function_str(
             serialized_map_qubits_fn, attr_dict["version"]
         )
 

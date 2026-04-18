@@ -17,8 +17,6 @@ extra:
   main_site_url: /
 extra_css:
   - assets/stylesheets/api-extra.css
-extra_javascript:
-  - assets/javascripts/api-extra.js
 
 markdown_extensions:
   - footnotes

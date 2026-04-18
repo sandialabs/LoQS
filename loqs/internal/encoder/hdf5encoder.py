@@ -100,9 +100,9 @@ class HDF5Encoder(BaseEncoder):
         obj_group.attrs["class"] = to_encode.__class__.__name__
         obj_group.attrs["version"] = SERIALIZATION_VERSION
 
-        # Use SERIALIZE_ATTRS pattern for encoding
-        for serial_attr in to_encode.SERIALIZE_ATTRS:
-            attr_value = to_encode.get_encoding_attr(
+        # Use _SERIALIZE_ATTRS pattern for encoding
+        for serial_attr in to_encode._SERIALIZE_ATTRS:
+            attr_value = to_encode._get_encoding_attr(
                 serial_attr,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
@@ -166,7 +166,7 @@ class HDF5Encoder(BaseEncoder):
                 raise DecodableVersionError()
 
         # Get the class
-        cls = Serializable.import_class(
+        cls = Serializable._import_class(
             encoded.attrs["module"], encoded.attrs["class"], version
         )
 
@@ -199,8 +199,8 @@ class HDF5Encoder(BaseEncoder):
         if cls == Instruction:
             attr_dict["version"] = version
 
-        # Create the object using its from_decoded_attrs method
-        decoded = cls.from_decoded_attrs(attr_dict)
+        # Create the object using its _from_decoded_attrs method
+        decoded = cls._from_decoded_attrs(attr_dict)
 
         # Replace the placeholder with the actual object
         if (
@@ -921,7 +921,7 @@ class HDF5Encoder(BaseEncoder):
                 raise DecodableVersionError()
 
         # Get the class
-        return Serializable.import_class(
+        return Serializable._import_class(
             class_group.attrs["module"],
             class_group.attrs["class"],
             class_group.attrs["version"],
@@ -933,7 +933,7 @@ class HDF5Encoder(BaseEncoder):
         assert callable(to_encode)
         assert isinstance(h5_group, h5py.Group)
 
-        full_src = Serializable.get_function_str(to_encode)
+        full_src = Serializable._get_function_str(to_encode)
 
         function_group = h5_group.create_group("function")
         function_group.attrs["version"] = SERIALIZATION_VERSION
@@ -988,7 +988,7 @@ class HDF5Encoder(BaseEncoder):
                 source = str(source)
             assert isinstance(source, str)
 
-        return Serializable.eval_function_str(source, version)
+        return Serializable._eval_function_str(source, version)
 
     @staticmethod
     def encode_primitive(to_encode, h5_group=None):

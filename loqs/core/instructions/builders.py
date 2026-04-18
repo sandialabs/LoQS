@@ -98,12 +98,12 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - ``patch_label``, usually from the [patch_label](api:InstructionLabel.patch_label)
+    - `patch_label`, usually from the [patch_label](api:InstructionLabel.patch_label)
     - `stack`, usually from the QuantumProgram
     - `instructions`, usually from the [data](api:Instruction.data)
 
-    It returns a [Frame](api:Frame) where ``instructions`` have been inserted
-    onto the front of InstructionStack stored at ``"stack"``.
+    It returns a [Frame](api:Frame) where `instructions` have been inserted
+    onto the front of InstructionStack stored at `"stack"`.
 
     There is a map qubits function, which calls the map qubits
     functions for the underlying `instructions`.
@@ -476,9 +476,9 @@ def build_object_builder_instruction(
     obj_class: type,
     name: str = "(Unnamed object builder)",
 ) -> Instruction:
-    """Build an instruction that can initialize LoQS objects.
+    """Build an instruction that can initialize `LoQS` objects.
 
-    This is a sort of meta-instruction that can build LoQS
+ `LoQS`    This is a sort of meta-instruction that can build LoQS
     objects and then store them into a `Frame`. This is currently
     used primarily to initialize the `BaseQuantumState` if no
     `initial_history` is provided to a `QuantumProgram`.
@@ -504,7 +504,7 @@ def build_object_builder_instruction(
         The key used to store the resulting object in the `Frame`
 
     obj_class:
-        The LoQS object to construct
+        The `LoQS` object to construct
 
     name:
         Name for logging purposes

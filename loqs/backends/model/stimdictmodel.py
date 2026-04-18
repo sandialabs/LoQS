@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMDictNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -38,9 +37,9 @@ class STIMDictNoiseModel(DictNoiseModel):
     """Model backend for handling generic operation dicts for STIM.
 
     This functionality should ideally by pulled into
-    :class:`.DictNoiseModel`, but to make quick progress,
+    [](api:DictNoiseModel), but to make quick progress,
     we are making a derived class that can handle a
-    :class:`.StimPhysicalCircuit` more naturally.
+    [](api:STIMPhysicalCircuit) more naturally.
     """
 
     name: ClassVar[str] = "STIM gate dict"
@@ -69,16 +68,16 @@ class STIMDictNoiseModel(DictNoiseModel):
 
         instrep_cast_include_outcomes:
             If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to :class:`.RepTuples`, this will be used as
+            are being cast up to [](api:RepTuples), this will be used as
             the first argument of the rep, indicating which state to reset
-            to (``0`` or ``1``) or whether to not reset (``None``, default).
+            to (`0` or `1`) or whether to not reset (`None`, default).
 
         instrep_cast_include_outcomes:
             If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
             :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to :class:`.RepTuples`, this will be used as
+            being cast up to [](api:RepTuples), this will be used as
             the second argument of the rep, indicating whether outcomes
-            should be kept (``True``, default) or not (``False``).
+            should be kept (`True`, default) or not (`False`).
         """
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
         # function. The next two variables are like gate_dict and inst_dict,

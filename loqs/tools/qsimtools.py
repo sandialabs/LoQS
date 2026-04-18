@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""A collection of tools useful for :class:`.QSimQuantumState` objects.
+"""A collection of tools useful for [](api:QSimQuantumState) objects.
 
 Primarily verbose printing for debugging currently.
 """
