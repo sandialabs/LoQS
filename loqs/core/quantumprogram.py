@@ -581,7 +581,7 @@ class QuantumProgram(Displayable):
     # Static for more efficient parallel data movement
     @staticmethod
     def _run_shot(
-        program,
+        program : QuantumProgram,
         max_frame_limit: int = 100,
         seed: int | None = None,
         shot_index: int | None = None,

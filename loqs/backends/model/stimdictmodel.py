@@ -34,6 +34,26 @@ from loqs.backends.reps import (
 T = TypeVar("T", bound="DictNoiseModel")
 
 
+def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
+    aliases = STIMPhysicalCircuit.stim_command_aliases
+
+    need_aliasing = []
+    for k in d:
+        if isinstance(k, str) and k in aliases:
+            need_aliasing.append(k)
+        if isinstance(k, tuple) and k[0] in aliases:
+            need_aliasing.append(k)
+
+    for k in need_aliasing:
+        if isinstance(k, str):
+            aliased_k = aliases[k]
+        elif isinstance(k, tuple):
+            aliased_k = (aliases[k[0]],) + k[1:]
+        d[aliased_k] = d[k]
+
+    return
+
+
 class STIMDictNoiseModel(DictNoiseModel):
     """Model backend for handling generic operation dicts for STIM.
 
@@ -140,12 +160,16 @@ class STIMDictNoiseModel(DictNoiseModel):
                 return (k[0].upper(), k[1]), k[1]
 
         # Run through gates and upgrade everything to RepTuples
-        for k, gr in gate_dict.items():
+        gate_dict_unfiltered = gate_dict.copy()
+        gate_dict.clear()
+        for k, gr in gate_dict_unfiltered.items():
             k, qubits = promoted_key_and_qubits(k)
             gate_dict[k] = convert_to_gatereptuple(gr, qubits)
 
         # Run through instrument dict and upgrade everything to RepTuples
-        for k, ir in inst_dict.items():
+        inst_dict_unfiltered = inst_dict.copy()
+        inst_dict.clear()
+        for k, ir in inst_dict_unfiltered.items():
             k, qubits = promoted_key_and_qubits(k)
 
             if not isinstance(ir, RepTuple) and isinstance(ir, str):
@@ -180,12 +204,14 @@ class STIMDictNoiseModel(DictNoiseModel):
                 assert (
                     ir.reptype in instreps
                 ), f"Provided {ir} but reptype not in instreps"
+                inst_dict[k] = ir
 
         self.gate_dict: dict[MemberLabel, RepTuple] = gate_dict  # type: ignore
         self.inst_dict: dict[MemberLabel, RepTuple] = inst_dict  # type: ignore
+        add_command_aliases(self.gate_dict)
         return
 
-    def get_reps(  # noqa: C901
+    def get_reps(
         self,
         circuit: BasePhysicalCircuit,
         gatereps: Sequence[GateRep],
@@ -203,6 +229,7 @@ class STIMDictNoiseModel(DictNoiseModel):
             if len(entries) == 0:
                 # Empty line, but pass it on as a comment so full circuit has same formatting
                 reps.append(RepTuple(line, tuple(), GateRep.STIM_CIRCUIT_STR))
+                continue
 
             # Some commands can have parameters
             # Strip those so we can check base command name

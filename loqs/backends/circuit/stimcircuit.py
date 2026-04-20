@@ -16,6 +16,7 @@ from collections.abc import Sequence, Mapping
 import textwrap
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 import warnings
+import re
 
 from loqs.backends import BasePhysicalCircuit, is_backend_available
 
@@ -34,9 +35,187 @@ else:
 QubitTypes: TypeAlias = str | int
 """Qubit types for builtins"""
 
-STIMCircuitCastableTypes: TypeAlias = BasePhysicalCircuit | str
-"""Types we can cast to a STIM circuit.
+STIMCircuitCastableTypes: TypeAlias = BasePhysicalCircuit | str | _Circuit
+"""Types we can cast to a STIM circuit."""
+
+r"""
+STIM circuit grammar
+--------------------
+<CIRCUIT> ::= <LINE>*
+<LINE> ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\n'
+<BLOCK_START> ::= <INSTRUCTION> /[ \t]*/ '{'
+<BLOCK_END> ::= '}' 
+<INSTRUCTION> ::= <NAME> <TAG>? <PARENS_ARGUMENTS>? <TARGETS>
+<NAME> ::= /[a-zA-Z][a-zA-Z0-9_]*/ 
+<TAG> ::= '[' /[^\r\]\n]/* ']'
+<PARENS_ARGUMENTS> ::= '(' <ARGUMENTS> ')' 
+<ARGUMENTS> ::= /[ \t]*/ <ARG> /[ \t]*/ (',' <ARGUMENTS>)?
+<ARG> ::= <double> 
+<TARGETS> ::= /[ \t]+/ <TARG> <TARGETS>?
+<TARG> ::= <QUBIT_TARGET> | <MEASUREMENT_RECORD_TARGET> | <SWEEP_BIT_TARGET> | <PAULI_TARGET> | <COMBINER_TARGET> 
+<QUBIT_TARGET> ::= '!'? <uint>
+<MEASUREMENT_RECORD_TARGET> ::= "rec[-" <uint> "]"
+<SWEEP_BIT_TARGET> ::= "sweep[" <uint> "]"
+<PAULI_TARGET> ::= '!'? /[XYZ]/ <uint>
+<COMBINER_TARGET> ::= '*'
+<INDENT> ::= /[ \t]*/
+<COMMENT> ::= '#' /[^\n]*/
 """
+
+
+def _get_used_stim_indices(circuit: _Circuit) -> list[int]:
+    """Return sorted list of qubit indices that appear as qubit targets."""
+    used_indices = set()
+    for instruction in circuit:
+        # Skip REPEAT blocks as they don't have qubit targets
+        if instruction.name == "REPEAT":
+            continue
+        for target in instruction.targets_copy():
+            if target.is_qubit_target:
+                used_indices.add(target.value)
+    return sorted(used_indices)
+
+
+def _reindex_stim_circuit(circuit: _Circuit, index_map: dict[int, int]) -> _Circuit:
+    """Return a new STIM circuit with qubit targets remapped according to index_map."""
+    # Build the circuit string and parse it - this is more reliable than trying to
+    # reconstruct instructions manually with the STIM API
+    circuit_lines = []
+    
+    for instruction in circuit:
+        if instruction.name == "" or instruction.name.startswith("#"):
+            # Skip comments and annotations for now
+            continue
+            
+        # Start with instruction name
+        line_parts = [instruction.name]
+        
+        # Add gate arguments if any
+        gate_args = instruction.gate_args_copy()
+        if gate_args:
+            line_parts.extend(str(arg) for arg in gate_args)
+        
+        # Process targets
+        for target in instruction.targets_copy():
+            if target.is_qubit_target:
+                # Remap qubit target
+                new_idx = index_map[target.value]
+                if target.is_inverted_result_target:
+                    line_parts.append(f"!{new_idx}")
+                else:
+                    line_parts.append(str(new_idx))
+            else:
+                # Pass through non-qubit targets unchanged
+                if target.is_inverted_result_target:
+                    line_parts.append(f"!{target.value}")
+                elif target.is_measurement_record_target:
+                    line_parts.append(f"rec[{target.value}]")
+                elif target.is_combiner_target:
+                    line_parts.append("*")
+                elif target.is_relative_target:
+                    line_parts.append(f"+{target.value}")
+                else:
+                    # Fallback: use the string representation
+                    line_parts.append(str(target.value))
+        
+        circuit_lines.append(" ".join(line_parts))
+    
+    # Create new circuit from the rebuilt string
+    return _Circuit("\n".join(circuit_lines))
+
+
+def _separate_stimcircuit_instruction(ell: str) -> tuple[str, str]:
+    """
+    Assume ell is a <LINE> in the following sense.
+    
+        <LINE> ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\n'
+            <INDENT>      ::=  /[ \t]*/
+            <COMMENT>     ::=  '#' /[^\n]*/
+            <BLOCK_START> ::=  <INSTRUCTION> /[ \t]*/ '{'
+            <BLOCK_END>   ::=  '}' 
+
+    Return a pair of strings (p1, p2), where p1 = ((<INSTRUCTION> + ' ' ) | '') and 
+    ell.replace('\t','    ').lstrip(' ') == p1 + p2, up to whitepsace dfferences.
+    """
+    ell = ell.replace('\t', '    ')
+    ell = ell.lstrip(' ')
+
+    if len(ell) == 0:
+        return '', ''
+    
+    if '#' in ell:
+        # No syntax constraints after the first '#'. The presence or absence
+        # of <INSTRUCTION> is determined by the substring preceding '#'.
+        ells = ell.split('#', maxsplit=1)
+        p1, p2 = _separate_stimcircuit_instruction(ells[0])
+        p2 = p2 + '#' + ells[1]
+        return p1, p2
+    
+    # No comments past this point.
+    if '}' in ell:
+        # We match <BLOCK_END>; such lines cannot contain instructions.
+        return '', ell
+    elif '{' in ell:
+        # We match <BLOCK_START> ::= <INSTRUCTION> /[ \t]*/ '{'
+        ells = ell.split('{', maxsplit=1)
+        len_before = len(ells[0])
+        p1 = ells[0].rstrip(' ')
+        len_after  = len(p1)
+        whitespace = ' ' * (len_before - len_after)
+        p2 = whitespace + '{' + ells[1]
+        return p1, p2
+    else:
+        # We match <INSTRUCTION> directly
+        return ell, ''
+
+
+def _replace_instruction_targets(inst: str, targets_map: dict[str, str]) -> str:
+    parts = inst.split(')', maxsplit=1)
+    if len(parts) == 2:
+        pre, post = parts
+        post = _replace_instruction_targets(post, targets_map)
+        return pre + ')' + post
+    
+    parts = inst.split(']', maxsplit=1)
+    if len(parts) == 2:
+        pre, post = parts
+        post = _replace_instruction_targets(post, targets_map)
+        return pre + ']' + post
+    
+    parts = inst.split(' ')
+    for i in range(1, len(parts)):
+        pi = parts[i]
+        prefix = '' if (not pi.startswith('!')) else '!'
+        pi = pi.lstrip('!')
+        if pi in targets_map:
+            pi = str(targets_map[pi])
+        pi = prefix + pi
+        parts[i] = pi
+    inst = ' '.join(parts)
+    return inst
+
+
+def _as_stim_circuit(circuit: str, qubit_labels) -> _Circuit:
+    lines = []
+    label_map = {str(lbl): str(i) for i,lbl in enumerate(qubit_labels)}
+    for line in circuit.split('\n'):
+        p1, p2 = _separate_stimcircuit_instruction(line)
+        if len(p1) == 0:
+            lines.append(line)
+        else:
+            p1_mapped = _replace_instruction_targets(p1, label_map)
+            line_mapped = p1_mapped + p2
+            lines.append(line_mapped)
+    circuit_str = '\n'.join(lines)
+    c = _Circuit(circuit_str)
+    return c
+
+
+def _check_label_count(actual, claimed):
+    if len(actual) != len(claimed):
+        msg  = f"Circuit uses {len(actual)} unique qubit labels "
+        msg += f"but only {len(claimed)} labels provided"
+        raise ValueError(msg)
 
 
 class STIMPhysicalCircuit(BasePhysicalCircuit):
@@ -47,7 +226,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """
 
     _qubit_labels: list[QubitTypes]
-    """List of qubit labels"""
+    """list of qubit labels"""
 
     _stim_annotations: ClassVar[list[str]] = [
         "REPEAT",
@@ -178,6 +357,10 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     as possible keys into a :class:`.STIMDictNoiseModel`.
     """
 
+    stim_command_aliases : ClassVar[dict[str,str]] = {
+        'CNOT': 'CX'
+    }
+
     def __init__(
         self,
         circuit: STIMCircuitCastableTypes,
@@ -185,31 +368,41 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         suppress_tick_warning: bool = False,
     ) -> None:
         if not is_backend_available("stim_circuit"):
-            raise ImportError(
-                "STIM backend is not available. "
-                "Please install stim: pip install loqs[stim]"
-            )
+            msg  = "STIM backend is not available.\n"
+            msg += "Please install stim: pip install loqs[stim]"
+            raise ImportError(msg)
+        
+        if not isinstance(circuit, (STIMPhysicalCircuit, str, _Circuit)):
+            raise ValueError()
+
+        if qubit_labels is None:
+            if isinstance(circuit, STIMPhysicalCircuit):
+                qubit_labels = circuit.qubit_labels
+            elif isinstance(circuit, _Circuit):
+                qubit_labels = _get_used_stim_indices(circuit)
+            else:  # we're a plain str
+                qubit_labels = _get_used_stim_indices(_Circuit(circuit))
+
         if isinstance(circuit, STIMPhysicalCircuit):
+            _check_label_count(circuit.qubit_labels, qubit_labels)
             self._circuit = circuit.circuit.copy()
-            self._qubit_labels = circuit.qubit_labels
-        elif isinstance(circuit, str):
-            self._circuit = _Circuit(circuit)
-            self._qubit_labels = list(range(self.circuit.num_qubits))
+            self._qubit_labels = list(qubit_labels)
+            
         elif isinstance(circuit, _Circuit):
-            self._circuit = circuit
-            self._qubit_labels = list(range(self.circuit.num_qubits))
-        elif isinstance(circuit, BasePhysicalCircuit):
-            raise NotImplementedError(
-                "Have not implemented this conversion yet"
-            )
-        else:
-            raise ValueError("Expected BasePhysicalCircuit or list of layers")
+            used_indices = _get_used_stim_indices(circuit)
+            _check_label_count(used_indices, qubit_labels)
+            index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(used_indices)}
+            self._circuit = _reindex_stim_circuit(circuit, index_map)
+            self._qubit_labels = list(qubit_labels)
+
+        else: # we're a plain str
+            self._circuit = _as_stim_circuit(circuit, qubit_labels)
+            self._qubit_labels = list(qubit_labels)
 
         unsupported = ("MPP", "SPP", "SPP_DAG")
         if any([u in str(self.circuit) for u in unsupported]):
-            raise ValueError(
-                f"STIM circuit contains a LoQS-unsupported instruction {unsupported}"
-            )
+            msg = f"STIM circuit contains a LoQS-unsupported instruction {unsupported}"
+            raise ValueError(msg)
 
         if not suppress_tick_warning and "TICK" not in str(self.circuit):
             warnings.warn(
@@ -217,11 +410,12 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             )
 
         super().__init__(circuit, qubit_labels)
+        return
 
     name: ClassVar[str] = "STIM"
 
     def __str__(self) -> str:
-        s = f"Physical {self.name} circuit ({self.qubit_labels}):\n"
+        s = f"Physical {self.name} circuit ({self._qubit_labels}):\n"
         s += textwrap.indent(str(self.circuit), "  ")
         return s
 
@@ -235,17 +429,20 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def qubit_labels(self) -> list[QubitTypes]:
-        assert len(self._qubit_labels) >= self.circuit.num_qubits
+        assert len(self._qubit_labels) == self.circuit.num_qubits
+        # ^ After our fix, we maintain the invariant that the STIM circuit
+        #   uses exactly len(self._qubit_labels) qubits with compact indices.
         return self._qubit_labels
 
     def copy(self) -> STIMPhysicalCircuit:
-        return STIMPhysicalCircuit(str(self._circuit), self.qubit_labels)
+        return STIMPhysicalCircuit(str(self._circuit), self._qubit_labels)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
     ) -> None:
+        # Convert qubit labels to STIM indices
         qubit_idxs_to_delete = [
-            str(self.qubit_labels.index(q)) for q in qubits_to_delete
+            self._qubit_labels.index(q) for q in qubits_to_delete
         ]
 
         new_lines = []
@@ -254,19 +451,32 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             if len(entries) == 0 or entries[0] not in self._stim_gates:
                 # Empty line or not a gate, don't do qubit idx check
                 pass
-            elif any([qidx in qubit_idxs_to_delete for qidx in entries[1:]]):
+            elif any([str(qidx) in entries[1:] for qidx in qubit_idxs_to_delete]):
                 # This has one of our qubits to delete, don't add it!
                 continue
 
             # Otherwise, this line can be safely added
             new_lines.append(line)
 
-        self._circuit = _Circuit("\n".join(new_lines))
-
+        # Create temporary circuit from filtered lines
+        temp_circuit = _Circuit("\n".join(new_lines))
+        
+        # Update qubit labels by removing deleted ones
         qubits_to_keep = []
         for q in self._qubit_labels:
             if q not in qubits_to_delete:
                 qubits_to_keep.append(q)
+        
+        # Build index map for reindexing: old_stim_idx -> new_stim_idx
+        index_map = {}
+        new_idx = 0
+        for old_idx in range(len(self._qubit_labels)):
+            if old_idx not in qubit_idxs_to_delete:
+                index_map[old_idx] = new_idx
+                new_idx += 1
+        
+        # Reindex the circuit to maintain compact indices
+        self._circuit = _reindex_stim_circuit(temp_circuit, index_map)
         self._qubit_labels = qubits_to_keep
 
     def get_possible_discrete_error_locations(
@@ -281,21 +491,22 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     # Empty line or not a gate, skip to next line
                     continue
 
-                # Normally we would look up the qubit index,
-                # but for stim, the circuit uses indices already
+                # Convert STIM indices to LoQS labels
                 if post_twoq_gates:
                     if entries[0] in self._stim_twoq_gates:
                         # Handle the case where multiple 2Q gates are defined on one line
                         for i in range(1, len(entries[1:]), 2):
+                            stim_idx1 = int(entries[i])
+                            stim_idx2 = int(entries[i + 1])
                             circuit_locations.append(
                                 (
                                     lidx + 1,
-                                    (int(entries[i]), int(entries[i + 1])),
+                                    (self._qubit_labels[stim_idx1], self._qubit_labels[stim_idx2]),
                                 )
                             )
                 else:
                     circuit_locations.extend(
-                        [(lidx, int(q)) for q in entries[1:]]
+                        [(lidx, self._qubit_labels[int(q)]) for q in entries[1:]]
                     )
         return circuit_locations
 
@@ -330,13 +541,13 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     ) -> None:
         # Pass through any unspecified qubits
         complete_mapping = {
-            q: qubit_mapping.get(q, q) for q in self.qubit_labels
+            q: qubit_mapping.get(q, q) for q in self._qubit_labels
         }
 
         # For STIM, we don't need to adjust internal circuit at all,
         # since it only store qubit indices. Just update the labels!
 
-        self._qubit_labels = [complete_mapping[q] for q in self.qubit_labels]
+        self._qubit_labels = [complete_mapping[q] for q in self._qubit_labels]
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         """Merge another circuit to this circuit.
@@ -358,8 +569,30 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         """
         other_circuit = STIMPhysicalCircuit.cast(circuit)
 
-        layers = self._unroll_repeats().split("TICK\n")
-        other_layers = other_circuit._unroll_repeats().split("TICK\n")
+        # Build index map for the other circuit
+        index_map = {}
+        new_qubit_labels = list(self._qubit_labels)
+        
+        # Map shared qubit labels to their existing STIM indices
+        for stim_idx, label in enumerate(self._qubit_labels):
+            if label in other_circuit.qubit_labels:
+                other_stim_idx = other_circuit.qubit_labels.index(label)
+                index_map[other_stim_idx] = stim_idx
+        
+        # Add new qubit labels and map them to new STIM indices
+        for other_stim_idx, other_label in enumerate(other_circuit.qubit_labels):
+            if other_label not in self._qubit_labels:
+                new_stim_idx = len(new_qubit_labels)
+                index_map[other_stim_idx] = new_stim_idx
+                new_qubit_labels.append(other_label)
+        
+        # Reindex the other circuit to use our STIM indices
+        reindexed_other_circuit = _reindex_stim_circuit(
+            other_circuit.circuit.copy(), index_map
+        )
+
+        layers = self._unroll_repeats().split("\nTICK\n")
+        other_layers = str(reindexed_other_circuit).split("\nTICK\n")
 
         # Ensure circuit is long enough for merge
         end = idx + other_circuit.depth
@@ -368,14 +601,31 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         # Perform merge
         for lidx in range(idx, end):
-            layers[lidx] += other_layers[lidx - idx]
+            
+            incoming = other_layers[lidx - idx]
+            current  = layers[lidx]
+            
+            targets_incoming = re.findall( r'\d+', incoming )
+            targets_current  = re.findall( r'\d+', current  )
 
-        self._circuit = _Circuit("TICK\n".join(layers))
+            collision = set(targets_current).intersection(targets_incoming)
+            
+            if collision := set(targets_current).intersection(targets_incoming):
+                msg  = f"Cannot merge\n{self}\nwith\n{circuit}.\n"
+                msg += f"Layer {lidx} of the candidate merge has ill-posed behavior\n"
+                msg += f"for target qubit(s) {collision}."
+                raise ValueError(msg)
 
-        # Also add any new qubit labels
-        for other_qubit in other_circuit.qubit_labels:
-            if other_qubit not in self.qubit_labels:
-                self._qubit_labels.append(other_qubit)
+            layers[lidx] = current + '\n' + incoming
+
+        # Check for multiple constructions applied to the same qubit.
+
+        arg = "\nTICK\n".join(layers)
+        self._circuit = _Circuit(arg)
+
+        # Update qubit labels
+        self._qubit_labels = new_qubit_labels
+        return
 
     def pad_single_qubit_idles_by_duration_inplace(
         self,
@@ -406,7 +656,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     layer_duration = max(layer_duration, duration)
 
                 for qubit in entries[1:]:
-                    seen_qubits.add(self.qubit_labels[int(qubit)])
+                    seen_qubits.add(self._qubit_labels[int(qubit)])
 
             # Get idling operation (or skip for empty layers with no idles)
             if layer_duration is None:
@@ -422,7 +672,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             # Insert idling operations
             missing_qubits = set(self._qubit_labels) - seen_qubits
             for mq in missing_qubits:
-                idx = self.qubit_labels.index(mq)
+                idx = self._qubit_labels.index(mq)
                 new_circ_str += f"\n{layer_idle} {idx}"
 
             # Finish layer
@@ -467,14 +717,14 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         def find_first_repeat_start(lines):
             for i, line in enumerate(lines):
                 entries = line.split()
-                if entries[0] == "REPEAT":
+                if entries and entries[0] == "REPEAT":
                     return i
             return None
 
         def find_last_repeat_end(lines):
             for i, line in enumerate(lines[::-1]):
                 entries = line.split()
-                if entries[0] == "}":
+                if entries and entries[0] == "}":
                     return len(lines) - i - 1
             return None
 
@@ -499,3 +749,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             start = find_first_repeat_start(unrolled_lines)
 
         return "\n".join(unrolled_lines)
+
+    @staticmethod
+    def substitute_command_aliases(s: str) -> str:
+        for k, v in STIMPhysicalCircuit.stim_command_aliases.items():
+            s = s.replace(k, v)
+        return s
