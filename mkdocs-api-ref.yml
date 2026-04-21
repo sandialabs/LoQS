@@ -17,6 +17,8 @@ extra:
   main_site_url: /
 extra_css:
   - assets/stylesheets/api-extra.css
+extra_javascript:
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 markdown_extensions:
   - footnotes
@@ -27,6 +29,8 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.superfences
   - pymdownx.highlight
+  - pymdownx.arithmatex:
+      generic: true
 
 plugins:
   - search

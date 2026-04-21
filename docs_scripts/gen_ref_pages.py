@@ -1,53 +1,3 @@
-# docs_scripts/gen_ref_pages.py
-"""
-Generate the LoQS API reference pages and an API symbol inventory for link resolution.
-
-This script is executed by the MkDocs API-reference build via the ``mkdocs-gen-files``
-plugin. It walks the ``loqs`` package source tree and writes a documentation page for
-each module and each public class into the virtual MkDocs file system. It also writes
-a ``SUMMARY.md`` file consumed by ``mkdocs-literate-nav`` to populate the left
-navigation.
-
-High-level behavior
--------------------
-- Discover public API surface:
-
-  - Parse each ``.py`` file with ``ast`` to identify public classes, functions, and
-    module-level variables/type aliases/type variables.
-  - For each public class, use runtime introspection to enumerate methods and to
-    determine the defining class for documentation ownership (e.g., prefer base-class
-    docstrings when the derived override is undocumented).
-  - Collect class-body “member variables” across the class MRO and merge type/value/doc
-    information so inherited rows are populated as fully as possible.
-
-- Emit reference pages:
-
-  - For modules: write a module index page containing a “Members” table (variables) and
-    a “Functions” section rendered via mkdocstrings.
-  - For classes: write a class page containing the class docstring, a “Members” table
-    (class variables and properties treated as member variables), and grouped method
-    sections (static/class/instance). Each method is rendered with mkdocstrings using
-    per-block options (e.g., ``heading_level``) to control heading hierarchy. Methods
-    inherited from external bases may be represented by lightweight stubs that link to
-    the owning base class (internal) or upstream documentation (external).
-
-- Build an API inventory for ``api:`` links:
-
-  - Create a mapping from fully-qualified API identifiers (e.g.,
-    ``loqs.pkg.mod.Class.method``) to the generated page URL + anchor.
-  - Build a suffix index to support progressively-qualified ``api:`` targets in
-    documentation (e.g., resolving ``api:Class.method`` when unambiguous).
-  - Write the inventory both into the build output and to ``docs/_api_inventory.json``
-    on disk so MkDocs hooks can resolve and rewrite ``api:`` links during the same
-    build.
-
-Notes
------
-This generator intentionally separates *discovery* (AST/introspection) from *rendering*
-(mkdocstrings directives) so that navigation, anchors, and cross-reference resolution
-remain stable and predictable across the documentation set.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -55,6 +5,7 @@ import importlib
 import inspect
 import json
 import re
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +22,7 @@ INVENTORY_PATH = "api_inventory.json"  # generated into API site output root
 def _is_public_method(name: str) -> bool:
     return not name.startswith("_") and not name.startswith("__")
 
+
 def _is_documented_class_method(name: str) -> bool:
     """
     Methods documented on class pages.
@@ -79,6 +31,7 @@ def _is_documented_class_method(name: str) -> bool:
     constructors appear in the generated API like AutoAPI-style class docs.
     """
     return name == "__init__" or _is_public_method(name)
+
 
 def _is_public_var(name: str) -> bool:
     return not name.startswith("_") and not name.startswith("__")
@@ -134,36 +87,47 @@ def _qualname_to_ident(obj: Any) -> str:
     return f"{obj.__module__}.{obj.__qualname__}"
 
 
-def _has_doc(obj: Any) -> bool:
-    return bool(inspect.getdoc(obj))
+def _has_own_doc(obj: Any) -> bool:
+    """
+    Return whether an object defines its own docstring directly, without
+    inheriting one through ``inspect.getdoc`` MRO fallback.
+    """
+    return bool((getattr(obj, "__doc__", None) or "").strip())
 
 
 def _method_owner_for_docs(cls: type, name: str) -> type:
     if name not in getattr(cls, "__dict__", {}):
         return cls
+
     obj = cls.__dict__.get(name)
     if obj is None:
         return cls
 
-    # For properties, check fget docstring (and fset/fdel if desired later)
+    # For locally overridden members, only treat an object as documented if it
+    # defines its own docstring directly. Using inspect.getdoc() here would
+    # incorrectly inherit base-class docstrings for undocumented overrides.
     if isinstance(obj, property):
-        if obj.fget is not None and _has_doc(obj.fget):
+        if obj.fget is not None and _has_own_doc(obj.fget):
             return cls
     else:
-        if _has_doc(obj):
+        if _has_own_doc(obj):
             return cls
 
     for base in cls.__mro__[1:]:
-        if name in getattr(base, "__dict__", {}):
-            base_obj = base.__dict__.get(name)
-            if base_obj is None:
-                continue
-            if isinstance(base_obj, property):
-                if base_obj.fget is not None and _has_doc(base_obj.fget):
-                    return base
-            else:
-                if _has_doc(base_obj):
-                    return base
+        if name not in getattr(base, "__dict__", {}):
+            continue
+
+        base_obj = base.__dict__.get(name)
+        if base_obj is None:
+            continue
+
+        if isinstance(base_obj, property):
+            if base_obj.fget is not None and inspect.getdoc(base_obj.fget):
+                return base
+        else:
+            if inspect.getdoc(base_obj):
+                return base
+
     return cls
 
 
@@ -179,7 +143,6 @@ def _collect_import_aliases(tree: ast.AST) -> dict[str, str]:
         if isinstance(node, ast.Import):
             for a in node.names:
                 if a.asname:
-                    # import pkg.mod as alias  -> alias: pkg.mod
                     out[a.asname] = a.name
         elif isinstance(node, ast.ImportFrom):
             if not node.module:
@@ -187,32 +150,110 @@ def _collect_import_aliases(tree: ast.AST) -> dict[str, str]:
             mod = node.module
             for a in node.names:
                 if a.asname:
-                    # from pkg.mod import Name as alias -> alias: pkg.mod.Name
                     out[a.asname] = f"{mod}.{a.name}"
                 else:
-                    # from pkg.mod import Name -> Name: pkg.mod.Name
-                    # (this helps Example 2)
                     out[a.name] = f"{mod}.{a.name}"
     return out
 
 
 def _expand_type_aliases(type_s: str, aliases: dict[str, str]) -> str:
     """
-    Expand imported names/aliases inside an annotation string.
+    Expand imported names/aliases inside an annotation string, then normalize
+    verbose module prefixes for display.
 
-    Replaces whole identifier tokens only, and prefers longer keys first.
+    Replaces whole identifier tokens only, prefers longer keys first, and
+    strips common prefixes like ``typing.`` and ``collections.abc.``.
     """
     s = (type_s or "").strip()
-    if not s or not aliases:
+    if not s:
         return s
 
-    # Only attempt replacement on identifier-like tokens
-    keys = sorted(aliases.keys(), key=len, reverse=True)
-    for k in keys:
-        v = aliases[k]
-        # whole-token replace
-        s = re.sub(rf"\b{re.escape(k)}\b", v, s)
+    if aliases:
+        keys = sorted(aliases.keys(), key=len, reverse=True)
+        for k in keys:
+            v = aliases[k]
+            s = re.sub(rf"\b{re.escape(k)}\b", v, s)
+
+    s = re.sub(r"\btyping\.", "", s)
+    s = re.sub(r"\bcollections\.abc\.", "", s)
     return s
+
+
+def _type_to_md(
+    type_s: str,
+    link_names: set[str] | None = None,
+) -> str:
+    """
+    Render a type/value string for Markdown tables.
+
+    Imported identifiers are first expanded via the local alias map. Fully-qualified
+    ``loqs.`` identifiers are replaced with short ``api:`` links whose target and
+    display text are both just the final symbol name. Additionally, short local names
+    listed in ``link_names`` are linked directly, which is useful for module-level
+    type aliases and variables that already have anchors on the current page.
+
+    Non-linked fragments are wrapped in backticks so mixed types like
+    ``list[loqs.foo.Bar]`` render as code plus links.
+    """
+    s = (type_s or "").strip()
+    if not s:
+        return ""
+    
+    # Short circuit for TypeVar, we want to link bound class
+    m_typevar = re.match(
+        r"^(?P<prefix>TypeVar\('(?P<name>[^']+)'\s*,\s*bound=')(?P<bound>[A-Za-z_][A-Za-z0-9_\.]*)(?P<suffix>'\))$",
+        s,
+    )
+    if m_typevar:
+        bound = m_typevar.group("bound")
+        if bound.startswith("loqs."):
+            target = bound.split(".")[-1]
+            label = target
+        else:
+            target = bound
+            label = bound
+        return (
+            f"<code>{m_typevar.group('prefix')}</code>"
+            f'<a href="api:{target}"><code>{label}</code></a>'
+            f"<code>{m_typevar.group('suffix')}</code>"
+        )
+
+    names = sorted(link_names or set(), key=len, reverse=True)
+    if names:
+        token_re = re.compile(
+            r"\bloqs(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|"
+            + "|".join(rf"\b{re.escape(n)}\b" for n in names)
+        )
+    else:
+        token_re = re.compile(r"\bloqs(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b")
+
+    parts: list[str] = []
+    last = 0
+
+    for m in token_re.finditer(s):
+        prefix = s[last:m.start()]
+        if prefix:
+            parts.append(f"<code>{prefix}</code>")
+
+        token = m.group(0)
+        if token.startswith("loqs."):
+            target = token.split(".")[-1]
+            label = target
+        else:
+            target = token
+            label = token
+
+        parts.append(f'<a href="api:{target}"><code>{label}</code></a>')
+        last = m.end()
+
+    suffix = s[last:]
+    if suffix:
+        parts.append(f"<code>{suffix}</code>")
+
+    if parts:
+        return "".join(parts)
+
+    return f"<code>{s}</code>"
 
 
 def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
@@ -393,7 +434,7 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
                 drow["type"] = brow["type"]
             if not (drow.get("value") or "").strip() and (brow.get("value") or "").strip():
                 drow["value"] = brow["value"]
-        
+
         def _score_row(r: dict) -> tuple[int, int, int]:
             return (
                 1 if (r.get("value") or "").strip() else 0,
@@ -421,8 +462,11 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
     Build "member variable" rows for @property descriptors.
 
     Table mapping:
-      - Type column: inferred return type annotation of the property's fget (if any)
+      - Type column: inferred return type annotation of the property's fget
+        (falling back through the MRO when the derived property omits it)
       - Value column: *property* / *read-only property* (+ *(abstract)* if applicable)
+      - Doc column: first line of the property's getter docstring, with base-class
+        fallback when the derived property omits it
     """
     rows: list[dict] = []
     for name, val in getattr(cls_obj, "__dict__", {}).items():
@@ -431,9 +475,9 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
         if not isinstance(val, property):
             continue
 
-        # Type column: return annotation on fget if present
         typ = ""
         fget = val.fget
+        type_owner = cls_obj
         if fget is not None:
             try:
                 ann = inspect.signature(fget).return_annotation
@@ -441,31 +485,65 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
                 ann = inspect.Signature.empty
 
             if ann is not inspect.Signature.empty:
-                # Prefer a readable type string
                 if isinstance(ann, str):
                     typ = ann
                 else:
                     typ = getattr(ann, "__name__", None) or str(ann)
+            else:
+                for base in cls_obj.__mro__[1:]:
+                    if base is object:
+                        continue
+                    base_prop = getattr(base, "__dict__", {}).get(name)
+                    if not isinstance(base_prop, property) or base_prop.fget is None:
+                        continue
+                    try:
+                        base_ann = inspect.signature(base_prop.fget).return_annotation
+                    except (TypeError, ValueError):
+                        base_ann = inspect.Signature.empty
+                    if base_ann is inspect.Signature.empty:
+                        continue
+                    if isinstance(base_ann, str):
+                        typ = base_ann
+                    else:
+                        typ = getattr(base_ann, "__name__", None) or str(base_ann)
+                    type_owner = base
+                    break
         typ = _expand_type_aliases(typ, aliases)
 
-        # Value column: property kind + abstract marker
         kind = "*read-only property*" if val.fset is None else "*property*"
         is_abstract = bool(getattr(fget, "__isabstractmethod__", False)) if fget is not None else False
         val_s = kind + (" *(abstract)*" if is_abstract else "")
 
-        # Doc column: first line of fget docstring (if any)
         doc = ""
+        doc_owner = cls_obj
         if fget is not None:
             d = inspect.getdoc(fget) or ""
             d = d.strip()
             if d:
                 doc = d.splitlines()[0]
+            else:
+                for base in cls_obj.__mro__[1:]:
+                    if base is object:
+                        continue
+                    base_prop = getattr(base, "__dict__", {}).get(name)
+                    if not isinstance(base_prop, property) or base_prop.fget is None:
+                        continue
+                    bd = inspect.getdoc(base_prop.fget) or ""
+                    bd = bd.strip()
+                    if bd:
+                        doc = bd.splitlines()[0]
+                        doc_owner = base
+                        break
+
+        row_owner = owner_ident
+        if doc_owner is not cls_obj and type_owner is doc_owner:
+            row_owner = _qualname_to_ident(doc_owner)
 
         rows.append(
             {
                 "name": name,
                 "type": typ,
-                "owner": owner_ident,
+                "owner": row_owner,
                 "value": val_s,
                 "doc": doc,
             }
@@ -499,7 +577,6 @@ def inherited_only_methods(cls_obj: type, *, declared: set[str]) -> dict[str, tu
 
             base_val = base.__dict__.get(name)
 
-            # properties are documented in the attributes table, not methods
             if isinstance(base_val, property):
                 break
 
@@ -528,7 +605,7 @@ def class_members_from_introspection(
 ) -> tuple[
     type | None,
     list[str],          # declared documented methods
-    dict[str, str],     # owner_override
+    dict[str, str],     # doc owner override
     list[str],          # toc_remove_anchors
 ]:
     try:
@@ -558,7 +635,6 @@ def class_members_from_introspection(
         if isinstance(val, (staticmethod, classmethod)) or inspect.isfunction(val):
             methods.append(name)
         else:
-            # properties intentionally excluded from "Methods"
             continue
 
         doc_owner = _method_owner_for_docs(cls, name)
@@ -573,6 +649,352 @@ def class_members_from_introspection(
 
     return cls, methods, owner_override, toc_remove_anchors
 
+
+# ----------------------------------------------------------------------
+#  Lightweight NumPy-doc fallback rendering for undocumented overrides
+# ----------------------------------------------------------------------
+
+_SECTION_NAMES = {
+    "parameters",
+    "returns",
+    "yields",
+    "raises",
+    "notes",
+    "examples",
+    "see also",
+    "references",
+    "warnings",
+    "attributes",
+    "methods",
+}
+
+
+def _is_numpy_section_header(lines: list[str], i: int) -> bool:
+    if i + 1 >= len(lines):
+        return False
+    title = lines[i].strip()
+    underline = lines[i + 1].strip()
+    return bool(title) and title.lower() in _SECTION_NAMES and len(underline) >= 3 and set(underline) == {"-"}
+
+
+def _split_numpy_doc_sections(doc: str) -> tuple[list[str], dict[str, list[str]]]:
+    """
+    Split a NumPy-style docstring into a leading prose block and named sections.
+
+    Returns ``(lead_lines, sections)``, where ``sections`` maps lowercased
+    section names to their raw lines.
+    """
+    text = textwrap.dedent(doc or "").strip("\n")
+    if not text:
+        return [], {}
+
+    lines = text.splitlines()
+    lead: list[str] = []
+    sections: dict[str, list[str]] = {}
+
+    i = 0
+    while i < len(lines) and not _is_numpy_section_header(lines, i):
+        lead.append(lines[i])
+        i += 1
+
+    while i < len(lines):
+        if not _is_numpy_section_header(lines, i):
+            i += 1
+            continue
+
+        name = lines[i].strip().lower()
+        i += 2
+
+        body: list[str] = []
+        while i < len(lines) and not _is_numpy_section_header(lines, i):
+            body.append(lines[i])
+            i += 1
+        sections[name] = body
+
+    return lead, sections
+
+
+def _paragraphs_from_lines(lines: list[str]) -> list[str]:
+    """
+    Convert raw docstring lines into Markdown paragraphs separated by blank lines.
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    for line in lines:
+        if line.strip():
+            buf.append(line.strip())
+        else:
+            if buf:
+                out.append(" ".join(buf).strip())
+                buf = []
+    if buf:
+        out.append(" ".join(buf).strip())
+    return [p for p in out if p]
+
+
+def _parse_numpy_parameters(lines: list[str]) -> list[dict[str, str]]:
+    """
+    Parse a NumPy-style Parameters section into rows with keys:
+      - name
+      - type
+      - desc
+    """
+    rows: list[dict[str, str]] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        if not lines[i].strip():
+            i += 1
+            continue
+
+        if ":" in lines[i]:
+            name_part, type_part = lines[i].split(":", 1)
+            name = name_part.strip()
+            typ = type_part.strip()
+            i += 1
+
+            desc_lines: list[str] = []
+            while i < n:
+                line = lines[i]
+                if not line.strip():
+                    desc_lines.append("")
+                    i += 1
+                    continue
+                if not line.startswith(" ") and ":" in line:
+                    break
+                desc_lines.append(line.strip())
+                i += 1
+
+            desc = " ".join(x for x in desc_lines if x).strip()
+            rows.append({"name": name, "type": typ, "desc": desc})
+        else:
+            i += 1
+
+    return rows
+
+
+def _signature_parameter_map(func: Any, aliases: dict[str, str] | None = None) -> dict[str, dict[str, str]]:
+    """
+    Build a parameter metadata map from a callable signature.
+
+    Returned mapping keys are parameter names and values contain:
+      - ``type``: display type string (possibly empty)
+      - ``default``: ``*required*`` or a rendered default value
+    """
+    aliases = aliases or {}
+    out: dict[str, dict[str, str]] = {}
+
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return out
+
+    for name, param in sig.parameters.items():
+        if name in {"self", "cls"}:
+            continue
+
+        if param.annotation is inspect.Signature.empty:
+            ann = ""
+        elif isinstance(param.annotation, str):
+            ann = _expand_type_aliases(param.annotation, aliases)
+        else:
+            ann = _expand_type_aliases(str(param.annotation), aliases)
+
+        default = "*required*" if param.default is inspect.Signature.empty else f"<code>{param.default!r}</code>"
+        out[name] = {"type": ann, "default": default}
+
+    return out
+
+
+def _parse_numpy_returns(lines: list[str]) -> list[dict[str, str]]:
+    """
+    Parse a NumPy-style Returns section into rows with keys:
+      - type
+      - desc
+    """
+    rows: list[dict[str, str]] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        if not lines[i].strip():
+            i += 1
+            continue
+
+        typ = lines[i].strip()
+        i += 1
+
+        desc_lines: list[str] = []
+        while i < n:
+            line = lines[i]
+            if not line.strip():
+                desc_lines.append("")
+                i += 1
+                continue
+            if not line.startswith(" "):
+                break
+            desc_lines.append(line.strip())
+            i += 1
+
+        desc = " ".join(x for x in desc_lines if x).strip()
+        rows.append({"type": typ, "desc": desc})
+
+    return rows
+
+
+def _signature_return_type(func: Any, aliases: dict[str, str] | None = None) -> str:
+    """
+    Return a display string for a callable return annotation, or ``""`` if none.
+    """
+    aliases = aliases or {}
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return ""
+
+    ann = sig.return_annotation
+    if ann is inspect.Signature.empty:
+        return ""
+
+    text = _expand_type_aliases(str(ann), aliases)
+    return "" if text == "None" else text
+
+
+def _callable_for_method_name(cls_obj: type, name: str) -> Any | None:
+    obj = getattr(cls_obj, "__dict__", {}).get(name)
+    if obj is None:
+        return None
+    if isinstance(obj, staticmethod):
+        return obj.__func__
+    if isinstance(obj, classmethod):
+        return obj.__func__
+    return obj
+
+
+def _emit_inherited_doc_summary(
+    f,
+    *,
+    fallback_owner_ident: str,
+    member_name: str,
+    doc_text: str,
+    derived_callable: Any | None = None,
+) -> None:
+    """
+    Emit a lightweight inherited-doc summary for an undocumented override.
+
+    Supported sections:
+      - lead/body prose
+      - Parameters
+      - Returns
+      - signature-derived parameter types/defaults
+      - signature-derived return type when omitted in the docstring
+
+    Any additional recognized NumPy-style sections trigger a note directing the
+    reader to the base method for the full documentation.
+    """
+    lead_lines, sections = _split_numpy_doc_sections(doc_text)
+
+    base_class = fallback_owner_ident.rsplit(".", 1)[-1]
+    if member_name == "__init__":
+        base_link = f"[`{base_class}()`](api:{fallback_owner_ident}.{member_name})"
+    else:
+        base_link = f"[`{base_class}.{member_name}()`](api:{fallback_owner_ident}.{member_name})"
+
+    lead_paragraphs = _paragraphs_from_lines(lead_lines)
+    for p in lead_paragraphs:
+        f.write(p + "\n\n")
+
+    sig_params = _signature_parameter_map(derived_callable) if derived_callable is not None else {}
+    params = _parse_numpy_parameters(sections.get("parameters", []))
+    if sig_params:
+        seen = {row["name"] for row in params}
+        for row in params:
+            meta = sig_params.get(row["name"], {})
+            if not row.get("type"):
+                row["type"] = meta.get("type", "")
+            row["default"] = meta.get("default", "*required*")
+        for name, meta in sig_params.items():
+            if name not in seen:
+                params.append(
+                    {
+                        "name": name,
+                        "type": meta.get("type", ""),
+                        "default": meta.get("default", "*required*"),
+                        "desc": "",
+                    }
+                )
+
+    returns = _parse_numpy_returns(sections.get("returns", []))
+    sig_return = _signature_return_type(derived_callable) if derived_callable is not None else ""
+    if returns:
+        for row in returns:
+            if not row.get("type"):
+                row["type"] = sig_return
+    elif sig_return:
+        returns = [{"type": sig_return, "desc": ""}]
+
+    if params:
+        f.write("**Parameters**\n\n")
+        f.write("| Name | Type | Description | Default |\n")
+        f.write("|---|---|---|---|\n")
+        for row in params:
+            name = row["name"].replace("|", "\\|")
+            typ = _type_to_md(_expand_type_aliases(row["type"], {}))
+            desc = row["desc"].replace("|", "\\|")
+            default = row.get("default", "*required*").replace("|", "\\|")
+            f.write(f"| `{name}` | `{typ}` | {desc} | {default} |\n")
+        f.write("\n")
+
+    if returns:
+        f.write("**Returns**\n\n")
+        f.write("| Type | Description |\n")
+        f.write("|---|---|\n")
+        for row in returns:
+            typ = _expand_type_aliases(row["type"], {}).replace("|", "\\|")
+            desc = row["desc"].replace("|", "\\|")
+            f.write(f"| {typ} | {desc} |\n")
+        f.write("\n")
+
+    supported = {"parameters", "returns"}
+    extra_sections = [s for s in sections.keys() if s not in supported]
+    if extra_sections:
+        f.write("!!! note\n\n")
+        f.write(f"    Original documentation in {base_link} has more content not rendered here.\n\n")
+
+
+def _base_method_doc_owner_and_text(owner_ident: str, cls_obj: type, name: str) -> tuple[str, str]:
+    """
+    Return ``(owner_ident, doc_text)`` for the inherited documentation selected
+    for an undocumented override, or ``('', '')`` if none is available.
+    """
+    if not owner_ident or owner_ident == _qualname_to_ident(cls_obj):
+        return "", ""
+
+    for base in cls_obj.__mro__[1:]:
+        if _qualname_to_ident(base) != owner_ident:
+            continue
+
+        obj = getattr(base, "__dict__", {}).get(name)
+        if obj is None or isinstance(obj, property):
+            return "", ""
+
+        if isinstance(obj, staticmethod):
+            target = obj.__func__
+        elif isinstance(obj, classmethod):
+            target = obj.__func__
+        else:
+            target = obj
+
+        doc_text = inspect.getdoc(target) or ""
+        if not doc_text.strip():
+            return "", ""
+
+        return owner_ident, doc_text
+
+    return "", ""
+
+
 def write_class_members_table(
     f,
     rows: list[dict],
@@ -582,6 +1004,7 @@ def write_class_members_table(
     inv_objects: dict[str, str],
     inv_kinds: dict[str, str],
     page_url: str,
+    link_names: set[str] | None = None,
 ) -> None:
     if not rows:
         return
@@ -598,7 +1021,7 @@ def write_class_members_table(
             name_cell += "<br><em>(inherited)</em>"
 
         typ_raw = (r.get("type") or "")
-        typ = _classvar_inner(typ_raw).replace("\n", " ").replace("|", "\\|")
+        typ = _type_to_md(_classvar_inner(typ_raw).replace("\n", " ").replace("|", "\\|"), link_names=link_names)
 
         val = r.get("value")
         if isinstance(val, str) and "property" in val:
@@ -608,11 +1031,11 @@ def write_class_members_table(
         if val is None or str(val).strip() == "":
             val_s = "*unset*"
         else:
-            val_s = str(val).replace("\n", " ").replace("|", "\\|")
-
-            # If the value already contains Markdown (e.g., *property*), don't wrap in code ticks.
-            if "*" not in val_s and "_" not in val_s:
-                val_s = f"`{val_s}`"
+            val_s_raw = str(val).replace("\n", " ").strip()
+            if "*" in val_s_raw:
+                val_s = val_s_raw
+            else:
+                val_s = _type_to_md(val_s_raw.replace("|", "\\|"), link_names=link_names)
 
         doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
 
@@ -621,19 +1044,28 @@ def write_class_members_table(
 
 
 def write_class_intro(f, cls_ident: str) -> None:
+    """
+    Emit the class intro block.
+
+    The intro render includes the class docstring and explicitly includes
+    ``__init__`` so the constructor appears first on the page and in the TOC.
+    """
     f.write(f"::: {cls_ident}\n")
     f.write("    options:\n")
-    f.write("      members: false\n")
+    f.write("      members:\n")
+    f.write("        - __init__\n")
     f.write("      inherited_members: false\n")
     f.write("\n")
 
 
 def write_class_member_block(f, owner_ident: str, member_name: str) -> None:
+    """
+    Emit a declared method block for non-constructor methods.
+
+    Methods are always rendered from the derived class object so anchors remain
+    unique to the derived page.
+    """
     f.write(f"<!-- API_METHOD owner={owner_ident} member={member_name} -->\n\n")
-    if member_name == "__init__":
-        cls_name = owner_ident.rsplit(".", 1)[-1]
-        f.write(f"<!-- API_CONSTRUCTOR_HEADING {owner_ident}.{member_name} {cls_name} -->\n\n")
-    
     f.write(f"::: {owner_ident}\n")
     f.write("    options:\n")
     f.write("      members:\n")
@@ -684,6 +1116,7 @@ def write_inherited_method_stub(
     else:
         f.write(f'Inherited {kind_label}method from [](api:{base_ident}).\n\n')
 
+
 def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
     if not funcs:
         return
@@ -692,12 +1125,14 @@ def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
         f.write(f"<!-- API_MODULE_MEMBERS owner={mod_ident} -->\n\n")
         f.write(f"::: {mod_ident}\n")
         f.write("    options:\n")
+        f.write("      heading_level: 3\n")
         f.write("      members:\n")
         f.write(f"        - {fn}\n")
         f.write("      inherited_members: false\n\n")
 
         if i != len(funcs) - 1:
             f.write("---\n\n")
+
 
 def write_module_members_table(
     f,
@@ -706,6 +1141,7 @@ def write_module_members_table(
     rows: list[dict],
     inv_objects: dict[str, str],
     inv_kinds: dict[str, str],
+    link_names: set[str] | None = None,
 ) -> None:
     if not rows:
         return
@@ -716,17 +1152,17 @@ def write_module_members_table(
         nm = r["name"]
         anchor_id = f"{mod_ident}.{nm}"
         inv_objects[anchor_id] = f"{page_url}#{anchor_id}"
-        inv_kinds[anchor_id] = "variable"
+        inv_kinds[anchor_id] = (r.get("kind") or "variable").replace(" ", "_")
 
         name_cell = f'<a id="{anchor_id}"></a>`{nm}`'
-        typ = (r.get("type") or "").replace("\n", " ").replace("|", "\\|")
+        typ = _type_to_md((r.get("type") or "").replace("\n", " ").replace("|", "\\|"), link_names=link_names)
 
         val = r.get("value")
         if val is None or str(val).strip() == "":
             val_s = "*unset*"
         else:
-            val_s = str(val).replace("\n", " ")#.replace("|", "\\|")
-            val_s = f"`{val_s}`"
+            val_s_raw = str(val).replace("\n", " ").strip()
+            val_s = _type_to_md(val_s_raw.replace("|", "\\|"), link_names=link_names)
 
         doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
         f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
@@ -744,14 +1180,13 @@ def write_module_page(
     classes: list[str],
     inv_objects: dict[str, str],
     inv_kinds: dict[str, str],
+    link_names: set[str] | None = None,
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{mod_ident}`\n\n")
 
-        # Strip module/package entries from the TOC
         f.write(f"<!-- API_TOC_REMOVE {mod_ident} -->\n\n")
-        
-        # Always render the module/package docstring
+
         f.write(f"::: {mod_ident}\n")
         f.write("    options:\n")
         f.write("      members: false\n")
@@ -765,7 +1200,7 @@ def write_module_page(
 
         if rows:
             f.write("## Attributes\n\n")
-            write_module_members_table(f, mod_ident, page_url, rows, inv_objects, inv_kinds)
+            write_module_members_table(f, mod_ident, page_url, rows, inv_objects, inv_kinds, link_names)
             f.write("\n\n\n")
 
         if funcs:
@@ -774,13 +1209,13 @@ def write_module_page(
             f.write("\n\n\n")
 
 
-
 def write_class_page(
     path: Path,
     title: str,
     cls_ident: str,
     page_url: str,
     *,
+    cls_obj: type | None,
     var_rows: list[dict],
     inherited_method_stubs: dict[str, tuple[str, str]],
     methods: list[str],
@@ -788,6 +1223,7 @@ def write_class_page(
     toc_remove_anchors: list[str],
     inv_objects: dict[str, str],
     inv_kinds: dict[str, str],
+    link_names: set[str] | None = None,
 ) -> None:
     with mkdocs_gen_files.open(path, "w") as f:
         f.write(f"# `{title}`\n\n")
@@ -797,7 +1233,25 @@ def write_class_page(
 
         write_class_intro(f, cls_ident)
 
+        # If the constructor itself is undocumented but a base constructor has
+        # docs, append the lightweight inherited-doc summary directly after the
+        # intro block so it sits with the rendered constructor.
+        if cls_obj is not None and "__init__" in methods:
+            owner = owner_override.get("__init__", cls_ident)
+            if owner != cls_ident:
+                fallback_owner_ident, fallback_doc_text = _base_method_doc_owner_and_text(owner, cls_obj, "__init__")
+                derived_callable = _callable_for_method_name(cls_obj, "__init__")
+                if fallback_owner_ident and fallback_doc_text:
+                    _emit_inherited_doc_summary(
+                        f,
+                        fallback_owner_ident=fallback_owner_ident,
+                        member_name="__init__",
+                        doc_text=fallback_doc_text,
+                        derived_callable=derived_callable,
+                    )
+
         if var_rows:
+            f.write("\n---\n\n")
             f.write("## Attributes\n")
             write_class_members_table(
                 f,
@@ -807,22 +1261,38 @@ def write_class_page(
                 inv_objects=inv_objects,
                 inv_kinds=inv_kinds,
                 page_url=page_url,
+                link_names=link_names,
             )
 
-        if methods or inherited_method_stubs:
-            f.write("## Methods\n\n")
+        other_methods = [m for m in methods if m != "__init__"]
+
+        if other_methods or inherited_method_stubs:
+            f.write("\n---\n\n")
 
             inherited_method_stubs = inherited_method_stubs or {}
-            declared_set = set(methods)
-            
+            declared_set = set(other_methods)
+
             def _method_sort_key(name: str) -> tuple[int, str]:
-                return (0 if name == "__init__" else 1, name.lower())
-            all_names = sorted(set(methods) | set(inherited_method_stubs), key=_method_sort_key)
+                return name.lower(),
+
+            all_names = sorted(set(other_methods) | set(inherited_method_stubs), key=lambda name: name.lower())
 
             for m in all_names:
                 if m in declared_set:
+                    write_class_member_block(f, cls_ident, m)
+
                     owner = owner_override.get(m, cls_ident)
-                    write_class_member_block(f, owner, m)
+                    if cls_obj is not None and owner != cls_ident:
+                        fallback_owner_ident, fallback_doc_text = _base_method_doc_owner_and_text(owner, cls_obj, m)
+                        derived_callable = _callable_for_method_name(cls_obj, m)
+                        if fallback_owner_ident and fallback_doc_text:
+                            _emit_inherited_doc_summary(
+                                f,
+                                fallback_owner_ident=fallback_owner_ident,
+                                member_name=m,
+                                doc_text=fallback_doc_text,
+                                derived_callable=derived_callable,
+                            )
                 else:
                     kind, base_ident = inherited_method_stubs[m]
                     write_inherited_method_stub(
@@ -835,12 +1305,12 @@ def write_class_page(
 
                 f.write("\n---\n\n")
 
+
 def main() -> None:
     nav = mkdocs_gen_files.Nav()
     inv_objects: dict[str, str] = {}
     inv_kinds: dict[str, str] = {}
 
-    # Global references page for citations in docstrings
     nav[("Bibliography",)] = "bib.md"
     with mkdocs_gen_files.open("bib.md", "w") as f:
         f.write("# Bibliography\n\n")
@@ -880,6 +1350,7 @@ def main() -> None:
             inv_kinds[f"{mod_ident}.{fn}"] = "function"
         for cls_name in classes:
             inv_kinds[f"{mod_ident}.{cls_name}"] = "class"
+        mod_link_names = {r["name"] for r in rows if isinstance(r.get("name"), str)}
 
         nav[nav_key] = page.as_posix()
         write_module_page(
@@ -891,7 +1362,8 @@ def main() -> None:
             funcs=funcs,
             classes=classes,
             inv_objects=inv_objects,
-            inv_kinds=inv_kinds
+            inv_kinds=inv_kinds,
+            link_names=mod_link_names
         )
 
         for cls_name in classes:
@@ -912,14 +1384,11 @@ def main() -> None:
                 inherited_missing = inherited_only_methods(cls_obj, declared=declared)
 
             cls_page_url = mod_page_url + f"{cls_name}/"
-            # Inventory entry for the class object should point at the class page (not the module page)
             inv_objects[cls_ident] = f"{cls_page_url}#{cls_ident}"
 
-            # Inventory entries for methods should point at the class page
             for m in methods:
                 inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
                 inv_kinds[f"{cls_ident}.{m}"] = "method"
-            # Also stub inherited but not declared
             for m in inherited_missing.keys():
                 inv_objects[f"{cls_ident}.{m}"] = f"{cls_page_url}#{cls_ident}.{m}"
                 inv_kinds[f"{cls_ident}.{m}"] = "method"
@@ -933,13 +1402,24 @@ def main() -> None:
                 except SyntaxError:
                     aliases = {}
 
-                # Add @property descriptors to the Members table (as "member variables")
+                mod_link_names = {r["name"] for r in rows if isinstance(r.get("name"), str)}
+
                 prop_rows = property_rows_from_introspection(cls_obj, owner_ident=cls_ident, aliases=aliases)
 
-                # Merge (prefer var_rows entries if name collides)
-                by_name = {r["name"]: r for r in prop_rows}
+                by_name = {r["name"]: r.copy() for r in prop_rows}
                 for r in var_rows:
-                    by_name[r["name"]] = r
+                    prev = by_name.get(r["name"])
+                    if prev is not None:
+                        merged = r.copy()
+                        if not (merged.get("doc") or "").strip() and (prev.get("doc") or "").strip():
+                            merged["doc"] = prev["doc"]
+                        if not (merged.get("type") or "").strip() and (prev.get("type") or "").strip():
+                            merged["type"] = prev["type"]
+                        if not (merged.get("value") or "").strip() and (prev.get("value") or "").strip():
+                            merged["value"] = prev["value"]
+                        by_name[r["name"]] = merged
+                    else:
+                        by_name[r["name"]] = r
                 var_rows = sorted(by_name.values(), key=_var_sort_key)
             else:
                 derived_map = _class_var_info_map_from_ast(py, cls_name, owner_ident=cls_ident)
@@ -950,6 +1430,7 @@ def main() -> None:
                 title=cls_name,
                 cls_ident=cls_ident,
                 page_url=cls_page_url,
+                cls_obj=cls_obj,
                 var_rows=var_rows,
                 inherited_method_stubs=inherited_missing,
                 methods=methods,
@@ -957,6 +1438,7 @@ def main() -> None:
                 toc_remove_anchors=toc_remove_anchors,
                 inv_objects=inv_objects,
                 inv_kinds=inv_kinds,
+                link_names=mod_link_names,
             )
 
     with mkdocs_gen_files.open("index.md", "w") as f:
@@ -973,8 +1455,6 @@ def main() -> None:
     with mkdocs_gen_files.open(INVENTORY_PATH, "w") as f:
         json.dump({"objects": inv_objects, "suffix_index": suffix_index, "kinds": inv_kinds}, f, indent=2, sort_keys=True)
 
-    # ALSO write to disk so api_hooks.py can load it during the same build
-    # serve.py will clean it
     disk_path = REPO_ROOT / "docs" / f"_{INVENTORY_PATH}"
     disk_path.write_text(
         json.dumps({"objects": inv_objects, "suffix_index": suffix_index, "kinds": inv_kinds}, indent=2, sort_keys=True),
