@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMDictNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -38,9 +37,9 @@ class STIMDictNoiseModel(DictNoiseModel):
     """Model backend for handling generic operation dicts for STIM.
 
     This functionality should ideally by pulled into
-    :class:`.DictNoiseModel`, but to make quick progress,
+    [](api:DictNoiseModel), but to make quick progress,
     we are making a derived class that can handle a
-    :class:`.StimPhysicalCircuit` more naturally.
+    [](api:STIMPhysicalCircuit) more naturally.
     """
 
     name: ClassVar[str] = "STIM gate dict"
@@ -54,32 +53,6 @@ class STIMDictNoiseModel(DictNoiseModel):
         instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
-        """Initialize a generic gate dict model.
-
-        Parameters
-        ----------
-        model_or_dicts:
-            A model to convert or pair of dictionaries to use
-
-        gaterep:
-            Gate representation this model will return
-
-        instrep:
-            Instrument representation this model will return
-
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to :class:`.RepTuples`, this will be used as
-            the first argument of the rep, indicating which state to reset
-            to (``0`` or ``1``) or whether to not reset (``None``, default).
-
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
-            :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to :class:`.RepTuples`, this will be used as
-            the second argument of the rep, indicating whether outcomes
-            should be kept (``True``, default) or not (``False``).
-        """
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
         # function. The next two variables are like gate_dict and inst_dict,
         # but have more lax types.
@@ -187,10 +160,45 @@ class STIMDictNoiseModel(DictNoiseModel):
 
     def get_reps(  # noqa: C901
         self,
-        circuit: BasePhysicalCircuit,
+        circuit: STIMPhysicalCircuit,
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
+        """Get operation representations for a STIM circuit.
+
+        This method processes a STIM circuit and generates a list of operation
+        representations (RepTuples) that describe the circuit's operations,
+        including gates and instruments, with appropriate noise models applied.
+
+        This method handles STIM-specific circuit processing including:
+        - Unrolling circuit repeats
+        - Mapping qubit labels
+        - Applying noise models from gate and instrument dictionaries
+        - Combining common operations for efficient STIM processing
+        - Warning about conflicting noise applications
+
+        Parameters
+        ----------
+        circuit:
+            The STIM circuit to process.
+
+        gatereps:
+            Sequence of gate representations that the output should use.
+
+        instreps:
+            Sequence of instrument representations that the output should use.
+
+        Returns
+        -------
+        list[RepTuple]
+            List of operation representations describing the circuit's operations
+            with noise models applied.
+
+        Raises
+        ------
+        AssertionError
+            If the circuit is not a STIMPhysicalCircuit instance.
+        """
         assert isinstance(
             circuit, STIMPhysicalCircuit
         ), "Only designed for STIM circuits"

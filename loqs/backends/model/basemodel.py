@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseNoiseModel` and :class:`.BaseTimeDependentNoiseModel` definitions.
-"""
+
 
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ class BaseNoiseModel(Castable, Displayable):
     name: ClassVar[str]
     """Name of circuit backend"""
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __str__(self) -> str:
         return f"Physical {self.name} noise model\n"
@@ -76,11 +75,11 @@ class BaseNoiseModel(Castable, Displayable):
 
         gatereps:
             Output representations for gate operations.
-            For more details, look at :class:`GateRep`.
+            For more details, look at [GateRep](api:loqs.backends.reps.GateRep).
 
         instreps:
             Output representations for instrument operations.
-            For more details, look at :class:`InstrumentRep`.
+            For more details, look at [InstrumentRep](api:loqs.backends.reps.InstrumentRep).
 
         Returns
         -------
@@ -109,26 +108,38 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
     """
 
     def add_gate_duration_to_layer(self, gate_duration):
+        """Add a gate duration to the current layer duration.
+
+        If a layer duration already exists, the new layer duration is
+        max of current and incoming gate durations.
+
+        Parameters
+        ----------
+        gate_duration : float
+            Duration of the gate to add to the current layer.
+        """
         self._local_layer_duration = max(
             self._local_layer_duration, gate_duration
         )
 
     def add_layer_duration_to_current_time(self):
+        """Add the current layer duration to the total simulation time.
+
+        This also internally resets the layer duration to zero.
+        """
         self.current_time += self._local_layer_duration
         self._local_layer_duration = 0.0
 
     @abstractmethod
     def get_gate_duration(self, gate_label) -> int | float:
         """Get the gate duration from a gate label.
-
-        Derived classes should implement this.
         """
+        # Derived classes should implement this
         pass
 
     @abstractmethod
     def get_instrument_duration(self, inst_label) -> int | float:
         """Get the instrument duration from an instrument label.
-
-        Derived classes should implement this.
         """
+        # Derived classes should implement this
         pass

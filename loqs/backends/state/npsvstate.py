@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -47,13 +46,12 @@ but keeping it simple as other types are unlikely.
 
 
 class NumpyStatevectorQuantumState(BaseQuantumState):
-    """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str] = "NumPy Statevector"
 
-    SERIALIZE_ATTRS = ["_state", "qubit_labels", "seed"]
+    _SERIALIZE_ATTRS = ["_state", "qubit_labels", "seed"]
 
-    SERIALIZE_ATTRS_MAP = {"_state": "state"}
+    _SERIALIZE_ATTRS_MAP = {"_state": "state"}
 
     _state: np.ndarray
     """Underlying state object."""
@@ -63,6 +61,13 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @property
     def state(self) -> np.ndarray:
+        """Get the underlying quantum state vector.
+
+        Returns
+        -------
+        np.ndarray
+            The quantum state vector as a numpy array.
+        """
         return self._state
 
     @property
@@ -388,6 +393,11 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return new_state
 
     def print_bitstring_amplitudes(self):
+        """Print the amplitudes of all bitstrings in the quantum state.
+
+        This method prints the qubit labels and then iterates through all possible
+        bitstrings, displaying those with amplitudes greater than a threshold (1e-6).
+        """
         n_qubits = len(self.qubit_labels)
         print(self.qubit_labels)
         for i in range(2**n_qubits):

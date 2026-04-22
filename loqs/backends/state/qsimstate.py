@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.QSimQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -51,7 +50,7 @@ class QSimQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "QuantumSim"
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "qubit_labels",
         "_qsim_classical",
         "_qsim_idx_in_full_dm",
@@ -70,6 +69,13 @@ class QSimQuantumState(BaseQuantumState):
 
     @property
     def state(self) -> _SparseDM:
+        """Get the underlying QuantumSim state object.
+
+        Returns
+        -------
+        _SparseDM
+            The internal QuantumSim state object that represents the quantum state.
+        """
         return self._state
 
     @property
@@ -97,6 +103,9 @@ class QSimQuantumState(BaseQuantumState):
         qubit_labels:
             Optional qubit labels. If not provided, the default range of ints
             is used.
+        
+        seed:
+            Optional RNG seed. If not provided, default NumPy RNG behavior applies.
         """
         if isinstance(state, QSimQuantumState):
             self._state = state._state.copy()
@@ -320,7 +329,7 @@ class QSimQuantumState(BaseQuantumState):
 
         return prob
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         # Get any needed internal state from SparseDM
         if attr == "qubit_labels":
             return self.state.names
@@ -346,10 +355,10 @@ class QSimQuantumState(BaseQuantumState):
             return self.state._last_majority_vote_array
 
         # Otherwise fallback
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         qubit_labels = attr_dict["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
 

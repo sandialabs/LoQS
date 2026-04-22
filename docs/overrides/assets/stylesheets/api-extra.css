@@ -1,0 +1,27 @@
+/* Make hrules between functions more visible */
+.md-typeset hr {
+  border: 0;
+  border-top: 3px solid var(--md-primary-fg-color);
+  margin: 1.5rem 0;
+  opacity: 0.35;
+}
+
+/* Make TOC panel scrollable */
+.md-sidebar--secondary .md-sidebar__scrollwrap {
+  max-height: calc(100vh - 7rem);
+  overflow: auto;
+}
+
+/* Inherited entries in the right-hand TOC */
+.md-sidebar--secondary .api-inherited-toc {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* Unresolved external api: links shown but not clickable */
+.md-typeset a.api-unresolved-external {
+  font-style: italic;
+  opacity: 0.75;
+  pointer-events: none;
+  cursor: default;
+}

@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.DictNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -44,10 +43,17 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     """Model backend for handling generic operation dicts."""
 
     name: ClassVar[str] = "gate dict"
-    gate_dict: dict[MemberLabel, RepTuple]
-    inst_dict: dict[MemberLabel, RepTuple]
 
-    SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
+    gate_dict: dict[MemberLabel, RepTuple]
+    """Mapping from labels to [](api:RepTuple) for gate operations.
+    """
+
+    inst_dict: dict[MemberLabel, RepTuple]
+    """Mapping from labels to [](api:RepTuple) for instrument operations.
+    """
+
+
+    _SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
 
     def __init__(  # noqa: C901
         self,
@@ -65,24 +71,28 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         model_or_dicts:
             A model to convert or pair of dictionaries to use
 
-        gaterep:
+        gatereps:
             Gate representation this model will return
 
-        instrep:
+        instreps:
             Instrument representation this model will return
 
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to :class:`.RepTuples`, this will be used as
+        gaterep_array_cast_rep:
+            The [](api:GateRep) used when casting bare matrices to a
+            [](api:RepTuple).
+
+        instrep_cast_reset:
+            If [](api:InstrumentRep.ZBASIS_PRE_POST_OPERATIONS) values
+            are being cast up to [](api:RepTuple)s, this will be used as
             the first argument of the rep, indicating which state to reset
-            to (``0`` or ``1``) or whether to not reset (``None``, default).
+            to (`0` or `1`) or whether to not reset (`None`, default).
 
         instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
-            :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to :class:`.RepTuples`, this will be used as
+            If [](api:InstrumentRep.ZBASIS_PRE_POST_OPERATIONS) or
+            [](api:InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT) values are
+            being cast up to [](api:RepTuple), this will be used as
             the second argument of the rep, indicating whether outcomes
-            should be kept (``True``, default) or not (``False``).
+            should be kept (`True`, default) or not (`False`).
         """
 
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
@@ -236,10 +246,24 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
+        """Get the list of gate representations this model can output.
+
+        Returns
+        -------
+        list[GateRep]
+            List of gate representations that this model can output.
+        """
         return self._gatereps
 
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
+        """Get the list of instrument representations this model can output.
+
+        Returns
+        -------
+        list[InstrumentRep]
+            List of instrument representations that this model can output.
+        """
         return self._instreps
 
     def get_reps(
@@ -248,6 +272,27 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
+        """Get list of operator representations that can be applied.
+
+        This method processes a circuit and returns a list of operation representations
+        (RepTuples) that can be applied to a quantum state.
+
+        Parameters
+        ----------
+        circuit : BasePhysicalCircuit
+            Physical circuit to get the representations for.
+
+        gatereps : Sequence[GateRep]
+            Output representations for gate operations.
+
+        instreps : Sequence[InstrumentRep]
+            Output representations for instrument operations.
+
+        Returns
+        -------
+        list[RepTuple]
+            List of operation representations for the circuit.
+        """
         # Get builtin circuit for easy processing
         circuit = ListPhysicalCircuit.cast(circuit)
 
@@ -287,7 +332,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         return reps
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         gate_dict = attr_dict["gate_dict"]
         inst_dict = attr_dict["inst_dict"]
         gatereps = [GateRep(v) for v in attr_dict["_gatereps"]]

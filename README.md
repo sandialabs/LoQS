@@ -28,7 +28,7 @@ There are various optional requirements that are available, including:
 - `dask`: Enables usage of Dask for parallelizing over shots.
 - `dev`: Allows the use of `black` and `flake8` prior to committing
 (see Code Formatting and Linting below).
-- `docs`: Allows building of the JupyterBook documentation (see Documentation below).
+- `docs`: Allows building of the documentation (see Documentation below).
 - `quantumsim`: Enables the QuantumSim (state) backend.
 - `pygsti`: Enables the PyGSTi (circuit, model, state) backend.
 - `stim`: Enables the STIM (state) backend.
@@ -61,29 +61,17 @@ to get the 0.9.12 release of pyGSTi, which will be located in `src`.
 Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
 if you are working off of a feature branch.
 
-### Visualization
-
-LoQS now has some capability to turn circuit diagrams into LaTeX via the quantikz package.
-This requires `pdflatex`, commonly from the a TeX installation, as well as `loqs[visualization]`.
-
 ## Documentation
 
-This project uses JupyterBook for documentation.
-Assuming the `docs` requirements have been installed, the documentation can be generated via:
+This project uses Marimo notebooks and MkDocs for documentation.
+In order to use these features, do at least a installation of `loqs[docs]`.
 
-```
-jupyterbook build docs
-```
+To interactively edit and run the notebooks locally, run: `marimo edit docs`
 
-and then viewed by opening `docs/_build/html/index.html` in a browser.
+To build and serve the documentation, run: `python docs/serve.py`
 
-### Jupytext Notebooks
+Both commands will launch local servers that can be navigated to in your web browser of choice.
+Marimo will auto-open the browser, while `serve.py` will simply tell you the URL
+(typically `localhost:8000`).
 
-For users who want executable versions of the MyST Markdown can use Jupytext to turn them into IPython/Jupyter notebooks.
-```
-jupytext --sync docs/markdown/*
-```
-
-will synchronize all the Markdown files in `docs/markdown` with the Jupyter notebooks in `docs/notebook`. Only the 
-Markdown is committed and used for generating the JupyterBook, but the notebooks can be handy to test execution
-in an interactive way.
+More details are available in (docs/DOCS_README.md)[docs/DOCS_README.md].

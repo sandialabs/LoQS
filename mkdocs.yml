@@ -1,0 +1,56 @@
+site_name: LoQS Documentation
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Install: getting-started/install.md
+      - Overview: getting-started/overview.md
+      - Workflow: getting-started/workflow.md
+  # - Tutorials:
+  #   - tutorials/buildinstruction.md
+  #   - tutorials/buildqeccode.md
+  #   - tutorials/daskparallelism.md
+  # - Examples:
+  #   - examples/runlogst.md
+  #   - examples/fttests.md
+  #   - examples/timedepmodel.md
+  - Developer Zone:
+      - Dev Guide: dev-zone/devguide.md
+  - API Reference: /reference
+  - Bibliography: references.md
+
+theme:
+  name: material
+  logo: logo_icon.png
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+
+markdown_extensions:
+  - footnotes
+  - toc:
+      permalink: true
+  - attr_list
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+plugins:
+  - search
+  - marimo:
+      display_code: true
+  - bibtex:
+      bib_file: docs/references.bib
+      csl_file: docs/american-physical-society-et-al.csl
+  - mkdocs-simple-hooks:
+      hooks:
+        on_page_markdown: docs_scripts.main_hooks:on_page_markdown

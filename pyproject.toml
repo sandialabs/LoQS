@@ -54,9 +54,20 @@ dev = [
     "snakeviz"
 ]
 docs = [
-    "sphinx",
-    "jupyter-book<2",
-    "jupytext"
+    "griffelib==2.0.2",
+    "mkdocs==1.6.1",
+    "mkdocs-autorefs~=1.4.4",
+    "mkdocs-bibtex==4.4.0",
+    "mkdocs-gen-files~=0.6.1",
+    "mkdocs-literate-nav~=0.6.3",
+    "mkdocs-marimo==0.2.1",
+    "mkdocs-material==9.7.6",
+    "mkdocs-simple-hooks~=0.1.5",
+    "mkdocstrings==1.0.3",
+    "mkdocstrings-python==2.0.3",
+    "pymdown-extensions~=10.21.2",
+    "pypandoc==1.17",
+    "pypandoc-binary==1.17",
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]
@@ -84,6 +95,9 @@ all = ["loqs[backends,nobackends]"]
 requires = ["setuptools >= 61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+exclude=["docs*", "tests*"]
+
 [tool.black]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'
@@ -103,6 +117,13 @@ force-exclude = '''
 
 [tool.pyright]
 exclude = [
+    "**/node_modules",
     "**/pycache",
+    "**/__pycache__",
+    "**/.*",
     "**/venv"
 ]
+
+[tool.marimo.runtime]
+on_cell_change = "lazy"
+auto_reload = "lazy"

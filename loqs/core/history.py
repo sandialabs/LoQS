@@ -19,9 +19,6 @@ import textwrap
 
 from loqs.core.frame import Frame, FrameCastableTypes
 from loqs.internal import SeqCastable, Displayable
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
-from loqs.internal.serializable import Serializable
-from loqs.internal.encoder.jsonencoder import JSONEncoder
 
 
 T = TypeVar("T", bound="History")
@@ -29,30 +26,30 @@ T = TypeVar("T", bound="History")
 HistoryCastableTypes: TypeAlias = (
     "History | FrameCastableTypes | Sequence[FrameCastableTypes] | None"
 )
-"""Things that can be cast to :class:`History`."""
+"""Things that can be cast to [History](api:History)."""
 
 HistoryCollectDataIndexTypes: TypeAlias = (
     int | slice | Sequence[int] | Literal["all"]
 )
-"""Types that can be passed into ``indices`` for :meth:`.History.collect_data`"""
+"""Types that can be passed into `indices` for [collect_data](api:History.collect_data)"""
 
 HistoryCollectDataArgsType: TypeAlias = tuple[
     str, HistoryCollectDataIndexTypes
 ]
-"""Type alias for arguments to :meth:`.History.collect_data`"""
+"""Type alias for arguments to [collect_data](api:History.collect_data)"""
 
 
 class History(Sequence[Frame], SeqCastable, Displayable):
-    """A semi-mutable list of :class:`Frame` objects.
+    """A semi-mutable list of [Frame](api:Frame) objects.
 
     The intention is to provide a list-like object where existing
-    :class:`Frame` objects cannot be changed or removed,
+    [Frame](api:Frame) objects cannot be changed or removed,
     and insertion can only occur at the end of the list.
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "_history",
         "expiring_keys",
         "_expiring_key_locs",
@@ -60,7 +57,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         "no_serialize_keys",
     ]
 
-    SERIALIZE_ATTRS_MAP = {
+    _SERIALIZE_ATTRS_MAP = {
         "_history": "history",
         "expiring_keys": "expiring_keys",
         "_expiring_key_locs": "_expiring_key_locs",
@@ -71,7 +68,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
     _history: list[Frame]
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "History":
+    def _from_decoded_attrs(cls, attr_dict) -> "History":
         """
         Create a History object from decoded attributes dictionary.
 
@@ -116,35 +113,35 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         Parameters
         ----------
         history:
-            An initial history to use. Defaults to ``None``,
+            An initial history to use. Defaults to `None`,
             which initializes an empty list.
 
         expiring_keys:
             A list of keys that should "expire" when a new
-            :class:`.Frame` is added. Specifically, it calls
-            :meth:`.Frame.expire` on old frames when a new
+            [Frame](api:Frame) is added. Specifically, it calls
+            [expire](api:Frame.expire) on old frames when a new
             frame containing that key is added.
-            It defaults to ``["state"]``, assuming that the
+            It defaults to `["state"]`, assuming that the
             quantum state is being propagated in-place.
 
         propagating_keys:
             A list of keys that should be added to an
-            incoming :class:`.Frame` if it does not already
+            incoming [Frame](api:Frame) if it does not already
             have it.
-            The default is ``["state", "patches"]``, ensuring
-            that the most up-to-date :class:`.BaseQuantumState`
-            and :class:`.PatchDict` are always available in the
+            The default is `["state", "patches"]`, ensuring
+            that the most up-to-date BaseQuantumState
+            and PatchDict are always available in the
             last frame.
             Common other additions including syndrome bits
             for decoders that require the previous syndrome.
 
         no_serialize_keys:
             A list of keys that should not be serialized by
-            each :class:`.Frame`. Specifically, it calls
-            :meth:`.Frame.no_serialize` on frames as they
+            each [Frame](api:Frame). Specifically, it calls
+            [no_serialize](api:Frame.no_serialize) on frames as they
             are added.
-            It defaults to ``None``, but a common choice would
-            also be ``["state"]`` in cases where the quantum
+            It defaults to `None`, but a common choice would
+            also be `["state"]` in cases where the quantum
             state is large or there is no need to keep it,
             i.e. no plans to rerun a shot starting from that point.
         """
@@ -214,11 +211,11 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         return s
 
     def append(self, item: FrameCastableTypes) -> None:
-        """Add a :class:`.Frame` to the end of the :class:`.History`.
+        """Add a [Frame](api:Frame) to the end of the [History](api:History).
 
         Parameters
         ----------
-        item:
+        item : FrameCastableTypes
             The frame-castable object to append.
         """
         item = Frame.cast(item)
@@ -259,24 +256,30 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         indices: HistoryCollectDataIndexTypes,
         strip_none_entries: bool = False,
     ) -> list | object:
-        """Pull data by key out of one or several stored :class:`.Frame` objects.
+        """Pull data by key out of one or several stored [Frame](api:Frame) objects.
 
         Parameters
         ----------
-        key:
-            The key into each :class:`.Frame` corresponding to the desired data.
+        key : str
+            The key into each [Frame](api:Frame) corresponding to the desired data.
 
-        indices:
-            Frame indices to look for ``key`` in. This can either be an int for a single frame,
+        indices : HistoryCollectDataIndexTypes
+            Frame indices to look for `key` in. This can either be an int for a single frame,
             a list of ints for several frames, a slice for a continuous set of frames,
-            or ``"all"`` (which is equivalent to ``slice(0, None)``).
+            or `"all"` (which is equivalent to `slice(0, None)`).
             These values can either be positive and index starting from the beginning,
             or negative and index from the last frame, i.e. -1 is a common way to get
             data from the last frame.
 
-        strip_none_entry:
-            Whether to keep None entries (``False``, default) or remove them (``True``).
+        strip_none_entries : bool, optional
+            Whether to keep None entries (`False`, default) or remove them (`True`).
             Only has an effect if returned data will have more than one value.
+
+        Returns
+        -------
+        list | object
+            The collected data. If indices is an int, returns a single object.
+            Otherwise, returns a list of objects.
         """
 
         if isinstance(indices, int):

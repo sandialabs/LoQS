@@ -8,6 +8,17 @@
 #####################################################################################################################
 
 """Quantum simulation backends for LoQS
+
+There are three kinds of backends in LoQS: [circuit](api:backends.circuit),
+[model](api:backends.model), and [state](api:backends.circuit).
+
+!!! warning
+
+    For backends that depend on optional third-party packages,
+    it is recommended to not import from the module/class file directly.
+    Instead, try to import from `loqs.backends`, which dynamically checks
+    if that backend is available using the below methods.
+
 """
 
 from typing import TYPE_CHECKING, Any
@@ -24,11 +35,14 @@ from .state.basestate import OutcomeDict
 
 @dataclass
 class BackendAvailability:
-    """Class to track backend availability"""
+    """Dataclass to track backend availability"""
 
     name: str
+    """Backend name"""
     available: bool
+    """Whether the backend is available or not"""
     error: str | None = None
+    """Error message when trying to import the backend"""
 
 
 # Backend availability tracking
@@ -146,12 +160,12 @@ def propagate_state(
 ) -> tuple[BaseQuantumState, OutcomeDict]:
     """Given a circuit and model, propagate a state forward in time.
 
-    This is a wrapper for :meth:`.BaseNoiseModel.get_reps`
-    and :meth:`.BaseQuantumState.apply_reps_inplace` (or
-    the non-inplace version if ``inplace=False``).
+    This is a wrapper for [BaseNoiseModel.get_reps](api:BaseNoiseModel.get_reps)
+    and [BaseQuantumState.apply_reps_inplace](api:BaseQuantumState.apply_reps_inplace) (or
+    the non-inplace version if `inplace=False`).
     It does also try to find compatible reptypes by
-    searching for a match in output reps from ``model``
-    and input reps from ``state``.
+    searching for a match in output reps from `model`
+    and input reps from `state`.
 
     Parameters
     ----------
@@ -166,15 +180,15 @@ def propagate_state(
         The state to move forward in time
 
     inplace:
-        Whether to modify the state in-place (``True``, default)
-        or propagate a copy forward (``False``).
-        This should probably remain ``True`` for memory reasons.
+        Whether to modify the state in-place (`True`, default)
+        or propagate a copy forward (`False`).
+        This should probably remain `True` for memory reasons.
 
     Returns
     -------
     BaseQuantumState, OutcomeDict
-        The output of :meth:`.BaseQuantumState.apply_reps`.
-        If ``inplace=True``, then the state is also returned
+        The output of [BaseQuantumState.apply_reps](api:BaseQuantumState.apply_reps).
+        If `inplace=True`, then the state is also returned
         to provide a consistent API.
     """
     # Find a compatible model/state oprep

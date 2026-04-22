@@ -60,9 +60,9 @@ def test_serialization_performance(config):
     hdf5_factor, hdf5_unit = _get_print_factor_unit(hdf5_size)
 
     # Report results
-    print(f"JSON:  {json_time:.3f}s, {json_size/json_factor:.1f} {json_unit}")
-    print(f"HDF5: {hdf5_time:.3f}s, {hdf5_size/hdf5_factor:.1f} {hdf5_unit}")
-    print(f"HDF5 benefits: {json_size/hdf5_size:.1f}x size reduction, {json_time/hdf5_time:.1f}x faster")
+    print(f"JSON:  {json_time:.3f}s, {json_size/json_factor:.2f} {json_unit}")
+    print(f"HDF5: {hdf5_time:.3f}s, {hdf5_size/hdf5_factor:.2f} {hdf5_unit}")
+    print(f"HDF5 benefits: {json_size/hdf5_size:.2f}x size reduction, {json_time/hdf5_time:.2f}x faster")
     
     # Verify deserialization works correctly
     if config.name == "small":
@@ -172,44 +172,47 @@ def create_history_with_repeated_objects(config):
 def _test_json_serialization(history, config):
     """Test JSON serialization performance (helper function)."""
 
-    with make_temp_path(suffix=".json") as temp_file:
-        # Time the serialization
-        start_time = time.time()
+    with tempfile.NamedTemporaryFile(suffix=".json") as temp:
+        temp_file = temp.name
 
-        history.write(temp_file, format="json", use_caching=config.use_caching)
+        try:
+            # Time the serialization
+            start_time = time.time()
 
-        json_time = time.time() - start_time
+            history.write(temp_file, format="json", use_caching=config.use_caching)
 
-        # Get file size
-        json_size = os.path.getsize(temp_file)
+            json_time = time.time() - start_time
 
-        return json_time, json_size
+            # Get file size
+            json_size = os.path.getsize(temp_file)
 
-    finally:
-        #print(f"Leaving file {temp_file}")
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
+            return json_time, json_size
+        finally:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
 
 
 def _test_hdf5_serialization(history, config):
     """Test HDF5 serialization performance (helper function)."""
 
-    with make_temp_path(suffix=".h5") as temp_file:
-        # Time the serialization
-        start_time = time.time()
-        
-        history.write(temp_file, format="hdf5", use_caching=config.use_caching)
-        
-        hdf5_time = time.time() - start_time
+    with tempfile.NamedTemporaryFile(suffix=".h5") as temp:
+        temp_file = temp.name
 
-        # Get file size
-        hdf5_size = os.path.getsize(temp_file)
+        try:
+            # Time the serialization
+            start_time = time.time()
+            
+            history.write(temp_file, format="hdf5", use_caching=config.use_caching)
+            
+            hdf5_time = time.time() - start_time
 
-        return hdf5_time, hdf5_size
+            # Get file size
+            hdf5_size = os.path.getsize(temp_file)
 
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
+            return hdf5_time, hdf5_size
+        finally:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
 
 def _get_print_factor_unit(size):
     factor = 1024
@@ -226,31 +229,37 @@ def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
-    with make_temp_path(suffix=".json") as temp_file:
-        history.write(temp_file, format="json")
-        loaded_json = History.read(temp_file)
-        assert isinstance(loaded_json, History)
+    
+    with tempfile.NamedTemporaryFile(suffix=".json") as temp:
+        temp_file = temp.name
 
-        # Basic sanity checks
-        assert len(loaded_json) == len(history)
-        # Frame uses _data attribute
-        assert str(loaded_json[0]._data.keys()) == str(history[0]._data.keys())
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
+        try:
+            history.write(temp_file, format="json")
+            loaded_json = History.read(temp_file)
+            assert isinstance(loaded_json, History)
 
-    with make_temp_path(suffix=".h5") as temp_file:
-        history.write(temp_file, format="hdf5")
-        loaded_hdf5 = History.read(temp_file)
-        assert isinstance(loaded_hdf5, History)
+            # Basic sanity checks
+            assert len(loaded_json) == len(history)
+            # Frame uses _data attribute
+            assert str(loaded_json[0]._data.keys()) == str(history[0]._data.keys())
+        finally:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
 
-        # Basic sanity checks
-        assert len(loaded_hdf5) == len(history)
-        # Frame uses _data attribute
-        assert str(loaded_hdf5[0]._data.keys()) == str(history[0]._data.keys())
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
+    with tempfile.NamedTemporaryFile(suffix=".h5") as temp:
+        temp_file = temp.name
+        try:
+            history.write(temp_file, format="hdf5")
+            loaded_hdf5 = History.read(temp_file)
+            assert isinstance(loaded_hdf5, History)
+
+            # Basic sanity checks
+            assert len(loaded_hdf5) == len(history)
+            # Frame uses _data attribute
+            assert str(loaded_hdf5[0]._data.keys()) == str(history[0]._data.keys())
+        finally:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
 
 
 

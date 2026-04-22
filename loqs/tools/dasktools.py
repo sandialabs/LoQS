@@ -34,18 +34,20 @@ def run_program_list(
 
     Parameters
     ----------
-    programs:
+    programs : Sequence[QuantumProgram]
         The programs to run
 
-    dask_client:
+    dask_client : Client
         The Dask client to use when submitting shots
 
-    num_shots_per_program:
+    num_shots_per_program : int | Sequence[int]
         The number of shots to execute per program.
-        See :meth:`.QuantumProgram.run`.
+        See [QuantumProgram.run](api:QuantumProgram.run).
 
-    max_frame_limit:
-        See :meth:`.QuantumProgram.run`
+    max_frame_limit : int, optional
+        See [QuantumProgram.run](api:QuantumProgram.run), by default 100
+
+    REVIEW_SPHINX_REFERENCE
     """
     if isinstance(num_shots_per_program, int):
         num_shots_per_program = [

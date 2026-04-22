@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.ListPhysicalCircuit` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -275,21 +274,11 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         serial_circuit: str | list | dict,
         qubit_labels: Sequence | None = None,
     ) -> list[list[tuple[str, tuple[QubitTypes, ...]]]]:
-        """Helper function to deserialize a circuit.
-
-        Derived classes should implement this for
-        deserialization to work.
-        """
         # For list circuit, it is already serializable
         # qubit_labels not needed
         assert isinstance(serial_circuit, list)
         return serial_circuit
 
     def _serialize_circuit(self) -> str | list | dict:
-        """Helper function to serialize a circuit.
-
-        Derived classes should implement this for
-        serialization to work.
-        """
         # For list circuit, it is already serializable
         return self.circuit

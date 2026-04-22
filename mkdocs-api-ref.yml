@@ -1,0 +1,59 @@
+site_name: LoQS API Reference
+
+nav:
+  - Reference: SUMMARY.md
+
+theme:
+  name: material
+  logo: logo_icon.png
+  custom_dir: docs/overrides
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+
+extra:
+  main_site_url: /
+extra_css:
+  - assets/stylesheets/api-extra.css
+extra_javascript:
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+markdown_extensions:
+  - footnotes
+  - toc:
+      permalink: true
+  - attr_list
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.arithmatex:
+      generic: true
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs_scripts/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_source: false
+            show_signature: true
+            show_signature_annotations: true
+            separate_signature: true
+            heading_level: 2
+            members_order: alphabetical
+  - bibtex:
+      bib_file: docs/references.bib
+      csl_file: docs/american-physical-society-et-al.csl
+  - mkdocs-simple-hooks:
+      hooks:
+        on_post_page: docs_scripts.api_hooks:on_post_page

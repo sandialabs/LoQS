@@ -7,10 +7,10 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Common container-like objects stored in a :class:`.Frame`.
+"""Common container-like objects stored in a [](api:Frame).
 
-While a :class:`.Frame` -- and by extension, a :class:`.History` --
-contains many LoQS core objects or simple built-in Python objects,
+While a [](api:Frame) -- and by extension, a [](api:History) --
+contains many `LoQS` core objects or simple built-in Python objects,
 there are several other kinds of objects that we commonly want
 to store also.
 

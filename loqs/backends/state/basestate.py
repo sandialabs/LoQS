@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.BaseQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ class BaseQuantumState(Castable, Displayable):
     name: ClassVar[str]
     """Name of state backend"""
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -57,7 +56,14 @@ class BaseQuantumState(Castable, Displayable):
     @property
     @abstractmethod
     def input_reps(self) -> list[GateRep | InstrumentRep]:
-        """Gate and instrument reps this state can take as input."""
+        """Gate and instrument reps this state can take as input.
+        
+        Returns
+        -------
+        list[GateRep | InstrumentRep]
+            List of operation representation types that this quantum state backend
+            can process and apply.
+        """
         pass
 
     @abstractmethod
@@ -84,7 +90,7 @@ class BaseQuantumState(Castable, Displayable):
         Parameters
         ----------
         reps:
-            See :meth:`.apply_reps_inplace`.
+            See [apply_reps_inplace](api:BaseQuantumState.apply_reps_inplace).
 
         Returns
         -------
@@ -99,7 +105,7 @@ class BaseQuantumState(Castable, Displayable):
 
     @abstractmethod
     def copy(self: T) -> T:
-        """Copy a state object.
+        """Deep-copy a state object.
 
         Returns
         -------

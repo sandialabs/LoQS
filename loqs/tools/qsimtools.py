@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""A collection of tools useful for :class:`.QSimQuantumState` objects.
+"""A collection of tools useful for [](api:QSimQuantumState) objects.
 
 Primarily verbose printing for debugging currently.
 """
@@ -50,6 +50,19 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
     assert qubits is not None
 
     def get_bitstring_dict():
+        """Get computational basis probabilities as a bitstring dictionary.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        dict[str, float]
+            Dictionary mapping bitstrings to their measurement probabilities
+
+        REVIEW_NO_DOCSTRING
+        """
         probs = {}
         for bd, p in qsim_state.state.peak_multiple_measurements(qubits):
             bitstring = "".join([str(bd[q]) for q in qubits])
@@ -98,9 +111,11 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
 
 
 def print_state_probs_phases(qsim_state: QSimQuantumState):
-    """Pretty-print the output of :meth:`get_state_probs_phases`.
+    """Pretty-print the output of [get_state_probs_phases](api:get_state_probs_phases).
 
-    Refer to :meth:`get_state_probs_phases` for documentation.
+    Refer to [get_state_probs_phases](api:get_state_probs_phases) for documentation.
+
+    REVIEW_SPHINX_REFERENCE
     """
     qubits, probs, phases = get_state_probs_phases(qsim_state)
     print(qubits)

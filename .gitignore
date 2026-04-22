@@ -2,6 +2,7 @@
 __pycache__
 .pytest_cache
 .ipynb_checkpoints/
+__marimo__/
 
 .coverage*
 coverage.xml
@@ -18,6 +19,9 @@ docs/**/_autosummary
 docs/**/*.ipynb
 docs/**/*.json
 docs/**/*.json.gz
+docs/.refcache
+site/
+docs/_gen_md
 
 checkpoints/
 

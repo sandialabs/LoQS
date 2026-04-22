@@ -13,9 +13,9 @@ from loqs.types import NDArray
 class MockSerializable(Serializable):
     """A concrete Serializable class for testing."""
 
-    CACHE_ON_SERIALIZE = True
+    _CACHE_ON_SERIALIZE = True
 
-    SERIALIZE_ATTRS = ["name", "value", "data"]
+    _SERIALIZE_ATTRS = ["name", "value", "data"]
 
     def __init__(self, name="test", value=42, data=None):
         self.name = name
@@ -31,7 +31,7 @@ class MockSerializable(Serializable):
         )
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict):
+    def _from_decoded_attrs(cls, attr_dict):
         """Create a MockSerializable from decoded attributes dictionary."""
         return cls(
             name=attr_dict["name"],
@@ -350,15 +350,15 @@ class TestSerializableNestedData:
         assert loaded1.name == "obj1"
         assert loaded2.name == "obj2"
 
-    def test_same_serial_hash_different_instances(self, make_temp_path):
+    def test_same__serial_hash_different_instances(self, make_temp_path):
         """Test objects with same serializable content but different instances."""
         # Create two objects with identical content but different instances
         obj1 = MockSerializable(name="test", value=42, data={"key": "value"})
         obj2 = MockSerializable(name="test", value=42, data={"key": "value"})
         
-        # Verify they have different ids but same serial_hash
+        # Verify they have different ids but same _serial_hash
         assert id(obj1) != id(obj2)
-        assert Serializable.serial_hash(obj1) == Serializable.serial_hash(obj2)
+        assert Serializable._serial_hash(obj1) == Serializable._serial_hash(obj2)
         
         # Test serialization with caching
         cache = {}
@@ -444,7 +444,7 @@ class TestSerializableNestedData:
         state1 = Serializable.encode(obj1, format="json", encode_cache=cache, reset_encode_id=True)
         assert isinstance(state1, dict)
         
-        # Should be source since it's the first time we see this serial_hash
+        # Should be source since it's the first time we see this _serial_hash
         assert state1["cache_type"] == "source"
         
         # The nested obj2 should also be a source since it has different content
@@ -722,7 +722,7 @@ class TestSerializableNestedData:
         assert decoded["obj2"] is decoded["obj1"]
 
         # obj3 should have same hash, but diff id
-        assert Serializable.serial_hash(decoded["obj3"]) == Serializable.serial_hash(decoded["obj1"])
+        assert Serializable._serial_hash(decoded["obj3"]) == Serializable._serial_hash(decoded["obj1"])
         assert decoded["obj3"] is not decoded["obj1"]
 
         # obj4 is obj3

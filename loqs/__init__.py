@@ -9,8 +9,7 @@
 
 """Logical Qubit Simulator (LoQS)
 
-A simulator for logical qubits with arbitrary noise described
-by process matrices
+A simulator for logical qubits with arbitrary noise and flexible QEC code definitions
 """
 
 # Import first (most dependencies)

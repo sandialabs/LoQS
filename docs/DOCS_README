@@ -1,0 +1,208 @@
+# Documentation system overview
+
+This repository builds documentation in two stages and merges them into a single site:
+
+1) Main documentation site (`mkdocs.yml`) — narrative docs and interactive Marimo content
+2) API reference site (`mkdocs-api-ref.yml`) — auto-generated API reference
+
+The merged site mounts the API reference under `/reference/`. The main site includes a nav entry pointing there: `API Reference: /reference`.
+
+---
+
+## Stage 1: Main documentation site (Marimo-first)
+
+Config: `mkdocs.yml`
+Purpose: User-facing docs, tutorials, and interactive content.
+
+Key traits:
+
+- Uses the `marimo` MkDocs plugin so tutorials can be:
+  - run locally via `marimo edit`, and
+  - published as interactive documentation.
+- Navigation is primarily hand-curated (e.g., “Getting Started”, “Developer Zone”).
+- This site is the primary entry point and links to the API site at `/reference/`.
+
+Why this stage exists:
+
+- Marimo notebooks are a good format for executable tutorials and interactive docs.
+- Keeping this site focused on narrative content avoids turning the docs into an API dump.
+
+---
+
+## Stage 2: API reference site (generated, mkdocstrings-driven)
+
+Config: `mkdocs-api-ref.yml`
+Purpose: A comprehensive, navigable API reference that stays in sync with the codebase.
+
+Key traits:
+
+- Pages and navigation are generated at build time by `docs_scripts/gen_ref_pages.py`.
+- A minimal post-processing hook `docs_scripts/hooks.py` cleans up mkdocstrings rendering artifacts and prunes redundant TOC entries.
+- The API site is stable and predictable: module pages, class pages, consistent ordering, and no manual nav maintenance.
+
+Why this stage exists:
+
+- API reference generation benefits from automation and strict conventions.
+- Separating it from the Marimo site avoids mixing interactive tutorial requirements with API generation complexity.
+
+---
+
+## Why the two-stage setup?
+
+This split enables both:
+
+1) Interactive tutorials (Marimo) without compromising local edit/run workflows.
+2) A high-quality API reference (mkdocstrings) that is automatically generated, complete (including `__init__.py` content), and consistently structured.
+
+In practice: the main site is optimized for learning/onboarding; the API site is optimized for lookup/completeness.
+
+---
+
+## Differences from a standard mkdocstrings setup
+
+A typical mkdocstrings workflow often:
+
+- Manually writes Markdown pages under `docs/`
+- Adds a few `::: package.module` directives
+- Optionally enables `members: true` and lets mkdocstrings render everything
+- Manually maintains MkDocs navigation
+
+This repository differs in several ways:
+
+### 1) Pages and navigation are generated automatically (API site)
+
+- The `gen-files` plugin runs `docs_scripts/gen_ref_pages.py` during the API build.
+- It writes module pages, class pages, and a generated `SUMMARY.md` nav file.
+- The `literate-nav` plugin uses `SUMMARY.md` so the sidebar is always up to date.
+
+### 2) `__init__.py` is treated as real API surface
+
+Many projects expose public API via packages’ `__init__.py` files. This generator parses `__init__.py` like any other module (while still rendering it as the package landing page), ensuring those definitions are documented.
+
+### 3) Members tables are custom (AST-based), not mkdocstrings defaults
+
+For class and module member variables, the API reference uses an AST-based pass to build tables that can include:
+
+- name
+- type hint string (for class members, `ClassVar[T]` is displayed as `T`)
+- value (or `unset`)
+- a doc “hint” convention: a string literal immediately after the declaration
+- inherited members are included and are marked as `(inherited)`
+
+This is done because mkdocstrings does not reliably surface “variable docs” in the same way, and this repository relies on conventions that are easier to capture from source.
+
+### 4) Inheritance-aware documentation enhancements
+
+The generator uses runtime introspection for class MRO and method classification to support:
+
+- ordering methods consistently (static → class → instance, alphabetically)
+- documenting a base implementation’s docstring for undocumented overrides (when appropriate)
+- including inherited member variables (even if not redeclared)
+
+### 5) Minimal HTML post-processing to improve readability
+
+A small hook (`docs_scripts/hooks.py`) removes repeated mkdocstrings intro paragraphs in specific generated blocks and removes redundant class anchors from the right-hand TOC. The hook operates only on marked generated blocks to keep changes controlled.
+
+---
+
+## Cross-linking between docs and API: `api:` links
+
+This repository supports a custom link shorthand so the main docs (and API docs) can link into the generated API reference using progressive qualification, without writing full URLs.
+
+Authoring format:
+
+- Inline links: `[Text](api:Target)`
+- (Optionally) reference-style links: `[Text][api:Target]`
+
+Examples:
+
+- `[Serializable](api:Serializable)`
+- `[Serializable](api:internal.serializable.Serializable)`
+- `[encode](api:Serializable.encode())`  (parentheses are allowed)
+- `[SERIALIZATION_VERSION](api:Serializable.SERIALIZATION_VERSION)`
+- `[get_available_backends](api:get_available_backends)`
+
+Progressive qualification rules:
+
+- A short target like `api:Serializable` resolves only if it is unique.
+- If ambiguous, the build fails and you must add more qualification, e.g. `api:serializable.Serializable` or `api:internal.serializable.Serializable`.
+- Fully-qualified names (`api:loqs.internal.serializable.Serializable`) always resolve when present.
+
+Build behavior:
+
+- Missing or ambiguous `api:` targets are a hard build failure.
+
+How it works:
+
+- The API build generates an inventory file at `docs/_api_inventory.json` containing:
+  - all resolvable API anchors (modules/classes/functions/methods/attributes)
+  - a suffix index to enable progressive qualification
+- Both the main docs build and the API docs build rewrite `api:` links using this inventory.
+
+Note: `docs/_api_inventory.json` is treated as a generated artifact and is cleaned up by `serve.py` after each build.
+
+---
+
+## Local build/preview workflow (merged two-stage site)
+
+A single helper script supports both interactive local preview (serve) and build-only output.
+
+### `serve.py`
+
+`serve.py` builds both MkDocs sites, merges them into one output tree, and either:
+
+- serves them locally (default), or
+- builds only (with `--build-only`).
+
+It always mounts the API reference under `/reference/`.
+
+Serve mode (default):
+
+- Run: `python serve.py`
+
+This builds into a temporary directory and starts a local HTTP server. It prints URLs like:
+
+- `http://127.0.0.1:8000/` (main docs)
+- `http://127.0.0.1:8000/reference/` (API reference)
+
+Stop with Ctrl+C. Re-run the script to rebuild.
+
+Build-only mode:
+
+- Run: `python serve.py --build-only --clean`
+
+This builds and merges into a persistent output directory (defaults to `./site`) and does not start a server.
+
+Outputs:
+
+- `site/` (merged main docs)
+- `site/reference/` (API reference mounted)
+
+You can override the output directory:
+
+- `python serve.py --build-only --out site --clean`
+
+---
+
+## Files to know
+
+- `mkdocs.yml`
+  Main documentation site (Marimo-first tutorials and narrative docs).
+
+- `mkdocs-api-ref.yml`
+  API reference site (auto-generated).
+
+- `docs_scripts/gen_ref_pages.py`
+  Generates API Markdown pages, `SUMMARY.md`, and the `docs/_api_inventory.json` inventory.
+
+- `docs_scripts/api_hooks.py`
+  Minimal HTML cleanup and TOC pruning for generated API pages.
+
+- `docs_scripts/main_hooks.py`
+  Main docs hook: rewrites `api:` links to point to `/reference/...` URLs. Hard-fails on missing/ambiguous targets.
+
+- `docs_scripts/api_inventory.py`
+  Inventory format + progressive qualification resolver used by hooks.
+
+- `serve.py`
+  Builds both sites, merges them, and either serves locally or writes to `site/` with `--build-only`. It also cleans up the generated `docs/_api_inventory.json` file after builds.

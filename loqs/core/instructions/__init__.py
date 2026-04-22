@@ -7,15 +7,15 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.Instruction`-related objects and functions.
+"""[](api:Instruction)-related objects and functions.
 
-In addition to the :class:`.Instruction` itself,
-this includes :class:`.InstructionLabel` and
+In addition to the [](api:Instruction) itself,
+this includes [](api:InstructionLabel) and
 :class`.InstructionStack` objects.
 
 This module also include the :mod:`.builders`,
 which contain functions that generate common
-:class:`.Instruction` types.
+[](api:Instruction) types.
 """
 
 from .instruction import Instruction

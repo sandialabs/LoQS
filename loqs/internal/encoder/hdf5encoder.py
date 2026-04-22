@@ -39,6 +39,31 @@ class HDF5Encoder(BaseEncoder):
         encoded: Encoded,
         decode_cache: DecodeCache = None,
     ) -> Encodable:
+        """Decode the root HDF5 group containing a serialized object.
+
+        This method handles the top-level deserialization of HDF5 files by extracting
+        the main content group and delegating the actual deserialization to the
+        Serializable.decode method. REVIEW_NO_DOCSTRING
+
+        Parameters
+        ----------
+        encoded : Encoded
+            The root HDF5 group containing the serialized object.
+            Should contain exactly one subgroup with no attributes.
+        decode_cache : DecodeCache, optional
+            Cache used to track decoded objects and resolve references during
+            deserialization.
+
+        Returns
+        -------
+        Encodable
+            The decoded object contained in the HDF5 file.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded structure is not a valid HDF5 serialization format.
+        """
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
             assert len(encoded.keys()) == 1
@@ -75,9 +100,9 @@ class HDF5Encoder(BaseEncoder):
         obj_group.attrs["class"] = to_encode.__class__.__name__
         obj_group.attrs["version"] = SERIALIZATION_VERSION
 
-        # Use SERIALIZE_ATTRS pattern for encoding
-        for serial_attr in to_encode.SERIALIZE_ATTRS:
-            attr_value = to_encode.get_encoding_attr(
+        # Use _SERIALIZE_ATTRS pattern for encoding
+        for serial_attr in to_encode._SERIALIZE_ATTRS:
+            attr_value = to_encode._get_encoding_attr(
                 serial_attr,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
@@ -97,6 +122,36 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_uncached_obj(encoded, decode_cache=None):
+        """Decode a Serializable object from HDF5 format.
+
+        Deserializes a Serializable object that was not previously cached.
+        This method handles the core deserialization logic for Serializable objects,
+        including attribute reconstruction and circular reference handling.
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded Serializable object.
+            Should have 'encode_type' attribute set to 'Serializable' and
+            contain subgroups for each serialized attribute.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects. Used to handle
+            circular references and object caching during deserialization.
+
+        Returns
+        -------
+        Serializable
+            The decoded Serializable object of the appropriate class.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid Serializable object.
+        DecodableVersionError
+            If the serialization version is not supported.
+        ImportError
+            If the class cannot be imported from the specified module.
+        """
         # Check if right type
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
@@ -111,7 +166,7 @@ class HDF5Encoder(BaseEncoder):
                 raise DecodableVersionError()
 
         # Get the class
-        cls = Serializable.import_class(
+        cls = Serializable._import_class(
             encoded.attrs["module"], encoded.attrs["class"], version
         )
 
@@ -144,8 +199,8 @@ class HDF5Encoder(BaseEncoder):
         if cls == Instruction:
             attr_dict["version"] = version
 
-        # Create the object using its from_decoded_attrs method
-        decoded = cls.from_decoded_attrs(attr_dict)
+        # Create the object using its _from_decoded_attrs method
+        decoded = cls._from_decoded_attrs(attr_dict)
 
         # Replace the placeholder with the actual object
         if (
@@ -165,6 +220,31 @@ class HDF5Encoder(BaseEncoder):
         reference_cache_id=None,
         source_cache_id=None,
     ):
+        """Encode a cached object reference in HDF5 format.
+
+        This method creates a reference to an object that has already been serialized,
+        avoiding duplicate storage of identical objects. Used for implementing object
+        caching during serialization to improve efficiency and handle circular references.
+
+        Parameters
+        ----------
+        cache_id : int
+            The cache ID for this reference.
+        h5_group : h5py.Group
+            The HDF5 group to write the cached object reference to.
+        cache_type : str, optional
+            Type of cache reference, either 'reference' (multiple references to same object)
+            or 'copy' (copy of an existing object). Default is 'reference'.
+        reference_cache_id : int, optional
+            For copy-type caching, the cache ID of the reference object.
+        source_cache_id : int, optional
+            For copy-type caching, the cache ID to assign to the copied object.
+
+        Returns
+        -------
+        h5py.Group
+            The HDF5 group containing the encoded cached object reference.
+        """
         assert isinstance(h5_group, h5py.Group)
 
         obj_group = h5_group.create_group(
@@ -185,6 +265,40 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_cached_obj(encoded, decode_cache=None):
+        """Decode a cached object reference from HDF5 format.
+
+        This method handles the deserialization of object references that were
+        cached during encoding to avoid duplicate serialization of identical objects.
+        It supports both reference-type caching (where multiple references point to
+        the same object) and copy-type caching (where objects with identical content
+        are stored once and copied).
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded cached object reference.
+            Should have 'encode_type' attribute set to 'Serializable' and
+            'cache_type' attribute indicating the type of cache reference.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects. Used to resolve
+            object references and handle circular references.
+
+        Returns
+        -------
+        Serializable | DeferredRef
+            The decoded object. If the referenced object is not yet available
+            in the cache, returns a DeferredRef placeholder that will be
+            resolved later.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid cached object reference.
+        DecodableVersionError
+            If the serialization version is not supported.
+        RuntimeError
+            If object references cannot be resolved due to missing source objects.
+        """
         # Check if right type
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
@@ -346,6 +460,32 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_iterable(encoded, decode_cache=None):
+        """Decode an iterable (list, tuple, set) from HDF5 format.
+
+        Deserializes iterable objects that were serialized using encode_iterable.
+        Supports both the original format (individual groups for each element)
+        and the optimized format (HDF5 datasets for homogeneous native types).
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded iterable.
+            Should have an 'iterable' subgroup with appropriate structure.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects for reference resolution.
+
+        Returns
+        -------
+        list | tuple | set
+            The decoded iterable object of the appropriate type.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid iterable.
+        DecodableVersionError
+            If the serialization version is not supported.
+        """
         # Check if right type
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
@@ -473,6 +613,32 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_dict(encoded, decode_cache=None):
+        """Decode a dictionary from HDF5 format.
+
+        Deserializes dictionary objects that were serialized using encode_dict.
+        Preserves the original dictionary structure and insertion order by
+        separately serializing keys and values.
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded dictionary.
+            Should have a 'dict' subgroup with 'keys' and 'values' subgroups.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects for reference resolution.
+
+        Returns
+        -------
+        dict
+            The decoded dictionary object.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid dictionary.
+        DecodableVersionError
+            If the serialization version is not supported.
+        """
         # Check if right type
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
@@ -511,7 +677,29 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def encode_array(to_encode, h5_group=None):
-        """Serialize NumPy arrays and SciPy sparse matrices."""
+        """Encode NumPy arrays and SciPy sparse matrices to HDF5 format.
+
+        Serializes array data with support for both dense and sparse matrices.
+        Uses optimized storage strategies including compression and chunking for
+        large arrays, and handles complex numbers by separating real and imaginary parts.
+
+        Parameters
+        ----------
+        to_encode : EncodableArrays
+            The array to encode. Can be a NumPy array (NDArray) or SciPy sparse matrix (SPSArray).
+        h5_group : h5py.Group
+            The HDF5 group to write the array data to.
+
+        Returns
+        -------
+        h5py.Group
+            The HDF5 group containing the encoded array data.
+
+        Raises
+        ------
+        ValueError
+            If the array type is not supported.
+        """
         assert isinstance(to_encode, EncodableArrays)
         assert isinstance(h5_group, h5py.Group)
 
@@ -693,6 +881,31 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_class(encoded) -> type:
+        """Decode a class/type from HDF5 format.
+
+        Deserializes a class reference that was serialized using encode_class.
+        This allows for proper reconstruction of class types during deserialization.
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded class information.
+            Should have a 'class' subgroup with 'module' and 'class' attributes.
+
+        Returns
+        -------
+        type
+            The decoded class/type object.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid class reference.
+        DecodableVersionError
+            If the serialization version is not supported.
+        ImportError
+            If the class cannot be imported from the specified module.
+        """
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
             assert "class" in encoded
@@ -708,7 +921,7 @@ class HDF5Encoder(BaseEncoder):
                 raise DecodableVersionError()
 
         # Get the class
-        return Serializable.import_class(
+        return Serializable._import_class(
             class_group.attrs["module"],
             class_group.attrs["class"],
             class_group.attrs["version"],
@@ -720,7 +933,7 @@ class HDF5Encoder(BaseEncoder):
         assert callable(to_encode)
         assert isinstance(h5_group, h5py.Group)
 
-        full_src = Serializable.get_function_str(to_encode)
+        full_src = Serializable._get_function_str(to_encode)
 
         function_group = h5_group.create_group("function")
         function_group.attrs["version"] = SERIALIZATION_VERSION
@@ -729,6 +942,31 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_function(encoded):
+        """Decode a callable function from HDF5 format.
+
+        Deserializes function objects that were serialized using encode_function.
+        Reconstructs the function by evaluating its source code in an appropriate
+        environment with necessary imports.
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded function.
+            Should have a 'function' subgroup with 'source' dataset containing
+            the function's source code.
+
+        Returns
+        -------
+        callable
+            The decoded function object.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid function.
+        DecodableVersionError
+            If the serialization version is not supported.
+        """
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
             assert "function" in encoded
@@ -750,10 +988,27 @@ class HDF5Encoder(BaseEncoder):
                 source = str(source)
             assert isinstance(source, str)
 
-        return Serializable.eval_function_str(source, version)
+        return Serializable._eval_function_str(source, version)
 
     @staticmethod
     def encode_primitive(to_encode, h5_group=None):
+        """Encode a primitive value in HDF5 format.
+
+        Serializes primitive Python types (int, float, bool, complex, None, str, bytes)
+        to HDF5 format. Handles type preservation and special cases like None values.
+
+        Parameters
+        ----------
+        to_encode : EncodablePrimitives
+            The primitive value to encode. Can be int, float, bool, complex, None, str, or bytes.
+        h5_group : h5py.Group
+            The HDF5 group to write the primitive value to.
+
+        Returns
+        -------
+        h5py.Group
+            The HDF5 group containing the encoded primitive value.
+        """
         assert isinstance(to_encode, EncodablePrimitives)
         assert isinstance(h5_group, h5py.Group)
 
@@ -778,6 +1033,31 @@ class HDF5Encoder(BaseEncoder):
 
     @staticmethod
     def decode_primitive(encoded):
+        """Decode a primitive value from HDF5 format.
+
+        Deserializes primitive Python types that were serialized using encode_primitive.
+        Handles type reconstruction and special cases like None values and bytes encoding.
+
+        Parameters
+        ----------
+        encoded : h5py.Group
+            The HDF5 group containing the encoded primitive value.
+            Should have 'encode_type' attribute set to 'primitive'.
+
+        Returns
+        -------
+        EncodablePrimitives
+            The decoded primitive value (int, float, bool, complex, None, str, or bytes).
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid primitive.
+        DecodableVersionError
+            If the serialization version is not supported.
+        ValueError
+            If the decoded primitive type is unexpected.
+        """
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
             assert encoded.attrs.get("encode_type", "") == "primitive"

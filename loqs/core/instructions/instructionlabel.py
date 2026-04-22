@@ -25,11 +25,11 @@ T = TypeVar("T", bound="InstructionLabel")
 InstructionLabelCastableTypes: TypeAlias = (
     "Instruction | str | tuple[Instruction | str, str | None] | tuple[Instruction | str, str | None, Sequence | None] | tuple[Instruction | str, str | None, Sequence | None, Mapping | None] | InstructionLabel"
 )
-"""Objects that can be cast to a :class:`.InstructionLabel`."""
+"""Objects that can be cast to a [](api:InstructionLabel)."""
 
 
 class InstructionLabel(SeqCastable, Displayable):
-    """Instruction labels intended to be elements of an :class:`.InstructionStack`.
+    """Instruction labels intended to be elements of an [](api:InstructionStack).
 
     These are also castable from 1- to 4-tuples, so users
     can just specify a stack as a list of tuples and labels
@@ -72,7 +72,7 @@ class InstructionLabel(SeqCastable, Displayable):
     """Additional kwargs to pass on.
     """
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "instruction",
         "inst_label",
         "patch_label",
@@ -95,14 +95,14 @@ class InstructionLabel(SeqCastable, Displayable):
             one of :attr:`.instruction` or :attr:`.inst_label`.
 
         patch_label:
-            See :attr:`.patch_label`. Defaults to ``None``.
+            See :attr:`.patch_label`. Defaults to `None`.
 
         inst_args:
-            See :attr:`.inst_args`. Default to ``None``, which
+            See :attr:`.inst_args`. Default to `None`, which
             just sets it to be an empty list.
 
         inst_kwargs:
-            See :attr:`.inst_kwargs`. Default to ``None``, which
+            See :attr:`.inst_kwargs`. Default to `None`, which
             just sets it to be an empty dict.
         """
         self.instruction = None
@@ -122,7 +122,7 @@ class InstructionLabel(SeqCastable, Displayable):
         self.inst_kwargs = dict(inst_kwargs)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
+    def _from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
         """Create an InstructionLabel from decoded attributes dictionary."""
         # Handle the case where instruction might be None
         instruction = attr_dict.get("instruction")
@@ -170,9 +170,9 @@ class InstructionLabel(SeqCastable, Displayable):
 
     @classmethod
     def cast(cls, obj: object) -> InstructionLabel:
-        """Cast to a :class:`InstructionLabel` object.
+        """Cast to a [InstructionLabel](api:InstructionLabel) object.
 
-        Unlike most castable objects, :class:`InstructionLabel`
+        Unlike most castable objects, [InstructionLabel](api:InstructionLabel)
         requires at least two inputs. This version of cast additionally
         allows a tuple/list variant for the multiple arguments and
         disallows a single object being passed in.
@@ -181,15 +181,15 @@ class InstructionLabel(SeqCastable, Displayable):
         ----------
         obj:
             A castable object that is either:
-            - Already a :class:`InstructionLabel` object,
+            - Already a [InstructionLabel](api:InstructionLabel) object,
             in which case `obj` is returned
             - A kwarg dict that is passed into the constructor
             - A sequence of the arguments of the
-            :class:`InstructionLabel` constructor
+            [InstructionLabel](api:InstructionLabel) constructor
 
         Returns
         -------
-            A :class:`SyndromeExtraction` object
+            A [InstructionLabel](api:InstructionLabel) object
         """
         if isinstance(obj, InstructionLabel):
             # We are already the correct class, perform no copy
