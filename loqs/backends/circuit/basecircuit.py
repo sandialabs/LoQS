@@ -102,8 +102,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             stabilizer checks in the surface code have the same schedule pattern to
             allow for full parallelization between the stabilizers.
 
-            REVIEW_SPHINX_REFERENCE
-
         merge_offsets:
             A list of offsets to use when merging tiles. If a single value is
             given, it is applied to all tiles. This defaults to 0, which stacks
@@ -291,8 +289,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         -------
         BasePhysicalCircuit
             A modified copy of the circuit.
-
-        REVIEW_SPHINX_REFERENCE
         """
         modified_circuit = self.copy()
         modified_circuit.insert_inplace(circuit, idx)
@@ -361,8 +357,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         -------
         BasePhysicalCircuit
             A modified copy of the circuit.
-
-        REVIEW_SPHINX_REFERENCE
         """
         modified_circuit = self.copy()
         modified_circuit.merge_inplace(circuit, idx)
@@ -383,15 +377,11 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
 
         idx:
             Layer index to start merge
-
-        REVIEW_SPHINX_REFERENCE
         """
         pass
 
     def pad_single_qubit_idles(self: T, idle_name: str) -> T:
         """Replace empty spaces in layers with an idle operation.
-
-        REVIEW_SPHINX_REFERENCE: Updated docstring to use new crosslinking format.
 
         Parameters
         ----------
@@ -451,8 +441,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         -------
         BasePhysicalCircuit
             A modified copy of the circuit.
-
-        REVIEW_SPHINX_REFERENCE
         """
         modified_circuit = self.copy()
         modified_circuit.pad_single_qubit_idles_by_duration_inplace(
@@ -571,8 +559,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         Any
             The attribute value to be encoded. For 'circuit', returns the serialized
             circuit object.
-
-        REVIEW_NO_DOCSTRING
         """
         if attr == "circuit":
             return self._serialize_circuit()
@@ -592,8 +578,6 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         -------
         BasePhysicalCircuit
             A new circuit instance created from the decoded attributes.
-
-        REVIEW_NO_DOCSTRING
         """
         qubit_labels = attr_dict["qubit_labels"]
         circuit = cls._deserialize_circuit(attr_dict["circuit"], qubit_labels)

@@ -164,12 +164,24 @@ class ConcreteGateReps:
     # fmt: on
 
     TP_CHECK_TOL = 1e-8
+    """Numerical tolerance for TP preservation check."""
 
     @staticmethod
     def sequence_is_krausop_rep(
         gr: Sequence, tp_check_abstol: Float = TP_CHECK_TOL
     ) -> bool:
         """Check if a sequence is a valid Kraus operator representation.
+
+        A valid Kraus operator representation is a sequence where each element is
+        a tuple or list with exactly 2 elements: a numpy array (the Kraus operator)
+        and a float or None (the probability or weight).
+        However, this puts no restrictions on the matrices.
+
+        This function specificially checks that a set of Kraus operators \( K_i \) satisfies
+
+        \[
+        \sum_i K_i K_i^{\dagger} = I
+        \]
 
         Parameters
         ----------
@@ -185,18 +197,6 @@ class ConcreteGateReps:
         bool
             True if the sequence is a valid Kraus operator representation,
             False otherwise.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        A valid Kraus operator representation is a sequence where each element is
-        a tuple or list with exactly 2 elements: a numpy array (the Kraus operator)
-        and a float or None (the probability or weight).
-
-        If tp_check_abstol is finite, this function also checks if the Kraus
-        operators form a trace-preserving channel and issues a warning if they don't.
         """
         if len(gr) == 0:
             return False
@@ -224,6 +224,10 @@ class ConcreteGateReps:
     def sequence_is_probabilisticstim_rep(gr: Sequence) -> bool:
         """Check if a sequence is a valid probabilistic STIM operation representation.
 
+        A valid probabilistic STIM operation representation is a sequence where each
+        element is a tuple or list with exactly 2 elements: a STIM circuit string
+        and a probability value (float, int, or numpy floating type).
+
         Parameters
         ----------
         gr : Sequence
@@ -233,16 +237,7 @@ class ConcreteGateReps:
         -------
         bool
             True if the sequence is a valid probabilistic STIM operation representation,
-            False otherwise.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        A valid probabilistic STIM operation representation is a sequence where each
-        element is a tuple or list with exactly 2 elements: a STIM circuit string
-        and a probability value (float, int, or numpy floating type).
+            False otherwise.        
         """
         if len(gr) == 0:
             return False
@@ -363,15 +358,6 @@ class ConcreteInstrumentReps:
         bool
             True if the representation is a valid Z-basis projection representation,
             False otherwise.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        A Z-basis projection representation is valid if it is a tuple or list with
-        exactly 2 elements where the first element is an integer or None, and the
-        second element is a boolean.
         """
         if not isinstance(ir, (tuple, list)):
             return False
@@ -397,10 +383,10 @@ class RepTuple(Castable, Displayable):
     """Underlying representation object."""
 
     qubits: tuple[str | int, ...]
-    """Qubit labels that :attr:`.rep` should be applied to."""
+    """Qubit labels that [](api:RepTuple.rep) should be applied to."""
 
     reptype: RepEnum
-    """Enum entry indicating how :attr:`.rep` should be interpreted."""
+    """Enum entry indicating how [](api:RepTuple.rep) should be interpreted."""
 
     _SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
 
@@ -410,6 +396,24 @@ class RepTuple(Castable, Displayable):
         qubits: str | int | Sequence[str | int],
         reptype: RepEnum,
     ):
+        """Tuple describing operator representation.
+
+        !!! warning
+            
+            This will likely be refactored in the near future.
+
+        Parameters
+        ----------
+        rep:
+            Incoming representation matching one of the rep types
+            in [](api:ConcreteGateRep) or [](api:ConcreteInstrumentRep).
+
+        qubits:
+            Qubits this operation acts upon
+
+        reptype:
+            Enum flagging which [](api:GateRep) or [](api:InstrumentRep) this is.
+        """
         self.rep = rep
         if isinstance(qubits, (str, int)):
             self.qubits = (qubits,)
@@ -441,11 +445,6 @@ class RepTuple(Castable, Displayable):
 
         This is specialized because lists/tuples with up to 3 entries
         should be unpacked into the three arguments.
-
-        Notes
-        -----
-        REVIEW_SPHINX_REFERENCE: This docstring was updated to replace Sphinx references
-        with MkDocs format. Please review the new format.
         """
         if isinstance(obj, cls):
             # We are already the correct class, perform no copy

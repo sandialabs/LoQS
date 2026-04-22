@@ -42,6 +42,10 @@ def external_api_url(target: str) -> str | None:
             mod = ".".join(parts[:-1])      # e.g. pygsti.models.model
             mod_path = "/".join(parts[:-1]) # e.g. pygsti/models/model
             return f"https://pygsti.readthedocs.io/en/latest/autoapi/{mod_path}/index.html#{mod}.{cls}"
+    
+    # Stim Python API reference
+    if t.startswith("stim."):
+        return f"https://github.com/quantumlib/Stim/wiki/Stim-v1.13-Python-API-Reference#{t}"
 
     # Python stdlib (best-effort): module page + qualified anchor
     stdlib_prefixes = ("collections.", "collections.abc.", "typing.", "pathlib.", "dataclasses.", "abc.", "enum.")

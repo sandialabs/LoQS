@@ -43,8 +43,15 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     """Model backend for handling generic operation dicts."""
 
     name: ClassVar[str] = "gate dict"
+
     gate_dict: dict[MemberLabel, RepTuple]
+    """Mapping from labels to [](api:RepTuple) for gate operations.
+    """
+
     inst_dict: dict[MemberLabel, RepTuple]
+    """Mapping from labels to [](api:RepTuple) for instrument operations.
+    """
+
 
     _SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
 
@@ -64,22 +71,26 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         model_or_dicts:
             A model to convert or pair of dictionaries to use
 
-        gaterep:
+        gatereps:
             Gate representation this model will return
 
-        instrep:
+        instreps:
             Instrument representation this model will return
 
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to [](api:RepTuples), this will be used as
+        gaterep_array_cast_rep:
+            The [](api:GateRep) used when casting bare matrices to a
+            [](api:RepTuple).
+
+        instrep_cast_reset:
+            If [](api:InstrumentRep.ZBASIS_PRE_POST_OPERATIONS) values
+            are being cast up to [](api:RepTuple)s, this will be used as
             the first argument of the rep, indicating which state to reset
             to (`0` or `1`) or whether to not reset (`None`, default).
 
         instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
-            :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to [](api:RepTuples), this will be used as
+            If [](api:InstrumentRep.ZBASIS_PRE_POST_OPERATIONS) or
+            [](api:InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT) values are
+            being cast up to [](api:RepTuple), this will be used as
             the second argument of the rep, indicating whether outcomes
             should be kept (`True`, default) or not (`False`).
         """
@@ -127,36 +138,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         self._instreps = list(instreps)
 
         def convert_to_gatereptuple(gr, qubits) -> RepTuple:
-            """Convert a gate representation to a RepTuple.
-
-            This helper function converts various gate representation formats
-            to the standard RepTuple format used by the model.
-
-            Parameters
-            ----------
-            gr : object
-                Gate representation to convert. Can be a RepTuple, numpy array,
-                string, or sequence.
-
-            qubits : tuple
-                Tuple of qubit labels that this gate operates on.
-
-            Returns
-            -------
-            RepTuple
-                Converted gate representation in RepTuple format.
-
-            Raises
-            ------
-            AssertionError
-                If the input cannot be converted to a valid RepTuple or if the
-                resulting RepTuple's reptype is not in the allowed gatereps.
-
-            Notes
-            -----
-            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-            previously had no documentation. Please review and update as needed.
-            """
             if not isinstance(gr, RepTuple):
                 if isinstance(gr, np.ndarray):
                     # matrix for dense rep
@@ -271,11 +252,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         -------
         list[GateRep]
             List of gate representations that this model can output.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         return self._gatereps
 
@@ -287,11 +263,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         -------
         list[InstrumentRep]
             List of instrument representations that this model can output.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         return self._instreps
 
@@ -321,11 +292,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         -------
         list[RepTuple]
             List of operation representations for the circuit.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         # Get builtin circuit for easy processing
         circuit = ListPhysicalCircuit.cast(circuit)
@@ -367,27 +333,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
-        """Create a DictNoiseModel from decoded attributes.
-
-        This class method reconstructs a DictNoiseModel instance from a dictionary
-        of decoded attributes, typically used during deserialization.
-
-        Parameters
-        ----------
-        attr_dict : Mapping
-            Dictionary containing the decoded attributes. Expected to have keys:
-            'gate_dict', 'inst_dict', '_gatereps', and '_instreps'.
-
-        Returns
-        -------
-        T
-            A new DictNoiseModel instance initialized with the provided attributes.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         gate_dict = attr_dict["gate_dict"]
         inst_dict = attr_dict["inst_dict"]
         gatereps = [GateRep(v) for v in attr_dict["_gatereps"]]

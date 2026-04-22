@@ -45,7 +45,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
 
     _SERIALIZE_ATTRS = ["_instructions"]
 
-    __SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
+    _SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
 
     _instructions: list[InstructionLabel]
     """Internal list of :class:`InstructionLabels`"""

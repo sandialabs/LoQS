@@ -76,7 +76,7 @@ class STIMQuantumState(BaseQuantumState):
 
     These are used to map local ints
     to global ints in
-    :attr:`.GateRep.STIM_CIRCUIT_STR` reps.
+    [](api:GateRep.STIM_CIRCUIT_STR) reps.
     """
 
     @property
@@ -87,37 +87,11 @@ class STIMQuantumState(BaseQuantumState):
         -------
         _TableauSimulator
             The internal STIM TableauSimulator object that represents the quantum state.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This property provides access to the raw STIM TableauSimulator state object,
-        which contains the actual quantum state representation using STIM's tableau
-        simulation approach.
         """
         return self._state
 
     @property
     def input_reps(self) -> list[GateRep | InstrumentRep]:
-        """Get the list of supported operation representation types.
-
-        Returns
-        -------
-        list[GateRep | InstrumentRep]
-            List of operation representation types that this quantum state backend
-            can process and apply.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        The STIM backend supports STIM circuit strings, probabilistic STIM operations,
-        Z-basis projections, Z-basis pre/post operations, and STIM circuit strings
-        for instruments as input representations.
-        """
         return [
             GateRep.STIM_CIRCUIT_STR,
             GateRep.PROBABILISTIC_STIM_OPERATIONS,
@@ -142,6 +116,15 @@ class STIMQuantumState(BaseQuantumState):
         qubit_labels:
             Optional qubit labels. If not provided, the default range of ints
             is used.
+        
+        seed:
+            Optional RNG seed. If not provided, default NumPy RNG behavior applies.
+        
+        Notes
+        -----
+        STIM's [](api:stim.TableauSimulator) has its' own internal RNG. We try to prime
+        it as much as possible for consistency, but we cannot guarantee completely
+        identical RNG when copying/deserializing these objects.
         """
         if not is_backend_available("stim_state"):
             raise ImportError(
@@ -201,42 +184,6 @@ class STIMQuantumState(BaseQuantumState):
     def apply_reps_inplace(
         self, reps: Sequence, reset_latest_circ: bool = True
     ) -> OutcomeDict:
-        """Apply operation representations to the quantum state in-place.
-
-        This method applies a sequence of operation representations (RepTuples)
-        directly to the current quantum state, modifying it in-place, and returns
-        any measurement outcomes.
-
-        Parameters
-        ----------
-        reps : Sequence
-            Sequence of operation representations to apply to the state.
-
-        reset_latest_circ : bool, optional
-            Whether to reset the latest applied circuit before processing.
-            Default is True.
-
-        Returns
-        -------
-        OutcomeDict
-            Dictionary of measurement outcomes from applying the operations.
-            Outcomes can be empty if no measurements were performed.
-
-        Raises
-        ------
-        NotImplementedError
-            If an unknown or unsupported operation representation type is encountered.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method processes both gate operations (which modify the state directly)
-        and instrument operations (which may produce measurement outcomes).
-        When reset_latest_circ is True, it clears the previously applied circuit
-        before processing new operations.
-        """
         outcomes: OutcomeDict = defaultdict(list)
 
         if reset_latest_circ:
@@ -262,51 +209,9 @@ class STIMQuantumState(BaseQuantumState):
     def apply_reps(
         self, reps: Sequence
     ) -> tuple[STIMQuantumState, OutcomeDict]:
-        """Apply operation representations to the quantum state.
-
-        This method applies a sequence of operation representations (RepTuples)
-        to the quantum state and returns a new state with the operations applied
-        along with any measurement outcomes.
-
-        Parameters
-        ----------
-        reps : Sequence
-            Sequence of operation representations to apply to the state.
-
-        Returns
-        -------
-        tuple[STIMQuantumState, OutcomeDict]
-            A tuple containing a new quantum state with the operations applied
-            and a dictionary of measurement outcomes.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method delegates to the parent class implementation for the actual
-        operation application logic.
-        """
         return super().apply_reps(reps)
 
     def copy(self) -> STIMQuantumState:
-        """Create a deep copy of the quantum state.
-
-        Returns
-        -------
-        STIMQuantumState
-            A new quantum state object that is a deep copy of the current state,
-            including the STIM circuit state, qubit labels, random number generator
-            state, and all other attributes.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method creates a complete independent copy of the quantum state,
-        ensuring that modifications to the copy do not affect the original state.
-        """
         new_state = STIMQuantumState(self.state, self.qubit_labels, self.seed)
         new_state._rng = deepcopy(self._rng)
         return new_state
@@ -314,21 +219,15 @@ class STIMQuantumState(BaseQuantumState):
     def reset_seed(self, new_seed: int | None) -> None:
         """Reset the random seed for the quantum state.
 
+        Unlike some other implementations, this method explicitly forces a fresh
+        RNG initialization with the new seed in the underlying
+        [](api:stim.TableauSimulator) object.
+
         Parameters
         ----------
         new_seed : int | None
             The new random seed to use. If None, the random number generator
             will use its default seeding behavior.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method updates both the stored seed value and the internal random
-        number generator, ensuring reproducible behavior when the same seed is used.
-        Unlike some other implementations, this method explicitly does not copy
-        the RNG state, forcing a fresh RNG initialization with the new seed.
         """
         # We explicitly don't want to copy RNG here, force a new RNG seed
         self._state = self._state.copy(copy_rng=False, seed=new_seed)
@@ -540,34 +439,6 @@ class STIMQuantumState(BaseQuantumState):
         return cbit
 
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
-        """Get an attribute for encoding/serialization purposes.
-
-        This method retrieves specific attributes from the quantum state that are
-        needed for serialization, including STIM-specific state information.
-
-        Parameters
-        ----------
-        attr : str
-            The name of the attribute to retrieve.
-
-        ignore_no_serialize_flags : bool, optional
-            Whether to ignore serialization flags. Default is False.
-
-        Returns
-        -------
-        object
-            The value of the requested attribute, or the result from the parent
-            class if the attribute is not found in this class.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method handles retrieval of STIM-specific attributes such as the
-        state vector, which are needed for proper serialization and deserialization
-        of the quantum state.
-        """
         # Retrieve STIM state vector
         if attr == "_stim_state_vector":
             return self.state.state_vector(endian="little")
@@ -577,31 +448,6 @@ class STIMQuantumState(BaseQuantumState):
 
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
-        """Create a quantum state from decoded attributes.
-
-        This class method reconstructs a quantum state object from a dictionary
-        of decoded attributes, typically used during deserialization.
-
-        Parameters
-        ----------
-        attr_dict : Mapping
-            Dictionary containing the decoded attributes needed to reconstruct
-            the quantum state.
-
-        Returns
-        -------
-        T
-            A new quantum state object initialized with the provided attributes.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method is typically used during deserialization to reconstruct a
-        quantum state from stored data, including qubit labels and state vector
-        information. The state vector is converted to a STIM Tableau representation.
-        """
         qubit_labels = attr_dict["qubit_labels"]
         seed = attr_dict["seed"]
         state_vector = attr_dict["_stim_state_vector"]

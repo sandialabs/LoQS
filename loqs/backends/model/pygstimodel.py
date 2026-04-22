@@ -56,8 +56,19 @@ else:
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
-def compute_qsim_bases(num_qubits: int):
-    """TODO"""
+def compute_qsim_bases(num_qubits: int) -> ExplicitBasis:
+    """Compute QuantumSim bases.
+
+    Parameters
+    ----------
+    num_qubits:
+        Number of qubits in the state space
+
+    Returns
+    -------
+    ExplicitBasis
+        PyGSTi object containing the QuantumSim basis
+    """
     # Prep QuantumSim bases
     sig0q = np.array([[1.0, 0], [0, 0]], dtype="complex")
     sigXq = np.array([[0, 1], [1, 0]], dtype="complex") / np.sqrt(2)
@@ -77,18 +88,12 @@ def compute_qsim_bases(num_qubits: int):
     )
 
 
-# Module-level code that depends on PyGSTi must be conditional
-if _pygsti_available:
-    PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
-    """Precomputed 1- and 2-qubit basis for QSim PTMs"""
+PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
+"""Precomputed 1- and 2-qubit basis for QSim PTMs"""
 
-    PyGSTiModelCastableTypes: TypeAlias = (
-        ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
-    )
-else:
-    PYGSTI_QSIM_BASES = {}
-    PyGSTiModelCastableTypes = Any  # type: ignore
-
+PyGSTiModelCastableTypes: TypeAlias = (
+    ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
+)
 """Types of pyGSTi models this backend can handle"""
 
 
@@ -242,11 +247,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         -------
         list
             List of instrument keys, where each key is a tuple of (instrument_name, qubit_labels).
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         keys = []
         for key in self.inst_dict.keys():
@@ -263,11 +263,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         -------
         list[GateRep]
             List of gate representations that this model can output.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         return [
             GateRep.UNITARY,
@@ -287,10 +282,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         list[InstrumentRep]
             List of instrument representations that this model can output.
 
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
+        Note
+        ----
+        This is not quite right currently. It returns all *possible* types,
+        but often models will only allow one of the two types.
         """
         return [
             InstrumentRep.ZBASIS_PROJECTION,
@@ -321,11 +316,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         KeyError
             If the gate label is not found in the default gate durations.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         if not self.use_time_dependence:
             return 0
@@ -383,11 +373,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         KeyError
             If the instrument label is not found in the default instrument durations.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         if not self.use_time_dependence:
             return 0
@@ -429,28 +414,23 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         """Get list of operator representations that can be applied.
 
         This method processes a circuit and returns a list of operation representations
-        (RepTuples) that can be applied to a quantum state.
+        ([](api:RepTuples)) that can be applied to a quantum state.
 
         Parameters
         ----------
-        circuit : BasePhysicalCircuit
+        circuit:
             Physical circuit to get the representations for.
 
-        gatereps : Sequence[GateRep]
+        gatereps:
             Output representations for gate operations.
 
-        instreps : Sequence[InstrumentRep]
+        instreps:
             Output representations for instrument operations.
 
         Returns
         -------
         list[RepTuple]
             List of operation representations for the circuit.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         # Get bare circuit
         from loqs.backends import PyGSTiPhysicalCircuit
@@ -671,56 +651,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         return (rep, True), instreps[repidx]
 
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
-        """Get the encoding attribute for serialization.
-
-        This method returns the serialized representation of the model attribute
-        for encoding purposes.
-
-        Parameters
-        ----------
-        attr : str
-            Name of the attribute to encode.
-
-        ignore_no_serialize_flags : bool, optional
-            Whether to ignore no-serialize flags during encoding. Default is False.
-
-        Returns
-        -------
-        object
-            Serialized representation of the requested attribute.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         if attr == "model":
             return self.model.to_nice_serialization()
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
-        """Create a PyGSTiNoiseModel from decoded attributes.
-
-        This class method reconstructs a PyGSTiNoiseModel instance from a dictionary
-        of decoded attributes, typically used during deserialization.
-
-        Parameters
-        ----------
-        attr_dict : Mapping
-            Dictionary containing the decoded attributes. Expected to have keys:
-            'model' and 'qubit_aliases'.
-
-        Returns
-        -------
-        T
-            A new PyGSTiNoiseModel instance initialized with the provided attributes.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         model = Model.from_nice_serialization(attr_dict["model"])
         qubit_aliases = attr_dict["qubit_aliases"]
         return cls(model, qubit_aliases)

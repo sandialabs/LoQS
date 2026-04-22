@@ -53,32 +53,6 @@ class STIMDictNoiseModel(DictNoiseModel):
         instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
-        """Initialize a generic gate dict model.
-
-        Parameters
-        ----------
-        model_or_dicts:
-            A model to convert or pair of dictionaries to use
-
-        gaterep:
-            Gate representation this model will return
-
-        instrep:
-            Instrument representation this model will return
-
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to [](api:RepTuples), this will be used as
-            the first argument of the rep, indicating which state to reset
-            to (`0` or `1`) or whether to not reset (`None`, default).
-
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
-            :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to [](api:RepTuples), this will be used as
-            the second argument of the rep, indicating whether outcomes
-            should be kept (`True`, default) or not (`False`).
-        """
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
         # function. The next two variables are like gate_dict and inst_dict,
         # but have more lax types.
@@ -105,36 +79,6 @@ class STIMDictNoiseModel(DictNoiseModel):
         self._instreps = list(instreps)
 
         def convert_to_gatereptuple(gr, qubits):
-            """Convert a gate representation to a RepTuple for STIM circuits.
-
-            This helper function converts various gate representation formats
-            to the standard RepTuple format used by STIM noise models.
-
-            Parameters
-            ----------
-            gr : object
-                Gate representation to convert. Can be a RepTuple, string, or
-                probabilistic STIM operations sequence.
-
-            qubits : tuple
-                Tuple of qubit labels that this gate operates on.
-
-            Returns
-            -------
-            RepTuple
-                Converted gate representation in RepTuple format suitable for STIM.
-
-            Raises
-            ------
-            AssertionError
-                If the input cannot be converted to a valid RepTuple or if the
-                resulting RepTuple's reptype is not in the allowed gatereps.
-
-            Notes
-            -----
-            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-            previously had no documentation. Please review and update as needed.
-            """
             if not isinstance(gr, RepTuple):
                 if isinstance(gr, str):
                     return RepTuple(gr, qubits, GateRep.STIM_CIRCUIT_STR)
@@ -162,32 +106,6 @@ class STIMDictNoiseModel(DictNoiseModel):
             )
 
         def promoted_key_and_qubits(k):
-            """Promote a key to the standard format used by STIM models.
-
-            This helper function converts dictionary keys to the standard format
-            used by STIM noise models, ensuring STIM commands are uppercase
-            and properly formatted.
-
-            Parameters
-            ----------
-            k : str or tuple
-                The key to promote. Can be a string (command name) or a tuple
-                of (command_name, qubit_tuple).
-
-            Returns
-            -------
-            tuple
-                A tuple of (promoted_key, qubits) where promoted_key is the
-                standardized key format and qubits is the tuple of qubit labels.
-
-            Notes
-            -----
-            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-            previously had no documentation. Please review and update as needed.
-
-            STIM commands are conventionally uppercase, so this function ensures
-            that command names are converted to uppercase for consistency.
-            """
             # By convention, choose that STIM commands should be uppercase
             if isinstance(k, str):
                 return k.upper(), tuple()
@@ -242,7 +160,7 @@ class STIMDictNoiseModel(DictNoiseModel):
 
     def get_reps(  # noqa: C901
         self,
-        circuit: BasePhysicalCircuit,
+        circuit: STIMPhysicalCircuit,
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
@@ -252,15 +170,22 @@ class STIMDictNoiseModel(DictNoiseModel):
         representations (RepTuples) that describe the circuit's operations,
         including gates and instruments, with appropriate noise models applied.
 
+        This method handles STIM-specific circuit processing including:
+        - Unrolling circuit repeats
+        - Mapping qubit labels
+        - Applying noise models from gate and instrument dictionaries
+        - Combining common operations for efficient STIM processing
+        - Warning about conflicting noise applications
+
         Parameters
         ----------
-        circuit : BasePhysicalCircuit
-            The STIM circuit to process. Must be an instance of STIMPhysicalCircuit.
+        circuit:
+            The STIM circuit to process.
 
-        gatereps : Sequence[GateRep]
+        gatereps:
             Sequence of gate representations that the output should use.
 
-        instreps : Sequence[InstrumentRep]
+        instreps:
             Sequence of instrument representations that the output should use.
 
         Returns
@@ -273,18 +198,6 @@ class STIMDictNoiseModel(DictNoiseModel):
         ------
         AssertionError
             If the circuit is not a STIMPhysicalCircuit instance.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-
-        This method handles STIM-specific circuit processing including:
-        - Unrolling circuit repeats
-        - Mapping qubit labels
-        - Applying noise models from gate and instrument dictionaries
-        - Combining common operations for efficient STIM processing
-        - Warning about conflicting noise applications
         """
         assert isinstance(
             circuit, STIMPhysicalCircuit

@@ -57,7 +57,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         "no_serialize_keys",
     ]
 
-    __SERIALIZE_ATTRS_MAP = {
+    _SERIALIZE_ATTRS_MAP = {
         "_history": "history",
         "expiring_keys": "expiring_keys",
         "_expiring_key_locs": "_expiring_key_locs",

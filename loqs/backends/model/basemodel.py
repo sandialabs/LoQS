@@ -85,8 +85,6 @@ class BaseNoiseModel(Castable, Displayable):
         -------
         list
             List of operation representations for the circuit
-
-        REVIEW_SPHINX_REFERENCE
         """
         pass
 
@@ -112,18 +110,13 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
     def add_gate_duration_to_layer(self, gate_duration):
         """Add a gate duration to the current layer duration.
 
-        This method updates the current layer duration by taking the maximum
-        of the existing layer duration and the provided gate duration.
+        If a layer duration already exists, the new layer duration is
+        max of current and incoming gate durations.
 
         Parameters
         ----------
         gate_duration : float
             Duration of the gate to add to the current layer.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
         """
         self._local_layer_duration = max(
             self._local_layer_duration, gate_duration
@@ -132,13 +125,7 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
     def add_layer_duration_to_current_time(self):
         """Add the current layer duration to the total simulation time.
 
-        This method updates the current simulation time by adding the duration
-        of the current layer, then resets the layer duration to zero.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
+        This also internally resets the layer duration to zero.
         """
         self.current_time += self._local_layer_duration
         self._local_layer_duration = 0.0
@@ -146,15 +133,13 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
     @abstractmethod
     def get_gate_duration(self, gate_label) -> int | float:
         """Get the gate duration from a gate label.
-
-        Derived classes should implement this.
         """
+        # Derived classes should implement this
         pass
 
     @abstractmethod
     def get_instrument_duration(self, inst_label) -> int | float:
         """Get the instrument duration from an instrument label.
-
-        Derived classes should implement this.
         """
+        # Derived classes should implement this
         pass

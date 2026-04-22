@@ -56,7 +56,14 @@ class BaseQuantumState(Castable, Displayable):
     @property
     @abstractmethod
     def input_reps(self) -> list[GateRep | InstrumentRep]:
-        """Gate and instrument reps this state can take as input."""
+        """Gate and instrument reps this state can take as input.
+        
+        Returns
+        -------
+        list[GateRep | InstrumentRep]
+            List of operation representation types that this quantum state backend
+            can process and apply.
+        """
         pass
 
     @abstractmethod
@@ -91,11 +98,6 @@ class BaseQuantumState(Castable, Displayable):
             A copy of the state with reps applied, and
             dictionary of outcomes. Outcomes can be empty if no
             measurements were performed.
-
-        Notes
-        -----
-        REVIEW_SPHINX_REFERENCE: This docstring was updated to replace Sphinx references
-        with MkDocs format. Please review the new format.
         """
         new_state = self.copy()
         outputs = new_state.apply_reps_inplace(reps)
@@ -103,7 +105,7 @@ class BaseQuantumState(Castable, Displayable):
 
     @abstractmethod
     def copy(self: T) -> T:
-        """Copy a state object.
+        """Deep-copy a state object.
 
         Returns
         -------

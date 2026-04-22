@@ -226,73 +226,23 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     @property
     def circuit(self) -> _Circuit:
-        """Get the underlying STIM circuit object.
-
-        Returns
-        -------
-        _Circuit
-            The underlying stim.Circuit object.
-
-        REVIEW_NO_DOCSTRING
-        """
         return self._circuit
 
     @property
     def depth(self) -> int:
-        """Get the depth of the circuit.
-
-        The depth is calculated as the number of ticks plus one.
-
-        Returns
-        -------
-        int
-            The depth of the circuit.
-
-        REVIEW_NO_DOCSTRING
-        """
         return self.circuit.num_ticks + 1
 
     @property
     def qubit_labels(self) -> list[QubitTypes]:
-        """Get the list of qubit labels for this circuit.
-
-        Returns
-        -------
-        list[QubitTypes]
-            List of qubit labels, where each label corresponds to a qubit in the circuit.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         assert len(self._qubit_labels) >= self.circuit.num_qubits
         return self._qubit_labels
 
     def copy(self) -> STIMPhysicalCircuit:
-        """Create a copy of this circuit.
-
-        Returns
-        -------
-        STIMPhysicalCircuit
-            A new circuit object with the same circuit and qubit labels.
-
-        REVIEW_NO_DOCSTRING
-        """
         return STIMPhysicalCircuit(str(self._circuit), self.qubit_labels)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
     ) -> None:
-        """Delete qubits from the circuit in-place.
-
-        Parameters
-        ----------
-        qubits_to_delete : Sequence[QubitTypes]
-            Sequence of qubit labels to delete from the circuit.
-
-        REVIEW_NO_DOCSTRING
-        """
         qubit_idxs_to_delete = [
             str(self.qubit_labels.index(q)) for q in qubits_to_delete
         ]
@@ -321,29 +271,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def get_possible_discrete_error_locations(
         self, post_twoq_gates: bool = False
     ) -> list[tuple[int, int | tuple[int, ...]]]:
-        """Get possible discrete error locations in the circuit.
-
-        This method identifies locations in the circuit where discrete errors
-        could potentially occur. It can optionally focus on locations after
-        two-qubit gates.
-
-        Parameters
-        ----------
-        post_twoq_gates : bool, optional
-            If True, only return locations after two-qubit gates. Default is False.
-
-        Returns
-        -------
-        list[tuple[int, int | tuple[int, ...]]]
-            List of circuit locations where discrete errors could occur.
-            Each location is represented as a tuple of (layer_index, qubit_index)
-            or (layer_index, (qubit1_index, qubit2_index)) for two-qubit gates.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         circuit_locations: list[tuple[int, int | tuple[int, ...]]] = []
         unrolled_str = self._unroll_repeats()
         for lidx, lstr in enumerate(unrolled_str.split("TICK\n")):
@@ -400,22 +327,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def map_qubit_labels_inplace(
         self, qubit_mapping: Mapping[QubitTypes, QubitTypes]
     ) -> None:
-        """Map qubit labels in-place according to a provided mapping.
-
-        This method updates the qubit labels in the circuit based on the provided
-        mapping dictionary. Qubits not specified in the mapping will retain their
-        original labels.
-
-        Parameters
-        ----------
-        qubit_mapping : Mapping[QubitTypes, QubitTypes]
-            Dictionary mapping current qubit labels to new qubit labels.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         # Pass through any unspecified qubits
         complete_mapping = {
             q: qubit_mapping.get(q, q) for q in self.qubit_labels
@@ -443,8 +354,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         idx : int
             Layer index to start merge
-
-        REVIEW_SPHINX_REFERENCE
         """
         other_circuit = STIMPhysicalCircuit.cast(circuit)
 
@@ -474,37 +383,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         default_duration: int | float | None = None,
         empty_layer_idle: str | None = None,
     ) -> None:
-        """Pad single qubit idles by duration in-place.
-
-        This method adds idle operations to qubits that are not being used in a layer,
-        based on the duration of operations in that layer. This ensures that all qubits
-        have operations that span the same duration, which can be important for accurate
-        simulation and timing.
-
-        Parameters
-        ----------
-        idle_names : Mapping[int | float, str]
-            Mapping from durations to idle operation names. The idle operation
-            corresponding to the layer's duration will be used for padding.
-
-        durations : Mapping[str, int | float]
-            Mapping from operation names to their durations. Used to determine
-            the duration of each layer.
-
-        default_duration : int | float | None, optional
-            Default duration to use if an operation's duration is not specified
-            in the durations mapping. If None and an operation's duration is not
-            specified, a KeyError will be raised.
-
-        empty_layer_idle : str | None, optional
-            Idle operation to use for empty layers (layers with no operations).
-            If None, empty layers will not be padded.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         # We don't need to unroll for this, works fine with repeat blocks
         new_circ_str = ""
         for lstr in str(self.circuit).split("TICK\n"):
@@ -554,18 +432,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:
-        """Set the qubit labels for this circuit in-place.
-
-        Parameters
-        ----------
-        qubit_labels : Sequence[QubitTypes]
-            Sequence of new qubit labels to set for the circuit.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         self._qubit_labels = list(qubit_labels)
 
     @classmethod
@@ -574,22 +440,12 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         serial_circuit: str | list | dict,
         qubit_labels: Sequence | None = None,
     ) -> _Circuit:
-        """Helper function to deserialize a circuit.
-
-        Derived classes should implement this for
-        deserialization to work.
-        """
         # For STIM circuit, it is already deserializable from str
         # qubit_labels not needed
         assert isinstance(serial_circuit, str)
         return _Circuit(serial_circuit)
 
     def _serialize_circuit(self) -> str | list | dict:
-        """Helper function to serialize a circuit.
-
-        Derived classes should implement this for
-        serialization to work.
-        """
         # For STIM circuit, string version is already serializable
         return str(self.circuit)
 
@@ -598,26 +454,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         unrolled_lines = circuit_str.split("\n")
 
         def find_first_repeat_start(lines):
-            """Find the first REPEAT statement in a list of circuit lines.
-
-            This function searches through a list of circuit lines and returns the index
-            of the first line that contains a REPEAT statement.
-
-            Parameters
-            ----------
-            lines : list[str]
-                List of circuit lines to search through.
-
-            Returns
-            -------
-            int or None
-                Index of the first REPEAT statement, or None if no REPEAT statement is found.
-
-            Notes
-            -----
-            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-            previously had no documentation. Please review and update as needed.
-            """
             for i, line in enumerate(lines):
                 entries = line.split()
                 if entries[0] == "REPEAT":
@@ -625,26 +461,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
             return None
 
         def find_last_repeat_end(lines):
-            """Find the last REPEAT end statement in a list of circuit lines.
-
-            This function searches through a list of circuit lines in reverse order and returns the index
-            of the last line that contains a closing brace '}' for a REPEAT block.
-
-            Parameters
-            ----------
-            lines : list[str]
-                List of circuit lines to search through.
-
-            Returns
-            -------
-            int or None
-                Index of the last REPEAT end statement, or None if no REPEAT end statement is found.
-
-            Notes
-            -----
-            REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-            previously had no documentation. Please review and update as needed.
-            """
             for i, line in enumerate(lines[::-1]):
                 entries = line.split()
                 if entries[0] == "}":

@@ -11,7 +11,7 @@ from typing import Any
 
 import mkdocs_gen_files
 
-from docs_scripts.api_inventory import build_suffix_index
+from docs_scripts.api_inventory import build_suffix_index, external_api_url
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PKG_DIR = REPO_ROOT / "loqs"
@@ -182,24 +182,21 @@ def _expand_type_aliases(type_s: str, aliases: dict[str, str]) -> str:
 def _type_to_md(
     type_s: str,
     link_names: set[str] | None = None,
+    *,
+    html_code: bool = True,
 ) -> str:
     """
-    Render a type/value string for Markdown tables.
+    Render a type/value string for tables.
 
-    Imported identifiers are first expanded via the local alias map. Fully-qualified
-    ``loqs.`` identifiers are replaced with short ``api:`` links whose target and
-    display text are both just the final symbol name. Additionally, short local names
-    listed in ``link_names`` are linked directly, which is useful for module-level
-    type aliases and variables that already have anchors on the current page.
-
-    Non-linked fragments are wrapped in backticks so mixed types like
-    ``list[loqs.foo.Bar]`` render as code plus links.
+    Internal LoQS identifiers are linked using short ``api:`` targets. Known
+    external fully-qualified identifiers are linked via ``external_api_url()``.
+    When ``html_code`` is true, code styling is emitted as HTML fragments so
+    mixed text+link expressions can remain fully code-styled.
     """
     s = (type_s or "").strip()
     if not s:
         return ""
-    
-    # Short circuit for TypeVar, we want to link bound class
+
     m_typevar = re.match(
         r"^(?P<prefix>TypeVar\('(?P<name>[^']+)'\s*,\s*bound=')(?P<bound>[A-Za-z_][A-Za-z0-9_\.]*)(?P<suffix>'\))$",
         s,
@@ -209,51 +206,94 @@ def _type_to_md(
         if bound.startswith("loqs."):
             target = bound.split(".")[-1]
             label = target
+            if html_code:
+                return (
+                    f"<code>{m_typevar.group('prefix')}</code>"
+                    f'<a href="api:{target}"><code>{label}</code></a>'
+                    f"<code>{m_typevar.group('suffix')}</code>"
+                )
+            return (
+                f"`{m_typevar.group('prefix')}`"
+                f"[`{label}`](api:{target})"
+                f"`{m_typevar.group('suffix')}`"
+            )
         else:
-            target = bound
-            label = bound
-        return (
-            f"<code>{m_typevar.group('prefix')}</code>"
-            f'<a href="api:{target}"><code>{label}</code></a>'
-            f"<code>{m_typevar.group('suffix')}</code>"
-        )
+            url = external_api_url(bound)
+            if url is not None:
+                label = bound.split(".")[-1]
+                if html_code:
+                    return (
+                        f"<code>{m_typevar.group('prefix')}</code>"
+                        f'<a href="{url}"><code>{label}</code></a>'
+                        f"<code>{m_typevar.group('suffix')}</code>"
+                    )
+                return (
+                    f"`{m_typevar.group('prefix')}`"
+                    f"[`{label}`]({url})"
+                    f"`{m_typevar.group('suffix')}`"
+                )
+            return f"<code>{s}</code>" if html_code else f"`{s}`"
 
     names = sorted(link_names or set(), key=len, reverse=True)
     if names:
         token_re = re.compile(
             r"\bloqs(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|"
+            r"\b(?:pygsti|stim)(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|"
             + "|".join(rf"\b{re.escape(n)}\b" for n in names)
         )
     else:
-        token_re = re.compile(r"\bloqs(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b")
+        token_re = re.compile(
+            r"\bloqs(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b"
+            r"|\b(?:pygsti|stim)(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b"
+        )
 
     parts: list[str] = []
     last = 0
+    found_link = False
 
     for m in token_re.finditer(s):
         prefix = s[last:m.start()]
         if prefix:
-            parts.append(f"<code>{prefix}</code>")
+            parts.append(f"<code>{prefix}</code>" if html_code else prefix)
 
         token = m.group(0)
         if token.startswith("loqs."):
             target = token.split(".")[-1]
             label = target
+            if html_code:
+                parts.append(f'<a href="api:{target}"><code>{label}</code></a>')
+            else:
+                parts.append(f"[`{label}`](api:{target})")
+            found_link = True
         else:
-            target = token
-            label = token
+            url = external_api_url(token)
+            if url is not None:
+                label = token.split(".")[-1]
+                if html_code:
+                    parts.append(f'<a href="{url}"><code>{label}</code></a>')
+                else:
+                    parts.append(f"[`{label}`]({url})")
+                found_link = True
+            else:
+                target = token
+                label = token
+                if html_code:
+                    parts.append(f'<a href="api:{target}"><code>{label}</code></a>')
+                else:
+                    parts.append(f"[`{label}`](api:{target})")
+                found_link = True
 
-        parts.append(f'<a href="api:{target}"><code>{label}</code></a>')
         last = m.end()
 
     suffix = s[last:]
     if suffix:
-        parts.append(f"<code>{suffix}</code>")
+        parts.append(f"<code>{suffix}</code>" if html_code else suffix)
 
     if parts:
-        return "".join(parts)
+        out = "".join(parts)
+        return out if found_link else (f"<code>{s}</code>" if html_code else f"`{s}`")
 
-    return f"<code>{s}</code>"
+    return f"<code>{s}</code>" if html_code else f"`{s}`"
 
 
 def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
@@ -879,6 +919,7 @@ def _emit_inherited_doc_summary(
     member_name: str,
     doc_text: str,
     derived_callable: Any | None = None,
+    link_names = None
 ) -> None:
     """
     Emit a lightweight inherited-doc summary for an undocumented override.
@@ -940,10 +981,10 @@ def _emit_inherited_doc_summary(
         f.write("|---|---|---|---|\n")
         for row in params:
             name = row["name"].replace("|", "\\|")
-            typ = _type_to_md(_expand_type_aliases(row["type"], {}))
+            typ = _type_to_md(_expand_type_aliases(row["type"], {}).replace("|", "\\|"), link_names=link_names)
             desc = row["desc"].replace("|", "\\|")
             default = row.get("default", "*required*").replace("|", "\\|")
-            f.write(f"| `{name}` | `{typ}` | {desc} | {default} |\n")
+            f.write(f"| {name} | {typ} | {desc} | {default} |\n")
         f.write("\n")
 
     if returns:
@@ -951,7 +992,7 @@ def _emit_inherited_doc_summary(
         f.write("| Type | Description |\n")
         f.write("|---|---|\n")
         for row in returns:
-            typ = _expand_type_aliases(row["type"], {}).replace("|", "\\|")
+            typ = _type_to_md(_expand_type_aliases(row["type"], {}).replace("|", "\\|"), link_names=link_names)
             desc = row["desc"].replace("|", "\\|")
             f.write(f"| {typ} | {desc} |\n")
         f.write("\n")
@@ -1248,6 +1289,7 @@ def write_class_page(
                         member_name="__init__",
                         doc_text=fallback_doc_text,
                         derived_callable=derived_callable,
+                        link_names=link_names
                     )
 
         if var_rows:
@@ -1292,6 +1334,7 @@ def write_class_page(
                                 member_name=m,
                                 doc_text=fallback_doc_text,
                                 derived_callable=derived_callable,
+                                link_names=link_names
                             )
                 else:
                     kind, base_ident = inherited_method_stubs[m]

@@ -258,7 +258,7 @@ class Serializable:
     implement [_get_encoding_attr](api:Serializable._get_encoding_attr).
     """
 
-    __SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
+    _SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
     """Attribute map to use in [_from_decoded_attrs](api:Serializable._from_decoded_attrs).
 
     Useful when internal (e.g. _<attr>) attributes are
@@ -304,9 +304,9 @@ class Serializable:
 
         By default, this assumes that attributes are either directly named
         as constructor arguments, or at least are one of the arguments and
-        thus can be remapped to the proper kwarg via __SERIALIZE_ATTRS_MAP.
+        thus can be remapped to the proper kwarg via _SERIALIZE_ATTRS_MAP.
         This should be implemented by all Serializable subclasses that for
-        which the default behavior or mapping via __SERIALIZE_ATTRS_MAP is not
+        which the default behavior or mapping via _SERIALIZE_ATTRS_MAP is not
         sufficient to map decoded attributes to constructor arguments.
 
         Parameters
@@ -329,7 +329,7 @@ class Serializable:
             "cache_id",
         }
         filtered_dict = {
-            cls.__SERIALIZE_ATTRS_MAP.get(k, k): v
+            cls._SERIALIZE_ATTRS_MAP.get(k, k): v
             for k, v in attr_dict.items()
             if k not in metadata_fields
         }
