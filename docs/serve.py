@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -29,13 +30,55 @@ def run_cmd(cmd: list[str], cwd: Path) -> None:
     """
     Execute *cmd* in *cwd* with DISABLE_MKDOCS_2_WARNING=true set.
     Abort on non-zero return.
+
+    Suppress known benign MkDocs warnings and re-color only the leading WARNING
+    token in yellow for readable console output.
     """
     env = os.environ.copy()
     env["DISABLE_MKDOCS_2_WARNING"] = "true"
     env["NO_MKDOCS_2_WARNING"] = "true"
-    result = subprocess.run(cmd, cwd=str(cwd), env=env)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    suppress_res = [
+        re.compile(
+            r"contains a link '#fnref:[^']+', but there is no such anchor on this page",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"mkdocs_autorefs:\s+Multiple primary URLs found for",
+            re.IGNORECASE,
+        ),
+    ]
+
+    yellow = "\033[33m"
+    reset = "\033[0m"
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if any(rx.search(line) for rx in suppress_res):
+            continue
+
+        line_out = re.sub(
+            r"^(\s*)(WARNING)(\s*-?\s*)",
+            rf"\1{yellow}\2{reset}\3",
+            line.rstrip("\n"),
+            count=1,
+        )
+        print(line_out)
+
+    proc.wait()
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
 
 
 def copytree_into(src: Path, dst: Path) -> None:

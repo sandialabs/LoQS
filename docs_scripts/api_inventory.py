@@ -1,9 +1,35 @@
 from __future__ import annotations
 
+"""
+Shared API-inventory and cross-link utilities for the two-stage documentation build.
+
+Goals
+-----
+- Provide a canonical representation of the generated API inventory.
+- Resolve progressive-qualification `api:` targets to fully-qualified objects.
+- Rewrite Markdown `api:` links for both the main docs and the API-reference docs.
+- Centralize URL mounting/prefix behavior so hooks and generators use the same logic.
+- Provide best-effort external documentation mappings for selected third-party and
+  standard-library APIs.
+
+Key capabilities
+----------------
+- Progressive target resolution:
+  - `api:Serializable`
+  - `api:internal.serializable.Serializable`
+  - `api:loqs.internal.serializable.Serializable`
+- Link rewriting for:
+  - inline Markdown links: `[Text](api:Target)`
+  - reference-style links: `[Text][api:Target]`
+- URL helpers for mounting the API site under `/reference`.
+- External mappings for pyGSTi, Stim, and selected Python stdlib modules.
+"""
+
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
 
 # Inline Markdown links: [text](api:Target) or [](api:Target)
 _API_LINK_RE = re.compile(r"\[(?P<text>[^\]]*)\]\(\s*api:(?P<target>[^)\s]+)\s*\)")
@@ -26,6 +52,21 @@ def normalize_target(t: str) -> str:
     return t
 
 
+def mount_url(rel: str, prefix: str = "") -> str:
+    """
+    Mount an inventory-relative URL under a prefix.
+
+    Examples:
+      mount_url("/loqs/internal/", "/reference") -> "/reference/loqs/internal/"
+      mount_url("/loqs/internal/", "")           -> "/loqs/internal/"
+    """
+    if not prefix:
+        return rel
+    if rel.startswith("/"):
+        return prefix + rel
+    return prefix.rstrip("/") + "/" + rel.lstrip("/")
+
+
 def external_api_url(target: str) -> str | None:
     """
     Map non-loqs api: targets to an external documentation URL.
@@ -39,16 +80,24 @@ def external_api_url(target: str) -> str | None:
         parts = t.split(".")
         if len(parts) >= 3:
             cls = parts[-1]
-            mod = ".".join(parts[:-1])      # e.g. pygsti.models.model
-            mod_path = "/".join(parts[:-1]) # e.g. pygsti/models/model
+            mod = ".".join(parts[:-1])
+            mod_path = "/".join(parts[:-1])
             return f"https://pygsti.readthedocs.io/en/latest/autoapi/{mod_path}/index.html#{mod}.{cls}"
-    
+
     # Stim Python API reference
     if t.startswith("stim."):
         return f"https://github.com/quantumlib/Stim/wiki/Stim-v1.13-Python-API-Reference#{t}"
 
     # Python stdlib (best-effort): module page + qualified anchor
-    stdlib_prefixes = ("collections.", "collections.abc.", "typing.", "pathlib.", "dataclasses.", "abc.", "enum.")
+    stdlib_prefixes = (
+        "collections.",
+        "collections.abc.",
+        "typing.",
+        "pathlib.",
+        "dataclasses.",
+        "abc.",
+        "enum.",
+    )
     if t.startswith(stdlib_prefixes) and "." in t:
         mod = t.rsplit(".", 1)[0]
         return f"https://docs.python.org/3/library/{mod}.html#{t}"
@@ -59,11 +108,19 @@ def external_api_url(target: str) -> str | None:
 @dataclass(frozen=True)
 class ApiInventory:
     """
-    objects: map from fully qualified anchor id -> URL (relative to API site root)
-    suffix_index: map from suffix string -> list of fully qualified anchor ids
-    kinds: map from fully qualified anchor id -> kind string
-           (e.g. module/class/function/method/property/variable/type_alias/type_variable)
+    API inventory used by both docs stages.
+
+    objects:
+      map from fully qualified anchor id -> URL (relative to API site root)
+
+    suffix_index:
+      map from suffix string -> list of matching fully qualified anchor ids
+
+    kinds:
+      map from fully qualified anchor id -> kind string, e.g.
+      module/class/function/method/property/variable/type_alias/type_variable
     """
+
     objects: dict[str, str]
     suffix_index: dict[str, list[str]]
     kinds: dict[str, str]
@@ -114,7 +171,7 @@ class ApiInventory:
 
     def resolve(self, target: str) -> str:
         """
-        Resolve progressive qualification and return the URL.
+        Resolve progressive qualification and return the inventory-relative URL.
         """
         fqn = self.resolve_fqn(target)
         return self.objects[fqn]
@@ -130,6 +187,39 @@ class ApiInventory:
         except KeyError:
             return default
         return (self.kinds.get(fqn) or default)
+
+    def resolve_mounted_url(self, target: str, *, prefix: str = "") -> str:
+        """
+        Resolve a target and mount it under the requested prefix.
+        """
+        return mount_url(self.resolve(target), prefix=prefix)
+
+
+def resolve_api_target_url(
+    inv: ApiInventory,
+    target: str,
+    *,
+    src: str = "",
+    prefix: str = "",
+    allow_external: bool = True,
+) -> str | None:
+    """
+    Resolve a target to a mounted internal URL or an external URL.
+
+    Behavior:
+    - Internal `loqs.*` targets must resolve or raise.
+    - Non-loqs targets first try inventory resolution, then optional external mapping.
+    - Returns None for unresolved non-loqs targets when no external mapping exists.
+    """
+    try:
+        return inv.resolve_mounted_url(target, prefix=prefix)
+    except KeyError as e:
+        t = normalize_target(target)
+        if t.startswith("loqs."):
+            raise RuntimeError(f"{src}: {e}") from None
+        if not allow_external:
+            return None
+        return external_api_url(t)
 
 
 def build_suffix_index(objects: dict[str, str], *, package: str = "loqs") -> dict[str, list[str]]:
@@ -152,7 +242,7 @@ def build_suffix_index(objects: dict[str, str], *, package: str = "loqs") -> dic
     for fqn in objects.keys():
         if not fqn.startswith(package + "."):
             continue
-        tail = fqn[len(package) + 1 :]  # remove "loqs."
+        tail = fqn[len(package) + 1 :]
         parts = tail.split(".")
         for i in range(len(parts)):
             suff = ".".join(parts[i:])
@@ -168,21 +258,16 @@ def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page
     Rewrite api: links in Markdown into real URLs.
 
     url_prefix:
-      - main docs: "/reference" (so inventory URLs become /reference/loqs/...)
-      - API docs:  ""           (so inventory URLs stay /loqs/...)
+      - main docs: "/reference"
+      - API docs:  ""
     """
 
     def resolve_url(target: str) -> str:
         try:
-            rel = inv.resolve(target)
+            return inv.resolve_mounted_url(target, prefix=url_prefix)
         except KeyError as e:
             raise RuntimeError(f"{page_src}: {e}") from None
-        # Ensure prefix concatenation is clean
-        if url_prefix and rel.startswith("/"):
-            return url_prefix + rel
-        return url_prefix + rel
 
-    # 1) Convert reference-style to inline-style so the same logic handles both.
     def ref_to_inline(m: re.Match) -> str:
         text = m.group("text") or ""
         target = m.group("target")
@@ -190,40 +275,27 @@ def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page
 
     out = _API_REF_RE.sub(ref_to_inline, markdown)
 
-    # Inline: [text](api:Target) -> [text](URL)
     def repl_inline(m: re.Match) -> str:
         target = m.group("target")
         raw_text = (m.group("text") or "").strip()
 
         url = resolve_url(target)
 
-        # Resolve to canonical inventory key so we can classify kind accurately
         fqn = inv.resolve_fqn(target)
         kind = (inv.kinds.get(fqn) or "").lower()
 
-        # Choose display text
         if not raw_text:
-            # Use resolved object name as a guaranteed non-empty display
-            base = fqn.split(".")[-1]
-            display = base
+            display = fqn.split(".")[-1]
         else:
             display = raw_text
-            # Strip one layer of backticks if present; we'll reapply consistently below
             if display.startswith("`") and display.endswith("`") and len(display) >= 2:
                 display = display[1:-1].strip()
 
-        display = display.strip()
-        if not display:
-            # Absolute fallback (should never happen)
-            display = fqn.split(".")[-1]
+        display = display.strip() or fqn.split(".")[-1]
 
-        # Append () for callables (even when text is qualified), unless already present
-        if kind in {"function", "method"}:
-            if not display.endswith("()"):
-                display = display + "()"
+        if kind in {"function", "method"} and not display.endswith("()"):
+            display = display + "()"
 
-        # Backtick everything (consistently)
-        display = display.strip()
         if not (display.startswith("`") and display.endswith("`")):
             display = f"`{display}`"
 

@@ -2,16 +2,39 @@
 
 This repository builds documentation in two stages and merges them into a single site:
 
-1) Main documentation site (`mkdocs.yml`) — narrative docs and interactive Marimo content
-2) API reference site (`mkdocs-api-ref.yml`) — auto-generated API reference
+1) API reference site (`mkdocs-api-ref.yml`) — auto-generated API reference
+2) Main documentation site (`mkdocs.yml`) — narrative docs and interactive Marimo content
 
 The merged site mounts the API reference under `/reference/`. The main site includes a nav entry pointing there: `API Reference: /reference`.
 
 ---
 
-## Stage 1: Main documentation site (Marimo-first)
+## Stage 1: API reference site (generated, mkdocstrings-driven)
 
-Config: `mkdocs.yml`
+Config: `mkdocs-api-ref.yml`  
+Purpose: A comprehensive, navigable API reference that stays in sync with the codebase.
+
+Key traits:
+
+- Pages and navigation are generated at build time by `docs_scripts/gen_ref_pages.py`.
+- Supporting helpers in `docs_scripts/ref_introspect.py` and `docs_scripts/ref_render.py` separate:
+  - API discovery/introspection, and
+  - generated Markdown rendering.
+- A post-processing hook `docs_scripts/api_hooks.py` cleans up mkdocstrings rendering artifacts, prunes redundant TOC entries, rewrites links/citations, and normalizes inherited-doc renders.
+- This build also generates the shared API inventory used by both documentation stages.
+- The API site is stable and predictable: module pages, class pages, consistent ordering, and no manual nav maintenance.
+
+Why this stage exists:
+
+- API reference generation benefits from automation and strict conventions.
+- The API inventory must exist before the main docs build so `api:` links in the narrative docs can be resolved.
+- Separating this stage from the Marimo site avoids mixing interactive tutorial requirements with API generation complexity.
+
+---
+
+## Stage 2: Main documentation site (Marimo-first)
+
+Config: `mkdocs.yml`  
 Purpose: User-facing docs, tutorials, and interactive content.
 
 Key traits:
@@ -21,6 +44,7 @@ Key traits:
   - published as interactive documentation.
 - Navigation is primarily hand-curated (e.g., “Getting Started”, “Developer Zone”).
 - This site is the primary entry point and links to the API site at `/reference/`.
+- It consumes the generated API inventory so author-written `api:` links can be rewritten to `/reference/...`.
 
 Why this stage exists:
 
@@ -29,30 +53,12 @@ Why this stage exists:
 
 ---
 
-## Stage 2: API reference site (generated, mkdocstrings-driven)
-
-Config: `mkdocs-api-ref.yml`
-Purpose: A comprehensive, navigable API reference that stays in sync with the codebase.
-
-Key traits:
-
-- Pages and navigation are generated at build time by `docs_scripts/gen_ref_pages.py`.
-- A minimal post-processing hook `docs_scripts/hooks.py` cleans up mkdocstrings rendering artifacts and prunes redundant TOC entries.
-- The API site is stable and predictable: module pages, class pages, consistent ordering, and no manual nav maintenance.
-
-Why this stage exists:
-
-- API reference generation benefits from automation and strict conventions.
-- Separating it from the Marimo site avoids mixing interactive tutorial requirements with API generation complexity.
-
----
-
 ## Why the two-stage setup?
 
 This split enables both:
 
-1) Interactive tutorials (Marimo) without compromising local edit/run workflows.
-2) A high-quality API reference (mkdocstrings) that is automatically generated, complete (including `__init__.py` content), and consistently structured.
+1) A high-quality API reference (mkdocstrings) that is automatically generated, complete (including `__init__.py` content), and consistently structured.  
+2) Interactive tutorials (Marimo) without compromising local edit/run workflows.
 
 In practice: the main site is optimized for learning/onboarding; the API site is optimized for lookup/completeness.
 
@@ -72,36 +78,56 @@ This repository differs in several ways:
 ### 1) Pages and navigation are generated automatically (API site)
 
 - The `gen-files` plugin runs `docs_scripts/gen_ref_pages.py` during the API build.
-- It writes module pages, class pages, and a generated `SUMMARY.md` nav file.
+- It writes module pages, class pages, a generated `SUMMARY.md` nav file, and the API inventory.
 - The `literate-nav` plugin uses `SUMMARY.md` so the sidebar is always up to date.
 
 ### 2) `__init__.py` is treated as real API surface
 
 Many projects expose public API via packages’ `__init__.py` files. This generator parses `__init__.py` like any other module (while still rendering it as the package landing page), ensuring those definitions are documented.
 
-### 3) Members tables are custom (AST-based), not mkdocstrings defaults
+### 3) Members tables are custom (AST- and introspection-based), not mkdocstrings defaults
 
-For class and module member variables, the API reference uses an AST-based pass to build tables that can include:
+For module/class member variables and properties, the API reference uses custom collection logic rather than mkdocstrings’ default member rendering.
+
+These tables can include:
 
 - name
-- type hint string (for class members, `ClassVar[T]` is displayed as `T`)
+- type hint string
 - value (or `unset`)
 - a doc “hint” convention: a string literal immediately after the declaration
-- inherited members are included and are marked as `(inherited)`
+- inherited members marked as inherited
+- property-specific handling (including read-only/abstract property labeling)
 
-This is done because mkdocstrings does not reliably surface “variable docs” in the same way, and this repository relies on conventions that are easier to capture from source.
+This is done because mkdocstrings does not reliably surface all variable-style docs in the same way, and this repository relies on conventions that are easier to capture from source and introspection.
 
 ### 4) Inheritance-aware documentation enhancements
 
 The generator uses runtime introspection for class MRO and method classification to support:
 
-- ordering methods consistently (static → class → instance, alphabetically)
-- documenting a base implementation’s docstring for undocumented overrides (when appropriate)
-- including inherited member variables (even if not redeclared)
+- consistent method ordering
+- inherited-only method stubs for members not declared on the derived class
+- inherited member variables and properties
+- fallback documentation ownership for undocumented overrides
 
-### 5) Minimal HTML post-processing to improve readability
+For undocumented overrides with base-class docs, the system now renders the base method through mkdocstrings and then post-processes the HTML so:
 
-A small hook (`docs_scripts/hooks.py`) removes repeated mkdocstrings intro paragraphs in specific generated blocks and removes redundant class anchors from the right-hand TOC. The hook operates only on marked generated blocks to keep changes controlled.
+- the derived method remains the canonical heading/signature/anchor on the page
+- the inherited doc body is reused
+- duplicate base-method TOC entries are removed
+
+This keeps inherited documentation much closer to the normal mkdocstrings rendering path and makes link/citation/debug behavior more uniform.
+
+### 5) Minimal but targeted HTML post-processing improves readability and consistency
+
+A hook (`docs_scripts/api_hooks.py`) performs a few controlled HTML-space rewrites that are difficult to do reliably in Markdown space, including:
+
+- removing repeated intro paragraphs in marked generated blocks
+- pruning redundant class/base-class anchors from the right-hand TOC
+- rewriting rendered `api:` links and selected type spans
+- rewriting citations to point at the generated bibliography page
+- stripping inherited base-render wrappers so only the inherited doc body remains where appropriate
+
+The hook operates only on known generated patterns/markers to keep changes controlled.
 
 ---
 
@@ -118,7 +144,7 @@ Examples:
 
 - `[Serializable](api:Serializable)`
 - `[Serializable](api:internal.serializable.Serializable)`
-- `[encode](api:Serializable.encode())`  (parentheses are allowed)
+- `[encode](api:Serializable.encode())`
 - `[SERIALIZATION_VERSION](api:Serializable.SERIALIZATION_VERSION)`
 - `[get_available_backends](api:get_available_backends)`
 
@@ -137,9 +163,10 @@ How it works:
 - The API build generates an inventory file at `docs/_api_inventory.json` containing:
   - all resolvable API anchors (modules/classes/functions/methods/attributes)
   - a suffix index to enable progressive qualification
-- Both the main docs build and the API docs build rewrite `api:` links using this inventory.
+  - object kind metadata used for display/link normalization
+- Both the API docs build and the main docs build rewrite `api:` links using this inventory.
 
-Note: `docs/_api_inventory.json` is treated as a generated artifact and is cleaned up by `serve.py` after each build.
+Note: `docs/_api_inventory.json` is treated as a generated artifact and is cleaned up by `serve.py` after builds.
 
 ---
 
@@ -155,6 +182,13 @@ A single helper script supports both interactive local preview (serve) and build
 - builds only (with `--build-only`).
 
 It always mounts the API reference under `/reference/`.
+
+Build order:
+
+1. API reference site
+2. Main documentation site
+
+This order is required because the API build produces `docs/_api_inventory.json`, which the main docs build uses to resolve `api:` links.
 
 Serve mode (default):
 
@@ -186,23 +220,29 @@ You can override the output directory:
 
 ## Files to know
 
-- `mkdocs.yml`
-  Main documentation site (Marimo-first tutorials and narrative docs).
-
-- `mkdocs-api-ref.yml`
+- `mkdocs-api-ref.yml`  
   API reference site (auto-generated).
 
-- `docs_scripts/gen_ref_pages.py`
-  Generates API Markdown pages, `SUMMARY.md`, and the `docs/_api_inventory.json` inventory.
+- `mkdocs.yml`  
+  Main documentation site (Marimo-first tutorials and narrative docs).
 
-- `docs_scripts/api_hooks.py`
-  Minimal HTML cleanup and TOC pruning for generated API pages.
+- `docs_scripts/gen_ref_pages.py`  
+  Top-level API reference generator/orchestrator. Discovers modules, writes generated pages/nav, and writes the API inventory.
 
-- `docs_scripts/main_hooks.py`
-  Main docs hook: rewrites `api:` links to point to `/reference/...` URLs. Hard-fails on missing/ambiguous targets.
+- `docs_scripts/ref_introspect.py`  
+  Source-analysis and runtime-introspection helpers used by the API generator. Collects module/class members, inheritance metadata, doc ownership, and property/member tables.
 
-- `docs_scripts/api_inventory.py`
-  Inventory format + progressive qualification resolver used by hooks.
+- `docs_scripts/ref_render.py`  
+  Markdown rendering helpers for generated API pages. Emits module pages, class pages, member tables, mkdocstrings blocks, and inherited-render markers.
 
-- `serve.py`
+- `docs_scripts/api_hooks.py`  
+  API-site HTML post-processing hook. Cleans marked mkdocstrings blocks, rewrites rendered `api:` links/citations, strips inherited base-render wrappers, and prunes redundant TOC entries.
+
+- `docs_scripts/main_hooks.py`  
+  Main-docs hook: rewrites `api:` links to point to `/reference/...` URLs. Hard-fails on missing/ambiguous targets.
+
+- `docs_scripts/api_inventory.py`  
+  Inventory format, progressive-qualification resolver, URL helpers, and shared Markdown `api:` link rewriting used by both hooks/build stages.
+
+- `serve.py`  
   Builds both sites, merges them, and either serves locally or writes to `site/` with `--build-only`. It also cleans up the generated `docs/_api_inventory.json` file after builds.
