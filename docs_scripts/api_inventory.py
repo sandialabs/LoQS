@@ -285,7 +285,14 @@ def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page
         kind = (inv.kinds.get(fqn) or "").lower()
 
         if not raw_text:
-            display = fqn.split(".")[-1]
+            # Use resolved object name as a guaranteed non-empty display.
+            # Special-case constructors so empty-text links display `ClassName()`
+            # rather than `__init__()`.
+            base = fqn.split(".")[-1]
+            if base == "__init__" and "." in fqn:
+                display = fqn.split(".")[-2]
+            else:
+                display = base
         else:
             display = raw_text
             if display.startswith("`") and display.endswith("`") and len(display) >= 2:

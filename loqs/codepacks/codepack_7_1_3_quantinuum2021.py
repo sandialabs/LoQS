@@ -86,8 +86,6 @@ def create_qec_code(
     -------
     QECCode
         A [QECCode](api:QECCode) implementing the [[7,1,3]] code.
-
-    REVIEW_SPHINX_REFERENCE
     """
 
     # Template qubits for defining one patch
@@ -967,8 +965,6 @@ def create_ideal_model(  # noqa: C901
     BaseNoiseModel
         A noiseless model for the [QECCode](api:QECCode) returned by
         [create_qec_code](api:codepack_7_1_3_quantinuum2021.create_qec_code).
-
-    REVIEW_SPHINX_REFERENCE
     """
     # assert len(qubits) == 10, "Must provide exactly 10 qubit labels"
     # model_qubits = [f"Q{i}" for i in range(10)]

@@ -274,7 +274,11 @@ def _rewrite_rendered_api_links(output: str, inv: ApiInventory, *, src: str) -> 
 
         body = (m.group("body") or "").strip()
         if not body:
-            body = target.split(".")[-1]
+            base = target.split(".")[-1]
+            if base == "__init__" and "." in target:
+                body = target.split(".")[-2]
+            else:
+                body = base
 
         # Detect whether this <a> is already inside an outer <code>...</code> wrapper.
         before = output[max(0, m.start() - 64):m.start()]

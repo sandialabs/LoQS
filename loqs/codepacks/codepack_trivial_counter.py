@@ -32,8 +32,6 @@ def create_qec_code():
     -------
     QECCode
         A [QECCode](api:QECCode) implementing the trivial counter code.
-
-    REVIEW_SPHINX_REFERENCE
     """
     # We don't need actual qubits for this trivial example
     # but we'll define a minimal template structure
@@ -69,34 +67,13 @@ def create_qec_code():
     return code
 
 
-def create_ideal_model(
-    qubits: Sequence[str],
-    model_backend: type[BaseNoiseModel] = DictNoiseModel,
-    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
-):
+def create_ideal_model():
     """Create an ideal (noiseless) model for the trivial code.
-
-    Since this is a trivial classical counter, we return an empty model.
-
-    Parameters
-    ----------
-    qubits : Sequence[str]
-        List of qubit labels to use (not actually used in this trivial case).
-    model_backend : type[BaseNoiseModel], optional
-        The model backend to use (not actually used in this trivial case).
-        Default is [DictNoiseModel](api:DictNoiseModel).
-    gaterep : GateRep, optional
-        Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
-    instrep : InstrumentRep, optional
-        Instrument representation to use. Default is InstrumentRep.ZBASIS_PROJECTION.
-
+    
     Returns
     -------
     BaseNoiseModel
         An empty [DictNoiseModel](api:DictNoiseModel) representing no operations needed for this trivial code.
-
-    REVIEW_SPHINX_REFERENCE
     """
     # For this trivial classical counter, we don't need any quantum operations
     # Return an empty DictNoiseModel
