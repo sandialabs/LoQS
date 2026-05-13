@@ -72,7 +72,7 @@ This project uses JupyterBook for documentation.
 Assuming the `docs` requirements have been installed, the documentation can be generated via:
 
 ```
-jupyterbook build docs
+jupyter-book build docs
 ```
 
 and then viewed by opening `docs/_build/html/index.html` in a browser.
