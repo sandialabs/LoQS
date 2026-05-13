@@ -3,21 +3,13 @@
 import mock
 import pytest
 
-try:
-    from pygsti.baseobjs import Label
-    from pygsti.circuits import Circuit
-    
-    NO_PYGSTI = False
-except ImportError:
-    NO_PYGSTI = True
+pygsti = pytest.importorskip("pygsti")
+from pygsti.baseobjs import Label
+from pygsti.circuits import Circuit
 
 from loqs.backends import PyGSTiPhysicalCircuit as PhysCirc
 
 
-@pytest.mark.skipif(
-    NO_PYGSTI,
-    reason="Skipping pyGSTi backend tests due to failed import"
-)
 class TestPyGSTiPhysicalCircuit:
 
     @classmethod

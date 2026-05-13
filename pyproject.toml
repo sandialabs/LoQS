@@ -1,13 +1,13 @@
 [project]
 name = "loqs"
 version = "1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
     "tk",
     "tqdm>=4",
-    "loqs[backends,dask]"
+    "h5py"
 ]
 authors = [
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
@@ -32,9 +32,10 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: Unix",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Physics",
     "Typing :: Typed"
 ]
@@ -47,14 +48,14 @@ dask = [
 ]
 dev = [
     "pre-commit",
-    "black>=24",
+    "black==24.1.0",
     "flake8>=7",
     "mypy>=1",
     "snakeviz"
 ]
 docs = [
     "sphinx",
-    "jupyter-book",
+    "jupyter-book<2",
     "jupytext"
 ]
 quantumsim = ["quantumsim==0.2.0"]
@@ -86,6 +87,7 @@ build-backend = "setuptools.build_meta"
 [tool.black]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'
+required-version = "24.1.0"
 force-exclude = '''
 /(
       \.git

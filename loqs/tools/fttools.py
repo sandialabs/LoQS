@@ -283,9 +283,11 @@ def test_program_output(
         program_results = test_program.run(num_shots=num_shots, verbose=False)
     else:
         # If we're skipping the run, we need to get the results from somewhere
-        program_results = getattr(test_program, '_last_results', None)
+        program_results = getattr(test_program, "_last_results", None)
         if program_results is None:
-            raise ValueError("Cannot skip run when no previous results are available")
+            raise ValueError(
+                "Cannot skip run when no previous results are available"
+            )
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot

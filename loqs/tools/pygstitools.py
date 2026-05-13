@@ -294,11 +294,13 @@ def convert_run_programs_to_dataset(
     ds = DataSet()
     for circ, prog in zip(circs, programs):
         # Get program results from the program
-        program_results = getattr(prog, '_last_results', None)
+        program_results = getattr(prog, "_last_results", None)
         if program_results is None:
             # If no results stored, run the program
             program_results = prog.run()
-        counts = Counter(program_results.collect_shot_data(*collect_shot_data_args))
+        counts = Counter(
+            program_results.collect_shot_data(*collect_shot_data_args)
+        )
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)

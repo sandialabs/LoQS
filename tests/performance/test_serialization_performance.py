@@ -172,10 +172,7 @@ def create_history_with_repeated_objects(config):
 def _test_json_serialization(history, config):
     """Test JSON serialization performance (helper function)."""
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        temp_file = f.name
-
-    try:
+    with make_temp_path(suffix=".json") as temp_file:
         # Time the serialization
         start_time = time.time()
 
@@ -197,10 +194,7 @@ def _test_json_serialization(history, config):
 def _test_hdf5_serialization(history, config):
     """Test HDF5 serialization performance (helper function)."""
 
-    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
-        temp_file = f.name
-
-    try:
+    with make_temp_path(suffix=".h5") as temp_file:
         # Time the serialization
         start_time = time.time()
         
@@ -232,9 +226,7 @@ def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
-    with tempfile.NamedTemporaryFile(suffix=".json") as f:
-        temp_file = f.name
-
+    with make_temp_path(suffix=".json") as temp_file:
         history.write(temp_file, format="json")
         loaded_json = History.read(temp_file)
         assert isinstance(loaded_json, History)
@@ -243,9 +235,11 @@ def verify_deserialization(history):
         assert len(loaded_json) == len(history)
         # Frame uses _data attribute
         assert str(loaded_json[0]._data.keys()) == str(history[0]._data.keys())
+    finally:
+        if os.path.exists(temp_file):
+            os.unlink(temp_file)
 
-    with tempfile.NamedTemporaryFile(suffix=".h5") as f:
-        temp_file = f.name
+    with make_temp_path(suffix=".h5") as temp_file:
         history.write(temp_file, format="hdf5")
         loaded_hdf5 = History.read(temp_file)
         assert isinstance(loaded_hdf5, History)
@@ -254,6 +248,9 @@ def verify_deserialization(history):
         assert len(loaded_hdf5) == len(history)
         # Frame uses _data attribute
         assert str(loaded_hdf5[0]._data.keys()) == str(history[0]._data.keys())
+    finally:
+        if os.path.exists(temp_file):
+            os.unlink(temp_file)
 
 
 

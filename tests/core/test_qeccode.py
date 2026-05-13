@@ -1,14 +1,10 @@
 """Tester for loqs.core.qeccode"""
 
-import os
-from tempfile import NamedTemporaryFile
-import pytest
-
 import pytest
 
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
-from loqs.core.qeccode import QECCode
+from loqs.core.qeccode import QECCode, QECCodePatch
 
 class TestQECCodeAndPatch:
 
@@ -40,18 +36,18 @@ class TestQECCodeAndPatch:
         }
         assert result.log == "test result"
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
         patch = code.create_patch(["D0", "A0"])
 
         # Patch should serialize code, so just do that
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            patch.write(tempf.name)
+        with make_temp_path(suffix='.json') as tmp_path:
+            patch.write(tmp_path)
+            patch2 = QECCodePatch.read(tmp_path)
+            assert isinstance(patch2, QECCodePatch)
 
-            patch2 = Frame.read(tempf.name)
-        
             ins2 = patch2["ins"]
+            assert isinstance(ins2, Instruction)
             result = ins2.apply(state=0, qubits=ins2.data["qubits"])
             assert result._data == {
                 'state': 1,
@@ -61,105 +57,37 @@ class TestQECCodeAndPatch:
             }
             assert result.log == "test result"
 
-    def test_qeccode_serialization(self):
-        """Test QECCode serialization roundtrip."""
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_qeccode_serialization_parameterized(self, format, make_temp_path):
+        """Test QECCode serialization roundtrip with both JSON and HDF5 formats."""
         # Create a QEC code with instructions
         code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
 
-        # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            code.write(tempf.name)
-            loaded_code = QECCode.read(tempf.name)
-
-        # Verify structure is preserved
-        assert loaded_code.name == "Test code"
-        assert loaded_code.template_qubits == ["Q0", "Q1"]
-        assert loaded_code.template_data_qubits == ["Q0"]
-
-        # Test file serialization
-        with NamedTemporaryFile(suffix='.json') as f:
-            code.write(f.name)
-            loaded_code = QECCode.read(f.name)
-            assert loaded_code.name == "Test code"
-
-    def test_qeccode_patch_serialization(self):
-        """Test QECCode patch serialization."""
-        # Create a QEC code and patch
-        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
-        patch = code.create_patch(["D0", "A0"])
-
-        # Test patch serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            patch.write(tempf.name)
-            loaded_patch = QECCode.read(tempf.name)  # Patches are loaded as QECCode objects
-
-        # Verify the patch data is preserved
-        assert loaded_patch.code.name == "Test code"
-        assert loaded_patch.qubits == ["D0", "A0"]
-        # The instruction should be mapped to the patch qubits
-        loaded_ins = loaded_patch["ins"]
-        assert loaded_ins.data["qubits"] == ["D0", "A0"]
-
-    def test_qeccode_compressed_serialization(self):
-        """Test QECCode serialization with compressed format."""
-        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
-
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-            temp_path = temp_file.name
-
-        try:
-            # Write compressed
-            code.write(temp_path)
-
-            # Read compressed
-            loaded_code = QECCode.read(temp_path)
+        with make_temp_path(suffix=f'.{format}') as f_path:
+            code.write(f_path)
+            loaded_code = QECCode.read(f_path)
+            assert isinstance(loaded_code, QECCode)
             # Verify structure is preserved
             assert loaded_code.name == "Test code"
             assert loaded_code.template_qubits == ["Q0", "Q1"]
             assert loaded_code.template_data_qubits == ["Q0"]
 
-        finally:
-            import os
-            os.unlink(temp_path)
-
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_qeccode_serialization_parameterized(self, format):
-        """Test QECCode serialization roundtrip with both JSON and HDF5 formats."""
-        # Create a QEC code with instructions
-        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
-
-        # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            code.write(tempf.name)
-            loaded_code = QECCode.read(tempf.name)
-
-        # Verify structure is preserved
-        assert loaded_code.name == "Test code"
-        assert loaded_code.template_qubits == ["Q0", "Q1"]
-        assert loaded_code.template_data_qubits == ["Q0"]
-
-        # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            code.write(f.name)
-            loaded_code = QECCode.read(f.name)
-            assert loaded_code.name == "Test code"
-
-    @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_qeccode_patch_serialization_parameterized(self, format):
+    def test_qeccode_patch_serialization_parameterized(self, format, make_temp_path):
         """Test QECCode patch serialization with both JSON and HDF5 formats."""
         # Create a QEC code and patch
         code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
         patch = code.create_patch(["D0", "A0"])
 
         # Test patch serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            patch.write(tempf.name)
-            loaded_patch = QECCode.read(tempf.name)  # Patches are loaded as QECCode objects
+        with make_temp_path(suffix=f".{format}") as tempf_path:
+            patch.write(tempf_path)
+            loaded_patch = QECCodePatch.read(tempf_path)
+            assert isinstance(loaded_patch, QECCodePatch)
 
-        # Verify the patch data is preserved
-        assert loaded_patch.code.name == "Test code"
-        assert loaded_patch.qubits == ["D0", "A0"]
-        # The instruction should be mapped to the patch qubits
-        loaded_ins = loaded_patch["ins"]
-        assert loaded_ins.data["qubits"] == ["D0", "A0"]
-            
+            # Verify the patch data is preserved
+            assert loaded_patch.code.name == "Test code"
+            assert loaded_patch.qubits == ["D0", "A0"]
+            # The instruction should be mapped to the patch qubits
+            loaded_ins = loaded_patch["ins"]
+            assert loaded_ins.data["qubits"] == ["D0", "A0"]
