@@ -17,7 +17,10 @@ from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit, QubitTypes
     NO_STIM,
     reason="Skipping stim backend tests due to failed import"
 )
-class TestSTIMPhysicalCircuit(unittest.TestCase):
+class TestSTIMPhysicalCircuitInit(unittest.TestCase):
+    """Construction and validation: building a STIMPhysicalCircuit from
+    various inputs (string, stim.Circuit, copy-from-self), with and without
+    explicit qubit_labels, and the errors raised when inputs are invalid."""
 
     def test_init(self):
         # Test sparse STIM circuit (non-contiguous indices)
@@ -69,6 +72,149 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
             stim_circ_3q = stim.Circuit("H 0\nCX 0 1\nCX 1 2")
             STIMPhysicalCircuit(stim_circ_3q, ['Q0', 'Q1'])
 
+    def test_measurement_with_custom_labels(self):
+        # Test measurement operations with custom labels
+        circ_str = "H 0\nTICK\nM 0\nTICK\nMR 1"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        self.assertEqual(circ.qubit_labels, ['Q0', 'Q1'])
+        self.assertEqual(circ.circuit.num_qubits, 2)
+
+        circ_str_after = str(circ.circuit)
+        self.assertIn("H 0", circ_str_after)
+        self.assertIn("M 0", circ_str_after)
+        self.assertIn("MR 1", circ_str_after)
+
+    def test_repeat_blocks(self):
+        # Test that repeat blocks work correctly
+        circ_str = "REPEAT 2 {\n    H 0\n    CX 0 1\n    TICK\n}"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        self.assertEqual(circ.qubit_labels, ['Q0', 'Q1'])
+        self.assertEqual(circ.circuit.num_qubits, 2)
+
+        # After unrolling, should have correct operations
+        unrolled = circ._unroll_repeats()
+        self.assertEqual(unrolled.count("H 0"), 2)
+        self.assertEqual(unrolled.count("CX 0 1"), 2)
+
+    def test_invalid_qubit_labels(self):
+        # Test various invalid qubit label scenarios.
+        # ValueError is raised inside __init__ before the TICK-warning check,
+        # so these cases don't emit a UserWarning even when no TICK is present.
+
+        # Too few labels for circuit (using label names in string)
+        circ_str = "H Q0\nCX Q0 Q1"
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit(circ_str, ['Q0'])
+
+        # Mismatched labels when copying from STIMPhysicalCircuit
+        circ1 = STIMPhysicalCircuit("H 0\nCX 0 1", ['Q0', 'Q1'], suppress_tick_warning=True)
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit(circ1, ['Q0'])  # Wrong number
+
+        # Unknown label in circuit string
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit("H Unknown", ['Q0', 'Q1'])
+
+    def test_empty_circuit(self):
+        # Test empty circuit
+        circ = STIMPhysicalCircuit("", [], suppress_tick_warning=True)
+        self.assertEqual(circ.qubit_labels, [])
+        self.assertEqual(circ.circuit.num_qubits, 0)
+
+        # Test circuit with only TICK
+        circ2 = STIMPhysicalCircuit("TICK", [])
+        self.assertEqual(circ2.qubit_labels, [])
+        self.assertEqual(circ2.circuit.num_qubits, 0)
+
+    def test_annotation_instructions(self):
+        # Test that annotation instructions work
+        # Note: DETECTOR requires specific syntax, so we'll test with a simpler case
+        circ_str = "H 0\nTICK"
+        circ = STIMPhysicalCircuit(circ_str)
+
+        self.assertEqual(circ.qubit_labels, [0])
+        self.assertEqual(circ.circuit.num_qubits, 1)
+
+        # Basic operations should work
+        circ_str_after = str(circ.circuit)
+        self.assertIn("H 0", circ_str_after)
+        self.assertIn("TICK", circ_str_after)
+
+    def test_stim_circuit_object_input(self):
+        # Test initialization with stim.Circuit object
+        import stim
+
+        # Test with no qubit_labels
+        stim_circ = stim.Circuit("H 0\nCX 0 5")
+        circ1 = STIMPhysicalCircuit(stim_circ, suppress_tick_warning=True)
+        self.assertEqual(circ1.qubit_labels, [0, 5])
+        self.assertEqual(circ1.circuit.num_qubits, 2)
+
+        # Test with qubit_labels
+        stim_circ2 = stim.Circuit("H 0\nCX 0 1")
+        circ2 = STIMPhysicalCircuit(stim_circ2, ['A', 'B'], suppress_tick_warning=True)
+        self.assertEqual(circ2.qubit_labels, ['A', 'B'])
+        self.assertEqual(circ2.circuit.num_qubits, 2)
+
+        # Test error case: not enough labels
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit(stim_circ2, ['A'])
+
+    def test_comprehensive_init_cases(self):
+        # Test various initialization scenarios to cover more __init__ paths
+
+        # Test with BasePhysicalCircuit (should raise NotImplementedError)
+        # from loqs.backends import ListPhysicalCircuit
+        # list_circ = ListPhysicalCircuit([('H', 'Q0')], ['Q0'])
+        #
+        # try:
+        #     STIMPhysicalCircuit(list_circ)
+        #     assert False, "Should have raised NotImplementedError"
+        # except NotImplementedError:
+        #     pass  # Expected
+
+        # Test with unsupported STIM instructions
+        with self.assertRaises(ValueError) as ctx:
+            STIMPhysicalCircuit("MPP 0 1\nTICK")
+        self.assertIn("MPP", str(ctx.exception))
+
+        # Test warning suppression
+        circ_no_warn = STIMPhysicalCircuit("H 0", ['Q0'], suppress_tick_warning=True)
+        self.assertEqual(circ_no_warn.qubit_labels, ['Q0'])
+
+    def test_init_edge_cases_comprehensive(self):
+        # Test more edge cases in __init__
+
+        # Test with stim.Circuit that has no qubits
+        import stim
+        empty_stim_circ = stim.Circuit()
+        circ1 = STIMPhysicalCircuit(empty_stim_circ, [], suppress_tick_warning=True)
+        self.assertEqual(circ1.qubit_labels, [])
+        self.assertEqual(circ1.circuit.num_qubits, 0)
+
+        # Test with stim.Circuit that has annotations only (no qubit targets)
+        annot_circ = stim.Circuit("TICK")
+        circ2 = STIMPhysicalCircuit(annot_circ, [], suppress_tick_warning=True)
+        self.assertEqual(circ2.qubit_labels, [])
+
+        # Test copy constructor with different label types
+        circ3 = STIMPhysicalCircuit("H 0\nTICK", [0])
+        circ4 = STIMPhysicalCircuit(circ3, ['Q0'])
+        self.assertEqual(circ4.qubit_labels, ['Q0'])
+        self.assertEqual(circ4.circuit.num_qubits, 1)
+
+
+@pytest.mark.skipif(
+    NO_STIM,
+    reason="Skipping stim backend tests due to failed import"
+)
+class TestSTIMPhysicalCircuitMutators(unittest.TestCase):
+    """In-place mutators (delete/merge/insert/append/pad/map/set qubits)
+    and their non-inplace counterparts. Each test focuses on whether the
+    operation produces the expected updated circuit + qubit_labels."""
+
     def test_delete_qubits(self):
         # Create a circuit with 3 qubits
         circ_str = "H 0\nCX 0 1\nTICK\nX 2"
@@ -111,310 +257,6 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         self.assertIn('Y 1', circ_str)  # Q1 -> STIM idx 1 (from circ2, remapped)
         self.assertIn('Z 2', circ_str)  # Q2 -> STIM idx 2 (from circ2, remapped)
 
-    def test_get_possible_discrete_error_locations(self):
-        # Create a simple circuit
-        circ_str = "H 0\nTICK\nCX 0 1"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        # Get error locations
-        locations = circ.get_possible_discrete_error_locations()
-
-        # Should return LoQS labels, not STIM indices
-        for _, qubit_info in locations:
-            if isinstance(qubit_info, tuple):
-                # Two-qubit gate
-                self.assertIn(qubit_info[0], ['Q0', 'Q1'])
-                self.assertIn(qubit_info[1], ['Q0', 'Q1'])
-            else:
-                # Single-qubit gate
-                self.assertIn(qubit_info, ['Q0', 'Q1'])
-
-        # Test post_twoq_gates mode
-        locations_2q = circ.get_possible_discrete_error_locations(post_twoq_gates=True)
-        for _, qubit_info in locations_2q:
-            self.assertIsInstance(qubit_info, tuple)
-            assert isinstance(qubit_info, tuple)  # narrow for type checker
-            self.assertIn(qubit_info[0], ['Q0', 'Q1'])
-            self.assertIn(qubit_info[1], ['Q0', 'Q1'])
-
-    def test_map_qubit_labels(self):
-        # Create a circuit
-        circ_str = "H 0\nTICK\nCX 0 1"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        # Map qubit labels
-        mapping : dict[QubitTypes, QubitTypes] = {'Q0': 'A', 'Q1': 'B'}
-        circ.map_qubit_labels_inplace(mapping)
-
-        self.assertEqual(circ.qubit_labels, ['A', 'B'])
-
-        # The internal STIM circuit should remain unchanged (still uses compact indices)
-        self.assertEqual(circ.circuit.num_qubits, 2)
-        circ_str_after = str(circ.circuit)
-        self.assertIn('H 0', circ_str_after)
-        self.assertIn('CX 0 1', circ_str_after)
-
-    def test_pad_idles(self):
-        # Create a simple circuit with 2 qubits
-        circ_str = "H 0\nTICK\nX 0\nTICK\nH 1"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        # Pad with idles
-        durations  : dict[str, int|float] = { 'H': 1, 'X': 1 }  # type makes pyright happy
-        idle_names : dict[int|float, str] = {  1: 'I' }         # type makes pyright happy
-
-        circ.pad_single_qubit_idles_by_duration_inplace(
-            idle_names, durations, default_duration=1
-        )
-
-        # Should have added idle operations where needed
-        circ_str_after = str(circ.circuit)
-        # Check that we have the expected structure
-        self.assertIn('H 0', circ_str_after)
-        self.assertIn('X 0', circ_str_after)
-        self.assertIn('H 1', circ_str_after)
-
-        # Test simple pad_single_qubit_idles (without durations)
-        # Use a circuit that actually uses both qubits to maintain the invariant
-        circ2 = STIMPhysicalCircuit("H 0\nI 1\nTICK\nX 0\nI 1", ['Q0', 'Q1'])
-        circ2.pad_single_qubit_idles_inplace("I")
-
-        circ2_str = str(circ2.circuit)
-        self.assertIn('H 0', circ2_str)
-        self.assertIn('X 0', circ2_str)
-
-    def test_copy(self):
-        # Create a circuit
-        circ_str = "H 0\nTICK\nCX 0 1"
-        circ1 = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        # Copy it
-        circ2 = circ1.copy()
-
-        # Should be identical
-        self.assertEqual(circ2.qubit_labels, circ1.qubit_labels)
-        self.assertEqual(str(circ2.circuit), str(circ1.circuit))
-
-        # Modifying one shouldn't affect the other
-        circ2.map_qubit_labels_inplace({'Q0': 'A', 'Q1': 'B'})
-        self.assertEqual(circ1.qubit_labels, ['Q0', 'Q1'])
-
-    def test_set_qubit_labels(self):
-        # Create a circuit
-        circ_str = "H 0\nTICK\nCX 0 1"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        # Set new qubit labels
-        new_labels = ['A', 'B']
-        circ.set_qubit_labels_inplace(new_labels)
-
-        self.assertEqual(circ.qubit_labels, new_labels)
-        # Internal STIM circuit should be unchanged
-        self.assertEqual(circ.circuit.num_qubits, 2)
-        circ_str_after = str(circ.circuit)
-        self.assertIn('H 0', circ_str_after)
-        self.assertIn('CX 0 1', circ_str_after)
-
-        # Test non-inplace version
-        circ2 = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-        circ3 = circ2.set_qubit_labels(['X', 'Y'])
-
-        self.assertEqual(circ2.qubit_labels, ['Q0', 'Q1'])  # Original unchanged
-        self.assertEqual(circ3.qubit_labels, ['X', 'Y'])    # New circuit has new labels
-
-    def test_sparse_circuit_compactness(self):
-        # Test that sparse circuits maintain compact indices
-        sparse_circuit_str = "H 0\nTICK\nCX 0 10\nTICK\nM 10"
-        circ = STIMPhysicalCircuit(sparse_circuit_str)
-
-        # Should have exactly the used indices as labels
-        self.assertEqual(circ.qubit_labels, [0, 10])
-        self.assertEqual(circ.circuit.num_qubits, 2)
-
-        # Internal circuit should use compact indices 0, 1
-        circ_str = str(circ.circuit)
-        self.assertIn("H 0", circ_str)
-        self.assertIn("CX 0 1", circ_str)
-        self.assertIn("M 1", circ_str)
-        self.assertNotIn("H 10", circ_str)  # Original sparse index should be gone
-
-        # Test deletion from sparse circuit
-        circ.delete_qubits_inplace([10])
-        self.assertEqual(circ.circuit.num_qubits, 1)
-        self.assertEqual(circ.qubit_labels, [0])
-
-        # After merging with another sparse circuit
-        other_str = "X 10\nTICK\nY 15"
-        other_circ = STIMPhysicalCircuit(other_str)
-        circ.merge_inplace(other_circ, 0)
-
-        # Should have compact indices for all qubits
-        self.assertEqual(circ.circuit.num_qubits, 3)
-        self.assertEqual(set(circ.qubit_labels), {0, 10, 15})
-
-    def test_qubit_labels_property(self):
-        # Test that the assertion holds
-        circ_str = "H 0\nTICK\nCX 0 1"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        # This should not raise an assertion error
-        labels = circ.qubit_labels
-        self.assertEqual(labels, ['Q0', 'Q1'])
-        self.assertEqual(len(labels), circ.circuit.num_qubits)
-
-    def test_measurement_with_custom_labels(self):
-        # Test measurement operations with custom labels
-        circ_str = "H 0\nTICK\nM 0\nTICK\nMR 1"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        self.assertEqual(circ.qubit_labels, ['Q0', 'Q1'])
-        self.assertEqual(circ.circuit.num_qubits, 2)
-
-        circ_str_after = str(circ.circuit)
-        self.assertIn("H 0", circ_str_after)
-        self.assertIn("M 0", circ_str_after)
-        self.assertIn("MR 1", circ_str_after)
-
-    def test_repeat_blocks(self):
-        # Test that repeat blocks work correctly
-        circ_str = "REPEAT 2 {\n    H 0\n    CX 0 1\n    TICK\n}"
-        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
-
-        self.assertEqual(circ.qubit_labels, ['Q0', 'Q1'])
-        self.assertEqual(circ.circuit.num_qubits, 2)
-
-        # After unrolling, should have correct operations
-        unrolled = circ._unroll_repeats()
-        self.assertEqual(unrolled.count("H 0"), 2)
-        self.assertEqual(unrolled.count("CX 0 1"), 2)
-
-    def test_invalid_qubit_labels(self):
-        # Test various invalid qubit label scenarios
-
-        # Too few labels for circuit (using label names in string)
-        circ_str = "H Q0\nCX Q0 Q1"
-        with self.assertRaises(ValueError):
-            STIMPhysicalCircuit(circ_str, ['Q0'])
-
-        # Mismatched labels when copying from STIMPhysicalCircuit
-        circ1 = STIMPhysicalCircuit("H 0\nCX 0 1", ['Q0', 'Q1'])
-        with self.assertRaises(ValueError):
-            STIMPhysicalCircuit(circ1, ['Q0'])  # Wrong number
-
-        # Unknown label in circuit string
-        with self.assertRaises(ValueError):
-            STIMPhysicalCircuit("H Unknown", ['Q0', 'Q1'])
-
-    def test_empty_circuit(self):
-        # Test empty circuit
-        circ = STIMPhysicalCircuit("", [])
-        self.assertEqual(circ.qubit_labels, [])
-        self.assertEqual(circ.circuit.num_qubits, 0)
-
-        # Test circuit with only TICK
-        circ2 = STIMPhysicalCircuit("TICK", [])
-        self.assertEqual(circ2.qubit_labels, [])
-        self.assertEqual(circ2.circuit.num_qubits, 0)
-
-    def test_annotation_instructions(self):
-        # Test that annotation instructions work
-        # Note: DETECTOR requires specific syntax, so we'll test with a simpler case
-        circ_str = "H 0\nTICK"
-        circ = STIMPhysicalCircuit(circ_str)
-
-        self.assertEqual(circ.qubit_labels, [0])
-        self.assertEqual(circ.circuit.num_qubits, 1)
-
-        # Basic operations should work
-        circ_str_after = str(circ.circuit)
-        self.assertIn("H 0", circ_str_after)
-        self.assertIn("TICK", circ_str_after)
-
-    def test_helper_functions(self):
-        # Test the helper functions directly
-        import stim
-        from loqs.backends.circuit.stimcircuit import _get_used_stim_indices, _reindex_stim_circuit
-
-        # Test _get_used_stim_indices
-        circ = stim.Circuit("H 0\nCX 0 5\nM 3")
-        used_indices = _get_used_stim_indices(circ)
-        self.assertEqual(used_indices, [0, 3, 5])
-
-        # Test _reindex_stim_circuit
-        index_map = {0: 0, 3: 1, 5: 2}
-        reindexed_circ = _reindex_stim_circuit(circ, index_map)
-        circ_str = str(reindexed_circ)
-        self.assertIn("H 0", circ_str)
-        self.assertIn("CX 0 2", circ_str)
-        self.assertIn("M 1", circ_str)
-        self.assertEqual(reindexed_circ.num_qubits, 3)
-
-        # Test with measurement targets including inversion
-        circ_with_inv = stim.Circuit("H 0\nM !1\nCX 0 2")
-        used_indices_inv = _get_used_stim_indices(circ_with_inv)
-        self.assertEqual(used_indices_inv, [0, 1, 2])
-
-        index_map_inv = {0: 0, 1: 1, 2: 2}
-        reindexed_inv = _reindex_stim_circuit(circ_with_inv, index_map_inv)
-        circ_inv_str = str(reindexed_inv)
-        self.assertIn("H 0", circ_inv_str)
-        self.assertIn("M !1", circ_inv_str)
-        self.assertIn("CX 0 2", circ_inv_str)
-
-    def test_edge_cases(self):
-        # Test various edge cases
-
-        # Single qubit circuit
-        circ1 = STIMPhysicalCircuit("H 0", ['Q0'])
-        self.assertEqual(circ1.qubit_labels, ['Q0'])
-        self.assertEqual(circ1.circuit.num_qubits, 1)
-
-        # Circuit with only measurements
-        circ2 = STIMPhysicalCircuit("M Q0\nTICK\nM Q1", ['Q0', 'Q1'])
-        self.assertEqual(circ2.qubit_labels, ['Q0', 'Q1'])
-        self.assertEqual(circ2.circuit.num_qubits, 2)
-
-        # Circuit with mixed operations
-        circ3 = STIMPhysicalCircuit("H Q0\nCX Q0 Q1\nM Q0\nTICK\nX Q1", ['Q0', 'Q1'])
-        self.assertEqual(circ3.qubit_labels, ['Q0', 'Q1'])
-        self.assertEqual(circ3.circuit.num_qubits, 2)
-
-        # Test error locations with mixed operations
-        error_locs = circ3.get_possible_discrete_error_locations()
-        self.assertGreater(len(error_locs), 0)
-        for layer_idx, qubit_label in error_locs:
-            self.assertIn(qubit_label, ['Q0', 'Q1'])
-            self.assertIsInstance(qubit_label, str)
-
-        # Test post_twoq_gates mode
-        error_locs_2q = circ3.get_possible_discrete_error_locations(post_twoq_gates=True)
-        for layer_idx, qubit_tuple in error_locs_2q:
-            self.assertIsInstance(qubit_tuple, tuple)
-            assert isinstance(qubit_tuple, tuple)  # narrow for type checker
-            self.assertEqual(len(qubit_tuple), 2)
-            self.assertIn(qubit_tuple[0], ['Q0', 'Q1'])
-            self.assertIn(qubit_tuple[1], ['Q0', 'Q1'])
-
-    def test_stim_circuit_object_input(self):
-        # Test initialization with stim.Circuit object
-        import stim
-
-        # Test with no qubit_labels
-        stim_circ = stim.Circuit("H 0\nCX 0 5")
-        circ1 = STIMPhysicalCircuit(stim_circ)
-        self.assertEqual(circ1.qubit_labels, [0, 5])
-        self.assertEqual(circ1.circuit.num_qubits, 2)
-
-        # Test with qubit_labels
-        stim_circ2 = stim.Circuit("H 0\nCX 0 1")
-        circ2 = STIMPhysicalCircuit(stim_circ2, ['A', 'B'])
-        self.assertEqual(circ2.qubit_labels, ['A', 'B'])
-        self.assertEqual(circ2.circuit.num_qubits, 2)
-
-        # Test error case: not enough labels
-        with self.assertRaises(ValueError):
-            STIMPhysicalCircuit(stim_circ2, ['A'])
-
     def test_complex_merge_scenario(self):
         # Test a more complex merge scenario
         circ1 = STIMPhysicalCircuit("H Q0\nTICK\nX Q1\nTICK\nM Q0", ['Q0', 'Q1'])
@@ -434,6 +276,16 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         self.assertIn('Y 2', circ_str)
         self.assertIn('Z 3', circ_str)
         self.assertIn('M 0', circ_str)
+
+    def test_merge_edge_cases(self):
+        # Test a case that should cause collision
+        circ1 = STIMPhysicalCircuit("H 0\nTICK\nX 0", ['Q0'])
+        circ2 = STIMPhysicalCircuit("Y 0\nTICK\nZ 0", ['Q0'])
+
+        # Try to merge at layer 0 where both circuits have operations on Q0
+        with self.assertRaises(ValueError) as ctx:
+            circ1.merge_inplace(circ2, 0)
+        self.assertIn("ill-posed", str(ctx.exception).lower())
 
     def test_insert_and_append(self):
         # Test insert_inplace method
@@ -470,6 +322,237 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         circ6_str = str(circ6.circuit)
         self.assertIn('H 0', circ6_str)
         self.assertIn('X 0', circ6_str)
+
+    def test_insert_edge_cases(self):
+        # Test insert at various positions
+        circ1 = STIMPhysicalCircuit("H 0\nTICK\nX 0\nTICK\nY 0", ['Q0'])
+        circ2 = STIMPhysicalCircuit("Z 0\nTICK", ['Q0'])
+
+        # Insert at beginning (idx=0)
+        circ1.insert_inplace(circ2, 0)
+        circ_str = str(circ1.circuit)
+        self.assertTrue(circ_str.startswith('Z 0'))
+
+        # Test insert at end (use depth instead of -1)
+        circ3 = STIMPhysicalCircuit("H 0\nTICK", ['Q0'])
+        circ4 = STIMPhysicalCircuit("X 0\nTICK", ['Q0'])
+        circ3.insert_inplace(circ4, circ3.depth)  # Insert at end
+        circ3_str = str(circ3.circuit)
+        self.assertIn('H 0', circ3_str)
+        self.assertIn('X 0', circ3_str)
+        self.assertEqual(circ3_str.count('TICK'), 2)
+
+    def test_pad_idles(self):
+        # Create a simple circuit with 2 qubits
+        circ_str = "H 0\nTICK\nX 0\nTICK\nH 1"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        # Pad with idles
+        durations  : dict[str, int|float] = { 'H': 1, 'X': 1 }  # type makes pyright happy
+        idle_names : dict[int|float, str] = {  1: 'I' }         # type makes pyright happy
+
+        circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_names, durations, default_duration=1
+        )
+
+        # Should have added idle operations where needed
+        circ_str_after = str(circ.circuit)
+        # Check that we have the expected structure
+        self.assertIn('H 0', circ_str_after)
+        self.assertIn('X 0', circ_str_after)
+        self.assertIn('H 1', circ_str_after)
+
+        # Test simple pad_single_qubit_idles (without durations)
+        # Use a circuit that actually uses both qubits to maintain the invariant
+        circ2 = STIMPhysicalCircuit("H 0\nI 1\nTICK\nX 0\nI 1", ['Q0', 'Q1'])
+        circ2.pad_single_qubit_idles_inplace("I")
+
+        circ2_str = str(circ2.circuit)
+        self.assertIn('H 0', circ2_str)
+        self.assertIn('X 0', circ2_str)
+
+    def test_pad_edge_cases(self):
+        # Test padding with empty layers - use circuits that actually use both qubits
+        circ = STIMPhysicalCircuit("H 0\nI 1\nTICK\nH 0\nI 1", ['Q0', 'Q1'])
+
+        durations = {'H': 1, 'I': 1}
+        idle_names : dict[int | float, str] = {1: 'I'}  # type makes pyright happy
+
+        # This should work since both qubits are already used
+        circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_names, durations, default_duration=1, empty_layer_idle='I'
+        )
+
+        circ_str = str(circ.circuit)
+        self.assertIn('H 0', circ_str)
+        self.assertIn('I 1', circ_str)
+
+    def test_map_qubit_labels(self):
+        # Create a circuit
+        circ_str = "H 0\nTICK\nCX 0 1"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        # Map qubit labels
+        mapping : dict[QubitTypes, QubitTypes] = {'Q0': 'A', 'Q1': 'B'}
+        circ.map_qubit_labels_inplace(mapping)
+
+        self.assertEqual(circ.qubit_labels, ['A', 'B'])
+
+        # The internal STIM circuit should remain unchanged (still uses compact indices)
+        self.assertEqual(circ.circuit.num_qubits, 2)
+        circ_str_after = str(circ.circuit)
+        self.assertIn('H 0', circ_str_after)
+        self.assertIn('CX 0 1', circ_str_after)
+
+    def test_set_qubit_labels(self):
+        # Create a circuit
+        circ_str = "H 0\nTICK\nCX 0 1"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        # Set new qubit labels
+        new_labels = ['A', 'B']
+        circ.set_qubit_labels_inplace(new_labels)
+
+        self.assertEqual(circ.qubit_labels, new_labels)
+        # Internal STIM circuit should be unchanged
+        self.assertEqual(circ.circuit.num_qubits, 2)
+        circ_str_after = str(circ.circuit)
+        self.assertIn('H 0', circ_str_after)
+        self.assertIn('CX 0 1', circ_str_after)
+
+        # Test non-inplace version
+        circ2 = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+        circ3 = circ2.set_qubit_labels(['X', 'Y'])
+
+        self.assertEqual(circ2.qubit_labels, ['Q0', 'Q1'])  # Original unchanged
+        self.assertEqual(circ3.qubit_labels, ['X', 'Y'])    # New circuit has new labels
+
+
+@pytest.mark.skipif(
+    NO_STIM,
+    reason="Skipping stim backend tests due to failed import"
+)
+class TestSTIMPhysicalCircuitQueries(unittest.TestCase):
+    """Read-only operations: properties (qubit_labels, depth, .circuit),
+    dunder methods (__str__, __repr__), copy, error-location queries,
+    serialization round-trips, command aliases, and the
+    sparse-circuit compactness invariant."""
+
+    def test_copy(self):
+        # Create a circuit
+        circ_str = "H 0\nTICK\nCX 0 1"
+        circ1 = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        # Copy it
+        circ2 = circ1.copy()
+
+        # Should be identical
+        self.assertEqual(circ2.qubit_labels, circ1.qubit_labels)
+        self.assertEqual(str(circ2.circuit), str(circ1.circuit))
+
+        # Modifying one shouldn't affect the other
+        circ2.map_qubit_labels_inplace({'Q0': 'A', 'Q1': 'B'})
+        self.assertEqual(circ1.qubit_labels, ['Q0', 'Q1'])
+
+    def test_qubit_labels_property(self):
+        # Test that the assertion holds
+        circ_str = "H 0\nTICK\nCX 0 1"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        # This should not raise an assertion error
+        labels = circ.qubit_labels
+        self.assertEqual(labels, ['Q0', 'Q1'])
+        self.assertEqual(len(labels), circ.circuit.num_qubits)
+
+    def test_get_possible_discrete_error_locations(self):
+        # Create a simple circuit
+        circ_str = "H 0\nTICK\nCX 0 1"
+        circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
+
+        # Get error locations
+        locations = circ.get_possible_discrete_error_locations()
+
+        # Should return LoQS labels, not STIM indices
+        for _, qubit_info in locations:
+            if isinstance(qubit_info, tuple):
+                # Two-qubit gate
+                self.assertIn(qubit_info[0], ['Q0', 'Q1'])
+                self.assertIn(qubit_info[1], ['Q0', 'Q1'])
+            else:
+                # Single-qubit gate
+                self.assertIn(qubit_info, ['Q0', 'Q1'])
+
+        # Test post_twoq_gates mode
+        locations_2q = circ.get_possible_discrete_error_locations(post_twoq_gates=True)
+        for _, qubit_info in locations_2q:
+            self.assertIsInstance(qubit_info, tuple)
+            assert isinstance(qubit_info, tuple)  # narrow for type checker
+            self.assertIn(qubit_info[0], ['Q0', 'Q1'])
+            self.assertIn(qubit_info[1], ['Q0', 'Q1'])
+
+    def test_edge_cases(self):
+        # Test various edge cases
+
+        # Single qubit circuit
+        circ1 = STIMPhysicalCircuit("H 0", ['Q0'], suppress_tick_warning=True)
+        self.assertEqual(circ1.qubit_labels, ['Q0'])
+        self.assertEqual(circ1.circuit.num_qubits, 1)
+
+        # Circuit with only measurements
+        circ2 = STIMPhysicalCircuit("M Q0\nTICK\nM Q1", ['Q0', 'Q1'])
+        self.assertEqual(circ2.qubit_labels, ['Q0', 'Q1'])
+        self.assertEqual(circ2.circuit.num_qubits, 2)
+
+        # Circuit with mixed operations
+        circ3 = STIMPhysicalCircuit("H Q0\nCX Q0 Q1\nM Q0\nTICK\nX Q1", ['Q0', 'Q1'])
+        self.assertEqual(circ3.qubit_labels, ['Q0', 'Q1'])
+        self.assertEqual(circ3.circuit.num_qubits, 2)
+
+        # Test error locations with mixed operations
+        error_locs = circ3.get_possible_discrete_error_locations()
+        self.assertGreater(len(error_locs), 0)
+        for _, qubit_label in error_locs:
+            self.assertIn(qubit_label, ['Q0', 'Q1'])
+            self.assertIsInstance(qubit_label, str)
+
+        # Test post_twoq_gates mode
+        error_locs_2q = circ3.get_possible_discrete_error_locations(post_twoq_gates=True)
+        for _, qubit_tuple in error_locs_2q:
+            self.assertIsInstance(qubit_tuple, tuple)
+            assert isinstance(qubit_tuple, tuple)  # narrow for type checker
+            self.assertEqual(len(qubit_tuple), 2)
+            self.assertIn(qubit_tuple[0], ['Q0', 'Q1'])
+            self.assertIn(qubit_tuple[1], ['Q0', 'Q1'])
+
+    def test_sparse_circuit_compactness(self):
+        # Test that sparse circuits maintain compact indices
+        sparse_circuit_str = "H 0\nTICK\nCX 0 10\nTICK\nM 10"
+        circ = STIMPhysicalCircuit(sparse_circuit_str)
+
+        # Should have exactly the used indices as labels
+        self.assertEqual(circ.qubit_labels, [0, 10])
+        self.assertEqual(circ.circuit.num_qubits, 2)
+
+        # Internal circuit should use compact indices 0, 1
+        circ_str = str(circ.circuit)
+        self.assertIn("H 0", circ_str)
+        self.assertIn("CX 0 1", circ_str)
+        self.assertIn("M 1", circ_str)
+        self.assertNotIn("H 10", circ_str)  # Original sparse index should be gone
+
+        # Test deletion from sparse circuit
+        circ.delete_qubits_inplace([10])
+        self.assertEqual(circ.circuit.num_qubits, 1)
+        self.assertEqual(circ.qubit_labels, [0])
+
+        # After merging with another sparse circuit
+        other_str = "X 10\nTICK\nY 15"
+        other_circ = STIMPhysicalCircuit(other_str)
+        circ.merge_inplace(other_circ, 0)
+
+        # Should have compact indices for all qubits
+        self.assertEqual(circ.circuit.num_qubits, 3)
+        self.assertEqual(set(circ.qubit_labels), {0, 10, 15})
 
     def test_serialization_methods(self):
         # Test _serialize_circuit and _deserialize_circuit methods
@@ -509,72 +592,67 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         # The alias should be preserved in the internal circuit
         self.assertTrue('CNOT 0 1' in circ_str_after or 'CX 0 1' in circ_str_after)
 
-    def test_comprehensive_init_cases(self):
-        # Test various initialization scenarios to cover more __init__ paths
+    def test_method_properties(self):
+        # Test various method properties and edge cases
 
-        # Test with BasePhysicalCircuit (should raise NotImplementedError)
-        # from loqs.backends import ListPhysicalCircuit
-        # list_circ = ListPhysicalCircuit([('H', 'Q0')], ['Q0'])
-        #
-        # try:
-        #     STIMPhysicalCircuit(list_circ)
-        #     assert False, "Should have raised NotImplementedError"
-        # except NotImplementedError:
-        #     pass  # Expected
+        # Test depth property
+        circ = STIMPhysicalCircuit("H 0\nTICK\nX 0\nTICK", ['Q0'])
+        self.assertEqual(circ.depth, 3)  # 2 TICKs create 3 layers
 
-        # Test with unsupported STIM instructions
-        with self.assertRaises(ValueError) as ctx:
-            STIMPhysicalCircuit("MPP 0 1\nTICK")
-        self.assertIn("MPP", str(ctx.exception))
+        # Test __str__ method
+        circ_str = str(circ)
+        self.assertIn("Physical STIM circuit", circ_str)
+        self.assertIn("H 0", circ_str)
 
-        # Test warning suppression
-        circ_no_warn = STIMPhysicalCircuit("H 0", ['Q0'], suppress_tick_warning=True)
-        self.assertEqual(circ_no_warn.qubit_labels, ['Q0'])
+        # Test __repr__ method
+        circ_repr = repr(circ)
+        self.assertIn("Physical STIM circuit", circ_repr)
 
-    def test_insert_edge_cases(self):
-        # Test insert at various positions
-        circ1 = STIMPhysicalCircuit("H 0\nTICK\nX 0\nTICK\nY 0", ['Q0'])
-        circ2 = STIMPhysicalCircuit("Z 0\nTICK", ['Q0'])
+        # Test circuit property
+        stim_circ = circ.circuit
+        self.assertIsInstance(stim_circ, stim.Circuit)
+        self.assertEqual(stim_circ.num_qubits, 1)
 
-        # Insert at beginning (idx=0)
-        circ1.insert_inplace(circ2, 0)
-        circ_str = str(circ1.circuit)
-        self.assertTrue(circ_str.startswith('Z 0'))
 
-        # Test insert at end (use depth instead of -1)
-        circ3 = STIMPhysicalCircuit("H 0\nTICK", ['Q0'])
-        circ4 = STIMPhysicalCircuit("X 0\nTICK", ['Q0'])
-        circ3.insert_inplace(circ4, circ3.depth)  # Insert at end
-        circ3_str = str(circ3.circuit)
-        self.assertIn('H 0', circ3_str)
-        self.assertIn('X 0', circ3_str)
-        self.assertEqual(circ3_str.count('TICK'), 2)
+@pytest.mark.skipif(
+    NO_STIM,
+    reason="Skipping stim backend tests due to failed import"
+)
+class TestSTIMHelpers(unittest.TestCase):
+    """Module-level helper functions in stimcircuit
+    (_get_used_stim_indices, _reindex_stim_circuit) — these operate on raw
+    stim.Circuit objects and are not methods of STIMPhysicalCircuit."""
 
-    def test_merge_edge_cases(self):
-        # Test a case that should cause collision
-        circ1 = STIMPhysicalCircuit("H 0\nTICK\nX 0", ['Q0'])
-        circ2 = STIMPhysicalCircuit("Y 0\nTICK\nZ 0", ['Q0'])
+    def test_helper_functions(self):
+        # Test the helper functions directly
+        import stim
+        from loqs.backends.circuit.stimcircuit import _get_used_stim_indices, _reindex_stim_circuit
 
-        # Try to merge at layer 0 where both circuits have operations on Q0
-        with self.assertRaises(ValueError) as ctx:
-            circ1.merge_inplace(circ2, 0)
-        self.assertIn("ill-posed", str(ctx.exception).lower())
+        # Test _get_used_stim_indices
+        circ = stim.Circuit("H 0\nCX 0 5\nM 3")
+        used_indices = _get_used_stim_indices(circ)
+        self.assertEqual(used_indices, [0, 3, 5])
 
-    def test_pad_edge_cases(self):
-        # Test padding with empty layers - use circuits that actually use both qubits
-        circ = STIMPhysicalCircuit("H 0\nI 1\nTICK\nH 0\nI 1", ['Q0', 'Q1'])
+        # Test _reindex_stim_circuit
+        index_map = {0: 0, 3: 1, 5: 2}
+        reindexed_circ = _reindex_stim_circuit(circ, index_map)
+        circ_str = str(reindexed_circ)
+        self.assertIn("H 0", circ_str)
+        self.assertIn("CX 0 2", circ_str)
+        self.assertIn("M 1", circ_str)
+        self.assertEqual(reindexed_circ.num_qubits, 3)
 
-        durations = {'H': 1, 'I': 1}
-        idle_names : dict[int | float, str] = {1: 'I'}  # type makes pyright happy
+        # Test with measurement targets including inversion
+        circ_with_inv = stim.Circuit("H 0\nM !1\nCX 0 2")
+        used_indices_inv = _get_used_stim_indices(circ_with_inv)
+        self.assertEqual(used_indices_inv, [0, 1, 2])
 
-        # This should work since both qubits are already used
-        circ.pad_single_qubit_idles_by_duration_inplace(
-            idle_names, durations, default_duration=1, empty_layer_idle='I'
-        )
-
-        circ_str = str(circ.circuit)
-        self.assertIn('H 0', circ_str)
-        self.assertIn('I 1', circ_str)
+        index_map_inv = {0: 0, 1: 1, 2: 2}
+        reindexed_inv = _reindex_stim_circuit(circ_with_inv, index_map_inv)
+        circ_inv_str = str(reindexed_inv)
+        self.assertIn("H 0", circ_inv_str)
+        self.assertIn("M !1", circ_inv_str)
+        self.assertIn("CX 0 2", circ_inv_str)
 
     def test_comprehensive_helper_coverage(self):
         # Test helper functions more comprehensively
@@ -602,45 +680,3 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
 
         empty_reindexed = _reindex_stim_circuit(empty_circ, {})
         self.assertEqual(str(empty_reindexed), "")
-
-    def test_init_edge_cases_comprehensive(self):
-        # Test more edge cases in __init__
-
-        # Test with stim.Circuit that has no qubits
-        import stim
-        empty_stim_circ = stim.Circuit()
-        circ1 = STIMPhysicalCircuit(empty_stim_circ, [])
-        self.assertEqual(circ1.qubit_labels, [])
-        self.assertEqual(circ1.circuit.num_qubits, 0)
-
-        # Test with stim.Circuit that has annotations only (no qubit targets)
-        annot_circ = stim.Circuit("TICK")
-        circ2 = STIMPhysicalCircuit(annot_circ, [])
-        self.assertEqual(circ2.qubit_labels, [])
-
-        # Test copy constructor with different label types
-        circ3 = STIMPhysicalCircuit("H 0\nTICK", [0])
-        circ4 = STIMPhysicalCircuit(circ3, ['Q0'])
-        self.assertEqual(circ4.qubit_labels, ['Q0'])
-        self.assertEqual(circ4.circuit.num_qubits, 1)
-
-    def test_method_properties(self):
-        # Test various method properties and edge cases
-
-        # Test depth property
-        circ = STIMPhysicalCircuit("H 0\nTICK\nX 0\nTICK", ['Q0'])
-        self.assertEqual(circ.depth, 3)  # 2 TICKs create 3 layers
-
-        # Test __str__ method
-        circ_str = str(circ)
-        self.assertIn("Physical STIM circuit", circ_str)
-        self.assertIn("H 0", circ_str)
-
-        # Test __repr__ method
-        circ_repr = repr(circ)
-        self.assertIn("Physical STIM circuit", circ_repr)
-
-        # Test circuit property
-        stim_circ = circ.circuit
-        self.assertIsInstance(stim_circ, stim.Circuit)
-        self.assertEqual(stim_circ.num_qubits, 1)
