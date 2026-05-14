@@ -10,7 +10,7 @@ try:
 except ImportError:
     NO_STIM = True
 
-from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit, QubitTypes
 
 
 @pytest.mark.skipif(
@@ -120,7 +120,7 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         locations = circ.get_possible_discrete_error_locations()
 
         # Should return LoQS labels, not STIM indices
-        for layer_idx, qubit_info in locations:
+        for _, qubit_info in locations:
             if isinstance(qubit_info, tuple):
                 # Two-qubit gate
                 self.assertIn(qubit_info[0], ['Q0', 'Q1'])
@@ -131,7 +131,7 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
 
         # Test post_twoq_gates mode
         locations_2q = circ.get_possible_discrete_error_locations(post_twoq_gates=True)
-        for layer_idx, qubit_info in locations_2q:
+        for _, qubit_info in locations_2q:
             self.assertIsInstance(qubit_info, tuple)
             assert isinstance(qubit_info, tuple)  # narrow for type checker
             self.assertIn(qubit_info[0], ['Q0', 'Q1'])
@@ -143,7 +143,7 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
 
         # Map qubit labels
-        mapping = {'Q0': 'A', 'Q1': 'B'}
+        mapping : dict[QubitTypes, QubitTypes] = {'Q0': 'A', 'Q1': 'B'}
         circ.map_qubit_labels_inplace(mapping)
 
         self.assertEqual(circ.qubit_labels, ['A', 'B'])
@@ -160,8 +160,8 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         circ = STIMPhysicalCircuit(circ_str, ['Q0', 'Q1'])
 
         # Pad with idles
-        durations = {'H': 1, 'X': 1}
-        idle_names = {1: 'I'}
+        durations  : dict[str, int|float] = { 'H': 1, 'X': 1 }  # type makes pyright happy
+        idle_names : dict[int|float, str] = {  1: 'I' }         # type makes pyright happy
 
         circ.pad_single_qubit_idles_by_duration_inplace(
             idle_names, durations, default_duration=1
@@ -565,7 +565,7 @@ class TestSTIMPhysicalCircuit(unittest.TestCase):
         circ = STIMPhysicalCircuit("H 0\nI 1\nTICK\nH 0\nI 1", ['Q0', 'Q1'])
 
         durations = {'H': 1, 'I': 1}
-        idle_names = {1: 'I'}
+        idle_names : dict[int | float, str] = {1: 'I'}  # type makes pyright happy
 
         # This should work since both qubits are already used
         circ.pad_single_qubit_idles_by_duration_inplace(
