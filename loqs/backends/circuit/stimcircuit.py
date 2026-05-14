@@ -125,17 +125,28 @@ def _reindex_stim_circuit(circuit: _Circuit, index_map: dict[int, int]) -> _Circ
 
 
 def _separate_stimcircuit_instruction(ell: str) -> tuple[str, str]:
-    """
-    Assume ell is a <LINE> in the following sense.
-    
-        <LINE> ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\n'
-            <INDENT>      ::=  /[ \t]*/
-            <COMMENT>     ::=  '#' /[^\n]*/
-            <BLOCK_START> ::=  <INSTRUCTION> /[ \t]*/ '{'
-            <BLOCK_END>   ::=  '}' 
+    """Split a single STIM-circuit line into its instruction and remainder.
 
-    Return a pair of strings (p1, p2), where p1 = ((<INSTRUCTION> + ' ' ) | '') and 
-    ell.replace('\t','    ').lstrip(' ') == p1 + p2, up to whitepsace dfferences.
+    Assume ``ell`` is a <LINE> in the following sense.
+
+        <LINE> ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\\n'
+            <INDENT>      ::=  /[ \\t]*/
+            <COMMENT>     ::=  '#' /[^\\n]*/
+            <BLOCK_START> ::=  <INSTRUCTION> /[ \\t]*/ '{'
+            <BLOCK_END>   ::=  '}'
+
+    Returns a pair of strings ``(p1, p2)`` where ``p1`` is the
+    ``<INSTRUCTION>`` portion of the line (no trailing whitespace) and
+    ``p2`` is the remainder (any trailing whitespace, ``{`` or ``}``
+    block delimiter, and/or ``<COMMENT>``). If the line contains no
+    instruction, ``p1`` is the empty string and ``p2`` carries the whole
+    line (modulo the tab-expansion / leading-whitespace stripping that
+    this function performs).
+
+    Concatenation reproduces the de-tabbed, left-stripped line: i.e.
+    ``ell.replace('\\t', '    ').lstrip(' ') == p1 + p2`` up to a
+    possible single run of spaces shifted between p1's tail and p2's
+    head in the ``<BLOCK_START>`` case.
     """
     ell = ell.replace('\t', '    ')
     ell = ell.lstrip(' ')
@@ -227,22 +238,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     _qubit_labels: list[QubitTypes]
     """list of qubit labels"""
-
-    _stim_annotations: ClassVar[list[str]] = [
-        "REPEAT",
-        "DETECTOR",
-        "MPAD",
-        "OBSERVABLE_INCLUDE",
-        "QUBIT_COORDS",
-        "SHIFT_COORDS",
-        "TICK",
-    ]
-    """STIM control or annotations.
-
-    These instructions are handled differently
-    (or often ignored) by many circuit manipulation
-    functions.
-    """
 
     _stim_oneq_gates: ClassVar[list[str]] = [
         "I",
@@ -557,7 +552,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         existing layers.
 
         Note that for STIM circuits, this will first unroll repeat blocks
-        in the both circuits to ensure merging of correct layers.
+        in the current circuit. The incoming circuit is *not* unrolled;
+        any ``REPEAT`` block in the incoming circuit is treated as residing
+        in a single layer and may not merge as expected.
 
         Parameters
         ----------
@@ -691,13 +688,20 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         serial_circuit: str | list | dict,
         qubit_labels: Sequence | None = None,
     ) -> _Circuit:
-        """Helper function to deserialize a circuit.
+        """Deserialize a serialized STIM circuit back into a ``stim.Circuit``.
 
-        Derived classes should implement this for
-        deserialization to work.
+        Parameters
+        ----------
+        serial_circuit:
+            The serialized form, as produced by :meth:`._serialize_circuit`.
+            Must be a ``str``; the ``list``/``dict`` types in the parent
+            signature are not supported by this backend.
+
+        qubit_labels:
+            Accepted for API compatibility with
+            :meth:`.BasePhysicalCircuit.from_decoded_attrs` but unused —
+            STIM circuits round-trip through ``str(circuit)`` directly.
         """
-        # For STIM circuit, it is already deserializable from str
-        # qubit_labels not needed
         assert isinstance(serial_circuit, str)
         return _Circuit(serial_circuit)
 

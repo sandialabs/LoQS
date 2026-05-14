@@ -307,7 +307,10 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             Circuit to insert
 
         idx:
-            Starting index to begin insert. If -1, append to the end.
+            Layer index at which to begin the insertion. Use 0 to prepend,
+            or :attr:`.depth` to append (or call :meth:`.append_inplace`).
+            Negative indices follow Python slicing semantics and are
+            not a shorthand for "append to the end".
         """
         pass
 
@@ -473,7 +476,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             Defaults to None, which will cause a KeyError to be thrown.
 
         empty_layer_idle:
-            Label to use for qubits in a completely empty label.
+            Label to use for qubits in a completely empty layer.
             Defaults to None, which inserts no idles.
         """
         pass
