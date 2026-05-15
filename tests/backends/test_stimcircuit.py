@@ -1,5 +1,7 @@
 """Tester for loqs.backends.circuit.stimcircuit"""
 
+import warnings
+
 import pytest
 import unittest
 
@@ -122,11 +124,47 @@ class TestSTIMPhysicalCircuitInit(unittest.TestCase):
         circ = STIMPhysicalCircuit("", [], suppress_tick_warning=True)
         self.assertEqual(circ.qubit_labels, [])
         self.assertEqual(circ.circuit.num_qubits, 0)
+        # depth = num_ticks + 1, so an empty circuit reports a single
+        # (empty) layer.
+        self.assertEqual(circ.depth, 1)
 
         # Test circuit with only TICK
         circ2 = STIMPhysicalCircuit("TICK", [])
         self.assertEqual(circ2.qubit_labels, [])
         self.assertEqual(circ2.circuit.num_qubits, 0)
+        self.assertEqual(circ2.depth, 2)
+
+    def test_no_tick_warning_emitted(self):
+        """Constructing a circuit without TICK emits a UserWarning unless
+        suppress_tick_warning=True is passed."""
+        with self.assertWarnsRegex(UserWarning, "No TICK instructions"):
+            STIMPhysicalCircuit("H 0\nCX 0 1", ['Q0', 'Q1'])
+
+        # And the same construction with suppression emits no such warning.
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            STIMPhysicalCircuit(
+                "H 0\nCX 0 1", ['Q0', 'Q1'], suppress_tick_warning=True
+            )
+        tick_warnings = [w for w in captured if "No TICK" in str(w.message)]
+        self.assertEqual(tick_warnings, [])
+
+    def test_invalid_circuit_type_raises(self):
+        """Passing a value that is neither STIMPhysicalCircuit, str, nor
+        stim.Circuit raises ValueError."""
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit(123)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit(None)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            STIMPhysicalCircuit([("H", 0)])  # type: ignore[arg-type]
+
+    def test_parens_args_target_substitution(self):
+        """Instructions with parenthesized arguments (e.g. X_ERROR(0.1) Q0)
+        have their qubit targets correctly remapped from custom labels to
+        STIM indices via the parens-aware path in _replace_instruction_targets."""
+        circ = STIMPhysicalCircuit("X_ERROR(0.1) Q0\nTICK", ['Q0'])
+        self.assertIn("X_ERROR(0.1) 0", str(circ.circuit))
 
     def test_annotation_instructions(self):
         # Test that annotation instructions work
@@ -234,6 +272,13 @@ class TestSTIMPhysicalCircuitMutators(unittest.TestCase):
         circ.delete_qubits_inplace([0])
         self.assertEqual(circ.qubit_labels, [2])
         self.assertEqual(circ.circuit.num_qubits, 1)
+
+    def test_delete_unknown_label_raises(self):
+        """delete_qubits_inplace raises ValueError when given a label that
+        is not present in the circuit's qubit_labels."""
+        circ = STIMPhysicalCircuit("H 0\nTICK\nX 1", ['Q0', 'Q1'])
+        with self.assertRaises(ValueError):
+            circ.delete_qubits_inplace(['Q2'])  # Q2 is not in qubit_labels
 
     def test_merge(self):
         # Create two circuits with overlapping and new qubits
@@ -403,6 +448,14 @@ class TestSTIMPhysicalCircuitMutators(unittest.TestCase):
         circ_str_after = str(circ.circuit)
         self.assertIn('H 0', circ_str_after)
         self.assertIn('CX 0 1', circ_str_after)
+
+    def test_map_qubit_labels_partial_passthrough(self):
+        """map_qubit_labels_inplace leaves unmapped qubits unchanged
+        (contract inherited from BasePhysicalCircuit)."""
+        circ = STIMPhysicalCircuit("H 0\nTICK\nCX 0 1", ['Q0', 'Q1'])
+        # Map only Q0; Q1 should be untouched.
+        circ.map_qubit_labels_inplace({'Q0': 'A'})
+        self.assertEqual(circ.qubit_labels, ['A', 'Q1'])
 
     def test_set_qubit_labels(self):
         # Create a circuit
@@ -653,6 +706,16 @@ class TestSTIMHelpers(unittest.TestCase):
         self.assertIn("H 0", circ_inv_str)
         self.assertIn("M !1", circ_inv_str)
         self.assertIn("CX 0 2", circ_inv_str)
+
+    def test_get_used_stim_indices_excludes_rec_targets(self):
+        """_get_used_stim_indices counts only qubit targets, not measurement-
+        record references like rec[-1] that appear as DETECTOR targets."""
+        import stim
+        from loqs.backends.circuit.stimcircuit import _get_used_stim_indices
+
+        circ = stim.Circuit("H 0\nM 0\nDETECTOR rec[-1]")
+        # Only qubit 0 should be reported; rec[-1] is not a qubit target.
+        self.assertEqual(_get_used_stim_indices(circ), [0])
 
     def test_comprehensive_helper_coverage(self):
         # Test helper functions more comprehensively
