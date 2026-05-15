@@ -680,6 +680,34 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:
+        """Re-label the circuit's qubits in place.
+
+        The new ``qubit_labels`` sequence must have the same length as
+        :attr:`.circuit.num_qubits`. This is the invariant asserted by
+        :attr:`.qubit_labels` on read; we also enforce it here at write
+        time.
+
+        Parameters
+        ----------
+        qubit_labels:
+            New labels for the circuit's qubits. ``len(qubit_labels)``
+            must equal :attr:`.circuit.num_qubits`.
+
+        Raises
+        ------
+        ValueError
+            If the length of ``qubit_labels`` does not match the number
+            of qubits in the circuit.
+        """
+        if len(qubit_labels) != self.circuit.num_qubits:
+            msg = (
+                f"Cannot set {len(qubit_labels)} qubit labels on a STIM "
+                f"circuit with {self.circuit.num_qubits} qubits; lengths "
+                f"must match. (Use map_qubit_labels_inplace to rename a "
+                f"subset of qubits, or delete_qubits_inplace to change "
+                f"the qubit count.)"
+            )
+            raise ValueError(msg)
         self._qubit_labels = list(qubit_labels)
 
     @classmethod

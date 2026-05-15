@@ -393,8 +393,10 @@ class TestSTIMDictNoiseModel:
         inst_dict = {}
         model = STIMDictNoiseModel((gate_dict, inst_dict))
 
-        # Create empty circuit
-        circuit = STIMPhysicalCircuit("", ["Q0"])
+        # Create empty circuit. The qubit_labels list must have the same
+        # length as circuit.num_qubits (which is 0 for an empty string),
+        # so we pass an empty list rather than ["Q0"].
+        circuit = STIMPhysicalCircuit("", [])
 
         # Get representations
         reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])

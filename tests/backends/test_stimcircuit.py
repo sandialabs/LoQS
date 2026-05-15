@@ -480,6 +480,29 @@ class TestSTIMPhysicalCircuitMutators(unittest.TestCase):
         self.assertEqual(circ2.qubit_labels, ['Q0', 'Q1'])  # Original unchanged
         self.assertEqual(circ3.qubit_labels, ['X', 'Y'])    # New circuit has new labels
 
+    def test_set_qubit_labels_wrong_length_raises(self):
+        """set_qubit_labels_inplace must raise ValueError when the new
+        labels' length does not match the circuit's qubit count. This
+        catches the silent invariant violation noted as B11 in the audit
+        (len(self._qubit_labels) == self.circuit.num_qubits asserted by
+        the qubit_labels property)."""
+        circ = STIMPhysicalCircuit("H 0\nTICK\nCX 0 1", ['Q0', 'Q1'])
+
+        # Too few labels
+        with self.assertRaises(ValueError):
+            circ.set_qubit_labels_inplace(['A'])
+
+        # Too many labels
+        with self.assertRaises(ValueError):
+            circ.set_qubit_labels_inplace(['A', 'B', 'C'])
+
+        # The non-inplace variant should propagate the error too.
+        with self.assertRaises(ValueError):
+            circ.set_qubit_labels(['A'])
+
+        # And the original circuit should be untouched after the failures.
+        self.assertEqual(circ.qubit_labels, ['Q0', 'Q1'])
+
 
 @pytest.mark.skipif(
     NO_STIM,
