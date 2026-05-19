@@ -1,22 +1,19 @@
 """Tester for loqs.tools.qsimtools"""
 import pytest
 
-try:
-    from quantumsim import ptm as _ptm
-    import numpy as np
-    NO_QSIM = False
-except ImportError:
-    NO_QSIM = True
-
+# loqs.backends.state.qsimstate imports quantumsim eagerly, so this whole
+# module is skipped at collection time when quantumsim is missing.
+quantumsim = pytest.importorskip("quantumsim")
+import numpy as np
+from quantumsim import ptm as _ptm
 
 from loqs.backends.state.qsimstate import QSimQuantumState as QSimState
-from loqs.tools.qsimtools import get_state_probs_phases, print_state_probs_phases
-
-
-@pytest.mark.skipif(
-    NO_QSIM,
-    reason="Skipping quantumsim backend tests due to failed import"
+from loqs.tools.qsimtools import (
+    get_state_probs_phases,
+    print_state_probs_phases,
 )
+
+
 class TestQSimTools:
 
     def test_get_state_probs_phases_basic(self):

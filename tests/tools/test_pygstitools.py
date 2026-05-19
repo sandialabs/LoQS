@@ -4,6 +4,12 @@ from typing import Any
 
 import numpy as np
 import pytest
+
+# loqs.tools.pygstitools raises ImportError at module import when pyGSTi
+# is missing (see AGENTS.md "known wart"), so this whole module is
+# skipped at collection time when pyGSTi is unavailable.
+pygsti = pytest.importorskip("pygsti")
+
 from loqs.core.instructions.instructionlabel import InstructionLabel
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.instructions.instruction      import Instruction
@@ -18,24 +24,17 @@ from loqs.tools.pygstitools import (
     convert_edesign_to_programs,
     convert_run_programs_to_dataset,
 )
-
-try:
-    from pygsti.modelpacks import smq1Q_XYZI
-    from pygsti.protocols import ExperimentDesign
-    from pygsti.models import ExplicitOpModel
-    from pygsti.modelmembers.states import create_from_pure_vector
-    from pygsti.modelmembers.povms import create_from_pure_vectors
-    from pygsti.circuits import Circuit
-    from pygsti.baseobjs import Label
-    from pygsti.data import DataSet
-    from pygsti.tools import unitary_to_pauligate
-    NO_PYGSTI = False
-except ImportError:
-    NO_PYGSTI = True
+from pygsti.modelpacks import smq1Q_XYZI
+from pygsti.protocols import ExperimentDesign
+from pygsti.models import ExplicitOpModel
+from pygsti.modelmembers.states import create_from_pure_vector
+from pygsti.modelmembers.povms import create_from_pure_vectors
+from pygsti.circuits import Circuit
+from pygsti.baseobjs import Label
+from pygsti.data import DataSet
+from pygsti.tools import unitary_to_pauligate
 
 
-
-@pytest.mark.skipif(NO_PYGSTI, reason='pyGSTi is not installed')
 class TestPyGSTITools:
     """Test class for pyGSTi tools functions."""
 
