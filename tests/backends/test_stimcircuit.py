@@ -100,6 +100,41 @@ class TestSTIMPhysicalCircuitInit(unittest.TestCase):
         self.assertEqual(unrolled.count("H 0"), 2)
         self.assertEqual(unrolled.count("CX 0 1"), 2)
 
+    def test_unroll_repeats_with_sibling_blocks(self):
+        """_unroll_repeats must pair each REPEAT with its own matching `}`,
+        not the last `}` in the circuit. With two sibling REPEAT blocks
+        the buggy pairing would treat the entire span between the first
+        REPEAT and the last `}` as one block. (B12 from the audit.)"""
+        circ_str = (
+            "REPEAT 2 {\n  H 0\n  TICK\n}\n"
+            "X 0\nTICK\n"
+            "REPEAT 3 {\n  Y 0\n  TICK\n}"
+        )
+        circ = STIMPhysicalCircuit(circ_str, ['Q0'])
+        unrolled = circ._unroll_repeats()
+        self.assertEqual(unrolled.count("H 0"), 2)
+        self.assertEqual(unrolled.count("Y 0"), 3)
+        self.assertEqual(unrolled.count("X 0"), 1)
+        self.assertNotIn("REPEAT", unrolled)
+
+    def test_unroll_repeats_with_nested_blocks(self):
+        """_unroll_repeats must handle nested REPEAT blocks by pairing the
+        outer REPEAT with its own matching `}` (depth-tracking), not the
+        first `}` it sees. (B12 from the audit.)"""
+        circ_str = (
+            "REPEAT 2 {\n"
+            "  REPEAT 3 {\n"
+            "    H 0\n"
+            "    TICK\n"
+            "  }\n"
+            "}"
+        )
+        circ = STIMPhysicalCircuit(circ_str, ['Q0'])
+        unrolled = circ._unroll_repeats()
+        # H 0 should appear 2 * 3 = 6 times after full unrolling.
+        self.assertEqual(unrolled.count("H 0"), 6)
+        self.assertNotIn("REPEAT", unrolled)
+
     def test_invalid_qubit_labels(self):
         # Test various invalid qubit label scenarios.
         # ValueError is raised inside __init__ before the TICK-warning check,

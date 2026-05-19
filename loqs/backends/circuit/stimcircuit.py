@@ -743,6 +743,20 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         return str(self.circuit)
 
     def _unroll_repeats(self) -> str:
+        """Return the circuit string with all ``REPEAT`` blocks fully expanded.
+
+        Each ``REPEAT`` line is paired with its matching ``}`` by walking
+        forward with a brace-depth counter, so nested ``REPEAT`` blocks
+        and multiple sibling ``REPEAT`` blocks are handled correctly.
+
+        Raises
+        ------
+        ValueError
+            If a ``REPEAT`` line is followed by a non-integer repeat count.
+
+        AssertionError
+            If a ``REPEAT`` block is missing its closing ``}``.
+        """
         circuit_str = str(self.circuit)
         unrolled_lines = circuit_str.split("\n")
 
@@ -753,16 +767,26 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     return i
             return None
 
-        def find_last_repeat_end(lines):
-            for i, line in enumerate(lines[::-1]):
-                entries = line.split()
-                if entries and entries[0] == "}":
-                    return len(lines) - i - 1
+        def find_matching_end(lines, start):
+            """``lines[start]`` is a ``REPEAT`` opener; walk forward
+            tracking brace depth and return the index of the matching
+            ``}``. Returns ``None`` if no matching ``}`` is found."""
+            depth = 1
+            for i in range(start + 1, len(lines)):
+                entries = lines[i].split()
+                if not entries:
+                    continue
+                if entries[0] == "REPEAT":
+                    depth += 1
+                elif entries[0] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return i
             return None
 
         start = find_first_repeat_start(unrolled_lines)
         while start is not None:
-            end = find_last_repeat_end(unrolled_lines)
+            end = find_matching_end(unrolled_lines, start)
             assert end is not None, "Misformed REPEAT (no closing })"
 
             try:
