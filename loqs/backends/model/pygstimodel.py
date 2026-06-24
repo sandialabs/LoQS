@@ -227,23 +227,25 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             keys.append((name, aliased_qubits))
         return keys
 
+    _output_gate_reps = [
+        GateRep.UNITARY,
+        GateRep.KRAUS_OPERATORS,
+        GateRep.PTM,
+        GateRep.QSIM_SUPEROPERATOR,
+    ]
     @property
     def output_gate_reps(self) -> list[GateRep]:
-        return [
-            GateRep.UNITARY,
-            GateRep.KRAUS_OPERATORS,
-            GateRep.PTM,
-            GateRep.QSIM_SUPEROPERATOR,
-        ]
-
+        return self._output_gate_reps
+    
     # TODO: This is not quite right. It's probably one or the other,
     # depending on whether instruments are defined or not
+    _output_instrument_reps = [
+        InstrumentRep.ZBASIS_PROJECTION,
+        InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+    ]
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
-        return [
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
-        ]
+        return self._output_instrument_reps
 
     def get_gate_duration(self, gate_label) -> int | float:
         if not self.use_time_dependence:
