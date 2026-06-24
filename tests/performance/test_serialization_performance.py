@@ -8,7 +8,7 @@ Tests file size and compute time for various scenarios:
 """
 
 import copy
-import tempfile
+import tempfile as tf
 import os
 import time
 import numpy as np
@@ -31,6 +31,7 @@ class PerformanceTestConfig:
 
     def __str__(self):
         return (f"{self.name}: {self.num_frames} frames, array_size={self.array_size}")
+
 
 @pytest.mark.parametrize("config", [
     # Small dataset
@@ -67,6 +68,7 @@ def test_serialization_performance(config):
     # Verify deserialization works correctly
     if config.name == "small":
         verify_deserialization(history)
+
 
 @pytest.mark.parametrize("config", [
     PerformanceTestConfig(r"4% repeated", 50, 200, repeat_every=25),
@@ -172,7 +174,7 @@ def create_history_with_repeated_objects(config):
 def _test_json_serialization(history, config):
     """Test JSON serialization performance (helper function)."""
 
-    with make_temp_path(suffix=".json") as temp_file:
+    with tf.TemporaryFile(suffix=".json") as temp_file:
         # Time the serialization
         start_time = time.time()
 
@@ -181,20 +183,15 @@ def _test_json_serialization(history, config):
         json_time = time.time() - start_time
 
         # Get file size
-        json_size = os.path.getsize(temp_file)
+        json_size = temp_file.tell()
 
         return json_time, json_size
-
-    finally:
-        #print(f"Leaving file {temp_file}")
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
 
 
 def _test_hdf5_serialization(history, config):
     """Test HDF5 serialization performance (helper function)."""
 
-    with make_temp_path(suffix=".h5") as temp_file:
+    with tf.TemporaryFile(suffix=".h5") as temp_file:
         # Time the serialization
         start_time = time.time()
         
@@ -203,13 +200,10 @@ def _test_hdf5_serialization(history, config):
         hdf5_time = time.time() - start_time
 
         # Get file size
-        hdf5_size = os.path.getsize(temp_file)
+        hdf5_size = temp_file.tell()
 
         return hdf5_time, hdf5_size
 
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
 
 def _get_print_factor_unit(size):
     factor = 1024
@@ -222,37 +216,31 @@ def _get_print_factor_unit(size):
         unit = "GB"
     return factor, unit
 
+
 def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
-    with make_temp_path(suffix=".json") as temp_file:
+    with tf.TemporaryFile(suffix=".json") as temp_file:
         history.write(temp_file, format="json")
-        loaded_json = History.read(temp_file)
+        loaded_json = History.read(temp_file.name)
         assert isinstance(loaded_json, History)
 
         # Basic sanity checks
         assert len(loaded_json) == len(history)
         # Frame uses _data attribute
         assert str(loaded_json[0]._data.keys()) == str(history[0]._data.keys())
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
 
-    with make_temp_path(suffix=".h5") as temp_file:
+
+    with tf.TemporaryFile(suffix=".h5") as temp_file:
         history.write(temp_file, format="hdf5")
-        loaded_hdf5 = History.read(temp_file)
+        loaded_hdf5 = History.read(temp_file.name)
         assert isinstance(loaded_hdf5, History)
 
         # Basic sanity checks
         assert len(loaded_hdf5) == len(history)
         # Frame uses _data attribute
         assert str(loaded_hdf5[0]._data.keys()) == str(history[0]._data.keys())
-    finally:
-        if os.path.exists(temp_file):
-            os.unlink(temp_file)
-
-
 
 
 if __name__ == "__main__":

@@ -86,6 +86,10 @@ class BaseNoiseModel(Castable, Displayable):
         -------
         list
             List of operation representations for the circuit
+
+        TODO: describe the conditions under which this function is allowed to error.
+        DictNoiseModel.get_reps and StimDictNoiseModel.get_reps both ignore the
+        gatereps and instreps arguments.
         """
         pass
 
