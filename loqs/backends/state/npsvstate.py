@@ -95,8 +95,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             Optional RNG seed. If not provided, default NumPy RNG behavior applies.
         """
         self.qubit_labels = []
-        self.seed = seed
-        self._rng = np.random.default_rng(self.seed)
+        self.reset_seed(seed)
 
         if isinstance(state, NumpyStatevectorQuantumState):
             self._state = state._state
@@ -377,6 +376,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         self._state = self._block_matvec(proj_mat, [qbit], self.state)
 
         return cbit
+
+    def reset_seed(self, new_seed: int | None) -> None:
+        self.seed = new_seed
+        self._rng = np.random.default_rng(new_seed)
 
     def copy(self) -> NumpyStatevectorQuantumState:
         new_state = NumpyStatevectorQuantumState(
