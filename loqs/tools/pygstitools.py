@@ -37,7 +37,7 @@ try:
     from pygsti.modelmembers.operations import DenseOperator
 except ImportError as e:
     raise ImportError(
-        "Could not import pygsti, needed for loqs.extenstions.pygstitools"
+        "Could not import pygsti, needed for loqs.tools.pygstitools"
     ) from e
 
 

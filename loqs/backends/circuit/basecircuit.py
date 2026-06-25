@@ -271,6 +271,38 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         list
             List of 2-tuples of (layer index, qubit index/tuple of indices) describing all
             possible circuit locations where errors can be injected.
+
+        TODO
+        ----
+        Decide how the "before" vs. "after" semantics of ``post_twoq_gates``
+        should be encoded in the returned layer index, and pin the
+        decision in tests.
+
+        Currently, :class:`.STIMPhysicalCircuit` reports the gate's own
+        layer index ``lidx`` in the default branch (errors *before* the
+        gate) and ``lidx + 1`` in the ``post_twoq_gates`` branch (errors
+        *after* the gate). For a 2q gate sitting in the final layer
+        (``lidx == self.depth - 1``), the post-branch therefore returns
+        ``self.depth`` — one past any valid layer index in the circuit —
+        and it is not established whether downstream consumers handle
+        that as "post-circuit error", silently mis-index, or break.
+        The other backends do not encode pre/post in the index at all.
+
+        Options to weigh:
+          (a) Pin the ``+1`` convention as a contract — document it
+              here and have all backends agree; accept that the
+              post-branch can return an out-of-range index.
+          (b) Drop the ``+1`` — always return the gate's own layer
+              and treat ``post_twoq_gates`` as a pure filter (2q-only).
+          (c) Replace the integer index with a tagged form
+              (e.g. ``(lidx, "pre" | "post")``) so the semantics are
+              explicit and the out-of-range case disappears.
+
+        The existing tests only verify the *qubit labels* in each
+        returned tuple — never the layer index — so they don't pin
+        either convention. Whichever option is chosen, the test suite
+        needs new assertions that read the layer index back and check
+        it against the expected gate position.
         """
         pass
 
@@ -304,7 +336,10 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             Circuit to insert
 
         idx:
-            Starting index to begin insert. If -1, append to the end.
+            Layer index at which to begin the insertion. Use 0 to prepend,
+            or :attr:`.depth` to append (or call :meth:`.append_inplace`).
+            Negative indices follow Python slicing semantics and are
+            not a shorthand for "append to the end".
         """
         pass
 
@@ -477,7 +512,7 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
             Defaults to None, which will cause a KeyError to be thrown.
 
         empty_layer_idle:
-            Label to use for qubits in a completely empty label.
+            Label to use for qubits in a completely empty layer.
             Defaults to None, which inserts no idles.
         """
         pass

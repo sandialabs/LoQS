@@ -228,15 +228,20 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             keys.append((name, aliased_qubits))
         return keys
 
+    _output_gate_reps = [
+        GateRep.UNITARY,
+        GateRep.KRAUS_OPERATORS,
+        GateRep.PTM,
+        GateRep.QSIM_SUPEROPERATOR,
+    ]
     @property
     def output_gate_reps(self) -> list[GateRep]:
-        return [
-            GateRep.UNITARY,
-            GateRep.KRAUS_OPERATORS,
-            GateRep.PTM,
-            GateRep.QSIM_SUPEROPERATOR,
-        ]
+        return self._output_gate_reps
 
+    _output_instrument_reps = [
+        InstrumentRep.ZBASIS_PROJECTION,
+        InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+    ]
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
         """Get the list of instrument representations this model can output.
@@ -251,10 +256,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         This is not quite right currently. It returns all *possible* types,
         but often models will only allow one of the two types.
         """
-        return [
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
-        ]
+        return self._output_instrument_reps
 
     def get_gate_duration(self, gate_label) -> int | float:
         """Get the duration of a gate operation.

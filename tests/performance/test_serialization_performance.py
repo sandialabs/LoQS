@@ -8,7 +8,7 @@ Tests file size and compute time for various scenarios:
 """
 
 import copy
-import tempfile
+import tempfile as tf
 import os
 import time
 import numpy as np
@@ -31,6 +31,7 @@ class PerformanceTestConfig:
 
     def __str__(self):
         return (f"{self.name}: {self.num_frames} frames, array_size={self.array_size}")
+
 
 @pytest.mark.parametrize("config", [
     # Small dataset
@@ -67,6 +68,7 @@ def test_serialization_performance(config):
     # Verify deserialization works correctly
     if config.name == "small":
         verify_deserialization(history)
+
 
 @pytest.mark.parametrize("config", [
     PerformanceTestConfig(r"4% repeated", 50, 200, repeat_every=25),
@@ -172,7 +174,7 @@ def create_history_with_repeated_objects(config):
 def _test_json_serialization(history, config):
     """Test JSON serialization performance (helper function)."""
 
-    with tempfile.NamedTemporaryFile(suffix=".json") as temp:
+    with tf.NamedTemporaryFile(suffix=".json") as temp:
         temp_file = temp.name
 
         try:
@@ -195,7 +197,7 @@ def _test_json_serialization(history, config):
 def _test_hdf5_serialization(history, config):
     """Test HDF5 serialization performance (helper function)."""
 
-    with tempfile.NamedTemporaryFile(suffix=".h5") as temp:
+    with tf.NamedTemporaryFile(suffix=".h5") as temp:
         temp_file = temp.name
 
         try:
@@ -225,12 +227,13 @@ def _get_print_factor_unit(size):
         unit = "GB"
     return factor, unit
 
+
 def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
     
-    with tempfile.NamedTemporaryFile(suffix=".json") as temp:
+    with tf.NamedTemporaryFile(suffix=".json") as temp:
         temp_file = temp.name
 
         try:
@@ -246,7 +249,7 @@ def verify_deserialization(history):
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
 
-    with tempfile.NamedTemporaryFile(suffix=".h5") as temp:
+    with tf.NamedTemporaryFile(suffix=".h5") as temp:
         temp_file = temp.name
         try:
             history.write(temp_file, format="hdf5")
