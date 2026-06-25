@@ -7,15 +7,15 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Functions to construct common [Instruction](api:Instruction) objects.
+"""Functions to construct common [](api:Instruction) objects.
 
 Each function documents both how to use it, as well
 as providing the following information about the created
-[Instruction](api:Instruction):
+[](api:Instruction):
 
 - The apply function
     - The parameters it pulls, including the typical source
-    - What keys are in the returned [Frame](api:Frame)
+    - What keys are in the returned [](api:Frame)
 - The map qubits function (if needed)
 - The parameter priorities (if not default)
 - The parameter aliases (if provided)
@@ -98,11 +98,11 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - `patch_label`, usually from the [patch_label](api:InstructionLabel.patch_label)
+    - `patch_label`, usually from the [](api:InstructionLabel.patch_label)
     - `stack`, usually from the QuantumProgram
-    - `instructions`, usually from the [data](api:Instruction.data)
+    - `instructions`, usually from the [](api:Instruction.data)
 
-    It returns a [Frame](api:Frame) where `instructions` have been inserted
+    It returns a [](api:Frame) where `instructions` have been inserted
     onto the front of InstructionStack stored at `"stack"`.
 
     There is a map qubits function, which calls the map qubits
@@ -147,8 +147,6 @@ def build_composite_instruction(
         -------
         Frame
             Updated frame with modified instruction stack.
-
-        REVIEW_NO_DOCSTRING
         """
         for i, inst_or_label in enumerate(instructions):
             if isinstance(inst_or_label, Instruction):
@@ -180,26 +178,6 @@ def build_composite_instruction(
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> KwargDict:
-        """Map qubits function for composite instruction.
-
-        Maps qubits in the instruction sequence according to the provided mapping.
-
-        Parameters
-        ----------
-        qubit_mapping : Mapping[str | int, str | int]
-            Mapping from old qubit labels to new qubit labels.
-        instructions : Sequence[Instruction | InstructionLabel]
-            Instructions to map qubits for.
-        **kwargs
-            Additional keyword arguments to preserve.
-
-        Returns
-        -------
-        KwargDict
-            Dictionary containing updated instructions with mapped qubits.
-
-        REVIEW_NO_DOCSTRING
-        """
         new_kwargs = kwargs.copy()
         new_kwargs["instructions"] = [
             (
@@ -425,24 +403,6 @@ def build_lookup_decoder_instruction(
         syndrome_labels: list[SyndromeLabel],
         **kwargs,
     ) -> KwargDict:
-        """Map qubits function for lookup decoder instruction.
-
-        Updates syndrome labels to reflect new qubit mapping.
-
-        Parameters
-        ----------
-        qubit_mapping : Mapping[str | int, str | int]
-            Mapping from old qubit labels to new qubit labels.
-        syndrome_labels : list[SyndromeLabel]
-            List of syndrome labels to be updated.
-        **kwargs : dict
-            Additional keyword arguments to preserve.
-
-        Returns
-        -------
-        KwargDict
-            Dictionary containing updated syndrome labels and preserved kwargs.
-        """
         new_kwargs = kwargs.copy()
         new_kwargs["syndrome_labels"] = [
             SyndromeLabel(
@@ -632,8 +592,6 @@ def build_patch_builder_instruction(
         -------
         Frame
             Frame containing the updated patches dictionary.
-
-        REVIEW_NO_DOCSTRING
         """
         if patches is None:
             patches = PatchDict()
@@ -718,8 +676,6 @@ def build_patch_remover_instruction(
         -------
         Frame
             Frame containing the updated patches dictionary.
-
-        REVIEW_NO_DOCSTRING
         """
         assert (
             patch_label in patches
@@ -817,22 +773,6 @@ def build_patch_permute_instruction(
         qubit_mapping: Mapping[str | int, str | int],
         mapping: Mapping[str | int, str | int],
     ) -> KwargDict:
-        """Map qubits function for patch permute instruction.
-
-        Updates the qubit mapping to reflect the new qubit labels.
-
-        Parameters
-        ----------
-        qubit_mapping : Mapping[str | int, str | int]
-            Mapping from old qubit labels to new qubit labels.
-        mapping : Mapping[str | int, str | int]
-            Original mapping to be updated.
-
-        Returns
-        -------
-        KwargDict
-            Dictionary containing the updated mapping.
-        """
         new_mapping = {
             qubit_mapping[k]: qubit_mapping[v] for k, v in mapping.items()
         }
@@ -1144,34 +1084,6 @@ def build_repeat_until_success_instruction(
         max_repeats: int,
         stack: InstructionStack,
     ) -> Frame:
-        """Apply repeat-until-success instruction.
-
-        Repeats the underlying instruction until it succeeds or max_repeats is reached.
-
-        Parameters
-        ----------
-        observed : object
-            Observed outcome from the instruction execution.
-        expected : object
-            Expected outcome for successful execution.
-        rus_key : str
-            Key for the repeat-until-success instruction.
-        patch_label : str
-            Label of the patch being operated on.
-        repeat_count : int
-            Current repeat count.
-        instructions : InstructionStackCastableTypes
-            Instructions to execute.
-        max_repeats : int
-            Maximum number of repeats before giving up.
-        stack : InstructionStack
-            Current instruction stack.
-
-        Returns
-        -------
-        Frame
-            Frame containing success status and repeat count information.
-        """
         # If we were successful, return empty frame (with debug info)
         # TODO: If these are measurement_outcomes, how do we get inferred_outcomes from Pauli frame?
         if observed == expected:
@@ -1220,26 +1132,6 @@ def build_repeat_until_success_instruction(
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> KwargDict:
-        """Map qubits function for repeat-until-success instruction.
-
-        Maps qubits in the instruction sequence and expected outcomes.
-
-        Parameters
-        ----------
-        qubit_mapping : Mapping[str | int, str | int]
-            Mapping from old qubit labels to new qubit labels.
-        instructions : Sequence[Instruction | InstructionLabel]
-            Instructions to map qubits for.
-        **kwargs
-            Additional keyword arguments including expected outcomes.
-
-        Returns
-        -------
-        KwargDict
-            Dictionary containing updated instructions and expected outcomes with mapped qubits.
-
-        REVIEW_NO_DOCSTRING
-        """
         new_kwargs = kwargs.copy()
         new_kwargs["instructions"] = [
             (

@@ -42,13 +42,13 @@ class QECCode(Displayable):
     ]
 
     instructions: dict[str, Instruction]
-    """A mapping from name keys to [Instruction](api:Instruction) values."""
+    """A mapping from name keys to [](api:Instruction) values."""
 
     template_qubits: list[str | int]
-    """All template qubits used in [instructions](api:QECCode.instructions)."""
+    """All template qubits used in [](api:QECCode.instructions)."""
 
     template_data_qubits: list[str | int]
-    """The entries of [template_qubits](api:QECCode.template_qubits) corresponding to data qubits."""
+    """The entries of [](api:QECCode.template_qubits) corresponding to data qubits."""
 
     name: str = "(Unnamed QEC code)"
     """Name for logging"""
@@ -64,16 +64,16 @@ class QECCode(Displayable):
         Parameters
         ----------
         instructions:
-            See [instructions](api:QECCode.instructions).
+            See [](api:QECCode.instructions).
 
         template_qubits:
-            See [template_qubits](api:QECCode.template_qubits).
+            See [](api:QECCode.template_qubits).
 
         template_data_qubits:
-        See [template_data_qubits](api:QECCode.template_data_qubits).
+        See [](api:QECCode.template_data_qubits).
 
         name:
-            See [name](api:QECCode.name).
+            See [](api:QECCode.name).
         """
         self.instructions = dict(instructions)
 
@@ -95,22 +95,22 @@ class QECCode(Displayable):
         qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes | None = None,
     ) -> QECCodePatch:
-        """Create a [QECCodePatch](api:QECCodePatch) based on this [QECCode](api:QECCode).
+        """Create a [](api:QECCodePatch) based on this [](api:QECCode).
 
         Parameters
         ----------
         qubits:
-            Qubit labels to replace [template_qubits](api:QECCode.template_qubits).
+            Qubit labels to replace [](api:QECCode.template_qubits).
 
         pauli_frame:
-            An initial [PauliFrame](api:PauliFrame) to assign to the patch.
+            An initial [](api:PauliFrame) to assign to the patch.
             Defaults to `None`, which assigns the trivial Pauli frame
             of all `"I"` entries.
 
         Returns
         -------
         QECCodePatch
-            The constructed [QECCodePatch](api:QECCodePatch)
+            The constructed [](api:QECCodePatch)
         """
         if pauli_frame is None:
             # Map template data qubits to real qubits

@@ -31,7 +31,7 @@ def create_qec_code():
     Returns
     -------
     QECCode
-        A [QECCode](api:QECCode) implementing the trivial counter code.
+        A [](api:QECCode) implementing the trivial counter code.
     """
     # We don't need actual qubits for this trivial example
     # but we'll define a minimal template structure
@@ -73,7 +73,7 @@ def create_ideal_model():
     Returns
     -------
     BaseNoiseModel
-        An empty [DictNoiseModel](api:DictNoiseModel) representing no operations needed for this trivial code.
+        An empty [](api:DictNoiseModel) representing no operations needed for this trivial code.
     """
     # For this trivial classical counter, we don't need any quantum operations
     # Return an empty DictNoiseModel

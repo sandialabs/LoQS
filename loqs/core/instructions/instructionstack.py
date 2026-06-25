@@ -35,9 +35,9 @@ InstructionStackCastableTypes: TypeAlias = (
 
 
 class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
-    """A list of :class:`InstructionLabel` objects to execute.
+    """A list of [](api:InstructionLabel) objects to execute.
 
-    This is intended to be an immutable list of :class:`InstructionLabel`
+    This is intended to be an immutable list of [](api:InstructionLabel)
     objects to execute. Stack manipulations return a modified copy.
     """
 
@@ -48,7 +48,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
     _SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
 
     _instructions: list[InstructionLabel]
-    """Internal list of :class:`InstructionLabels`"""
+    """Internal list of [](api:InstructionLabels)"""
 
     def __init__(
         self, instructions: InstructionStackCastableTypes = None
@@ -57,7 +57,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         Parameters
         ----------
         instructions:
-            A sequence of :class:`InstructionLabel` castable things.
+            A sequence of [](api:InstructionLabel) castable things.
             Defaults to `None`, which creates an empty list.
         """
         self._instructions = []

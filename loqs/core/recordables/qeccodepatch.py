@@ -51,13 +51,13 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         Parameters
         ----------
         code:
-            See :attr:`.code`.
+            See [](api:code).
 
         qubits:
-            See :attr:`.qubits`.
+            See [](api:qubits).
 
         pauli_frame:
-            See :attr:`.pauli_frame`.
+            See [](api:pauli_frame).
         """
         assert len(qubits) == len(code.template_qubits), (
             f"Patch must have {len(code.template_qubits)} qubits "

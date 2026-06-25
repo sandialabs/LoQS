@@ -27,8 +27,8 @@ The packages currently available as noise models:
     - There is a second `dict`-based model ([](api:STIMDictNoiseModel)) that handles STIM circuit strings as values.
   Long-term this will be deprecated into [](api:DictNoiseModel).
   It does not require `loqs[stim]` itself, but requires [](api:STIMPhysicalCircuit) inputs (which do require `loqs[stim]`).
-- [pygsti.models.explicitmodel.ExplicitOpModel](api:pygsti.models.explicitmodel.ExplicitOpModel) and
-[pygsti.models.implicit.ImplicitOpModel](api:pygsti.models.implicit.ImplicitOpModel) via [](api:PyGSTiNoiseModel) (requires `loqs[pygsti]`)
+- [](api:pygsti.models.explicitmodel.ExplicitOpModel) and
+[](api:pygsti.models.implicit.ImplicitOpModel) via [](api:PyGSTiNoiseModel) (requires `loqs[pygsti]`)
 
 !!! warning
 

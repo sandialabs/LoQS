@@ -72,7 +72,7 @@ def create_qec_code(
         dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
         measurements, respectively.
         See `durations` from
-        [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
+        [](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     idle_gates : dict[int | float, str] | None, optional
@@ -80,17 +80,17 @@ def create_qec_code(
         which maps the dummy values from `gate_durations` to `"Gi1Q"`,
         `"Gi2Q"`, and `"GiMCM"`, respectively.
         See `idle_names` from
-        [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
+        [](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     circuit_backend : type[BasePhysicalCircuit], optional
         The circuit backend to use when generating physical circuits.
-        Default is [PyGSTiPhysicalCircuit](api:PyGSTiPhysicalCircuit).
+        Default is [](api:PyGSTiPhysicalCircuit).
 
     Returns
     -------
     QECCode
-        A [QECCode](api:QECCode) implementing the [[5,1,3]] code.
+        A [](api:QECCode) implementing the [[5,1,3]] code.
     """
 
     # Template qubits for defining one patch
@@ -540,7 +540,7 @@ def create_ideal_model(  # noqa: C901
     """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
 
     This model will contain all the instructions needed to run the
-    physical circuits in the [QECCode](api:QECCode) returned by [create_qec_code](api:codepack_5_1_3_quantinuum2022.create_qec_code).
+    physical circuits in the [](api:QECCode) returned by [](api:codepack_5_1_3_quantinuum2022.create_qec_code).
 
     Parameters
     ----------
@@ -550,8 +550,8 @@ def create_ideal_model(  # noqa: C901
 
     model_backend : type[BaseNoiseModel], optional
         The model backend to use when generating operations.
-        Currently, only [PyGSTiNoiseModel](api:PyGSTiNoiseModel) is allowed.
-        Default is [PyGSTiNoiseModel](api:PyGSTiNoiseModel).
+        Currently, only [](api:PyGSTiNoiseModel) is allowed.
+        Default is [](api:PyGSTiNoiseModel).
 
     gaterep : GateRep, optional
         Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
@@ -562,8 +562,8 @@ def create_ideal_model(  # noqa: C901
     Returns
     -------
     BaseNoiseModel
-        A noiseless model for the [QECCode](api:QECCode) returned by
-        [create_qec_code](api:codepack_5_1_3_quantinuum2022.create_qec_code).
+        A noiseless model for the [](api:QECCode) returned by
+        [](api:codepack_5_1_3_quantinuum2022.create_qec_code).
     """
     assert len(qubits) == 7, "Must provide exactly 7 qubit labels"
     model_qubits = [f"Q{i}" for i in range(7)]

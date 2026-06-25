@@ -11,9 +11,9 @@
 
 In addition to the [](api:Instruction) itself,
 this includes [](api:InstructionLabel) and
-:class`.InstructionStack` objects.
+[](api:InstructionStack) objects.
 
-This module also include the :mod:`.builders`,
+This module also include the [](api:builders),
 which contain functions that generate common
 [](api:Instruction) types.
 """

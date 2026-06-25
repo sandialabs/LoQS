@@ -23,7 +23,6 @@ from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
 from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
-_pygsti_available = True
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
@@ -38,19 +37,16 @@ if TYPE_CHECKING:
     from pygsti.tools import basistools as bt, superop_to_unitary
 else:
     # Runtime imports - these will be attempted only when needed
-    try:
-        from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
-        from pygsti.baseobjs.label import (
-            Label,
-            LabelStr,
-            LabelTupTupWithTime,
-            LabelTupWithTime,
-        )
-        from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
-        from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
-        from pygsti.tools import basistools as bt, superop_to_unitary
-    except ImportError:
-        _pygsti_available = False
+    from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
+    from pygsti.baseobjs.label import (
+        Label,
+        LabelStr,
+        LabelTupTupWithTime,
+        LabelTupWithTime,
+    )
+    from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
+    from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
+    from pygsti.tools import basistools as bt, superop_to_unitary
 
 
 T = TypeVar("T", bound="PyGSTiNoiseModel")
@@ -129,9 +125,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         ) = None,
     ) -> None:
         """Initialize a PyGSTiModelBackend.
-
-        TODO: Choices are made about instrument reset/outcomes.
-        Document this.
 
         Parameters
         ----------
@@ -213,19 +206,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def gate_keys(self) -> list:
-        """Get the list of gate keys this model can take in circuits.
-
-        Returns
-        -------
-        list
-            List of gate keys, where each key is a tuple of (gate_name, qubit_labels)
-            or (gate_name,) for gates without specific qubit labels.
-
-        Notes
-        -----
-        REVIEW_NO_DOCSTRING: This docstring was auto-generated for a function that
-        previously had no documentation. Please review and update as needed.
-        """
         keys = []
         for key in self.gate_dict.keys():
             name = key.name
@@ -241,13 +221,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def instrument_keys(self) -> list:
-        """Get the list of instrument keys this model can take in circuits.
-
-        Returns
-        -------
-        list
-            List of instrument keys, where each key is a tuple of (instrument_name, qubit_labels).
-        """
         keys = []
         for key in self.inst_dict.keys():
             name = key.name
@@ -257,13 +230,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
-        """Get the list of gate representations this model can output.
-
-        Returns
-        -------
-        list[GateRep]
-            List of gate representations that this model can output.
-        """
         return [
             GateRep.UNITARY,
             GateRep.KRAUS_OPERATORS,
@@ -271,8 +237,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             GateRep.QSIM_SUPEROPERATOR,
         ]
 
-    # TODO: This is not quite right. It's probably one or the other,
-    # depending on whether instruments are defined or not
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
         """Get the list of instrument representations this model can output.
@@ -411,27 +375,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
-        """Get list of operator representations that can be applied.
-
-        This method processes a circuit and returns a list of operation representations
-        ([](api:RepTuples)) that can be applied to a quantum state.
-
-        Parameters
-        ----------
-        circuit:
-            Physical circuit to get the representations for.
-
-        gatereps:
-            Output representations for gate operations.
-
-        instreps:
-            Output representations for instrument operations.
-
-        Returns
-        -------
-        list[RepTuple]
-            List of operation representations for the circuit.
-        """
         # Get bare circuit
         from loqs.backends import PyGSTiPhysicalCircuit
 

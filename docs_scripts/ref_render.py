@@ -35,15 +35,30 @@ from docs_scripts.ref_introspect import (
 )
 
 
-def type_to_md(
-    type_s: str,
+def render_inline_md(
+    text: str,
     link_names: set[str] | None = None,
     *,
     local_targets: dict[str, str] | None = None,
     html_code: bool = True,
+    prose: bool = False,
 ) -> str:
     """
-    Render a type/value string for tables.
+    Render inline documentation content for generated table cells.
+
+    Modes
+    -----
+    prose=False:
+        Type/value-expression mode. Autolinks recognized identifiers and emits a
+        single outer `<code>...</code>` block for HTML output.
+
+    prose=True:
+        Prose/doc-cell mode. Does not autolink bare identifiers. Instead it:
+        - collapses ordinary newlines to spaces
+        - preserves blank lines as `<br><br>`
+        - converts Markdown api-links `[text](api:Target)` to raw HTML anchors
+        - converts inline code spans `` `x` `` to `<code>x</code>`
+        - leaves math delimiters untouched as literal text
 
     Internal LoQS identifiers are linked using:
     - exact local fully-qualified targets when available via `local_targets`
@@ -51,17 +66,35 @@ def type_to_md(
     - otherwise short progressive `api:` targets for `loqs.*` tokens
 
     Known external fully-qualified identifiers are linked via `external_api_url()`.
-
-    For HTML output, the entire expression is wrapped in a single outer `<code>...</code>`
-    block and linked identifiers are inserted as plain `<a ...>label</a>` inside it.
-    This avoids fragmented code spans, broken nesting, and visual spacing artifacts.
     """
-    s = (type_s or "").strip()
+    s = (text or "").strip()
     if not s:
         return ""
 
     local_targets = local_targets or {}
     link_names = link_names or set()
+
+    if prose:
+        doc = s.replace("|", "\\|").strip()
+        if not doc:
+            return ""
+
+        paras = [" ".join(line.strip() for line in p.splitlines() if line.strip()) for p in doc.split("\n\n")]
+        doc = "<br><br>".join(p for p in paras if p)
+
+        doc = re.sub(
+            r"`([^`]+)`",
+            lambda m: f"<code>{m.group(1)}</code>",
+            doc,
+        )
+
+        doc = re.sub(
+            r"\[(?P<text>[^\]]+)\]\(\s*api:(?P<target>[^)\s]+)\s*\)",
+            lambda m: f'<a href="api:{m.group("target")}">{m.group("text")}</a>',
+            doc,
+        )
+
+        return doc
 
     def _html_link(target: str, label: str) -> str:
         return f'<a href="api:{target}">{label}</a>'
@@ -246,7 +279,7 @@ def write_class_members_table(
             name_cell += "<br><em>(inherited)</em>"
 
         typ_raw = (r.get("type") or "")
-        typ = type_to_md(
+        typ = render_inline_md(
             classvar_inner(typ_raw).replace("\n", " ").replace("|", "\\|"),
             link_names=link_names,
             local_targets=local_targets,
@@ -262,13 +295,13 @@ def write_class_members_table(
             val_s = "*unset*"
         else:
             val_s_raw = str(val).replace("\n", " ").strip()
-            val_s = val_s_raw if "*" in val_s_raw else type_to_md(
+            val_s = val_s_raw if "*" in val_s_raw else render_inline_md(
                 val_s_raw.replace("|", "\\|"),
                 link_names=link_names,
                 local_targets=local_targets,
             )
 
-        doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
+        doc = render_inline_md(r.get("doc") or "", prose=True)
 
         f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
     f.write("\n")
@@ -394,7 +427,7 @@ def write_module_members_table(
         inv_kinds[anchor_id] = r.get("kind") or K_VARIABLE
 
         name_cell = f'<a id="{anchor_id}"></a>`{nm}`'
-        typ = type_to_md(
+        typ = render_inline_md(
             (r.get("type") or "").replace("\n", " ").replace("|", "\\|"),
             link_names=link_names,
             local_targets=local_targets,
@@ -418,13 +451,14 @@ def write_module_members_table(
             val_s = "*unset*"
         else:
             val_s_raw = str(val).replace("\n", " ").strip()
-            val_s = type_to_md(
+            val_s = render_inline_md(
                 val_s_raw.replace("|", "\\|"),
                 link_names=link_names,
                 local_targets=local_targets,
             )
 
-        doc = (r.get("doc") or "").replace("\n", " ").replace("|", "\\|")
+        doc = render_inline_md(r.get("doc") or "", prose=True)
+        
         f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
     f.write("\n")
 

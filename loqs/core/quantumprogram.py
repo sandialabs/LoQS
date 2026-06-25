@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`QuantumProgram` definition.
+"""[](api:QuantumProgram) definition.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ class QuantumProgram(Displayable):
     [](api:InstructionStack) to run, a collection of all possible
     [](api:Instruction) objects that could be run (either "global"
     or patch-based), and default noise model and RNG seeds.
-    Once the :meth:`.run` command has been used, it also contains
+    Once the [](api:run) command has been used, it also contains
     a collection of [](api:History) objects for each shot.
     """
 
@@ -106,7 +106,7 @@ class QuantumProgram(Displayable):
         default_noise_model:
             A noise model to pass to any [](api:Instruction)
             that requests a model but does not have one provided
-            in its [](api:InstructionLabel) or :attr:`.Instruction.data`.
+            in its [][](api:Instruction.data).
 
         default_base_seed:
             Base seed to use for RNG. Each shot will use a seed as
@@ -114,8 +114,8 @@ class QuantumProgram(Displayable):
 
         expiring_state:
             Whether to set `"state"` as an expiring key in the
-            :attr:`.initial_history`. Defaults to True, matching the default
-            behavior of :attr:`.History.expiring_keys`.
+            [](api:initial_history). Defaults to True, matching the default
+            behavior of [](api:History.expiring_keys).
 
         global_instructions:
             A list of [](api:Instruction) objects that are not associated
@@ -138,7 +138,7 @@ class QuantumProgram(Displayable):
         override_global_instructions:
             Whether or not to override `"Init State"`, `"Init Patch <key>"`, and
             `"Remove Patch"` instructions if they exist in
-            :attr:`.global_instructions`, and `state_type` and/or
+            [](api:global_instructions), and `state_type` and/or
             `patch_types` are provided.
             Defaults to `False`, which preserves the existing instructions.
 
@@ -185,7 +185,7 @@ class QuantumProgram(Displayable):
                     instruction_stack
                 )
                 """The [](api:InstructionStack) that holds
-                :attr:`.InstructionLabelCastableTypes` object to execute."""
+                [](api:InstructionLabelCastableTypes) object to execute."""
             except ValueError as e:
                 raise ValueError(
                     "InstructionStack failed to cast, check all instructions/labels are well-formed"
@@ -286,38 +286,38 @@ class QuantumProgram(Displayable):
         patch_types: Mapping[str, QECCode] | None = None,
         name: str | None = None,
     ) -> QuantumProgram:
-        """Create a copy of a [QuantumProgram](api:QuantumProgram) with some options updated.
+        """Create a copy of a [](api:QuantumProgram) with some options updated.
 
         Parameters
         ----------
         other:
-            The base [QuantumProgram](api:QuantumProgram) to copy
+            The base [](api:QuantumProgram) to copy
 
         instruction_stack:
-            See `instruction_stack` in [__init__](api:QuantumProgram)
+            See `instruction_stack` in [](api:QuantumProgram)
 
         default_noise_model:
-            See `default_noise_model` in [__init__](api:QuantumProgram)
+            See `default_noise_model` in [](api:QuantumProgram)
 
         default_base_seed:
-            See `default_base_seed` in [__init__](api:QuantumProgram)
+            See `default_base_seed` in [](api:QuantumProgram)
 
         global_instructions:
-            See `global_instructions` in [__init__](api:QuantumProgram)
+            See `global_instructions` in [](api:QuantumProgram)
 
         state_type:
-            See `state_type` in [__init__](api:QuantumProgram)
+            See `state_type` in [](api:QuantumProgram)
 
         patch_types:
-            See `patch_types` in [__init__](api:QuantumProgram)
+            See `patch_types` in [](api:QuantumProgram)
 
         name:
-            See `name` in [__init__](api:QuantumProgram)
+            See `name` in [](api:QuantumProgram)
 
         Returns
         -------
         QuantumProgram
-            The copied and updated [QuantumProgram](api:QuantumProgram)
+            The copied and updated [](api:QuantumProgram)
         """
         if instruction_stack is None:
             instruction_stack = other.instruction_stack
@@ -363,9 +363,9 @@ class QuantumProgram(Displayable):
         checkpoint_dir: str | Path | None = None,
         checkpoint_strategy: str = "single_file",
     ) -> ProgramResults:
-        """Execute some shots of this [QuantumProgram](api:QuantumProgram).
+        """Execute some shots of this [](api:QuantumProgram).
 
-        This returns a [ProgramResults](api:ProgramResults) object containing the shot histories.
+        This returns a [](api:ProgramResults) object containing the shot histories.
 
         Parameters
         ----------
@@ -408,10 +408,10 @@ class QuantumProgram(Displayable):
             "per_batch" where each batch gets its own checkpoint file.
             Only used when checkpoint_batch_size is set.
 
-         Returns
-         -------
-         ProgramResults
-             A [ProgramResults](api:ProgramResults) object containing the shot histories.
+        Returns
+        -------
+        ProgramResults
+             A [](api:ProgramResults) object containing the shot histories.
         """
 
         # Create ProgramResults object to store results
@@ -668,15 +668,15 @@ class QuantumProgram(Displayable):
 
         This is not intended to be called by the user, but is documented
         as it is a critical (and potentially non-obvious) component of
-        :meth:`QuantumProgram.run`.
+        [](api:QuantumProgram.run).
 
         This function has the following logic:
 
-        1. If :attr:`InstructionLabel.instruction` is not `None`, return it
+        1. If [](api:InstructionLabel.instruction) is not `None`, return it
         2. If `inst_lbl.patch_label` is `None`, check for `inst_lbl.inst_name`
-           in :attr:`.global_instructions`. Return it if there, error if not
+           in [](api:global_instructions). Return it if there, error if not
         3. Otherwise, we must be from a [](api:QECCodePatch). Look up the
-           :class:`PatchDict` via `"patches"` in the provided frame, and
+           [](api:PatchDict) via `"patches"` in the provided frame, and
            check for `inst_lbl.inst_name` in the patch. Return if there,
            error if anything goes wrong along the way
 
@@ -750,50 +750,50 @@ class QuantumProgram(Displayable):
         name: str,
     ) -> object:
         """
-        An internal function to collect a parameter for :meth:`.Instruction.apply`.
+        An internal function to collect a parameter for [](api:Instruction.apply).
 
         This is not intended to be called by the user, but is documented
         as it is a critical (and potentially non-obvious) component
-        of :meth:`QuantumProgram.run`.
+        of [](api:QuantumProgram.run).
 
         There are four locations this function can source information.
 
         - `"label"`: This means the information should come from the
-          :class:`InstrumentLabel`. First, the :attr:`.InstrumentLabel.inst_args`
+          [](api:InstrumentLabel). First, the [](api:InstrumentLabel.inst_args)
           as passed in by `label_args` is checked. The `position`-th entry
           is returned if available, or we continue if not. Next, the
-          :attr:`.InstrumentLabel.inst_kwargs` as passed in by `label_kwargs`
+          [](api:InstrumentLabel.inst_kwargs) as passed in by `label_kwargs`
           are checked. Return the entry corresponding to `key`,
           or continue if not available.
         - `"instruction"`: This means the information should come from the
-          :attr:`Instruction.data` as passed in by `instruction_data`.
+          [](api:Instruction.data) as passed in by `instruction_data`.
           Return it if available, continue if not.
         - `"program"`: This means the information should come from the
-          :class:`QuantumProgram` itself. If `key` matches any of these,
+          [](api:QuantumProgram) itself. If `key` matches any of these,
           it is returned, otherwise continue. This data comes in the form of
           the passed in `program_data` described below.
         - `"history[<idxs>]"`: This means that the program should come from the
-          current [](api:History) object being built by :meth:`.run`. This will
-          call :meth:`.History.collect_data` with `key` and `<idxs>` as args.
+          current [][](api:run). This will
+          call [](api:History.collect_data) with `key` and `<idxs>` as args.
           It will return the resulting list/object if it is not `None`, otherwise
           continue.
           NOTE: This means that if a [](api:Frame) value is `None`, it will be
           considered as not found by this function. Users should pick a different
           default "missing" value in cases where that is a valid option that should
-          be passed on to :meth:`Instruction.apply`, or traverse the [](api:History)
+          be passed on to [](api:Instruction.apply], or traverse the [)(api:History)
           themselves by collecting it from the `program_data`.
 
         The `program_data` dict can have the following entries:
 
         - "history": The current [](api:History) object being built by
-            :meth:`.run`.
-        - "patch_label": The :attr:`.InstrumentLabel.patch_label`
+            [](api:run).
+        - "patch_label": The [](api:InstrumentLabel.patch_label)
         - "stack": The current [](api:InstructionStack) object being
-            read by :meth:`.run`.
-        - "seed": The shot of the seed, as :attr:`.default_base_seed`
-            :math:`+i` for seed :math:i if :attr:`.default_base_seed` is
+            read by [](api:run).
+        - "seed": The shot of the seed, as [](api:default_base_seed)
+            \[](api:default_base_seed) is
             not `None`, or `None` otherwise.
-        - "model": The :attr:`.default_noise_model` if it is not `None`,
+        - "model": The [](api:default_noise_model) if it is not `None`,
             otherwise it is not included in the dict
 
         Finally, if all sources are exhausted and no object has been found,
@@ -815,13 +815,13 @@ class QuantumProgram(Displayable):
             are tried.
 
         label_args:
-            The :attr:`.InstructionLabel.inst_args` to check
+            The [](api:InstructionLabel.inst_args) to check
 
         label_kwargs:
-            The :attr:`.InstructionLabel.inst_kwargs` to check
+            The [](api:InstructionLabel.inst_kwargs) to check
 
         instruction_data:
-            The :attr:`.Instruction.data` to check
+            The [](api:Instruction.data) to check
 
         program_data:
             The dict of program information described above under `"program"`
@@ -830,7 +830,7 @@ class QuantumProgram(Displayable):
             The current [](api:History) object
 
         name:
-            The resolved :attr:`.Instruction.name`.
+            The resolved [](api:Instruction.name).
             Only used for better information if the object is not found.
 
         Returns
@@ -907,8 +907,6 @@ class QuantumProgram(Displayable):
         -------
         object
             The value of the attribute for encoding.
-
-        REVIEW_NO_DOCSTRING
         """
         if (
             attr == "default_noise_model"

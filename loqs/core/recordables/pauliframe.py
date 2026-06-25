@@ -32,7 +32,7 @@ class PauliFrame(SeqCastable, Displayable):
     """Qubit labels being tracked by this [](api:PauliFrame)."""
 
     pauli_frame: list[str]
-    """A list of Pauli errors on the given :attr:`.qubit_labels`."""
+    """A list of Pauli errors on the given [](api:qubit_labels)."""
 
     _SERIALIZE_ATTRS = ["pauli_frame", "qubit_labels"]
 
@@ -51,7 +51,7 @@ class PauliFrame(SeqCastable, Displayable):
         ----------
         frame_or_labels:
             Either an existing [](api:PauliFrame) or a set of
-            qubit labels to be used for :attr:`.qubit_labels`.
+            qubit labels to be used for [](api:qubit_labels).
             If qubit labels and no `initial_paulis`, the frame
             is initialized to all `"I"`.
 
@@ -59,7 +59,7 @@ class PauliFrame(SeqCastable, Displayable):
             An initial set of Pauli corrections to track. If
             `frame_or_labels` was an existing [](api:PauliFrame),
             then `initial_paulis` will override the copied value of
-            :attr:`.pauli_frame`.
+            [](api:pauli_frame).
         """
         if isinstance(frame_or_labels, PauliFrame):
             self.qubit_labels = frame_or_labels.qubit_labels
@@ -83,11 +83,11 @@ class PauliFrame(SeqCastable, Displayable):
 
     @property
     def num_qubits(self) -> int:
-        """Number of qubits tracked by this [PauliFrame](api:PauliFrame)."""
+        """Number of qubits tracked by this [](api:PauliFrame)."""
         return len(self.qubit_labels)
 
     def copy(self) -> PauliFrame:
-        """Return a copy of this [PauliFrame](api:PauliFrame)."""
+        """Return a copy of this [](api:PauliFrame)."""
         return PauliFrame(self.qubit_labels, self.pauli_frame)
 
     def get_bit(self, type: str, qubit: str | int) -> int:
@@ -104,7 +104,7 @@ class PauliFrame(SeqCastable, Displayable):
         Returns
         -------
         int
-            The bit value of [pauli_frame](api:PauliFrame.pauli_frame) in basis `type` on qubit `qubit`
+            The bit value of [](api:PauliFrame.pauli_frame) in basis `type` on qubit `qubit`
         """
         type = type.upper()
         assert type in ("X", "Z"), "Can only get X or Z type bits"
@@ -116,7 +116,7 @@ class PauliFrame(SeqCastable, Displayable):
         return 0
 
     def map_frame(self, map: dict) -> PauliFrame:
-        """Map every element of the [PauliFrame](api:PauliFrame).
+        """Map every element of the [](api:PauliFrame).
 
         Parameters
         ----------
@@ -128,24 +128,24 @@ class PauliFrame(SeqCastable, Displayable):
         return PauliFrame(self.qubit_labels, new_paulis)
 
     def update_from_pauli_str(self, pstr: str) -> PauliFrame:
-        """Update the [PauliFrame](api:PauliFrame) by multiplication.
+        """Update the [](api:PauliFrame) by multiplication.
 
-        This is commonly used to update a [PauliFrame](api:PauliFrame)
+        This is commonly used to update a [](api:PauliFrame)
         from a correction coming from a lookup table.
 
-        Formally, we are doing :math:`F \rightarrow F P`, where
-        :math:`F` is the [pauli_frame](api:PauliFrame.pauli_frame) and :math:`P` is the
+        Formally, we are doing \( F \rightarrow F P \), where
+        \( F \) is the [](api:PauliFrame.pauli_frame) and \( P \) is the
         multi-qubit Pauli represented by `pstr`.
 
         Parameters
         ----------
         pstr:
-            A Pauli string to be multiplied into [pauli_frame](api:PauliFrame.pauli_frame).
+            A Pauli string to be multiplied into [](api:PauliFrame.pauli_frame).
 
         Returns
         -------
         PauliFrame
-            A copied and updated [PauliFrame](api:PauliFrame)
+            A copied and updated [](api:PauliFrame)
         """
         assert len(pstr) == self.num_qubits
 
@@ -159,22 +159,22 @@ class PauliFrame(SeqCastable, Displayable):
     def update_from_clifford_conjugation(
         self, cliffords: Sequence[str]
     ) -> PauliFrame:
-        """Update the [PauliFrame](api:PauliFrame) by Clifford conjugation.
+        """Update the [](api:PauliFrame) by Clifford conjugation.
 
-        Formally, we are doing :math:`F_i \rightarrow C_i^{-1} F_i C_i`, where
-        :math:`F_i` is element :math:`i` of the [pauli_frame](api:PauliFrame.pauli_frame) and
-        :math:`C_i` is element :math:`i` of the `cliffords`.
+        Formally, we are doing \( F_i \rightarrow C_i^{-1} F_i C_i \), where
+        \( F_i \) is element \( i \) of the [](api:PauliFrame.pauli_frame) and
+        \( C_i \) is element \( i \) of the `cliffords`.
 
         Parameters
         ----------
         cliffords:
             A set of Cliffords to conjugate the elements of
-            [pauli_frame](api:PauliFrame.pauli_frame) element-wise.
+            [](api:PauliFrame.pauli_frame) element-wise.
 
         Returns
         -------
         PauliFrame
-            A copied and updated [PauliFrame](api:PauliFrame)
+            A copied and updated [](api:PauliFrame)
         """
         assert len(cliffords) == len(self.pauli_frame)
 
@@ -186,25 +186,25 @@ class PauliFrame(SeqCastable, Displayable):
         return new_frame
 
     def update_from_transversal_clifford(self, clifford: str) -> PauliFrame:
-        """Update the [PauliFrame](api:PauliFrame) by Clifford conjugation.
+        """Update the [](api:PauliFrame) by Clifford conjugation.
 
-        This is commonly used to update a [PauliFrame](api:PauliFrame)
+        This is commonly used to update a [](api:PauliFrame)
         after a logical Clifford gate has been applied.
 
-        Formally, we are doing :math:`F_i \rightarrow C^{-1} F_i C`, where
-        :math:`F_i` is element :math:`i` of the [pauli_frame](api:PauliFrame.pauli_frame) and
-        :math:`C` is the `clifford`.
+        Formally, we are doing \( F_i \rightarrow C^{-1} F_i C \), where
+        \( F_i \) is element \( i \) of the [](api:PauliFrame.pauli_frame) and
+        \( C \) is the `clifford`.
 
         Parameters
         ----------
         clifford:
            The Clifford to conjugate all elements of
-            [pauli_frame](api:PauliFrame.pauli_frame).
+            [](api:PauliFrame.pauli_frame).
 
         Returns
         -------
         PauliFrame
-            A copied and updated [PauliFrame](api:PauliFrame)
+            A copied and updated [](api:PauliFrame)
         """
         old_to_new = self._clifford_mapping_dict(clifford)
         return self.map_frame(old_to_new)

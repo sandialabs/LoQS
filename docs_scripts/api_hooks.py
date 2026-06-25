@@ -692,6 +692,13 @@ def _extract_inherited_toc_remove_anchors(output: str) -> set[str]:
             anchors.add(base)
     return anchors
 
+def _rewrite_table_doc_parbreaks(html: str) -> str:
+    """
+    Replace generated table-doc paragraph break sentinels with HTML paragraph
+    spacing after Markdown/HTML rendering has already happened.
+    """
+    return html.replace("@@API_DOC_PBREAK@@", "<br><br>")
+
 
 def on_post_page(output: str, page, config) -> str:
     inv = _load_inventory(config)
@@ -716,5 +723,6 @@ def on_post_page(output: str, page, config) -> str:
     output = _rewrite_constructor_labels(output)
     output = _rewrite_citations(output)
     output = _strip_dead_fnref_links(output)
+    output = _rewrite_table_doc_parbreaks(output)
 
     return output

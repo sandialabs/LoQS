@@ -50,19 +50,6 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
     assert qubits is not None
 
     def get_bitstring_dict():
-        """Get computational basis probabilities as a bitstring dictionary.
-
-        Parameters
-        ----------
-        None
-
-        Returns
-        -------
-        dict[str, float]
-            Dictionary mapping bitstrings to their measurement probabilities
-
-        REVIEW_NO_DOCSTRING
-        """
         probs = {}
         for bd, p in qsim_state.state.peak_multiple_measurements(qubits):
             bitstring = "".join([str(bd[q]) for q in qubits])
@@ -111,11 +98,9 @@ def get_state_probs_phases(qsim_state: QSimQuantumState):
 
 
 def print_state_probs_phases(qsim_state: QSimQuantumState):
-    """Pretty-print the output of [get_state_probs_phases](api:get_state_probs_phases).
+    """Pretty-print the output of [](api:get_state_probs_phases).
 
-    Refer to [get_state_probs_phases](api:get_state_probs_phases) for documentation.
-
-    REVIEW_SPHINX_REFERENCE
+    Refer to [](api:get_state_probs_phases) for documentation.
     """
     qubits, probs, phases = get_state_probs_phases(qsim_state)
     print(qubits)

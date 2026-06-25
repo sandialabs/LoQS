@@ -62,9 +62,17 @@ def _is_public_property(name: str) -> bool:
 _ALL_CAPS_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
-def var_sort_key(row: dict) -> tuple[int, str]:
+def var_sort_key(row: dict) -> tuple[int, int | str, str]:
     name = (row.get("name") or "")
-    return (0 if _ALL_CAPS_RE.fullmatch(name) else 1, name.lower())
+    sort_value = (row.get("sort_value") or "").strip()
+
+    if sort_value:
+        try:
+            return (0, int(sort_value), name.lower())
+        except Exception:
+            pass
+
+    return (1 if _ALL_CAPS_RE.fullmatch(name) else 2, name.lower(), name.lower())
 
 
 def unparse(node: ast.AST | None) -> str:
@@ -202,6 +210,14 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
     funcs: list[str] = []
     rows: list[dict] = []
 
+    def _full_doc_from_next_stmt(body: list[ast.stmt], i: int) -> str:
+        if i + 1 >= len(body):
+            return ""
+        nxt = body[i + 1]
+        if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Constant) and isinstance(nxt.value.value, str):
+            return nxt.value.value.strip()
+        return ""
+
     body = tree.body
     for i, node in enumerate(body):
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
@@ -211,7 +227,7 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
             funcs.append(node.name)
 
         elif isinstance(node, ast.Assign):
-            doc = doc_hint_from_next_stmt(body, i)
+            doc = _full_doc_from_next_stmt(body, i)
             value_s = unparse(node.value).strip() if node.value is not None else ""
 
             typevar_bound = ""
@@ -233,12 +249,13 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
                             "value": value_s,
                             "doc": doc,
                             "typevar_bound": typevar_bound if is_tv else "",
+                            "sort_value": value_s,
                         }
                     )
 
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
-                doc = doc_hint_from_next_stmt(body, i)
+                doc = _full_doc_from_next_stmt(body, i)
                 ann_s = expand_type_aliases(unparse(node.annotation).strip(), aliases)
                 value_s = expand_type_aliases(unparse(node.value).strip() if node.value is not None else "", aliases)
 
@@ -253,6 +270,7 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
                         "value": value_s,
                         "doc": doc,
                         "typevar_bound": "",
+                        "sort_value": value_s,
                     }
                 )
 
@@ -313,6 +331,14 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
     except SyntaxError:
         return {}
 
+    def _full_doc_from_next_stmt(body: list[ast.stmt], i: int) -> str:
+        if i + 1 >= len(body):
+            return ""
+        nxt = body[i + 1]
+        if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Constant) and isinstance(nxt.value.value, str):
+            return nxt.value.value.strip()
+        return ""
+
     cls: ast.ClassDef | None = None
     for n in tree.body:
         if isinstance(n, ast.ClassDef) and n.name == class_name:
@@ -324,17 +350,30 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
     out: dict[str, dict] = {}
     body = cls.body
 
+    is_enum_like = any(
+        (isinstance(base, ast.Name) and base.id.endswith("Enum"))
+        or (isinstance(base, ast.Attribute) and base.attr.endswith("Enum"))
+        for base in cls.bases
+    )
+
     for i, node in enumerate(body):
         if isinstance(node, ast.Assign):
-            doc = doc_hint_from_next_stmt(body, i)
+            doc = _full_doc_from_next_stmt(body, i)
             value_s = unparse(node.value).strip() if node.value is not None else ""
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and _is_public_var(tgt.id):
-                    out[tgt.id] = {"name": tgt.id, "type": "", "owner": owner_ident, "value": value_s, "doc": doc}
+                    out[tgt.id] = {
+                        "name": tgt.id,
+                        "type": "",
+                        "owner": owner_ident,
+                        "value": value_s,
+                        "doc": doc,
+                        "sort_value": value_s if is_enum_like else "",
+                    }
 
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
-                doc = doc_hint_from_next_stmt(body, i)
+                doc = _full_doc_from_next_stmt(body, i)
                 ann_s = expand_type_aliases(unparse(node.annotation).strip(), aliases)
                 value_s = expand_type_aliases(unparse(node.value).strip() if node.value is not None else "", aliases)
                 out[node.target.id] = {
@@ -343,6 +382,7 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
                     "owner": owner_ident,
                     "value": value_s,
                     "doc": doc,
+                    "sort_value": value_s if is_enum_like else "",
                 }
 
     return out

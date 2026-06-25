@@ -35,8 +35,8 @@ class BaseEncoder(ABC):
     """Internal counter to ensure unique encoding ids.
 
     This is set back to 0 if `reset_encode_id=True` in
-    :meth:`.Serializable.encode`. Internally, this is
-    only happens in :meth:`.Serializable.dump`.
+    [](api:Serializable.encode). Internally, this is
+    only happens in [](api:Serializable.dump).
     Nothing bad happens if it is not reset, but the cache ids
     will not start at 0 as is "standard".
     """
@@ -51,7 +51,7 @@ class BaseEncoder(ABC):
 
         This context manager wraps decode operations and handles AssertionError
         exceptions by converting them to appropriate error types based on the
-        fatal parameter. REVIEW_NO_DOCSTRING
+        fatal parameter.
 
         Parameters
         ----------
@@ -94,10 +94,6 @@ class BaseEncoder(ABC):
     ):
         """Encode an object that has not been previously cached.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of objects that are being encountered for the first
-        time during the encoding process. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : Serializable
@@ -126,10 +122,6 @@ class BaseEncoder(ABC):
     ) -> Serializable | DeferredRef:
         """Decode an object that was not previously cached during encoding.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of objects that are being encountered for the first
-        time during the decoding process. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         encoded : Encoded
@@ -153,10 +145,6 @@ class BaseEncoder(ABC):
     @abstractmethod
     def encode_cached_obj(cache_id: int) -> Encoded:
         """Encode a cached object reference.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of objects that have been previously cached
-        during the encoding process. REVIEW_NO_DOCSTRING
 
         Parameters
         ----------
@@ -182,10 +170,6 @@ class BaseEncoder(ABC):
         encoded: Encoded, decode_cache: DecodeCache = None
     ) -> Serializable | DeferredRef:
         """Decode a cached object reference.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of objects that have been previously cached
-        during the encoding process. REVIEW_NO_DOCSTRING
 
         Parameters
         ----------
@@ -215,10 +199,6 @@ class BaseEncoder(ABC):
     ) -> Encoded:
         """Encode an iterable into a serializable format.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of iterable data structures (lists, tuples, etc.).
-        REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : EncodableIterables
@@ -246,10 +226,6 @@ class BaseEncoder(ABC):
         encoded: Encoded, decode_cache: DecodeCache = None
     ) -> EncodableIterables:
         """Decode an encoded iterable back to its original form.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of iterable data structures from the encoded format.
-        REVIEW_NO_DOCSTRING
 
         Parameters
         ----------
@@ -279,9 +255,6 @@ class BaseEncoder(ABC):
     ) -> Encoded:
         """Encode a dictionary into a serializable format.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of dictionary data structures. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : dict
@@ -310,10 +283,6 @@ class BaseEncoder(ABC):
     ) -> dict:
         """Decode an encoded dictionary back to its original form.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of dictionary data from the encoded format.
-        REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         encoded : Encoded
@@ -338,9 +307,6 @@ class BaseEncoder(ABC):
     def encode_array(to_encode: EncodableArrays):
         """Encode an array into a serializable format.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of array data structures. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : EncodableArrays
@@ -362,10 +328,6 @@ class BaseEncoder(ABC):
     @abstractmethod
     def decode_array(encoded: Encoded) -> EncodableArrays:
         """Decode an encoded array back to its original form.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of array data from the encoded format.
-        REVIEW_NO_DOCSTRING
 
         Parameters
         ----------
@@ -389,9 +351,6 @@ class BaseEncoder(ABC):
     def encode_class(to_encode: type):
         """Encode a class type into a serializable format.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of class type information. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : type
@@ -413,9 +372,6 @@ class BaseEncoder(ABC):
     @abstractmethod
     def decode_class(encoded: Encoded) -> type:
         """Decode an encoded class reference back to its class object.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of class type information. REVIEW_NO_DOCSTRING
 
         Parameters
         ----------
@@ -439,9 +395,6 @@ class BaseEncoder(ABC):
     def encode_function(to_encode: Callable) -> Encoded:
         """Encode a function into a serializable format.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of function objects. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : Callable
@@ -463,9 +416,6 @@ class BaseEncoder(ABC):
     @abstractmethod
     def decode_function(encoded: Encoded) -> Callable:
         """Decode an encoded function reference back to its callable form.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of function objects. REVIEW_NO_DOCSTRING
 
         Parameters
         ----------
@@ -489,10 +439,6 @@ class BaseEncoder(ABC):
     def encode_primitive(to_encode: EncodablePrimitives):
         """Encode a primitive value into a serializable format.
 
-        This abstract method should be implemented by concrete encoder classes
-        to handle the encoding of primitive data types (int, float, str, bool, etc.).
-        REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         to_encode : EncodablePrimitives
@@ -514,10 +460,6 @@ class BaseEncoder(ABC):
     @abstractmethod
     def decode_primitive(encoded: Encoded) -> EncodablePrimitives:
         """Decode an encoded primitive value back to its original form.
-
-        This abstract method should be implemented by concrete encoder classes
-        to handle the decoding of primitive data types (int, float, str, bool, etc.)
-        from the encoded format. REVIEW_NO_DOCSTRING
 
         Parameters
         ----------

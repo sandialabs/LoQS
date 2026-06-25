@@ -236,34 +236,18 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     @property
     def gate_keys(self) -> list:
-        """Gate keys this model can take in circuits."""
         return list(self.gate_dict.keys())
 
     @property
     def instrument_keys(self) -> list:
-        """Instrument keys this model can take in circuits."""
         return list(self.inst_dict.keys())
 
     @property
     def output_gate_reps(self) -> list[GateRep]:
-        """Get the list of gate representations this model can output.
-
-        Returns
-        -------
-        list[GateRep]
-            List of gate representations that this model can output.
-        """
         return self._gatereps
 
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
-        """Get the list of instrument representations this model can output.
-
-        Returns
-        -------
-        list[InstrumentRep]
-            List of instrument representations that this model can output.
-        """
         return self._instreps
 
     def get_reps(
@@ -272,27 +256,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
-        """Get list of operator representations that can be applied.
-
-        This method processes a circuit and returns a list of operation representations
-        (RepTuples) that can be applied to a quantum state.
-
-        Parameters
-        ----------
-        circuit : BasePhysicalCircuit
-            Physical circuit to get the representations for.
-
-        gatereps : Sequence[GateRep]
-            Output representations for gate operations.
-
-        instreps : Sequence[InstrumentRep]
-            Output representations for instrument operations.
-
-        Returns
-        -------
-        list[RepTuple]
-            List of operation representations for the circuit.
-        """
         # Get builtin circuit for easy processing
         circuit = ListPhysicalCircuit.cast(circuit)
 

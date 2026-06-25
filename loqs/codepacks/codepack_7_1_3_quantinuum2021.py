@@ -67,7 +67,7 @@ def create_qec_code(
         dummy values 1, 2, 3 for 1Q gates, 2Q gates, and mid-circuit
         measurements, respectively.
         See `durations` from
-        [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
+        [](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     idle_gates : dict[int | float, str] | None, optional
@@ -75,17 +75,17 @@ def create_qec_code(
         which maps the dummy values from `gate_durations` to `"Gi1Q"`,
         `"Gi2Q"`, and `"GiMCM"`, respectively.
         See `idle_names` from
-        [BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
+        [](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
 
     circuit_backend : type[BasePhysicalCircuit], optional
         The circuit backend to use when generating physical circuits.
-        Default is [PyGSTiPhysicalCircuit](api:PyGSTiPhysicalCircuit).
+        Default is [](api:PyGSTiPhysicalCircuit).
 
     Returns
     -------
     QECCode
-        A [QECCode](api:QECCode) implementing the [[7,1,3]] code.
+        A [](api:QECCode) implementing the [[7,1,3]] code.
     """
 
     # Template qubits for defining one patch
@@ -465,8 +465,6 @@ def create_qec_code(
         -------
         Frame
             Frame containing logical measurement outcome and related information.
-
-        REVIEW_NUMPY_FORMAT
         """
         # Get the logical pauli frame
         logical_pauli_frame = patches[patch_label].data.get(
@@ -497,8 +495,6 @@ def create_qec_code(
                 Syndrome data for decoding.
             pf_idx : int
                 Pauli frame index to update.
-
-            REVIEW_NUMPY_FORMAT
             """
             if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
                 logical_pauli_frame[pf_idx] ^= 1
@@ -542,8 +538,6 @@ def create_qec_code(
         -------
         KwargDict
             Updated keyword arguments with remapped qubit labels.
-
-        REVIEW_NUMPY_FORMAT
         """
         new_kwargs = kwargs.copy()
         new_kwargs["data_qubits"] = [qubit_mapping[q] for q in data_qubits]
@@ -653,8 +647,6 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         -------
         Frame
             Frame containing updated stack, patches, and syndrome information.
-
-        REVIEW_NUMPY_FORMAT
         """
         # Get last syndromes (or default to trivial)
         patch = patches[patch_label]
@@ -734,8 +726,6 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         -------
         KwargDict
             Updated keyword arguments with remapped qubit labels.
-
-        REVIEW_NUMPY_FORMAT
         """
         new_kwargs = kwargs.copy()
         new_kwargs["flag_qubits"] = [qubit_mapping[q] for q in flag_qubits]
@@ -791,8 +781,6 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         -------
         Frame
             Frame containing decoded syndrome information and updated patches.
-
-        REVIEW_NUMPY_FORMAT
         """
         # Get last syndromes (or default to trivial)
         patch = patches[patch_label]
@@ -819,17 +807,6 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         # Data qubit decoding. This is Table 1 of 10.1103/PhysRevX.11.041058, as implemented
         # by the algorithm in Fig 21
         def data_decode(sd, pf_idx):
-            """Decode data qubit errors based on syndrome.
-
-            Parameters
-            ----------
-            sd : list[int]
-                Syndrome data for decoding.
-            pf_idx : int
-                Pauli frame index to update.
-
-            REVIEW_NUMPY_FORMAT
-            """
             if sd in [[0, 1, 0], [0, 1, 1], [0, 0, 1]]:
                 logical_pauli_frame[pf_idx] ^= 1
 
@@ -839,19 +816,6 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         # Hook error decoding. This is Table 2 of 10.1103/PhysRevX.11.041058, as implemented
         # by a modified version of the algorithm in Fig 22
         def hook_decode(sd, fsd, pf_idx):
-            """Decode hook errors based on syndrome and flag syndrome differences.
-
-            Parameters
-            ----------
-            sd : list[int]
-                Syndrome data for decoding.
-            fsd : list[int]
-                Flag syndrome differences.
-            pf_idx : int
-                Pauli frame index to update.
-
-            REVIEW_NUMPY_FORMAT
-            """
             if (fsd, sd) in [
                 ([1, 0, 0], [0, 1, 0]),
                 ([1, 0, 0], [0, 0, 1]),
@@ -908,8 +872,6 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         -------
         KwargDict
             Updated keyword arguments with remapped qubit labels.
-
-        REVIEW_NUMPY_FORMAT
         """
         new_kwargs = kwargs.copy()
         new_kwargs["X_qubits"] = [qubit_mapping[q] for q in X_qubits]
@@ -941,7 +903,7 @@ def create_ideal_model(  # noqa: C901
     """Create an ideal (i.e. noiseless) model for the [[7,1,3]] code.
 
     This model will contain all the instructions needed to run the
-    physical circuits in the [QECCode](api:QECCode) returned by [create_qec_code](api:codepack_7_1_3_quantinuum2021.create_qec_code).
+    physical circuits in the [](api:QECCode) returned by [](api:codepack_7_1_3_quantinuum2021.create_qec_code).
 
     Parameters
     ----------
@@ -951,8 +913,8 @@ def create_ideal_model(  # noqa: C901
 
     model_backend : type[BaseNoiseModel], optional
         The model backend to use when generating operations.
-        Currently, only [PyGSTiNoiseModel](api:PyGSTiNoiseModel) is allowed.
-        Default is [PyGSTiNoiseModel](api:PyGSTiNoiseModel).
+        Currently, only [](api:PyGSTiNoiseModel) is allowed.
+        Default is [](api:PyGSTiNoiseModel).
 
     gaterep : GateRep, optional
         Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
@@ -963,8 +925,8 @@ def create_ideal_model(  # noqa: C901
     Returns
     -------
     BaseNoiseModel
-        A noiseless model for the [QECCode](api:QECCode) returned by
-        [create_qec_code](api:codepack_7_1_3_quantinuum2021.create_qec_code).
+        A noiseless model for the [](api:QECCode) returned by
+        [](api:codepack_7_1_3_quantinuum2021.create_qec_code).
     """
     # assert len(qubits) == 10, "Must provide exactly 10 qubit labels"
     # model_qubits = [f"Q{i}" for i in range(10)]

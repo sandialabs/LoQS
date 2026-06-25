@@ -44,6 +44,6 @@ class SyndromeLabel(Castable, Displayable):
     outcome_idx: int = 0
     """The outcome index.
 
-    Defaults to 0, the first outcome on :attr:`.qubit_label`.
-    Could be >0 if multiple checks were measured on :attr:`.qubit_label`.
+    Defaults to 0, the first outcome on [](api:qubit_label).
+    Could be >0 if multiple checks were measured on [](api:qubit_label).
     """

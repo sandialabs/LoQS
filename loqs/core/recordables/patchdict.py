@@ -35,9 +35,9 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
     refers to these keys) and the values are [](api:QECCodePatch) objects.
 
     Unlike many other `LoQS` objects, this is a mutable object to make it easy
-    to manipulate patches. Users should be careful to first use :attr:`.copy`
+    to manipulate patches. Users should be careful to first use [](api:copy)
     to avoid messing up previous [](api:Frame) objects (or use
-    :meth:`.Frame.expire` properly).
+    [](api:Frame.expire) properly).
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
@@ -53,7 +53,7 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
         Parameters
         ----------
         patches:
-            See :attr:`.patches`. Defaults to `None`, which uses
+            See [](api:patches). Defaults to `None`, which uses
             an empty `dict`.
         """
         if patches is None:
@@ -87,18 +87,18 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
 
     @property
     def all_qubit_labels(self) -> list[str | int]:
-        """All qubits managed by patches in this [PatchDict](api:PatchDict)."""
+        """All qubits managed by patches in this [](api:PatchDict)."""
         qubits: list[str | int] = []
         for patch in self.patches.values():
             qubits.extend(patch.qubits)
         return qubits
 
     def copy(self) -> PatchDict:
-        """Return a copy of this [PatchDict](api:PatchDict).
+        """Return a copy of this [](api:PatchDict).
 
         Returns
         -------
         PatchDict
-            The copied [PatchDict](api:PatchDict)
+            The copied [](api:PatchDict)
         """
         return PatchDict(self.patches.copy())

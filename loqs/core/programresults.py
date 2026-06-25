@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`ProgramResults` definition.
+"""[](api:ProgramResults) definition.
 """
 
 from __future__ import annotations
@@ -195,13 +195,13 @@ class ProgramResults(Displayable):
         Parameters
         ----------
         key:
-            See `key` in [History.collect_data](api:History.collect_data)
+            See `key` in [](api:History.collect_data)
 
         indices:
-            See `indices` in [History.collect_data](api:History.collect_data)
+            See `indices` in [](api:History.collect_data)
 
         strip_none_entries:
-            See `strip_none_entries` in [History.collect_data](api:History.collect_data)
+            See `strip_none_entries` in [](api:History.collect_data)
 
         return_counter:
             Whether to return using a collections.Counter or not (default).
@@ -209,7 +209,7 @@ class ProgramResults(Displayable):
         Returns
         -------
         list
-            List of [History.collect_data](api:History.collect_data) outputs per shot
+            List of [](api:History.collect_data) outputs per shot
         """
         data = [
             h.collect_data(key, indices, strip_none_entries)

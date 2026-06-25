@@ -36,7 +36,7 @@ class MeasurementOutcomes(
     This is a dict-like object with qubit label keys and lists of 0/1
     outcome values. These can represent both raw measurement outcomes
     or "inferred" outcomes where a [](api:PauliFrame) has been applied
-    (see :attr:`.get_inferred_outcomes`).
+    [](api:get_inferred_outcomes)).
     """
 
     _SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
@@ -53,7 +53,7 @@ class MeasurementOutcomes(
         Parameters
         ----------
         outcomes:
-            See :attr:`.outcomes`. No default since this is intended to be
+            See [](api:outcomes). No default since this is intended to be
             immutable, i.e. data is given once now and then not changed.
         """
         if isinstance(outcomes, MeasurementOutcomes):
@@ -117,12 +117,12 @@ class MeasurementOutcomes(
         pauli_frame: PauliFrame | None = None,
         basis: Literal["Z"] | Literal["X"] = "Z",
     ) -> MeasurementOutcomes:
-        """Apply a [PauliFrame](api:PauliFrame) to get inferred outcomes.
+        """Apply a [](api:PauliFrame) to get inferred outcomes.
 
         Parameters
         ----------
         pauli_frame:
-            The [PauliFrame](api:PauliFrame) to apply. Defaults to `None`,
+            The [](api:PauliFrame) to apply. Defaults to `None`,
             in which case this just returns a copy.
 
         basis:

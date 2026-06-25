@@ -50,7 +50,7 @@ class MapQubitsCallable(Protocol[P]):
     """The protocol a user-defined map qubits function must follow.
 
     Specifically, it must take a qubit_mapping `dict[str,str]` as the
-    the first argument, and return the mapped :attr:`.KwargDict`.
+    the first argument, and return the mapped [](api:KwargDict).
     """
 
     def __call__(  # noqa
@@ -80,12 +80,12 @@ class Instruction(Displayable):
     perform any transformation on that data, and output any
     information to be used by a downstream [](api:Instruction).
 
-    NOTE: The :class:`Instruction` is flexible and powerful; however,
+    NOTE: The [](api:Instruction) is flexible and powerful; however,
     with that flexibility comes complexity, and we are aware
     it may not be immediately clear how to use these. Interested users are
     encouraged to look at the Object Quickstart > Instructions and
     Tutorials > Building a Complex Instruction for more,
-    or at :mod:`.builders` for concrete examples.
+    or at [](api:builders) for concrete examples.
 
     At its core, an [](api:Instruction) is defined by five
     pieces of user-defined information:
@@ -104,17 +104,17 @@ class Instruction(Displayable):
 
     The [](api:Instruction) is then used in the following ways:
 
-    - A :class:`QECCode` will define these with respect to a
+    - A [](api:QECCode) will define these with respect to a
       template set of qubits
-    - The :class:`QECCodePatch` will use :meth:`.Instruction.map_qubits`
+    - The [](api:QECCodePatch) will use [](api:Instruction.map_qubits)
       to swap out the template qubits with the real ones (using
       the user-defined map qubits function)
-    - The :class:`QuantumProgram` will use the data and parameter
+    - The [](api:QuantumProgram) will use the data and parameter
       priorities/aliases to collect the right simulation information,
-      and then call :meth:`.Instruction.apply` to generate the next
+      and then call [](api:Instruction.apply) to generate the next
       [](api:Frame) (using the user-defined apply function)
 
-    NOTE: The :class:`Instruction` is annoying to serialize because it
+    NOTE: The [](api:Instruction) is annoying to serialize because it
     contains user-defined code. The way `LoQS` handles this is by
     storing the function definitions as strings for serialization,
     and re-executing them during deserialization. This has several
@@ -133,10 +133,10 @@ class Instruction(Displayable):
     3. As a side effect of the string versions of the functions
        being used for serialization, these are also the objects
        used when hashing and (potentially importantly) when doing
-       equality testing. Two :class:`Instruction` objects can have
-       functionally equivalently :attr:`.apply_fn` and :attr:`.map_qubits_fn`,
+       equality testing. Two [](api:Instruction) objects can have
+       functionally equivalently [](api:apply_fn) and [](api:map_qubits_fn),
        but they will not test as equal if the string representations differ
-       in any way. Similarly, two :class:`Instruction` objects that
+       in any way. Similarly, two [](api:Instruction) objects that
        have very different functions would test as equal if one had
        serialized versions that were set to match with the other.
     4. Importantly for Jupyter users, Caveat 2 means that you may run
@@ -161,26 +161,26 @@ class Instruction(Displayable):
     ]
 
     data: dict
-    """Data to keep with this [Instruction](api:Instruction).
+    """Data to keep with this [](api:Instruction).
 
     NOTE: There is currently a limitation that this data
     cannot store functions due to serialization issues.
     """
 
     apply_fn: ApplyCallable
-    """A user-defined function called in [apply](api:Instruction.apply).
+    """A user-defined function called in [](api:Instruction.apply).
 
-    It must conform to the [ApplyCallable](api:ApplyCallable) protocol.
+    It must conform to the [](api:ApplyCallable) protocol.
     """
 
     map_qubits_fn: MapQubitsCallable | None
-    """A user-defined function called in [map_qubits](api:Instruction.map_qubits).
+    """A user-defined function called in [](api:Instruction.map_qubits).
 
     It must conform to the [MapQubitsCallable](api:MapQubitsCallable] protocol.
     """
 
     param_error_behavior: Literal["continue", "warn", "raise"]
-    """Error behaviour when processing [apply_fn](api:Instruction.apply_fn) parameters.
+    """Error behaviour when processing [](api:Instruction.apply_fn) parameters.
     """
 
     name: str
@@ -206,44 +206,44 @@ class Instruction(Displayable):
         Parameters
         ----------
         apply_fn:
-            See :attr:`.apply_fn`
+            See [](api:apply_fn)
 
         data:
-            See :attr:`.data`. Defaults to `None`, which uses an empty `dict`.
+            See [](api:data). Defaults to `None`, which uses an empty `dict`.
 
         map_qubits_fn:
-            See :attr:`.map_qubits_fn`. Defaults to :meth:`.default_map_qubits`.
+            See [](api:map_qubits_fn). Defaults to [](api:default_map_qubits).
 
         param_priorities:
-            A mapping of :attr:`.apply_fn` parameter names to lists of priorities
+            A mapping of [](api:apply_fn) parameter names to lists of priorities
             to using during parameter collection with
-            :meth:`.QuantumProgram._collect_kwarg`. Defaults to `None`,
-            which sets every parameter's priority to :attr:`.DEFAULT_PARAMETERS`.
-            For an example, see :meth:`.builders.build_lookup_decoder_instruction`.
+            [](api:QuantumProgram._collect_kwarg). Defaults to `None`,
+            which sets every parameter's priority to [](api:DEFAULT_PARAMETERS).
+            For an example, see [](api:builders.build_lookup_decoder_instruction).
 
         param_error_behavior:
-            See :attr:`.param_error_behavior`. Defaults to `"warn"`.
+            See [](api:param_error_behavior). Defaults to `"warn"`.
 
         param_aliases:
             A mapping from `.apply_fn` parameter names to names to use during
-            parameter collection with :meth:`.QuantumProgram._collect_kwarg`.
-            For an example, see :meth:`.builders.build_lookup_decoder_instruction`.
+            parameter collection with [](api:QuantumProgram._collect_kwarg).
+            For an example, see [](api:builders.build_lookup_decoder_instruction).
 
         serialized_apply_fn:
-            A serialized version of :attr:`.apply_fn`. Defaults to `None`,
-            which sets this by calling :meth:`.serialize` on :attr:`.apply_fn`.
+            A serialized version of [](api:apply_fn). Defaults to `None`,
+            which sets this by calling [](api:serialize) on [](api:apply_fn).
             Not intended to be set by the user, see caveats above.
 
         serialized_map_qubits_fn:
-            A serialized version of :attr:`.map_qubits_fn`. Defaults to `None`,
-            which sets this by calling :meth:`.serialize` on :attr:`.map_qubits_fn`.
+            A serialized version of [](api:map_qubits_fn). Defaults to `None`,
+            which sets this by calling [](api:serialize) on [](api:map_qubits_fn).
             Not intended to be set by the user, see caveats above.
 
         name:
-            See :attr:`.name`.
+            See [](api:name).
 
         type:
-            See :attr:`.type`.
+            See [](api:type).
         """
         self.apply_fn = apply_fn
 
@@ -351,24 +351,22 @@ class Instruction(Displayable):
         -------
         str
             The aliased parameter name, or the original key if no alias exists.
-
-        REVIEW_NO_DOCSTRING
         """
         return self._param_aliases.get(key, key)
 
     def apply(self, **kwargs) -> Frame:
-        """Apply this [Instruction](api:Instruction) to get a new [Frame](api:Frame).
+        """Apply this [](api:Instruction) to get a new [](api:Frame).
 
         Parameters
         ----------
         **kwargs:
-            Parameters to pass on to [apply_fn](api:Instruction.apply_fn).
+            Parameters to pass on to [](api:Instruction.apply_fn).
 
         Returns
         -------
         Frame
-            The output [Frame](api:Frame) of [apply_fn](api:Instruction.apply_fn), with this
-            [Instruction](api:Instruction) and the input parameters appended for
+            The output [](api:Frame) of [](api:Instruction.apply_fn), with this
+            [](api:Instruction) and the input parameters appended for
             informational/debugging purposes
         """
         # Pull out only kwargs we need
@@ -386,7 +384,7 @@ class Instruction(Displayable):
         return output_frame
 
     def copy(self) -> Instruction:
-        """Return a copy of this [Instruction](api:Instruction)."""
+        """Return a copy of this [](api:Instruction)."""
         return Instruction(
             apply_fn=self.apply_fn,
             data=deepcopy(self.data),
@@ -414,7 +412,7 @@ class Instruction(Displayable):
         Returns
         -------
         Instruction
-            A copy of the [Instruction](api:Instruction) with mapped qubits
+            A copy of the [](api:Instruction) with mapped qubits
         """
         new_instruction = self.copy()
         # Map qubits on all data

@@ -50,13 +50,13 @@ class BaseNoiseModel(Castable, Displayable):
     @property
     @abstractmethod
     def output_gate_reps(self) -> list[GateRep]:
-        """Gate reps this model can output."""
+        """[](api:GateRep) this model can output."""
         pass
 
     @property
     @abstractmethod
     def output_instrument_reps(self) -> list[InstrumentRep]:
-        """Instrument reps this model can output."""
+        """[](api:InstrumentRep) this model can output."""
         pass
 
     @abstractmethod
@@ -75,11 +75,11 @@ class BaseNoiseModel(Castable, Displayable):
 
         gatereps:
             Output representations for gate operations.
-            For more details, look at [GateRep](api:loqs.backends.reps.GateRep).
+            For more details, look at [](api:GateRep).
 
         instreps:
             Output representations for instrument operations.
-            For more details, look at [InstrumentRep](api:loqs.backends.reps.InstrumentRep).
+            For more details, look at [](api:InstrumentRep).
 
         Returns
         -------

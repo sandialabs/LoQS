@@ -41,10 +41,6 @@ class HDF5Encoder(BaseEncoder):
     ) -> Encodable:
         """Decode the root HDF5 group containing a serialized object.
 
-        This method handles the top-level deserialization of HDF5 files by extracting
-        the main content group and delegating the actual deserialization to the
-        Serializable.decode method. REVIEW_NO_DOCSTRING
-
         Parameters
         ----------
         encoded : Encoded
