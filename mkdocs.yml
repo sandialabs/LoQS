@@ -1,23 +1,14 @@
 site_name: LoQS Documentation
 
 nav:
-  - Home: index.md
-  - Getting Started:
-      - Install: getting-started/install.md
-      - Overview: getting-started/overview.md
-      - Workflow: getting-started/workflow.md
-  # - Tutorials:
-  #   - tutorials/buildinstruction.md
-  #   - tutorials/buildqeccode.md
-  #   - tutorials/daskparallelism.md
-  # - Examples:
-  #   - examples/runlogst.md
-  #   - examples/fttests.md
-  #   - examples/timedepmodel.md
-  - Developer Zone:
-      - Dev Guide: dev-zone/devguide.md
-  - API Reference: /reference
-  - Bibliography: references.md
+  - Home: markdown/index.md
+  - Getting Started: markdown/getting-started.md
+  - Tutorials:
+      - Test: lite/lab/index.html?path=test-notebook.md
+  - Reference:
+      - Dev Guide: markdown/devguide.md
+      - API Documentation: /reference
+      - Bibliography: markdown/references.md
 
 theme:
   name: material
@@ -46,8 +37,7 @@ extra_javascript:
 
 plugins:
   - search
-  - marimo:
-      display_code: true
+  - include-markdown
   - bibtex:
       bib_file: docs/references.bib
       csl_file: docs/american-physical-society-et-al.csl

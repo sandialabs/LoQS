@@ -24,7 +24,7 @@ from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions import Instruction, InstructionLabel
-from loqs.tools.dasktools import run_program_list
+#from loqs.tools.dasktools import run_program_list
 
 
 def build_discrete_error_injection_programs(
@@ -204,6 +204,7 @@ def run_discrete_error_injected_programs(
         (as this is likely a better strategy than parallelizing
         over small number of shots per program).
         Defaults to `None`, which runs shots in serial.
+        CURRENTLY UNUSED.
 
     Returns
     -------
@@ -212,29 +213,30 @@ def run_discrete_error_injected_programs(
     """
     failed = []
 
-    if dask_client is None:
-        tasks = [
-            (p, collect_shot_data_args, expected_outcomes, num_shots)
-            for p in errored_programs
-        ]
-        for task in tqdm(tasks, "Running discrete error injected programs"):
-            success = test_program_output(*task)
-            if not success:
-                failed.append(task[0])
-    else:
-        print("Running discrete error injected programs in parallel with Dask")
-        run_program_list(errored_programs, dask_client, num_shots)
+    # Temporarily turn off DASK while reworking parallelization
+    # if dask_client is None:
+    tasks = [
+        (p, collect_shot_data_args, expected_outcomes, num_shots)
+        for p in errored_programs
+    ]
+    for task in tqdm(tasks, "Running discrete error injected programs"):
+        success = test_program_output(*task)
+        if not success:
+            failed.append(task[0])
+    # else:
+    #     print("Running discrete error injected programs in parallel with Dask")
+    #     run_program_list(errored_programs, dask_client, num_shots)
 
-        for program in errored_programs:
-            success = test_program_output(
-                program,
-                collect_shot_data_args,
-                expected_outcomes,
-                num_shots,
-                skip_run=True,
-            )
-            if not success:
-                failed.append(program)
+    #     for program in errored_programs:
+    #         success = test_program_output(
+    #             program,
+    #             collect_shot_data_args,
+    #             expected_outcomes,
+    #             num_shots,
+    #             skip_run=True,
+    #         )
+    #         if not success:
+    #             failed.append(program)
 
     if len(failed):
         print(f"Failed {len(failed)} programs!")

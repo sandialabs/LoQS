@@ -10,17 +10,9 @@ The *Lo*gical *Q*ubit *S*imulator (LoQS) is designed to simulate a few logical q
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
 
 ```
-conda create -p ./venv python=3.11
-conda activate ./venv
+conda create -n loqs-env python=3.14
+conda activate loqs-env
 pip install -e .
-```
-
-By default, this will not install any of the backends.
-In order to install PyGSTi and QuantumSim (i.e. previous LoQS backends),
-you can alter the last line to 
-
-```
-pip install -e ".[pygsti,quantumsim]"
 ```
 
 There are various optional requirements that are available, including:
@@ -54,11 +46,11 @@ pip install -e ".[all]"
 For developers who may want an editable version of `pyGSTi`, you can run:
 
 ```
-pip install -e git+https://github.com/sandialabs/pyGSTi.git@v0.9.12#egg=pyGSTi
+pip install -e git+https://github.com/sandialabs/pyGSTi.git@v0.9.14#egg=pyGSTi
 ```
 
-to get the 0.9.12 release of pyGSTi, which will be located in `src`.
-Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
+to get the 0.9.14 release of pyGSTi, which will be located in `src`.
+Alternatively, you can use any other tag or commit hash instead of `v0.9.14`
 if you are working off of a feature branch.
 
 ## Documentation
@@ -74,4 +66,4 @@ Both commands will launch local servers that can be navigated to in your web bro
 Marimo will auto-open the browser, while `serve.py` will simply tell you the URL
 (typically `localhost:8000`).
 
-More details are available in (docs/DOCS_README.md)[docs/DOCS_README.md].
+More details are available in [docs/DOCS_README.md](docs/DOCS_README.md).

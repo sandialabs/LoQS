@@ -13,6 +13,8 @@ htmlcov
 .env
 .opencode
 .ralph/*.json
+.devcontainer
+opencode-dev.sh
 
 docs/_build
 docs/**/_autosummary
