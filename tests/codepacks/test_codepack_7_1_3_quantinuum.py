@@ -11,6 +11,7 @@ stim = pytest.importorskip("stim")
 from loqs.backends import GateRep, PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
+from loqs.core.instructions import builders
 from loqs.core.recordables import MeasurementOutcomes
 from loqs.tools import fttools
 
@@ -107,7 +108,103 @@ class TestSteaneCodepack:
         program = QuantumProgram.from_quantum_program(ref_program, stack_ft)
         program_results = program.run()
         assert program_results.collect_shot_data("logical_measurement", -1)[0] == stack_outcome[1]
-    
+
+    # Regression test for over-correction of the logical Pauli frame in
+    # ``logical_meas_apply_fn``.
+    #
+    # A data error that commutes with the measurement basis (e.g. a Z error
+    # before a logical Z measurement) does not change the logical outcome.
+    # However, the QEC rounds detect that error and record a correction in the
+    # logical Pauli frame. The previous implementation of the final logical
+    # measurement (a) read the wrong frame component and (b) decoded the
+    # absolute reconstructed syndrome instead of the difference against the
+    # last recorded syndrome, so the frame correction was applied on top of an
+    # already-correct raw outcome -- flipping it. This double counting is the
+    # over-correction. Here we inject a single commuting Pauli error, run one
+    # or more QEC rounds, and assert the logical outcome is still 0.
+    #
+    # Scoped to STIMQuantumState + DictNoiseModel only (per request).
+    @pytest.mark.parametrize("num_qec_rounds", [1, 2])
+    @pytest.mark.parametrize("data_qubit", [f"D{i+3}" for i in range(7)])
+    @pytest.mark.parametrize("error_gate", ["Gzpi", "Gypi"])
+    def test_logical_meas_no_pauli_frame_overcorrection(
+        self, error_gate, data_qubit, num_qec_rounds
+    ):
+        # A physical single-qubit error on one data qubit. ``Gzpi``/``Gypi``
+        # both contain a Z component, which commutes with the logical Z-basis
+        # measurement and so must not change the logical outcome.
+        self._assert_single_error_corrected(
+            measurement_basis="Z",
+            error_gate=error_gate,
+            data_qubit=data_qubit,
+            num_qec_rounds=num_qec_rounds,
+        )
+
+    # Single-fault correctness: any single-qubit Pauli error on any data qubit
+    # must be corrected by the final logical measurement, with or without QEC
+    # rounds. This locks in the fix to which qubits contribute to the raw
+    # logical outcome (the weight-3 logical representative, consistent with the
+    # ``data_decode`` flip table). In particular it covers the D3 edge case
+    # that previously failed even with zero QEC rounds.
+    #
+    # Scoped to STIMQuantumState + DictNoiseModel only (per request).
+    @pytest.mark.parametrize("num_qec_rounds", [0, 1])
+    @pytest.mark.parametrize("data_qubit", [f"D{i+3}" for i in range(7)])
+    @pytest.mark.parametrize("error_gate", ["Gxpi", "Gypi", "Gzpi"])
+    @pytest.mark.parametrize("measurement_basis", ["Z", "X"])
+    def test_single_data_error_corrected(
+        self, measurement_basis, error_gate, data_qubit, num_qec_rounds
+    ):
+        self._assert_single_error_corrected(
+            measurement_basis=measurement_basis,
+            error_gate=error_gate,
+            data_qubit=data_qubit,
+            num_qec_rounds=num_qec_rounds,
+        )
+
+    def _assert_single_error_corrected(
+        self, measurement_basis, error_gate, data_qubit, num_qec_rounds
+    ):
+        circuit_backend = ListPhysicalCircuit
+        code = codepack_steane.create_qec_code(circuit_backend=circuit_backend)
+        model = codepack_steane.create_ideal_model(
+            self.qubits,
+            gaterep=GateRep.STIM_CIRCUIT_STR,
+            model_backend=DictNoiseModel,
+        )
+
+        error_circ = circuit_backend(
+            [[(error_gate, data_qubit)]], qubit_labels=self.qubits
+        )
+        code.instructions["Injected Data Error"] = (
+            builders.build_physical_circuit_instruction(
+                error_circ, name="Injected Data Error"
+            )
+        )
+
+        stack = [
+            ("Init State", None, (len(self.qubits),), {"qubit_labels": self.qubits}),
+            ("Init Patch Steane", None, ("L0", self.qubits)),
+            ("FT Zero Prep", "L0"),
+        ]
+        # Logical |0> measures to 0 in Z; logical |+> measures to 0 in X.
+        if measurement_basis == "X":
+            stack.append(("H", "L0"))
+        stack.append(("Injected Data Error", "L0"))
+        stack += [("Adaptive QEC", "L0")] * num_qec_rounds
+        stack.append((f"FT Logical {measurement_basis} Measure", "L0"))
+
+        program = QuantumProgram(
+            stack,
+            default_noise_model=model,
+            state_type=STIMQuantumState,
+            patch_types={"Steane": code},
+            name="single-fault correctness",
+        )
+        program_results = program.run()
+        assert (
+            program_results.collect_shot_data("logical_measurement", -1)[0] == 0
+        )
 
     def _test_program(self, program, key, idx):
         noise_injected_programs = fttools.build_discrete_error_injection_programs(

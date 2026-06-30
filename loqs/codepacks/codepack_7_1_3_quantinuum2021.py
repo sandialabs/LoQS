@@ -444,13 +444,20 @@ def create_qec_code(
         measurement_basis: str,
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
-        # Get the logical pauli frame
-        logical_pauli_frame = patches[patch_label].data.get(
-            "logical_pauli_frame", [0, 0]
+        # Get the logical pauli frame. Copy it so the decode below does not
+        # mutate the patch's stored frame in place (cf. QEC_decoder_apply_fn,
+        # which copy-on-writes a new patch).
+        logical_pauli_frame = list(
+            patches[patch_label].data.get("logical_pauli_frame", [0, 0])
+        )
+        # The previously recorded stabilizer syndrome (S_previous), stored by
+        # QEC_decoder_apply_fn as [S1, S2, S3 (X-type), S4, S5, S6 (Z-type)].
+        last_syndrome = patches[patch_label].data.get(
+            "latest_syndrome", [0] * 6
         )
 
         # Compute uncorrected output
-        raw_bitstring = [measurement_outcomes[q][0] for q in data_qubits]
+        raw_bitstring = [measurement_outcomes[q][0] for q in data_qubits[-3:]]
         uncorrected_outcome = sum(raw_bitstring) % 2
 
         plaq_idxs = [[0, 1, 2, 3], [1, 2, 4, 5], [2, 3, 5, 6]]
@@ -469,9 +476,29 @@ def create_qec_code(
                 logical_pauli_frame[pf_idx] ^= 1
 
         # We are correcting the opposite basis as our measurement, because
-        # that is the thing that does not commute/we are sensitive to
-        pf_idx = 1 if measurement_basis == "X" else 0
-        data_decode(classical_syndrome, pf_idx)
+        # that is the thing that does not commute/we are sensitive to.
+        #
+        # A Z-basis measurement reconstructs the Z-type stabilizers (S4-S6,
+        # which detect X errors); their corrections live in pf_idx 1 and the
+        # corresponding stored-syndrome slice is last_syndrome[3:]. An X-basis
+        # measurement reconstructs the X-type stabilizers (S1-S3, which detect
+        # Z errors): pf_idx 0 and last_syndrome[:3]. This matches the
+        # convention used by QEC_decoder_apply_fn.
+        if measurement_basis == "X":
+            pf_idx = 0
+            last_syndrome_slice = last_syndrome[:3]
+        else:
+            pf_idx = 1
+            last_syndrome_slice = last_syndrome[3:]
+
+        # Decode the *difference* against the previously recorded syndrome.
+        # The accumulated logical_pauli_frame already corrects every error
+        # detected up to S_previous, so decoding the absolute reconstructed
+        # syndrome would double-count (over-correct) those errors.
+        classical_syndrome_diff = [
+            c ^ s for c, s in zip(classical_syndrome, last_syndrome_slice)
+        ]
+        data_decode(classical_syndrome_diff, pf_idx)
 
         # Flip if needed based on logical pauli frame
         logical_outcome = uncorrected_outcome ^ logical_pauli_frame[pf_idx]
@@ -481,6 +508,7 @@ def create_qec_code(
                 "logical_measurement": logical_outcome,
                 "uncorrected_measurement": uncorrected_outcome,
                 "classical_syndrome": classical_syndrome,
+                "classical_syndrome_diff": classical_syndrome_diff,
                 "final_logical_pauli_frame": logical_pauli_frame,
             }
         )
@@ -712,7 +740,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         # Update the patch data
         new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
         new_patch.data = copy.deepcopy(patch.data)
-        new_patch.data["last_syndrome"] = (
+        new_patch.data["latest_syndrome"] = (
             unflagged_syndrome  # S becomes the new S_previous
         )
         new_patch.data["logical_pauli_frame"] = logical_pauli_frame
