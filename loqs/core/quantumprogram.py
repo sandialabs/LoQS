@@ -59,6 +59,13 @@ class QuantumProgram(Displayable):
     or patch-based), and default noise model and RNG seeds.
     Once the [](api:run) command has been used, it also contains
     a collection of [](api:History) objects for each shot.
+
+    Examples
+    --------
+    >>> from loqs.core import QuantumProgram
+    >>> prog = QuantumProgram(instruction_stack=[], name="MyProgram")
+    >>> prog.name
+    'MyProgram'
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True

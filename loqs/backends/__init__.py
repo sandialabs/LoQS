@@ -19,6 +19,10 @@ There are three kinds of backends in LoQS: [](api:backends.circuit),
     Instead, try to import from `loqs.backends`, which dynamically checks
     if that backend is available using the below methods.
 
+Examples
+--------
+>>> from loqs.backends import get_available_backends
+>>> list_of_backends = get_available_backends()
 """
 
 from typing import TYPE_CHECKING, Any

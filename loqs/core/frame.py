@@ -38,6 +38,15 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
     The [](api:Frame.log) can be accessed with the key `"log"`,
     and any expired key will instead return the string `"EXPIRED"`
     (although the object could still be retrieved from the underlying Frame._data).
+
+    Examples
+    --------
+    >>> from loqs.core import Frame
+    >>> f = Frame({"qubits": [0, 1, 2]}, log="Init Step")
+    >>> f["qubits"]
+    [0, 1, 2]
+    >>> f.log
+    'Init Step'
     """
 
     _data: dict
@@ -170,6 +179,16 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         -------
         Frame
             A new Frame instance with updated data and log.
+
+        Examples
+        --------
+        >>> from loqs.core import Frame
+        >>> f0 = Frame({"data": 100})
+        >>> f1 = f0.update({"data": 200}, new_log="Updated step")
+        >>> f0["data"]
+        100
+        >>> f1["data"]
+        200
         """
         data = self._data.copy()
         if new_data is not None:

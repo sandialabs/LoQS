@@ -38,6 +38,13 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
     to manipulate patches. Users should be careful to first use [](api:copy)
     to avoid messing up previous [](api:Frame) objects (or use
     [](api:Frame.expire) properly).
+
+    Examples
+    --------
+    >>> from loqs.core.recordables.patchdict import PatchDict
+    >>> pd = PatchDict()
+    >>> len(pd)
+    0
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True

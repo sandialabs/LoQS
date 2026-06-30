@@ -45,6 +45,32 @@ class History(Sequence[Frame], SeqCastable, Displayable):
     The intention is to provide a list-like object where existing
     [](api:Frame) objects cannot be changed or removed,
     and insertion can only occur at the end of the list.
+
+    Examples
+    --------
+    >>> from loqs.core import History, Frame
+    >>> # Define History with 'state' as propagating and 'temp' as expiring
+    >>> hist = History(expiring_keys=["temp"], propagating_keys=["state"])
+    >>> f0 = Frame({"state": [1, 0], "temp": "alpha"})
+    >>> hist.append(f0)
+    >>> len(hist)
+    1
+    >>> hist[0]["temp"]
+    'alpha'
+    >>> # When appending f1 without 'state', it propagates forward from f0
+    >>> f1 = Frame({"temp": "beta"})
+    >>> hist.append(f1)
+    >>> hist[1]["state"]
+    [1, 0]
+    >>> # 'temp' from f0 is now expired since we have a new frame.
+    >>> # We catch the warning raised during access:
+    >>> import warnings
+    >>> with warnings.catch_warnings(record=True) as w:
+    ...     val = hist[0]["temp"]
+    >>> val
+    'alpha'
+    >>> str(w[0].message)
+    'Accessing an expired object temp. The returned object may actually belong to a future frame.'
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
@@ -280,6 +306,13 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         list | object
             The collected data. If indices is an int, returns a single object.
             Otherwise, returns a list of objects.
+
+        Examples
+        --------
+        >>> from loqs.core import History, Frame
+        >>> hist = History(history=[Frame({"val": 10}), Frame({"val": 20}), Frame({"val": 30})])
+        >>> hist.collect_data("val", indices=[0, 2])
+        [10, 30]
         """
 
         if isinstance(indices, int):

@@ -35,6 +35,15 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
     qubits) is returned.
     It also stores the [](api:PauliFrame) for the data qubits, as this
     is the natural place for it.
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.recordables import QECCodePatch
+    >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+    >>> patch = QECCodePatch(code=code, qubits=["Q0", "Q1"], pauli_frame="II")
+    >>> patch.qubits
+    ['Q0', 'Q1']
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True

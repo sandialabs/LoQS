@@ -39,6 +39,13 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
 
     This is intended to be an immutable list of [](api:InstructionLabel)
     objects to execute. Stack manipulations return a modified copy.
+
+    Examples
+    --------
+    >>> from loqs.core.instructions import InstructionStack
+    >>> stack = InstructionStack([("Init State", "L0")])
+    >>> len(stack)
+    1
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True

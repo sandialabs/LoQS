@@ -31,4 +31,11 @@ This is primarily for testing, such that users can immediately use this as the `
 
     The codepack API is subject to change; or rather, there currently is no enforced API,
     and one may be created in the future.
+
+Examples
+--------
+>>> from loqs.codepacks import codepack_trivial_counter as cp
+>>> code = cp.create_qec_code()
+>>> code.name
+'Trivial Counter Code'
 """

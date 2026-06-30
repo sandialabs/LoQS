@@ -26,6 +26,13 @@ class PauliFrame(SeqCastable, Displayable):
     Commonly this is used to track data errors without applying
     active correction, and can be used in conjunction with
     [](api:MeasurementOutcomes) to provide inferred outcomes.
+
+    Examples
+    --------
+    >>> from loqs.core.recordables.pauliframe import PauliFrame
+    >>> pf = PauliFrame(["D0", "D1", "D2"], initial_paulis="IXI")
+    >>> pf.pauli_frame
+    ['I', 'X', 'I']
     """
 
     qubit_labels: list[str | int]

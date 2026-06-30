@@ -30,6 +30,13 @@ class QECCode(Displayable):
     All qubit-specific quantities are defined with respect to a set of
     template qubits that can then be replaced with real qubit labels
     at runtime.
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+    >>> code.name
+    '(Unnamed QEC code)'
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True

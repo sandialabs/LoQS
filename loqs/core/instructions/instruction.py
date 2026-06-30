@@ -144,7 +144,16 @@ class Instruction(Displayable):
        notebook cell. There are two solutions to this: you can provide
        the plain text versions during object construction, or you
        can keep your function definitions in a separate script.
-       The latter is preferred, but both should work.
+        The latter is preferred, but both should work.
+
+    Examples
+    --------
+    >>> from loqs.core import Instruction, Frame
+    >>> def my_apply(state):
+    ...     return Frame({"state": state})
+    >>> inst = Instruction(name="MyInstruction", apply_fn=my_apply, serialized_apply_fn="my_apply")
+    >>> inst.name
+    'MyInstruction'
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True

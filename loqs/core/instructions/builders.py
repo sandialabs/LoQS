@@ -120,6 +120,24 @@ def build_composite_instruction(
     Returns
     -------
         The built composite instruction
+
+    Examples
+    --------
+    >>> from loqs.core.instructions import InstructionStack
+    >>> from loqs.core.instructions.builders import build_composite_instruction
+    >>> inst = build_composite_instruction(
+    ...     instructions=[("DummyGate1", "L0"), ("DummyGate2", "L0")],
+    ...     name="Composite"
+    ... )
+    >>> stack = InstructionStack([])
+    >>> f = inst.apply(patch_label="L0", stack=stack, instructions=inst.data["instructions"])
+    >>> f_stack = f["stack"]
+    >>> len(f_stack)
+    2
+    >>> f_stack[0].inst_label
+    'DummyGate1'
+    >>> f_stack[1].inst_label
+    'DummyGate2'
     """
 
     def apply_fn(
@@ -269,6 +287,39 @@ def build_lookup_decoder_instruction(
     Returns
     -------
         The built lookup table decoder instruction
+
+    Examples
+    --------
+    >>> from loqs.core import History, QECCode
+    >>> from loqs.core.recordables import PatchDict, MeasurementOutcomes, QECCodePatch
+    >>> from loqs.core.instructions.builders import build_lookup_decoder_instruction
+    >>> inst = build_lookup_decoder_instruction(
+    ...     lookup_table={"0": "I"},
+    ...     syndrome_labels=[("A0", -1, 0)],
+    ...     raw_syndrome_frame_key="raw_syn",
+    ...     name="LookupDecoder"
+    ... )
+    >>> inst.name
+    'LookupDecoder'
+    >>> code = QECCode({}, ["Q0"], ["Q0"])
+    >>> patch = QECCodePatch(code, ["Q0"], "I")
+    >>> patches = PatchDict({"L0": patch})
+    >>> outcomes = MeasurementOutcomes({"A0": [0]})
+    >>> history = History()
+    >>> f = inst.apply(
+    ...     patch_label="L0",
+    ...     lookup_table=inst.data["lookup_table"],
+    ...     syndrome_labels=inst.data["syndrome_labels"],
+    ...     raw_syndrome_frame_key=inst.data["raw_syndrome_frame_key"],
+    ...     diff_prev_syndrome=inst.data["diff_prev_syndrome"],
+    ...     patches=patches,
+    ...     syndrome_outcomes=outcomes,
+    ...     history=history
+    ... )
+    >>> f["decoded_error"]
+    'I'
+    >>> f["syndrome_diff"]
+    [0]
     """
 
     # Sanity check: Have specified a syndrome label for each element of lookup_table
@@ -472,6 +523,24 @@ def build_object_builder_instruction(
     Returns
     -------
         The built object builder instruction
+
+    Examples
+    --------
+    >>> from loqs.core.instructions.builders import build_object_builder_instruction
+    >>> class MyClass:
+    ...     def __init__(self, x: int):
+    ...         self.x = x
+    >>> inst = build_object_builder_instruction(
+    ...     frame_key="my_obj",
+    ...     obj_class=MyClass,
+    ...     name="MyBuilder"
+    ... )
+    >>> inst.name
+    'MyBuilder'
+    >>> f = inst.apply(frame_key="my_obj", obj_class=MyClass, x=42)
+    >>> obj = f["my_obj"]
+    >>> obj.x
+    42
     """
 
     # This is also an odd apply_fn because we do not know the args a priori
@@ -564,6 +633,21 @@ def build_patch_builder_instruction(
     Returns
     -------
         The built patch builder instruction
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.instructions.builders import build_patch_builder_instruction
+    >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+    >>> inst = build_patch_builder_instruction(qec_code=code, name="PatchBuilder")
+    >>> inst.name
+    'PatchBuilder'
+    >>> f = inst.apply(patch_label="L0", qubits=["Q0", "Q1"], qec_code=code, patches=None)
+    >>> patches = f["patches"]
+    >>> "L0" in patches
+    True
+    >>> patches["L0"].qubits
+    ['Q0', 'Q1']
     """
 
     # Standard apply_fn construction
@@ -655,6 +739,21 @@ def build_patch_remover_instruction(
     Returns
     -------
         The built patch remover instruction
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.recordables import PatchDict, QECCodePatch
+    >>> from loqs.core.instructions.builders import build_patch_remover_instruction
+    >>> inst = build_patch_remover_instruction(name="Remove Patch")
+    >>> inst.name
+    'Remove Patch'
+    >>> code = QECCode({}, ["q0"], ["q0"])
+    >>> patch = QECCodePatch(code, ["Q0"], "I")
+    >>> patches = PatchDict({"L0": patch})
+    >>> f = inst.apply(patch_label="L0", patches=patches)
+    >>> "L0" in f["patches"]
+    False
     """
 
     def apply_fn(
@@ -721,6 +820,21 @@ def build_patch_permute_instruction(
     Returns
     -------
         The built patch permuter instruction
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.recordables import PatchDict, QECCodePatch
+    >>> from loqs.core.instructions.builders import build_patch_permute_instruction
+    >>> inst = build_patch_permute_instruction(mapping={"Q0": "Q1", "Q1": "Q0"}, name="Permuter")
+    >>> inst.name
+    'Permuter'
+    >>> code = QECCode({}, ["q0", "q1"], ["q0"])
+    >>> patch = QECCodePatch(code, ["Q0", "Q1"], "II")
+    >>> patches = PatchDict({"L0": patch})
+    >>> f = inst.apply(patch_label="L0", mapping={"Q0": "Q1", "Q1": "Q0"}, patches=patches)
+    >>> f["patches"]["L0"].qubits
+    ['Q1', 'Q0']
     """
 
     # Standard apply_fn construction
@@ -846,6 +960,31 @@ def build_physical_circuit_instruction(
     Returns
     -------
         The built physical circuit instruction
+
+    Examples
+    --------
+    >>> from loqs.backends import ListPhysicalCircuit as PhysCirc, DictNoiseModel, NumpyStatevectorQuantumState, GateRep, InstrumentRep
+    >>> from loqs.core.recordables import PatchDict
+    >>> from loqs.core.instructions.builders import build_physical_circuit_instruction
+    >>> circ = PhysCirc(circuit=[], qubit_labels=[0, 1])
+    >>> inst = build_physical_circuit_instruction(circuit=circ, name="PhysCirc")
+    >>> inst.name
+    'PhysCirc'
+    >>> model = DictNoiseModel(({}, {}), gatereps=[GateRep.UNITARY], instreps=[InstrumentRep.ZBASIS_PROJECTION])
+    >>> state = NumpyStatevectorQuantumState(2, qubit_labels=[0, 1])
+    >>> patches = PatchDict()
+    >>> f = inst.apply(
+    ...     model=model,
+    ...     circuit=circ,
+    ...     state=state,
+    ...     inplace=True,
+    ...     error_injections=None,
+    ...     pauli_frame_update=None,
+    ...     patch_label="L0",
+    ...     patches=patches
+    ... )
+    >>> complex(f["state"].state[0, 0])
+    (1+0j)
     """
 
     # Standard apply_fn construction
@@ -1072,6 +1211,29 @@ def build_repeat_until_success_instruction(
     Returns
     -------
         The built repeat-until-success instruction
+
+    Examples
+    --------
+    >>> from loqs.core.instructions import InstructionStack
+    >>> from loqs.core.instructions.builders import build_repeat_until_success_instruction
+    >>> inst = build_repeat_until_success_instruction(instructions=[], rus_key="success", name="RUS")
+    >>> inst.name
+    'RUS'
+    >>> stack = InstructionStack([])
+    >>> f = inst.apply(
+    ...     observed=True,
+    ...     expected=True,
+    ...     rus_key="success",
+    ...     patch_label="L0",
+    ...     repeat_count=1,
+    ...     instructions=[],
+    ...     max_repeats=10,
+    ...     stack=stack
+    ... )
+    >>> f["rus_success"]
+    True
+    >>> f["total_rus_count"]
+    1
     """
 
     def apply_fn(

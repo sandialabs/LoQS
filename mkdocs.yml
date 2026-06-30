@@ -1,10 +1,18 @@
 site_name: LoQS Documentation
 
 nav:
-  - Home: markdown/index.md
-  - Getting Started: markdown/getting-started.md
+  - Home: index.md
+  - Getting Started:
+      - Quickstart Guide: markdown/getting-started.md
+      - High-level Overview: markdown/overview.md
+      - Example Workflow: markdown/workflow.md
   - Tutorials:
-      - Test: notebooks/test-notebook.md
+      - Build Instruction: markdown/buildinstruction.md
+      - Build QECCode: markdown/buildqeccode.md
+  - Examples:
+      - Run LoGST: markdown/runlogst.md
+      - FT Tests: markdown/fttests.md
+      - Time-Dependent Model: markdown/timedepmodel.md
   - Reference:
       - Dev Guide: markdown/devguide.md
       - API Documentation: /reference

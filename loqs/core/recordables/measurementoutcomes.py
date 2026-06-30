@@ -37,6 +37,13 @@ class MeasurementOutcomes(
     outcome values. These can represent both raw measurement outcomes
     or "inferred" outcomes where a [](api:PauliFrame) has been applied
     [](api:get_inferred_outcomes)).
+
+    Examples
+    --------
+    >>> from loqs.core.recordables import MeasurementOutcomes
+    >>> outcomes = MeasurementOutcomes({"A0": [0, 1, 0]})
+    >>> outcomes["A0"]
+    [0, 1, 0]
     """
 
     _SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
