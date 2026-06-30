@@ -13,7 +13,7 @@ jupyter:
 
 # Tutorial Notebook
 
-This notebook is stored as Markdown and converted to `.ipynb` for JupyterLite.
+This notebook is stored as Markdown.
 
 ## A simple calculation
 

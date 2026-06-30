@@ -4,7 +4,7 @@ nav:
   - Home: markdown/index.md
   - Getting Started: markdown/getting-started.md
   - Tutorials:
-      - Test: lite/lab/index.html?path=test-notebook.md
+      - Test: notebooks/test-notebook.md
   - Reference:
       - Dev Guide: markdown/devguide.md
       - API Documentation: /reference
