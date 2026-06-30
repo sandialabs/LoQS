@@ -37,7 +37,7 @@ All "standard" Instructions can be created using the builders in `loqs.core.inst
 
 Let's take a look at the physical circuit instruction builder docstring (also accessible in built docs, but shown here for completeness):
 
-```python
+```{code-cell} ipython3
 import loqs.core.instructions.builders as ib
 
 print(ib.build_physical_circuit_instruction.__doc__)
@@ -57,7 +57,7 @@ Let's start with the "higher level" modification first: It is possible to overri
 
 For example, consider we have the following QuantumProgram:
 
-```python
+```{code-cell} ipython3
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
 from loqs.core import Frame, History, InstructionStack, PatchDict, QuantumProgram
 from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel
@@ -91,7 +91,7 @@ Now, let's assume that we want to simulate a case where the logical idle is supe
 
 Let's check what the actual circuit is, so that we know which *physical* operations need to be adjusted:
 
-```python
+```{code-cell} ipython3
 print(steane_code.instructions["I"])
 ```
 
@@ -99,14 +99,14 @@ We see that this instruction is just Gi on the data qubits. Let's tweak the nois
 
 We could build a full noise model from scratch like in the previous tutorial, but we can also make spot changes since we know how implicit models work in pyGSTi.
 
-```python
+```{code-cell} ipython3
 depol_Gi_model_pygsti = ideal_model.model.copy()
 
 # These are the gates that are used when constructing layers
 depol_Gi_model_pygsti.operation_blks["gates"]
 ```
 
-```python
+```{code-cell} ipython3
 # Replace the Gi gate and pre-computed layers
 import pygsti.modelmembers.operations as ops
 
@@ -137,7 +137,7 @@ We have two options: We could store the model in the Instruction.data, so that e
 
 ### New Instruction that always depolarizes
 
-```python
+```{code-cell} ipython3
 # Option 1: Making every I instruction use this noise model
 depol_I = steane_code.instructions["I"].copy()
 depol_I.data["model"] = depol_Gi_model
@@ -150,7 +150,7 @@ print(depol_I)
 steane_code.instructions["I (depolarized)"] = depol_I
 ```
 
-```python
+```{code-cell} ipython3
 # BUG: Still slow here if running I after running I (depolarized)
 
 # Finally, we can make a new stack
@@ -182,7 +182,7 @@ So this approach would look like:
 
 
 
-```python
+```{code-cell} ipython3
 # Make a new stack with spot change
 stack3 = InstructionStack([
     ("FT Zero Prep", "L0"),
@@ -292,7 +292,7 @@ Visualization in progress, but the workflow is as follows:
 
 The Adaptive QEC instruction is actually just a composite instruction of steps (1) and (2). That means the following two stacks are equivalent:
 
-```python
+```{code-cell} ipython3
 stack4 = InstructionStack([
     ("FT Zero Prep", "L0"),
     ("Adaptive QEC", "L0"),
@@ -312,7 +312,7 @@ stack5 = InstructionStack([
 With that in mind, let's inject an error into Flagged Parallel S1-S5-S6 and make sure the feed-forward is working properly.
 Here is the circuit:
 
-```python
+```{code-cell} ipython3
 print(steane_code.instructions["Flagged Parallel S1-S5-S6 Check"])
 ```
 
@@ -328,7 +328,7 @@ It turns out for our implementation of this circuit, this location would be at l
 
 So this error injection would be (4, "Gxpi", qubits.index("A0")).
 
-```python
+```{code-cell} ipython3
 # Regular program but with X injected during first flagged checks
 stack6 = InstructionStack([
     ("FT Zero Prep", "L0"),
@@ -366,10 +366,10 @@ For the first time, let's print the entire shot history. This is EXTREMELY verbo
 2. In that same frame, look at the measurement_outcomes. Is this the expected result?
 2. The next frame is the result of the feed-forward. Look at the output `stack`. Are the next operations what you expected?
 
-```python
+```{code-cell} ipython3
 #print(results6.shot_histories[0])
 ```
 
-```python
+```{code-cell} ipython3
 
 ```

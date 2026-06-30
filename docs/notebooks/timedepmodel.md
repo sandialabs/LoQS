@@ -17,7 +17,7 @@ kernelspec:
 
 Playground for time-dependent/updateable model work.
 
-```python
+```{code-cell} ipython3
 from collections import Counter
 
 import loqs
@@ -33,7 +33,7 @@ from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 
 Working with time-dependent models requires a few modifications to the normal workflow. To see the differences, first let's see the "bog standard" workflow for time-independent models.
 
-```python
+```{code-cell} ipython3
 code_5q = codepack_5_1_3.create_qec_code()
 
 qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
@@ -66,7 +66,7 @@ A few note-worthy things about how we constructed this program:
     - We also have to tell the program what objects to use for those using ``state_type`` and ``patch_types``.
 2. We are providing the noise model only with ``default_noise_model``. This is usually fine behavior, and is actually not a deal-breaker for time-dependent but not updateable model. If we want to update the model though, it needs to be available in each Frame instead.
 
-```python
+```{code-cell} ipython3
 program.run(10)
 Counter(program.collect_shot_data("logical_measurement", -1))
 ```
@@ -81,7 +81,7 @@ The crux of the difference is that we want to make the model an "expiring" and "
 
 While we are making a custom ``History`` with the model set up like we need, we might as well shift the other initialization steps too to the initial ``History`` as well.
 
-```python
+```{code-cell} ipython3
 code_5q = codepack_5_1_3.create_qec_code()
 
 qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
@@ -117,7 +117,7 @@ program2 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program2.run(10)
 Counter(program2.collect_shot_data("logical_measurement", -1))
 ```
@@ -128,7 +128,7 @@ With all the ``LoQS`` basics covered for using time-dependent/updateable models,
 
 First, let's just make our model time-dependent and set some default durations for all our gates. We would normally do this in the nosie model constructor, but we can modify one on the fly as well. Currently, only the ``PyGSTiNoiseModel`` supports time-dependent operations, so we ensure that our starting noise model uses this backend.
 
-```python
+```{code-cell} ipython3
 # PyGSTiNoiseModel is currently the default, but this future-proofs us
 qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
 model_td1 = codepack_5_1_3.create_ideal_model(qubits, model_backend=PyGSTiNoiseModel)
@@ -137,7 +137,7 @@ model_td1 = codepack_5_1_3.create_ideal_model(qubits, model_backend=PyGSTiNoiseM
 model_td1.use_time_dependence = True
 ```
 
-```python
+```{code-cell} ipython3
 initial_history_td1 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
@@ -164,7 +164,7 @@ program_td1 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program_td1.run(10)
 ```
 
@@ -174,7 +174,7 @@ Well, under the hood, the model is trying to compute the time of each gate/layer
 
 The fallback is to use the ``default_gate_durations`` and ``default_instrument_durations`` dictionaries to look up the durations, but we have not provided those either! Let's fix that.
 
-```python
+```{code-cell} ipython3
 #  We can instead just provide defaults by name instead of (name, qubit) Label
 # Let's say that all all Z gates take 0 units of time because they are done virtually,
 # 1Q gates take 1 unit of time, 2Q gates take 10 units of time, and measurements take 100 units of time
@@ -199,7 +199,7 @@ model_td1.default_instrument_durations = {
 }
 ```
 
-```python
+```{code-cell} ipython3
 # And let's try to run the program again
 program_td1.run(10)
 Counter(program_td1.collect_shot_data("logical_measurement", -1))
@@ -209,7 +209,7 @@ Ok, but how do we know whether this actually did anything different yet?
 
 Well, internally the model has been keeping track of the time, even though none of our operations use that yet. When a time-dependent model is used, we also print the current simulation time at the end of each instruction to the ``Frame``.
 
-```python
+```{code-cell} ipython3
 program_td1.collect_shot_data("current_model_time", "all")
 ```
 
@@ -219,7 +219,7 @@ As for the time entries, we can also double-check this. The encoding circuit is 
 
 We can verify that this is indeed a property of programs that contain time-dependent models by checking this for one of our time-independent models.
 
-```python
+```{code-cell} ipython3
 program.collect_shot_data("current_model_time", "all")
 ```
 
@@ -236,7 +236,7 @@ But how do we actually define this operation? We can define our own custom PyGST
 
 (For advanced PyGSTi users, OperationFactories are also a common way to do a similar thing. The difference is that an OpFactory takes arguments from the Circuit label to generate the representation. In this case, we don't need to do that -- the model is feeding us the time via `set_time()` so we don't need any additional information.)
 
-```python
+```{code-cell} ipython3
 from copy import deepcopy
 import numpy as np
 
@@ -245,7 +245,7 @@ from pygsti.baseobjs import Label
 from pygsti.modelmembers.operations import DenseOperator, EmbeddedOp
 ```
 
-```python
+```{code-cell} ipython3
 class FlippingIdle(DenseOperator):
     """An idle that gets an X(pi) rotation applied every 134 units."""
     def __init__(self):
@@ -273,38 +273,38 @@ class FlippingIdle(DenseOperator):
 flipping_idle = FlippingIdle()
 ```
 
-```python
+```{code-cell} ipython3
 model_td2 = deepcopy(model_td1)
 # Currently, PyGSTi doesn't like qubit labels that don't start with Q so we have some minor aliasing to do
 D2_qubit = model_td2.model_qubit_aliases["D2"]
 model_td2.gate_dict[Label("Gi", D2_qubit)] = EmbeddedOp(model_td2.model.state_space, [D2_qubit], flipping_idle)
 ```
 
-```python
+```{code-cell} ipython3
 model_td2.current_time = 0
 ```
 
-```python
+```{code-cell} ipython3
 reps = model_td2.get_reps(PyGSTiPhysicalCircuit([("Gi", "D2")]), gatereps=[loqs.backends.GateRep.QSIM_SUPEROPERATOR], instreps=[loqs.backends.InstrumentRep.ZBASIS_PROJECTION])
 pygsti.print_mx(reps[0].rep)
 ```
 
-```python
+```{code-cell} ipython3
 # Let's try after our supposed flip
 model_td2.current_time = 135
 ```
 
-```python
+```{code-cell} ipython3
 reps = model_td2.get_reps(PyGSTiPhysicalCircuit([("Gi", "D2")]), gatereps=[loqs.backends.GateRep.QSIM_SUPEROPERATOR], instreps=[loqs.backends.InstrumentRep.ZBASIS_PROJECTION])
 pygsti.print_mx(reps[0].rep)
 ```
 
-```python
+```{code-cell} ipython3
 # Remember to set back to 0 for simulation
 model_td2.current_time = 0
 ```
 
-```python
+```{code-cell} ipython3
 initial_history_td2 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
@@ -343,11 +343,11 @@ program_td2 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program_td2.run(1)
 ```
 
-```python
+```{code-cell} ipython3
 program_td2.collect_shot_data("logical_measurement", "all", strip_none_entries=True)
 ```
 
@@ -357,7 +357,7 @@ So that is working but obviously it's not a very realistic model. Let's try anot
 
 We'll also set this overrotation error rate as an internal parameter. Doing it this way means that there will be a parameter for us to tune later!
 
-```python
+```{code-cell} ipython3
 import scipy.linalg as sla
 
 class XRotatingIdle(DenseOperator):
@@ -402,13 +402,13 @@ class XRotatingIdle(DenseOperator):
 xrot_8cycle_idle = XRotatingIdle(134*8, 31)
 ```
 
-```python
+```{code-cell} ipython3
 # At t=31, we should be an I
 xrot_8cycle_idle.set_time(31)
 pygsti.print_mx(xrot_8cycle_idle.to_dense())
 ```
 
-```python
+```{code-cell} ipython3
 # At t=31+134*2, we should be an X(pi/2)
 xrot_8cycle_idle.set_time(31+134*2)
 pygsti.print_mx(xrot_8cycle_idle.to_dense())
@@ -417,7 +417,7 @@ pygsti.print_mx(xrot_8cycle_idle.to_dense())
 # but send Y to Z and Z to -Y, i.e. rotate a quarter turn clockwise around the X axis.
 ```
 
-```python
+```{code-cell} ipython3
 # At t=31+134*4, we should be an X(pi)
 xrot_8cycle_idle.set_time(31+134*4)
 pygsti.print_mx(xrot_8cycle_idle.to_dense())
@@ -426,7 +426,7 @@ pygsti.print_mx(xrot_8cycle_idle.to_dense())
 # i.e. a half turn around the X axis.
 ```
 
-```python
+```{code-cell} ipython3
 # At t=31+134*8, we should be an I again
 xrot_8cycle_idle.set_time(31+134*8)
 pygsti.print_mx(xrot_8cycle_idle.to_dense())
@@ -434,14 +434,14 @@ pygsti.print_mx(xrot_8cycle_idle.to_dense())
 
 Ok, great! Now let's run a program and see this rotating around.
 
-```python
+```{code-cell} ipython3
 # Set up our model again, this time with the rotating idle
 model_td3 = deepcopy(model_td1)
 D2_qubit = model_td3.model_qubit_aliases["D2"]
 model_td3.gate_dict[Label("Gi", D2_qubit)] = EmbeddedOp(model_td3.model.state_space, [D2_qubit], xrot_8cycle_idle)
 ```
 
-```python
+```{code-cell} ipython3
 initial_history_td3 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
@@ -466,7 +466,7 @@ program_td3 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program_td3.run(num_shots=100)
 ```
 
@@ -475,14 +475,14 @@ We can see this took a little longer as we ran more shots and our program is lon
 The key we are looking for in the frame is just ``"measurement_outcomes"``. This is the default key for... measurement outcomes after a physical circuit ``Instruction`` in LoQS.
 It's our first time interacting with the ``MeasurementOutcome`` object directly, so we'll go through this in a few steps.
 
-```python
+```{code-cell} ipython3
 # We could grab all the measurement outcomes like we were before
 # (Here I'm just using the collect_data on a single History for a shot, same syntax as collect_shot_data on the QuantumProgram)
 shot0_mos = program_td3.shot_histories[0].collect_data("measurement_outcomes", "all", strip_none_entries=True)
 shot0_mos
 ```
 
-```python
+```{code-cell} ipython3
 # What does each of these look like? Well, they are a dict with qubit label keys and list of outcome values.
 # Why a list and not a single outcome? A circuit could have multiple mid-circuit measurements on the same qubit,
 # so we default to storing it as a list.
@@ -493,7 +493,7 @@ What have we actually read off here? Well, it turns out that in the 5 qubit code
 
 Let's compute those for each logical measurement using some list comprehensions.
 
-```python
+```{code-cell} ipython3
 # As a side note, this is basically exactly what the last instruction that populates "logical_measurement" is doing
 def compute_logical_outcome(measurement_outcomes):
     data_outcomes = [v[0] for v in measurement_outcomes.values()]
@@ -507,19 +507,19 @@ Obviously it's a little hard to tell from a single shot, but we roughly see that
 
 Of course, I've selected a seed such that this is true for explanatory purposes here, but we can average over all the shots to see this trend is carried out.
 
-```python
+```{code-cell} ipython3
 outcomes_td3 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
     for shot_mos in program_td3.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
 ]
 ```
 
-```python
+```{code-cell} ipython3
 mean_outcomes_td3 = np.mean(outcomes_td3, axis=0)
 mean_outcomes_td3
 ```
 
-```python
+```{code-cell} ipython3
 # Sweet! We start at 1, decay to 0 (hitting 50/50 along the way), and recur back to 1!
 # Let's plot it against the ideal case (cos with a period of 2pi/(8*134) and a shift of 31) for funsies.
 # The 0.5 and shift are to account for the fact that our outcome goes from 1->0 instead of 1->-1
@@ -540,7 +540,7 @@ Finally we get to the crux of the capability we want: to be able to update the m
 
 Before we dive into the examples, let's see how we can tweak the model parameters.
 
-```python
+```{code-cell} ipython3
 model_td4 = deepcopy(model_td3)
 
 # This is a LoQS model. We can reach in to get the pyGSTi model with .model
@@ -548,7 +548,7 @@ model_td4 = deepcopy(model_td3)
 print(model_td4.model.to_vector())
 ```
 
-```python
+```{code-cell} ipython3
 # We can also ask for labels
 # NOTE: If you are using pyGSTi pre-0.9.13, this needs to be called after model.to_vector() or model.num_params
 # That should be fixed in 0.9.13, and you can ask for these parameter labels before anything else
@@ -558,13 +558,13 @@ model_td4.model.parameter_labels
 # That's a pyGSTi restriction we might resolve later
 ```
 
-```python
+```{code-cell} ipython3
 # We can update the parameters by calling from_vector()
 # In this case, let's half the period
 model_td4.model.from_vector([1072/2, 31])
 ```
 
-```python
+```{code-cell} ipython3
 initial_history_td4 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
@@ -583,11 +583,11 @@ program_td4 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program_td4.run(100)
 ```
 
-```python
+```{code-cell} ipython3
 # Let's make an updated plot
 outcomes_td4 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
@@ -623,7 +623,7 @@ One obvious thing that is missing is that we only care about certain qubits in t
 
 With all of that conceptually laid out, let's see what this `Instruction` actually looks like.
 
-```python
+```{code-cell} ipython3
 from loqs.core import Frame, Instruction
 from loqs.core.recordables import MeasurementOutcomes
 from loqs.backends.model import BaseNoiseModel, PyGSTiNoiseModel
@@ -660,7 +660,7 @@ onetime_instruction = Instruction(
 
 Now we have our `Instruction`, but how do we use it? This is where we can use the `global_instructions` argument of the QuantumProgram that we have thus far been not utilizing to make our `Instruction` available during runtime, without having to change the codepack.
 
-```python
+```{code-cell} ipython3
 global_instructions_td5 = {
     "One-time Update": onetime_instruction
 }
@@ -693,13 +693,13 @@ program_td5 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program_td5.run(100)
 ```
 
 Sweet! Our program ran. But did it do the right thing? Let's remake our plot. If we are updating the model successfully, we should see a break from our oscillatory behavior after the 5th cycle and a return back to (nearly) 1 as our logical output.
 
-```python
+```{code-cell} ipython3
 # Let's make an updated plot
 outcomes_td5 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
@@ -720,7 +720,7 @@ plt.show()
 
 Probably a closer to realistic option is that we are doing smaller updates all the time. Let's have our `Instruction` realize try to play catch up by shifting the start of the oscillation, but maybe do that imperfectly. This time, maybe we only need the last measurement outcome, so our parameter priority/aliases can be simplified a bit.
 
-```python
+```{code-cell} ipython3
 def continuous_apply_fn(
     measurement_outcomes: int,
     model: BaseNoiseModel,
@@ -746,7 +746,7 @@ continuous_instruction = Instruction(
 )
 ```
 
-```python
+```{code-cell} ipython3
 global_instructions_td6 = {
     "Continuous Update": continuous_instruction
 }
@@ -779,11 +779,11 @@ program_td6 = QuantumProgram(
 )
 ```
 
-```python
+```{code-cell} ipython3
 program_td6.run(100)
 ```
 
-```python
+```{code-cell} ipython3
 # Let's make an updated plot
 outcomes_td6 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
@@ -800,6 +800,6 @@ plt.ylabel("Avg. Logical Outcome")
 plt.show()
 ```
 
-```python
+```{code-cell} ipython3
 
 ```

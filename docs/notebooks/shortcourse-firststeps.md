@@ -42,11 +42,11 @@ Where most pyGSTi examples start with a modelpack, we'll start with a codepack. 
 
 I'm going to use the Steane code here, but feel free to go through and try this with the 5Q code later for extra credit.
 
-```python
+```{code-cell} ipython3
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
 ```
 
-```python
+```{code-cell} ipython3
 # We can print the module's docstring to get more information on the codepack
 # This is the same as what is in the documentation (with less nice formatting)
 print(codepack_Steane.__doc__)
@@ -56,7 +56,7 @@ Codepacks offer two things: a QECCode and an ideal physical noise model. Let's e
 
 In order to define our physical noise model, we must make a few choices: qubit labels, model backend, and gate/instrument/measurement representations.
 
-```python
+```{code-cell} ipython3
 # Let's check what our available backends are
 from loqs.backends import get_available_backends
 get_available_backends()
@@ -65,7 +65,7 @@ get_available_backends()
 # If you don't, reinstall with loqs[pygsti,quantumsim] (or `-e ."[pygsti,quantumsim]"`) at least and check again
 ```
 
-```python
+```{code-cell} ipython3
 # Let's define qubits for a single Quantinuum-style Steane patch: 7 data qubits, 3 aux qubits
 qubits = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
 
@@ -79,7 +79,7 @@ ideal_model = codepack_Steane.create_ideal_model(qubits=qubits, model_backend=Py
 
 The QECCode creation function also has several options. For the purposes of this tutorial, we'll just explicitly set the circuit backend as a reminder that it's there.
 
-```python
+```{code-cell} ipython3
 from loqs.backends import PyGSTiPhysicalCircuit
 
 steane_code = codepack_Steane.create_qec_code(circuit_backend=PyGSTiPhysicalCircuit)
@@ -87,7 +87,7 @@ steane_code = codepack_Steane.create_qec_code(circuit_backend=PyGSTiPhysicalCirc
 
 Before we get too far, let's see what Instructions are available to us:
 
-```python
+```{code-cell} ipython3
 #steane_code.instructions
 # Or displayed more compactly:
 list(steane_code.instructions.keys())
@@ -101,7 +101,7 @@ Let's start simple: Let's do a state preservation experiment!
 
 In order to do this, we need to create an initial History and set up an InstructionStack.
 
-```python
+```{code-cell} ipython3
 from loqs.core import Frame, History, InstructionStack, PatchDict
 from loqs.backends import NumpyStatevectorQuantumState, QSimQuantumState
 
@@ -129,7 +129,7 @@ stack = InstructionStack([
 
 And finally, we are ready to run some shots!
 
-```python
+```{code-cell} ipython3
 from loqs.core import QuantumProgram
 
 program1 = QuantumProgram(
@@ -148,11 +148,11 @@ We could print the full History for each shot, but the results object has some c
 There are some caveats: To use the collation tools effectively, you have to have some idea of what is in the Frames that you want to check.
 In our case, all LoQS codepacks currently include logical_measurement in measurement Instructions.
 
-```python
+```{code-cell} ipython3
 print(results1.shot_histories[0])
 ```
 
-```python
+```{code-cell} ipython3
 results1.collect_shot_data(
     key="logical_measurement", # key in the Frame,
     indices=-1, # Check the last frame of each shot,

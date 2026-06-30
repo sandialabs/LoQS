@@ -17,26 +17,26 @@ kernelspec:
 
 ## Step 1: Generate a GST design
 
-```python
+```{code-cell} ipython3
 import pygsti
 from pygsti.modelpacks import smq1Q_XZ as modelpack
 ```
 
-```python
+```{code-cell} ipython3
 gst_design = modelpack.create_gst_experiment_design(max_max_length=16, qubit_labels=["Q0"])
 gst_model = modelpack.target_model(qubit_labels=["Q0"]) # 1 physical qubit model
 ```
 
 ## Step 2: Convert each `Circuit` into a `QuantumProgram`
 
-```python
+```{code-cell} ipython3
 from loqs.backends.circuit import PyGSTiPhysicalCircuit
 from loqs.backends.state import QSimQuantumState
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack
 from loqs.tools import pygstitools as pt
 ```
 
-```python
+```{code-cell} ipython3
 qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
 
 ideal_model = codepack.create_ideal_model(qubits) # 7 physical qubit model for simulating 1 logical qubit
@@ -49,7 +49,7 @@ program_kwargs = {
 }
 ```
 
-```python
+```{code-cell} ipython3
 physical_to_logical = {
     "rho0": [
         ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
@@ -70,11 +70,11 @@ physical_to_logical = {
 }
 ```
 
-```python
+```{code-cell} ipython3
 programs = pt.convert_edesign_to_programs(gst_design, gst_model, physical_to_logical, **program_kwargs)
 ```
 
-```python
+```{code-cell} ipython3
 len(gst_design.all_circuits_needing_data) == len(programs)
 ```
 
@@ -82,14 +82,14 @@ len(gst_design.all_circuits_needing_data) == len(programs)
 
 This takes the place of a `pygsti.data.simulate_data`
 
-```python
+```{code-cell} ipython3
 for program in programs:
     program.run(num_shots=10)
 ```
 
 ## Step 4: Convert this to a pyGSTi dataset
 
-```python
+```{code-cell} ipython3
 ds = pt.convert_run_programs_to_dataset(gst_design, programs)
 ```
 

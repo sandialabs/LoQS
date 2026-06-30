@@ -22,7 +22,7 @@ Now, let's add some stochastic noise to see how things change up! There are seve
 
 We follow a very similar pattern from the previous notebook for setting up our program:
 
-```python
+```{code-cell} ipython3
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
 from loqs.core import Frame, History, InstructionStack, PatchDict, QuantumProgram
 from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel, QSimQuantumState
@@ -46,7 +46,7 @@ stack = InstructionStack([
 
 However, instead of calling the codepack's ideal model creation function, let's pattern match off that function but add some noise like we do in pyGSTi:
 
-```python
+```{code-cell} ipython3
 # PyGSTi models expect qubit labels to start with Q, so we define these here
 # LoQS will take care of aliasing between the two sets of qubit labels
 model_qubits = [f"Q{i}" for i in range(len(qubits))]
@@ -89,7 +89,7 @@ stochastic_model = PyGSTiNoiseModel(stochastic_model_pygsti, qubits)
 
 And now we run the program as before, but use our new model:
 
-```python
+```{code-cell} ipython3
 sto_program = QuantumProgram(
     instruction_stack=stack,
     initial_history=init_history,
@@ -100,7 +100,7 @@ sto_program = QuantumProgram(
 sto_results = sto_program.run(num_shots=100)
 ```
 
-```python
+```{code-cell} ipython3
 sto_results.collect_shot_data("logical_measurement", -1, return_counter=True)
 ```
 
@@ -129,7 +129,7 @@ Note: I'm not expecting anything particularly interesting here, but just some pr
 
 Now let's try some coherent noise! We can use the same pspec as above, just change our create_crosstalk_free_model call:
 
-```python
+```{code-cell} ipython3
 coherent_model_pygsti = pygsti.models.create_crosstalk_free_model(
     pspec,
     lindblad_error_coeffs={ # Some overrotations
@@ -143,13 +143,13 @@ coherent_model_pygsti = pygsti.models.create_crosstalk_free_model(
 coherent_model = PyGSTiNoiseModel(coherent_model_pygsti, qubits)
 ```
 
-```python
+```{code-cell} ipython3
 # Let's copy and run
 co_program = QuantumProgram.from_quantum_program(sto_program, default_noise_model=coherent_model)
 co_results = co_program.run(100)
 ```
 
-```python
+```{code-cell} ipython3
 # And check our results
 co_results.collect_shot_data("logical_measurement", -1, return_counter=True)
 ```
