@@ -1,0 +1,16 @@
+name: binder-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - pip:
+    - numpy
+    - scipy
+    - h5py
+    - tqdm>=4
+    - jupyter
+    - notebook
+    - ipykernel
+    - pygsti>=0.9.12
+    - -e .[docs]

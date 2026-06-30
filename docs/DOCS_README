@@ -41,6 +41,7 @@ Key traits:
 
 - Uses Jupytext-compatible Markdown notebooks located under `docs/notebooks/`.
 - Every tutorial features a "Launch Binder" badge, allowing users to open and run interactive notebook environments in the cloud.
+- Includes a dedicated "Short Course" section detailing step-by-step introduction notebooks (from first steps to general and instruction-specific error injections).
 - Navigation is primarily hand-curated (e.g., “Getting Started”, “Developer Zone”).
 - This site is the primary entry point and links to the API site at `/reference/`.
 - It consumes the generated API inventory so author-written `api:` links can be rewritten to `/reference/...`.

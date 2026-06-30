@@ -6,6 +6,10 @@ nav:
       - Quickstart Guide: markdown/getting-started.md
       - High-level Overview: markdown/overview.md
       - Example Workflow: notebooks/workflow.md
+  - Short Course:
+      - First Steps with LoQS: notebooks/shortcourse-firststeps.md
+      - Adding (Global) Model Noise: notebooks/shortcourse-generalnoise.md
+      - Instruction-specific Noise & Error Injection: notebooks/shortcourse-targetednoise.md
   - Tutorials:
       - Build Instruction: notebooks/buildinstruction.md
       - Build QECCode: notebooks/buildqeccode.md
