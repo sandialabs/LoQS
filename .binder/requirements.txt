@@ -1,9 +1,4 @@
-numpy
-scipy
-h5py
-tqdm>=4
 jupyter
 notebook
 ipykernel
-jupytext
-pygsti>=0.9.12
+-e .[pygsti,docs]

@@ -55,6 +55,7 @@ dev = [
 ]
 docs = [
     "griffelib==2.0.2",
+    "jupytext",
     "mkdocs==1.6.1",
     "mkdocs-autorefs~=1.4.4",
     "mkdocs-bibtex==4.4.0",
