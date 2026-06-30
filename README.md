@@ -55,15 +55,23 @@ if you are working off of a feature branch.
 
 ## Documentation
 
-This project uses Marimo notebooks and MkDocs for documentation.
-In order to use these features, do at least a installation of `loqs[docs]`.
+This project uses MkDocs and Jupytext-compatible Markdown notebooks under `docs/notebooks/` for its documentation and interactive tutorials. In order to build or preview the documentation locally, do at least an installation of `loqs[docs]`.
 
-To interactively edit and run the notebooks locally, run: `marimo edit docs`
+### Interactive Cloud Notebooks (Binder)
 
-To build and serve the documentation, run: `python docs/serve.py`
+The tutorials and examples are configured to be run interactively in the cloud using **Binder**! You can open any of the tutorial or example notebooks directly in your browser by clicking the "Launch Binder" badges on the generated documentation pages.
 
-Both commands will launch local servers that can be navigated to in your web browser of choice.
-Marimo will auto-open the browser, while `serve.py` will simply tell you the URL
-(typically `localhost:8000`).
+Alternatively, you can launch the interactive Binder environment for the entire repository here:
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates)
 
-More details are available in [docs/DOCS_README.md](docs/DOCS_README.md).
+### Local Building & Preview
+
+To build and serve the documentation locally, run:
+
+```
+python docs/serve.py
+```
+
+This will launch a local server typically accessible at `http://127.0.0.1:8000/`.
+
+More details on the documentation structure and Jupytext workflow are available in [docs/DOCS_README](docs/DOCS_README).

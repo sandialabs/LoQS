@@ -13,6 +13,8 @@ kernelspec:
 
 # Building a QEC Code
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/buildqeccode.ipynb)
+
 In the previous tutorial, we saw how to create a multi-stage feed-forward instruction.
 A single instruction does not make a QEC code, but luckily not all instructions will take quite as much effort.
 In this tutorial, we show how you can build the majority of a QEC code using the [Instruction builders](/reference/loqs/core/instructions/builders/).

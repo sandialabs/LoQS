@@ -6,12 +6,14 @@ jupytext:
     format_version: 0.13
     jupytext_version: 1.16.1
 kernelspec:
-  display_name: loqs-develop
+  display_name: Python 3
   language: python
   name: python3
 ---
 
 # Testing Fault Tolerance
+
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/fttests.ipynb)
 
 Here we show a few examples of explicitly testing the fault tolerance of the [[5,1,3]] codepack.
 

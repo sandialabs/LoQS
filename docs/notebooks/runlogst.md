@@ -13,6 +13,8 @@ kernelspec:
 
 # Running Logical GST (LoGST)
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/runlogst.ipynb)
+
 ## Step 1: Generate a GST design
 
 ```python

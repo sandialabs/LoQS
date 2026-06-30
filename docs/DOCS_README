@@ -28,27 +28,27 @@ Why this stage exists:
 
 - API reference generation benefits from automation and strict conventions.
 - The API inventory must exist before the main docs build so `api:` links in the narrative docs can be resolved.
-- Separating this stage from the Marimo site avoids mixing interactive tutorial requirements with API generation complexity.
+- Separating this stage from the Jupytext/Binder notebooks avoids mixing interactive tutorial requirements with API generation complexity.
 
 ---
 
-## Stage 2: Main documentation site (Marimo-first)
+## Stage 2: Main documentation site (Jupytext/Binder-first)
 
 Config: `mkdocs.yml`  
 Purpose: User-facing docs, tutorials, and interactive content.
 
 Key traits:
 
-- Uses the `marimo` MkDocs plugin so tutorials can be:
-  - run locally via `marimo edit`, and
-  - published as interactive documentation.
+- Uses Jupytext-compatible Markdown notebooks located under `docs/notebooks/`.
+- Every tutorial features a "Launch Binder" badge, allowing users to open and run interactive notebook environments in the cloud.
 - Navigation is primarily hand-curated (e.g., “Getting Started”, “Developer Zone”).
 - This site is the primary entry point and links to the API site at `/reference/`.
 - It consumes the generated API inventory so author-written `api:` links can be rewritten to `/reference/...`.
 
 Why this stage exists:
 
-- Marimo notebooks are a good format for executable tutorials and interactive docs.
+- Jupytext-synced Markdown notebooks allow maintaining tutorials in plain text (under version control) while maintaining complete Jupyter notebook functionality.
+- Binder integration makes it extremely easy to provision cloud-based, interactive computing spaces without requiring users to install the package and its backend dependencies locally.
 - Keeping this site focused on narrative content avoids turning the docs into an API dump.
 
 ---
@@ -58,7 +58,7 @@ Why this stage exists:
 This split enables both:
 
 1) A high-quality API reference (mkdocstrings) that is automatically generated, complete (including `__init__.py` content), and consistently structured.  
-2) Interactive tutorials (Marimo) without compromising local edit/run workflows.
+2) Interactive tutorials (Jupytext + Binder) without compromising local version-control and documentation-cleanliness workflows.
 
 In practice: the main site is optimized for learning/onboarding; the API site is optimized for lookup/completeness.
 

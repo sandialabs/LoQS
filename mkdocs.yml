@@ -5,14 +5,14 @@ nav:
   - Getting Started:
       - Quickstart Guide: markdown/getting-started.md
       - High-level Overview: markdown/overview.md
-      - Example Workflow: markdown/workflow.md
+      - Example Workflow: notebooks/workflow.md
   - Tutorials:
-      - Build Instruction: markdown/buildinstruction.md
-      - Build QECCode: markdown/buildqeccode.md
+      - Build Instruction: notebooks/buildinstruction.md
+      - Build QECCode: notebooks/buildqeccode.md
   - Examples:
-      - Run LoGST: markdown/runlogst.md
-      - FT Tests: markdown/fttests.md
-      - Time-Dependent Model: markdown/timedepmodel.md
+      - Run LoGST: notebooks/runlogst.md
+      - FT Tests: notebooks/fttests.md
+      - Time-Dependent Model: notebooks/timedepmodel.md
   - Reference:
       - Dev Guide: markdown/devguide.md
       - API Documentation: /reference
