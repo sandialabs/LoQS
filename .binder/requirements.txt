@@ -5,4 +5,5 @@ tqdm>=4
 jupyter
 notebook
 ipykernel
+jupytext
 pygsti>=0.9.12
