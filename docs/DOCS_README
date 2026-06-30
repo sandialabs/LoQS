@@ -49,7 +49,7 @@ Key traits:
 Why this stage exists:
 
 - Jupytext-synced Markdown notebooks allow maintaining tutorials in plain text (under version control) while maintaining complete Jupyter notebook functionality.
-- Binder integration makes it extremely easy to provision cloud-based, interactive computing spaces without requiring users to install the package and its backend dependencies locally.
+- Binder integration makes it extremely easy to provision cloud-based, interactive computing spaces without requiring users to install the package and its backend dependencies locally. Note that to keep plain-text notebooks branch-agnostic under version control, Binder links use a dynamic `{{ binder_branch }}` placeholder that is resolved to the active Git branch name at compile-time by `main_hooks.py`. Furthermore, Binder's `.binder/postBuild` is configured to pre-compile these plain-text notebooks into `.ipynb` files at build-time for an instant run experience.
 - Keeping this site focused on narrative content avoids turning the docs into an API dump.
 
 ---
@@ -240,7 +240,7 @@ You can override the output directory:
   API-site HTML post-processing hook. Cleans marked mkdocstrings blocks, rewrites rendered `api:` links/citations, strips inherited base-render wrappers, and prunes redundant TOC entries.
 
 - `docs_scripts/main_hooks.py`  
-  Main-docs hook: rewrites `api:` links to point to `/reference/...` URLs. Hard-fails on missing/ambiguous targets.
+  Main-docs hook: rewrites `api:` links to point to `/reference/...` URLs, and dynamically replaces `{{ binder_branch }}` with the active Git branch name. Hard-fails on missing/ambiguous targets.
 
 - `docs_scripts/api_inventory.py`  
   Inventory format, progressive-qualification resolver, URL helpers, and shared Markdown `api:` link rewriting used by both hooks/build stages.

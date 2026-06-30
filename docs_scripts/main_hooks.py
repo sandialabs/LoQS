@@ -20,10 +20,26 @@ from docs_scripts.api_inventory import ApiInventory, rewrite_api_links
 
 def on_page_markdown(markdown: str, page, config, files) -> str:
     """
-    Rewrite `[text](api:Target)` into `/reference/...` URLs.
+    Rewrite `[text](api:Target)` into `/reference/...` URLs and resolve Binder branch placeholders.
 
-    Hard build failure on unresolved or ambiguous targets.
+    - Rewrites author-facing `api:` links to `/reference/...` URLs using the generated API inventory.
+    - Hard build failure on unresolved or ambiguous targets.
+    - Dynamically resolves the currently checked-out Git branch name and replaces `{{ binder_branch }}` in every page's markdown.
     """
+    import subprocess
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True,
+            cwd=config["config_dir"],
+        ).strip()
+        if branch == "HEAD":
+            branch = "main"
+    except Exception:
+        branch = "main"
+
+    markdown = markdown.replace("{{ binder_branch }}", branch)
+
     inv_path = Path(config["docs_dir"]) / "_api_inventory.json"
     if not inv_path.exists():
         raise RuntimeError(

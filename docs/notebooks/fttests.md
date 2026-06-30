@@ -13,7 +13,7 @@ kernelspec:
 
 # Testing Fault Tolerance
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/fttests.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/fttests.ipynb)
 
 Here we show a few examples of explicitly testing the fault tolerance of the [[5,1,3]] codepack.
 

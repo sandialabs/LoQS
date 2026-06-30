@@ -13,7 +13,7 @@ kernelspec:
 
 # First Steps with LoQS
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/shortcourse-firststeps.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/shortcourse-firststeps.ipynb)
 
 A rough analogy of pyGSTi $\rightarrow$ LoQS concepts:
 

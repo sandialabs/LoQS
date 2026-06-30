@@ -13,7 +13,7 @@ kernelspec:
 
 # Instruction-specific Noise and Error Injection
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/shortcourse-targetednoise.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/shortcourse-targetednoise.ipynb)
 
 The previous notebook let us change the noise model for the whole program. However, sometimes we want to make more targeted changes: insert a Pauli at a specific location in a circuit, or swap out the noise model for one particular Instruction.
 

@@ -13,7 +13,7 @@ kernelspec:
 
 # Example Workflow
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/workflow.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/workflow.ipynb)
 
 Here we provide an example of a general workflow where we define a `QuantumProgram` based on a "codepack" (i.e. prebuilt `QECCode` object) and an ideal noise model.
 

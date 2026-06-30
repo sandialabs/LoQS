@@ -13,7 +13,7 @@ kernelspec:
 
 # Building a Complex Instruction
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/buildinstruction.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/buildinstruction.ipynb)
 
 While the [instruction builders](/reference/loqs/core/instructions/builders/) can create many of the `Instruction` objects we will need to implement QEC codes, they are not exhaustive.
 This is particularly true for feed-forward operations that process classical data and have branching logic.

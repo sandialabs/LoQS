@@ -13,7 +13,7 @@ kernelspec:
 
 # Adding (Global) Model Noise
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/shortcourse-generalnoise.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/shortcourse-generalnoise.ipynb)
 
 Ok, we ran some programs but they are not very interesting. Let's use some more interesting noise models!
 

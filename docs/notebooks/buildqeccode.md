@@ -13,7 +13,7 @@ kernelspec:
 
 # Building a QEC Code
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates?filepath=docs/notebooks/buildqeccode.ipynb)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/buildqeccode.ipynb)
 
 In the previous tutorial, we saw how to create a multi-stage feed-forward instruction.
 A single instruction does not make a QEC code, but luckily not all instructions will take quite as much effort.
