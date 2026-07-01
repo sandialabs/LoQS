@@ -208,7 +208,7 @@ def create_qec_code(
         "X": "Gxpi",
         "Y": "Gypi",
         "Z": "Gzpi",
-        "H": "Gh",
+        "H circuit": "Gh",
         "S": "Gzmpi2",  # Logical S is really all Sdagger...
         "Sdag": "Gzpi2",  # ...and vice versa
         "I": "Gi",
@@ -231,6 +231,46 @@ def create_qec_code(
             pauli_frame_update=n,
             name=f"Logical {n}",
         )
+    
+    # We need to update the logical Pauli frame if we have run Logical H circuit
+    def H_frame_update_apply_fn(
+        patches: PatchDict,
+        patch_label: str,
+    ):
+        # Get logical frame for patch
+        patch = patches[patch_label]
+        logical_pauli_frame = list(
+            patch.data.get("logical_pauli_frame", [0, 0])
+        )
+
+        # Flip Z/X
+        temp = logical_pauli_frame[0]
+        logical_pauli_frame[0] = logical_pauli_frame[1]
+        logical_pauli_frame[1] = temp
+
+        # Update the patch data
+        new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
+        new_patch.data = copy.deepcopy(patch.data)
+        new_patch.data["logical_pauli_frame"] = logical_pauli_frame
+
+        patches[patch_label] = new_patch
+
+        return Frame(
+            {
+                "new_logical_pauli_frame": logical_pauli_frame,
+                "patches": patches,
+            }
+        )
+
+    instructions["H Frame Update"] = Instruction(
+        H_frame_update_apply_fn,
+        name="Logical H Frame Update"
+    )
+
+    instructions["H"] = builders.build_composite_instruction(
+        [instructions["H Circuit"], instructions["H Frame Update"]],
+        name="Logical H"
+    )
 
     ## QEC
     # This is "First flagged parallel circuit" from Figure 10 of 10.1103/PhysRevX.11.041058
