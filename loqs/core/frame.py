@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`Frame` definition.
+"""[](api:Frame) definition.
 """
 
 from __future__ import annotations
@@ -25,19 +25,28 @@ from loqs.internal.serializable import Serializable
 T = TypeVar("T", bound="Frame")
 
 FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
-"""Things that can be cast to :class:`Frame`."""
+"""Things that can be cast to [](api:Frame)."""
 
 
 class Frame(Mapping[str, object], MapCastable, Displayable):
     """A record of the state of the simulation at a given time.
 
-    The core functionality is a ``dict`` that relates keys to stateful objects.
-    It is highly recommended that users not modify :attr:`._data` directly,
-    and instead use :meth:`.update` to return an updated copy instead.
+    The core functionality is a `dict` that relates keys to stateful objects.
+    It is highly recommended that users not modify Frame._data directly,
+    and instead use [](api:Frame.update) to return an updated copy instead.
 
-    The :attr:`.Frame.log` can be accessed with the key ``"log"``,
-    and any expired key will instead return the string ``"EXPIRED"``
-    (although the object could still be retrieved from :attr:`.Frame._data`).
+    The [](api:Frame.log) can be accessed with the key `"log"`,
+    and any expired key will instead return the string `"EXPIRED"`
+    (although the object could still be retrieved from the underlying Frame._data).
+
+    Examples
+    --------
+    >>> from loqs.core import Frame
+    >>> f = Frame({"qubits": [0, 1, 2]}, log="Init Step")
+    >>> f["qubits"]
+    [0, 1, 2]
+    >>> f.log
+    'Init Step'
     """
 
     _data: dict
@@ -46,18 +55,18 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
     log: str
     """Log string for better printing."""
 
-    SERIALIZE_ATTRS = ["log", "_data", "_expired_keys", "_no_serialize_keys"]
+    _SERIALIZE_ATTRS = ["log", "_data", "_expired_keys", "_no_serialize_keys"]
 
     def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
         """
         Parameters
         ----------
         data:
-            A ``dict``-like object with frame data. Defaults to ``None``,
+            A `dict`-like object with frame data. Defaults to `None`,
             which initializes an empty frame.
 
         log:
-            See :attr:`.log`.
+            See [](api:Frame.log).
         """
         if data is None:
             data = {}
@@ -122,12 +131,12 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         """Mark a key as expired.
 
         This will cause the key to return
-        ``"EXPIRED"`` instead of the stored object,
-        although the object is still stored in :attr:`._data`.
+        `"EXPIRED"` instead of the stored object,
+        although the object is still stored internally.
 
         Parameters
         ----------
-        key:
+        key : str
             The key to expire
         """
         if key in self and key not in self._expired_keys:
@@ -151,18 +160,35 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         new_data: Mapping[str, object] | None = None,
         new_log: str | None = None,
     ) -> Frame:
-        """Create a new :class:`.Frame` with updated data and log.
+        """Create a new [](api:Frame) with updated data and log.
 
         Any data/log that is unchanged will be carried over
-        from the current :class:`.Frame`.
+        from the current [](api:Frame).
 
-        new_data:
+        Parameters
+        ----------
+        new_data : Mapping[str, object] | None
             Any data to add/override from the old frame.
-            Defaults to ``None``, which changes no data.
+            Defaults to `None`, which changes no data.
 
-        new_log:
-            A new log string. Defaults to ``None``,
-            which keeps the old :attr:`.log`.
+        new_log : str | None
+            A new log string. Defaults to `None`,
+            which keeps the old [](api:Frame.log).
+
+        Returns
+        -------
+        Frame
+            A new Frame instance with updated data and log.
+
+        Examples
+        --------
+        >>> from loqs.core import Frame
+        >>> f0 = Frame({"data": 100})
+        >>> f1 = f0.update({"data": 200}, new_log="Updated step")
+        >>> f0["data"]
+        100
+        >>> f1["data"]
+        200
         """
         data = self._data.copy()
         if new_data is not None:
@@ -176,7 +202,25 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
         return f
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+        """Get encoding attributes for serialization.
+
+        For the "_data" attribute, replaces objects marked as "no serialize"
+        with "NOT SERIALIZED" strings unless ignore_no_serialize_flags is True.
+
+        Parameters
+        ----------
+        attr : str
+            The attribute name to get encoding for.
+        ignore_no_serialize_flags : bool, optional
+            Whether to ignore no-serialize flags and include all data.
+            Default is False.
+
+        Returns
+        -------
+        object
+            The encoded attribute value.
+        """
         if attr == "_data" and not ignore_no_serialize_flags:
             # We want to replace "no serialize" objects with "NOT_SERIALIZED"
             return {
@@ -185,10 +229,23 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
             }
 
         # Otherwise, do as normal
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> Frame:
+    def _from_decoded_attrs(cls, attr_dict) -> Frame:
+        """Create a Frame instance from decoded attributes.
+
+        Parameters
+        ----------
+        attr_dict : dict
+            Dictionary containing decoded attributes with keys:
+            "_data", "log", "_expired_keys", "_no_serialize_keys".
+
+        Returns
+        -------
+        Frame
+            A new Frame instance reconstructed from the decoded attributes.
+        """
         obj = cls(attr_dict["_data"], attr_dict["log"])
         obj._expired_keys = attr_dict["_expired_keys"]
         obj._no_serialize_keys = attr_dict["_no_serialize_keys"]

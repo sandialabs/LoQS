@@ -28,18 +28,27 @@ U = TypeVar("U", bound="QECCodePatch")
 
 
 class QECCodePatch(Mapping[str, Instruction], Displayable):
-    """An instantiation of a :class:`.QECCode` on a set of qubits.
+    """An instantiation of a [](api:QECCode) on a set of qubits.
 
-    This object acts like a ``dict``, where instruction names are the
-    keys and the appropriate :class:`.Instruction` (mapped to the patch
+    This object acts like a `dict`, where instruction names are the
+    keys and the appropriate [](api:Instruction) (mapped to the patch
     qubits) is returned.
-    It also stores the :class:`.PauliFrame` for the data qubits, as this
+    It also stores the [](api:PauliFrame) for the data qubits, as this
     is the natural place for it.
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.recordables import QECCodePatch
+    >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+    >>> patch = QECCodePatch(code=code, qubits=["Q0", "Q1"], pauli_frame="II")
+    >>> patch.qubits
+    ['Q0', 'Q1']
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = ["code", "qubits", "pauli_frame", "data"]
+    _SERIALIZE_ATTRS = ["code", "qubits", "pauli_frame", "data"]
 
     def __init__(
         self,
@@ -51,13 +60,13 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         Parameters
         ----------
         code:
-            See :attr:`.code`.
+            See [](api:code).
 
         qubits:
-            See :attr:`.qubits`.
+            See [](api:qubits).
 
         pauli_frame:
-            See :attr:`.pauli_frame`.
+            See [](api:pauli_frame).
         """
         assert len(qubits) == len(code.template_qubits), (
             f"Patch must have {len(code.template_qubits)} qubits "
@@ -65,7 +74,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         )
 
         self.code = code
-        """The :class:`.QECCode` being used on this patch of qubits."""
+        """The [](api:QECCode) being used on this patch of qubits."""
 
         self.qubits = qubits
         """The qubits this patch acts on."""
@@ -102,7 +111,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         return s
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "QECCodePatch":
+    def _from_decoded_attrs(cls, attr_dict) -> "QECCodePatch":
         """Create a QECCodePatch from decoded attributes dictionary."""
         from loqs.core import QECCode
 

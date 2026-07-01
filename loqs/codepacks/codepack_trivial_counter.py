@@ -6,7 +6,7 @@
 # in compliance with the License.  You may obtain a copy of the License at                                          #
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
-"""A trivial LoQS QEC codepack for testing purposes.
+"""A trivial `LoQS` QEC codepack for testing purposes.
 This implementation provides a simple counter-like behavior where a "state"
 value can be incremented. This is purely for demonstration and testing purposes.
 """
@@ -25,10 +25,13 @@ from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
 
 def create_qec_code():
     """Create a trivial QECCode for testing.
+
     This codepack implements a simple counter with an increment instruction.
+
     Returns
     -------
-        A :class:`.QECCode` implementing the trivial counter code.
+    QECCode
+        A [](api:QECCode) implementing the trivial counter code.
     """
     # We don't need actual qubits for this trivial example
     # but we'll define a minimal template structure
@@ -64,23 +67,13 @@ def create_qec_code():
     return code
 
 
-def create_ideal_model(
-    qubits: Sequence[str],
-    model_backend: type[BaseNoiseModel] = DictNoiseModel,
-    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
-):
+def create_ideal_model():
     """Create an ideal (noiseless) model for the trivial code.
-    Since this is a trivial classical counter, we return an empty model.
-    Parameters
-    ----------
-    qubits:
-        List of qubit labels to use (not actually used in this trivial case).
-    model_backend:
-        The model backend to use (not actually used in this trivial case).
+    
     Returns
     -------
-        An empty dict representing no operations needed for this trivial code.
+    BaseNoiseModel
+        An empty [](api:DictNoiseModel) representing no operations needed for this trivial code.
     """
     # For this trivial classical counter, we don't need any quantum operations
     # Return an empty DictNoiseModel

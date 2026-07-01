@@ -2,6 +2,7 @@
 __pycache__
 .pytest_cache
 .ipynb_checkpoints/
+__marimo__/
 
 .coverage*
 coverage.xml
@@ -12,12 +13,17 @@ htmlcov
 .env
 .opencode
 .ralph/*.json
+.devcontainer
+opencode-dev.sh
 
 docs/_build
 docs/**/_autosummary
 docs/**/*.ipynb
 docs/**/*.json
 docs/**/*.json.gz
+docs/.refcache
+site/
+docs/_gen_md
 
 checkpoints/
 

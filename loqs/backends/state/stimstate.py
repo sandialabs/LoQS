@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMQuantumState` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -67,7 +66,7 @@ class STIMQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "STIM Tableau"
 
-    SERIALIZE_ATTRS = ["qubit_labels", "seed", "_stim_state_vector"]
+    _SERIALIZE_ATTRS = ["qubit_labels", "seed", "_stim_state_vector"]
 
     _state: _TableauSimulator
     """Underlying state object."""
@@ -77,11 +76,18 @@ class STIMQuantumState(BaseQuantumState):
 
     These are used to map local ints
     to global ints in
-    :attr:`.GateRep.STIM_CIRCUIT_STR` reps.
+    [](api:GateRep.STIM_CIRCUIT_STR) reps.
     """
 
     @property
     def state(self) -> _TableauSimulator:
+        """Get the underlying STIM TableauSimulator state object.
+
+        Returns
+        -------
+        _TableauSimulator
+            The internal STIM TableauSimulator object that represents the quantum state.
+        """
         return self._state
 
     @property
@@ -110,6 +116,15 @@ class STIMQuantumState(BaseQuantumState):
         qubit_labels:
             Optional qubit labels. If not provided, the default range of ints
             is used.
+        
+        seed:
+            Optional RNG seed. If not provided, default NumPy RNG behavior applies.
+        
+        Notes
+        -----
+        STIM's [](api:stim.TableauSimulator) has its' own internal RNG. We try to prime
+        it as much as possible for consistency, but we cannot guarantee completely
+        identical RNG when copying/deserializing these objects.
         """
         if not is_backend_available("stim_state"):
             raise ImportError(
@@ -202,6 +217,18 @@ class STIMQuantumState(BaseQuantumState):
         return new_state
 
     def reset_seed(self, new_seed: int | None) -> None:
+        """Reset the random seed for the quantum state.
+
+        Unlike some other implementations, this method explicitly forces a fresh
+        RNG initialization with the new seed in the underlying
+        [](api:stim.TableauSimulator) object.
+
+        Parameters
+        ----------
+        new_seed : int | None
+            The new random seed to use. If None, the random number generator
+            will use its default seeding behavior.
+        """
         # We explicitly don't want to copy RNG here, force a new RNG seed
         self._state = self._state.copy(copy_rng=False, seed=new_seed)
         self.seed = new_seed
@@ -411,16 +438,16 @@ class STIMQuantumState(BaseQuantumState):
 
         return cbit
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         # Retrieve STIM state vector
         if attr == "_stim_state_vector":
             return self.state.state_vector(endian="little")
 
         # Otherwise fallback
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         qubit_labels = attr_dict["qubit_labels"]
         seed = attr_dict["seed"]
         state_vector = attr_dict["_stim_state_vector"]

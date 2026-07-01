@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.MeasurementOutcomes` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ T = TypeVar("T", bound="MeasurementOutcomes")
 MeasurementOutcomesCastableTypes: TypeAlias = (
     "MeasurementOutcomes | Mapping[str | int, int | Sequence[int]]"
 )
-"Things that can be cast to :class:`.MeasurementOutcomes`."
+"Things that can be cast to [](api:MeasurementOutcomes)."
 
 
 class MeasurementOutcomes(
@@ -36,11 +35,18 @@ class MeasurementOutcomes(
 
     This is a dict-like object with qubit label keys and lists of 0/1
     outcome values. These can represent both raw measurement outcomes
-    or "inferred" outcomes where a :class:`.PauliFrame` has been applied
-    (see :attr:`.get_inferred_outcomes`).
+    or "inferred" outcomes where a [](api:PauliFrame) has been applied
+    [](api:get_inferred_outcomes)).
+
+    Examples
+    --------
+    >>> from loqs.core.recordables import MeasurementOutcomes
+    >>> outcomes = MeasurementOutcomes({"A0": [0, 1, 0]})
+    >>> outcomes["A0"]
+    [0, 1, 0]
     """
 
-    SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["outcomes"]
 
     outcomes: OutcomeDict
     """Dict with qubit label keys and list of 0/1 outcome values.
@@ -54,7 +60,7 @@ class MeasurementOutcomes(
         Parameters
         ----------
         outcomes:
-            See :attr:`.outcomes`. No default since this is intended to be
+            See [](api:outcomes). No default since this is intended to be
             immutable, i.e. data is given once now and then not changed.
         """
         if isinstance(outcomes, MeasurementOutcomes):
@@ -118,17 +124,17 @@ class MeasurementOutcomes(
         pauli_frame: PauliFrame | None = None,
         basis: Literal["Z"] | Literal["X"] = "Z",
     ) -> MeasurementOutcomes:
-        """Apply a :class:`.PauliFrame` to get inferred outcomes.
+        """Apply a [](api:PauliFrame) to get inferred outcomes.
 
         Parameters
         ----------
         pauli_frame:
-            The :class:`.PauliFrame` to apply. Defaults to ``None``,
+            The [](api:PauliFrame) to apply. Defaults to `None`,
             in which case this just returns a copy.
 
         basis:
-            Which measurement basis to use when applying the ``pauli_frame``.
-            Must be one of ``["X", "Z"]``, and defaults to ``"Z"``.
+            Which measurement basis to use when applying the `pauli_frame`.
+            Must be one of `["X", "Z"]`, and defaults to `"Z"`.
         """
         if pauli_frame is None:
             return MeasurementOutcomes(self.outcomes.copy())

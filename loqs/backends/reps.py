@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.RepTuple` and :class:`.RepEnum` definitions.
-"""
+
 
 from __future__ import annotations
 
@@ -68,14 +67,14 @@ class GateRep(RepEnum):
     """STIM circuit string
 
     The expected rep type is a STIM circuit string with placeholder
-    qubit labels. The string can include both gates (e.g. ``"H"``,
-    ``"CX"``) and noise specifications (e.g. ``"X_ERROR(<rate>)"``,
-    ``"DEPOLARIZE1(<rate>)"``). However, this should not include
+    qubit labels. The string can include both gates (e.g. `"H"`,
+    `"CX"`) and noise specifications (e.g. `"X_ERROR(<rate>)"`,
+    `"DEPOLARIZE1(<rate>)"`). However, this should not include
     measurement or reset gates; for those, use
-    :attr:`.InstrumentRep.STIM_CIRCUIT_STR` instead.
+    [](api:InstrumentRep.STIM_CIRCUIT_STR) instead.
 
     Qubit labels are placeholders indexing into the paired
-    :attr:`.RepTuple.qubits`.
+    [](api:RepTuple.qubits).
     """
 
     PROBABILISTIC_STIM_OPERATIONS = 5
@@ -95,19 +94,19 @@ class GateRep(RepEnum):
     KRAUS_OPERATORS = 6
     r"""A list of Kraus operators.
 
-    The Kraus operators for a CP channel :math:`\Lambda` are
-    defined as :math:`K_i` s.t. the
+    The Kraus operators for a CP channel \( \Lambda \) are
+    defined as \( K_i \) s.t. the
 
-    .. math::
-
-        \Lambda(\rho) = \sum_i K_i \rho K_i^\dagger
+    \[
+    \Lambda(\rho) = \sum_i K_i \rho K_i^\dagger
+    \]
 
     The Kraus operators do not have to be unitary, Hermitian,
     or invertible, but the map is also TP if they obey
 
-    .. math::
-
-        \sum_i K_i^\dagger K_i = I
+    \[
+    \sum_i K_i^\dagger K_i = I
+    \]
 
 
     This representation is convenient for all sorts of
@@ -116,11 +115,11 @@ class GateRep(RepEnum):
     In that case, one must sample from the probability
     distribution given by
 
-    .. math::
+    \[
+    P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
+    \]
 
-        P_i = \mathrm{Tr}\left[\rho K_i^\dagger K_i]
-
-    Note that in the case that :math:`K_i` is a scaled unitary,
+    Note that in the case that \( K_i \) is a scaled unitary,
     this probability will be independent of the state and be a
     fixed coefficient (which is often pulled out of the Kraus matrix
     in most descriptions of the formalism).
@@ -128,16 +127,16 @@ class GateRep(RepEnum):
     After sampling which Kraus operator to apply, the final state
     is then
 
-    .. math::
-
-        \rho \rightarrow K_i \rho K_i^\dagger / P_i
+    \[
+    \rho \rightarrow K_i \rho K_i^\dagger / P_i
+    \]
 
     Note the renormalization by probability here, since this version
     of the formalism folds the probability into the Kraus matrix,
     and thus works even when the probability is state-dependent.
 
     This unraveling of non-unital channels can even be done with a
-    :class:`.STIMQuantumState`, enabling fast stabilizer simulation
+    [](api:STIMQuantumState), enabling fast stabilizer simulation
     with amplitude damping.
 
     The expected rep type is a list of 2-tuples with the first entry as
@@ -149,7 +148,7 @@ class GateRep(RepEnum):
     """
 
 
-GateRep.SERIALIZE_ATTRS = ["value"]
+GateRep._SERIALIZE_ATTRS = ["value"]
 
 
 class ConcreteGateReps:
@@ -165,11 +164,40 @@ class ConcreteGateReps:
     # fmt: on
 
     TP_CHECK_TOL = 1e-8
+    """Numerical tolerance for TP preservation check."""
 
     @staticmethod
     def sequence_is_krausop_rep(
         gr: Sequence, tp_check_abstol: Float = TP_CHECK_TOL
     ) -> bool:
+        """Check if a sequence is a valid Kraus operator representation.
+
+        A valid Kraus operator representation is a sequence where each element is
+        a tuple or list with exactly 2 elements: a numpy array (the Kraus operator)
+        and a float or None (the probability or weight).
+        However, this puts no restrictions on the matrices.
+
+        This function specificially checks that a set of Kraus operators \( K_i \) satisfies
+
+        \[
+        \sum_i K_i K_i^{\dagger} = I
+        \]
+
+        Parameters
+        ----------
+        gr : Sequence
+            The sequence to check for Kraus operator representation format.
+
+        tp_check_abstol : Float, optional
+            Absolute tolerance for trace-preserving check. If finite, performs
+            a trace-preserving check on the Kraus operators. Default is TP_CHECK_TOL.
+
+        Returns
+        -------
+        bool
+            True if the sequence is a valid Kraus operator representation,
+            False otherwise.
+        """
         if len(gr) == 0:
             return False
         for el in gr:
@@ -194,6 +222,23 @@ class ConcreteGateReps:
 
     @staticmethod
     def sequence_is_probabilisticstim_rep(gr: Sequence) -> bool:
+        """Check if a sequence is a valid probabilistic STIM operation representation.
+
+        A valid probabilistic STIM operation representation is a sequence where each
+        element is a tuple or list with exactly 2 elements: a STIM circuit string
+        and a probability value (float, int, or numpy floating type).
+
+        Parameters
+        ----------
+        gr : Sequence
+            The sequence to check for probabilistic STIM operation representation format.
+
+        Returns
+        -------
+        bool
+            True if the sequence is a valid probabilistic STIM operation representation,
+            False otherwise.        
+        """
         if len(gr) == 0:
             return False
         for el in gr:
@@ -239,19 +284,19 @@ class InstrumentRep(RepEnum):
     For when a mid-circuit measurement can be modeled by a perfect
     Z-basis projection sandwiched by two noisy operations.
     The expected rep is a 4-tuple where the first two elements are
-    the unpacking of some :attr:`.InstrumentRep.ZBASIS_PROJECTION`,
-    and then two :class:`.RepTuple` objects with a :class:`.GateRep`
-    ``reptype``.
+    the unpacking of some [](api:InstrumentRep.ZBASIS_PROJECTION),
+    and then two [](api:RepTuple) objects with a [](api:GateRep)
+    `reptype`.
     """
 
     ZBASIS_OUTCOME_OPERATION_DICT = 3
     """Dict with MCM outcome labels and CP map operation keys.
 
     For when a mid-circuit measurement can be modeled by a
-    ``pyGSTi``-like quantum instrument.
+    `pyGSTi`-like quantum instrument.
     The expected rep is a 2-tuple where the first entry is a
-    dict with tuple of outcome keys and :class:`.RepTuple` objects
-    with a :class:`.GateRep` ``reptype`` for values, and the second
+    dict with tuple of outcome keys and [](api:RepTuple) objects
+    with a [](api:GateRep) `reptype` for values, and the second
     entry is a bool which indicates whether the outcome should be recorded,
     e.g. ({...}, False) would look like a noisy reset.
     """
@@ -261,10 +306,10 @@ class InstrumentRep(RepEnum):
     """STIM circuit string
 
     The expected rep type is a STIM circuit string with placeholder
-    qubit labels. This is the same as :attr:`.GateRep.STIM_CIRCUIT_STR`,
+    qubit labels. This is the same as [](api:GateRep.STIM_CIRCUIT_STR),
     except that it should only be a measurement gate, i.e. one of
     {M, MX, MY, MZ, MR, MRX, MRY, MRZ, R, RX, RY, RZ, MXX, MYY, MZZ}.
-    These are analogous to the following :attr:`.ZBASIS_PROJECTION`
+    These are analogous to the following [](api:ZBASIS_PROJECTION)
     specifications, except in all bases instead of just Z:
 
     - The first four (i.e., start with "M") are like (None, True),
@@ -278,11 +323,11 @@ class InstrumentRep(RepEnum):
       on an auxiliary qubit and then performing a (0, True) on the auxiliary.
 
     Qubit labels are placeholders indexing into the paired
-    :attr:`.RepTuple.qubits`.
+    [](api:RepTuple.qubits).
     """
 
 
-InstrumentRep.SERIALIZE_ATTRS = ["value"]
+InstrumentRep._SERIALIZE_ATTRS = ["value"]
 
 
 class ConcreteInstrumentReps:
@@ -301,6 +346,19 @@ class ConcreteInstrumentReps:
 
     @staticmethod
     def is_zbasis_projection_rep(ir) -> bool:
+        """Check if an instrument representation is a Z-basis projection representation.
+
+        Parameters
+        ----------
+        ir : object
+            The instrument representation to check.
+
+        Returns
+        -------
+        bool
+            True if the representation is a valid Z-basis projection representation,
+            False otherwise.
+        """
         if not isinstance(ir, (tuple, list)):
             return False
         if len(ir) != 2:
@@ -325,12 +383,12 @@ class RepTuple(Castable, Displayable):
     """Underlying representation object."""
 
     qubits: tuple[str | int, ...]
-    """Qubit labels that :attr:`.rep` should be applied to."""
+    """Qubit labels that [](api:RepTuple.rep) should be applied to."""
 
     reptype: RepEnum
-    """Enum entry indicating how :attr:`.rep` should be interpreted."""
+    """Enum entry indicating how [](api:RepTuple.rep) should be interpreted."""
 
-    SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
+    _SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
 
     def __init__(
         self,
@@ -338,6 +396,24 @@ class RepTuple(Castable, Displayable):
         qubits: str | int | Sequence[str | int],
         reptype: RepEnum,
     ):
+        """Tuple describing operator representation.
+
+        !!! warning
+            
+            This will likely be refactored in the near future.
+
+        Parameters
+        ----------
+        rep:
+            Incoming representation matching one of the rep types
+            in [](api:ConcreteGateRep) or [](api:ConcreteInstrumentRep).
+
+        qubits:
+            Qubits this operation acts upon
+
+        reptype:
+            Enum flagging which [](api:GateRep) or [](api:InstrumentRep) this is.
+        """
         self.rep = rep
         if isinstance(qubits, (str, int)):
             self.qubits = (qubits,)
@@ -365,7 +441,7 @@ class RepTuple(Castable, Displayable):
 
     @classmethod
     def cast(cls: type[RepTuple], obj: object) -> RepTuple:
-        """Cast this object to a :class:`RepTuple`.
+        """Cast this object to a [](api:RepTuple).
 
         This is specialized because lists/tuples with up to 3 entries
         should be unpacked into the three arguments.

@@ -27,9 +27,9 @@ def pauli_sym_prod_phase(pstr1: str, pstr2: str) -> int:
 
     Given two Pauli string `P_1` and `P_2`, this computes the quantity
 
-    .. math::
-
-        (-1)^<P_1, P_2>
+    \[
+    (-1)^<P_1, P_2>
+    \]
 
     where <P_1, P_2> is the symplectic inner product as defined by
     Eqn. 2 of https://doi.org/10.1103/PRXQuantum.2.010322.
@@ -70,17 +70,17 @@ def pauli_rates_to_eigvals(rates: Sequence[Float]) -> List[float]:
 
     Given the Kraus representation of a Pauli-stochastic operator
 
-    .. math::
-
-        \rho \rightarrow \sum_i p_i P_i \rho P_i^\dagger,
+    \[
+    \rho \rightarrow \sum_i p_i P_i \rho P_i^\dagger,
+    \]
 
     where `P_i` are the `i`-qubit Paulis, then the Pauli eigenvalues
     of this channel are given via the Walsh-Hadamard transform
     (Eqn. 5 of https://doi.org/10.1103/PRXQuantum.2.010322)
 
-    .. math::
-
-        \lambda_j = \sum_i p_i (-1)^{<P_i, P_j>}.
+    \[
+    \lambda_j = \sum_i p_i (-1)^{<P_i, P_j>}.
+    \]
 
     The PTM representation of this channel is then just
     diag(`\vec{\lambda}`).
@@ -117,17 +117,17 @@ def pauli_eigvals_to_rates(eigvals: Sequence[Float]) -> List[float]:
     (Eqn. 6 of https://doi.org/10.1103/PRXQuantum.2.010322)
     gives
 
-    .. math::
-
-        \p_j = \frac{1}{4**n} \sum_i \lambda_i (-1)^{<P_i, P_j>},
+    \[
+    \p_j = \frac{1}{4**n} \sum_i \lambda_i (-1)^{<P_i, P_j>},
+    \]
 
     where `P_i,P_j` are `n`-qubit Paulis.
 
     The Kraus representation of the operator is then
 
-    .. math::
-
-        \rho \rightarrow \sum_i p_i P_i \rho P_i^\dagger.
+    \[
+    \rho \rightarrow \sum_i p_i P_i \rho P_i^\dagger.
+    \]
 
 
     Parameters
@@ -211,14 +211,14 @@ def create_depolarizing_kraus_rep(
     """Create a depolarizing Kraus RepTuple.
 
     This is a convenience function that wraps
-    :meth:`create_pauli_stochastic_kraus_reps`.
+    [](api:create_pauli_stochastic_kraus_rep).
 
     Parameters
     ----------
-    rate:
+    rate : Float
         The depolarizing rate.
 
-    qubits:
+    qubits : Sequence[str | int]
         The targeted qubits (needed for RepTuple construction)
 
     Returns
@@ -237,11 +237,11 @@ def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> RepTuple:
 
     Parameters
     ----------
-    prob:
+    prob : Float
         Probability of damping
 
-    qubit:
-        Target qubit (for :class:`RepTuple` construction)
+    qubit : str | int
+        Target qubit for [](api:RepTuple) construction)
 
     Returns
     -------
@@ -335,7 +335,7 @@ def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
 def compose_kraus_reptuples(
     rt1: RepTuple, rt2: RepTuple, dedup: bool = True
 ) -> RepTuple:
-    r"""Compose two Kraus :class:`RepTuple`s together.
+    r"""Compose two Kraus [](api:RepTuple)s together.
 
     Essentially just foils them out:
 
@@ -352,15 +352,15 @@ def compose_kraus_reptuples(
 
     Parameters
     ----------
-    rt1:
-        The first :class:`RepTuple`.
+    rt1 : RepTuple
+        The first [](api:RepTuple).
 
-    rt2:
-        The second :class:`RepTuple`.
+    rt2 : RepTuple
+        The second [](api:RepTuple).
 
-    dedup:
+    dedup : bool, optional
         Whether (True, default) or not (False) to deduplicate
-        the output Kraus channel.
+        the output Kraus channel, by default True
 
     Returns
     -------

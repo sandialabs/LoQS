@@ -1,2 +1,2 @@
-jupyter-book<2
-sphinx
+# Point to pyproject.toml so we can't get out of sync
+-e .[docs]

@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.InstructionStack` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -32,24 +31,31 @@ T = TypeVar("T", bound="InstructionStack")
 InstructionStackCastableTypes: TypeAlias = (
     "InstructionStack | InstructionLabelCastableTypes | Sequence[InstructionLabelCastableTypes] | None"
 )
-"""Objects that can be cast to a :class:`.InstructionStack`."""
+"""Objects that can be cast to a [](api:InstructionStack)."""
 
 
 class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
-    """A list of :class:`InstructionLabel` objects to execute.
+    """A list of [](api:InstructionLabel) objects to execute.
 
-    This is intended to be an immutable list of :class:`InstructionLabel`
+    This is intended to be an immutable list of [](api:InstructionLabel)
     objects to execute. Stack manipulations return a modified copy.
+
+    Examples
+    --------
+    >>> from loqs.core.instructions import InstructionStack
+    >>> stack = InstructionStack([("Init State", "L0")])
+    >>> len(stack)
+    1
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = ["_instructions"]
+    _SERIALIZE_ATTRS = ["_instructions"]
 
-    SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
+    _SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
 
     _instructions: list[InstructionLabel]
-    """Internal list of :class:`InstructionLabels`"""
+    """Internal list of [](api:InstructionLabels)"""
 
     def __init__(
         self, instructions: InstructionStackCastableTypes = None
@@ -58,8 +64,8 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         Parameters
         ----------
         instructions:
-            A sequence of :class:`InstructionLabel` castable things.
-            Defaults to ``None``, which creates an empty list.
+            A sequence of [](api:InstructionLabel) castable things.
+            Defaults to `None`, which creates an empty list.
         """
         self._instructions = []
         if isinstance(instructions, InstructionStack):
