@@ -497,6 +497,14 @@ def create_qec_code(
             name="QEC Lookup Decoder",
         )
     elif decoder_type == "pymatching":
+        try:
+            import pymatching
+        except ImportError as e:
+            raise ImportError(
+                "PyMatching is not installed, cannot use pymatching decoder. "
+                "Please install pymatching: pip install loqs[pymatching]"
+            ) from e
+
         # Deferred decoder: collects and stores syndrome outcomes in Frame propagating keys
         def pymatching_deferred_decoder_apply_fn(
             patch_label: str,
@@ -724,6 +732,14 @@ def create_qec_code(
         instructions["FT Z logical parity calculation"] = Z_logical_meas
         instructions["FT X logical parity calculation"] = X_logical_meas
     elif decoder_type == "pymatching":
+        try:
+            import pymatching
+        except ImportError as e:
+            raise ImportError(
+                "PyMatching is not installed, cannot use pymatching decoder. "
+                "Please install pymatching: pip install loqs[pymatching]"
+            ) from e
+
         # Global Space-Time deferred decoding over R rounds of syndrome extraction + final data measurements
         def pymatching_global_meas_apply_fn(
             patch_label: str,

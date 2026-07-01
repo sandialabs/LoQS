@@ -23,6 +23,7 @@ There are various optional requirements that are available, including:
 - `docs`: Allows building of the documentation (see Documentation below).
 - `quantumsim`: Enables the QuantumSim (state) backend.
 - `pygsti`: Enables the PyGSTi (circuit, model, state) backend.
+- `pymatching`: Enables the PyMatching (minimum-weight perfect matching) decoder for certain codepacks.
 - `stim`: Enables the STIM (state) backend.
 - `test`: Allows testing (see Testing below)
 - `visualization`: Enables some of the visualization tools in `loqs.tools`. Note that
