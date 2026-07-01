@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.QECCode` and :class:`.QECCodePatch` definitions.
-"""
+
 
 from __future__ import annotations
 
@@ -26,21 +25,40 @@ T = TypeVar("T", bound="QECCode")
 
 
 class QECCode(Displayable):
-    """A set of :class:`.Instruction` objects that implement a QEC code.
+    """A set of [](api:Instruction) objects that implement a QEC code.
 
     All qubit-specific quantities are defined with respect to a set of
     template qubits that can then be replaced with real qubit labels
     at runtime.
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+    >>> code.name
+    '(Unnamed QEC code)'
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "instructions",
         "template_qubits",
         "template_data_qubits",
         "name",
     ]
+
+    instructions: dict[str, Instruction]
+    """A mapping from name keys to [](api:Instruction) values."""
+
+    template_qubits: list[str | int]
+    """All template qubits used in [](api:QECCode.instructions)."""
+
+    template_data_qubits: list[str | int]
+    """The entries of [](api:QECCode.template_qubits) corresponding to data qubits."""
+
+    name: str = "(Unnamed QEC code)"
+    """Name for logging"""
 
     def __init__(
         self,
@@ -53,32 +71,28 @@ class QECCode(Displayable):
         Parameters
         ----------
         instructions:
-            See :attr:`.instructions`.
+            See [](api:QECCode.instructions).
 
         template_qubits:
-            See :attr:`.template_qubits`.
+            See [](api:QECCode.template_qubits).
 
         template_data_qubits:
-            See :attr:`.template_data_qubits`.
+        See [](api:QECCode.template_data_qubits).
 
         name:
-            See :attr:`.name`.
+            See [](api:QECCode.name).
         """
         self.instructions = dict(instructions)
-        """A mapping from name keys to :class:`.Instruction` values."""
 
         self.template_qubits = list(template_qubits)
-        """All template qubits used in :attr:`instructions`."""
 
         self.template_data_qubits = list(template_data_qubits)
-        """The entries of :attr:`template_qubits` corresponding to data qubits."""
 
         assert all(
             [tdq in self.template_qubits for tdq in self.template_data_qubits]
         ), "Data qubits must a subset of all template qubits"
 
         self.name = name
-        """Name for logging"""
 
     def __str__(self) -> str:
         return f"QECCode {self.name}"
@@ -88,22 +102,22 @@ class QECCode(Displayable):
         qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes | None = None,
     ) -> QECCodePatch:
-        """Create a :class:`.QECCodePatch` based on this :class:`QECCode`.
+        """Create a [](api:QECCodePatch) based on this [](api:QECCode).
 
         Parameters
         ----------
         qubits:
-            Qubit labels to replace :attr:`.template_qubits`.
+            Qubit labels to replace [](api:QECCode.template_qubits).
 
         pauli_frame:
-            An initial :class:`.PauliFrame` to assign to the patch.
-            Defaults to ``None``, which assigns the trivial Pauli frame
-            of all ``"I"`` entries.
+            An initial [](api:PauliFrame) to assign to the patch.
+            Defaults to `None`, which assigns the trivial Pauli frame
+            of all `"I"` entries.
 
         Returns
         -------
         QECCodePatch
-            The constructed :class:`.QECCodePatch`
+            The constructed [](api:QECCodePatch)
         """
         if pauli_frame is None:
             # Map template data qubits to real qubits
@@ -116,7 +130,7 @@ class QECCode(Displayable):
         return QECCodePatch(self, qubits, pauli_frame)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "QECCode":
+    def _from_decoded_attrs(cls, attr_dict) -> "QECCode":
         """Create a QECCode from decoded attributes dictionary."""
         return cls(
             attr_dict["instructions"],

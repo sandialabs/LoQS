@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMPhysicalCircuit` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -339,7 +338,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """STIM noise channels.
 
     These should probably not be part of a circuit
-    prior to it going through a :class:`.BaseNoiseModel`,
+    prior to it going through a [](api:BaseNoiseModel),
     but currently they will just pass through.
     """
 
@@ -349,7 +348,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """STIM 1Q, 2Q, and measurement gates.
 
     These are the STIM instructions that will be treated
-    as possible keys into a :class:`.STIMDictNoiseModel`.
+    as possible keys into a [](api:STIMDictNoiseModel).
     """
 
     stim_command_aliases : ClassVar[dict[str,str]] = {
@@ -547,8 +546,8 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
         """Merge another circuit to this circuit.
 
-        While :meth:`.insert_inplace` adds new layers,
-        :meth:`.merge_inplace` will try to add operations to
+        While [](api:STIMPhysicalCircuit.insert_inplace) adds new layers,
+        [](api:STIMPhysicalCircuit.merge_inplace) will try to add operations to
         existing layers.
 
         Note that for STIM circuits, this will first unroll repeat blocks
@@ -558,10 +557,10 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         Parameters
         ----------
-        circuit:
+        circuit : BasePhysicalCircuit
             Circuit to merge
 
-        idx:
+        idx : int
             Layer index to start merge
         """
         other_circuit = STIMPhysicalCircuit.cast(circuit)
@@ -734,11 +733,6 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         return _Circuit(serial_circuit)
 
     def _serialize_circuit(self) -> str | list | dict:
-        """Helper function to serialize a circuit.
-
-        Derived classes should implement this for
-        serialization to work.
-        """
         # For STIM circuit, string version is already serializable
         return str(self.circuit)
 

@@ -1,0 +1,2 @@
+#!/bin/bash
+jupytext --to ipynb docs/notebooks/*.md

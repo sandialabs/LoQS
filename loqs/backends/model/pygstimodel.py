@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.PyGSTiNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -24,7 +23,6 @@ from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
 from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
-_pygsti_available = True
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
@@ -39,26 +37,34 @@ if TYPE_CHECKING:
     from pygsti.tools import basistools as bt, superop_to_unitary
 else:
     # Runtime imports - these will be attempted only when needed
-    try:
-        from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
-        from pygsti.baseobjs.label import (
-            Label,
-            LabelStr,
-            LabelTupTupWithTime,
-            LabelTupWithTime,
-        )
-        from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
-        from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
-        from pygsti.tools import basistools as bt, superop_to_unitary
-    except ImportError:
-        _pygsti_available = False
+    from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
+    from pygsti.baseobjs.label import (
+        Label,
+        LabelStr,
+        LabelTupTupWithTime,
+        LabelTupWithTime,
+    )
+    from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
+    from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
+    from pygsti.tools import basistools as bt, superop_to_unitary
 
 
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
-def compute_qsim_bases(num_qubits: int):
-    """TODO"""
+def compute_qsim_bases(num_qubits: int) -> ExplicitBasis:
+    """Compute QuantumSim bases.
+
+    Parameters
+    ----------
+    num_qubits:
+        Number of qubits in the state space
+
+    Returns
+    -------
+    ExplicitBasis
+        PyGSTi object containing the QuantumSim basis
+    """
     # Prep QuantumSim bases
     sig0q = np.array([[1.0, 0], [0, 0]], dtype="complex")
     sigXq = np.array([[0, 1], [1, 0]], dtype="complex") / np.sqrt(2)
@@ -78,34 +84,32 @@ def compute_qsim_bases(num_qubits: int):
     )
 
 
-# Module-level code that depends on PyGSTi must be conditional
-if _pygsti_available:
-    PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
-    """Precomputed 1- and 2-qubit basis for QSim PTMs"""
+PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
+"""Precomputed 1- and 2-qubit basis for QSim PTMs"""
 
-    PyGSTiModelCastableTypes: TypeAlias = (
-        ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
-    )
-else:
-    PYGSTI_QSIM_BASES = {}
-    PyGSTiModelCastableTypes = Any  # type: ignore
-
+PyGSTiModelCastableTypes: TypeAlias = (
+    ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
+)
 """Types of pyGSTi models this backend can handle"""
 
 
 class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
-    """Model backend for handling ``pygsti.model.OpModel`` objects.
+    """Model backend for handling [](api:pygsti.models.model.OpModel) objects.
 
     PyGSTi models are inherently time-dependent, so this inherits from
-    :class:`TimeDependentBaseNoiseModel` rather than
-    :class:`BaseNoiseModel`.
+    [](api:TimeDependentBaseNoiseModel) rather than
+    [](api:BaseNoiseModel).
     However, time-dependent features are opt-in and require the user
-    to specify ``use_time_dependence=True`` during initialization.
+    to specify `use_time_dependence=True` during initialization.
     """
 
     name: ClassVar[str] = "pyGSTi"
 
-    SERIALIZE_ATTRS = ["model", "qubit_aliases"]
+    _SERIALIZE_ATTRS = ["model", "qubit_aliases"]
+
+    model: ExplicitOpModel | ImplicitOpModel
+    """Underlying [](api:pygsti.models.explicitmodel.ExplicitOpModel) or [](api:pygsti.models.implicitmodel.ImplicitOpModel)
+    """
 
     def __init__(
         self,
@@ -121,9 +125,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         ) = None,
     ) -> None:
         """Initialize a PyGSTiModelBackend.
-
-        TODO: Choices are made about instrument reset/outcomes.
-        Document this.
 
         Parameters
         ----------
@@ -236,18 +237,52 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     @property
     def output_gate_reps(self) -> list[GateRep]:
         return self._output_gate_reps
-    
-    # TODO: This is not quite right. It's probably one or the other,
-    # depending on whether instruments are defined or not
+
     _output_instrument_reps = [
         InstrumentRep.ZBASIS_PROJECTION,
         InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
     ]
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
+        """Get the list of instrument representations this model can output.
+
+        Returns
+        -------
+        list[InstrumentRep]
+            List of instrument representations that this model can output.
+
+        Note
+        ----
+        This is not quite right currently. It returns all *possible* types,
+        but often models will only allow one of the two types.
+        """
         return self._output_instrument_reps
 
     def get_gate_duration(self, gate_label) -> int | float:
+        """Get the duration of a gate operation.
+
+        This method retrieves the duration of a gate operation from either the gate label
+        itself (if time-dependent) or from the default gate durations mapping.
+
+        Parameters
+        ----------
+        gate_label : Label | str
+            The gate label to get the duration for.
+
+        Returns
+        -------
+        int | float
+            Duration of the gate operation.
+
+        Raises
+        ------
+        ValueError
+            If time dependence is not enabled and no default gate durations are provided,
+            or if a LayerTupTupWithTime is unexpectedly provided.
+
+        KeyError
+            If the gate label is not found in the default gate durations.
+        """
         if not self.use_time_dependence:
             return 0
 
@@ -280,6 +315,31 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         return duration
 
     def get_instrument_duration(self, inst_label) -> int | float:
+        """Get the duration of an instrument operation.
+
+        This method retrieves the duration of an instrument operation from either the
+        instrument label itself (if time-dependent) or from the default instrument
+        durations mapping.
+
+        Parameters
+        ----------
+        inst_label : Label | str
+            The instrument label to get the duration for.
+
+        Returns
+        -------
+        int | float
+            Duration of the instrument operation.
+
+        Raises
+        ------
+        ValueError
+            If time dependence is not enabled and no default instrument durations are provided,
+            or if a LayerTupTupWithTime is unexpectedly provided.
+
+        KeyError
+            If the instrument label is not found in the default instrument durations.
+        """
         if not self.use_time_dependence:
             return 0
 
@@ -535,13 +595,13 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         return (rep, True), instreps[repidx]
 
-    def get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
+    def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         if attr == "model":
             return self.model.to_nice_serialization()
-        return super().get_encoding_attr(attr, ignore_no_serialize_flags)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
+    def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         model = Model.from_nice_serialization(attr_dict["model"])
         qubit_aliases = attr_dict["qubit_aliases"]
         return cls(model, qubit_aliases)

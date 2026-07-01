@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`ProgramResults` definition.
+"""[](api:ProgramResults) definition.
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ class ProgramResults(Displayable):
     of shot histories in QuantumProgram.
     """
 
-    CACHE_ON_SERIALIZE: ClassVar[bool] = True
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "shot_histories",
         "_unwritten_shots",
         "name",
@@ -82,7 +82,7 @@ class ProgramResults(Displayable):
         self.shot_histories = (
             shot_histories if shot_histories is not None else {}
         )
-        """Record of shot :class:`.History` objects, mapped by shot index."""
+        """Record of shot [](api:History) objects, mapped by shot index."""
 
         self._unwritten_shots = set()
         """Set of shot indices that have not been written to checkpoint files yet."""
@@ -195,13 +195,13 @@ class ProgramResults(Displayable):
         Parameters
         ----------
         key:
-            See ``key`` in :meth:`.History.collect_data`
+            See `key` in [](api:History.collect_data)
 
         indices:
-            See ``indices`` in :meth:`.History.collect_data`
+            See `indices` in [](api:History.collect_data)
 
         strip_none_entries:
-            See ``strip_none_entries`` in :meth:`.History.collect_data`
+            See `strip_none_entries` in [](api:History.collect_data)
 
         return_counter:
             Whether to return using a collections.Counter or not (default).
@@ -209,7 +209,7 @@ class ProgramResults(Displayable):
         Returns
         -------
         list
-            List of :meth:`.History.collect_data` outputs per shot
+            List of [](api:History.collect_data) outputs per shot
         """
         data = [
             h.collect_data(key, indices, strip_none_entries)
@@ -240,7 +240,7 @@ class ProgramResults(Displayable):
         return list(self._unwritten_shots)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "ProgramResults":
+    def _from_decoded_attrs(cls, attr_dict) -> "ProgramResults":
         """Create a ProgramResults object from decoded attributes dictionary."""
         # Handle shot_histories: convert string keys back to integers if needed
         shot_histories = attr_dict["shot_histories"]

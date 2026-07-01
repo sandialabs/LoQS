@@ -23,14 +23,14 @@ T = TypeVar("T", bound="SyndromeLabel")
 SyndromeLabelCastableTypes: TypeAlias = (
     "str | tuple[str] | tuple[str, int] | tuple[str, int, int] | SyndromeLabel"
 )
-"""Objects that can be cast to :class:`.SyndromeLabel` objects."""
+"""Objects that can be cast to [](api:SyndromeLabel) objects."""
 
 
 @dataclass
 class SyndromeLabel(Castable, Displayable):
     """Label that indicates which past outcome was a syndrome bit."""
 
-    SERIALIZE_ATTRS = ["qubit_label", "frame_idx", "outcome_idx"]
+    _SERIALIZE_ATTRS = ["qubit_label", "frame_idx", "outcome_idx"]
 
     qubit_label: str | int
     """The qubit label."""
@@ -44,6 +44,6 @@ class SyndromeLabel(Castable, Displayable):
     outcome_idx: int = 0
     """The outcome index.
 
-    Defaults to 0, the first outcome on :attr:`.qubit_label`.
-    Could be >0 if multiple checks were measured on :attr:`.qubit_label`.
+    Defaults to 0, the first outcome on [](api:qubit_label).
+    Could be >0 if multiple checks were measured on [](api:qubit_label).
     """

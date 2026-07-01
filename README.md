@@ -10,17 +10,9 @@ The *Lo*gical *Q*ubit *S*imulator (LoQS) is designed to simulate a few logical q
 The following installation instructions can be used on M1/M2 Macs using Anaconda/Miniconda to create a local virtual environment.
 
 ```
-conda create -p ./venv python=3.11
-conda activate ./venv
+conda create -n loqs-env python=3.14
+conda activate loqs-env
 pip install -e .
-```
-
-By default, this will not install any of the backends.
-In order to install PyGSTi and QuantumSim (i.e. previous LoQS backends),
-you can alter the last line to 
-
-```
-pip install -e ".[pygsti,quantumsim]"
 ```
 
 There are various optional requirements that are available, including:
@@ -28,7 +20,7 @@ There are various optional requirements that are available, including:
 - `dask`: Enables usage of Dask for parallelizing over shots.
 - `dev`: Allows the use of `black` and `flake8` prior to committing
 (see Code Formatting and Linting below).
-- `docs`: Allows building of the JupyterBook documentation (see Documentation below).
+- `docs`: Allows building of the documentation (see Documentation below).
 - `quantumsim`: Enables the QuantumSim (state) backend.
 - `pygsti`: Enables the PyGSTi (circuit, model, state) backend.
 - `stim`: Enables the STIM (state) backend.
@@ -54,36 +46,41 @@ pip install -e ".[all]"
 For developers who may want an editable version of `pyGSTi`, you can run:
 
 ```
-pip install -e git+https://github.com/sandialabs/pyGSTi.git@v0.9.12#egg=pyGSTi
+pip install -e git+https://github.com/sandialabs/pyGSTi.git@v0.9.14#egg=pyGSTi
 ```
 
-to get the 0.9.12 release of pyGSTi, which will be located in `src`.
-Alternatively, you can use any other tag or commit hash instead of `v0.9.12`
+to get the 0.9.14 release of pyGSTi, which will be located in `src`.
+Alternatively, you can use any other tag or commit hash instead of `v0.9.14`
 if you are working off of a feature branch.
-
-### Visualization
-
-LoQS now has some capability to turn circuit diagrams into LaTeX via the quantikz package.
-This requires `pdflatex`, commonly from the a TeX installation, as well as `loqs[visualization]`.
 
 ## Documentation
 
-This project uses JupyterBook for documentation.
-Assuming the `docs` requirements have been installed, the documentation can be generated via:
+This project uses MkDocs and Jupytext-compatible Markdown notebooks under `docs/notebooks/` for its documentation and interactive tutorials. In order to build or preview the documentation locally, do at least an installation of `loqs[docs]`.
+
+### Local Building & Preview
+
+To build and serve the documentation locally, run:
 
 ```
-jupyter-book build docs
+python docs/serve.py
 ```
 
-and then viewed by opening `docs/_build/html/index.html` in a browser.
+This will launch a local server typically accessible at `http://127.0.0.1:8000/`.
 
-### Jupytext Notebooks
+More details on the documentation structure and Jupytext workflow are available in [docs/DOCS_README](docs/DOCS_README).
 
-For users who want executable versions of the MyST Markdown can use Jupytext to turn them into IPython/Jupyter notebooks.
-```
-jupytext --sync docs/markdown/*
-```
+### Interactive Cloud Notebooks (Binder)
 
-will synchronize all the Markdown files in `docs/markdown` with the Jupyter notebooks in `docs/notebook`. Only the 
-Markdown is committed and used for generating the JupyterBook, but the notebooks can be handy to test execution
-in an interactive way.
+The tutorials and examples are configured to be run interactively in the cloud using **Binder**! You can open any of the tutorial or example notebooks directly in your browser by clicking the "Launch Binder" badges on the generated documentation pages.
+
+Note that the first launch may take up to 5-10 minutes to build the Binder environment.
+
+### Contributing Interactive Notebooks
+
+The easiest way to modify and add interactive notebooks is to use Jupytext.
+
+1. Navigate to `docs/notebooks`, where all interactive notebooks are kept as Markdown for easy source control.
+1. Generate the corresponding Jupyter notebook via `jupytext --to ipynb <target_to_edit>.md`
+1. Edit the notebooks, e.g. `jupyter lab` to start a server, edit, and save.
+1. Sync them back to Markdown via `jupytext --to myst <target_to_edit>.md`
+1. Commit your changes!
