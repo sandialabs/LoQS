@@ -208,7 +208,7 @@ def create_qec_code(
         "X": "Gxpi",
         "Y": "Gypi",
         "Z": "Gzpi",
-        "H circuit": "Gh",
+        "H Circuit": "Gh",
         "S": "Gzmpi2",  # Logical S is really all Sdagger...
         "Sdag": "Gzpi2",  # ...and vice versa
         "I": "Gi",
