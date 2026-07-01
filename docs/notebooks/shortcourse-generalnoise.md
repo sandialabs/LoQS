@@ -4,9 +4,9 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.19.4
+    jupytext_version: 1.19.1
 kernelspec:
-  display_name: Python 3
+  display_name: Python 3 (ipykernel)
   language: python
   name: python3
 ---
@@ -25,7 +25,7 @@ We follow a very similar pattern from the previous notebook for setting up our p
 ```{code-cell} ipython3
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
 from loqs.core import Frame, History, InstructionStack, PatchDict, QuantumProgram
-from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel, QSimQuantumState
+from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel
 
 # Let's define qubits for a single Quantinuum-style Steane patch: 7 data qubits, 3 aux qubits
 qubits = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
@@ -121,8 +121,6 @@ Additionally, any non-unital Kraus operators will further slow the simulation do
 
 Some things to consider: What happens if you scale everything up and down? What about changing the fraction of 1Q to 2Q noise? What happens if you change from depolarizing noise to general (or a specific) Pauli stochastic noise instead?
 
-Note: I'm not expecting anything particularly interesting here, but just some practice.
-
 +++
 
 ## Coherent Noise
@@ -158,6 +156,6 @@ co_results.collect_shot_data("logical_measurement", -1, return_counter=True)
 
 #### Create a model that has both stochastic and coherent noise and do some parameter sweeps. Anything interesting happen as you switch off noise between stochastic and coherent?
 
-Note: I'm not expecting anything crazy to pop out here either, especially at low shot counts. But it's worth the exercise regardless.
+```{code-cell} ipython3
 
-+++
+```

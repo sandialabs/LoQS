@@ -4,9 +4,9 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.19.4
+    jupytext_version: 1.19.1
 kernelspec:
-  display_name: Python 3
+  display_name: Python 3 (ipykernel)
   language: python
   name: python3
 ---
@@ -178,10 +178,6 @@ Often it is safer to use the kwargs rather than the args, unless you know exactl
 
 So this approach would look like:
 
-+++
-
-
-
 ```{code-cell} ipython3
 # Make a new stack with spot change
 stack3 = InstructionStack([
@@ -332,12 +328,8 @@ So this error injection would be (4, "Gxpi", qubits.index("A0")).
 # Regular program but with X injected during first flagged checks
 stack6 = InstructionStack([
     ("FT Zero Prep", "L0"),
-    ("Flagged Parallel S1-S5-S6 Check", "L0"),#, (), {"error_injections": [(4, "Gxpi", qubits.index("A0"))]}),
-    ("Flagged S1-S5-S6 Feed-Forward", "L0", (), {
-        "stack": [
-            ("Flagged Parallel S2-S3-S4 Check", "L0", (), {error_injection}), (Logical Z)
-        ]
-    }),
+    ("Flagged Parallel S1-S5-S6 Check", "L0", (), {"error_injections": [(4, "Gxpi", qubits.index("A0"))]}),
+    ("Flagged S1-S5-S6 Feed-Forward", "L0"),
     ("FT Logical Z Measure", "L0")
 ])
 

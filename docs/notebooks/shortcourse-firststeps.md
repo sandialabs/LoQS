@@ -4,9 +4,9 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.19.4
+    jupytext_version: 1.19.1
 kernelspec:
-  display_name: Python 3
+  display_name: Python 3 (ipykernel)
   language: python
   name: python3
 ---
@@ -149,10 +149,6 @@ There are some caveats: To use the collation tools effectively, you have to have
 In our case, all LoQS codepacks currently include logical_measurement in measurement Instructions.
 
 ```{code-cell} ipython3
-print(results1.shot_histories[0])
-```
-
-```{code-cell} ipython3
 results1.collect_shot_data(
     key="logical_measurement", # key in the Frame,
     indices=-1, # Check the last frame of each shot,
@@ -277,4 +273,6 @@ and the other bases are analogous to Exercise 1, with the exception of not havin
 
 </details>
 
-+++
+```{code-cell} ipython3
+
+```

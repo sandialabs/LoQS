@@ -57,13 +57,6 @@ if you are working off of a feature branch.
 
 This project uses MkDocs and Jupytext-compatible Markdown notebooks under `docs/notebooks/` for its documentation and interactive tutorials. In order to build or preview the documentation locally, do at least an installation of `loqs[docs]`.
 
-### Interactive Cloud Notebooks (Binder)
-
-The tutorials and examples are configured to be run interactively in the cloud using **Binder**! You can open any of the tutorial or example notebooks directly in your browser by clicking the "Launch Binder" badges on the generated documentation pages.
-
-Alternatively, you can launch the interactive Binder environment for the entire repository here:
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/docs-updates)
-
 ### Local Building & Preview
 
 To build and serve the documentation locally, run:
@@ -75,3 +68,19 @@ python docs/serve.py
 This will launch a local server typically accessible at `http://127.0.0.1:8000/`.
 
 More details on the documentation structure and Jupytext workflow are available in [docs/DOCS_README](docs/DOCS_README).
+
+### Interactive Cloud Notebooks (Binder)
+
+The tutorials and examples are configured to be run interactively in the cloud using **Binder**! You can open any of the tutorial or example notebooks directly in your browser by clicking the "Launch Binder" badges on the generated documentation pages.
+
+Note that the first launch may take up to 5-10 minutes to build the Binder environment.
+
+### Contributing Interactive Notebooks
+
+The easiest way to modify and add interactive notebooks is to use Jupytext.
+
+1. Navigate to `docs/notebooks`, where all interactive notebooks are kept as Markdown for easy source control.
+1. Generate the corresponding Jupyter notebook via `jupytext --to ipynb <target_to_edit>.md`
+1. Edit the notebooks, e.g. `jupyter lab` to start a server, edit, and save.
+1. Sync them back to Markdown via `jupytext --to myst <target_to_edit>.md`
+1. Commit your changes!
