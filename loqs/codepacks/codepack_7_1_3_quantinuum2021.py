@@ -228,7 +228,7 @@ def create_qec_code(
             )
         instructions[n] = builders.build_physical_circuit_instruction(
             logical_circ,
-            pauli_frame_update=n,
+            pauli_frame_update="H" if n == "H Circuit" else n,
             name=f"Logical {n}",
         )
     
@@ -620,6 +620,9 @@ def create_qec_code(
         )
     )
 
+    instructions["FT Z logical parity calculation"] = Z_logical_meas
+    instructions["FT X logical parity calculation"] = X_logical_meas
+
     code = QECCode(
         instructions,
         qubits,
@@ -737,7 +740,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             new_stack = stack
 
             # Delete flag syndrome
-            del new_patch.data["flagged_syndrome_diff"]
+            new_patch.data.pop("flagged_syndrome_diff", None)
 
         patches[patch_label] = new_patch
 
@@ -878,7 +881,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
             unflagged_syndrome  # S becomes the new S_previous
         )
         new_patch.data["logical_pauli_frame"] = logical_pauli_frame
-        del new_patch.data["flagged_syndrome_diff"]
+        new_patch.data.pop("flagged_syndrome_diff", None)
 
         patches[patch_label] = new_patch
 

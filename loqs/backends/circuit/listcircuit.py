@@ -135,7 +135,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         return self._qubit_labels
 
     def copy(self) -> ListPhysicalCircuit:
-        return ListPhysicalCircuit(self._circuit)
+        return ListPhysicalCircuit(self._circuit, qubit_labels=self._qubit_labels)
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
