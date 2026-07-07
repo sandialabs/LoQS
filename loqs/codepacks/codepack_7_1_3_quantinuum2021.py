@@ -232,26 +232,31 @@ def create_qec_code(
             name=f"Logical {n}",
         )
     
-    # We need to update the logical Pauli frame if we have run Logical H circuit
+    # We need to update the logical Pauli frame and stabilizer syndrome slices if we have run Logical H circuit
     def H_frame_update_apply_fn(
         patches: PatchDict,
         patch_label: str,
     ):
-        # Get logical frame for patch
         patch = patches[patch_label]
         logical_pauli_frame = list(
             patch.data.get("logical_pauli_frame", [0, 0])
         )
 
-        # Flip Z/X
+        # Flip Z/X Pauli Frame
         temp = logical_pauli_frame[0]
         logical_pauli_frame[0] = logical_pauli_frame[1]
         logical_pauli_frame[1] = temp
 
-        # Update the patch data
-        new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
-        new_patch.data = copy.deepcopy(patch.data)
+        # Swap X and Z stabilizer slices in latest_syndrome to align with physical H transformation
+        latest_syndrome = list(patch.data.get("latest_syndrome", [0] * 6))
+        temp_syn = latest_syndrome[:3]
+        latest_syndrome[:3] = latest_syndrome[3:]
+        latest_syndrome[3:] = temp_syn
+
+        # Update the patch data (copying automatically deep-copies tracking data)
+        new_patch = patch.copy()
         new_patch.data["logical_pauli_frame"] = logical_pauli_frame
+        new_patch.data["latest_syndrome"] = latest_syndrome
 
         patches[patch_label] = new_patch
 
@@ -704,17 +709,20 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         flag_syndrome_diff = patch.data.get("flagged_syndrome_diff", [0] * 6)
 
         # Compute flagged syndrome diffs for these three checks
-        # S^f in paper
-        # Specifically S^f_{1,5,6} if first_check else S^f_{2,3,4}
-        flag_syndromes = [measurement_outcomes[fq][0] for fq in flag_qubits]
+        flag_syndromes = {fq: measurement_outcomes[fq][0] for fq in flag_qubits}
 
-        syndrome_idxs = [0, 4, 5] if first_check else [1, 2, 3]
-        for i, j in enumerate(syndrome_idxs):
-            flag_syndrome_diff[j] = flag_syndromes[i] ^ last_syndromes[j]
+        if first_check:
+            # A0 -> S1 (index 0), A1 -> S5 (index 4), A2 -> S6 (index 5)
+            mapping = {"A0": 0, "A1": 4, "A2": 5}
+        else:
+            # A1 -> S2 (index 1), A2 -> S3 (index 2), A0 -> S4 (index 3)
+            mapping = {"A1": 1, "A2": 2, "A0": 3}
+
+        for fq, j in mapping.items():
+            flag_syndrome_diff[j] = flag_syndromes[fq] ^ last_syndromes[j]
 
         # Save in patch information for if needed in decoding later
-        new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
-        new_patch.data = copy.deepcopy(patch.data)
+        new_patch = patch.copy()
         new_patch.data["flagged_syndrome_diff"] = flag_syndrome_diff
 
         if any([sd == 1 for sd in flag_syndrome_diff]):
@@ -875,8 +883,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         hook_decode(unflagged_syndrome_diff[3:], flagged_syndrome_diff[3:], 1)
 
         # Update the patch data
-        new_patch = QECCodePatch(patch.code, patch.qubits, patch.pauli_frame)
-        new_patch.data = copy.deepcopy(patch.data)
+        new_patch = patch.copy()
         new_patch.data["latest_syndrome"] = (
             unflagged_syndrome  # S becomes the new S_previous
         )

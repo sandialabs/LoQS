@@ -415,9 +415,7 @@ def build_lookup_decoder_instruction(
 
         # Update patches
         new_patches = patches.copy()
-        new_patches[patch_label] = QECCodePatch(
-            patch.code, patch.qubits, new_pauli_frame
-        )
+        new_patches[patch_label] = patch.copy(pauli_frame=new_pauli_frame)
 
         frame = Frame(
             {
@@ -1084,9 +1082,7 @@ def build_physical_circuit_instruction(
 
             # Update patches
             new_patches = patches.copy()
-            new_patches[patch_label] = QECCodePatch(
-                patch.code, patch.qubits, new_pauli_frame
-            )
+            new_patches[patch_label] = patch.copy(pauli_frame=new_pauli_frame)
 
             data["patches"] = new_patches
 
