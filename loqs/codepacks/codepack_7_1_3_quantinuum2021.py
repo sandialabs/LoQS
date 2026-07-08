@@ -713,10 +713,10 @@ def _create_adaptive_qec_instructions(instructions, qubits):
 
         if first_check:
             # A0 -> S1 (index 0), A1 -> S5 (index 4), A2 -> S6 (index 5)
-            mapping = {"A0": 0, "A1": 4, "A2": 5}
+            mapping = {flag_qubits[0]: 0, flag_qubits[1]: 4, flag_qubits[2]: 5}
         else:
             # A1 -> S2 (index 1), A2 -> S3 (index 2), A0 -> S4 (index 3)
-            mapping = {"A1": 1, "A2": 2, "A0": 3}
+            mapping = {flag_qubits[1]: 1, flag_qubits[2]: 2, flag_qubits[0]: 3}
 
         for fq, j in mapping.items():
             flag_syndrome_diff[j] = flag_syndromes[fq] ^ last_syndromes[j]
