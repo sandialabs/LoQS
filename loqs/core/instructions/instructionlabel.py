@@ -7,7 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`InstructionLabel` definition.
+"""[](api:InstructionLabel) definition.
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ T = TypeVar("T", bound="InstructionLabel")
 InstructionLabelCastableTypes: TypeAlias = (
     "Instruction | str | tuple[Instruction | str, str | None] | tuple[Instruction | str, str | None, Sequence | None] | tuple[Instruction | str, str | None, Sequence | None, Mapping | None] | InstructionLabel"
 )
-"""Objects that can be cast to a :class:`.InstructionLabel`."""
+"""Objects that can be cast to a [](api:InstructionLabel)."""
 
 
 class InstructionLabel(SeqCastable, Displayable):
-    """Instruction labels intended to be elements of an :class:`.InstructionStack`.
+    """Instruction labels intended to be elements of an [](api:InstructionStack).
 
     These are also castable from 1- to 4-tuples, so users
     can just specify a stack as a list of tuples and labels
@@ -39,29 +39,29 @@ class InstructionLabel(SeqCastable, Displayable):
     instruction: Instruction | None
     """Instruction.
 
-    Either :attr:`instruction` or
-    :attr:`inst_label` must be defined.
+    Either [](api:instruction) or
+    [](api:inst_label) must be defined.
     """
 
     inst_label: str | None
     """Instruction name, if needs to be resolved.
 
-    Either :attr:`instruction` or
-    :attr:`inst_label` must be defined.
+    Either [](api:instruction) or
+    [](api:inst_label) must be defined.
 
     This should be the key to look up either in the
-    :attr:`InstructionSet.instructions` or a
-    :attr:`QECCode.instructions`.
+    [](api:InstructionSet.instructions) or a
+    [](api:QECCode.instructions).
     """
 
     patch_label: str | None
     """Target patch label, if needs to be resolved.
 
     Can be None to use an entry in
-    :attr:`InstructionStack.global_instructions`.
+    [](api:InstructionStack.global_instructions).
     Otherwise, should be a key into the
-    :class:`PatchDict` stored in 'patches' in the
-    last :class:`Frame` of the :class:`History`.
+    [](api:PatchDict) stored in 'patches' in the
+    last [](api:Frame) of the [](api:History).
     """
 
     inst_args: tuple
@@ -72,7 +72,7 @@ class InstructionLabel(SeqCastable, Displayable):
     """Additional kwargs to pass on.
     """
 
-    SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = [
         "instruction",
         "inst_label",
         "patch_label",
@@ -91,18 +91,18 @@ class InstructionLabel(SeqCastable, Displayable):
         Parameters
         ----------
         inst_or_label:
-            Either an :class:`Instruction` or string, setting
-            one of :attr:`.instruction` or :attr:`.inst_label`.
+            Either an [](api:Instruction) or string, setting
+            one of [](api:instruction) or [](api:inst_label).
 
         patch_label:
-            See :attr:`.patch_label`. Defaults to ``None``.
+            See [](api:patch_label). Defaults to `None`.
 
         inst_args:
-            See :attr:`.inst_args`. Default to ``None``, which
+            See [](api:inst_args). Default to `None`, which
             just sets it to be an empty list.
 
         inst_kwargs:
-            See :attr:`.inst_kwargs`. Default to ``None``, which
+            See [](api:inst_kwargs). Default to `None`, which
             just sets it to be an empty dict.
         """
         self.instruction = None
@@ -122,7 +122,7 @@ class InstructionLabel(SeqCastable, Displayable):
         self.inst_kwargs = dict(inst_kwargs)
 
     @classmethod
-    def from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
+    def _from_decoded_attrs(cls, attr_dict) -> "InstructionLabel":
         """Create an InstructionLabel from decoded attributes dictionary."""
         # Handle the case where instruction might be None
         instruction = attr_dict.get("instruction")
@@ -170,9 +170,9 @@ class InstructionLabel(SeqCastable, Displayable):
 
     @classmethod
     def cast(cls, obj: object) -> InstructionLabel:
-        """Cast to a :class:`InstructionLabel` object.
+        """Cast to a [](api:InstructionLabel) object.
 
-        Unlike most castable objects, :class:`InstructionLabel`
+        Unlike most castable objects, [](api:InstructionLabel)
         requires at least two inputs. This version of cast additionally
         allows a tuple/list variant for the multiple arguments and
         disallows a single object being passed in.
@@ -181,15 +181,15 @@ class InstructionLabel(SeqCastable, Displayable):
         ----------
         obj:
             A castable object that is either:
-            - Already a :class:`InstructionLabel` object,
+            - Already a [](api:InstructionLabel) object,
             in which case `obj` is returned
             - A kwarg dict that is passed into the constructor
             - A sequence of the arguments of the
-            :class:`InstructionLabel` constructor
+            [](api:InstructionLabel) constructor
 
         Returns
         -------
-            A :class:`SyndromeExtraction` object
+            A [](api:InstructionLabel) object
         """
         if isinstance(obj, InstructionLabel):
             # We are already the correct class, perform no copy

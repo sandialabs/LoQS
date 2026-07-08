@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.STIMDictNoiseModel` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -34,13 +33,33 @@ from loqs.backends.reps import (
 T = TypeVar("T", bound="DictNoiseModel")
 
 
+def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
+    aliases = STIMPhysicalCircuit.stim_command_aliases
+
+    need_aliasing = []
+    for k in d:
+        if isinstance(k, str) and k in aliases:
+            need_aliasing.append(k)
+        if isinstance(k, tuple) and k[0] in aliases:
+            need_aliasing.append(k)
+
+    for k in need_aliasing:
+        if isinstance(k, str):
+            aliased_k = aliases[k]
+        elif isinstance(k, tuple):
+            aliased_k = (aliases[k[0]],) + k[1:]
+        d[aliased_k] = d[k]
+
+    return
+
+
 class STIMDictNoiseModel(DictNoiseModel):
     """Model backend for handling generic operation dicts for STIM.
 
     This functionality should ideally by pulled into
-    :class:`.DictNoiseModel`, but to make quick progress,
+    [](api:DictNoiseModel), but to make quick progress,
     we are making a derived class that can handle a
-    :class:`.StimPhysicalCircuit` more naturally.
+    [](api:STIMPhysicalCircuit) more naturally.
     """
 
     name: ClassVar[str] = "STIM gate dict"
@@ -54,32 +73,6 @@ class STIMDictNoiseModel(DictNoiseModel):
         instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
-        """Initialize a generic gate dict model.
-
-        Parameters
-        ----------
-        model_or_dicts:
-            A model to convert or pair of dictionaries to use
-
-        gaterep:
-            Gate representation this model will return
-
-        instrep:
-            Instrument representation this model will return
-
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` values
-            are being cast up to :class:`.RepTuples`, this will be used as
-            the first argument of the rep, indicating which state to reset
-            to (``0`` or ``1``) or whether to not reset (``None``, default).
-
-        instrep_cast_include_outcomes:
-            If :attr:`.InstrumentRep.ZBASIS_PRE_POST_OPERATIONS` or
-            :attr:`.InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT` values are
-            being cast up to :class:`.RepTuples`, this will be used as
-            the second argument of the rep, indicating whether outcomes
-            should be kept (``True``, default) or not (``False``).
-        """
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
         # function. The next two variables are like gate_dict and inst_dict,
         # but have more lax types.
@@ -140,12 +133,16 @@ class STIMDictNoiseModel(DictNoiseModel):
                 return (k[0].upper(), k[1]), k[1]
 
         # Run through gates and upgrade everything to RepTuples
-        for k, gr in gate_dict.items():
+        gate_dict_unfiltered = gate_dict.copy()
+        gate_dict.clear()
+        for k, gr in gate_dict_unfiltered.items():
             k, qubits = promoted_key_and_qubits(k)
             gate_dict[k] = convert_to_gatereptuple(gr, qubits)
 
         # Run through instrument dict and upgrade everything to RepTuples
-        for k, ir in inst_dict.items():
+        inst_dict_unfiltered = inst_dict.copy()
+        inst_dict.clear()
+        for k, ir in inst_dict_unfiltered.items():
             k, qubits = promoted_key_and_qubits(k)
 
             if not isinstance(ir, RepTuple) and isinstance(ir, str):
@@ -180,17 +177,54 @@ class STIMDictNoiseModel(DictNoiseModel):
                 assert (
                     ir.reptype in instreps
                 ), f"Provided {ir} but reptype not in instreps"
+                inst_dict[k] = ir
 
         self.gate_dict: dict[MemberLabel, RepTuple] = gate_dict  # type: ignore
         self.inst_dict: dict[MemberLabel, RepTuple] = inst_dict  # type: ignore
+        add_command_aliases(self.gate_dict)
         return
 
-    def get_reps(  # noqa: C901
+    def get_reps(
         self,
-        circuit: BasePhysicalCircuit,
+        circuit: STIMPhysicalCircuit,
         gatereps: Sequence[GateRep],
         instreps: Sequence[InstrumentRep],
     ) -> list[RepTuple]:
+        """Get operation representations for a STIM circuit.
+
+        This method processes a STIM circuit and generates a list of operation
+        representations (RepTuples) that describe the circuit's operations,
+        including gates and instruments, with appropriate noise models applied.
+
+        This method handles STIM-specific circuit processing including:
+        - Unrolling circuit repeats
+        - Mapping qubit labels
+        - Applying noise models from gate and instrument dictionaries
+        - Combining common operations for efficient STIM processing
+        - Warning about conflicting noise applications
+
+        Parameters
+        ----------
+        circuit:
+            The STIM circuit to process.
+
+        gatereps:
+            Sequence of gate representations that the output should use.
+
+        instreps:
+            Sequence of instrument representations that the output should use.
+
+        Returns
+        -------
+        list[RepTuple]
+            List of operation representations describing the circuit's operations
+            with noise models applied.
+
+        Raises
+        ------
+        AssertionError
+            If the circuit is not a STIMPhysicalCircuit instance.
+        """
         assert isinstance(
             circuit, STIMPhysicalCircuit
         ), "Only designed for STIM circuits"
@@ -203,6 +237,7 @@ class STIMDictNoiseModel(DictNoiseModel):
             if len(entries) == 0:
                 # Empty line, but pass it on as a comment so full circuit has same formatting
                 reps.append(RepTuple(line, tuple(), GateRep.STIM_CIRCUIT_STR))
+                continue
 
             # Some commands can have parameters
             # Strip those so we can check base command name

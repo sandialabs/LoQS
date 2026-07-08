@@ -24,7 +24,7 @@ from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions import Instruction, InstructionLabel
-from loqs.tools.dasktools import run_program_list
+#from loqs.tools.dasktools import run_program_list
 
 
 def build_discrete_error_injection_programs(
@@ -36,32 +36,32 @@ def build_discrete_error_injection_programs(
 ) -> list[QuantumProgram]:
     """Create a series of programs with one discrete error injected each.
 
-    This will take a (presumably physical circuit) :class:`.Instruction`,
-    use :meth:`.BasePhysicalCircuit.get_possible_discrete_error_locations`
+    This will take a [](api:Instruction),
+    use [](api:BasePhysicalCircuit.get_possible_discrete_error_locations)
     to collect the possible error locations, and then create new programs
-    where the error will be injected via ``error_injections`` (see
-    :meth:`.build_physical_circuit_instruction` for more) as a kwarg
-    to the relevant :class:`.InstructionLabel`.
+    where the error will be injected via `error_injections` (see
+    `build_physical_circuit_instruction` for more) as a kwarg
+    to the relevant [](api:InstructionLabel).
 
     Parameters
     ----------
-    base_program:
+    base_program : QuantumProgram
         The base program to modify
 
-    instruction_to_analyze:
-        The :class:`.Instruction` to get all possible discrete errors for
+    instruction_to_analyze : Instruction
+        The [](api:Instruction) to get all possible discrete errors for
 
-    stack_idx_to_modify:
-        The entry in the :class:`.InstructionStack` of the ``base_program``
-        to modify with ``error_injections`` as a label kwarg.
+    stack_idx_to_modify : int
+        The entry in the [](api:InstructionStack) of the `base_program`
+        to modify with `error_injections` as a label kwarg.
 
-    error_circuit_labels:
+    error_circuit_labels : Sequence[str]
         The labels for possible errors to insert.
 
-    post_twoq_gates:
-        Whether to inject weight-1 errors before every gate (``False``, default)
-        or all weight-2 errors after 2Q gates (``True``). Also see
-        :meth:`.BasePhysicalCircuit.get_possible_discrete_error_locations`.
+    post_twoq_gates : bool, optional
+        Whether to inject weight-1 errors before every gate (`False`, default)
+        or all weight-2 errors after 2Q gates (`True`). Also see
+        [](api:BasePhysicalCircuit.get_possible_discrete_error_locations), by default False
 
     Returns
     -------
@@ -182,28 +182,29 @@ def run_discrete_error_injected_programs(
     num_shots: int = 1,
     dask_client: Client | None = None,  # type: ignore
 ) -> list[QuantumProgram]:
-    """Call :meth:`.test_program_output` on many programs.
+    """Call [](api:test_program_output) on many programs.
 
     Parameters
     ----------
-    errored_programs:
+    errored_programs : Sequence[QuantumProgram]
         A list of programs to test, usually the output of
-        :meth:`.build_discrete_error_injection_programs`.
+        [](api:build_discrete_error_injection_programs).
 
-    collect_shot_data_args:
-        See :meth:`.test_program_output`.
+    collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
+        See [](api:test_program_output).
 
-    expected_outcomes:
-        See :meth:`.test_program_output`.
+    expected_outcomes : Sequence
+        See [](api:test_program_output).
 
-    num_shots:
-        See :meth:`.test_program_output`.
+    num_shots : int, optional
+        See [](api:test_program_output), by default 1
 
-    dask_client:
+    dask_client : Client | None, optional
         A Dask client to use for parallelizing over programs
         (as this is likely a better strategy than parallelizing
         over small number of shots per program).
-        Defaults to ``None``, which runs shots in serial.
+        Defaults to `None`, which runs shots in serial.
+        CURRENTLY UNUSED.
 
     Returns
     -------
@@ -212,29 +213,30 @@ def run_discrete_error_injected_programs(
     """
     failed = []
 
-    if dask_client is None:
-        tasks = [
-            (p, collect_shot_data_args, expected_outcomes, num_shots)
-            for p in errored_programs
-        ]
-        for task in tqdm(tasks, "Running discrete error injected programs"):
-            success = test_program_output(*task)
-            if not success:
-                failed.append(task[0])
-    else:
-        print("Running discrete error injected programs in parallel with Dask")
-        run_program_list(errored_programs, dask_client, num_shots)
+    # Temporarily turn off DASK while reworking parallelization
+    # if dask_client is None:
+    tasks = [
+        (p, collect_shot_data_args, expected_outcomes, num_shots)
+        for p in errored_programs
+    ]
+    for task in tqdm(tasks, "Running discrete error injected programs"):
+        success = test_program_output(*task)
+        if not success:
+            failed.append(task[0])
+    # else:
+    #     print("Running discrete error injected programs in parallel with Dask")
+    #     run_program_list(errored_programs, dask_client, num_shots)
 
-        for program in errored_programs:
-            success = test_program_output(
-                program,
-                collect_shot_data_args,
-                expected_outcomes,
-                num_shots,
-                skip_run=True,
-            )
-            if not success:
-                failed.append(program)
+    #     for program in errored_programs:
+    #         success = test_program_output(
+    #             program,
+    #             collect_shot_data_args,
+    #             expected_outcomes,
+    #             num_shots,
+    #             skip_run=True,
+    #         )
+    #         if not success:
+    #             failed.append(program)
 
     if len(failed):
         print(f"Failed {len(failed)} programs!")
@@ -256,36 +258,42 @@ def test_program_output(
 
     Parameters
     ----------
-    test_program:
-        The :class:`.QuantumProgram` to test
+    test_program : QuantumProgram
+        The [](api:QuantumProgram) to test
 
-    collect_shot_data_args:
-        A list of arguments to :meth:`.History.collect_shot_data`.
+    collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
+        A list of arguments to [](api:ProgramResults.collect_shot_data).
 
-    expected_outcomes:
+    expected_outcomes : Sequence
         A list of the expected results to the
-        :meth:`.History.collect_shot_data` calls.
+        [](api:ProgramResults.collect_shot_data) calls.
 
-    num_shots:
-        The number of shots to run and test.
+    num_shots : int, optional
+        The number of shots to run and test, by default 1
 
-    verbose:
+    verbose : bool, optional
         Whether to print the failed entry, if one occurs.
         Will only print the first failed entry, if more than
-        one fails.
+        one fails, by default False
+
+    skip_run : bool, optional
+        Whether to skip running the program and use previous results,
+        by default False
 
     Returns
     -------
     bool
-        ``True`` if all outputs match expected, ``False`` on failure
+        `True` if all outputs match expected, `False` on failure
     """
     if not skip_run:
         program_results = test_program.run(num_shots=num_shots, verbose=False)
     else:
         # If we're skipping the run, we need to get the results from somewhere
-        program_results = getattr(test_program, '_last_results', None)
+        program_results = getattr(test_program, "_last_results", None)
         if program_results is None:
-            raise ValueError("Cannot skip run when no previous results are available")
+            raise ValueError(
+                "Cannot skip run when no previous results are available"
+            )
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot

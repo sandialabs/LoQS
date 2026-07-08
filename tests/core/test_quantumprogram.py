@@ -1,8 +1,11 @@
 """Tester for loqs.core.quantumprogram"""
 
 import os
-from tempfile import NamedTemporaryFile
 import pytest
+
+# TODO: Rework to run with native backend only if failure to import
+quantumsim = pytest.importorskip("quantumsim")
+stim = pytest.importorskip("stim")
 
 from loqs.backends import QSimQuantumState, STIMQuantumState
 from loqs.core import QuantumProgram
@@ -57,7 +60,7 @@ class TestQuantumProgram:
         assert len(history) > 0  # Should have multiple frames from the instructions
 
     @pytest.mark.parametrize("format", ["json", "json.gz", "hdf5"])
-    def test_program_serialization_parameterized(self, format):
+    def test_program_serialization_parameterized(self, format, make_temp_path):
         """Test QuantumProgram serialization with different formats using parameterization."""
         # Create a simple program for testing using the trivial codepack
         trivial_code = trivial_codepack.create_qec_code()
@@ -90,25 +93,24 @@ class TestQuantumProgram:
         assert len(new_program_results.shot_histories) == 1  # Should have more frames after running
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=f".{format}") as tempf:
-            program.write(tempf.name)
-            loaded_program = QuantumProgram.read(tempf.name)
+        with make_temp_path(suffix=f".{format}") as tempf_path:
+            program.write(tempf_path)
+            loaded_program = QuantumProgram.read(tempf_path)
             assert isinstance(loaded_program, QuantumProgram)
 
-        # Verify program structure is preserved
-        
-        loaded_program_results = loaded_program.run()
-        assert len(loaded_program_results.shot_histories) == 1  # Should have more frames after running
-        assert loaded_program.name == "Trivial counter test"
-        assert len(loaded_program.instruction_stack) == len(stack)  # Stack should be preserved
-        assert loaded_program.state_type == state_type
-        assert loaded_program.patch_types is not None
-        assert len(loaded_program.patch_types) == len(patch_types)
+            # Verify program structure is preserved
 
-        # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            loaded_program.write(f.name)
-            loaded_program2 = QuantumProgram.read(f.name)
+            loaded_program_results = loaded_program.run()
+            assert len(loaded_program_results.shot_histories) == 1  # Should have more frames after running
+            assert loaded_program.name == "Trivial counter test"
+            assert len(loaded_program.instruction_stack) == len(stack)  # Stack should be preserved
+            assert loaded_program.state_type == state_type
+            assert loaded_program.patch_types is not None
+            assert len(loaded_program.patch_types) == len(patch_types)
+
+        with make_temp_path(suffix=f'.{format}') as f_path:
+            loaded_program.write(f_path)
+            loaded_program2 = QuantumProgram.read(f_path)
             assert isinstance(loaded_program2, QuantumProgram)
 
             # Verify program structure is preserved

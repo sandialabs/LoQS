@@ -1,8 +1,7 @@
 """Tester for loqs.core.recordables.measurementoutcomes"""
 
-import os
-from tempfile import NamedTemporaryFile
 import pytest
+import h5py
 
 from loqs.core.recordables import MeasurementOutcomes
 from loqs.core.recordables.pauliframe import PauliFrame
@@ -18,7 +17,7 @@ class TestMeasurementOutcomes:
     def test_init(self):
         outcomes = {"Q0": [0, 1], "Q1": 1}
         expected = {"Q0": [0, 1], "Q1": [1]}
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
         self._check(m, expected)
 
         m2 = MeasurementOutcomes(m)
@@ -36,7 +35,7 @@ class TestMeasurementOutcomes:
     def test_inferred(self):
         qubits = ["Q0", "Q1","Q2","Q3"]
         outcomes = {k: [0, 1] for k in qubits}
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
         pf = PauliFrame(qubits, "IXYZ")
 
         # X basis, Y and Z errors cause bitflips
@@ -49,46 +48,41 @@ class TestMeasurementOutcomes:
         m3 = m.get_inferred_outcomes(pf, "Z")
         self._check(m3, Z_expected)
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         outcomes = {"Q0": [0, 1], "Q1": 1}
         expected = {"Q0": [0, 1], "Q1": [1]}
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            m.write(tempf.name)
-
-            m2 = MeasurementOutcomes.read(tempf.name)
+        with make_temp_path(suffix='.json') as tmp_path:
+            m.write(tmp_path)
+            m2 = MeasurementOutcomes.read(tmp_path)
             self._check(m2, expected)
 
-    def test_hdf5_serialization(self):
+    def test_hdf5_serialization(self, make_temp_path):
         """Test MeasurementOutcomes HDF5 serialization."""
         outcomes = {"Q0": [0, 1], "Q1": 1}
         expected = {"Q0": [0, 1], "Q1": [1]}
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
 
         # Test file serialization with HDF5
-        import h5py
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            with h5py.File(tempf.name, 'w') as h5f:
+        with make_temp_path(suffix='.h5') as tempf_path:
+            with h5py.File(tempf_path, 'w') as h5f:
                 m.dump(h5f)
-            with h5py.File(tempf.name, 'r') as h5f:
+            with h5py.File(tempf_path, 'r') as h5f:
                 m2 = MeasurementOutcomes.load(h5f)
             self._check(m2, expected)
 
-        # Test file serialization with .h5 extension
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            m.write(tempf.name)
-            m2 = MeasurementOutcomes.read(tempf.name)
+        with make_temp_path(suffix='.h5') as tempf_path:
+            m.write(tempf_path)
+            m2 = MeasurementOutcomes.read(tempf_path)
             self._check(m2, expected)
 
-        # Test file serialization with .hdf5 extension
-        with NamedTemporaryFile(suffix='.hdf5') as tempf:
-            m.write(tempf.name)
-            m2 = MeasurementOutcomes.read(tempf.name)
+        with make_temp_path(suffix='.hdf5') as tempf_path:
+            m.write(tempf_path)
+            m2 = MeasurementOutcomes.read(tempf_path)
             self._check(m2, expected)
 
-    def test_hdf5_serialization_complex(self):
+    def test_hdf5_serialization_complex(self, make_temp_path):
         """Test MeasurementOutcomes HDF5 serialization with complex data."""
         outcomes = {
             "Q0": [0, 1, 0, 1],
@@ -97,50 +91,53 @@ class TestMeasurementOutcomes:
             "aux_0": [1],
             "aux_1": [0, 1]
         }
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
 
         # Test HDF5 serialization
-        import h5py
-        with NamedTemporaryFile(suffix='.h5') as tempf:
-            with h5py.File(tempf.name, 'w') as h5f:
+        with make_temp_path(suffix='.h5') as tempf_path:
+            with h5py.File(tempf_path, 'w') as h5f:
                 m.dump(h5f)
-            with h5py.File(tempf.name, 'r') as h5f:
+            with h5py.File(tempf_path, 'r') as h5f:
                 m2 = MeasurementOutcomes.load(h5f)
+            
+            assert isinstance(m2, MeasurementOutcomes)
 
-        # Check all outcomes are preserved
-        for qubit in outcomes:
-            assert m2[qubit] == outcomes[qubit]
+            # Check all outcomes are preserved
+            for qubit in outcomes:
+                assert m2[qubit] == outcomes[qubit]
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_measurementoutcomes_serialization_parameterized(self, format):
+    def test_measurementoutcomes_serialization_parameterized(self, format, make_temp_path):
         """Test MeasurementOutcomes serialization with both JSON and HDF5 formats."""
         outcomes = {"Q0": [0, 1], "Q1": 1}
         expected = {"Q0": [0, 1], "Q1": [1]}
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
 
         # Test bytes serialization
         if format == "json":
-            with NamedTemporaryFile(mode="w+", suffix=".json") as tempf:
-                m.dump(tempf.file)
-                tempf.seek(0)
-                m2 = MeasurementOutcomes.load(tempf.file)
+            with make_temp_path(suffix=".json") as tempf_path:
+                with open(tempf_path, "w+") as tempf:
+                    m.dump(tempf)
+                    tempf.seek(0)
+                    m2 = MeasurementOutcomes.load(tempf)
+
         else:  # hdf5
-            import h5py
-            with NamedTemporaryFile(suffix=".h5") as tempf:
-                with h5py.File(tempf.name, "w") as h5f:
+            with make_temp_path(suffix=".h5") as tempf_path:
+                with h5py.File(tempf_path, "w") as h5f:
                     m.dump(h5f)
-                with h5py.File(tempf.name, "r") as h5f:
+                with h5py.File(tempf_path, "r") as h5f:
                     m2 = MeasurementOutcomes.load(h5f)
+
         self._check(m2, expected)
 
         # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as tempf:
-            m.write(tempf.name)
-            m2 = MeasurementOutcomes.read(tempf.name)
+        with make_temp_path(suffix=f'.{format}') as tempf_path:
+            m.write(tempf_path)
+            m2 = MeasurementOutcomes.read(tempf_path)
             self._check(m2, expected)
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_measurementoutcomes_serialization_complex_parameterized(self, format):
+    def test_measurementoutcomes_serialization_complex_parameterized(self, format, make_temp_path):
         """Test MeasurementOutcomes serialization with complex data using both formats."""
         outcomes = {
             "Q0": [0, 1, 0, 1],
@@ -149,22 +146,23 @@ class TestMeasurementOutcomes:
             "aux_0": [1],
             "aux_1": [0, 1]
         }
-        m = MeasurementOutcomes(outcomes)
+        m = MeasurementOutcomes(outcomes) # type: ignore
 
         # Test serialization
         if format == "json":
-            with NamedTemporaryFile(mode="w+", suffix=".json") as tempf:
-                m.dump(tempf.file)
-                tempf.seek(0)
-                m2 = MeasurementOutcomes.load(tempf.file)
-        else:  # hdf5
-            import h5py
-            with NamedTemporaryFile(suffix=".h5") as tempf:
-                with h5py.File(tempf.name, "w") as h5f:
-                    m.dump(h5f)
-                with h5py.File(tempf.name, "r") as h5f:
-                    m2 = MeasurementOutcomes.load(h5f)
+            with make_temp_path(suffix=".json") as tempf_path:
+                with open(tempf_path, "w+") as tempf:
+                    m.dump(tempf)
+                    tempf.seek(0)
+                    m2 = MeasurementOutcomes.load(tempf)
 
-        # Check all outcomes are preserved
+        else:  # hdf5
+            with make_temp_path(suffix=".h5") as tempf_path:
+                with h5py.File(tempf_path, "w") as h5f:
+                    m.dump(h5f)
+                with h5py.File(tempf_path, "r") as h5f:
+                    m2 = MeasurementOutcomes.load(h5f)
+        
+        assert isinstance(m2, MeasurementOutcomes)
         for qubit in outcomes:
             assert m2[qubit] == outcomes[qubit]

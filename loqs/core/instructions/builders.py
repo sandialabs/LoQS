@@ -7,15 +7,15 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Functions to construct common :class:`.Instruction` objects.
+"""Functions to construct common [](api:Instruction) objects.
 
 Each function documents both how to use it, as well
 as providing the following information about the created
-:class:`.Instruction`:
+[](api:Instruction):
 
 - The apply function
     - The parameters it pulls, including the typical source
-    - What keys are in the returned :class:`.Frame`
+    - What keys are in the returned [](api:Frame)
 - The map qubits function (if needed)
 - The parameter priorities (if not default)
 - The parameter aliases (if provided)
@@ -98,12 +98,12 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - ``patch_label``, usually from the :attr:`.InstructionLabel.patch_label`
-    - `stack`, usually from the :class:`.QuantumProgram`
-    - `instructions`, usually from the :attr:`.Instruction.data`
+    - `patch_label`, usually from the [](api:InstructionLabel.patch_label)
+    - `stack`, usually from the QuantumProgram
+    - `instructions`, usually from the [](api:Instruction.data)
 
-    It returns a :class:`.Frame` where ``instructions`` have been inserted
-    onto the front of :class:`.InstructionStack` stored at ``"stack"``.
+    It returns a [](api:Frame) where `instructions` have been inserted
+    onto the front of InstructionStack stored at `"stack"`.
 
     There is a map qubits function, which calls the map qubits
     functions for the underlying `instructions`.
@@ -120,6 +120,24 @@ def build_composite_instruction(
     Returns
     -------
         The built composite instruction
+
+    Examples
+    --------
+    >>> from loqs.core.instructions import InstructionStack
+    >>> from loqs.core.instructions.builders import build_composite_instruction
+    >>> inst = build_composite_instruction(
+    ...     instructions=[("DummyGate1", "L0"), ("DummyGate2", "L0")],
+    ...     name="Composite"
+    ... )
+    >>> stack = InstructionStack([])
+    >>> f = inst.apply(patch_label="L0", stack=stack, instructions=inst.data["instructions"])
+    >>> f_stack = f["stack"]
+    >>> len(f_stack)
+    2
+    >>> f_stack[0].inst_label
+    'DummyGate1'
+    >>> f_stack[1].inst_label
+    'DummyGate2'
     """
 
     def apply_fn(
@@ -128,6 +146,26 @@ def build_composite_instruction(
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
     ) -> Frame:
+        """Apply function for composite instruction.
+
+        Inserts instructions into the instruction stack and returns updated frame.
+
+        Parameters
+        ----------
+        patch_label : str | None
+            Patch label for the instruction.
+        stack : InstructionStack
+            Current instruction stack.
+        instructions : Sequence[Instruction | InstructionLabel]
+            Instructions to insert into the stack.
+        **kwargs
+            Additional keyword arguments for the instructions.
+
+        Returns
+        -------
+        Frame
+            Updated frame with modified instruction stack.
+        """
         for i, inst_or_label in enumerate(instructions):
             if isinstance(inst_or_label, Instruction):
                 new_label = InstructionLabel(
@@ -249,6 +287,39 @@ def build_lookup_decoder_instruction(
     Returns
     -------
         The built lookup table decoder instruction
+
+    Examples
+    --------
+    >>> from loqs.core import History, QECCode
+    >>> from loqs.core.recordables import PatchDict, MeasurementOutcomes, QECCodePatch
+    >>> from loqs.core.instructions.builders import build_lookup_decoder_instruction
+    >>> inst = build_lookup_decoder_instruction(
+    ...     lookup_table={"0": "I"},
+    ...     syndrome_labels=[("A0", -1, 0)],
+    ...     raw_syndrome_frame_key="raw_syn",
+    ...     name="LookupDecoder"
+    ... )
+    >>> inst.name
+    'LookupDecoder'
+    >>> code = QECCode({}, ["Q0"], ["Q0"])
+    >>> patch = QECCodePatch(code, ["Q0"], "I")
+    >>> patches = PatchDict({"L0": patch})
+    >>> outcomes = MeasurementOutcomes({"A0": [0]})
+    >>> history = History()
+    >>> f = inst.apply(
+    ...     patch_label="L0",
+    ...     lookup_table=inst.data["lookup_table"],
+    ...     syndrome_labels=inst.data["syndrome_labels"],
+    ...     raw_syndrome_frame_key=inst.data["raw_syndrome_frame_key"],
+    ...     diff_prev_syndrome=inst.data["diff_prev_syndrome"],
+    ...     patches=patches,
+    ...     syndrome_outcomes=outcomes,
+    ...     history=history
+    ... )
+    >>> f["decoded_error"]
+    'I'
+    >>> f["syndrome_diff"]
+    [0]
     """
 
     # Sanity check: Have specified a syndrome label for each element of lookup_table
@@ -267,6 +338,32 @@ def build_lookup_decoder_instruction(
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
         history: History,
     ) -> Frame:
+        """Apply lookup table decoder instruction.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch to apply corrections to.
+        lookup_table : dict[str, str]
+            Mapping from syndrome strings to correction Pauli strings.
+        syndrome_labels : list[SyndromeLabel]
+            List of syndrome labels describing measurement outcomes.
+        raw_syndrome_frame_key : str
+            Key for storing raw syndrome information in the output frame.
+        diff_prev_syndrome : bool
+            Whether to XOR with previous syndrome (True) or use current syndrome directly (False).
+        patches : PatchDict
+            Dictionary of patches containing Pauli frames.
+        syndrome_outcomes : list[MeasurementOutcomes] | MeasurementOutcomes
+            Measurement outcomes from previous frames.
+        history : History
+            History of previous frames for reference.
+
+        Returns
+        -------
+        Frame
+            Updated frame with corrected Pauli frame and syndrome information.
+        """
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
             syndrome_outcomes = [syndrome_outcomes]
 
@@ -318,9 +415,7 @@ def build_lookup_decoder_instruction(
 
         # Update patches
         new_patches = patches.copy()
-        new_patches[patch_label] = QECCodePatch(
-            patch.code, patch.qubits, new_pauli_frame
-        )
+        new_patches[patch_label] = patch.copy(pauli_frame=new_pauli_frame)
 
         frame = Frame(
             {
@@ -390,9 +485,9 @@ def build_object_builder_instruction(
     obj_class: type,
     name: str = "(Unnamed object builder)",
 ) -> Instruction:
-    """Build an instruction that can initialize LoQS objects.
+    """Build an instruction that can initialize `LoQS` objects.
 
-    This is a sort of meta-instruction that can build LoQS
+ `LoQS`    This is a sort of meta-instruction that can build LoQS
     objects and then store them into a `Frame`. This is currently
     used primarily to initialize the `BaseQuantumState` if no
     `initial_history` is provided to a `QuantumProgram`.
@@ -418,7 +513,7 @@ def build_object_builder_instruction(
         The key used to store the resulting object in the `Frame`
 
     obj_class:
-        The LoQS object to construct
+        The `LoQS` object to construct
 
     name:
         Name for logging purposes
@@ -426,11 +521,46 @@ def build_object_builder_instruction(
     Returns
     -------
         The built object builder instruction
+
+    Examples
+    --------
+    >>> from loqs.core.instructions.builders import build_object_builder_instruction
+    >>> class MyClass:
+    ...     def __init__(self, x: int):
+    ...         self.x = x
+    >>> inst = build_object_builder_instruction(
+    ...     frame_key="my_obj",
+    ...     obj_class=MyClass,
+    ...     name="MyBuilder"
+    ... )
+    >>> inst.name
+    'MyBuilder'
+    >>> f = inst.apply(frame_key="my_obj", obj_class=MyClass, x=42)
+    >>> obj = f["my_obj"]
+    >>> obj.x
+    42
     """
 
     # This is also an odd apply_fn because we do not know the args a priori
     # Here we define the generic apply_fn using variadic kwargs
     def apply_fn(**kwargs) -> Frame:
+        """Apply object builder instruction.
+
+        This function takes variadic kwargs since the constructor arguments
+        are not known until runtime. It constructs an object of the specified
+        class and stores it in a frame.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Must contain 'frame_key' (str) and 'obj_class' (type), plus any
+            additional arguments required by the obj_class constructor.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary.
+        """
         frame_key = kwargs.pop("frame_key")
         obj_class = kwargs.pop("obj_class")
         try:
@@ -501,6 +631,21 @@ def build_patch_builder_instruction(
     Returns
     -------
         The built patch builder instruction
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.instructions.builders import build_patch_builder_instruction
+    >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+    >>> inst = build_patch_builder_instruction(qec_code=code, name="PatchBuilder")
+    >>> inst.name
+    'PatchBuilder'
+    >>> f = inst.apply(patch_label="L0", qubits=["Q0", "Q1"], qec_code=code, patches=None)
+    >>> patches = f["patches"]
+    >>> "L0" in patches
+    True
+    >>> patches["L0"].qubits
+    ['Q0', 'Q1']
     """
 
     # Standard apply_fn construction
@@ -510,6 +655,26 @@ def build_patch_builder_instruction(
         qec_code: QECCode,
         patches: PatchDict | None,
     ) -> Frame:
+        """Apply patch builder instruction.
+
+        Creates a new patch from the QEC code and adds it to the patches dictionary.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label for the new patch.
+        qubits : Sequence[str]
+            List of qubit labels for the new patch.
+        qec_code : QECCode
+            Quantum error correction code to use for creating the patch.
+        patches : PatchDict | None
+            Existing patches dictionary, or None to create a new one.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary.
+        """
         if patches is None:
             patches = PatchDict()
 
@@ -572,12 +737,43 @@ def build_patch_remover_instruction(
     Returns
     -------
         The built patch remover instruction
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.recordables import PatchDict, QECCodePatch
+    >>> from loqs.core.instructions.builders import build_patch_remover_instruction
+    >>> inst = build_patch_remover_instruction(name="Remove Patch")
+    >>> inst.name
+    'Remove Patch'
+    >>> code = QECCode({}, ["q0"], ["q0"])
+    >>> patch = QECCodePatch(code, ["Q0"], "I")
+    >>> patches = PatchDict({"L0": patch})
+    >>> f = inst.apply(patch_label="L0", patches=patches)
+    >>> "L0" in f["patches"]
+    False
     """
 
     def apply_fn(
         patch_label: str,
         patches: PatchDict,
     ) -> Frame:
+        """Apply patch remover instruction.
+
+        Removes a patch from the patches dictionary.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch to remove.
+        patches : PatchDict
+            Dictionary of patches to remove from.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary.
+        """
         assert (
             patch_label in patches
         ), f"Patch remover failed, could not find patch {patch_label}"
@@ -622,6 +818,21 @@ def build_patch_permute_instruction(
     Returns
     -------
         The built patch permuter instruction
+
+    Examples
+    --------
+    >>> from loqs.core import QECCode
+    >>> from loqs.core.recordables import PatchDict, QECCodePatch
+    >>> from loqs.core.instructions.builders import build_patch_permute_instruction
+    >>> inst = build_patch_permute_instruction(mapping={"Q0": "Q1", "Q1": "Q0"}, name="Permuter")
+    >>> inst.name
+    'Permuter'
+    >>> code = QECCode({}, ["q0", "q1"], ["q0"])
+    >>> patch = QECCodePatch(code, ["Q0", "Q1"], "II")
+    >>> patches = PatchDict({"L0": patch})
+    >>> f = inst.apply(patch_label="L0", mapping={"Q0": "Q1", "Q1": "Q0"}, patches=patches)
+    >>> f["patches"]["L0"].qubits
+    ['Q1', 'Q0']
     """
 
     # Standard apply_fn construction
@@ -630,6 +841,24 @@ def build_patch_permute_instruction(
         mapping: Mapping[str | int, str | int],
         patches: PatchDict,
     ) -> Frame:
+        """Apply patch permute instruction.
+
+        Permutes the qubits in a patch according to the provided mapping.
+
+        Parameters
+        ----------
+        patch_label : str
+            Label of the patch to permute.
+        mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        patches : PatchDict
+            Dictionary of patches containing the patch to permute.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated patches dictionary with permuted patch.
+        """
         assert (
             patch_label in patches
         ), f"Patch permute failed, could not find patch {patch_label}"
@@ -729,6 +958,31 @@ def build_physical_circuit_instruction(
     Returns
     -------
         The built physical circuit instruction
+
+    Examples
+    --------
+    >>> from loqs.backends import ListPhysicalCircuit as PhysCirc, DictNoiseModel, NumpyStatevectorQuantumState, GateRep, InstrumentRep
+    >>> from loqs.core.recordables import PatchDict
+    >>> from loqs.core.instructions.builders import build_physical_circuit_instruction
+    >>> circ = PhysCirc(circuit=[], qubit_labels=[0, 1])
+    >>> inst = build_physical_circuit_instruction(circuit=circ, name="PhysCirc")
+    >>> inst.name
+    'PhysCirc'
+    >>> model = DictNoiseModel(({}, {}), gatereps=[GateRep.UNITARY], instreps=[InstrumentRep.ZBASIS_PROJECTION])
+    >>> state = NumpyStatevectorQuantumState(2, qubit_labels=[0, 1])
+    >>> patches = PatchDict()
+    >>> f = inst.apply(
+    ...     model=model,
+    ...     circuit=circ,
+    ...     state=state,
+    ...     inplace=True,
+    ...     error_injections=None,
+    ...     pauli_frame_update=None,
+    ...     patch_label="L0",
+    ...     patches=patches
+    ... )
+    >>> complex(f["state"].state[0, 0])
+    (1+0j)
     """
 
     # Standard apply_fn construction
@@ -742,6 +996,34 @@ def build_physical_circuit_instruction(
         patch_label: str,
         patches: PatchDict,
     ) -> Frame:
+        """Apply physical circuit instruction.
+
+        Executes a physical circuit on the quantum state and updates the Pauli frame.
+
+        Parameters
+        ----------
+        model : BaseNoiseModel
+            Noise model to use for circuit execution.
+        circuit : BasePhysicalCircuit
+            Physical circuit to execute.
+        state : BaseQuantumState
+            Quantum state to operate on.
+        inplace : bool
+            Whether to modify the state in-place.
+        error_injections : list[tuple[int, str, int]] | None
+            List of error injections to apply to the circuit.
+        pauli_frame_update : str | list[str] | dict[str, str] | None
+            Pauli frame update to apply after circuit execution.
+        patch_label : str
+            Label of the patch to update.
+        patches : PatchDict
+            Dictionary of patches containing the patch to update.
+
+        Returns
+        -------
+        Frame
+            Frame containing the updated state and patches.
+        """
 
         # Modify circuit for injected errors
         qubits = circuit.qubit_labels
@@ -800,9 +1082,7 @@ def build_physical_circuit_instruction(
 
             # Update patches
             new_patches = patches.copy()
-            new_patches[patch_label] = QECCodePatch(
-                patch.code, patch.qubits, new_pauli_frame
-            )
+            new_patches[patch_label] = patch.copy(pauli_frame=new_pauli_frame)
 
             data["patches"] = new_patches
 
@@ -838,6 +1118,24 @@ def build_physical_circuit_instruction(
         circuit: BasePhysicalCircuit,
         **kwargs,
     ) -> KwargDict:
+        """Map qubits function for physical circuit instruction.
+
+        Updates the circuit to reflect new qubit mapping.
+
+        Parameters
+        ----------
+        qubit_mapping : Mapping[str | int, str | int]
+            Mapping from old qubit labels to new qubit labels.
+        circuit : BasePhysicalCircuit
+            Circuit to be updated with new qubit labels.
+        **kwargs : dict
+            Additional keyword arguments to preserve.
+
+        Returns
+        -------
+        KwargDict
+            Dictionary containing updated circuit and preserved kwargs.
+        """
         new_kwargs = kwargs.copy()
         new_kwargs["circuit"] = circuit.map_qubit_labels(qubit_mapping)
         return new_kwargs
@@ -909,6 +1207,29 @@ def build_repeat_until_success_instruction(
     Returns
     -------
         The built repeat-until-success instruction
+
+    Examples
+    --------
+    >>> from loqs.core.instructions import InstructionStack
+    >>> from loqs.core.instructions.builders import build_repeat_until_success_instruction
+    >>> inst = build_repeat_until_success_instruction(instructions=[], rus_key="success", name="RUS")
+    >>> inst.name
+    'RUS'
+    >>> stack = InstructionStack([])
+    >>> f = inst.apply(
+    ...     observed=True,
+    ...     expected=True,
+    ...     rus_key="success",
+    ...     patch_label="L0",
+    ...     repeat_count=1,
+    ...     instructions=[],
+    ...     max_repeats=10,
+    ...     stack=stack
+    ... )
+    >>> f["rus_success"]
+    True
+    >>> f["total_rus_count"]
+    1
     """
 
     def apply_fn(

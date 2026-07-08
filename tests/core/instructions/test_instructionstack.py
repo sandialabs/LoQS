@@ -1,7 +1,8 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
 import os
-from tempfile import NamedTemporaryFile
+import tempfile
+import json
 import pytest
 
 import pytest
@@ -53,55 +54,48 @@ class TestInstructionStack:
         assert ilbl.patch_label == "L0"
         self._check(s5, ["L1"])
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            s.write(tempf.name)
-
-            s2 = InstructionStack.read(tempf.name)
+        # Create and write, but keep file closed before re-opening
+        with make_temp_path(suffix=".json") as tmp_path:
+            s.write(tmp_path)
+            
+            # Now safe to open/read/remove on Windows
+            s2 = InstructionStack.read(tmp_path)
             self._check(s2, ["L0", "L1"])
 
-    def test_instruction_stack_serialization_comprehensive(self):
+    def test_instruction_stack_serialization_comprehensive(self, make_temp_path):
         """Comprehensive test of InstructionStack serialization methods."""
         # Create a more complex instruction stack
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            stack.write(tempf.name)
-            loaded_stack = InstructionStack.read(tempf.name)
-        self._check(loaded_stack, ["L0", "L1", "L0"])
-
-        # Test file serialization
-        with NamedTemporaryFile(suffix='.json') as f:
-            stack.write(f.name)
-            loaded_stack = InstructionStack.read(f.name)
+        with make_temp_path(suffix=".json") as tmp_path:
+            stack.write(tmp_path)
+            loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
 
-        # Test compressed format
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-            temp_path = temp_file.name
+        with make_temp_path(suffix='.json') as tmp_path:
+            stack.write(tmp_path)
+            loaded_stack = InstructionStack.read(tmp_path)
+            self._check(loaded_stack, ["L0", "L1", "L0"])
 
-        try:
+        with make_temp_path(suffix='.json.gz') as temp_path:
             stack.write(temp_path)
             loaded_stack = InstructionStack.read(temp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
-        finally:
-            import os
-            os.unlink(temp_path)
 
-    def test_instruction_stack_equality_after_serialization(self):
+    def test_instruction_stack_equality_after_serialization(self, make_temp_path):
         """Test that InstructionStack equality is preserved after serialization."""
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = InstructionStack.read(tempf.name)
+        with make_temp_path(suffix=".json") as tmp_path:
+            original.write(tmp_path)
+            deserialized = InstructionStack.read(tmp_path)
+            assert isinstance(deserialized, InstructionStack)
 
-        # Should be equal (content-wise after serial_id removal)
         assert len(original) == len(deserialized)
         for i in range(len(original)):
             assert original[i].patch_label == deserialized[i].patch_label
@@ -114,34 +108,33 @@ class TestInstructionStack:
             assert original[i].patch_label == deserialized[i].patch_label
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_instruction_stack_serialization_comprehensive_parameterized(self, format):
+    def test_instruction_stack_serialization_comprehensive_parameterized(self, format, make_temp_path):
         """Comprehensive test of InstructionStack serialization methods with both formats."""
         # Create a more complex instruction stack
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1]) # type: ignore
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            stack.write(tempf.name)
-            loaded_stack = InstructionStack.read(tempf.name)
-        self._check(loaded_stack, ["L0", "L1", "L0"])
+        with make_temp_path(suffix=".json") as tmp_path:
+            stack.write(tmp_path)
+            loaded_stack = InstructionStack.read(tmp_path)
+            self._check(loaded_stack, ["L0", "L1", "L0"])
 
-        # Test file serialization
-        with NamedTemporaryFile(suffix=f'.{format}') as f:
-            stack.write(f.name)
-            loaded_stack = InstructionStack.read(f.name)
+        with make_temp_path(suffix=f'.{format}') as tmp_path:
+            stack.write(tmp_path)
+            loaded_stack = InstructionStack.read(tmp_path)
             self._check(loaded_stack, ["L0", "L1", "L0"])
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
-    def test_instruction_stack_equality_after_serialization_parameterized(self, format):
+    def test_instruction_stack_equality_after_serialization_parameterized(self, format, make_temp_path):
         """Test that InstructionStack equality is preserved after serialization with both formats."""
         original = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = InstructionStack.read(tempf.name)
+        with make_temp_path(suffix=f".{format}") as tmp_path:
+            original.write(tmp_path)
+            deserialized = InstructionStack.read(tmp_path)
+            assert isinstance(deserialized, InstructionStack)
 
-        # Should be equal (content-wise after serial_id removal)
         assert len(original) == len(deserialized)
         for i in range(len(original)):
             assert original[i].patch_label == deserialized[i].patch_label

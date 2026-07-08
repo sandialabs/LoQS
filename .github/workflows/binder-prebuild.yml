@@ -1,0 +1,19 @@
+name: Binder Pre-Builder
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+
+jobs:
+  binder-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger MyBinder Build
+        run: |
+          REF_NAME="${{ github.ref_name }}"
+          echo "Triggering Binder build for ref: ${REF_NAME}"
+          # Make a GET request to the Binder API to trigger pre-building of the Docker image
+          curl -s -I "https://mybinder.org/build/gh/sandialabs/LoQS/${REF_NAME}"

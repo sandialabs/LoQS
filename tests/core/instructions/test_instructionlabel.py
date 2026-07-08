@@ -1,10 +1,5 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
-import os
-from tempfile import NamedTemporaryFile
-
-import pytest
-
 from loqs.core.instructions import Instruction, InstructionLabel
 
 
@@ -70,77 +65,65 @@ class TestInstructionLabel:
         self._check(ilbl11, self.ins, None, None, (), {})
 
     
-    @pytest.mark.skipif(os.getenv("RUNNER_OS", "N/A") == "Windows", reason="Permission issues on Windows GitHub runner")
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         # Test string version
         ilbl = InstructionLabel("Label", "L0", self.args, self.kwargs)
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            ilbl.write(tempf.name)
-
-            ilbl2 = InstructionLabel.read(tempf.name)
+        with make_temp_path(suffix='.json') as tmp_path:
+            ilbl.write(tmp_path)
+            ilbl2 = InstructionLabel.read(tmp_path)
             self._check(ilbl2, None, "Label", "L0", self.args, self.kwargs)
 
-        # And instruction version
         ilbl3 = InstructionLabel(self.ins, "L0", self.args, self.kwargs)
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            ilbl3.write(tempf.name)
-
-            ilbl4 = InstructionLabel.read(tempf.name)
+        with make_temp_path(suffix='.json') as tmp_path:
+            ilbl3.write(tmp_path)
+            ilbl4 = InstructionLabel.read(tmp_path)
             self._check(ilbl4, self.ins, None, "L0", self.args, self.kwargs)
 
-    def test_instruction_label_serialization_comprehensive(self):
+    def test_instruction_label_serialization_comprehensive(self, make_temp_path):
         """Comprehensive test of InstructionLabel serialization methods."""
         # Test with instruction and all parameters
         label = InstructionLabel(self.ins, "L1", self.args, self.kwargs)
 
         # Test string serialization
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label.write(tempf.name)
-            loaded_label = InstructionLabel.read(tempf.name)
-        self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
-
-        # Test file serialization
-        with NamedTemporaryFile(suffix='.json') as f:
-            label.write(f.name)
-            loaded_label = InstructionLabel.read(f.name)
+        with make_temp_path(suffix=".json") as tmp_path:
+            label.write(tmp_path)
+            loaded_label = InstructionLabel.read(tmp_path)
             self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
 
-        # Test compressed format
-        with NamedTemporaryFile(suffix='.json.gz', delete=False) as temp_file:
-            temp_path = temp_file.name
+        with make_temp_path(suffix='.json') as tmp_path:
+            label.write(tmp_path)
+            loaded_label = InstructionLabel.read(tmp_path)
+            self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
 
-        try:
+        with make_temp_path(suffix='.json.gz') as temp_path:
             label.write(temp_path)
             loaded_label = InstructionLabel.read(temp_path)
             self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
-        finally:
-            import os
-            os.unlink(temp_path)
 
-    def test_instruction_label_without_instruction(self):
+    def test_instruction_label_without_instruction(self, make_temp_path):
         """Test InstructionLabel serialization without instruction."""
         # Test label without instruction
         label = InstructionLabel(self.ins, "L0")
 
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            label.write(tempf.name)
-            loaded_label = InstructionLabel.read(tempf.name)
-        self._check(loaded_label, self.ins, None, "L0", (), {})
+        with make_temp_path(suffix=".json") as tmp_path:
+            label.write(tmp_path)
+            loaded_label = InstructionLabel.read(tmp_path)
+            self._check(loaded_label, self.ins, None, "L0", (), {})
 
-    def test_instruction_label_equality_after_serialization(self):
+    def test_instruction_label_equality_after_serialization(self, make_temp_path):
         """Test that InstructionLabel equality is preserved after serialization."""
         original = InstructionLabel(self.ins, "L2", self.args)
 
         # Serialize and deserialize
-        with NamedTemporaryFile("w+", suffix=".json") as tempf:
-            original.write(tempf.name)
-            deserialized = InstructionLabel.read(tempf.name)
+        with make_temp_path(suffix=".json") as tmp_path:
+            original.write(tmp_path)
+            deserialized = InstructionLabel.read(tmp_path)
+            assert isinstance(deserialized, InstructionLabel)
 
-        # Should be equal (content-wise after serial_id removal)
         assert original.patch_label == deserialized.patch_label
-        assert original.instruction.name == deserialized.instruction.name
+        assert original.instruction.name == deserialized.instruction.name # type: ignore
         # Check lengths and types of args/kwargs (not exact equality due to different object instances)
         assert len(original.inst_args) == len(deserialized.inst_args)
         assert len(original.inst_kwargs) == len(deserialized.inst_kwargs)

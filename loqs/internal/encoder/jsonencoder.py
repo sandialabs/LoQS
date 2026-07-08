@@ -7,13 +7,16 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
+import copy
 import h5py
 import numpy as np
 import scipy.sparse as sps
 
 from loqs.internal.serializable import (
     DecodableVersionError,
+    DeferredRef,
     EncodablePrimitives,
+    IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
 from loqs.types import Float, Int
@@ -28,7 +31,6 @@ class JSONEncoder(BaseEncoder):
         to_encode,
         encode_cache=None,
         ignore_no_serialize_flags=False,
-        h5_group=None,
     ):
         assert isinstance(to_encode, Serializable)
 
@@ -40,8 +42,8 @@ class JSONEncoder(BaseEncoder):
         }
 
         # Encode attributes using the standard JSON encode method
-        for serial_attr in to_encode.SERIALIZE_ATTRS:
-            attr_value = to_encode.get_encoding_attr(
+        for serial_attr in to_encode._SERIALIZE_ATTRS:
+            attr_value = to_encode._get_encoding_attr(
                 serial_attr,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
@@ -53,22 +55,42 @@ class JSONEncoder(BaseEncoder):
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
 
-        # Add to cache if class marked as should be cached
-        if encode_cache is not None and to_encode.CACHE_ON_SERIALIZE:
-            object_id = id(to_encode)
-            encode_cache[object_id] = JSONEncoder.ENCODE_ID
-            state.update(
-                {
-                    "cache_type": "source",
-                    "cache_id": JSONEncoder.ENCODE_ID,
-                }
-            )
-            JSONEncoder.ENCODE_ID += 1
-
         return state
 
     @staticmethod
     def decode_uncached_obj(encoded, decode_cache=None) -> Serializable | dict:  # type: ignore
+        """Decode a Serializable object from JSON format.
+
+        Deserializes a Serializable object that was not previously cached.
+        This method handles the core deserialization logic for Serializable objects,
+        including attribute reconstruction, circular reference handling, and
+        backwards compatibility with version 0 serialization format.
+
+        Parameters
+        ----------
+        encoded : dict
+            The JSON dictionary containing the encoded Serializable object.
+            Should have 'encode_type' field set to 'Serializable' and
+            contain keys for each serialized attribute.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects. Used to handle
+            circular references and object caching during deserialization.
+
+        Returns
+        -------
+        Serializable | dict
+            The decoded Serializable object of the appropriate class, or
+            the raw dictionary if it's a pygsti object (for backwards compatibility).
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid Serializable object.
+        DecodableVersionError
+            If the serialization version is not supported.
+        ImportError
+            If the class cannot be imported from the specified module.
+        """
         # Check if right type
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
@@ -102,9 +124,22 @@ class JSONEncoder(BaseEncoder):
             return encoded
 
         # Get the class
-        cls = Serializable.import_class(
+        cls = Serializable._import_class(
             encoded["module"], encoded["class"], version
         )
+
+        # Handle circular references by adding a placeholder to decode_cache early
+        # This allows forward references to be resolved during attribute decoding
+        cache_id = None
+        if (
+            version == 0 and encoded.get("type", "") == "cached_object_source"
+        ) or encoded.get("cache_type", "") == "source":
+            try:
+                cache_id = encoded["cache_id"]
+
+                decode_cache[cache_id] = DeferredRef(cache_id)  # type: ignore
+            except (KeyError, TypeError):
+                pass  # Not a source object, no need for early caching
 
         # Create the attribute dictionary for deserialization
         attr_dict = {}
@@ -152,32 +187,95 @@ class JSONEncoder(BaseEncoder):
             if version == 0:
                 attr_dict["type"] = encoded["type"]
 
-        # Create the object using its from_decoded_attrs method
-        decoded = cls.from_decoded_attrs(attr_dict)
+        # Create the object using its _from_decoded_attrs method
+        decoded = cls._from_decoded_attrs(attr_dict)
 
-        # Save new object in cache if it is a source
-        if (
-            version == 0 and encoded.get("type", "") == "cached_object_source"
-        ) or encoded.get("cache_type", "") == "source":
-            try:
-                cache_id = encoded["cache_id"]
-                decode_cache[cache_id] = decoded  # type: ignore
-            except (KeyError, TypeError):
-                raise RuntimeError("Failed to look up cache source")
+        # Replace the placeholder with the actual object
+        if cache_id is not None and cache_id in decode_cache:
+            decode_cache[cache_id] = decoded  # type: ignore
 
         return decoded
 
     @staticmethod
-    def encode_cached_obj(cache_id, h5_group=None):
-        return {
+    def encode_cached_obj(
+        cache_id,
+        cache_type="reference",
+        reference_cache_id=None,
+        source_cache_id=None,
+    ):
+        """Encode a cached object reference in JSON format.
+
+        This method creates a reference to an object that has already been serialized,
+        avoiding duplicate storage of identical objects. Used for implementing object
+        caching during serialization to improve efficiency and handle circular references.
+
+        Parameters
+        ----------
+        cache_id : int
+            The cache ID for this reference.
+        cache_type : str, optional
+            Type of cache reference, either 'reference' (multiple references to same object)
+            or 'copy' (copy of an existing object). Default is 'reference'.
+        reference_cache_id : int, optional
+            For copy-type caching, the cache ID of the reference object.
+        source_cache_id : int, optional
+            For copy-type caching, the cache ID to assign to the copied object.
+
+        Returns
+        -------
+        dict
+            The JSON dictionary containing the encoded cached object reference.
+        """
+        result = {
             "encode_type": "Serializable",
             "version": SERIALIZATION_VERSION,
-            "cache_type": "reference",
-            "cache_id": cache_id,
+            "cache_type": cache_type,
         }
 
+        if cache_type == "reference":
+            result["cache_id"] = cache_id
+        elif cache_type == "copy":
+            result["reference_cache_id"] = reference_cache_id
+            result["source_cache_id"] = source_cache_id
+
+        return result
+
     @staticmethod
-    def decode_cached_obj(encoded, decode_cache=None):
+    def decode_cached_obj(encoded, decode_cache=None):  # noqa: C901
+        """Decode a cached object reference from JSON format.
+
+        This method handles the deserialization of object references that were
+        cached during encoding to avoid duplicate serialization of identical objects.
+        It supports both reference-type caching (where multiple references point to
+        the same object) and copy-type caching (where objects with identical content
+        are stored once and copied).
+
+        Parameters
+        ----------
+        encoded : dict
+            The JSON dictionary containing the encoded cached object reference.
+            Should have 'encode_type' field set to 'Serializable' and
+            'cache_type' field indicating the type of cache reference.
+        decode_cache : dict, optional
+            Dictionary mapping cache IDs to decoded objects. Used to resolve
+            object references and handle circular references.
+
+        Returns
+        -------
+        Serializable | DeferredRef
+            The decoded object. If the referenced object is not yet available
+            in the cache, returns a DeferredRef placeholder that will be
+            resolved later.
+
+        Raises
+        ------
+        IncorrectDecodableTypeError
+            If the encoded object is not a valid cached object reference.
+        DecodableVersionError
+            If the serialization version is not supported.
+        RuntimeError
+            If object references cannot be resolved due to missing source objects.
+        """
         # Check if right type
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
@@ -192,17 +290,58 @@ class JSONEncoder(BaseEncoder):
             elif version == 1:
                 # Can check for encode_type
                 assert encoded.get("encode_type", "") == "Serializable"
-                assert encoded.get("cache_type", "") == "reference"
+                # Only proceed if this actually has cache_type attribute
+                if "cache_type" not in encoded:
+                    raise IncorrectDecodableTypeError("Not a cached object")
+                cache_type = encoded["cache_type"]
+                assert cache_type in ["reference", "copy"]
             else:
                 raise DecodableVersionError()
 
         # Check if properly formed
         with JSONEncoder.assert_decode(fatal=True):
-            assert "cache_id" in encoded
+            cache_type = encoded.get(
+                "cache_type", "reference"
+            )  # Default to reference for backwards compatibility
+
+            if cache_type == "reference":
+                assert "cache_id" in encoded
+            elif cache_type == "copy":
+                assert "reference_cache_id" in encoded
+                assert "source_cache_id" in encoded
 
         try:
             assert decode_cache is not None
-            return decode_cache[encoded["cache_id"]]
+
+            if cache_type == "reference":
+                cached_obj = decode_cache[encoded["cache_id"]]
+                if isinstance(cached_obj, DeferredRef):
+                    # This is a forward reference that will be resolved later
+                    # Return the deferred reference object
+                    return cached_obj
+                return cached_obj
+            elif cache_type == "copy":
+                # Get the reference object and create a copy
+                reference_cache_id = encoded["reference_cache_id"]
+                source_cache_id = encoded["source_cache_id"]
+
+                # Check if reference object is available
+                if reference_cache_id not in decode_cache:
+                    # Reference object not available yet, create a placeholder
+                    copied_obj = DeferredRef(reference_cache_id)
+                else:
+                    reference_obj = decode_cache[reference_cache_id]
+                    # Check if reference is a placeholder
+                    if isinstance(reference_obj, DeferredRef):
+                        # Create a new placeholder for the copy
+                        copied_obj = DeferredRef(reference_obj.cache_id)
+                    else:
+                        copied_obj = copy.deepcopy(reference_obj)
+
+                # Add the copy to cache
+                decode_cache[source_cache_id] = copied_obj
+                return copied_obj
+
         except AssertionError:
             raise RuntimeError("Object reference found but no cache provided.")
         except KeyError:
@@ -215,7 +354,6 @@ class JSONEncoder(BaseEncoder):
         to_encode,
         encode_cache=None,
         ignore_no_serialize_flags=False,
-        h5_group=None,
     ):
         if isinstance(to_encode, list):
             name = "list"
@@ -235,7 +373,6 @@ class JSONEncoder(BaseEncoder):
                 format="json",
                 encode_cache=encode_cache,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
-                h5_group=None,
             )
             encoded_items.append(encoded_item)
 
@@ -294,7 +431,6 @@ class JSONEncoder(BaseEncoder):
         to_encode,
         encode_cache=None,
         ignore_no_serialize_flags=False,
-        h5_group=None,
     ):
         """
         Encode a dictionary (JSON version).
@@ -303,8 +439,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         d : dict
             The dictionary to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
         encode_cache : dict
             Dictionary mapping object hashes to serialization IDs.
         ignore_no_serialize_flags : bool
@@ -387,7 +521,28 @@ class JSONEncoder(BaseEncoder):
         return decoded_dict
 
     @staticmethod
-    def encode_array(to_encode, h5_group=None):
+    def encode_array(to_encode):
+        """Encode NumPy arrays and SciPy sparse matrices to JSON format.
+
+        Serializes array data to JSON-compatible structures. Handles both dense
+        and sparse matrices, with special handling for complex numbers and
+        type preservation.
+
+        Parameters
+        ----------
+        to_encode : EncodableArrays
+            The array to encode. Can be a NumPy array (np.ndarray) or SciPy sparse matrix.
+
+        Returns
+        -------
+        dict
+            The JSON dictionary containing the encoded array data.
+
+        Raises
+        ------
+        ValueError
+            If the array type is not supported.
+        """
 
         def _serialize_matrix_component(arr):
             """Inline helper for serializing matrix components."""
@@ -513,7 +668,7 @@ class JSONEncoder(BaseEncoder):
         return decoded
 
     @staticmethod
-    def encode_class(to_encode, h5_group=None):
+    def encode_class(to_encode):
         """
         Encode a class/type (JSON version).
 
@@ -521,8 +676,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         to_encode : type
             The class/type to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
 
         Returns
         -------
@@ -570,12 +723,12 @@ class JSONEncoder(BaseEncoder):
             assert "module" in encoded
             assert "class" in encoded
 
-        return Serializable.import_class(
+        return Serializable._import_class(
             encoded["module"], encoded["class"], version
         )
 
     @staticmethod
-    def encode_function(to_encode, h5_group=None):
+    def encode_function(to_encode):
         """
         Encode a callable function (JSON version).
 
@@ -583,8 +736,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         func : callable
             The function to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
 
         Returns
         -------
@@ -595,11 +746,11 @@ class JSONEncoder(BaseEncoder):
         return {
             "encode_type": "function",
             "version": SERIALIZATION_VERSION,
-            "source": Serializable.get_function_str(to_encode),
+            "source": Serializable._get_function_str(to_encode),
         }
 
     @staticmethod
-    def decode_function(encoded, h5_group=None):
+    def decode_function(encoded):
         """
         Decode a callable function (JSON version).
 
@@ -635,10 +786,10 @@ class JSONEncoder(BaseEncoder):
                 source = encoded.get("source", None)  # type: ignore
 
         assert isinstance(source, str)
-        return Serializable.eval_function_str(source, version)
+        return Serializable._eval_function_str(source, version)
 
     @staticmethod
-    def encode_primitive(to_encode, h5_group=None):
+    def encode_primitive(to_encode):
         """
         Encode a primitive value (JSON version).
 
@@ -646,8 +797,6 @@ class JSONEncoder(BaseEncoder):
         ----------
         to_encode : Any
             The primitive value to encode.
-        h5_group : Any
-            The storage group/object to write to (ignored for JSON).
 
         Returns
         -------

@@ -1,11 +1,12 @@
 """Tester for loqs.backends.state.qsimstate"""
 
 import os
+import tempfile
+import json
 
 import mock
 import numpy as np
 import pytest
-from tempfile import NamedTemporaryFile
 
 from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
 from loqs.backends import NumpyStatevectorQuantumState as SVState
@@ -245,8 +246,7 @@ class TestNumPyStatevectorQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
-    @pytest.mark.skipif(os.getenv("RUNNER_OS") == "Windows", reason="Permission issues on Windows GitHub runner")
-    def test_serialization(self):
+    def test_serialization(self, make_temp_path):
         # Start in the 10 state
         state10 = SVState([1, 0], ["Q0", "Q1"])
         
@@ -259,12 +259,12 @@ class TestNumPyStatevectorQuantumState:
         test, _ = state10.apply_reps([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
         test.apply_reps_inplace([RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY)])
 
-        with NamedTemporaryFile("w+", dir='.', suffix='.json') as tempf:
-            test.write(tempf.name)
-            
-            test2: SVState = SVState.read(tempf.name)
+        with make_temp_path(suffix='.json') as tmp_path:
+            test.write(tmp_path)
+            test2 = SVState.read(tmp_path)
         
         # And finish applying
+        assert isinstance(test2, SVState)
         test2.apply_reps_inplace([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
         
         # The expected 11 state

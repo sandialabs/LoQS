@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-""":class:`.PyGSTiPhysicalCircuit` definition.
-"""
+
 
 from __future__ import annotations
 
@@ -62,7 +61,7 @@ a string and a list of operations/layers).
 
 
 class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
-    """Circuit backend for handling ``pygsti.circuits.Circuit`` objects."""
+    """Circuit backend for handling `pygsti.circuits.Circuit` objects."""
 
     def __init__(
         self,
@@ -111,8 +110,8 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return self._circuit.depth
 
     @property
-    def qubit_labels(self) -> Sequence[QubitTypes]:
-        return self.circuit.line_labels
+    def qubit_labels(self) -> list:
+        return list(self.circuit.line_labels)
 
     def copy(self) -> PyGSTiPhysicalCircuit:
         return PyGSTiPhysicalCircuit(self.circuit, self.qubit_labels)
@@ -225,18 +224,6 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:
-        """Set the qubit labels of an underlying circuit.
-
-        This only adds or deletes qubits from the circuit,
-        but does not modify the qubit labels of operations.
-        For a complete change of qubit labels, see
-        :meth:`map_qubit_labels_inplace` instead.
-
-        Parameters
-        ----------
-        qubit_labels:
-            Qubit labels to assign to circuit.
-        """
         self.circuit.line_labels = qubit_labels
 
     @classmethod
@@ -245,11 +232,6 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         serial_circuit: str | list | dict,
         qubit_labels: Sequence | None = None,
     ) -> _Circuit:
-        """Helper function to deserialize a circuit.
-
-        Derived classes should implement this for
-        deserialization to work.
-        """
         # For pyGSTi circuit, we can load from string rep
         # (minus leading "Circuit(" and trailing ")" )
         assert isinstance(serial_circuit, str)
@@ -293,10 +275,5 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return circ
 
     def _serialize_circuit(self) -> str | list | dict:
-        """Helper function to serialize a circuit.
-
-        Derived classes should implement this for
-        serialization to work.
-        """
         # For pyGSTi circuit, we use the string rep
         return repr(self.circuit)
