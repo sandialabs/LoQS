@@ -19,11 +19,10 @@ from loqs.tools import fttools
 class TestSurf17Codepack:
 
     @staticmethod
-    def _create_program(circuit_backend, model_backend, state_backend, auxiliary_reuse=False, basis="Z", decoder_type="lookup"):
+    def _create_program(circuit_backend, model_backend, state_backend, auxiliary_reuse=False, basis="Z"):
         code_surf = codepack_surf17.create_qec_code(
             auxiliary_reuse=auxiliary_reuse,
             circuit_backend=circuit_backend,
-            decoder_type=decoder_type,
         )
 
         if auxiliary_reuse:
@@ -59,7 +58,6 @@ class TestSurf17Codepack:
             name=f"Prep {basis}, measure {basis}",
         )
 
-    @pytest.mark.parametrize("decoder_type", ["lookup", "pymatching"])
     @pytest.mark.parametrize("auxiliary_reuse", [False, True])
     @pytest.mark.parametrize("workflow", [
         # Z-basis tests
@@ -73,7 +71,7 @@ class TestSurf17Codepack:
         # H gate tests
         ("Z", [("H", "L0")], 0),                             # Prep 0, apply H (becomes +), measure X -> 0
     ])
-    def test_workflow(self, decoder_type, auxiliary_reuse, workflow):
+    def test_workflow(self, auxiliary_reuse, workflow):
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
         state_backend = NumpyStatevectorQuantumState
@@ -89,7 +87,6 @@ class TestSurf17Codepack:
             state_backend,
             auxiliary_reuse=auxiliary_reuse,
             basis=prep_basis,
-            decoder_type=decoder_type,
         )
 
         if auxiliary_reuse:
@@ -113,9 +110,8 @@ class TestSurf17Codepack:
         program_results = program.run()
         assert program_results.collect_shot_data("logical_measurement", -1)[0] == expected
 
-    @pytest.mark.parametrize("decoder_type", ["lookup", "pymatching"])
     @pytest.mark.parametrize("auxiliary_reuse", [False, True])
-    def test_qec_fault_tolerance(self, decoder_type, auxiliary_reuse):
+    def test_qec_fault_tolerance(self, auxiliary_reuse):
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
         state_backend = STIMQuantumState
@@ -123,7 +119,7 @@ class TestSurf17Codepack:
         code_surf = codepack_surf17.create_qec_code(
             auxiliary_reuse=auxiliary_reuse,
             circuit_backend=circuit_backend,
-            decoder_type=decoder_type,
+            num_qec_rounds=3,
         )
 
         if auxiliary_reuse:
@@ -141,7 +137,9 @@ class TestSurf17Codepack:
             ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
             ("Init Patch SURF", None, ("L0", qubits)),
             ("Zero Prep", "L0"),
-            ("Syndrome Extraction", "L0"),  # index 3
+            ("Syndrome Extraction", "L0"),  # index 3 (inject here)
+            ("Syndrome Extraction", "L0"),  # index 4
+            ("Syndrome Extraction", "L0"),  # index 5
             ("Decoder", "L0"),
             ("FT Logical Z Measure", "L0"),
         ]
@@ -166,7 +164,7 @@ class TestSurf17Codepack:
             [("logical_measurement", -1)],
             [0],
         )
-        assert len(failed) <= 10
+        assert len(failed) == 0
 
     @pytest.mark.parametrize("auxiliary_reuse", [False, True])
     def test_measurement_fault_tolerance(self, auxiliary_reuse):
