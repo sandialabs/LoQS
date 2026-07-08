@@ -455,6 +455,7 @@ def convert_circuit_to_quantikz(
     lstick_values: Sequence[str | None] | None = None,
     include_qubits_in_lsticks: bool = True,
     full_document: bool = False,
+    compress_layers: bool = True,
 ) -> str:
     """Convert a pyGSTi `Circuit` to a quantikz string.
 
@@ -527,7 +528,7 @@ def convert_circuit_to_quantikz(
         quantikz_lines[i] += "} & "
 
     # Layer processing
-    parallel_layers = _process_layers(circuit, gatename_conversion)
+    parallel_layers = _process_layers(circuit, gatename_conversion, compress_layers)
 
     # String processing
     for layer_cache in parallel_layers:
@@ -591,7 +592,7 @@ def convert_circuit_to_quantikz(
     return quantikz
 
 
-def _process_layers(circuit, gatename_conversion):
+def _process_layers(circuit, gatename_conversion, compress_layers: bool = True):
     num_lines = circuit.width
 
     # Helper to check whether we have space in an existing layer
@@ -626,48 +627,63 @@ def _process_layers(circuit, gatename_conversion):
         ]
         comps = circuit._layer_components(lidx)
 
-        # Run through once and add all single qubit gates
-        # This ensures they are all in a layer at the beginning
-        remaining_comps = []
-        for comp in comps:
-            idxs = [circuit.line_labels.index(q) for q in comp.qubits]
-            if len(idxs) > 1:
-                # Skip 2Q gates here
-                remaining_comps.append(comp)
-                continue
+        if not compress_layers:
+            for comp in comps:
+                idxs = [circuit.line_labels.index(q) for q in comp.qubits]
+                curr_layer_idx = 0
+                interval = list(range(min(idxs), max(idxs) + 1)) if len(idxs) > 1 else idxs
+                while not can_place_in_layer(curr_layer_idx, interval):
+                    curr_layer_idx += 1
+                _add_component_to_layer(
+                    comp,
+                    gatename_conversion,
+                    layer_caches,
+                    curr_layer_idx,
+                    idxs,
+                )
+        else:
+            # Run through once and add all single qubit gates
+            # This ensures they are all in a layer at the beginning
+            remaining_comps = []
+            for comp in comps:
+                idxs = [circuit.line_labels.index(q) for q in comp.qubits]
+                if len(idxs) > 1:
+                    # Skip 2Q gates here
+                    remaining_comps.append(comp)
+                    continue
 
-            # Find the layer index where we can insert this
-            curr_layer_idx = 0
-            while not can_place_in_layer(curr_layer_idx, idxs):
-                curr_layer_idx += 1
+                # Find the layer index where we can insert this
+                curr_layer_idx = 0
+                while not can_place_in_layer(curr_layer_idx, idxs):
+                    curr_layer_idx += 1
 
-            # Insert into layer
-            _add_component_to_layer(
-                comp,
-                gatename_conversion,
-                layer_caches,
-                curr_layer_idx,
-                idxs,
-            )
+                # Insert into layer
+                _add_component_to_layer(
+                    comp,
+                    gatename_conversion,
+                    layer_caches,
+                    curr_layer_idx,
+                    idxs,
+                )
 
-        # Now run through the 2Q gates
-        for comp in remaining_comps:
-            idxs = [circuit.line_labels.index(q) for q in comp.qubits]
+            # Now run through the 2Q gates
+            for comp in remaining_comps:
+                idxs = [circuit.line_labels.index(q) for q in comp.qubits]
 
-            # Find the layer index where we can insert this
-            curr_layer_idx = 0
-            interval = list(range(min(idxs), max(idxs) + 1))
-            while not can_place_in_layer(curr_layer_idx, interval):
-                curr_layer_idx += 1
+                # Find the layer index where we can insert this
+                curr_layer_idx = 0
+                interval = list(range(min(idxs), max(idxs) + 1))
+                while not can_place_in_layer(curr_layer_idx, interval):
+                    curr_layer_idx += 1
 
-            # Insert into layer
-            _add_component_to_layer(
-                comp,
-                gatename_conversion,
-                layer_caches,
-                curr_layer_idx,
-                idxs,
-            )
+                # Insert into layer
+                _add_component_to_layer(
+                    comp,
+                    gatename_conversion,
+                    layer_caches,
+                    curr_layer_idx,
+                    idxs,
+                )
 
         # Run through lines and extra empty layer for non_resets
         for layer_cache in layer_caches:

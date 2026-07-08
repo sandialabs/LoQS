@@ -55,6 +55,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         code: "QECCode",  # to avoid circular import
         qubits: Sequence[str | int],
         pauli_frame: PauliFrameCastableTypes,
+        data: dict | None = None,
     ):
         """
         Parameters
@@ -67,6 +68,10 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
 
         pauli_frame:
             See [](api:pauli_frame).
+
+        data:
+            Tracked patch-specific data dictionary. If provided, it will
+            be deep-copied to ensure independence of the new patch's state.
         """
         assert len(qubits) == len(code.template_qubits), (
             f"Patch must have {len(code.template_qubits)} qubits "
@@ -82,8 +87,27 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self.pauli_frame = PauliFrame.cast(pauli_frame)
         """The Pauli frame tracking errors on these qubits."""
 
-        self.data = {}
+        import copy
+        self.data = copy.deepcopy(data) if data is not None else {}
         """Extra patch-specific data to be tracked."""
+
+    def copy(self: U, pauli_frame: PauliFrameCastableTypes | None = None) -> U:
+        """Create a copy of this QECCodePatch, deep-copying its tracked data.
+
+        Parameters
+        ----------
+        pauli_frame : PauliFrameCastableTypes, optional
+            A new Pauli frame to associate with the copied patch.
+            If None (default), the copied patch retains the original
+            patch's Pauli frame.
+        """
+        pf = self.pauli_frame if pauli_frame is None else pauli_frame
+        return self.__class__(
+            self.code,
+            list(self.qubits),
+            pf,
+            data=self.data,
+        )
 
     def __getitem__(self, key: str) -> Instruction:
         try:
