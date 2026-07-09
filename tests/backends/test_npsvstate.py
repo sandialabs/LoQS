@@ -140,6 +140,234 @@ class TestNumPyStatevectorQuantumState:
                 RepTuple(None, "Q0", GateRep.QSIM_SUPEROPERATOR)
             ])
 
+    @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
+    def test_kraus_sampling_distribution(self, kraus_sampling):
+        """Kraus channel sampling must match analytic Born-rule probabilities,
+        and each outcome state must equal the normalized K_i |psi> for the
+        branch taken. Written against behavior, not implementation, so both
+        sampling modes are held to the same distributional contract."""
+
+        # Asymmetric initial state so branch probabilities are state-dependent
+        # and unequal -- catches interval/boundary and ordering bugs that a
+        # symmetric 50/50 channel would mask
+        theta = 0.4
+        psi = np.array([np.cos(theta), np.sin(theta)], dtype=np.complex128)
+
+        def run_trials(reptuple, Ks, n_trials, seed):
+            # Analytic branch probabilities and post-application states
+            probs_exact = [np.linalg.norm(K @ psi) ** 2 for K in Ks]
+            posts_exact = [K @ psi / np.linalg.norm(K @ psi) for K in Ks]
+            assert np.isclose(sum(probs_exact), 1)
+
+            test = SVState(
+                psi.copy(), ["Q0"], seed=seed, kraus_sampling=kraus_sampling
+            )
+            counts = [0] * len(Ks)
+            for _ in range(n_trials):
+                test._state = psi.copy()  # manual reset, RNG stream continues
+                test.apply_reps_inplace([reptuple])
+
+                # Identify the branch by phase-insensitive overlap; the output
+                # must *exactly* match that branch's normalized K_i |psi>
+                fids = [
+                    np.abs(np.vdot(post, test.state)) for post in posts_exact
+                ]
+                branch = int(np.argmax(fids))
+                assert np.isclose(fids[branch], 1)
+                counts[branch] += 1
+
+            # Frequencies within 5 sigma (binomial) of Born probabilities --
+            # deterministic given the seed, so no flakiness
+            for count, p in zip(counts, probs_exact):
+                sigma = np.sqrt(p * (1 - p) / n_trials)
+                assert abs(count / n_trials - p) < 5 * sigma
+
+        # Case 1: amplitude damping with all probabilities None
+        # (exercises the state-dependent probability path)
+        gamma = 0.3
+        A0 = np.array([[1, 0], [0, np.sqrt(1 - gamma)]])
+        A1 = np.array([[0, np.sqrt(gamma)], [0, 0]])
+        amp_damp = RepTuple(
+            [(A0, None), (A1, None)], ["Q0"], GateRep.KRAUS_OPERATORS
+        )
+        run_trials(amp_damp, [A0, A1], n_trials=20_000, seed=20260708)
+
+        # Case 2: three operators with a mix of given and None probabilities
+        # (exercises mixed accumulation across the operator list)
+        p_x, p_y = 0.2, 0.1
+        U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        U_Y = np.array([[0, -1j], [1j, 0]])
+        K_I = np.sqrt(1 - p_x - p_y) * np.eye(2)
+        K_X = np.sqrt(p_x) * U_X
+        K_Y = np.sqrt(p_y) * U_Y
+        mixed = RepTuple(
+            [(K_I, 1 - p_x - p_y), (K_X, None), (K_Y, p_y)],
+            ["Q0"],
+            GateRep.KRAUS_OPERATORS,
+        )
+        run_trials(mixed, [K_I, K_X, K_Y], n_trials=20_000, seed=20260708)
+
+        # Case 3: same channel, operator list reversed -- frequencies must
+        # match the same analytic probabilities regardless of list order
+        # (i.e., ordering introduces no bias)
+        mixed_rev = RepTuple(
+            [(K_Y, p_y), (K_X, None), (K_I, 1 - p_x - p_y)],
+            ["Q0"],
+            GateRep.KRAUS_OPERATORS,
+        )
+        run_trials(mixed_rev, [K_Y, K_X, K_I], n_trials=20_000, seed=20260708)
+
+        # Case 4: given probabilities summing to slightly below 1 (float
+        # roundoff) must not raise -- exercises the tail/renormalization
+        # fallback -- and the output state must stay normalized
+        eps = 5e-8
+        leaky = RepTuple(
+            [
+                (np.sqrt(0.5) * U_X, 0.5),
+                (np.sqrt(0.5 - eps) * np.eye(2), 0.5 - eps),
+            ],
+            ["Q0"],
+            GateRep.KRAUS_OPERATORS,
+        )
+        test = SVState(
+            psi.copy(), ["Q0"], seed=20260709, kraus_sampling=kraus_sampling
+        )
+        for _ in range(200):
+            test._state = psi.copy()
+            test.apply_reps_inplace([leaky])
+            assert np.isclose(np.linalg.norm(test.state), 1)
+
+    def test_contraction_matmul_einsum_equivalence(self):
+        """The matmul and einsum block-matvec implementations must produce
+        the same result for arbitrary (non-unitary, non-Hermitian) operators
+        applied to arbitrary qubit subsets, including out-of-order and
+        non-adjacent subsets, up to floating-point summation order."""
+        n_qubits = 6
+        labels = [f"Q{i}" for i in range(n_qubits)]
+        rng = np.random.default_rng(20260709)
+
+        # Random dense state (not normalized -- the contraction is linear,
+        # so equivalence must hold for any vector)
+        vec = rng.standard_normal(
+            (2,) * n_qubits
+        ) + 1j * rng.standard_normal((2,) * n_qubits)
+
+        state_m = SVState(vec.copy(), labels, contraction="matmul")
+        state_e = SVState(vec.copy(), labels, contraction="einsum")
+        assert state_m.contraction == "matmul"
+        assert state_e.contraction == "einsum"
+
+        # 1Q, 2Q, and 3Q targets: in-order, reversed, non-adjacent, endpoints
+        subsets = [
+            ["Q0"],
+            ["Q3"],
+            ["Q5"],
+            ["Q0", "Q1"],
+            ["Q1", "Q0"],
+            ["Q3", "Q1"],
+            ["Q5", "Q0"],
+            ["Q4", "Q2"],
+            ["Q1", "Q4", "Q2"],
+            ["Q5", "Q0", "Q3"],
+        ]
+        for sublbls in subsets:
+            dim = 2 ** len(sublbls)
+            # Random complex operator: no unitarity/symmetry that could
+            # mask index-ordering mistakes
+            op = rng.standard_normal((dim, dim)) + 1j * rng.standard_normal(
+                (dim, dim)
+            )
+            out_m = state_m._block_matvec(op, sublbls, vec)
+            out_e = state_e._block_matvec(op, sublbls, vec)
+            assert out_m.shape == out_e.shape == vec.shape
+            assert np.allclose(out_m, out_e, atol=1e-13), sublbls
+
+        # Sanity check that the comparison is not trivially symmetric:
+        # applying the same operator with swapped target order must NOT
+        # match (in either implementation)
+        op = rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4))
+        assert not np.allclose(
+            state_m._block_matvec(op, ["Q1", "Q3"], vec),
+            state_m._block_matvec(op, ["Q3", "Q1"], vec),
+        )
+        assert not np.allclose(
+            state_e._block_matvec(op, ["Q1", "Q3"], vec),
+            state_e._block_matvec(op, ["Q3", "Q1"], vec),
+        )
+
+    @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
+    def test_contraction_equivalence_end_to_end(self, kraus_sampling):
+        """Same seed, same circuit: matmul and einsum contraction modes must
+        yield identical measurement/Kraus trajectories and matching states.
+
+        Both modes consume the RNG stream identically (contraction mode does
+        not change how randomness is drawn), and their probabilities agree to
+        machine precision, so seeded outcomes must match exactly and the
+        final statevectors must agree up to summation-order roundoff."""
+        n_qubits = 4
+        labels = [f"Q{i}" for i in range(n_qubits)]
+        seed = 20260709
+
+        U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+        U_CZ = np.diag([1, 1, 1, -1]).astype(np.complex128)
+
+        # 1Q amplitude damping, state-dependent probabilities
+        gamma = 0.1
+        A0 = np.array([[1, 0], [0, np.sqrt(1 - gamma)]])
+        A1 = np.array([[0, np.sqrt(gamma)], [0, 0]])
+
+        # 2Q channel with mixed given/None probabilities, applied to an
+        # out-of-order, non-adjacent qubit pair
+        p_xx = 0.2
+        U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        K_II = np.sqrt(1 - p_xx) * np.eye(4)
+        K_XX = np.sqrt(p_xx) * np.kron(U_X, U_X)
+
+        reps = (
+            [RepTuple(U_H, [q], GateRep.UNITARY) for q in labels]
+            + [
+                RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY),
+                RepTuple(U_CZ, ["Q2", "Q3"], GateRep.UNITARY),
+            ]
+            + [
+                RepTuple(
+                    [(A0, None), (A1, None)], [q], GateRep.KRAUS_OPERATORS
+                )
+                for q in labels
+            ]
+            + [
+                RepTuple(
+                    [(K_II, 1 - p_xx), (K_XX, None)],
+                    ["Q3", "Q1"],
+                    GateRep.KRAUS_OPERATORS,
+                ),
+                RepTuple(
+                    (None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION
+                ),
+                RepTuple((0, True), ["Q2"], InstrumentRep.ZBASIS_PROJECTION),
+            ]
+        )
+
+        def run(contraction):
+            state = SVState(
+                [0] * n_qubits,
+                labels,
+                seed=seed,
+                kraus_sampling=kraus_sampling,
+                contraction=contraction,
+            )
+            outcomes = []
+            for _ in range(20):
+                outs = state.apply_reps_inplace(reps)
+                outcomes.append({k: list(v) for k, v in outs.items()})
+            return state, outcomes
+
+        state_m, outcomes_m = run("matmul")
+        state_e, outcomes_e = run("einsum")
+
+        assert outcomes_m == outcomes_e
+        assert np.allclose(state_m.state, state_e.state, atol=1e-12)
+
     def test_apply_instruments(self):
         # H gate to get + state for testing
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)

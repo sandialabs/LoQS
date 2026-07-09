@@ -384,8 +384,12 @@ class Instruction(Displayable):
             [](api:Instruction) and the input parameters appended for
             informational/debugging purposes
         """
-        # Pull out only kwargs we need
-        apply_kwargs = {k: kwargs[k] for k in self.param_priorities}
+        # Pull out only kwargs we need; params omitted at collection time
+        # (see param_error_behavior "continue") stay omitted so the
+        # apply_fn's own defaults apply
+        apply_kwargs = {
+            k: kwargs[k] for k in self.param_priorities if k in kwargs
+        }
 
         applied_frame = self.apply_fn(**apply_kwargs)
 

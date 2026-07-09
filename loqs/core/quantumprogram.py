@@ -635,19 +635,27 @@ class QuantumProgram(Displayable):
             for i, (key, priorities) in enumerate(
                 inst.param_priorities.items()
             ):
-                apply_kwargs[key] = program._collect_kwarg(
-                    position=i,
-                    key=inst.param_alias(
-                        key
-                    ),  # Unalias for expected frame key
-                    priorities=priorities,
-                    label_args=label_args,
-                    label_kwargs=label_kwargs,
-                    instruction_data=inst.data,
-                    program_data=program_data,
-                    history=history,
-                    name=inst.name,
-                )
+                try:
+                    apply_kwargs[key] = program._collect_kwarg(
+                        position=i,
+                        key=inst.param_alias(
+                            key
+                        ),  # Unalias for expected frame key
+                        priorities=priorities,
+                        label_args=label_args,
+                        label_kwargs=label_kwargs,
+                        instruction_data=inst.data,
+                        program_data=program_data,
+                        history=history,
+                        name=inst.name,
+                    )
+                except RuntimeError:
+                    # With "continue" error behavior (e.g. object builders),
+                    # an uncollectable parameter is omitted so the apply_fn
+                    # (or the constructed object's) default applies
+                    if inst.param_error_behavior == "continue":
+                        continue
+                    raise
 
             applied_frame = inst.apply(**apply_kwargs)
 
@@ -913,8 +921,12 @@ class QuantumProgram(Displayable):
                             "Invalid index spec for history priority for {name}"
                         )
 
-                # Collect the requested data
-                data = history.collect_data(key, idxs)
+                # Collect the requested data; out-of-range indices (e.g.
+                # history[-1] on an empty history) mean "not found here"
+                try:
+                    data = history.collect_data(key, idxs)
+                except IndexError:
+                    continue
                 if isinstance(data, list):
                     if any([d is not None for d in data]):
                         return data
