@@ -79,20 +79,20 @@ import loqs.tools.qectools as qt
 
 
 def create_qec_code(
-    auxiliary_reuse: bool = False,
+    layout: Literal["surf17", "surf13", "surf10"] = "surf17",
     include_idles: bool = False,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     num_qec_rounds: int = 3,
 ) -> QECCode:
-    """Create a QECCode implementing the Surface-17 or Surface-13 code.
+    """Create a QECCode implementing the Surface-17, Surface-13, or Surface-10 code.
 
     Parameters
     ----------
-    auxiliary_reuse : bool, optional
-        Whether to implement Surface-13 with auxiliary qubit reuse (True)
-        or standard Surface-17 (False, default).
+    layout : str, optional
+        Whether to implement "surf17" (default), "surf13" (4 auxiliary qubits),
+        or "surf10" (1 auxiliary qubit).
 
     include_idles : bool, optional
         Whether to include (True) or not (False, default) idle gates
@@ -116,12 +116,17 @@ def create_qec_code(
     QECCode
         A QECCode implementing the surface code.
     """
-    if auxiliary_reuse:
+    if layout == "surf10":
+        qubits = [f"D{i}" for i in range(9)] + ["A9"]
+        name = "Surface-10 Code"
+    elif layout == "surf13":
         qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
         name = "Surface-13 Code"
-    else:
+    elif layout == "surf17":
         qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
         name = "Surface-17 Code"
+    else:
+        raise ValueError(f"Unknown layout: {layout}")
 
     data_qubits = [f"D{i}" for i in range(9)]
     instructions: dict[str, Instruction] = {}
@@ -331,7 +336,7 @@ def create_qec_code(
         X_template.pad_single_qubit_idles_by_duration_inplace(idle_gates, gate_durations)
         Z_template.pad_single_qubit_idles_by_duration_inplace(idle_gates, gate_durations)
 
-    if not auxiliary_reuse:
+    if layout == "surf17":
         # Surface-17
         X_tiles = [
             [None, None, "D1", "D2", "A9"],
@@ -352,7 +357,7 @@ def create_qec_code(
             Z_template, qubits, Z_tiles, merge_offsets=0
         )
         full_syndrome_circ = X_syndrome.merge(Z_syndrome, 0)
-    else:
+    elif layout == "surf13":
         # Surface-13
         X_tiles_mapped = [
             [None, None, "D1", "D2", "A9"],
@@ -373,6 +378,29 @@ def create_qec_code(
             Z_template, qubits, Z_tiles_mapped, merge_offsets=0
         )
         full_syndrome_circ = X_syndrome.append(Z_syndrome)
+    elif layout == "surf10":
+        # Surface-10
+        X_tiles_10 = [
+            [None, None, "D1", "D2", "A9"],
+            ["D0", "D1", "D3", "D4", "A9"],
+            ["D4", "D5", "D7", "D8", "A9"],
+            ["D6", "D7", None, None, "A9"],
+        ]
+        Z_tiles_10 = [
+            [None, "D0", None, "D3", "A9"],
+            ["D1", "D2", "D4", "D5", "A9"],
+            ["D3", "D4", "D6", "D7", "A9"],
+            ["D5", None, "D8", None, "A9"],
+        ]
+        circuits = []
+        for tile in X_tiles_10:
+            circuits.append(circuit_backend.from_circuit_tiling(X_template, qubits, [tile], merge_offsets=0))
+        for tile in Z_tiles_10:
+            circuits.append(circuit_backend.from_circuit_tiling(Z_template, qubits, [tile], merge_offsets=0))
+            
+        full_syndrome_circ = circuits[0]
+        for c in circuits[1:]:
+            full_syndrome_circ = full_syndrome_circ.append(c)
 
     instructions["Syndrome Extraction"] = builders.build_physical_circuit_instruction(
         full_syndrome_circ,
@@ -400,7 +428,7 @@ def create_qec_code(
         [0, 0, 0, 0, 0, 1, 0, 0, 1], # SZ3
     ])
 
-    if not auxiliary_reuse:
+    if layout == "surf17":
         # Surface-17
         syndrome_labels_X = [
             SyndromeLabel("A11", -1, 0),
@@ -414,7 +442,7 @@ def create_qec_code(
             SyndromeLabel("A13", -1, 0),
             SyndromeLabel("A15", -1, 0),
         ]
-    else:
+    elif layout == "surf13":
         # Surface-13
         syndrome_labels_X = [
             SyndromeLabel("A11", -1, 0),
@@ -427,6 +455,20 @@ def create_qec_code(
             SyndromeLabel("A12", -1, 1),
             SyndromeLabel("A9",  -1, 1),
             SyndromeLabel("A11", -1, 1),
+        ]
+    elif layout == "surf10":
+        # Surface-10
+        syndrome_labels_X = [
+            SyndromeLabel("A9", -1, 0),
+            SyndromeLabel("A9", -1, 1),
+            SyndromeLabel("A9", -1, 2),
+            SyndromeLabel("A9", -1, 3),
+        ]
+        syndrome_labels_Z = [
+            SyndromeLabel("A9", -1, 4),
+            SyndromeLabel("A9", -1, 5),
+            SyndromeLabel("A9", -1, 6),
+            SyndromeLabel("A9", -1, 7),
         ]
 
     try:

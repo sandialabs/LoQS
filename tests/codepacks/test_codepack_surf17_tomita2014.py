@@ -1,6 +1,7 @@
 """Tester for loqs.codepacks.codepack_surf17_tomita2014"""
 
 import pytest
+from typing import Literal
 
 pygsti = pytest.importorskip("pygsti")
 
@@ -19,13 +20,15 @@ from loqs.tools import fttools
 class TestSurf17Codepack:
 
     @staticmethod
-    def _create_program(circuit_backend, model_backend, state_backend, auxiliary_reuse=False, basis="Z"):
+    def _create_program(circuit_backend, model_backend, state_backend, layout: Literal["surf17", "surf13", "surf10"] = "surf17", basis="Z"):
         code_surf = codepack_surf17.create_qec_code(
-            auxiliary_reuse=auxiliary_reuse,
+            layout=layout,
             circuit_backend=circuit_backend,
         )
 
-        if auxiliary_reuse:
+        if layout == "surf10":
+            qubits = [f"D{i}" for i in range(9)] + ["A9"]
+        elif layout == "surf13":
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
         else:
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
@@ -58,7 +61,7 @@ class TestSurf17Codepack:
             name=f"Prep {basis}, measure {basis}",
         )
 
-    @pytest.mark.parametrize("auxiliary_reuse", [False, True])
+    @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
     @pytest.mark.parametrize("workflow", [
         # Z-basis tests
         ("Z", [], 0),                                       # Prep 0, measure Z -> 0
@@ -71,7 +74,7 @@ class TestSurf17Codepack:
         # H gate tests
         ("Z", [("H", "L0")], 0),                             # Prep 0, apply H (becomes +), measure X -> 0
     ])
-    def test_workflow(self, auxiliary_reuse, workflow):
+    def test_workflow(self, layout, workflow):
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
         state_backend = NumpyStatevectorQuantumState
@@ -85,11 +88,13 @@ class TestSurf17Codepack:
             circuit_backend,
             model_backend,
             state_backend,
-            auxiliary_reuse=auxiliary_reuse,
+            layout=layout,
             basis=prep_basis,
         )
 
-        if auxiliary_reuse:
+        if layout == "surf10":
+            qubits = [f"D{i}" for i in range(9)] + ["A9"]
+        elif layout == "surf13":
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
         else:
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
@@ -110,19 +115,21 @@ class TestSurf17Codepack:
         program_results = program.run()
         assert program_results.collect_shot_data("logical_measurement", -1)[0] == expected
 
-    @pytest.mark.parametrize("auxiliary_reuse", [False, True])
-    def test_qec_fault_tolerance(self, auxiliary_reuse):
+    @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
+    def test_qec_fault_tolerance(self, layout):
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
         state_backend = STIMQuantumState
 
         code_surf = codepack_surf17.create_qec_code(
-            auxiliary_reuse=auxiliary_reuse,
+            layout=layout,
             circuit_backend=circuit_backend,
             num_qec_rounds=3,
         )
 
-        if auxiliary_reuse:
+        if layout == "surf10":
+            qubits = [f"D{i}" for i in range(9)] + ["A9"]
+        elif layout == "surf13":
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
         else:
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
@@ -166,18 +173,20 @@ class TestSurf17Codepack:
         )
         assert len(failed) == 0
 
-    @pytest.mark.parametrize("auxiliary_reuse", [False, True])
-    def test_measurement_fault_tolerance(self, auxiliary_reuse):
+    @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
+    def test_measurement_fault_tolerance(self, layout):
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
         state_backend = STIMQuantumState
 
         code_surf = codepack_surf17.create_qec_code(
-            auxiliary_reuse=auxiliary_reuse,
+            layout=layout,
             circuit_backend=circuit_backend,
         )
 
-        if auxiliary_reuse:
+        if layout == "surf10":
+            qubits = [f"D{i}" for i in range(9)] + ["A9"]
+        elif layout == "surf13":
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
         else:
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
