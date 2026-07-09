@@ -26,7 +26,7 @@ class TestPyGSTiPhysicalCircuit:
 
     def _check(self, circ, expected_circ):
         assert circ.circuit == expected_circ
-        assert circ.qubit_labels == expected_circ.line_labels
+        assert list(circ.qubit_labels) == list(expected_circ.line_labels)
 
     def test_init(self):
         # Base initializer
@@ -95,10 +95,10 @@ class TestPyGSTiPhysicalCircuit:
         # Set qubits
         pc = PhysCirc(self.test_circ)
         pc2 = pc.set_qubit_labels(test_circ2.line_labels)
-        assert pc2.qubit_labels == test_circ2.line_labels
+        assert list(pc2.qubit_labels) == list(test_circ2.line_labels)
 
         pc.set_qubit_labels_inplace(self.test_circ.line_labels)
-        assert pc.qubit_labels == self.test_circ.line_labels
+        assert list(pc.qubit_labels) == list(self.test_circ.line_labels)
         
         # Delete qubits
         pc3 = PhysCirc(test_circ2)
