@@ -12,7 +12,8 @@ The following installation instructions can be used on M1/M2 Macs using Anaconda
 ```
 conda create -n loqs-env python=3.14
 conda activate loqs-env
-pip install -e .
+pip install loqs
+# pip install -e . ## for "editable" cloned repo install
 ```
 
 There are various optional requirements that are available, including:

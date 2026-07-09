@@ -37,7 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.11', '3.12', '3.13', '3.14']
-        loqs-optional: ["all"] #"test", # Test is no backends/dask for minimal install testing, TODO but currently pygsti import missing somewhere
+        loqs-optional: ["all", "test"] #Test is no backends/dask for minimal install testing
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run complete LoQS tests
     with:

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import numpy as np
-from typing import ClassVar, Literal, TypeAlias, TypeVar
+from typing import ClassVar, Literal, TypeAlias, TypeVar, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 
 from loqs.backends.circuit import BasePhysicalCircuit, ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
-from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
@@ -108,18 +110,19 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         if isinstance(model_or_dicts, DictNoiseModel):
             gate_dict = model_or_dicts.gate_dict.copy()
             inst_dict = model_or_dicts.inst_dict.copy()
-        elif isinstance(model_or_dicts, PyGSTiNoiseModel):
-            for gate_key in model_or_dicts.gate_keys:
+        elif type(model_or_dicts).__name__ == "PyGSTiNoiseModel":
+            pygsti_model: Any = model_or_dicts
+            for gate_key in pygsti_model.gate_keys:
                 label = (gate_key.name, gate_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
-                gate_dict[label] = model_or_dicts.get_reps(
+                gate_dict[label] = pygsti_model.get_reps(
                     circ, gatereps=gatereps, instreps=instreps
                 )[0][0]
 
-            for inst_key in model_or_dicts.instrument_keys:
+            for inst_key in pygsti_model.instrument_keys:
                 label = (inst_key.name, inst_key.qubits)
                 circ = ListPhysicalCircuit([[label]])
-                inst_dict[label] = model_or_dicts.get_reps(
+                inst_dict[label] = pygsti_model.get_reps(
                     circ, gatereps=gatereps, instreps=instreps
                 )[0][0]
 

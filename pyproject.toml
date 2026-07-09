@@ -1,6 +1,6 @@
 [project]
 name = "loqs"
-version = "1.1.1"
+version = "1.1"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
@@ -20,8 +20,8 @@ authors = [
     {name = "Mario Morford-Oberst", email = "mmorfor@sandia.gov"},
 ]
 maintainers = [
-    {name = "Stefan Seritan", email = "sserita@sandia.gov"},
-    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"}
+    {name = "Kenneth Rudinger", email = "kmrudin@sandia.gov"},
+    {name = "Stefan Seritan", email = "sserita@sandia.gov"}
 ]
 description = "Logical Qubit Simulator (LoQS)"
 readme = "README.md"

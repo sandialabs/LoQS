@@ -40,7 +40,7 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables import QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
-import loqs.tools.pygstitools as pt
+import loqs.tools.qectools as qt
 
 
 def create_qec_code(
@@ -1090,6 +1090,7 @@ def create_ideal_model(  # noqa: C901
                             pygsti.tools.unitary_to_pauligate(U)
                         )
                     elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                        import loqs.tools.pygstitools as pt
                         gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
                     else:
                         raise NotImplementedError(
