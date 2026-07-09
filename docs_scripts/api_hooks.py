@@ -267,10 +267,35 @@ def _rewrite_constructor_labels(html: str) -> str:
     return out
 
 
+def get_rtd_prefix() -> str:
+    import os
+    from urllib.parse import urlparse
+    canonical_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
+    if canonical_url:
+        path = urlparse(canonical_url).path.rstrip("/")
+        if path:
+            return path
+    return ""
+
+
+def on_config(config):
+    import os
+    from urllib.parse import urlparse
+    canonical_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
+    if canonical_url:
+        rtd_path = urlparse(canonical_url).path.rstrip("/")
+        if rtd_path:
+            config["extra"]["main_site_url"] = f"{rtd_path}/"
+    return config
+
+
 def _rewrite_rendered_api_links(output: str, inv: ApiInventory, *, src: str) -> str:
+    rtd_prefix = get_rtd_prefix()
+    ref_prefix = f"{rtd_prefix}/reference" if rtd_prefix else "/reference"
+
     def repl(m: re.Match) -> str:
         target = m.group("target").strip()
-        url = resolve_api_target_url(inv, target, src=src, prefix="/reference", allow_external=True)
+        url = resolve_api_target_url(inv, target, src=src, prefix=ref_prefix, allow_external=True)
 
         body = (m.group("body") or "").strip()
         if not body:
@@ -314,11 +339,14 @@ def _rewrite_rendered_api_links(output: str, inv: ApiInventory, *, src: str) -> 
 
 
 def _rewrite_typed_spans(output: str, inv: ApiInventory) -> str:
+    rtd_prefix = get_rtd_prefix()
+    ref_prefix = f"{rtd_prefix}/reference" if rtd_prefix else "/reference"
+
     def repl(m: re.Match) -> str:
         target = m.group("target").strip()
         label = (m.group("label") or "").strip() or target.split(".")[-1]
         try:
-            url = inv.resolve_mounted_url(target, prefix="/reference")
+            url = inv.resolve_mounted_url(target, prefix=ref_prefix)
         except KeyError:
             return m.group(0)
         return f'<a href="{url}">{label}</a>'
@@ -327,6 +355,9 @@ def _rewrite_typed_spans(output: str, inv: ApiInventory) -> str:
 
 
 def _rewrite_citations(output: str) -> str:
+    rtd_prefix = get_rtd_prefix()
+    ref_prefix = f"{rtd_prefix}/reference" if rtd_prefix else "/reference"
+
     def repl(m: re.Match) -> str:
         keys_raw = m.group("keys")
         keys: list[str] = []
@@ -341,7 +372,7 @@ def _rewrite_citations(output: str) -> str:
         if not keys:
             return m.group(0)
 
-        links = [f'<a class="citation" href="/reference/bib/#fn:{k}">{k}</a>' for k in keys]
+        links = [f'<a class="citation" href="{ref_prefix}/bib/#fn:{k}">{k}</a>' for k in keys]
         return "[" + "; ".join(links) + "]"
 
     return CITE_BRACKET_RE.sub(repl, output)

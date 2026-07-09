@@ -18,6 +18,33 @@ from pathlib import Path
 from docs_scripts.api_inventory import ApiInventory, rewrite_api_links
 
 
+def get_rtd_prefix() -> str:
+    import os
+    from urllib.parse import urlparse
+    canonical_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
+    if canonical_url:
+        path = urlparse(canonical_url).path.rstrip("/")
+        if path:
+            return path
+    return ""
+
+
+def on_nav(nav, config, files):
+    rtd_prefix = get_rtd_prefix()
+    if not rtd_prefix:
+        return nav
+
+    def walk_items(items):
+        for item in items:
+            if hasattr(item, "url") and item.url == "/reference":
+                item.url = f"{rtd_prefix}/reference"
+            if hasattr(item, "children") and item.children:
+                walk_items(item.children)
+
+    walk_items(nav.items)
+    return nav
+
+
 def on_page_markdown(markdown: str, page, config, files) -> str:
     """
     Rewrite `[text](api:Target)` into `/reference/...` URLs and resolve Binder branch placeholders.
@@ -49,4 +76,6 @@ def on_page_markdown(markdown: str, page, config, files) -> str:
 
     inv = ApiInventory.load(inv_path)
     src = getattr(page.file, "src_path", "") if hasattr(page, "file") else ""
-    return rewrite_api_links(markdown, inv, url_prefix="/reference", page_src=src)
+    rtd_prefix = get_rtd_prefix()
+    url_prefix = f"{rtd_prefix}/reference" if rtd_prefix else "/reference"
+    return rewrite_api_links(markdown, inv, url_prefix=url_prefix, page_src=src)
