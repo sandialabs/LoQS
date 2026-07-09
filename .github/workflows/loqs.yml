@@ -37,7 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.11', '3.12', '3.13', '3.14']
-        loqs-optional: ["all"] #"test", # Test is no backends/dask for minimal install testing, but currently env is off. Turn off for now.
+        loqs-optional: ["all"] #"test", # Test is no backends/dask for minimal install testing, TODO but currently pygsti import missing somewhere
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run complete LoQS tests
     with:
@@ -60,9 +60,11 @@ jobs:
           result="${{ needs.full-unit-tests.result }}"
           if [ "$result" == "success" ]; then exit 0; else exit 1; fi
   
+  # Build docs if either minimal or full unit tests ran and succeeded
   docs:
     runs-on: ubuntu-latest
-    needs: minimal-unit-tests
+    needs: [full-unit-tests, minimal-unit-tests]
+      if: ${{ always() && (needs.full-unit-tests.result == 'success' || needs.minimal-unit-tests.result == 'success') }}
     steps:
     - uses: actions/checkout@v4
 
