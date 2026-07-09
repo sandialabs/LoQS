@@ -394,11 +394,26 @@ class Test5QCodepack:
                 1,
                 1,
                 "Non-FT state decoder circuit result",
-                MeasurementOutcomes({"D2": [0], "D3": [0], "D4": [0], "D5": [0], "D6": [1]}),
+                 MeasurementOutcomes({"D2": [0], "D3": [0], "D4": [0], "D5": [0], "D6": [1]}),
                 "FT Logical X Measure Classical Decoder result",
                 "IIIIX", # Remember that this is the decoded error
                 [0, 0, 0, 0, 0],
                 1
             ]
         )
-            
+
+    def test_h_syndrome_permutation(self):
+        ref_program = self._create_program(PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState)
+        stack = [
+            ("Init State", None, (len(self.qubits),), {"qubit_labels": self.qubits}),
+            ("Init Patch 5Q", None, ("L0", self.qubits)),
+            ("Non-FT Minus Prep", "L0", (), {"error_injections": [(2, "Gzpi", 2)]}),
+            ("Unflagged QEC", "L0"),
+            ("H", "L0"),
+        ]
+        program = QuantumProgram.from_quantum_program(ref_program, stack)
+        results = program.run()
+        history = results.shot_histories[0]
+        h_frame = history[-1]
+        assert "raw_syndrome" in h_frame
+        assert h_frame["raw_syndrome"] == [0, 1, 1, 0]

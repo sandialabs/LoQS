@@ -20,6 +20,7 @@ Thus, we will have 7 qubits total: 5 data and 2 auxiliary.
 """
 
 from collections.abc import Sequence
+import copy
 import itertools
 from typing import Mapping
 import numpy as np
@@ -33,7 +34,7 @@ from loqs.backends.model.basemodel import (
 )
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.core import Instruction, QECCode
+from loqs.core import Instruction, QECCode, History
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
@@ -44,6 +45,7 @@ from loqs.core.instructions.instructionlabel import (
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.syndromelabel import SyndromeLabel
 import loqs.tools.pygstitools as pt
 import loqs.tools.qectools as qt
 
@@ -284,11 +286,66 @@ def create_qec_code(
             name="Logical H circuit",
         )
     )
-    instructions["Logical H permutation"] = (
-        builders.build_patch_permute_instruction(
-            {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"},  # initial: final
-            name="Logical H permutation",
-        )
+    mapping = {"D0": "D3", "D1": "D0", "D3": "D4", "D4": "D1"}
+    data = {"mapping": mapping}
+
+    def H_permutation_apply_fn(
+        patch_label: str,
+        mapping: Mapping[str | int, str | int],
+        patches: PatchDict,
+    ) -> Frame:
+        assert (
+            patch_label in patches
+        ), f"Patch permute failed, could not find patch {patch_label}"
+
+        patch = patches[patch_label]
+        code = patch.code
+        qubits = patch.qubits
+
+        # get(q, q) ensures non-specified qubits are unchanged
+        mapped_qubits = [mapping.get(q, q) for q in qubits]
+        permuted_patch = code.create_patch(mapped_qubits)
+
+        # Retrieve and permute raw_syndrome from patch.data
+        prev_syndrome = patch.data.get("raw_syndrome", None)
+
+        new_patches = patches.copy()
+        new_patch = permuted_patch.copy()
+        new_patch.data = copy.deepcopy(patch.data)
+
+        if prev_syndrome is not None:
+            assert len(prev_syndrome) == 4
+            s0, s1, s2, s3 = prev_syndrome
+            new_s0 = s0 ^ s1 ^ s2 ^ s3
+            new_s1 = s2
+            new_s2 = s0
+            new_s3 = s3
+            new_patch.data["raw_syndrome"] = [new_s0, new_s1, new_s2, new_s3]
+
+        new_patches[patch_label] = new_patch
+
+        # Also return raw_syndrome in Frame so it's logged to history
+        new_frame_data: dict[str, object] = {"patches": new_patches}
+        if prev_syndrome is not None:
+            new_frame_data["raw_syndrome"] = new_patch.data["raw_syndrome"]
+
+        return Frame(new_frame_data)
+
+    def H_permutation_map_qubits_fn(
+        qubit_mapping: Mapping[str | int, str | int],
+        mapping: Mapping[str | int, str | int],
+    ) -> KwargDict:
+        new_mapping = {
+            qubit_mapping[k]: qubit_mapping[v] for k, v in mapping.items()
+        }
+        return {"mapping": new_mapping}
+
+    instructions["Logical H permutation"] = Instruction(
+        apply_fn=H_permutation_apply_fn,
+        data=data,
+        map_qubits_fn=H_permutation_map_qubits_fn,
+        name="Logical H permutation",
+        type="Patch Permuter",
     )
 
     instructions["H"] = builders.build_composite_instruction(
@@ -1780,14 +1837,61 @@ def _create_unflagged_QEC_instruction(
     unflagged_lookup_table = {k: v[0] for k, v in syndrome_dict.items()}
 
     # Take the first measurement from A0 qubit for last 4 instructions as syndrome
-    syndrome_labels = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
-    instructions["Unflagged Decoder"] = (
-        builders.build_lookup_decoder_instruction(
-            lookup_table=unflagged_lookup_table,
-            syndrome_labels=syndrome_labels,
-            raw_syndrome_frame_key="raw_syndrome",
-            name="Unflagged decoder",
-        )
+    # TODO: Generalize the lookup decoder builder to deal with syndrome in patch
+    def unflagged_decoder_apply_fn(
+        patch_label: str,
+        patches: PatchDict,
+        syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
+    ) -> Frame:
+        if isinstance(syndrome_outcomes, MeasurementOutcomes):
+            syndrome_outcomes = [syndrome_outcomes]
+
+        patch = patches[patch_label]
+
+        # Extract syndrome across multiple historical check frames using SyndromeLabel
+        syndrome_labels_raw = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
+        syndrome_labels = [SyndromeLabel.cast(lbl) for lbl in syndrome_labels_raw]
+        syndrome: list[int] = []
+        for synlbl in syndrome_labels:
+            frame_outcomes = syndrome_outcomes[synlbl.frame_idx]
+            outcome = frame_outcomes[synlbl.qubit_label][synlbl.outcome_idx]
+            syndrome.append(outcome)
+
+        # Diff against last syndrome in patch.data
+        prev_syndrome = patch.data.get("raw_syndrome", None)
+        if prev_syndrome is None:
+            syndrome_diff = syndrome
+        else:
+            syndrome_diff = [
+                int(b) for b in np.bitwise_xor(syndrome, prev_syndrome)
+            ]
+
+        # Look up data error
+        syndrome_str = "".join([str(s) for s in syndrome_diff])
+        data_error_str = unflagged_lookup_table[syndrome_str]
+
+        # Update Pauli frame
+        new_pauli_frame = patch.pauli_frame.update_from_pauli_str(data_error_str)
+
+        # Update patches and patch.data with current raw_syndrome
+        new_patch = patch.copy(pauli_frame=new_pauli_frame)
+        new_patch.data["raw_syndrome"] = syndrome
+
+        new_patches = patches.copy()
+        new_patches[patch_label] = new_patch
+
+        return Frame({
+            "patches": new_patches,
+            "raw_syndrome": syndrome,
+            "decoded_error": data_error_str,
+            "syndrome_diff": syndrome_diff,
+        })
+
+    instructions["Unflagged Decoder"] = Instruction(
+        apply_fn=unflagged_decoder_apply_fn,
+        name="Unflagged decoder",
+        param_priorities={"syndrome_outcomes": ["history[-4:]"]},
+        param_aliases={"syndrome_outcomes": "measurement_outcomes"},
     )
 
     # QEC is now just the 4 unflagged checks + decoding
