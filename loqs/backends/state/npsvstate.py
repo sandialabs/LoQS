@@ -41,15 +41,47 @@ but keeping it simple as other types are unlikely.
 
 # TODO: Possible performance improvements:
 # Use QSim's trick of removing measured qubits for smaller statevector
-# Use two 2**N arrays and use einsum's out= to prevent new mem allocations
-# Use einsum_path to chain operations over a whole circuit at once
+# Use two 2**N arrays and matmul's out= to prevent new mem allocations
+# Exploit that Pauli-stochastic Kraus operators are scaled axis permutations
+
+KRAUS_SAMPLING_MODES = ("lazy", "choice")
+"""Supported Kraus sampling modes.
+
+"lazy": inverse-CDF sampling; state-dependent probabilities are computed
+only until the sampled operator is reached (fast, default).
+
+"choice": legacy eager sampling; all state-dependent probabilities are
+computed up front and ``rng.choice`` draws the operator. Consumes the RNG
+stream exactly as LoQS did before lazy sampling existed, so seeded
+trajectories from older runs reproduce bit-for-bit.
+"""
+
+CONTRACTION_MODES = ("matmul", "einsum")
+"""Supported contraction modes for applying operators to the state tensor.
+
+Governs every operator application (unitary gates, Kraus operators, and
+measurement projectors), which all route through the same block matvec.
+
+"matmul": moveaxis + a single BLAS matmul + moveaxis (fast, default).
+
+"einsum": the original ``np.einsum`` contraction, preserved verbatim as an
+independent reference implementation for equivalence testing and
+benchmarking. Amplitudes may differ from "matmul" at machine precision
+(floating-point summation order), but not beyond.
+"""
 
 
 class NumpyStatevectorQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "NumPy Statevector"
 
-    _SERIALIZE_ATTRS = ["_state", "qubit_labels", "seed"]
+    _SERIALIZE_ATTRS = [
+        "_state",
+        "qubit_labels",
+        "seed",
+        "kraus_sampling",
+        "contraction",
+    ]
 
     _SERIALIZE_ATTRS_MAP = {"_state": "state"}
 
@@ -58,6 +90,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     qubit_labels: list[QubitTypes]
     """Qubit labels."""
+
+    kraus_sampling: str
+    """Kraus sampling mode; see [](api:KRAUS_SAMPLING_MODES)."""
+
+    contraction: str
+    """Operator contraction mode; see [](api:CONTRACTION_MODES)."""
 
     @property
     def state(self) -> np.ndarray:
@@ -84,6 +122,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         state: NumpyStatevectorCastableTypes,
         qubit_labels: Sequence[QubitTypes] | None = None,
         seed: int | None = None,
+        kraus_sampling: str | None = None,
+        contraction: str | None = None,
     ) -> None:
         """
         Parameters
@@ -98,15 +138,32 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
         seed:
             Optional RNG seed. If not provided, default NumPy RNG behavior applies.
+
+        kraus_sampling:
+            Kraus sampling mode; see [](api:KRAUS_SAMPLING_MODES). If not
+            provided, inherited from `state` when copy-constructing,
+            otherwise defaults to "lazy".
+
+        contraction:
+            Operator contraction mode; see [](api:CONTRACTION_MODES). If not
+            provided, inherited from `state` when copy-constructing,
+            otherwise defaults to "matmul".
         """
         self.qubit_labels = []
         self.reset_seed(seed)
+        # These may be None here; resolved below
+        self.kraus_sampling = kraus_sampling
+        self.contraction = contraction
 
         if isinstance(state, NumpyStatevectorQuantumState):
             self._state = state._state
             self.qubit_labels = state.qubit_labels
             self.seed = state.seed
             self._rng = state._rng
+            if kraus_sampling is None:
+                self.kraus_sampling = state.kraus_sampling
+            if contraction is None:
+                self.contraction = state.contraction
         elif isinstance(state, int):
             self._state = np.zeros((2,) * state, np.complex128)
             self._state[(0,) * state] = 1
@@ -138,6 +195,19 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         assert len(self.qubit_labels) == len(
             self.state.shape
         ), "Must specify a qubit label for every qubit"
+
+        if self.kraus_sampling is None:  # We haven't set it yet
+            self.kraus_sampling = "lazy"
+        assert self.kraus_sampling in KRAUS_SAMPLING_MODES, (
+            f"kraus_sampling must be one of {KRAUS_SAMPLING_MODES}, "
+            f"got {self.kraus_sampling}"
+        )
+        if self.contraction is None:  # We haven't set it yet
+            self.contraction = "matmul"
+        assert self.contraction in CONTRACTION_MODES, (
+            f"contraction must be one of {CONTRACTION_MODES}, "
+            f"got {self.contraction}"
+        )
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -189,59 +259,153 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         elif reptype == GateRep.KRAUS_OPERATORS:
             assert isinstance(rep, (list, tuple))
             assert all([isinstance(r, tuple) and len(r) == 2 for r in rep])
-
-            Ks = [r[0] for r in rep]
-            probs = [r[1] for r in rep]
             assert all(
                 [
-                    isinstance(K, np.ndarray)
-                    and K.shape == (2 * len(qubits), 2 * len(qubits))
-                    for K in Ks
+                    isinstance(r[0], np.ndarray)
+                    and r[0].shape == (2 ** len(qubits), 2 ** len(qubits))
+                    for r in rep
                 ]
             )
 
-            # Compute any state-dependent probabilities we need to
-            Kprods = {}
-            for i, (K, prob) in enumerate(rep):
-                if prob is None:
-                    # Compute probability
-
-                    Kprod = self._block_matvec(K, qubits, self.state)
-                    prob_calc = np.vdot(Kprod, Kprod)
-                    prob_calc = np.abs(np.real_if_close(prob_calc))
-                    assert np.isreal(prob_calc)
-
-                    probs[i] = prob_calc.real
-                    Kprods[i] = Kprod
-
-            assert all([prob >= 0 for prob in probs])
-            assert np.isclose(sum(probs), 1.0)
-
-            # # Sample
-            try:
-                choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
-            except ValueError:
-                if np.abs(1 - sum(probs)) < 1e-7:
-                    renormed_probs = np.asarray(probs) / np.sum(probs)
-                    choice = self._rng.choice(
-                        range(len(rep)), size=1, p=renormed_probs
-                    )[0]
-
-            # Normalize final subvector
-            try:
-                chosen_Kprod = Kprods[choice]
-            except KeyError:
-                # Was not computed for probability, compute it now
-                chosen_Kprod = self._block_matvec(
-                    Ks[choice], qubits, self.state
-                )
-            self._state = chosen_Kprod / np.sqrt(probs[choice])
+            if self.kraus_sampling == "choice":
+                self._apply_kraus_choice(rep, qubits)
+            else:
+                self._apply_kraus_lazy(rep, qubits)
 
             assert np.isclose(np.linalg.norm(self.state), 1)
         else:
             raise ValueError(f"Cannot apply GateRep {reptype}")
 
+    def _apply_kraus_lazy(self, rep, qubits) -> None:
+        """Apply a Kraus channel using lazy inverse-CDF sampling.
+
+        A single uniform draw selects the operator: operator i owns the
+        interval [C_{i-1}, C_i) of cumulative probabilities, so it is chosen
+        with probability exactly p_i regardless of list order. Probabilities
+        given as None are computed from the state only until the sampled
+        operator is reached, so each Kraus operator is applied at most once
+        and (for low-noise channels with the dominant operator first) the
+        typical cost is a single matvec.
+        """
+        assert self._rng is not None
+        r = self._rng.random()
+
+        cum = 0.0
+        choice = None
+        chosen_prob = None
+        chosen_Kprod = None
+        last_valid = None
+        for i, (K, prob) in enumerate(rep):
+            Kprod = None
+            if prob is None:
+                # Compute state-dependent probability
+                Kprod = self._block_matvec(K, qubits, self.state)
+                prob = np.vdot(Kprod, Kprod).real
+            assert prob >= -1e-9
+            prob = max(prob, 0.0)
+            if prob > 0:
+                last_valid = (i, prob, Kprod)
+            cum += prob
+            if r < cum:
+                choice, chosen_prob, chosen_Kprod = i, prob, Kprod
+                break
+
+        if choice is None:
+            # r landed in the float-roundoff sliver between cum and 1;
+            # fall back to the last operator with nonzero probability
+            assert last_valid is not None and np.isclose(cum, 1.0)
+            choice, chosen_prob, chosen_Kprod = last_valid
+
+        # Normalize final subvector
+        if chosen_Kprod is None:
+            # Probability was given, so the product was never computed
+            chosen_Kprod = self._block_matvec(rep[choice][0], qubits, self.state)
+        self._state = chosen_Kprod / np.sqrt(chosen_prob)
+
+    def _apply_kraus_choice(self, rep, qubits) -> None:
+        """Apply a Kraus channel using legacy eager rng.choice sampling.
+
+        All state-dependent probabilities are computed up front (one matvec
+        per None-probability operator). Kept because it consumes the RNG
+        stream exactly as pre-lazy LoQS did, so old seeded trajectories
+        reproduce bit-for-bit.
+        """
+        Ks = [r[0] for r in rep]
+        probs = [r[1] for r in rep]
+
+        # Compute any state-dependent probabilities we need to
+        Kprods = {}
+        for i, (K, prob) in enumerate(rep):
+            if prob is None:
+                # Compute probability
+
+                Kprod = self._block_matvec(K, qubits, self.state)
+                prob_calc = np.vdot(Kprod, Kprod)
+                prob_calc = np.abs(np.real_if_close(prob_calc))
+                assert np.isreal(prob_calc)
+
+                probs[i] = prob_calc.real
+                Kprods[i] = Kprod
+
+        assert all([prob >= 0 for prob in probs])
+        assert np.isclose(sum(probs), 1.0)
+
+        # # Sample
+        try:
+            choice = self._rng.choice(range(len(rep)), size=1, p=probs)[0]
+        except ValueError:
+            if np.abs(1 - sum(probs)) < 1e-7:
+                renormed_probs = np.asarray(probs) / np.sum(probs)
+                choice = self._rng.choice(
+                    range(len(rep)), size=1, p=renormed_probs
+                )[0]
+            else:
+                raise ValueError(
+                    "Kraus operator probabilities sum to "
+                    f"{sum(probs)}, too far from 1 to renormalize"
+                )
+
+        # Normalize final subvector
+        try:
+            chosen_Kprod = Kprods[choice]
+        except KeyError:
+            # Was not computed for probability, compute it now
+            chosen_Kprod = self._block_matvec(Ks[choice], qubits, self.state)
+        self._state = chosen_Kprod / np.sqrt(probs[choice])
+
     def _block_matvec(self, submat, sublbls, vec) -> np.ndarray:
+        if self.contraction == "einsum":
+            return self._block_matvec_einsum(submat, sublbls, vec)
+        return self._block_matvec_matmul(submat, sublbls, vec)
+
+    def _block_matvec_matmul(self, submat, sublbls, vec) -> np.ndarray:
+        n_sub = len(sublbls)
+        assert len(submat.flat) == 4**n_sub
+
+        # Axes of the state tensor targeted by the operator
+        try:
+            axes = [self.qubit_labels.index(lbl) for lbl in sublbls]
+        except ValueError as e:
+            raise ValueError(
+                "Rep's qubit is not in state's qubit labels\n" + str(e)
+            )
+
+        # Bring the target axes to the front (in sublbls order, matching the
+        # operator's row/column qubit ordering), contract with a single BLAS
+        # matmul, then restore the original axis order. Materialize the
+        # result contiguously: returning a strided view makes every
+        # downstream contraction read badly-ordered memory and is a net loss
+        moved = np.moveaxis(vec, axes, range(n_sub))
+        out = submat.reshape(2**n_sub, 2**n_sub) @ moved.reshape(
+            2**n_sub, -1
+        )
+        return np.ascontiguousarray(
+            np.moveaxis(out.reshape(moved.shape), range(n_sub), axes)
+        )
+
+    def _block_matvec_einsum(self, submat, sublbls, vec) -> np.ndarray:
+        # The original einsum contraction, preserved verbatim as a reference
+        # implementation; must remain equivalent to _block_matvec_matmul
         n_sub = len(sublbls)
         n_tot = len(vec.shape)
         assert len(submat.flat) == 4**n_sub
@@ -269,7 +433,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         vec_out_idxs = [sub_idx_map.get(i, i) for i in range(n_tot)]
 
         # Now perform the einsum
-        # TODO: For multiple back-to-back mults, it might be better to einsum_path
         return np.einsum(
             vec, vec_in_idxs, submat, submat_idxs, vec_out_idxs, optimize=True
         )
@@ -391,6 +554,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             deepcopy(self.state),
             qubit_labels=self.qubit_labels,
             seed=self.seed,
+            kraus_sampling=self.kraus_sampling,
+            contraction=self.contraction,
         )
         new_state._rng = deepcopy(self._rng)
         return new_state

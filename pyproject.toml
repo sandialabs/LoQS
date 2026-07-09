@@ -72,6 +72,7 @@ docs = [
 ]
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]
+pymatching = ["pymatching>=2"]
 stim = [
     "stim>=1",
     "pymatching>=2"
@@ -88,7 +89,7 @@ visualization = [
     "pillow",
     "qiskit[visualization]",
 ]
-backends = ["loqs[quantumsim,pygsti,stim]"]
+backends = ["loqs[quantumsim,pygsti,stim,pymatching]"]
 nobackends = ["loqs[dask,dev,docs,test,visualization]"]
 all = ["loqs[backends,nobackends]"]
 

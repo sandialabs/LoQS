@@ -232,6 +232,7 @@ def create_qec_code(
             name=f"Logical {n}",
         )
     
+
     # We need to update the logical Pauli frame and stabilizer syndrome slices if we have run Logical H circuit
     def H_frame_update_apply_fn(
         patches: PatchDict,

@@ -575,10 +575,12 @@ def build_object_builder_instruction(
 
     # Because we don't know the signature, let's set the priorities ourselves
     # Let's grab all the args from the constructor, excluding self
+    # Params that cannot be collected from any source are omitted at run
+    # time (param_error_behavior="continue"), so constructor defaults apply
     param_priorities = {}
     sig = ins.signature(obj_class)
-    for param in list(sig.parameters):
-        param_priorities[param] = DEFAULT_PRIORITIES
+    for param_name in sig.parameters:
+        param_priorities[param_name] = DEFAULT_PRIORITIES
     # And add on our instruction data information
     for k in data:
         param_priorities[k] = ["instruction"]
