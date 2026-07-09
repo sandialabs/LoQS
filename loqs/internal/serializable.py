@@ -1035,6 +1035,9 @@ class Serializable:
             import_lines = []
             multiline = ""
             for line in f.readlines():
+                stripped = line.strip()
+                if any(stripped.startswith(p) for p in ["#", ">>>", '"""', "'''", "*"]):
+                    continue
                 if len(multiline):
                     multiline += line
                     if ")" in line:

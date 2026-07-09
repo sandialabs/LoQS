@@ -43,7 +43,7 @@ class PauliFrame(SeqCastable, Displayable):
 
     _SERIALIZE_ATTRS = ["pauli_frame", "qubit_labels"]
 
-    __SERIALIZE_ATTRS_MAP = {
+    _SERIALIZE_ATTRS_MAP = {
         "qubit_labels": "frame_or_labels",
         "pauli_frame": "initial_paulis",
     }

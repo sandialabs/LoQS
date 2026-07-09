@@ -67,7 +67,7 @@ def create_qec_code():
     return code
 
 
-def create_ideal_model():
+def create_ideal_model(qubits=None):
     """Create an ideal (noiseless) model for the trivial code.
     
     Returns
