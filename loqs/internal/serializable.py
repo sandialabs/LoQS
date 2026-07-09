@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""[](api:Serializable) definition.
-"""
+"""[](api:Serializable) definition."""
 
 from __future__ import annotations
 
@@ -134,7 +133,7 @@ class Serializable:
     - Format-agnostic API for easy switching between formats
 
     Derived classes should implement:
-    
+
     - `_from_decoded_attrs()`: Create object from decoded attributes
 
     Example:
@@ -1036,7 +1035,10 @@ class Serializable:
             multiline = ""
             for line in f.readlines():
                 stripped = line.strip()
-                if any(stripped.startswith(p) for p in ["#", ">>>", '"""', "'''", "*"]):
+                if any(
+                    stripped.startswith(p)
+                    for p in ["#", ">>>", '"""', "'''", "*"]
+                ):
                     continue
                 if len(multiline):
                     multiline += line

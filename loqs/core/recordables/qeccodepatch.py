@@ -88,6 +88,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         """The Pauli frame tracking errors on these qubits."""
 
         import copy
+
         self.data = copy.deepcopy(data) if data is not None else {}
         """Extra patch-specific data to be tracked."""
 

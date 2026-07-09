@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -22,7 +21,6 @@ from loqs.backends.model.basemodel import GateRep, InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="NumpyStatevectorQuantumState")
 
@@ -319,7 +317,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         # Normalize final subvector
         if chosen_Kprod is None:
             # Probability was given, so the product was never computed
-            chosen_Kprod = self._block_matvec(rep[choice][0], qubits, self.state)
+            chosen_Kprod = self._block_matvec(
+                rep[choice][0], qubits, self.state
+            )
         self._state = chosen_Kprod / np.sqrt(chosen_prob)
 
     def _apply_kraus_choice(self, rep, qubits) -> None:
@@ -396,9 +396,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         # result contiguously: returning a strided view makes every
         # downstream contraction read badly-ordered memory and is a net loss
         moved = np.moveaxis(vec, axes, range(n_sub))
-        out = submat.reshape(2**n_sub, 2**n_sub) @ moved.reshape(
-            2**n_sub, -1
-        )
+        out = submat.reshape(2**n_sub, 2**n_sub) @ moved.reshape(2**n_sub, -1)
         return np.ascontiguousarray(
             np.moveaxis(out.reshape(moved.shape), range(n_sub), axes)
         )

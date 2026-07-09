@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""class:`.History` definition.
-"""
+"""class:`.History` definition."""
 
 from __future__ import annotations
 
@@ -19,7 +18,6 @@ import textwrap
 
 from loqs.core.frame import Frame, FrameCastableTypes
 from loqs.internal import SeqCastable, Displayable
-
 
 T = TypeVar("T", bound="History")
 

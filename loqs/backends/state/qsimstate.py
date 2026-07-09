@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -103,7 +102,7 @@ class QSimQuantumState(BaseQuantumState):
         qubit_labels:
             Optional qubit labels. If not provided, the default range of ints
             is used.
-        
+
         seed:
             Optional RNG seed. If not provided, default NumPy RNG behavior applies.
         """

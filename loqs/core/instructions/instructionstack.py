@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -24,7 +23,6 @@ from loqs.internal import SeqCastable, Displayable
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.encoder.jsonencoder import JSONEncoder
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="InstructionStack")
 

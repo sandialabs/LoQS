@@ -528,7 +528,9 @@ def convert_circuit_to_quantikz(
         quantikz_lines[i] += "} & "
 
     # Layer processing
-    parallel_layers = _process_layers(circuit, gatename_conversion, compress_layers)
+    parallel_layers = _process_layers(
+        circuit, gatename_conversion, compress_layers
+    )
 
     # String processing
     for layer_cache in parallel_layers:
@@ -592,7 +594,9 @@ def convert_circuit_to_quantikz(
     return quantikz
 
 
-def _process_layers(circuit, gatename_conversion, compress_layers: bool = True):
+def _process_layers(
+    circuit, gatename_conversion, compress_layers: bool = True
+):
     num_lines = circuit.width
 
     # Helper to check whether we have space in an existing layer
@@ -631,7 +635,11 @@ def _process_layers(circuit, gatename_conversion, compress_layers: bool = True):
             for comp in comps:
                 idxs = [circuit.line_labels.index(q) for q in comp.qubits]
                 curr_layer_idx = 0
-                interval = list(range(min(idxs), max(idxs) + 1)) if len(idxs) > 1 else idxs
+                interval = (
+                    list(range(min(idxs), max(idxs) + 1))
+                    if len(idxs) > 1
+                    else idxs
+                )
                 while not can_place_in_layer(curr_layer_idx, interval):
                     curr_layer_idx += 1
                 _add_component_to_layer(

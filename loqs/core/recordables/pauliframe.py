@@ -13,7 +13,6 @@ from typing import Sequence, TypeAlias, TypeVar
 
 from loqs.internal import SeqCastable, Displayable
 
-
 U = TypeVar("U", bound="PauliFrame")
 
 PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"

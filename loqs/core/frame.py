@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""[](api:Frame) definition.
-"""
+"""[](api:Frame) definition."""
 
 from __future__ import annotations
 from copy import deepcopy
@@ -20,7 +19,6 @@ from typing import TypeAlias, TypeVar
 
 from loqs.internal import MapCastable, Displayable
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="Frame")
 

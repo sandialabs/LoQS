@@ -1850,7 +1850,9 @@ def _create_unflagged_QEC_instruction(
 
         # Extract syndrome across multiple historical check frames using SyndromeLabel
         syndrome_labels_raw = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
-        syndrome_labels = [SyndromeLabel.cast(lbl) for lbl in syndrome_labels_raw]
+        syndrome_labels = [
+            SyndromeLabel.cast(lbl) for lbl in syndrome_labels_raw
+        ]
         syndrome: list[int] = []
         for synlbl in syndrome_labels:
             frame_outcomes = syndrome_outcomes[synlbl.frame_idx]
@@ -1871,7 +1873,9 @@ def _create_unflagged_QEC_instruction(
         data_error_str = unflagged_lookup_table[syndrome_str]
 
         # Update Pauli frame
-        new_pauli_frame = patch.pauli_frame.update_from_pauli_str(data_error_str)
+        new_pauli_frame = patch.pauli_frame.update_from_pauli_str(
+            data_error_str
+        )
 
         # Update patches and patch.data with current raw_syndrome
         new_patch = patch.copy(pauli_frame=new_pauli_frame)
@@ -1880,12 +1884,14 @@ def _create_unflagged_QEC_instruction(
         new_patches = patches.copy()
         new_patches[patch_label] = new_patch
 
-        return Frame({
-            "patches": new_patches,
-            "raw_syndrome": syndrome,
-            "decoded_error": data_error_str,
-            "syndrome_diff": syndrome_diff,
-        })
+        return Frame(
+            {
+                "patches": new_patches,
+                "raw_syndrome": syndrome,
+                "decoded_error": data_error_str,
+                "syndrome_diff": syndrome_diff,
+            }
+        )
 
     instructions["Unflagged Decoder"] = Instruction(
         apply_fn=unflagged_decoder_apply_fn,

@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -28,7 +27,6 @@ from loqs.backends.reps import (
 )
 from loqs.internal import SeqCastable
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="DictNoiseModel")
 
@@ -51,7 +49,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     inst_dict: dict[MemberLabel, RepTuple]
     """Mapping from labels to [](api:RepTuple) for instrument operations.
     """
-
 
     _SERIALIZE_ATTRS = ["gate_dict", "inst_dict", "_gatereps", "_instreps"]
 

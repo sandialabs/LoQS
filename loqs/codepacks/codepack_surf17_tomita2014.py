@@ -23,8 +23,8 @@ differing only in how the auxiliary (syndrome extraction) qubits are allocated a
 Decoders
 --------
 This codepack implements a Minimum-Weight Perfect Matching (MWPM) decoder using PyMatching
-and Scipy-compatible check matrices. It constructs a 3D Space-Time Matching Graph deferred 
-global decoder that decodes across the QEC cycles and final measurement parities, 
+and Scipy-compatible check matrices. It constructs a 3D Space-Time Matching Graph deferred
+global decoder that decodes across the QEC cycles and final measurement parities,
 achieving full fault tolerance.
 
 Examples
@@ -168,11 +168,8 @@ def create_qec_code(
 
     # X-basis preparation (|+>_L)
     raw_X_prep_circ = circuit_backend(
-        [
-            [("Iz", q) for q in data_qubits],
-            [("Gh", q) for q in data_qubits]
-        ],
-        qubit_labels=qubits
+        [[("Iz", q) for q in data_qubits], [("Gh", q) for q in data_qubits]],
+        qubit_labels=qubits,
     )
     if include_idles:
         raw_X_prep_circ.pad_single_qubit_idles_by_duration_inplace(
@@ -228,9 +225,9 @@ def create_qec_code(
         [
             [("Gzpi", q) for q in ["D0", "D8"]],
             [("Gxpi", q) for q in ["D2", "D6"]],
-            [("Gypi", "D4")]
+            [("Gypi", "D4")],
         ],
-        qubit_labels=qubits
+        qubit_labels=qubits,
     )
     if include_idles:
         logical_Y_circ.pad_single_qubit_idles_by_duration_inplace(
@@ -256,7 +253,9 @@ def create_qec_code(
 
     # Software permutation for H (clockwise 90-degree rotation of the 3x3 data grid)
     # 0->2, 1->5, 2->8, 3->1, 4->4, 5->7, 6->0, 7->3, 8->6
-    def H_permutation_apply_fn(patches: PatchDict, patch_label: str, history: History) -> Frame:
+    def H_permutation_apply_fn(
+        patches: PatchDict, patch_label: str, history: History
+    ) -> Frame:
         patch = patches[patch_label]
         old_frame = patch.pauli_frame
         old_paulis = old_frame.pauli_frame
@@ -264,7 +263,7 @@ def create_qec_code(
         pi = {0: 2, 1: 5, 2: 8, 3: 1, 4: 4, 5: 7, 6: 0, 7: 3, 8: 6}
         for i, p in enumerate(old_paulis):
             new_paulis[pi[i]] = p
-        
+
         new_frame = PauliFrame(old_frame.qubit_labels, new_paulis)
         new_patch = QECCodePatch(patch.code, patch.qubits, new_frame)
         new_patch.data = copy.deepcopy(patch.data)
@@ -295,11 +294,13 @@ def create_qec_code(
         history.propagating_keys.add("syndrome_history_X")
         history.propagating_keys.add("syndrome_history_Z")
 
-        return Frame({
-            "patches": patches,
-            "syndrome_history_X": new_hist_X,
-            "syndrome_history_Z": new_hist_Z,
-        })
+        return Frame(
+            {
+                "patches": patches,
+                "syndrome_history_X": new_hist_X,
+                "syndrome_history_Z": new_hist_Z,
+            }
+        )
 
     instructions["H Permutation"] = Instruction(
         H_permutation_apply_fn,
@@ -312,29 +313,39 @@ def create_qec_code(
     )
 
     # 3. Syndrome Extraction Circuit
-    X_template = circuit_backend([
-        ('Gh', 'aux'),
-        ('Gcnot', 'aux', 'b'),
-        ('Gcnot', 'aux', 'a'),
-        ('Gcnot', 'aux', 'd'),
-        ('Gcnot', 'aux', 'c'),
-        ('Gh', 'aux'),
-        ('Iz', 'aux')
-    ], qubit_labels=['a', 'b', 'c', 'd', 'aux'])
+    X_template = circuit_backend(
+        [
+            ("Gh", "aux"),
+            ("Gcnot", "aux", "b"),
+            ("Gcnot", "aux", "a"),
+            ("Gcnot", "aux", "d"),
+            ("Gcnot", "aux", "c"),
+            ("Gh", "aux"),
+            ("Iz", "aux"),
+        ],
+        qubit_labels=["a", "b", "c", "d", "aux"],
+    )
 
-    Z_template = circuit_backend([
-        [],
-        ('Gcnot', 'b', 'aux'),
-        ('Gcnot', 'a', 'aux'),
-        ('Gcnot', 'd', 'aux'),
-        ('Gcnot', 'c', 'aux'),
-        [],
-        ('Iz','aux')
-    ], qubit_labels=['a', 'b', 'c', 'd', 'aux'])
+    Z_template = circuit_backend(
+        [
+            [],
+            ("Gcnot", "b", "aux"),
+            ("Gcnot", "a", "aux"),
+            ("Gcnot", "d", "aux"),
+            ("Gcnot", "c", "aux"),
+            [],
+            ("Iz", "aux"),
+        ],
+        qubit_labels=["a", "b", "c", "d", "aux"],
+    )
 
     if include_idles:
-        X_template.pad_single_qubit_idles_by_duration_inplace(idle_gates, gate_durations)
-        Z_template.pad_single_qubit_idles_by_duration_inplace(idle_gates, gate_durations)
+        X_template.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
+        Z_template.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
 
     if layout == "surf17":
         # Surface-17
@@ -394,17 +405,27 @@ def create_qec_code(
         ]
         circuits = []
         for tile in X_tiles_10:
-            circuits.append(circuit_backend.from_circuit_tiling(X_template, qubits, [tile], merge_offsets=0))
+            circuits.append(
+                circuit_backend.from_circuit_tiling(
+                    X_template, qubits, [tile], merge_offsets=0
+                )
+            )
         for tile in Z_tiles_10:
-            circuits.append(circuit_backend.from_circuit_tiling(Z_template, qubits, [tile], merge_offsets=0))
-            
+            circuits.append(
+                circuit_backend.from_circuit_tiling(
+                    Z_template, qubits, [tile], merge_offsets=0
+                )
+            )
+
         full_syndrome_circ = circuits[0]
         for c in circuits[1:]:
             full_syndrome_circ = full_syndrome_circ.append(c)
 
-    instructions["Syndrome Extraction"] = builders.build_physical_circuit_instruction(
-        full_syndrome_circ,
-        name="Syndrome Extraction",
+    instructions["Syndrome Extraction"] = (
+        builders.build_physical_circuit_instruction(
+            full_syndrome_circ,
+            name="Syndrome Extraction",
+        )
     )
 
     # 4. Decoder selection
@@ -413,26 +434,30 @@ def create_qec_code(
     Z_stabilizers = ["ZIIZIIIII", "IZZIZZIII", "IIIZZIZZI", "IIIIIZIIZ"]
 
     # H_X maps Z errors (X stabilizers detect Z errors)
-    H_X = np.array([
-        [1, 1, 0, 1, 1, 0, 0, 0, 0], # SX0
-        [0, 1, 1, 0, 0, 0, 0, 0, 0], # SX1
-        [0, 0, 0, 0, 1, 1, 0, 1, 1], # SX2
-        [0, 0, 0, 0, 0, 0, 1, 1, 0], # SX3
-    ])
+    H_X = np.array(
+        [
+            [1, 1, 0, 1, 1, 0, 0, 0, 0],  # SX0
+            [0, 1, 1, 0, 0, 0, 0, 0, 0],  # SX1
+            [0, 0, 0, 0, 1, 1, 0, 1, 1],  # SX2
+            [0, 0, 0, 0, 0, 0, 1, 1, 0],  # SX3
+        ]
+    )
 
     # H_Z maps X errors (Z stabilizers detect X errors)
-    H_Z = np.array([
-        [1, 0, 0, 1, 0, 0, 0, 0, 0], # SZ0
-        [0, 1, 1, 0, 1, 1, 0, 0, 0], # SZ1
-        [0, 0, 0, 1, 1, 0, 1, 1, 0], # SZ2
-        [0, 0, 0, 0, 0, 1, 0, 0, 1], # SZ3
-    ])
+    H_Z = np.array(
+        [
+            [1, 0, 0, 1, 0, 0, 0, 0, 0],  # SZ0
+            [0, 1, 1, 0, 1, 1, 0, 0, 0],  # SZ1
+            [0, 0, 0, 1, 1, 0, 1, 1, 0],  # SZ2
+            [0, 0, 0, 0, 0, 1, 0, 0, 1],  # SZ3
+        ]
+    )
 
     if layout == "surf17":
         # Surface-17
         syndrome_labels_X = [
             SyndromeLabel("A11", -1, 0),
-            SyndromeLabel("A9",  -1, 0),
+            SyndromeLabel("A9", -1, 0),
             SyndromeLabel("A14", -1, 0),
             SyndromeLabel("A16", -1, 0),
         ]
@@ -446,14 +471,14 @@ def create_qec_code(
         # Surface-13
         syndrome_labels_X = [
             SyndromeLabel("A11", -1, 0),
-            SyndromeLabel("A9",  -1, 0),
+            SyndromeLabel("A9", -1, 0),
             SyndromeLabel("A10", -1, 0),
             SyndromeLabel("A12", -1, 0),
         ]
         syndrome_labels_Z = [
             SyndromeLabel("A10", -1, 1),
             SyndromeLabel("A12", -1, 1),
-            SyndromeLabel("A9",  -1, 1),
+            SyndromeLabel("A9", -1, 1),
             SyndromeLabel("A11", -1, 1),
         ]
     elif layout == "surf10":
@@ -499,14 +524,18 @@ def create_qec_code(
             sx_t = []
             for synlbl in syndrome_labels_X:
                 frame_outcomes = syndrome_outcomes[t]
-                outcome = frame_outcomes[synlbl.qubit_label][synlbl.outcome_idx]
+                outcome = frame_outcomes[synlbl.qubit_label][
+                    synlbl.outcome_idx
+                ]
                 sx_t.append(outcome)
             current_sx.append(sx_t)
 
             sz_t = []
             for synlbl in syndrome_labels_Z:
                 frame_outcomes = syndrome_outcomes[t]
-                outcome = frame_outcomes[synlbl.qubit_label][synlbl.outcome_idx]
+                outcome = frame_outcomes[synlbl.qubit_label][
+                    synlbl.outcome_idx
+                ]
                 sz_t.append(outcome)
             current_sz.append(sz_t)
 
@@ -524,11 +553,13 @@ def create_qec_code(
         history.propagating_keys.add("syndrome_history_X")
         history.propagating_keys.add("syndrome_history_Z")
 
-        return Frame({
-            "patches": patches,  # Data qubits kept uncorrected (deferred)
-            "syndrome_history_X": hist_X,
-            "syndrome_history_Z": hist_Z,
-        })
+        return Frame(
+            {
+                "patches": patches,  # Data qubits kept uncorrected (deferred)
+                "syndrome_history_X": hist_X,
+                "syndrome_history_Z": hist_Z,
+            }
+        )
 
     def pymatching_decoder_map_qubits_fn(
         qubit_mapping: Mapping[str | int, str | int],
@@ -538,11 +569,19 @@ def create_qec_code(
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
         new_kwargs["syndrome_labels_X"] = [
-            SyndromeLabel(qubit_mapping.get(lbl.qubit_label, lbl.qubit_label), lbl.frame_idx, lbl.outcome_idx)
+            SyndromeLabel(
+                qubit_mapping.get(lbl.qubit_label, lbl.qubit_label),
+                lbl.frame_idx,
+                lbl.outcome_idx,
+            )
             for lbl in syndrome_labels_X
         ]
         new_kwargs["syndrome_labels_Z"] = [
-            SyndromeLabel(qubit_mapping.get(lbl.qubit_label, lbl.qubit_label), lbl.frame_idx, lbl.outcome_idx)
+            SyndromeLabel(
+                qubit_mapping.get(lbl.qubit_label, lbl.qubit_label),
+                lbl.frame_idx,
+                lbl.outcome_idx,
+            )
             for lbl in syndrome_labels_Z
         ]
         return new_kwargs
@@ -555,13 +594,16 @@ def create_qec_code(
             "num_qec_rounds": num_qec_rounds,
         },
         map_qubits_fn=pymatching_decoder_map_qubits_fn,
-        param_priorities={"syndrome_outcomes": [f"history[-{num_qec_rounds}:]"]},
+        param_priorities={
+            "syndrome_outcomes": [f"history[-{num_qec_rounds}:]"]
+        },
         param_aliases={"syndrome_outcomes": "measurement_outcomes"},
         name="QEC PyMatching Decoder",
     )
 
     instructions["QEC"] = builders.build_composite_instruction(
-        [instructions["Syndrome Extraction"]] * num_qec_rounds + [instructions["Decoder"]],
+        [instructions["Syndrome Extraction"]] * num_qec_rounds
+        + [instructions["Decoder"]],
         name="QEC Cycle",
     )
 
@@ -583,13 +625,17 @@ def create_qec_code(
         raw_X_meas_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
-    instructions["Raw Z Data Measure"] = builders.build_physical_circuit_instruction(
-        raw_Z_meas_circ,
-        name="Raw logical Z-basis measurement",
+    instructions["Raw Z Data Measure"] = (
+        builders.build_physical_circuit_instruction(
+            raw_Z_meas_circ,
+            name="Raw logical Z-basis measurement",
+        )
     )
-    instructions["Raw X Data Measure"] = builders.build_physical_circuit_instruction(
-        raw_X_meas_circ,
-        name="Raw logical X-basis measurement",
+    instructions["Raw X Data Measure"] = (
+        builders.build_physical_circuit_instruction(
+            raw_X_meas_circ,
+            name="Raw logical X-basis measurement",
+        )
     )
 
     # 6. Logical measurements with PyMatching global decoding
@@ -615,12 +661,15 @@ def create_qec_code(
         history: History,
     ) -> Frame:
         import pymatching
+
         patch = patches[patch_label]
         pauli_frame = patch.pauli_frame
-        
+
         # 1. Get raw outcomes corrected by previous physical Pauli frame
-        inferred_outcomes = measurement_outcomes.get_inferred_outcomes(pauli_frame, measurement_basis)
-        
+        inferred_outcomes = measurement_outcomes.get_inferred_outcomes(
+            pauli_frame, measurement_basis
+        )
+
         # 2. Retrieve history of syndromes from the propagating Frame keys
         try:
             hist_X = list(history[-1].get("syndrome_history_X", []))  # type: ignore
@@ -628,115 +677,183 @@ def create_qec_code(
         except (IndexError, AttributeError, KeyError):
             hist_X = []
             hist_Z = []
-            
+
         R = len(hist_X)  # number of previous syndrome rounds
-        
+
         # 3. Final round R+1 syndrome from final measurements
-        data_inferred_bitstring = [inferred_outcomes[q][0] for q in data_qubits]
-        
+        data_inferred_bitstring = [
+            inferred_outcomes[q][0] for q in data_qubits
+        ]
+
         if measurement_basis == "Z":
-            uncorrected = inferred_outcomes["D0"][0] ^ inferred_outcomes["D4"][0] ^ inferred_outcomes["D8"][0]
-            
+            uncorrected = (
+                inferred_outcomes["D0"][0]
+                ^ inferred_outcomes["D4"][0]
+                ^ inferred_outcomes["D8"][0]
+            )
+
             # ReconstructSZ0 to SZ3 (detects X errors)
-            data_inferred_pstr = "".join(["X" if b == 1 else "I" for b in data_inferred_bitstring])
-            sz_final = [int(c) for c in qt.get_syndrome_from_stabilizers_and_pstr(Z_stabilizers, data_inferred_pstr)]
-            
+            data_inferred_pstr = "".join(
+                ["X" if b == 1 else "I" for b in data_inferred_bitstring]
+            )
+            sz_final = [
+                int(c)
+                for c in qt.get_syndrome_from_stabilizers_and_pstr(
+                    Z_stabilizers, data_inferred_pstr
+                )
+            ]
+
             # Form complete syndrome vector sz_history: hist_Z + sz_final
             sz_history = hist_Z + [sz_final]
             num_rounds = R + 1
-            
+
             # Construct 3D space-time matching graph matching_Z dynamically
             matching_Z = pymatching.Matching()
             matching_Z.ensure_num_fault_ids(9)
-            
+
             # Spatial edges for each round t
             for t in range(num_rounds):
                 for j in range(9):
                     nodes = [i for i in range(4) if H_Z[i, j] == 1]
                     fault_ids = {j}
                     if len(nodes) == 2:
-                        matching_Z.add_edge(t * 4 + nodes[0], t * 4 + nodes[1], fault_ids=fault_ids, weight=1.0, merge_strategy='smallest-weight')
+                        matching_Z.add_edge(
+                            t * 4 + nodes[0],
+                            t * 4 + nodes[1],
+                            fault_ids=fault_ids,
+                            weight=1.0,
+                            merge_strategy="smallest-weight",
+                        )
                     elif len(nodes) == 1:
-                        matching_Z.add_boundary_edge(t * 4 + nodes[0], fault_ids=fault_ids, weight=1.0, merge_strategy='smallest-weight')
+                        matching_Z.add_boundary_edge(
+                            t * 4 + nodes[0],
+                            fault_ids=fault_ids,
+                            weight=1.0,
+                            merge_strategy="smallest-weight",
+                        )
             # Temporal edges
             for t in range(num_rounds - 1):
                 for i in range(4):
-                    matching_Z.add_edge(t * 4 + i, (t + 1) * 4 + i, weight=0.9, merge_strategy='smallest-weight')
-                    
+                    matching_Z.add_edge(
+                        t * 4 + i,
+                        (t + 1) * 4 + i,
+                        weight=0.9,
+                        merge_strategy="smallest-weight",
+                    )
+
             # Compute difference syndrome
             diff_sz = []
             for t in range(num_rounds):
                 if t == 0:
                     diff_sz.extend(sz_history[0])
                 else:
-                    diff_sz.extend([a ^ b for a, b in zip(sz_history[t], sz_history[t-1])])
-                    
+                    diff_sz.extend(
+                        [
+                            a ^ b
+                            for a, b in zip(sz_history[t], sz_history[t - 1])
+                        ]
+                    )
+
             # Decode X errors
             correction_Z = matching_Z.decode(np.array(diff_sz, dtype=np.uint8))
-            
+
             # Check if correction flips ZL = Z0 Z4 Z8
             correction_bit = 0
             if len(correction_Z) > 0:
                 for idx in [0, 4, 8]:
                     if idx < len(correction_Z) and correction_Z[idx] == 1:
                         correction_bit ^= 1
-                        
+
             logical_outcome = uncorrected ^ correction_bit
-            
+
         else:  # X basis
-            uncorrected = inferred_outcomes["D2"][0] ^ inferred_outcomes["D4"][0] ^ inferred_outcomes["D6"][0]
-            
+            uncorrected = (
+                inferred_outcomes["D2"][0]
+                ^ inferred_outcomes["D4"][0]
+                ^ inferred_outcomes["D6"][0]
+            )
+
             # Reconstruct SX0 to SX3 (detects Z errors)
-            data_inferred_pstr = "".join(["Z" if b == 1 else "I" for b in data_inferred_bitstring])
-            sx_final = [int(c) for c in qt.get_syndrome_from_stabilizers_and_pstr(X_stabilizers, data_inferred_pstr)]
-            
+            data_inferred_pstr = "".join(
+                ["Z" if b == 1 else "I" for b in data_inferred_bitstring]
+            )
+            sx_final = [
+                int(c)
+                for c in qt.get_syndrome_from_stabilizers_and_pstr(
+                    X_stabilizers, data_inferred_pstr
+                )
+            ]
+
             # Form complete syndrome vector sx_history: hist_X + sx_final
             sx_history = hist_X + [sx_final]
             num_rounds = R + 1
-            
+
             # Construct 3D space-time matching graph matching_X dynamically
             matching_X = pymatching.Matching()
             matching_X.ensure_num_fault_ids(9)
-            
+
             # Spatial edges for each round t
             for t in range(num_rounds):
                 for j in range(9):
                     nodes = [i for i in range(4) if H_X[i, j] == 1]
                     fault_ids = {j}
                     if len(nodes) == 2:
-                        matching_X.add_edge(t * 4 + nodes[0], t * 4 + nodes[1], fault_ids=fault_ids, weight=1.0, merge_strategy='smallest-weight')
+                        matching_X.add_edge(
+                            t * 4 + nodes[0],
+                            t * 4 + nodes[1],
+                            fault_ids=fault_ids,
+                            weight=1.0,
+                            merge_strategy="smallest-weight",
+                        )
                     elif len(nodes) == 1:
-                        matching_X.add_boundary_edge(t * 4 + nodes[0], fault_ids=fault_ids, weight=1.0, merge_strategy='smallest-weight')
+                        matching_X.add_boundary_edge(
+                            t * 4 + nodes[0],
+                            fault_ids=fault_ids,
+                            weight=1.0,
+                            merge_strategy="smallest-weight",
+                        )
             # Temporal edges
             for t in range(num_rounds - 1):
                 for i in range(4):
-                    matching_X.add_edge(t * 4 + i, (t + 1) * 4 + i, weight=0.9, merge_strategy='smallest-weight')
-                    
+                    matching_X.add_edge(
+                        t * 4 + i,
+                        (t + 1) * 4 + i,
+                        weight=0.9,
+                        merge_strategy="smallest-weight",
+                    )
+
             # Compute difference syndrome
             diff_sx = []
             for t in range(num_rounds):
                 if t == 0:
                     diff_sx.extend(sx_history[0])
                 else:
-                    diff_sx.extend([a ^ b for a, b in zip(sx_history[t], sx_history[t-1])])
-                    
+                    diff_sx.extend(
+                        [
+                            a ^ b
+                            for a, b in zip(sx_history[t], sx_history[t - 1])
+                        ]
+                    )
+
             # Decode Z errors
             correction_X = matching_X.decode(np.array(diff_sx, dtype=np.uint8))
-            
+
             # Check if correction flips XL = X2 X4 X6
             correction_bit = 0
             if len(correction_X) > 0:
                 for idx in [2, 4, 6]:
                     if idx < len(correction_X) and correction_X[idx] == 1:
                         correction_bit ^= 1
-                        
+
             logical_outcome = uncorrected ^ correction_bit
-            
-        return Frame({
-            "patch_label": patch_label,
-            "logical_measurement": logical_outcome,
-            "uncorrected_measurement": uncorrected,
-        })
+
+        return Frame(
+            {
+                "patch_label": patch_label,
+                "logical_measurement": logical_outcome,
+                "uncorrected_measurement": uncorrected,
+            }
+        )
 
     def pymatching_global_meas_map_qubits_fn(
         qubit_mapping: Mapping[str | int, str | int],
@@ -747,14 +864,24 @@ def create_qec_code(
     ) -> KwargDict:
         new_kwargs = kwargs.copy()
         new_kwargs["syndrome_labels_X"] = [
-            SyndromeLabel(qubit_mapping.get(lbl.qubit_label, lbl.qubit_label), lbl.frame_idx, lbl.outcome_idx)
+            SyndromeLabel(
+                qubit_mapping.get(lbl.qubit_label, lbl.qubit_label),
+                lbl.frame_idx,
+                lbl.outcome_idx,
+            )
             for lbl in syndrome_labels_X
         ]
         new_kwargs["syndrome_labels_Z"] = [
-            SyndromeLabel(qubit_mapping.get(lbl.qubit_label, lbl.qubit_label), lbl.frame_idx, lbl.outcome_idx)
+            SyndromeLabel(
+                qubit_mapping.get(lbl.qubit_label, lbl.qubit_label),
+                lbl.frame_idx,
+                lbl.outcome_idx,
+            )
             for lbl in syndrome_labels_Z
         ]
-        new_kwargs["data_qubits"] = [qubit_mapping.get(q, q) for q in data_qubits]
+        new_kwargs["data_qubits"] = [
+            qubit_mapping.get(q, q) for q in data_qubits
+        ]
         return new_kwargs
 
     Z_global_meas = Instruction(
@@ -771,9 +898,11 @@ def create_qec_code(
         param_priorities={"measurement_outcomes": ["history[-1]"]},
         name="FT Z global parity calculation with PyMatching",
     )
-    instructions["FT Logical Z Measure"] = builders.build_composite_instruction(
-        [instructions["Raw Z Data Measure"], Z_global_meas],
-        name="FT logical Z measurement with PyMatching",
+    instructions["FT Logical Z Measure"] = (
+        builders.build_composite_instruction(
+            [instructions["Raw Z Data Measure"], Z_global_meas],
+            name="FT logical Z measurement with PyMatching",
+        )
     )
 
     X_global_meas = Instruction(
@@ -790,9 +919,11 @@ def create_qec_code(
         param_priorities={"measurement_outcomes": ["history[-1]"]},
         name="FT X global parity calculation with PyMatching",
     )
-    instructions["FT Logical X Measure"] = builders.build_composite_instruction(
-        [instructions["Raw X Data Measure"], X_global_meas],
-        name="FT logical X measurement with PyMatching",
+    instructions["FT Logical X Measure"] = (
+        builders.build_composite_instruction(
+            [instructions["Raw X Data Measure"], X_global_meas],
+            name="FT logical X measurement with PyMatching",
+        )
     )
     instructions["FT Z logical parity calculation"] = Z_global_meas
     instructions["FT X logical parity calculation"] = X_global_meas

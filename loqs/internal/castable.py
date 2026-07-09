@@ -7,14 +7,12 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""[](api:Castable) definition.
-"""
+"""[](api:Castable) definition."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import TypeVar
-
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="Castable")

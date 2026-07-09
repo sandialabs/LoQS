@@ -16,7 +16,6 @@ from typing import ClassVar, Type, TypeVar
 
 from loqs.internal import SeqCastable, Displayable
 
-
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BasePhysicalCircuit")
 

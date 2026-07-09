@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Tools for LoQS.
-"""
+"""Tools for LoQS."""
 
 from . import fttools
 from . import qectools

@@ -487,58 +487,58 @@ def build_object_builder_instruction(
 ) -> Instruction:
     """Build an instruction that can initialize `LoQS` objects.
 
- `LoQS`    This is a sort of meta-instruction that can build LoQS
-    objects and then store them into a `Frame`. This is currently
-    used primarily to initialize the `BaseQuantumState` if no
-    `initial_history` is provided to a `QuantumProgram`.
-    The constructor arguments should typically be provided
-    in the `InstructionLabel` as args or kwargs.
+    `LoQS`    This is a sort of meta-instruction that can build LoQS
+       objects and then store them into a `Frame`. This is currently
+       used primarily to initialize the `BaseQuantumState` if no
+       `initial_history` is provided to a `QuantumProgram`.
+       The constructor arguments should typically be provided
+       in the `InstructionLabel` as args or kwargs.
 
-    The apply function takes variadic kwargs, since we do not
-    know the constructor arguments until runtime. However, it takes
-    at least the following:
+       The apply function takes variadic kwargs, since we do not
+       know the constructor arguments until runtime. However, it takes
+       at least the following:
 
-    - `frame_key`, taken from `Instruction.data`
-    - `obj_class`, taken from `Instruction.data`
+       - `frame_key`, taken from `Instruction.data`
+       - `obj_class`, taken from `Instruction.data`
 
-    It also must take all required args to the `obj_class` constructor, and
-    returns a `Frame` with the constructed object stored under `frame_key`.
+       It also must take all required args to the `obj_class` constructor, and
+       returns a `Frame` with the constructed object stored under `frame_key`.
 
-    The parameter priorities are generated programatically using
-    the `inspect` module for function signature introspection.
+       The parameter priorities are generated programatically using
+       the `inspect` module for function signature introspection.
 
-    Parameters
-    ----------
-    frame_key:
-        The key used to store the resulting object in the `Frame`
+       Parameters
+       ----------
+       frame_key:
+           The key used to store the resulting object in the `Frame`
 
-    obj_class:
-        The `LoQS` object to construct
+       obj_class:
+           The `LoQS` object to construct
 
-    name:
-        Name for logging purposes
+       name:
+           Name for logging purposes
 
-    Returns
-    -------
-        The built object builder instruction
+       Returns
+       -------
+           The built object builder instruction
 
-    Examples
-    --------
-    >>> from loqs.core.instructions.builders import build_object_builder_instruction
-    >>> class MyClass:
-    ...     def __init__(self, x: int):
-    ...         self.x = x
-    >>> inst = build_object_builder_instruction(
-    ...     frame_key="my_obj",
-    ...     obj_class=MyClass,
-    ...     name="MyBuilder"
-    ... )
-    >>> inst.name
-    'MyBuilder'
-    >>> f = inst.apply(frame_key="my_obj", obj_class=MyClass, x=42)
-    >>> obj = f["my_obj"]
-    >>> obj.x
-    42
+       Examples
+       --------
+       >>> from loqs.core.instructions.builders import build_object_builder_instruction
+       >>> class MyClass:
+       ...     def __init__(self, x: int):
+       ...         self.x = x
+       >>> inst = build_object_builder_instruction(
+       ...     frame_key="my_obj",
+       ...     obj_class=MyClass,
+       ...     name="MyBuilder"
+       ... )
+       >>> inst.name
+       'MyBuilder'
+       >>> f = inst.apply(frame_key="my_obj", obj_class=MyClass, x=42)
+       >>> obj = f["my_obj"]
+       >>> obj.x
+       42
     """
 
     # This is also an odd apply_fn because we do not know the args a priori

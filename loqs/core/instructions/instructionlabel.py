@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""[](api:InstructionLabel) definition.
-"""
+"""[](api:InstructionLabel) definition."""
 
 from __future__ import annotations
 
@@ -18,7 +17,6 @@ from typing import TypeAlias, TypeVar
 from loqs.core.instructions.instruction import Instruction
 from loqs.internal import SeqCastable, Displayable
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="InstructionLabel")
 

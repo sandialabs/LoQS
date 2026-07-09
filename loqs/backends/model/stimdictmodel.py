@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -28,7 +27,6 @@ from loqs.backends.reps import (
     ConcreteGateReps,
     ConcreteInstrumentReps,
 )
-
 
 T = TypeVar("T", bound="DictNoiseModel")
 

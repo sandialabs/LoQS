@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -19,7 +18,6 @@ from typing import ClassVar, TypeAlias, TypeVar
 from loqs.backends.model.basemodel import GateRep, InstrumentRep
 from loqs.backends.reps import RepTuple
 from loqs.internal import Castable, Displayable
-
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
@@ -57,7 +55,7 @@ class BaseQuantumState(Castable, Displayable):
     @abstractmethod
     def input_reps(self) -> list[GateRep | InstrumentRep]:
         """Gate and instrument reps this state can take as input.
-        
+
         Returns
         -------
         list[GateRep | InstrumentRep]

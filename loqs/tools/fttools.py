@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""A collection of functions to help fault-tolerance testing.
-"""
+"""A collection of functions to help fault-tolerance testing."""
 
 from collections.abc import Sequence
 from copy import deepcopy
@@ -24,7 +23,8 @@ from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions import Instruction, InstructionLabel
-#from loqs.tools.dasktools import run_program_list
+
+# from loqs.tools.dasktools import run_program_list
 
 
 def build_discrete_error_injection_programs(

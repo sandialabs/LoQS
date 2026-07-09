@@ -48,7 +48,7 @@ dask = [
 ]
 dev = [
     "pre-commit",
-    "black==24.1.0",
+    "black==26.3.1",
     "flake8>=7",
     "mypy>=1",
     "snakeviz"
@@ -103,7 +103,7 @@ exclude=["docs*", "tests*"]
 [tool.black]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'
-required-version = "24.1.0"
+required-version = "26.3.1"
 force-exclude = '''
 /(
       \.git
@@ -125,7 +125,3 @@ exclude = [
     "**/.*",
     "**/venv"
 ]
-
-[tool.marimo.runtime]
-on_cell_change = "lazy"
-auto_reload = "lazy"

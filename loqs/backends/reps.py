@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -24,7 +23,6 @@ from loqs.internal.encoder.jsonencoder import JSONEncoder
 from loqs.internal.serializable import Serializable
 from loqs.types import Float, NDArray
 from loqs.internal import Castable, Displayable
-
 
 T = TypeVar("T", bound="RepEnum")
 U = TypeVar("U", bound="RepTuple")
@@ -237,7 +235,7 @@ class ConcreteGateReps:
         -------
         bool
             True if the sequence is a valid probabilistic STIM operation representation,
-            False otherwise.        
+            False otherwise.
         """
         if len(gr) == 0:
             return False
@@ -399,7 +397,7 @@ class RepTuple(Castable, Displayable):
         """Tuple describing operator representation.
 
         !!! warning
-            
+
             This will likely be refactored in the near future.
 
         Parameters

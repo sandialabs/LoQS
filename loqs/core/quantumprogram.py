@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""[](api:QuantumProgram) definition.
-"""
+"""[](api:QuantumProgram) definition."""
 
 from __future__ import annotations
 
@@ -45,7 +44,6 @@ from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
 from loqs.core.programresults import ProgramResults
 from loqs.internal import Displayable
-
 
 T = TypeVar("T", bound="QuantumProgram")
 
@@ -588,7 +586,7 @@ class QuantumProgram(Displayable):
     # Static for more efficient parallel data movement
     @staticmethod
     def _run_shot(
-        program : QuantumProgram,
+        program: QuantumProgram,
         max_frame_limit: int = 100,
         seed: int | None = None,
         shot_index: int | None = None,

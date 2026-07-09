@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -234,6 +233,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         GateRep.PTM,
         GateRep.QSIM_SUPEROPERATOR,
     ]
+
     @property
     def output_gate_reps(self) -> list[GateRep]:
         return self._output_gate_reps
@@ -242,6 +242,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         InstrumentRep.ZBASIS_PROJECTION,
         InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
     ]
+
     @property
     def output_instrument_reps(self) -> list[InstrumentRep]:
         """Get the list of instrument representations this model can output.

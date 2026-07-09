@@ -7,8 +7,7 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Utility classes and functions for LoQS.
-"""
+"""Utility classes and functions for LoQS."""
 
 from .castable import Castable, SeqCastable, MapCastable
 

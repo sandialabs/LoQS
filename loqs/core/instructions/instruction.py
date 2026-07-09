@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -28,7 +27,6 @@ import warnings
 from loqs.core import Frame
 from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="Instruction")
 P = ParamSpec("P")
@@ -267,7 +265,9 @@ class Instruction(Displayable):
         # Let's serialize the functions now, when we know we have access to source code
         self._serialized_apply_fn = serialized_apply_fn
         if serialized_apply_fn is None:
-            self._serialized_apply_fn = Serializable._get_function_str(apply_fn)
+            self._serialized_apply_fn = Serializable._get_function_str(
+                apply_fn
+            )
         self._serialized_map_qubits_fn = serialized_map_qubits_fn
         if serialized_map_qubits_fn is None:
             self._serialized_map_qubits_fn = Serializable._get_function_str(

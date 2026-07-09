@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -136,14 +135,12 @@ class TimeDependentBaseNoiseModel(BaseNoiseModel):
 
     @abstractmethod
     def get_gate_duration(self, gate_label) -> int | float:
-        """Get the gate duration from a gate label.
-        """
+        """Get the gate duration from a gate label."""
         # Derived classes should implement this
         pass
 
     @abstractmethod
     def get_instrument_duration(self, inst_label) -> int | float:
-        """Get the instrument duration from an instrument label.
-        """
+        """Get the instrument duration from an instrument label."""
         # Derived classes should implement this
         pass

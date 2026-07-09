@@ -231,7 +231,6 @@ def create_qec_code(
             pauli_frame_update="H" if n == "H Circuit" else n,
             name=f"Logical {n}",
         )
-    
 
     # We need to update the logical Pauli frame and stabilizer syndrome slices if we have run Logical H circuit
     def H_frame_update_apply_fn(
@@ -269,13 +268,12 @@ def create_qec_code(
         )
 
     instructions["H Frame Update"] = Instruction(
-        H_frame_update_apply_fn,
-        name="Logical H Frame Update"
+        H_frame_update_apply_fn, name="Logical H Frame Update"
     )
 
     instructions["H"] = builders.build_composite_instruction(
         [instructions["H Circuit"], instructions["H Frame Update"]],
-        name="Logical H"
+        name="Logical H",
     )
 
     ## QEC
@@ -710,7 +708,9 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         flag_syndrome_diff = patch.data.get("flagged_syndrome_diff", [0] * 6)
 
         # Compute flagged syndrome diffs for these three checks
-        flag_syndromes = {fq: measurement_outcomes[fq][0] for fq in flag_qubits}
+        flag_syndromes = {
+            fq: measurement_outcomes[fq][0] for fq in flag_qubits
+        }
 
         if first_check:
             # A0 -> S1 (index 0), A1 -> S5 (index 4), A2 -> S6 (index 5)

@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -116,10 +115,10 @@ class STIMQuantumState(BaseQuantumState):
         qubit_labels:
             Optional qubit labels. If not provided, the default range of ints
             is used.
-        
+
         seed:
             Optional RNG seed. If not provided, default NumPy RNG behavior applies.
-        
+
         Notes
         -----
         STIM's [](api:stim.TableauSimulator) has its' own internal RNG. We try to prime

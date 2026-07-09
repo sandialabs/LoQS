@@ -8,7 +8,6 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -19,7 +18,6 @@ from loqs.core.recordables.pauliframe import PauliFrameCastableTypes
 from loqs.core.recordables.qeccodepatch import QECCodePatch
 from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
-
 
 T = TypeVar("T", bound="QECCode")
 

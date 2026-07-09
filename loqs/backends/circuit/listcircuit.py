@@ -8,14 +8,12 @@
 #####################################################################################################################
 
 
-
 from __future__ import annotations
 
 from collections.abc import Sequence, Mapping
 from typing import ClassVar, TypeAlias, Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
-
 
 ## Type aliases for static type checking
 QubitTypes: TypeAlias = str | int
@@ -135,7 +133,9 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         return self._qubit_labels
 
     def copy(self) -> ListPhysicalCircuit:
-        return ListPhysicalCircuit(self._circuit, qubit_labels=self._qubit_labels)
+        return ListPhysicalCircuit(
+            self._circuit, qubit_labels=self._qubit_labels
+        )
 
     def delete_qubits_inplace(
         self, qubits_to_delete: Sequence[QubitTypes]
