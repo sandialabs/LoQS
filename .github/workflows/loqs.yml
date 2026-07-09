@@ -37,7 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.11', '3.12', '3.13', '3.14']
-        loqs-optional: ["test", "all"] # Test is no backends/dask for minimal install testing
+        loqs-optional: ["all"] #"test", # Test is no backends/dask for minimal install testing, but currently env is off. Turn off for now.
     uses: ./.github/workflows/reusable-loqs.yml
     name: Run complete LoQS tests
     with:
@@ -60,11 +60,9 @@ jobs:
           result="${{ needs.full-unit-tests.result }}"
           if [ "$result" == "success" ]; then exit 0; else exit 1; fi
   
-  # Test on doc-updates branch
   docs:
     runs-on: ubuntu-latest
     needs: minimal-unit-tests
-    if: github.ref == 'refs/heads/docs-updates'
     steps:
     - uses: actions/checkout@v4
 

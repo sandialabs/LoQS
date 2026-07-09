@@ -15,9 +15,9 @@ This implementation is based on the 2014 paper by Yu Tomita and Krysta M. Svore,
 Both layouts encode 1 logical qubit into 9 data qubits (labeled D0 to D8) with code distance d=3,
 differing only in how the auxiliary (syndrome extraction) qubits are allocated and scheduled:
 
-- **Surface-17 (auxiliary_reuse=False)**: Uses 8 dedicated auxiliary qubits (A9 to A16).
+- **Surface-17 (layout="surf17")**: Uses 8 dedicated auxiliary qubits (A9 to A16).
   X and Z checks are disjoint, allowing parallel syndrome extraction in 7 cycles.
-- **Surface-13 (auxiliary_reuse=True)**: Uses only 4 auxiliary qubits (A9 to A12) by reusing them
+- **Surface-13 (layout="surf13")**: Uses only 4 auxiliary qubits (A9 to A12) by reusing them
   for both X and Z checks. Syndrome extraction is sequential, requiring 14 cycles.
 
 Decoders
@@ -34,7 +34,7 @@ Preservation of logical state |0>_L over 3 QEC cycles under single-fault injecti
 >>> from loqs.backends import PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState, GateRep
 >>> from loqs.core import QuantumProgram
 >>> from loqs.codepacks import codepack_surf17_tomita2014 as cp
->>> code = cp.create_qec_code(auxiliary_reuse=False, num_qec_rounds=3)
+>>> code = cp.create_qec_code(layout="surf17", num_qec_rounds=3)
 >>> qubits = [f'D{i}' for i in range(9)] + [f'A{i}' for i in range(9, 17)]
 >>> model = cp.create_ideal_model(qubits, gaterep=GateRep.STIM_CIRCUIT_STR, model_backend=DictNoiseModel)
 >>> stack = [
