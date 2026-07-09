@@ -179,8 +179,17 @@ def main() -> None:
         f.write("# API Reference\n\n")
         f.write("Use the sidebar to browse.\n")
 
+    import os
+    from urllib.parse import urlparse
+    canonical_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
+    home_url = "/"
+    if canonical_url:
+        path = urlparse(canonical_url).path.rstrip("/")
+        if path:
+            home_url = f"{path}/"
+
     with mkdocs_gen_files.open("SUMMARY.md", "w") as f:
-        f.write("* [Home](/)\n")
+        f.write(f"* [Home]({home_url})\n")
         f.write("* [API Reference](index.md)\n")
         for line in nav.build_literate_nav():
             f.write("  " + line)
