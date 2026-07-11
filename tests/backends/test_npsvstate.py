@@ -505,7 +505,7 @@ class TestNumPyStatevectorQuantumState:
         qubit_labels = ["Q0", "Q1"]
         s = SVState(2, qubit_labels, d=3)
         assert s.state.shape == (3, 3)
-        assert s.d == 3
+        assert s.d == [3, 3]
 
         # Copy constructor
         s2 = SVState(s)
@@ -521,7 +521,7 @@ class TestNumPyStatevectorQuantumState:
         flat_arr = np.zeros(27, dtype=complex)
         flat_arr[5] = 1.0 # corresponds to index [0, 1, 2] since 0*9 + 1*3 + 2 = 5
         s4 = SVState(flat_arr, qubit_labels_3, d=3)
-        assert s4.d == 3
+        assert s4.d == [3, 3, 3]
         assert s4.state.shape == (3, 3, 3)
         assert np.allclose(s4.state[0, 1, 2], 1.0)
 
@@ -606,6 +606,61 @@ class TestNumPyStatevectorQuantumState:
     def test_qutrit_serialization(self, make_temp_path):
         # Create a qutrit state
         state = SVState([1, 2], ["Q0", "Q1"], d=3)
+        with make_temp_path(suffix='.json') as tmp_path:
+            state.write(tmp_path)
+            loaded = SVState.read(tmp_path)
+        self._check(loaded, state)
+
+    def test_mixed_qubit_qutrit(self, make_temp_path):
+        # 1. Initialize mixed state: Q0 is qubit (d=2), Q1 is qutrit (d=3)
+        qubit_labels = ["Q0", "Q1"]
+        state = SVState([0, 0], qubit_labels, d=[2, 3])
+        assert state.state.shape == (2, 3)
+        assert state.d == [2, 3]
+
+        # 2. Apply qubit-only unitary gate (2x2) on Q0
+        U_X_2 = np.array([
+            [0, 1],
+            [1, 0]
+        ], dtype=complex)
+        state.apply_reps_inplace([RepTuple(U_X_2, ["Q0"], GateRep.UNITARY)])
+        # Expected state is |10>
+        expected1 = SVState([1, 0], qubit_labels, d=[2, 3])
+        assert np.allclose(state.state, expected1.state)
+
+        # 3. Apply qutrit-only unitary gate (3x3) on Q1 (swap 0 <-> 1)
+        U_X_3 = np.array([
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, 1]
+        ], dtype=complex)
+        state.apply_reps_inplace([RepTuple(U_X_3, ["Q1"], GateRep.UNITARY)])
+        # Expected state is |11>
+        expected2 = SVState([1, 1], qubit_labels, d=[2, 3])
+        assert np.allclose(state.state, expected2.state)
+
+        # 4. Apply joint qubit-qutrit unitary gate (6x6) on Q0, Q1
+        # Swaps index 4 (|11>) and index 5 (|12>)
+        U_joint = np.eye(6, dtype=complex)
+        U_joint[4, 4] = 0.0
+        U_joint[5, 5] = 0.0
+        U_joint[4, 5] = 1.0
+        U_joint[5, 4] = 1.0
+
+        state.apply_reps_inplace([RepTuple(U_joint, ["Q0", "Q1"], GateRep.UNITARY)])
+        # Expected state is |12>
+        expected3 = SVState([1, 2], qubit_labels, d=[2, 3])
+        assert np.allclose(state.state, expected3.state)
+
+        # 5. Measure qubit in Z-basis with reset=0
+        iz_reset_rep = [RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)]
+        res = state.apply_reps_inplace(iz_reset_rep)
+        assert res["Q0"][0] == 1  # was prepared as |1>
+        # Q0 is now reset to |0>, so state is |02>
+        expected4 = SVState([0, 2], qubit_labels, d=[2, 3])
+        assert np.allclose(state.state, expected4.state)
+
+        # 6. Mixed state serialization/deserialization
         with make_temp_path(suffix='.json') as tmp_path:
             state.write(tmp_path)
             loaded = SVState.read(tmp_path)
