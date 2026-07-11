@@ -13,6 +13,7 @@ nav:
   - Tutorials:
       - Build Instruction: notebooks/buildinstruction.md
       - Build QECCode: notebooks/buildqeccode.md
+      - Leakage Modeling: notebooks/leakage-tutorial.md
   - Examples:
       - Run LoGST: notebooks/runlogst.md
       - FT Tests: notebooks/fttests.md

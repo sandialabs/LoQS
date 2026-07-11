@@ -499,4 +499,115 @@ class TestNumPyStatevectorQuantumState:
         state11 = SVState([1, 1], ["Q0", "Q1"])
 
         self._check(test2, state11)
+
+    def test_qutrit_init(self):
+        # 1. Base qutrit initializer
+        qubit_labels = ["Q0", "Q1"]
+        s = SVState(2, qubit_labels, d=3)
+        assert s.state.shape == (3, 3)
+        assert s.d == 3
+
+        # Copy constructor
+        s2 = SVState(s)
+        self._check(s2, s)
+
+        # Bitstring initializer (e.g., state |012> on 3 qutrits)
+        qubit_labels_3 = ["Q0", "Q1", "Q2"]
+        s3 = SVState([0, 1, 2], qubit_labels_3, d=3)
+        assert s3.state.shape == (3, 3, 3)
+        assert np.allclose(s3.state[0, 1, 2], 1.0)
+
+        # Cast with flat numpy array check
+        flat_arr = np.zeros(27, dtype=complex)
+        flat_arr[5] = 1.0 # corresponds to index [0, 1, 2] since 0*9 + 1*3 + 2 = 5
+        s4 = SVState(flat_arr, qubit_labels_3, d=3)
+        assert s4.d == 3
+        assert s4.state.shape == (3, 3, 3)
+        assert np.allclose(s4.state[0, 1, 2], 1.0)
+
+        # Copy check
+        s5 = s3.copy()
+        self._check(s5, s3)
+
+    def test_qutrit_apply_gates(self):
+        # Swap 0 <-> 1, leave 2 untouched
+        U_X = np.array([
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, 1]
+        ], dtype=complex)
+        X_reps = [RepTuple(U_X, ["Q0"], GateRep.UNITARY)]
+
+        # Start in state |0>
+        state0 = SVState([0], ["Q0"], d=3)
+        # Expected is |1>
+        state1 = SVState([1], ["Q0"], d=3)
+
+        # Run in-place
+        test = state0.copy()
+        test.apply_reps_inplace(X_reps)
+        self._check(test, state1)
+
+        # Start in state |2>
+        state2 = SVState([2], ["Q0"], d=3)
+        test_2 = state2.copy()
+        test_2.apply_reps_inplace(X_reps)
+        # Should stay as |2>
+        self._check(test_2, state2)
+
+    def test_qutrit_cz_gate(self):
+        # 2-qutrit CZ: -1 phase only on state |11> (index 4)
+        cz_matrix = np.diag([1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0]).astype(complex)
+        cz_reps = [RepTuple(cz_matrix, ["Q0", "Q1"], GateRep.UNITARY)]
+
+        # 1. State |11>
+        state11 = SVState([1, 1], ["Q0", "Q1"], d=3)
+        test = state11.copy()
+        test.apply_reps_inplace(cz_reps)
+        # Should get -1 phase
+        expected = state11.copy()
+        expected._state *= -1
+        self._check(test, expected)
+
+        # 2. State |12> (leaked state, should not get a phase)
+        state12 = SVState([1, 2], ["Q0", "Q1"], d=3)
+        test2 = state12.copy()
+        test2.apply_reps_inplace(cz_reps)
+        self._check(test2, state12)
+
+    def test_qutrit_projective_measurement(self):
+        # Equal superposition of all 3 levels: (|0> + |1> + |2>) / sqrt(3)
+        superposition = np.array([1, 1, 1], dtype=complex) / np.sqrt(3)
+        state = SVState(superposition, ["Q0"], d=3, seed=12345)
+
+        # Perform 300 measurements with reset=None (leaves them in the projected state)
+        outcomes = []
+        iz_rep = [RepTuple((None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)]
+        for _ in range(300):
+            test = state.copy()
+            test._rng = state._rng  # Share advancing RNG
+            res = test.apply_reps_inplace(iz_rep)
+            outcomes.append(res["Q0"][0])
+
+        # Verify that all three outcomes occur roughly with ~1/3 probability
+        counts = np.bincount(outcomes, minlength=3)
+        assert all(c > 60 for c in counts), f"Outcomes are not well distributed: {counts}"
+
+        # Test projective measurement with reset=0
+        iz_reset_rep = [RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)]
+        for _ in range(10):
+            test = state.copy()
+            test._rng = state._rng
+            res = test.apply_reps_inplace(iz_reset_rep)
+            assert res["Q0"][0] in [0, 1, 2]
+            # State vector must end up exactly in |0>
+            assert np.allclose(test.state, [1.0, 0.0, 0.0])
+
+    def test_qutrit_serialization(self, make_temp_path):
+        # Create a qutrit state
+        state = SVState([1, 2], ["Q0", "Q1"], d=3)
+        with make_temp_path(suffix='.json') as tmp_path:
+            state.write(tmp_path)
+            loaded = SVState.read(tmp_path)
+        self._check(loaded, state)
                     
