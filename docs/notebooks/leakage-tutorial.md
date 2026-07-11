@@ -15,7 +15,7 @@ kernelspec:
 
 In quantum error correction, leakage is a common source of coherent and incoherent noise where a physical qubit leaks from its computational subspace ($|0\rangle, |1\rangle$) into a higher-lying state ($|2\rangle$). 
 
-In this tutorial, we will walk through modeling and simulating leakage in the **Logical Qubit Simulator (LoQS)** across three stages:\n",
+In this tutorial, we will walk through modeling and simulating leakage in the **Logical Qubit Simulator (LoQS)** across three stages:
 1. **Stage 1**: Constructing an ideal, noiseless repeated ZZ and XX parity-check program utilizing custom composite instructions.
 2. **Stage 2**: Extending the statevector backend to qutrits ($d=3$) and simulating a noiseless leakage representation.
 3. **Stage 3**: Integrating post-gate leakage noise on the qutrit CZ gate using Kraus channel composition tools.
@@ -26,7 +26,7 @@ In this tutorial, we will walk through modeling and simulating leakage in the **
 
 First, we build a noiseless repeated ZZ and XX parity check program on 2 data qubits (`d0`, `d1`) and 1 auxiliary measurement qubit (`a0`) without relying on pre-built codepacks. 
 
-We use a custom `ComputeParity` instruction to cleanly extract the parities directly from the frames in `ProgramResults` and reset the auxiliary qubit to $|0\rangle$ after each measurement round.
+We use a custom, non-hardcoded `ComputeParity` instruction with an explicit `map_qubits_fn` to cleanly extract the parities directly from the frames in `ProgramResults` and reset the auxiliary qubit to $|0\rangle$ after each measurement round.
 
 ```{code-cell} ipython3
 import numpy as np
@@ -43,21 +43,32 @@ from loqs.backends.state.npsvstate import NumpyStatevectorQuantumState
 from loqs.backends.model import DictNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
 
-def build_compute_parity_instruction(parity_key: str) -> Instruction:
-    def apply_fn(measurement_outcomes: MeasurementOutcomes, patches: PatchDict, patch_label: str) -> Frame:
-        patch = patches[patch_label]
-        auxiliary_label = patch.qubits[-1]
-        outcome = measurement_outcomes[auxiliary_label][-1]
+def build_compute_parity_instruction(parity_key: str, aux_qubit: str) -> Instruction:
+    """
+    Builds an instruction that computes parity from the last measurement outcome.
+    Stores the aux_qubit in the instruction's data dictionary, and provides
+    a map_qubits_fn to remap it during patch instantiation.
+    """
+    def apply_fn(measurement_outcomes: MeasurementOutcomes, aux_qubit: str) -> Frame:
+        outcome = measurement_outcomes[aux_qubit][-1]
         return Frame({parity_key: outcome})
+
+    def map_qubits_fn(qubit_mapping, **kwargs):
+        new_kwargs = kwargs.copy()
+        if "aux_qubit" in new_kwargs:
+            old_aux = new_kwargs["aux_qubit"]
+            new_kwargs["aux_qubit"] = qubit_mapping.get(old_aux, old_aux)
+        return new_kwargs
 
     return Instruction(
         apply_fn=apply_fn,
+        map_qubits_fn=map_qubits_fn,
+        data={"aux_qubit": aux_qubit},
         param_priorities={
             "measurement_outcomes": ["history[-1]"],
-            "patches": ["history[-1]"],
-            "patch_label": ["program"],
+            "aux_qubit": ["instruction"],
         },
-        name=f"ComputeParity_{parity_key}"
+        name=f"compute_{parity_key}_{aux_qubit.lower()}"
     )
 ```
 
@@ -67,46 +78,49 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
     template_auxiliary_qubits = [f"A{i}" for i in range(num_qubits - 1)]
     template_qubits = template_data_qubits + template_auxiliary_qubits
 
-    # 1. Build instructions with placeholder qubits
+    # 1. Build instructions with placeholder qubits (lowercase / snake_case)
     instructions = {}
     for q in template_qubits:
-        instructions[f"H_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"H_{q}")
-        instructions[f"X_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"X_{q}")
-        instructions[f"Z_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"Z_{q}")
-        instructions[f"Iz_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"Iz_{q}")
+        ql = q.lower()
+        instructions[f"h_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"h_{ql}")
+        instructions[f"x_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"x_{ql}")
+        instructions[f"z_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"z_{ql}")
+        instructions[f"iz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"iz_{ql}")
+        if q in template_auxiliary_qubits:
+            instructions[f"compute_zz_parity_{ql}"] = build_compute_parity_instruction("zz_parity", q)
+            instructions[f"compute_xx_parity_{ql}"] = build_compute_parity_instruction("xx_parity", q)
     
-    instructions["ComputeZZParity"] = build_compute_parity_instruction("zz_parity")
-    instructions["ComputeXXParity"] = build_compute_parity_instruction("xx_parity")
+    for i in range(num_qubits - 1):
+        a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
+        al, d0l, d1l = a.lower(), d0.lower(), d1.lower()
+        instructions[f"gcphase_{al}_{d0l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d0))]), name=f"gcphase_{al}_{d0l}")
+        instructions[f"gcphase_{al}_{d1l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d1))]), name=f"gcphase_{al}_{d1l}")
+        instructions[f"gcphase_{d0l}_{d1l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (d0, d1))]), name=f"gcphase_{d0l}_{d1l}")
 
     for i in range(num_qubits - 1):
         a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
-        instructions[f"Gcphase_{a}_{d0}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d0))]), name=f"Gcphase_{a}_{d0}")
-        instructions[f"Gcphase_{a}_{d1}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d1))]), name=f"Gcphase_{a}_{d1}")
-        instructions[f"Gcphase_{d0}_{d1}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (d0, d1))]), name=f"Gcphase_{d0}_{d1}")
+        al, d0l, d1l = a.lower(), d0.lower(), d1.lower()
+        instructions[f"zz_check_{i}"] = build_composite_instruction([
+            (f"h_{al}", "global"),
+            (f"gcphase_{al}_{d0l}", "global"),
+            (f"gcphase_{al}_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"iz_{al}", "global"),
+            (f"compute_zz_parity_{al}", "global"),
+        ], name=f"zz_check_{i}")
 
-    for i in range(num_qubits - 1):
-        a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
-        instructions[f"ZZ_check_{i}"] = build_composite_instruction([
-            (f"H_{a}", "global"),
-            (f"Gcphase_{a}_{d0}", "global"),
-            (f"Gcphase_{a}_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"Iz_{a}", "global"),
-            ("ComputeZZParity", "global"),
-        ], name=f"ZZ_check_{i}")
-
-        instructions[f"XX_check_{i}"] = build_composite_instruction([
-            (f"H_{d0}", "global"),
-            (f"H_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"Gcphase_{a}_{d0}", "global"),
-            (f"Gcphase_{a}_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"H_{d0}", "global"),
-            (f"H_{d1}", "global"),
-            (f"Iz_{a}", "global"),
-            ("ComputeXXParity", "global"),
-        ], name=f"XX_check_{i}")
+        instructions[f"xx_check_{i}"] = build_composite_instruction([
+            (f"h_{d0l}", "global"),
+            (f"h_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"gcphase_{al}_{d0l}", "global"),
+            (f"gcphase_{al}_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"h_{d0l}", "global"),
+            (f"h_{d1l}", "global"),
+            (f"iz_{al}", "global"),
+            (f"compute_xx_parity_{al}", "global"),
+        ], name=f"xx_check_{i}")
 
     code = QECCode(instructions, template_qubits, template_data_qubits)
 
@@ -137,8 +151,8 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
         instruction_stack.extend(prep_instructions)
     for r in range(num_rounds):
         for i in range(num_qubits - 1):
-            instruction_stack.append(InstructionLabel(f"ZZ_check_{i}", "global"))
-            instruction_stack.append(InstructionLabel(f"XX_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"zz_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"xx_check_{i}", "global"))
 
     qubit_labels = [f"d{i}" for i in range(num_qubits)] + [f"a{i}" for i in range(num_qubits - 1)]
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=2)
@@ -159,25 +173,25 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
 def run_and_report_program(program_creator, d=2):
     prep_states = {
         "|00>": [],
-        "|11>": [InstructionLabel("X_D0", "global"), InstructionLabel("X_D1", "global")],
-        "|++>": [InstructionLabel("H_D0", "global"), InstructionLabel("H_D1", "global")],
+        "|11>": [InstructionLabel("x_d0", "global"), InstructionLabel("x_d1", "global")],
+        "|++>": [InstructionLabel("h_d0", "global"), InstructionLabel("h_d1", "global")],
         "|-->": [
-            InstructionLabel("X_D0", "global"), InstructionLabel("H_D0", "global"),
-            InstructionLabel("X_D1", "global"), InstructionLabel("H_D1", "global")
+            InstructionLabel("x_d0", "global"), InstructionLabel("h_d0", "global"),
+            InstructionLabel("x_d1", "global"), InstructionLabel("h_d1", "global")
         ],
-        "|01>": [InstructionLabel("X_D1", "global")],
+        "|01>": [InstructionLabel("x_d1", "global")],
         "|+->": [
-            InstructionLabel("H_D0", "global"),
-            InstructionLabel("X_D1", "global"), InstructionLabel("H_D1", "global")
+            InstructionLabel("h_d0", "global"),
+            InstructionLabel("x_d1", "global"), InstructionLabel("h_d1", "global")
         ],
-        "|1+>": [InstructionLabel("X_D0", "global"), InstructionLabel("H_D1", "global")],
+        "|1+>": [InstructionLabel("x_d0", "global"), InstructionLabel("h_d1", "global")],
         "|Psi->": [
-            InstructionLabel("X_D0", "global"),
-            InstructionLabel("H_D0", "global"),
-            InstructionLabel("H_D1", "global"),
-            InstructionLabel("Gcphase_D0_D1", "global"),
-            InstructionLabel("H_D1", "global"),
-            InstructionLabel("X_D1", "global")
+            InstructionLabel("x_d0", "global"),
+            InstructionLabel("h_d0", "global"),
+            InstructionLabel("h_d1", "global"),
+            InstructionLabel("gcphase_d0_d1", "global"),
+            InstructionLabel("h_d1", "global"),
+            InstructionLabel("x_d1", "global")
         ]
     }
 
@@ -214,43 +228,46 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
 
     instructions = {}
     for q in template_qubits:
-        instructions[f"H_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"H_{q}")
-        instructions[f"X_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"X_{q}")
-        instructions[f"Z_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"Z_{q}")
-        instructions[f"Iz_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"Iz_{q}")
+        ql = q.lower()
+        instructions[f"h_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"h_{ql}")
+        instructions[f"x_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"x_{ql}")
+        instructions[f"z_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"z_{ql}")
+        instructions[f"iz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"iz_{ql}")
+        if q in template_auxiliary_qubits:
+            instructions[f"compute_zz_parity_{ql}"] = build_compute_parity_instruction("zz_parity", q)
+            instructions[f"compute_xx_parity_{ql}"] = build_compute_parity_instruction("xx_parity", q)
     
-    instructions["ComputeZZParity"] = build_compute_parity_instruction("zz_parity")
-    instructions["ComputeXXParity"] = build_compute_parity_instruction("xx_parity")
+    for i in range(num_qubits - 1):
+        a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
+        al, d0l, d1l = a.lower(), d0.lower(), d1.lower()
+        instructions[f"gcphase_{al}_{d0l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d0))]), name=f"gcphase_{al}_{d0l}")
+        instructions[f"gcphase_{al}_{d1l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d1))]), name=f"gcphase_{al}_{d1l}")
+        instructions[f"gcphase_{d0l}_{d1l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (d0, d1))]), name=f"gcphase_{d0l}_{d1l}")
 
     for i in range(num_qubits - 1):
         a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
-        instructions[f"Gcphase_{a}_{d0}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d0))]), name=f"Gcphase_{a}_{d0}")
-        instructions[f"Gcphase_{a}_{d1}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d1))]), name=f"Gcphase_{a}_{d1}")
-        instructions[f"Gcphase_{d0}_{d1}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (d0, d1))]), name=f"Gcphase_{d0}_{d1}")
+        al, d0l, d1l = a.lower(), d0.lower(), d1.lower()
+        instructions[f"zz_check_{i}"] = build_composite_instruction([
+            (f"h_{al}", "global"),
+            (f"gcphase_{al}_{d0l}", "global"),
+            (f"gcphase_{al}_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"iz_{al}", "global"),
+            (f"compute_zz_parity_{al}", "global"),
+        ], name=f"zz_check_{i}")
 
-    for i in range(num_qubits - 1):
-        a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
-        instructions[f"ZZ_check_{i}"] = build_composite_instruction([
-            (f"H_{a}", "global"),
-            (f"Gcphase_{a}_{d0}", "global"),
-            (f"Gcphase_{a}_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"Iz_{a}", "global"),
-            ("ComputeZZParity", "global"),
-        ], name=f"ZZ_check_{i}")
-
-        instructions[f"XX_check_{i}"] = build_composite_instruction([
-            (f"H_{d0}", "global"),
-            (f"H_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"Gcphase_{a}_{d0}", "global"),
-            (f"Gcphase_{a}_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"H_{d0}", "global"),
-            (f"H_{d1}", "global"),
-            (f"Iz_{a}", "global"),
-            ("ComputeXXParity", "global"),
-        ], name=f"XX_check_{i}")
+        instructions[f"xx_check_{i}"] = build_composite_instruction([
+            (f"h_{d0l}", "global"),
+            (f"h_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"gcphase_{al}_{d0l}", "global"),
+            (f"gcphase_{al}_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"h_{d0l}", "global"),
+            (f"h_{d1l}", "global"),
+            (f"iz_{al}", "global"),
+            (f"compute_xx_parity_{al}", "global"),
+        ], name=f"xx_check_{i}")
 
     code = QECCode(instructions, template_qubits, template_data_qubits)
 
@@ -291,8 +308,8 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
         instruction_stack.extend(prep_instructions)
     for r in range(num_rounds):
         for i in range(num_qubits - 1):
-            instruction_stack.append(InstructionLabel(f"ZZ_check_{i}", "global"))
-            instruction_stack.append(InstructionLabel(f"XX_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"zz_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"xx_check_{i}", "global"))
 
     qubit_labels = [f"d{i}" for i in range(num_qubits)] + [f"a{i}" for i in range(num_qubits - 1)]
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=3)
@@ -330,43 +347,46 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
 
     instructions = {}
     for q in template_qubits:
-        instructions[f"H_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"H_{q}")
-        instructions[f"X_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"X_{q}")
-        instructions[f"Z_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"Z_{q}")
-        instructions[f"Iz_{q}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"Iz_{q}")
+        ql = q.lower()
+        instructions[f"h_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"h_{ql}")
+        instructions[f"x_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"x_{ql}")
+        instructions[f"z_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"z_{ql}")
+        instructions[f"iz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"iz_{ql}")
+        if q in template_auxiliary_qubits:
+            instructions[f"compute_zz_parity_{ql}"] = build_compute_parity_instruction("zz_parity", q)
+            instructions[f"compute_xx_parity_{ql}"] = build_compute_parity_instruction("xx_parity", q)
     
-    instructions["ComputeZZParity"] = build_compute_parity_instruction("zz_parity")
-    instructions["ComputeXXParity"] = build_compute_parity_instruction("xx_parity")
+    for i in range(num_qubits - 1):
+        a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
+        al, d0l, d1l = a.lower(), d0.lower(), d1.lower()
+        instructions[f"gcphase_{al}_{d0l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d0))]), name=f"gcphase_{al}_{d0l}")
+        instructions[f"gcphase_{al}_{d1l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d1))]), name=f"gcphase_{al}_{d1l}")
+        instructions[f"gcphase_{d0l}_{d1l}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (d0, d1))]), name=f"gcphase_{d0l}_{d1l}")
 
     for i in range(num_qubits - 1):
         a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
-        instructions[f"Gcphase_{a}_{d0}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d0))]), name=f"Gcphase_{a}_{d0}")
-        instructions[f"Gcphase_{a}_{d1}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (a, d1))]), name=f"Gcphase_{a}_{d1}")
-        instructions[f"Gcphase_{d0}_{d1}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("CZ", (d0, d1))]), name=f"Gcphase_{d0}_{d1}")
+        al, d0l, d1l = a.lower(), d0.lower(), d1.lower()
+        instructions[f"zz_check_{i}"] = build_composite_instruction([
+            (f"h_{al}", "global"),
+            (f"gcphase_{al}_{d0l}", "global"),
+            (f"gcphase_{al}_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"iz_{al}", "global"),
+            (f"compute_zz_parity_{al}", "global"),
+        ], name=f"zz_check_{i}")
 
-    for i in range(num_qubits - 1):
-        a, d0, d1 = f"A{i}", f"D{i}", f"D{i+1}"
-        instructions[f"ZZ_check_{i}"] = build_composite_instruction([
-            (f"H_{a}", "global"),
-            (f"Gcphase_{a}_{d0}", "global"),
-            (f"Gcphase_{a}_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"Iz_{a}", "global"),
-            ("ComputeZZParity", "global"),
-        ], name=f"ZZ_check_{i}")
-
-        instructions[f"XX_check_{i}"] = build_composite_instruction([
-            (f"H_{d0}", "global"),
-            (f"H_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"Gcphase_{a}_{d0}", "global"),
-            (f"Gcphase_{a}_{d1}", "global"),
-            (f"H_{a}", "global"),
-            (f"H_{d0}", "global"),
-            (f"H_{d1}", "global"),
-            (f"Iz_{a}", "global"),
-            ("ComputeXXParity", "global"),
-        ], name=f"XX_check_{i}")
+        instructions[f"xx_check_{i}"] = build_composite_instruction([
+            (f"h_{d0l}", "global"),
+            (f"h_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"gcphase_{al}_{d0l}", "global"),
+            (f"gcphase_{al}_{d1l}", "global"),
+            (f"h_{al}", "global"),
+            (f"h_{d0l}", "global"),
+            (f"h_{d1l}", "global"),
+            (f"iz_{al}", "global"),
+            (f"compute_xx_parity_{al}", "global"),
+        ], name=f"xx_check_{i}")
 
     code = QECCode(instructions, template_qubits, template_data_qubits)
 
@@ -435,8 +455,8 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
         instruction_stack.extend(prep_instructions)
     for r in range(num_rounds):
         for i in range(num_qubits - 1):
-            instruction_stack.append(InstructionLabel(f"ZZ_check_{i}", "global"))
-            instruction_stack.append(InstructionLabel(f"XX_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"zz_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"xx_check_{i}", "global"))
 
     qubit_labels = [f"d{i}" for i in range(num_qubits)] + [f"a{i}" for i in range(num_qubits - 1)]
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=3)
