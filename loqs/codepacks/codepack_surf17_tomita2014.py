@@ -269,11 +269,14 @@ def create_qec_code(
         patches[patch_label] = new_patch
 
         # Retrieve and permute syndrome histories from propagating Frame keys
+        # (keys are namespaced per patch so multi-patch programs do not collide)
+        key_X = f"syndrome_history_X_{patch_label}"
+        key_Z = f"syndrome_history_Z_{patch_label}"
         try:
-            old_hist_X = history[-1].get("syndrome_history_X", [])
+            old_hist_X = history[-1].get(key_X, [])
             if not isinstance(old_hist_X, list):
                 old_hist_X = []
-            old_hist_Z = history[-1].get("syndrome_history_Z", [])
+            old_hist_Z = history[-1].get(key_Z, [])
             if not isinstance(old_hist_Z, list):
                 old_hist_Z = []
         except (IndexError, AttributeError, KeyError):
@@ -290,14 +293,14 @@ def create_qec_code(
         for s_Z in old_hist_Z:
             new_hist_X.append([s_Z[2], s_Z[0], s_Z[1], s_Z[3]])
 
-        history.propagating_keys.add("syndrome_history_X")
-        history.propagating_keys.add("syndrome_history_Z")
+        history.propagating_keys.add(key_X)
+        history.propagating_keys.add(key_Z)
 
         return Frame(
             {
                 "patches": patches,
-                "syndrome_history_X": new_hist_X,
-                "syndrome_history_Z": new_hist_Z,
+                key_X: new_hist_X,
+                key_Z: new_hist_Z,
             }
         )
 
@@ -325,12 +328,21 @@ def create_qec_code(
         qubit_labels=["a", "b", "c", "d", "aux"],
     )
 
+    # CNOT order b,d,a,c (NOT b,a,d,c): a single Z fault on the ancilla
+    # after two CNOTs hooks Z onto the two remaining data qubits. With the
+    # remaining pair {a,c} = {NW,SW} the hook is VERTICAL, perpendicular to
+    # Z_L (which runs along rows), hence correctable. The b,a,d,c order
+    # leaves the horizontal pair {d,c}, a weight-2 Z along Z_L that breaks
+    # X-basis fault tolerance at d=3. Schedule validity in parallel mode is
+    # preserved: no data qubit is touched twice in a layer, and every
+    # adjacent X/Z tile pair visits its two shared qubits in the same
+    # relative order.
     Z_template = circuit_backend(
         [
             [],
             ("Gcnot", "b", "aux"),
-            ("Gcnot", "a", "aux"),
             ("Gcnot", "d", "aux"),
+            ("Gcnot", "a", "aux"),
             ("Gcnot", "c", "aux"),
             [],
             ("Iz", "aux"),
@@ -481,10 +493,12 @@ def create_qec_code(
             SyndromeLabel("A11", -1, 1),
         ]
     elif layout == "surf10":
-        # Surface-10
+        # Surface-10. Serial tile execution order is [SX1, SX0, SX2, SX3]
+        # (matching the surf17/surf13 tile lists), so H row SX0 is the
+        # SECOND measurement (outcome_idx 1) and SX1 the first.
         syndrome_labels_X = [
-            SyndromeLabel("A9", -1, 0),
             SyndromeLabel("A9", -1, 1),
+            SyndromeLabel("A9", -1, 0),
             SyndromeLabel("A9", -1, 2),
             SyndromeLabel("A9", -1, 3),
         ]
@@ -539,9 +553,12 @@ def create_qec_code(
             current_sz.append(sz_t)
 
         # Retrieve histories from propagating Frame keys
+        # (keys are namespaced per patch so multi-patch programs do not collide)
+        key_X = f"syndrome_history_X_{patch_label}"
+        key_Z = f"syndrome_history_Z_{patch_label}"
         try:
-            hist_X = list(history[-1].get("syndrome_history_X", []))  # type: ignore
-            hist_Z = list(history[-1].get("syndrome_history_Z", []))  # type: ignore
+            hist_X = list(history[-1].get(key_X, []))  # type: ignore
+            hist_Z = list(history[-1].get(key_Z, []))  # type: ignore
         except (IndexError, AttributeError, KeyError):
             hist_X = []
             hist_Z = []
@@ -549,14 +566,14 @@ def create_qec_code(
         hist_X.extend(current_sx)
         hist_Z.extend(current_sz)
 
-        history.propagating_keys.add("syndrome_history_X")
-        history.propagating_keys.add("syndrome_history_Z")
+        history.propagating_keys.add(key_X)
+        history.propagating_keys.add(key_Z)
 
         return Frame(
             {
                 "patches": patches,  # Data qubits kept uncorrected (deferred)
-                "syndrome_history_X": hist_X,
-                "syndrome_history_Z": hist_Z,
+                key_X: hist_X,
+                key_Z: hist_Z,
             }
         )
 
@@ -658,6 +675,8 @@ def create_qec_code(
         measurement_basis: Literal["Z", "X"],
         measurement_outcomes: MeasurementOutcomes,
         history: History,
+        reference_round_X: bool = False,
+        reference_round_Z: bool = False,
     ) -> Frame:
         import pymatching
 
@@ -670,9 +689,10 @@ def create_qec_code(
         )
 
         # 2. Retrieve history of syndromes from the propagating Frame keys
+        # (keys are namespaced per patch so multi-patch programs do not collide)
         try:
-            hist_X = list(history[-1].get("syndrome_history_X", []))  # type: ignore
-            hist_Z = list(history[-1].get("syndrome_history_Z", []))  # type: ignore
+            hist_X = list(history[-1].get(f"syndrome_history_X_{patch_label}", []))  # type: ignore
+            hist_Z = list(history[-1].get(f"syndrome_history_Z_{patch_label}", []))  # type: ignore
         except (IndexError, AttributeError, KeyError):
             hist_X = []
             hist_Z = []
@@ -685,10 +705,11 @@ def create_qec_code(
         ]
 
         if measurement_basis == "Z":
+            # ZL = Z0 Z4 Z8 on the (mapped) data qubits
             uncorrected = (
-                inferred_outcomes["D0"][0]
-                ^ inferred_outcomes["D4"][0]
-                ^ inferred_outcomes["D8"][0]
+                inferred_outcomes[data_qubits[0]][0]
+                ^ inferred_outcomes[data_qubits[4]][0]
+                ^ inferred_outcomes[data_qubits[8]][0]
             )
 
             # ReconstructSZ0 to SZ3 (detects X errors)
@@ -706,12 +727,17 @@ def create_qec_code(
             sz_history = hist_Z + [sz_final]
             num_rounds = R + 1
 
+            # With a reference round (e.g. prep basis does not stabilize the
+            # Z checks, so round 0 is random), round 0 only serves as the
+            # reference for later diffs and contributes no detector layer
+            num_layers = num_rounds - 1 if reference_round_Z else num_rounds
+
             # Construct 3D space-time matching graph matching_Z dynamically
             matching_Z = pymatching.Matching()
             matching_Z.ensure_num_fault_ids(9)
 
             # Spatial edges for each round t
-            for t in range(num_rounds):
+            for t in range(num_layers):
                 for j in range(9):
                     nodes = [i for i in range(4) if H_Z[i, j] == 1]
                     fault_ids = {j}
@@ -731,7 +757,7 @@ def create_qec_code(
                             merge_strategy="smallest-weight",
                         )
             # Temporal edges
-            for t in range(num_rounds - 1):
+            for t in range(num_layers - 1):
                 for i in range(4):
                     matching_Z.add_edge(
                         t * 4 + i,
@@ -742,7 +768,8 @@ def create_qec_code(
 
             # Compute difference syndrome
             diff_sz = []
-            for t in range(num_rounds):
+            first_t = 1 if reference_round_Z else 0
+            for t in range(first_t, num_rounds):
                 if t == 0:
                     diff_sz.extend(sz_history[0])
                 else:
@@ -754,7 +781,12 @@ def create_qec_code(
                     )
 
             # Decode X errors
-            correction_Z = matching_Z.decode(np.array(diff_sz, dtype=np.uint8))
+            if num_layers > 0:
+                correction_Z = matching_Z.decode(
+                    np.array(diff_sz, dtype=np.uint8)
+                )
+            else:
+                correction_Z = np.zeros(9, dtype=np.uint8)
 
             # Check if correction flips ZL = Z0 Z4 Z8
             correction_bit = 0
@@ -766,10 +798,11 @@ def create_qec_code(
             logical_outcome = uncorrected ^ correction_bit
 
         else:  # X basis
+            # XL = X2 X4 X6 on the (mapped) data qubits
             uncorrected = (
-                inferred_outcomes["D2"][0]
-                ^ inferred_outcomes["D4"][0]
-                ^ inferred_outcomes["D6"][0]
+                inferred_outcomes[data_qubits[2]][0]
+                ^ inferred_outcomes[data_qubits[4]][0]
+                ^ inferred_outcomes[data_qubits[6]][0]
             )
 
             # Reconstruct SX0 to SX3 (detects Z errors)
@@ -787,12 +820,17 @@ def create_qec_code(
             sx_history = hist_X + [sx_final]
             num_rounds = R + 1
 
+            # With a reference round (e.g. prep basis does not stabilize the
+            # X checks, so round 0 is random), round 0 only serves as the
+            # reference for later diffs and contributes no detector layer
+            num_layers = num_rounds - 1 if reference_round_X else num_rounds
+
             # Construct 3D space-time matching graph matching_X dynamically
             matching_X = pymatching.Matching()
             matching_X.ensure_num_fault_ids(9)
 
             # Spatial edges for each round t
-            for t in range(num_rounds):
+            for t in range(num_layers):
                 for j in range(9):
                     nodes = [i for i in range(4) if H_X[i, j] == 1]
                     fault_ids = {j}
@@ -812,7 +850,7 @@ def create_qec_code(
                             merge_strategy="smallest-weight",
                         )
             # Temporal edges
-            for t in range(num_rounds - 1):
+            for t in range(num_layers - 1):
                 for i in range(4):
                     matching_X.add_edge(
                         t * 4 + i,
@@ -823,7 +861,8 @@ def create_qec_code(
 
             # Compute difference syndrome
             diff_sx = []
-            for t in range(num_rounds):
+            first_t = 1 if reference_round_X else 0
+            for t in range(first_t, num_rounds):
                 if t == 0:
                     diff_sx.extend(sx_history[0])
                 else:
@@ -835,7 +874,12 @@ def create_qec_code(
                     )
 
             # Decode Z errors
-            correction_X = matching_X.decode(np.array(diff_sx, dtype=np.uint8))
+            if num_layers > 0:
+                correction_X = matching_X.decode(
+                    np.array(diff_sx, dtype=np.uint8)
+                )
+            else:
+                correction_X = np.zeros(9, dtype=np.uint8)
 
             # Check if correction flips XL = X2 X4 X6
             correction_bit = 0
@@ -892,6 +936,8 @@ def create_qec_code(
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
             "measurement_basis": "Z",
+            "reference_round_X": False,
+            "reference_round_Z": False,
         },
         map_qubits_fn=pymatching_global_meas_map_qubits_fn,
         param_priorities={"measurement_outcomes": ["history[-1]"]},
@@ -900,6 +946,12 @@ def create_qec_code(
     instructions["FT Logical Z Measure"] = (
         builders.build_composite_instruction(
             [instructions["Raw Z Data Measure"], Z_global_meas],
+            # Declared here so stack-level kwargs thread through to the
+            # global parity calculation (label kwargs only reach declared params)
+            extra_data={
+                "reference_round_X": False,
+                "reference_round_Z": False,
+            },
             name="FT logical Z measurement with PyMatching",
         )
     )
@@ -913,6 +965,8 @@ def create_qec_code(
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
             "measurement_basis": "X",
+            "reference_round_X": False,
+            "reference_round_Z": False,
         },
         map_qubits_fn=pymatching_global_meas_map_qubits_fn,
         param_priorities={"measurement_outcomes": ["history[-1]"]},
@@ -921,6 +975,10 @@ def create_qec_code(
     instructions["FT Logical X Measure"] = (
         builders.build_composite_instruction(
             [instructions["Raw X Data Measure"], X_global_meas],
+            extra_data={
+                "reference_round_X": False,
+                "reference_round_Z": False,
+            },
             name="FT logical X measurement with PyMatching",
         )
     )
