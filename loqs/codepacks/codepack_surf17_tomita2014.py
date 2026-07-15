@@ -65,7 +65,7 @@ from loqs.backends.model.basemodel import (
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import RepTuple
-from loqs.core import Instruction, QECCode, History
+from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
@@ -253,7 +253,7 @@ def create_qec_code(
     # Software permutation for H (clockwise 90-degree rotation of the 3x3 data grid)
     # 0->2, 1->5, 2->8, 3->1, 4->4, 5->7, 6->0, 7->3, 8->6
     def H_permutation_apply_fn(
-        patches: PatchDict, patch_label: str, history: History
+        patches: PatchDict, patch_label: str
     ) -> Frame:
         patch = patches[patch_label]
         old_frame = patch.pauli_frame
@@ -266,21 +266,15 @@ def create_qec_code(
         new_frame = PauliFrame(old_frame.qubit_labels, new_paulis)
         new_patch = QECCodePatch(patch.code, patch.qubits, new_frame)
         new_patch.data = copy.deepcopy(patch.data)
-        patches[patch_label] = new_patch
 
-        # Retrieve and permute syndrome histories from propagating Frame keys
-        # (keys are namespaced per patch so multi-patch programs do not collide)
-        key_X = f"syndrome_history_X_{patch_label}"
-        key_Z = f"syndrome_history_Z_{patch_label}"
-        try:
-            old_hist_X = history[-1].get(key_X, [])
-            if not isinstance(old_hist_X, list):
-                old_hist_X = []
-            old_hist_Z = history[-1].get(key_Z, [])
-            if not isinstance(old_hist_Z, list):
-                old_hist_Z = []
-        except (IndexError, AttributeError, KeyError):
+        # Retrieve and permute syndrome histories from the patch's own
+        # tracked data (scoped to this patch, so multi-patch programs do
+        # not collide without needing any key namespacing).
+        old_hist_X = new_patch.data.get("syndrome_history_X", [])
+        if not isinstance(old_hist_X, list):
             old_hist_X = []
+        old_hist_Z = new_patch.data.get("syndrome_history_Z", [])
+        if not isinstance(old_hist_Z, list):
             old_hist_Z = []
 
         # S_X -> S_Z mapping: new_Z_round = [s_X[3], s_X[0], s_X[2], s_X[1]]
@@ -293,16 +287,11 @@ def create_qec_code(
         for s_Z in old_hist_Z:
             new_hist_X.append([s_Z[2], s_Z[0], s_Z[1], s_Z[3]])
 
-        history.propagating_keys.add(key_X)
-        history.propagating_keys.add(key_Z)
+        new_patch.data["syndrome_history_X"] = new_hist_X
+        new_patch.data["syndrome_history_Z"] = new_hist_Z
+        patches[patch_label] = new_patch
 
-        return Frame(
-            {
-                "patches": patches,
-                key_X: new_hist_X,
-                key_Z: new_hist_Z,
-            }
-        )
+        return Frame({"patches": patches})
 
     instructions["H Permutation"] = Instruction(
         H_permutation_apply_fn,
@@ -517,7 +506,9 @@ def create_qec_code(
             "Please install pymatching: pip install loqs[pymatching]"
         ) from e
 
-    # Deferred decoder: collects and stores syndrome outcomes in Frame propagating keys
+    # Deferred decoder: collects and stores syndrome outcomes on the patch's
+    # tracked data (scoped to this patch, so multi-patch programs do not
+    # collide without needing any key namespacing).
     def pymatching_deferred_decoder_apply_fn(
         patch_label: str,
         patches: PatchDict,
@@ -525,7 +516,6 @@ def create_qec_code(
         syndrome_labels_Z: list[SyndromeLabel],
         num_qec_rounds: int,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
-        history: History,
     ) -> Frame:
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
             syndrome_outcomes = [syndrome_outcomes]
@@ -552,28 +542,22 @@ def create_qec_code(
                 sz_t.append(outcome)
             current_sz.append(sz_t)
 
-        # Retrieve histories from propagating Frame keys
-        # (keys are namespaced per patch so multi-patch programs do not collide)
-        key_X = f"syndrome_history_X_{patch_label}"
-        key_Z = f"syndrome_history_Z_{patch_label}"
-        try:
-            hist_X = list(history[-1].get(key_X, []))  # type: ignore
-            hist_Z = list(history[-1].get(key_Z, []))  # type: ignore
-        except (IndexError, AttributeError, KeyError):
-            hist_X = []
-            hist_Z = []
+        # Retrieve histories from the patch's own tracked data
+        patch = patches[patch_label]
+        new_patch = patch.copy()
+        hist_X = list(new_patch.data.get("syndrome_history_X", []))
+        hist_Z = list(new_patch.data.get("syndrome_history_Z", []))
 
         hist_X.extend(current_sx)
         hist_Z.extend(current_sz)
 
-        history.propagating_keys.add(key_X)
-        history.propagating_keys.add(key_Z)
+        new_patch.data["syndrome_history_X"] = hist_X
+        new_patch.data["syndrome_history_Z"] = hist_Z
+        patches[patch_label] = new_patch
 
         return Frame(
             {
                 "patches": patches,  # Data qubits kept uncorrected (deferred)
-                key_X: hist_X,
-                key_Z: hist_Z,
             }
         )
 
@@ -674,7 +658,6 @@ def create_qec_code(
         data_qubits: list[str],
         measurement_basis: Literal["Z", "X"],
         measurement_outcomes: MeasurementOutcomes,
-        history: History,
         reference_round_X: bool = False,
         reference_round_Z: bool = False,
     ) -> Frame:
@@ -688,14 +671,10 @@ def create_qec_code(
             pauli_frame, measurement_basis
         )
 
-        # 2. Retrieve history of syndromes from the propagating Frame keys
-        # (keys are namespaced per patch so multi-patch programs do not collide)
-        try:
-            hist_X = list(history[-1].get(f"syndrome_history_X_{patch_label}", []))  # type: ignore
-            hist_Z = list(history[-1].get(f"syndrome_history_Z_{patch_label}", []))  # type: ignore
-        except (IndexError, AttributeError, KeyError):
-            hist_X = []
-            hist_Z = []
+        # 2. Retrieve history of syndromes from the patch's own tracked data
+        # (scoped to this patch, so multi-patch programs do not collide)
+        hist_X = list(patch.data.get("syndrome_history_X", []))
+        hist_Z = list(patch.data.get("syndrome_history_Z", []))
 
         R = len(hist_X)  # number of previous syndrome rounds
 

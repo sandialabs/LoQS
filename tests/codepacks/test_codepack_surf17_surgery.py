@@ -157,9 +157,8 @@ class TestSyndromeRowOrdering:
                 patch_types={"SURF": code},
             )
             res = program.run(num_shots=1, verbose=False)
-            hist = res.collect_shot_data(
-                f"syndrome_history_{check_type}_L0", -1
-            )[0]
+            patch = res.collect_shot_data("patches", -1)[0]["L0"]
+            hist = patch.data[f"syndrome_history_{check_type}"]
             expected = [0, 0, 0, 0]
             expected[expected_row] = 1
             assert hist == [expected], (

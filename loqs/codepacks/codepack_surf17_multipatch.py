@@ -10,9 +10,10 @@
 """Multi-patch machinery for the Surface-17/13/10 codepack.
 
 This module provides two-patch logical operations for patches built from
-[](api:codepack_surf17_tomita2014), which namespaces its deferred syndrome
-histories per patch (`syndrome_history_X_<patch_label>` etc.) so multiple
-patches can decode independently in one program.
+[](api:codepack_surf17_tomita2014), which stores its deferred syndrome
+histories on each patch's own tracked data (`patch.data["syndrome_history_X"]`
+etc.) so multiple patches can decode independently in one program without
+needing any patch-label key namespacing.
 
 Provided operations
 -------------------
@@ -56,7 +57,7 @@ import warnings
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.core import Instruction, History
+from loqs.core import Instruction
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
@@ -185,17 +186,17 @@ def build_cnot_bookkeeping_instruction(
     The apply function takes:
 
     - `patches`, usually from the previous frame
-    - `history`, usually from the QuantumProgram
     - the patch labels and data qubit lists, from `Instruction.data`
 
     It (a) conjugates both patches' Pauli frames through the pairwise CNOTs
     (see [](api:pairwise_cnot_pauli_frames)) and (b) XORs the round-aligned
-    namespaced syndrome histories (`hist_Z_tgt ^= hist_Z_ctrl` and
-    `hist_X_ctrl ^= hist_X_tgt`), asserting that the two patches have
-    accumulated the same number of syndrome-extraction rounds.
+    syndrome histories, tracked on each patch's own `.data`
+    (`hist_Z_tgt ^= hist_Z_ctrl` and `hist_X_ctrl ^= hist_X_tgt`), asserting
+    that the two patches have accumulated the same number of
+    syndrome-extraction rounds.
 
-    It returns a [](api:Frame) with updated `patches` and the two modified
-    syndrome-history keys.
+    It returns a [](api:Frame) with the two patches' `.data` updated
+    in-place inside `patches`.
 
     Parameters
     ----------
@@ -222,7 +223,6 @@ def build_cnot_bookkeeping_instruction(
 
     def apply_fn(
         patches: PatchDict,
-        history: History,
         ctrl_patch_label: str,
         tgt_patch_label: str,
         ctrl_data_qubits: list[str],
@@ -238,28 +238,19 @@ def build_cnot_bookkeeping_instruction(
             ctrl_data_qubits,
             tgt_data_qubits,
         )
-        new_patches = patches.copy()
-        new_patches[ctrl_patch_label] = patch_c.copy(
-            pauli_frame=new_frame_c
-        )
-        new_patches[tgt_patch_label] = patch_t.copy(pauli_frame=new_frame_t)
+        new_patch_c = patch_c.copy(pauli_frame=new_frame_c)
+        new_patch_t = patch_t.copy(pauli_frame=new_frame_t)
 
-        # 2. XOR round-aligned syndrome histories across the CNOT.
+        # 2. XOR round-aligned syndrome histories across the CNOT, read from
+        # and written back to each patch's own tracked data (scoped per
+        # patch, so multi-patch programs do not collide without needing any
+        # key namespacing).
         # X errors copy ctrl -> tgt and are detected by Z checks;
         # Z errors copy tgt -> ctrl and are detected by X checks.
-        key_X_c = f"syndrome_history_X_{ctrl_patch_label}"
-        key_Z_c = f"syndrome_history_Z_{ctrl_patch_label}"
-        key_X_t = f"syndrome_history_X_{tgt_patch_label}"
-        key_Z_t = f"syndrome_history_Z_{tgt_patch_label}"
-
-        try:
-            last = history[-1]
-            hist_X_c = list(last.get(key_X_c, []))  # type: ignore
-            hist_Z_c = list(last.get(key_Z_c, []))  # type: ignore
-            hist_X_t = list(last.get(key_X_t, []))  # type: ignore
-            hist_Z_t = list(last.get(key_Z_t, []))  # type: ignore
-        except (IndexError, AttributeError, KeyError):
-            hist_X_c, hist_Z_c, hist_X_t, hist_Z_t = [], [], [], []
+        hist_X_c = list(new_patch_c.data.get("syndrome_history_X", []))
+        hist_Z_c = list(new_patch_c.data.get("syndrome_history_Z", []))
+        hist_X_t = list(new_patch_t.data.get("syndrome_history_X", []))
+        hist_Z_t = list(new_patch_t.data.get("syndrome_history_Z", []))
 
         assert len(hist_Z_t) == len(hist_Z_c) and len(hist_X_c) == len(
             hist_X_t
@@ -279,16 +270,14 @@ def build_cnot_bookkeeping_instruction(
             for round_c, round_t in zip(hist_X_c, hist_X_t)
         ]
 
-        history.propagating_keys.add(key_X_c)
-        history.propagating_keys.add(key_Z_t)
+        new_patch_c.data["syndrome_history_X"] = new_hist_X_c
+        new_patch_t.data["syndrome_history_Z"] = new_hist_Z_t
 
-        return Frame(
-            {
-                "patches": new_patches,
-                key_X_c: new_hist_X_c,
-                key_Z_t: new_hist_Z_t,
-            }
-        )
+        new_patches = patches.copy()
+        new_patches[ctrl_patch_label] = new_patch_c
+        new_patches[tgt_patch_label] = new_patch_t
+
+        return Frame({"patches": new_patches})
 
     data = {
         "ctrl_patch_label": ctrl_patch_label,
