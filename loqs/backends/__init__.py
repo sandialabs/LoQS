@@ -170,7 +170,7 @@ def __getattr__(name: str) -> Any:
         else:
             raise ImportError(
                 f"QSim backend is not available. "
-                f"Error: {get_backend_error('qsim')}"
+                f"Error: {get_backend_error('qsim_state')}"
             )
 
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

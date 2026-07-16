@@ -6,11 +6,13 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 
 from pygsti.baseobjs import Label
+from pygsti.baseobjs.label import LabelStr
 from pygsti.baseobjs.statespace import QubitSpace
 from pygsti.modelmembers.instruments import Instrument
 from pygsti.modelmembers.operations import FullArbitraryOp
 from pygsti.models import ExplicitOpModel
 
+import loqs.backends as backends_module
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep
@@ -56,6 +58,30 @@ def _build_implicit_model():
 
 
 class TestConstruction:
+    def test_raises_import_error_when_unavailable(self):
+        original = backends_module._backend_availability["pygsti_model"]
+        backends_module._backend_availability["pygsti_model"] = (
+            backends_module.BackendAvailability("pygsti_model", False)
+        )
+        try:
+            with pytest.raises(
+                ImportError, match="PyGSTi model backend is not available"
+            ):
+                PyGSTiNoiseModel(_build_explicit_model())
+        finally:
+            backends_module._backend_availability["pygsti_model"] = original
+
+    def test_gate_keys_labelstr_has_no_qubits(self):
+        """A `LabelStr`-keyed gate (no qubit arguments at all, e.g. a
+        global idle) must appear in `gate_keys` as a bare 1-tuple,
+        skipping the qubit-aliasing step entirely."""
+        model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
+        model.operations[LabelStr("Gidle")] = FullArbitraryOp(
+            np.eye(4), basis="pp"
+        )
+        pgm = PyGSTiNoiseModel(model)
+        assert ("Gidle",) in pgm.gate_keys
+
     def test_from_explicit_op_model(self):
         pgm = PyGSTiNoiseModel(_build_explicit_model())
         assert ("Gxpi", ["Q0"]) in pgm.gate_keys
@@ -196,3 +222,281 @@ class TestGetInstrumentRep:
             ValueError, match="Failed to create instrument rep for any of"
         ):
             pgm._get_instrument_rep("Iz", ["Q0"], [InstrumentRep.STIM_CIRCUIT_STR])
+
+
+class TestTimeDependence:
+    """`get_gate_duration`/`get_instrument_duration` (and the
+    `add_gate_duration_to_layer`/`add_layer_duration_to_current_time`
+    helpers they feed into via `get_reps`) are only active when
+    `use_time_dependence=True`; otherwise they always return 0."""
+
+    @pytest.fixture
+    def pgm(self):
+        return PyGSTiNoiseModel(_build_explicit_model())
+
+    @pytest.fixture
+    def pgm_time_dependent(self):
+        return PyGSTiNoiseModel(
+            _build_explicit_model(),
+            use_time_dependence=True,
+            default_gate_durations={Label("Gxpi", "Q0"): 5, "Gad": 7},
+            default_instrument_durations={Label("Iz", "Q0"): 3},
+        )
+
+    @pytest.mark.parametrize(
+        "method,label",
+        [
+            ("get_gate_duration", Label("Gxpi", "Q0")),
+            ("get_instrument_duration", Label("Iz", "Q0")),
+        ],
+    )
+    def test_disabled_always_returns_zero(self, pgm, method, label):
+        assert getattr(pgm, method)(label) == 0
+
+    def test_gate_duration_from_label_with_time(self, pgm_time_dependent):
+        label = Label("Gxpi", "Q0", time=1.5)
+        assert pgm_time_dependent.get_gate_duration(label) == 1.5
+
+    def test_instrument_duration_from_label_with_time(self, pgm_time_dependent):
+        label = Label("Iz", "Q0", time=2.5)
+        assert pgm_time_dependent.get_instrument_duration(label) == 2.5
+
+    @pytest.mark.parametrize(
+        "method",
+        ["get_gate_duration", "get_instrument_duration"],
+    )
+    def test_layer_label_raises_value_error(self, pgm_time_dependent, method):
+        layer_label = Label(
+            [Label("Gxpi", "Q0"), Label("Gypi", "Q1")], time=1.0
+        )
+        with pytest.raises(ValueError, match="LayerTupTupWithTime"):
+            getattr(pgm_time_dependent, method)(layer_label)
+
+    def test_gate_duration_no_defaults_raises_value_error(self):
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), use_time_dependence=True
+        )
+        with pytest.raises(ValueError, match="no default gate durations"):
+            pgm.get_gate_duration(Label("Gxpi", "Q0"))
+
+    def test_instrument_duration_no_defaults_raises_value_error(self):
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), use_time_dependence=True
+        )
+        with pytest.raises(ValueError, match="no default instrument durations"):
+            pgm.get_instrument_duration(Label("Iz", "Q0"))
+
+    def test_gate_duration_exact_label_match(self, pgm_time_dependent):
+        assert pgm_time_dependent.get_gate_duration(Label("Gxpi", "Q0")) == 5
+
+    def test_gate_duration_name_only_fallback(self, pgm_time_dependent):
+        # "Gad" is registered by name only (no qubit), so an exact-label
+        # lookup for Label("Gad", "Q0") must fall back to a name-only
+        # lookup.
+        assert pgm_time_dependent.get_gate_duration(Label("Gad", "Q0")) == 7
+
+    def test_instrument_duration_exact_label_match(self, pgm_time_dependent):
+        assert pgm_time_dependent.get_instrument_duration(Label("Iz", "Q0")) == 3
+
+    def test_gate_duration_not_found_raises_key_error(self, pgm_time_dependent):
+        with pytest.raises(KeyError, match="not available by label or name"):
+            pgm_time_dependent.get_gate_duration(Label("Gunknown", "Q0"))
+
+    def test_instrument_duration_not_found_raises_key_error(
+        self, pgm_time_dependent
+    ):
+        with pytest.raises(KeyError, match="not available by label or name"):
+            pgm_time_dependent.get_instrument_duration(Label("Iunknown", "Q0"))
+
+    def test_get_reps_advances_current_time(self):
+        """End-to-end: `get_reps` on a real (multi-layer) pyGSTi circuit
+        with `use_time_dependence=True` must advance `current_time` by
+        each layer's max gate/instrument duration."""
+        from loqs.backends import PyGSTiPhysicalCircuit
+
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(),
+            use_time_dependence=True,
+            default_gate_durations={"Gxpi": 5, "Gad": 2},
+            default_instrument_durations={"Iz": 3},
+        )
+        assert pgm.current_time == 0.0
+
+        circuit = PyGSTiPhysicalCircuit(
+            [("Gxpi", "Q0"), ("Gad", "Q0"), ("Iz", "Q0")], ["Q0"]
+        )
+        pgm.get_reps(
+            circuit,
+            [GateRep.UNITARY, GateRep.QSIM_SUPEROPERATOR],
+            [InstrumentRep.ZBASIS_PROJECTION],
+        )
+
+        # Gxpi (5) and Gad (2) can't share a layer (both act on Q0), and
+        # Iz (3) is its own layer too -- so total elapsed time is 5+2+3=10.
+        assert pgm.current_time == 10.0
+
+
+class TestDenseEmbeddingWarningHelpers:
+    def test_safe_time_dependent_evotype(self):
+        from pygsti.evotypes import Evotype
+        from loqs.backends.model.pygstimodel import safe_time_dependent_evotype
+
+        evotype = safe_time_dependent_evotype("densitymx")
+        assert isinstance(evotype, Evotype)
+
+    def test_check_for_dense_embedding_issues_no_warning(self, recwarn):
+        """A model with no `EmbeddedOp`s at all must not warn."""
+        pgm = PyGSTiNoiseModel(_build_explicit_model())
+        pgm.check_for_dense_embedding_issues()
+        from loqs.backends.model.pygstimodel import (
+            PyGSTiEmbeddedOpMemoryWarning,
+        )
+
+        assert not any(
+            issubclass(w.category, PyGSTiEmbeddedOpMemoryWarning)
+            for w in recwarn.list
+        )
+
+
+class TestGetRepsErrorPaths:
+    def test_unhandled_component_prefix_raises(self):
+        """`get_reps` only knows how to dispatch component names starting
+        with `G` (gates) or `I` (instruments); anything else must raise a
+        clear `NotImplementedError` rather than silently mis-dispatching."""
+        from loqs.backends import PyGSTiPhysicalCircuit
+
+        pgm = PyGSTiNoiseModel(_build_explicit_model())
+        circuit = PyGSTiPhysicalCircuit([("Xpi", "Q0")], ["Q0"])
+        with pytest.raises(NotImplementedError, match="G/I prefixes"):
+            pgm.get_reps(
+                circuit, [GateRep.UNITARY], [InstrumentRep.ZBASIS_PROJECTION]
+            )
+
+    def test_gate_rep_unsupported_reptype_raises(self):
+        pgm = PyGSTiNoiseModel(_build_explicit_model())
+        with pytest.raises(
+            ValueError, match="Failed to create gate rep for any of"
+        ):
+            pgm._get_gate_rep("Gxpi", ["Q0"], [GateRep.STIM_CIRCUIT_STR])
+
+    def test_gate_rep_qsim_superoperator_more_than_2_qubits_raises(self):
+        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1", "Q2"]), basis="pp")
+        model.operations[Label("Gccx", ("Q0", "Q1", "Q2"))] = FullArbitraryOp(
+            np.eye(64), basis="pp"
+        )
+        pgm = PyGSTiNoiseModel(model)
+        with pytest.raises(
+            ValueError, match="Failed to create gate rep for any of"
+        ):
+            pgm._get_gate_rep(
+                "Gccx", ["Q0", "Q1", "Q2"], [GateRep.QSIM_SUPEROPERATOR]
+            )
+
+    def test_kraus_operators_identity_branch(self):
+        """`_get_gate_rep`'s KRAUS_OPERATORS branch pre-computes a fixed
+        probability whenever a Kraus operator is proportional to the
+        identity once its own scale is divided out (always true for any
+        *unitary* Kraus component, e.g. a probabilistic-bit-flip channel);
+        the amplitude-damping channel used elsewhere in this file instead
+        exercises the opposite (non-unitary, `prob=None`) branch."""
+        U_X = np.array([[0, 1], [1, 0]], dtype=complex)
+        p = 0.2
+        K0 = np.sqrt(1 - p) * np.eye(2)
+        K1 = np.sqrt(p) * U_X
+        superop = FullArbitraryOp.from_kraus_operators([K0, K1], "pp").to_dense()
+
+        model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
+        model.operations[Label("Gbf", "Q0")] = FullArbitraryOp(superop, basis="pp")
+        pgm = PyGSTiNoiseModel(model)
+
+        rep, reptype = pgm._get_gate_rep("Gbf", ["Q0"], [GateRep.KRAUS_OPERATORS])
+        assert reptype == GateRep.KRAUS_OPERATORS
+        probs = sorted(prob for _, prob in rep)
+        assert all(prob is not None for prob in probs)
+        assert np.allclose(probs, [p, 1 - p])
+
+    def test_instrument_rep_multiqubit_outcome_keys(self):
+        """A multi-qubit instrument's outcome-dict keys are multi-character
+        strings (e.g. `"01"`), exercising the multi-char branch of the
+        outcome-key-to-tuple conversion (as opposed to the existing
+        single-qubit fixture's single-character keys)."""
+        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        effects = {k: np.eye(16, dtype=complex) for k in ["00", "01", "10", "11"]}
+        model.instruments[Label("Izz", ("Q0", "Q1"))] = Instrument(effects)
+        pgm = PyGSTiNoiseModel(model)
+
+        rep, reptype = pgm._get_instrument_rep(
+            "Izz", ["Q0", "Q1"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+        )
+        outcome_dict, include_outcomes = rep
+        assert include_outcomes is True
+        assert set(outcome_dict.keys()) == {(0, 0), (0, 1), (1, 0), (1, 1)}
+
+    def test_instrument_rep_non_string_outcome_keys(self):
+        """An instrument whose outcome-dict keys are already tuples (not
+        strings) must pass them through unchanged, skipping the
+        string-to-tuple parsing entirely."""
+        model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
+        model.instruments[Label("Iz", "Q0")] = Instrument(
+            {(0,): np.eye(4, dtype=complex), (1,): np.eye(4, dtype=complex)}
+        )
+        pgm = PyGSTiNoiseModel(model)
+
+        rep, reptype = pgm._get_instrument_rep(
+            "Iz", ["Q0"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+        )
+        outcome_dict, include_outcomes = rep
+        assert set(outcome_dict.keys()) == {(0,), (1,)}
+
+    def test_instrument_rep_bad_outcome_key_raises(self):
+        model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
+        model.instruments[Label("Iz", "Q0")] = Instrument(
+            {"a": np.eye(4, dtype=complex), "b": np.eye(4, dtype=complex)}
+        )
+        pgm = PyGSTiNoiseModel(model)
+        with pytest.raises(
+            ValueError, match="Failed to create instrument rep for any of"
+        ):
+            pgm._get_instrument_rep(
+                "Iz", ["Q0"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+            )
+
+    def test_get_reps_time_dependence_with_outcome_operation_dict(self):
+        """Exercises the ZBASIS_OUTCOME_OPERATION_DICT-specific
+        `op.set_time(...)` call, only reachable with `use_time_dependence`
+        and that specific InstrumentRep requested (unlike
+        `test_get_reps_advances_current_time`, which requests
+        ZBASIS_PROJECTION)."""
+        from loqs.backends import PyGSTiPhysicalCircuit
+
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(),
+            use_time_dependence=True,
+            default_instrument_durations={"Iz": 1},
+        )
+        circuit = PyGSTiPhysicalCircuit([("Iz", "Q0")], ["Q0"])
+        reps = pgm.get_reps(
+            circuit, [GateRep.UNITARY], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+        )
+        assert len(reps) == 1
+        assert reps[0].reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT
+
+
+class TestSerialization:
+    def test_round_trip(self, make_temp_path):
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), qubit_aliases={"Q0": "MyQubit"}
+        )
+
+        with make_temp_path(suffix=".json") as tmp_path:
+            pgm.write(tmp_path)
+            pgm2 = PyGSTiNoiseModel.read(tmp_path)
+
+        assert isinstance(pgm2, PyGSTiNoiseModel)
+        assert pgm2.qubit_aliases == {"Q0": "MyQubit"}
+        assert pgm2.gate_keys == pgm.gate_keys
+        assert pgm2.instrument_keys == pgm.instrument_keys
+
+        rep, reptype = pgm2._get_gate_rep("Gxpi", ["Q0"], [GateRep.UNITARY])
+        assert reptype == GateRep.UNITARY
+        assert np.shape(rep) == (2, 2)

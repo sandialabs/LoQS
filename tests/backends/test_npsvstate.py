@@ -48,7 +48,38 @@ class TestNumPyStatevectorQuantumState:
         # Copy check
         s7 = s.copy()
         self._check(s7, s)
-    
+
+        # Invalid initializer input raises a clear error
+        with pytest.raises(ValueError, match="Cannot initialize"):
+            SVState("not a valid state")
+
+    def test_str(self):
+        s = SVState([0, 1], ["Q0", "Q1"])
+        assert str(s) == (
+            "Physical NumPy Statevector state:\n"
+            "  NumPy statevector on 2 qubits ([Q0,...,Q1])\n"
+        )
+
+    def test_apply_reps_inplace_unknown_reptype_raises(self):
+        """`apply_reps_inplace` must reject any `RepTuple.reptype` that is
+        neither a `GateRep` nor an `InstrumentRep` -- a third `RepEnum`
+        subclass is defined locally here since none exists elsewhere in
+        the codebase to construct such a case."""
+        from loqs.backends.reps import RepEnum
+
+        class _OtherRep(RepEnum):
+            FOO = 1
+
+        s = SVState([0], ["Q0"])
+        with pytest.raises(ValueError, match="Cannot apply unknown reptype"):
+            s.apply_reps_inplace([RepTuple(None, ["Q0"], _OtherRep.FOO)])
+
+    @pytest.mark.parametrize("contraction", ["matmul", "einsum"])
+    def test_block_matvec_unknown_qubit_raises(self, contraction):
+        s = SVState([0], ["Q0"], contraction=contraction)
+        with pytest.raises(ValueError, match="not in state's qubit labels"):
+            s._block_matvec(np.eye(2), ["QBad"], s.state)
+
     def test_apply_gates(self):
         # Let's apply a X gate
         U_X = np.array([[0, 1], [1, 0]])
@@ -154,6 +185,25 @@ class TestNumPyStatevectorQuantumState:
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
             InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
         }
+
+    def test_base_str(self):
+        """`NumpyStatevectorQuantumState` overrides `__str__`, so calling
+        the base `BaseQuantumState.__str__` explicitly is the only way to
+        exercise its (otherwise always-shadowed) implementation."""
+        from loqs.backends.state.basestate import BaseQuantumState
+
+        state = SVState([0], ["Q0"])
+        s = BaseQuantumState.__str__(state)
+        assert s.startswith(f"Physical {state.name} state:\n")
+        assert "1." in s  # amplitude of the |0> state appears indented
+
+    def test_deepcopy(self):
+        import copy
+
+        state = SVState([0], ["Q0"], seed=20260716)
+        state2 = copy.deepcopy(state)
+        assert state2 is not state
+        self._check(state2, state)
 
     @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
     def test_kraus_sampling_distribution(self, kraus_sampling):
@@ -273,6 +323,45 @@ class TestNumPyStatevectorQuantumState:
         test = SVState([0], ["Q0"], seed=1, kraus_sampling="choice")
         with pytest.raises(ValueError, match="too far from 1 to renormalize"):
             test.apply_reps_inplace([bad_probs])
+
+    def test_kraus_lazy_roundoff_sliver_fallback(self):
+        """`_apply_kraus_lazy`'s cumulative-probability loop can finish
+        without any branch satisfying `r < cum` if the given probabilities'
+        floating-point sum lands one ULP short of 1.0 and the (mocked) RNG
+        draw lands in that unreachable sliver; it must then fall back to
+        the last operator with nonzero probability, not raise or silently
+        produce an unnormalized state."""
+        U0 = np.eye(2, dtype=complex)
+        U1 = np.array([[0, 1], [1, 0]], dtype=complex)
+        U2 = np.array([[1, 0], [0, -1]], dtype=complex)
+        p0, p1, p2 = 0.47, 0.45, 0.08
+        assert repr(p0 + p1 + p2) == "0.9999999999999999"  # one ULP short of 1.0
+
+        rep = [
+            (np.sqrt(p0) * U0, p0),
+            (np.sqrt(p1) * U1, p1),
+            (np.sqrt(p2) * U2, p2),
+        ]
+        state = SVState([0], ["Q0"])
+        state._rng = mock.Mock()
+        state._rng.random.return_value = 0.9999999999999999
+
+        state._apply_kraus_lazy(rep, ["Q0"])
+        # Falls back to the last (nonzero-probability) operator, U2,
+        # applied and normalized by its own probability.
+        assert np.allclose(state.state, [1, 0])
+        assert np.isclose(np.linalg.norm(state.state), 1)
+
+    def test_print_bitstring_amplitudes(self, capsys):
+        state = SVState([0, 1], ["Q0", "Q1"])
+        state.print_bitstring_amplitudes()
+        captured = capsys.readouterr()
+        assert "['Q0', 'Q1']" in captured.out
+        # Only one bitstring has nonzero amplitude; the others must be
+        # filtered out by the amplitude threshold.
+        lines = captured.out.strip().split("\n")
+        assert len(lines) == 2
+        assert lines[1] == "10: (1+0j)"
 
     @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
     def test_kraus_sampling_distribution_multiqubit(self, kraus_sampling):

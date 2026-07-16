@@ -793,8 +793,11 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     self._dense_embedding_checked_inst_keys.add(inst_key)
 
                 # if using time-dependence, update operator rep
+                # `Instrument` itself has no `set_time` -- each individual
+                # member operation does.
                 if self.use_time_dependence:
-                    op.set_time(self.current_time)
+                    for member_op in op.values():
+                        member_op.set_time(self.current_time)
 
                 rep = {}
                 for k, v in op.items():

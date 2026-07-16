@@ -63,10 +63,11 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         # and add any BasePhysicalCircuit
         return self.append(other)
 
-    def __iadd__(self: T, other: T) -> None:
+    def __iadd__(self: T, other: T) -> T:
         # TODO: Should eventually be able to cast to derived class
         # and add any BasePhysicalCircuit
-        return self.append_inplace(other)
+        self.append_inplace(other)
+        return self
 
     # Class methods
     @classmethod

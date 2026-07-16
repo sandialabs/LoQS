@@ -28,6 +28,10 @@ class TestConstruction:
         assert model.gate_dict == {}
         assert model.inst_dict == {}
 
+    def test_str(self):
+        model = DictNoiseModel(({}, {}))
+        assert str(model) == f"Physical {model.name} noise model\n"
+
     def test_copy_constructor(self):
         gate_dict = {("X", ("Q0",)): np.eye(4)}
         original = DictNoiseModel((gate_dict, {}))
