@@ -299,9 +299,9 @@ recovered_results6.load_checkpoint(checkpoint_dir="test-checkpoint")
 len(recovered_results6.shot_histories)
 ```
 
-:::{note}
+```{note}
 Unlike the old (pre-`ProgramResults`) checkpointing API, `run()` currently always starts a fresh set of shots from 0 rather than resuming a previous, interrupted run -- there is currently no built-in way to feed `recovered_results6` back into a new `run()` call to "finish off" an interrupted job. Checkpointing today is primarily useful for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`/`load_checkpoint`). If you need true resume-and-continue support, please file a LoQS issue requesting it.
-:::
+```
 
 ```{code-cell} ipython3
 
