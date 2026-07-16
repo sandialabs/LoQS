@@ -116,7 +116,15 @@ class TestSurf17Codepack:
         assert program_results.collect_shot_data("logical_measurement", -1)[0] == expected
 
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
-    def test_qec_fault_tolerance(self, layout):
+    @pytest.mark.parametrize("basis", ["Z", "X"])
+    def test_qec_fault_tolerance(self, layout, basis):
+        """Weight-1 SE faults never flip the logical, in either basis.
+
+        The X basis is the sensitive one for Z-ancilla hook errors (a Z
+        fault on an interior Z-check ancilla mid-extraction propagates onto
+        two data qubits); the Z-template CNOT order b,d,a,c keeps that hook
+        perpendicular to Z_L.
+        """
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
         state_backend = STIMQuantumState
@@ -143,12 +151,12 @@ class TestSurf17Codepack:
         stack = [
             ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
             ("Init Patch SURF", None, ("L0", qubits)),
-            ("Zero Prep", "L0"),
+            ("Zero Prep" if basis == "Z" else "Plus Prep", "L0"),
             ("Syndrome Extraction", "L0"),  # index 3 (inject here)
             ("Syndrome Extraction", "L0"),  # index 4
             ("Syndrome Extraction", "L0"),  # index 5
             ("Decoder", "L0"),
-            ("FT Logical Z Measure", "L0"),
+            (f"FT Logical {basis} Measure", "L0"),
         ]
 
         base_program = QuantumProgram(
