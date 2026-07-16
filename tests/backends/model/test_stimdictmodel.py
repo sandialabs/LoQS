@@ -492,10 +492,16 @@ class TestSTIMDictNoiseModel:
         assert any("Y" in str(r.rep) for r in reps)
 
     def test_multiple_same_command_combining(self):
-        """Test combining when same command appears multiple times sequentially."""
-        # Create a gate dict with a specific qubit label to trigger the combining logic
+        """Test combining when same command appears multiple times sequentially.
+
+        This asserts the exact merged circuit-string content (not just that
+        *some* multi-qubit rep exists), since only checking `len(qubits) > 1`
+        previously let a real bug slip through undetected: see
+        `test_common_command_combining_requires_self_indexed_template` below
+        for the specific malformed-template case this used to miss.
+        """
         gate_dict = {
-            "X": RepTuple("X", ("Q0",), GateRep.STIM_CIRCUIT_STR),  # Note: no qubit index in rep
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
         }
         inst_dict = {}
         model = STIMDictNoiseModel((gate_dict, inst_dict))
@@ -506,11 +512,77 @@ class TestSTIMDictNoiseModel:
         # Get representations
         reps = model.get_reps(circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION])
 
-        # Should have combined the X commands
-        assert len(reps) >= 1
-        # Look for a combined rep with multiple qubits
+        # Should have combined the X commands into a single multi-qubit rep,
+        # with each of Q0, Q1, Q2 actually referenced (in order) by the
+        # merged circuit string.
         combined_reps = [r for r in reps if len(r.qubits) > 1]
-        assert len(combined_reps) > 0, "Should have combined multiple X commands"
+        assert len(combined_reps) == 1, "Should have combined the 3 X commands into one rep"
+        merged = combined_reps[0]
+        assert merged.rep == "X 0 1 2"
+        assert merged.qubits == ("Q0", "Q1", "Q2")
+
+    def test_common_command_combining_requires_self_indexed_template(self):
+        """A generic template that omits its own qubit index must raise, not
+        silently drop that qubit from the merged circuit string.
+
+        Before this validation was added, registering `RepTuple("X", ...)`
+        (no embedded qubit index) as a generic entry and combining it across
+        multiple qubits would silently produce e.g. `"X 1 2"` for qubits
+        `(Q0, Q1, Q2)` -- claiming to act on Q0 while never actually
+        referencing it.
+        """
+        gate_dict = {
+            "X": RepTuple("X", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel((gate_dict, inst_dict))
+        circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
+
+        with pytest.raises(ValueError, match="must already reference its own qubit"):
+            model.get_reps(
+                circuit,
+                [GateRep.STIM_CIRCUIT_STR],
+                [InstrumentRep.ZBASIS_PROJECTION],
+            )
+
+    def test_common_command_combining_multiline_template(self):
+        """Multi-line generic templates should have every line extended per
+        merged qubit, not just the first line."""
+        gate_dict = {
+            "HS": RepTuple("H 0\nS 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
+        inst_dict = {}
+        model = STIMDictNoiseModel(
+            (gate_dict, inst_dict),
+            gatereps=[GateRep.STIM_CIRCUIT_STR],
+        )
+        # HS isn't a real single-token STIM gate name, so exercise the merge
+        # helper directly rather than via a real STIMPhysicalCircuit line.
+        from loqs.backends.model.stimdictmodel import _merge_common_rep
+
+        common: dict = {}
+        _merge_common_rep("HS", ("Q0",), gate_dict["HS"], common)
+        _merge_common_rep("HS", ("Q1",), gate_dict["HS"], common)
+        _merge_common_rep("HS", ("Q2",), gate_dict["HS"], common)
+        merged = common["HS"]
+        assert merged.rep == "H 0 1 2\nS 0 1 2"
+        assert merged.qubits == ("Q0", "Q1", "Q2")
+
+    def test_common_command_combining_instrument_reptype(self):
+        """Generic InstrumentRep.ZBASIS_PROJECTION entries (a `(reset,
+        include_outcomes)` tuple payload, not circuit-string text) should
+        merge by concatenating qubits and keeping the payload unchanged,
+        since there's no per-qubit text to combine."""
+        from loqs.backends.model.stimdictmodel import _merge_common_rep
+
+        generic = RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION)
+        common: dict = {}
+        _merge_common_rep("M", ("Q0",), generic, common)
+        _merge_common_rep("M", ("Q1",), generic, common)
+        merged = common["M"]
+        assert merged.rep == (None, True)
+        assert merged.qubits == ("Q0", "Q1")
+        assert merged.reptype == InstrumentRep.ZBASIS_PROJECTION
 
     def test_individual_command_no_combining(self):
         """Test case where commands are processed individually without combining."""

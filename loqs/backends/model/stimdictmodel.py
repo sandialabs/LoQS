@@ -31,6 +31,77 @@ from loqs.backends.reps import (
 T = TypeVar("T", bound="DictNoiseModel")
 
 
+_STIM_CIRCUIT_STR_REPTYPES = (GateRep.STIM_CIRCUIT_STR, InstrumentRep.STIM_CIRCUIT_STR)
+"""Reptypes whose `.rep` is STIM circuit-string text (and therefore has
+per-qubit index placeholders to combine), as opposed to e.g.
+`InstrumentRep.ZBASIS_PROJECTION`'s `(reset, include_outcomes)` tuple, which
+carries no qubit-specific text at all.
+"""
+
+
+def _merge_common_rep(
+    command: str,
+    qt: tuple,
+    generic: RepTuple,
+    common: dict[str, RepTuple],
+) -> None:
+    """Merge a generic (name-only) dict entry into `common[command]`.
+
+    For `GateRep.STIM_CIRCUIT_STR`/`InstrumentRep.STIM_CIRCUIT_STR` reps,
+    generic templates are combined across multiple qubits by *appending*
+    further trailing qubit indices to every line for each additional qubit,
+    so a template must already reference its own qubit(s) as indices
+    ``0..len(qt)-1`` (e.g. `"X 0"` for a single-qubit template, `"CNOT 0 1"`
+    for a two-qubit one) before it is used for the first time here. Without
+    this, the first qubit's index would silently never be added -- this
+    raises a clear error instead of producing a `RepTuple` that claims to
+    act on a qubit its own circuit string never actually references.
+
+    For other reptypes (e.g. `InstrumentRep.ZBASIS_PROJECTION`), `.rep` has
+    no per-qubit text to combine -- the same payload applies uniformly
+    regardless of how many qubits are merged in (state backends apply it in
+    a `for qbit in qubits: ...` loop), so merging is just concatenating the
+    qubit tuples.
+    """
+    prev = common.get(command)
+
+    if generic.reptype not in _STIM_CIRCUIT_STR_REPTYPES:
+        prev_qubits: tuple = prev.qubits if prev is not None else tuple()
+        common[command] = RepTuple(
+            generic.rep, prev_qubits + qt, generic.reptype
+        )
+        return
+
+    if prev is None:
+        # First occurrence: the raw template must already reference its own
+        # qubit(s) as indices 0..len(qt)-1, and is used exactly as registered
+        # -- no further indices are appended for the qubit(s) it already
+        # covers. Only later occurrences (below) append further trailing
+        # indices for *additional* qubits.
+        expected = [str(i) for i in range(len(qt))]
+        for line in generic.rep.split("\n"):
+            trailing = line.split()[-len(qt) :] if len(qt) else []
+            if trailing != expected:
+                raise ValueError(
+                    f"Generic STIM circuit-string template for command "
+                    f"{command!r} (line {line!r}) must already reference its "
+                    f"own qubit(s) as index/indices {expected} before it can "
+                    "be combined across multiple qubits, since additional "
+                    "qubits are handled by appending further trailing "
+                    f"indices; got trailing tokens {trailing!r}."
+                )
+        common[command] = RepTuple(generic.rep, qt, generic.reptype)
+        return
+
+    new_lines = [
+        line + "".join(f" {len(prev.qubits) + i}" for i in range(len(qt)))
+        for line in prev.rep.split("\n")
+    ]
+    common[command] = RepTuple(
+        "\n".join(new_lines), prev.qubits + qt, generic.reptype
+    )
+
+
 def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
     aliases = STIMPhysicalCircuit.stim_command_aliases
 
@@ -295,30 +366,12 @@ class STIMDictNoiseModel(DictNoiseModel):
 
                     if reptuple is None:
                         # If that failed, check for generic name only
-                        reptuple = self.gate_dict.get(command, None)
-                        if reptuple is not None:
-                            assert isinstance(reptuple, RepTuple)
-                            reptuple = RepTuple(
-                                reptuple.rep, qt, reptuple.reptype
-                            )
-
-                            # Append this to common rep
+                        generic = self.gate_dict.get(command, None)
+                        if generic is not None:
+                            assert isinstance(generic, RepTuple)
                             is_common = True
-                            if command in common:
-                                new_lines = []
-                                for line in common[command].rep.split("\n"):
-                                    # Add qubit indices to template lines
-                                    for i in range(len(qt)):
-                                        line += f" {len(common[command].qubits) + i}"
-                                    new_lines.append(line)
-                                new_qubits = common[command].qubits + qt
-                                common[command] = RepTuple(
-                                    "\n".join(new_lines),
-                                    new_qubits,
-                                    reptuple.reptype,
-                                )
-                            else:
-                                common[command] = reptuple
+                            _merge_common_rep(command, qt, generic, common)
+                            reptuple = common[command]
 
                     if reptuple is None:
                         # Failed, now look up in instruments
@@ -326,30 +379,12 @@ class STIMDictNoiseModel(DictNoiseModel):
 
                     if reptuple is None:
                         # If that failed, check for generic name only
-                        reptuple = self.inst_dict.get(command, None)
-                        if reptuple is not None:
-                            assert isinstance(reptuple, RepTuple)
-                            reptuple = RepTuple(
-                                reptuple.rep, qt, reptuple.reptype
-                            )
-
-                            # Append this to common rep
+                        generic = self.inst_dict.get(command, None)
+                        if generic is not None:
+                            assert isinstance(generic, RepTuple)
                             is_common = True
-                            if command in common:
-                                new_lines = []
-                                for line in common[command].rep.split("\n"):
-                                    # Add qubit indices to template lines
-                                    for i in range(len(qt)):
-                                        line += f" {len(common[command].qubits) + i}"
-                                    new_lines.append(line)
-                                new_qubits = common[command].qubits + qt
-                                common[command] = RepTuple(
-                                    "\n".join(new_lines),
-                                    new_qubits,
-                                    reptuple.reptype,
-                                )
-                            else:
-                                common[command] = reptuple
+                            _merge_common_rep(command, qt, generic, common)
+                            reptuple = common[command]
 
                     assert reptuple is not None, f"Failed to look up {label}"
                     assert isinstance(reptuple, RepTuple)

@@ -113,6 +113,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             GateRep.KRAUS_OPERATORS,
             InstrumentRep.ZBASIS_PROJECTION,
             InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
         ]
 
     def __init__(
