@@ -21,9 +21,7 @@ Playground for time-dependent/updateable model work.
 from collections import Counter
 
 import loqs
-from loqs.backends.circuit import PyGSTiPhysicalCircuit
-from loqs.backends.model import PyGSTiNoiseModel
-from loqs.backends.state import QSimQuantumState
+from loqs.backends import PyGSTiPhysicalCircuit, PyGSTiNoiseModel, QSimQuantumState
 from loqs.core import QuantumProgram, History
 from loqs.core.recordables import PatchDict
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
@@ -67,8 +65,8 @@ A few note-worthy things about how we constructed this program:
 2. We are providing the noise model only with ``default_noise_model``. This is usually fine behavior, and is actually not a deal-breaker for time-dependent but not updateable model. If we want to update the model though, it needs to be available in each Frame instead.
 
 ```{code-cell} ipython3
-program.run(10)
-Counter(program.collect_shot_data("logical_measurement", -1))
+results = program.run(10)
+Counter(results.collect_shot_data("logical_measurement", -1))
 ```
 
 ## Alternate but equivalent "standard" workflow
@@ -118,8 +116,8 @@ program2 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
-program2.run(10)
-Counter(program2.collect_shot_data("logical_measurement", -1))
+results2 = program2.run(10)
+Counter(results2.collect_shot_data("logical_measurement", -1))
 ```
 
 ## Using a time-dependent model
@@ -201,8 +199,8 @@ model_td1.default_instrument_durations = {
 
 ```{code-cell} ipython3
 # And let's try to run the program again
-program_td1.run(10)
-Counter(program_td1.collect_shot_data("logical_measurement", -1))
+results_td1 = program_td1.run(10)
+Counter(results_td1.collect_shot_data("logical_measurement", -1))
 ```
 
 Ok, but how do we know whether this actually did anything different yet?
@@ -210,7 +208,7 @@ Ok, but how do we know whether this actually did anything different yet?
 Well, internally the model has been keeping track of the time, even though none of our operations use that yet. When a time-dependent model is used, we also print the current simulation time at the end of each instruction to the ``Frame``.
 
 ```{code-cell} ipython3
-program_td1.collect_shot_data("current_model_time", "all")
+results_td1.collect_shot_data("current_model_time", "all")
 ```
 
 How do we interpret this? Well each list is for one shot, and the entry of each list is the value of "current_model_time" at that ``Frame``. Some of the entries are ``None`` because these do not correspond to physical circuit instructions. (It's not that important, but specifically the first entry is our initial ``History`` frame where we obviously did not set the time, the third to last entry is the Non-FT Logical X Measure instruction getting split into the decoding circuit [the second to last entry] and the parity computation for the logical measurement [last entry]).
@@ -220,7 +218,7 @@ As for the time entries, we can also double-check this. The encoding circuit is 
 We can verify that this is indeed a property of programs that contain time-dependent models by checking this for one of our time-independent models.
 
 ```{code-cell} ipython3
-program.collect_shot_data("current_model_time", "all")
+results.collect_shot_data("current_model_time", "all")
 ```
 
 ## An actual time-dependent operation
@@ -246,7 +244,7 @@ import pygsti
 from pygsti.baseobjs import Label
 from pygsti.modelmembers.operations import DenseOperator, EmbeddedOp
 
-from loqs.backends.model.pygstimodel import safe_time_dependent_evotype
+from loqs.backends import safe_time_dependent_evotype
 ```
 
 ```{code-cell} ipython3
@@ -348,11 +346,11 @@ program_td2 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
-program_td2.run(1)
+results_td2 = program_td2.run(1)
 ```
 
 ```{code-cell} ipython3
-program_td2.collect_shot_data("logical_measurement", "all", strip_none_entries=True)
+results_td2.collect_shot_data("logical_measurement", "all", strip_none_entries=True)
 ```
 
 ## A more interesting time-dependent operation
@@ -474,7 +472,7 @@ program_td3 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
-program_td3.run(num_shots=100)
+results_td3 = program_td3.run(num_shots=100)
 ```
 
 We can see this took a little longer as we ran more shots and our program is longer. Now, let's introspect this and see what our stabilizer check is picking up!
@@ -484,8 +482,8 @@ It's our first time interacting with the ``MeasurementOutcome`` object directly,
 
 ```{code-cell} ipython3
 # We could grab all the measurement outcomes like we were before
-# (Here I'm just using the collect_data on a single History for a shot, same syntax as collect_shot_data on the QuantumProgram)
-shot0_mos = program_td3.shot_histories[0].collect_data("measurement_outcomes", "all", strip_none_entries=True)
+# (Here I'm just using the collect_data on a single History for a shot, same syntax as collect_shot_data on the ProgramResults)
+shot0_mos = results_td3.shot_histories[0].collect_data("measurement_outcomes", "all", strip_none_entries=True)
 shot0_mos
 ```
 
@@ -517,7 +515,7 @@ Of course, I've selected a seed such that this is true for explanatory purposes 
 ```{code-cell} ipython3
 outcomes_td3 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
-    for shot_mos in program_td3.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
+    for shot_mos in results_td3.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
 ]
 ```
 
@@ -591,14 +589,14 @@ program_td4 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
-program_td4.run(100)
+results_td4 = program_td4.run(100)
 ```
 
 ```{code-cell} ipython3
 # Let's make an updated plot
 outcomes_td4 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
-    for shot_mos in program_td4.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
+    for shot_mos in results_td4.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
 ]
 mean_outcomes_td4 = np.mean(outcomes_td4, axis=0)
 
@@ -633,7 +631,7 @@ With all of that conceptually laid out, let's see what this `Instruction` actual
 ```{code-cell} ipython3
 from loqs.core import Frame, Instruction
 from loqs.core.recordables import MeasurementOutcomes
-from loqs.backends.model import BaseNoiseModel, PyGSTiNoiseModel
+from loqs.backends import BaseNoiseModel, PyGSTiNoiseModel
 
 def onetime_apply_fn(
     all_measurement_outcomes: MeasurementOutcomes,
@@ -701,7 +699,7 @@ program_td5 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
-program_td5.run(100)
+results_td5 = program_td5.run(100)
 ```
 
 Sweet! Our program ran. But did it do the right thing? Let's remake our plot. If we are updating the model successfully, we should see a break from our oscillatory behavior after the 5th cycle and a return back to (nearly) 1 as our logical output.
@@ -710,7 +708,7 @@ Sweet! Our program ran. But did it do the right thing? Let's remake our plot. If
 # Let's make an updated plot
 outcomes_td5 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
-    for shot_mos in program_td5.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
+    for shot_mos in results_td5.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
 ]
 mean_outcomes_td5 = np.mean(outcomes_td5, axis=0)
 
@@ -787,14 +785,14 @@ program_td6 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
-program_td6.run(100)
+results_td6 = program_td6.run(100)
 ```
 
 ```{code-cell} ipython3
 # Let's make an updated plot
 outcomes_td6 = [
     [compute_logical_outcome(mo) for mo in shot_mos]
-    for shot_mos in program_td6.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
+    for shot_mos in results_td6.collect_shot_data("measurement_outcomes", "all", strip_none_entries=True)
 ]
 mean_outcomes_td6 = np.mean(outcomes_td6, axis=0)
 
