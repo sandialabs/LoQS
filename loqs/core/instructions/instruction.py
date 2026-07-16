@@ -125,7 +125,7 @@ class Instruction(Displayable):
     important caveats:
 
     1. THIS HAS OBVIOUS SECURITY IMPLICATIONS. DO NOT DESERIALIZE
-       INSTRUMENT-CONTAINING `LoQS` OBJECTS THAT YOU DO NOT TRUST.
+       INSTRUCTION-CONTAINING `LoQS` OBJECTS THAT YOU DO NOT TRUST.
        The good news is that because the function is stored in plain text,
        you can verify whether it is doing anything malicious.
     2. The serialized versions are computed at construction time
