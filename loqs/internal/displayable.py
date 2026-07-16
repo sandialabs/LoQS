@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.1                                                                             #
+# Logical Qubit Simulator (LoQS) v. 1.1.1                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -37,7 +37,10 @@ class Displayable(Serializable):
         This launches a separate process for Tkinter,
         making it non-blocking.
         """
-        data = Displayable.encode(self)
+        # Explicitly request JSON (rather than the Serializable-wide default of
+        # HDF5) since we just need an in-memory dict for the viewer, and HDF5
+        # encoding requires an open h5py.Group to write into.
+        data = Displayable.encode(self, format="json")
 
         title = f"{self.__class__.__name__} "
         obj_name = getattr(self, "name", None)
