@@ -406,13 +406,10 @@ class STIMQuantumState(BaseQuantumState):
 
             # but then post-process to grab the outcomes from the measurement record
             current_mr = self.state.current_measurement_record()
-            # print(current_mr[-len(self.latest_measurement_labels):])
             mr_entries = [
                 int(mre)
                 for mre in current_mr[-len(self.latest_measurement_labels) :]
             ]
-            # print(mr_entries)
-            # print()
 
             for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
                 outcomes[qbit].append(cbit)

@@ -438,9 +438,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
         rep = reptuple.rep
-        assert isinstance(rep, (tuple, list)) and len(rep) > 1
-        reset = rep[0]
-        include_outcomes = rep[1]
 
         qubits = reptuple.qubits
         assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
@@ -451,6 +448,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         outcomes: OutcomeDict = defaultdict(list)
 
         if reptype == InstrumentRep.ZBASIS_PROJECTION:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            reset = rep[0]
+            include_outcomes = rep[1]
+
             # TODO: Could do it all at once probably
             # but currently just copying measureRenormalizeQubit behavior
             for qbit in qubits:
@@ -458,6 +459,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 if include_outcomes:
                     outcomes[qbit].append(cbit)
         elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            reset = rep[0]
+            include_outcomes = rep[1]
+
             # Check we can apply the reps
             preop = rep[2]
             postop = rep[3]
@@ -482,6 +487,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             # Apply the post-op
             self.apply_reps_inplace([postop])
         elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            assert isinstance(rep, (tuple, list)) and len(rep) > 1
+            include_outcomes = rep[1]
+
             if len(qubits) > 1:
                 raise NotImplementedError(
                     "More than 1-qubit instruments not yet implemented"
@@ -509,10 +517,11 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 # We already computed this product
                 self._state = prod / np.sqrt(prob_0)
             else:
-                print(f"{instrument_dict[1].rep=}")
                 self._state = self._block_matvec(
                     instrument_dict[1].rep, qubits, self.state
                 ) / np.sqrt(1 - prob_0)
+        else:
+            raise NotImplementedError(f"Cannot apply InstrumentRep {reptype}")
 
         return outcomes
 

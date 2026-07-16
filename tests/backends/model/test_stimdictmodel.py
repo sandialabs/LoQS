@@ -136,6 +136,67 @@ class TestSTIMDictNoiseModel:
         assert isinstance(model.gate_dict["Y"], RepTuple)
         assert model.gate_dict["X"].reptype == GateRep.STIM_CIRCUIT_STR
 
+    def test_gaterep_conversion_rejects_ndarray_and_kraus_sequence(self):
+        """Unlike `DictNoiseModel`, `STIMDictNoiseModel`'s gate-dict
+        conversion has no branch for a raw `ndarray` or a Kraus-operator
+        sequence -- it only accepts `RepTuple`, `str`, or a
+        probabilistic-STIM-operations sequence -- so both must fail the
+        final "failed to upgrade to a RepTuple" assertion."""
+        import numpy as np
+
+        with pytest.raises(AssertionError, match="failed to upgrade"):
+            STIMDictNoiseModel(({"X": np.eye(2)}, {}))
+
+        kraus_seq = ((np.eye(2), 1.0), (np.eye(2), 0.0))
+        with pytest.raises(AssertionError, match="failed to upgrade"):
+            STIMDictNoiseModel(({"X": kraus_seq}, {}))
+
+    def test_instrument_mapping_value_rejected(self):
+        """Unlike `DictNoiseModel`, `STIMDictNoiseModel`'s instrument-dict
+        conversion has no dedicated branch for a bare `Mapping` (which
+        `DictNoiseModel` upgrades to `InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT`)
+        -- it falls through to the final "failed to upgrade to a RepTuple"
+        assertion instead."""
+        ideal_maps = {
+            0: RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+            1: RepTuple("Y 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
+        with pytest.raises(AssertionError, match="failed to upgrade"):
+            STIMDictNoiseModel(({}, {"M": ideal_maps}))
+
+    def test_add_command_aliases_resolution_through_get_reps(self):
+        """A gate registered only under its alias-source name (`CNOT`,
+        aliased by `add_command_aliases` to `CX` at construction time)
+        must resolve when the input circuit uses the name STIM itself
+        normalizes to (`CX`), confirming the alias is actually what makes
+        the lookup succeed -- not some other coincidental match."""
+        gate_dict = {
+            ("CNOT", ("Q0", "Q1")): RepTuple(
+                "CX 0 1", ("Q0", "Q1"), GateRep.STIM_CIRCUIT_STR
+            ),
+        }
+        circuit = STIMPhysicalCircuit("CNOT 0 1", ["Q0", "Q1"])
+
+        # Without the alias, the same circuit fails to resolve, since
+        # STIM normalizes "CNOT" to "CX" and only "CNOT" was registered.
+        model_no_alias = STIMDictNoiseModel((gate_dict, {}))
+        del model_no_alias.gate_dict[("CX", ("Q0", "Q1"))]
+        with pytest.raises(AssertionError, match="Failed to look up"):
+            model_no_alias.get_reps(
+                circuit,
+                [GateRep.STIM_CIRCUIT_STR],
+                [InstrumentRep.ZBASIS_PROJECTION],
+            )
+
+        # With the alias intact (the normal construction path), the same
+        # circuit resolves to the registered RepTuple.
+        model = STIMDictNoiseModel((gate_dict, {}))
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 1
+        assert reps[0] is model.gate_dict[("CNOT", ("Q0", "Q1"))]
+
     def test_instrument_rep_conversion(self):
         """Test instrument representation conversion.
 
@@ -676,6 +737,149 @@ class TestSTIMDictNoiseModel:
         else:
             assert False, "No combined reps with multiple qubits found"
 
+    def test_exact_entry_takes_priority_over_generic(self):
+        """A gate registered under an exact `(command, qubit-tuple)` key
+        must take priority over a generic (name-only) entry for the same
+        command."""
+        gate_dict = {
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+            ("X", ("Q1",)): RepTuple("Y 0", ("Q1",), GateRep.STIM_CIRCUIT_STR),
+        }
+        model = STIMDictNoiseModel((gate_dict, {}))
+        circuit = STIMPhysicalCircuit("X 1", ["Q0", "Q1"])
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 1
+        assert reps[0] is model.gate_dict[("X", ("Q1",))]
+        assert reps[0].rep == "Y 0"
+
+    def test_twoq_gate_multiple_pairs_one_line(self):
+        """A single line containing multiple two-qubit gate target pairs
+        (e.g. `CX 0 1 2 3`) must be split into separate qubit-tuples, one
+        per pair, and merged together via the same generic entry."""
+        gate_dict = {
+            "CX": RepTuple("CX 0 1", ("Q0", "Q1"), GateRep.STIM_CIRCUIT_STR),
+        }
+        model = STIMDictNoiseModel((gate_dict, {}))
+        circuit = STIMPhysicalCircuit("CX 0 1 2 3", ["Q0", "Q1", "Q2", "Q3"])
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 1
+        assert reps[0].rep == "CX 0 1 2 3"
+        assert reps[0].qubits == ("Q0", "Q1", "Q2", "Q3")
+
+    def test_twoq_gate_consecutive_lines_merge_via_stim_consolidation(self):
+        """Two-qubit gate pairs given on separate, consecutive lines of
+        the same command (e.g. `CX 0 1\\nCX 2 3`) still end up merged into
+        a single rep -- but only because `stim` itself consolidates
+        consecutive identical-gate instructions into one line before
+        `get_reps` ever sees the circuit text (confirmed below via
+        `_unroll_repeats()`), not because `get_reps` merges across lines
+        itself (its `common` dict is reset per line; see
+        `test_multiple_generic_commands_merge_independently` for a case
+        where that per-line scope is directly observable)."""
+        gate_dict = {
+            "CX": RepTuple("CX 0 1", ("Q0", "Q1"), GateRep.STIM_CIRCUIT_STR),
+        }
+        model = STIMDictNoiseModel((gate_dict, {}))
+        circuit = STIMPhysicalCircuit(
+            "CX 0 1\nCX 2 3", ["Q0", "Q1", "Q2", "Q3"]
+        )
+        assert circuit._unroll_repeats() == "CX 0 1 2 3"
+
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 1
+        assert reps[0].rep == "CX 0 1 2 3"
+        assert reps[0].qubits == ("Q0", "Q1", "Q2", "Q3")
+
+    def test_negated_qubit_mapping(self):
+        """A `!`-prefixed qubit index in the raw circuit text (STIM's
+        syntax for a negated measurement target, e.g. `M !0`) must be
+        mapped to a `!`-prefixed qubit label in the resulting RepTuple's
+        `qubits`, for the state backend to interpret."""
+        inst_dict = {
+            "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
+        }
+        model = STIMDictNoiseModel(
+            ({}, inst_dict), instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        )
+        circuit = STIMPhysicalCircuit("M !0", ["Q0"])
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 1
+        assert reps[0].qubits == ("!Q0",)
+
+    def test_generic_instrument_merging_multiqubit(self):
+        """Generic (name-only) instrument entries must merge across
+        multiple qubits the same way generic gate entries do."""
+        inst_dict = {
+            "M": RepTuple((None, True), ("Q0",), InstrumentRep.ZBASIS_PROJECTION),
+        }
+        model = STIMDictNoiseModel(
+            ({}, inst_dict), instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        )
+        circuit = STIMPhysicalCircuit("M 0 1 2", ["Q0", "Q1", "Q2"])
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 1
+        assert reps[0].qubits == ("Q0", "Q1", "Q2")
+        assert reps[0].rep == (None, True)
+
+    def test_repeat_block_unrolling_through_get_reps(self):
+        """A REPEAT block in the input circuit must be unrolled before
+        `get_reps` processes it, producing one rep per iteration."""
+        gate_dict = {"X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR)}
+        model = STIMDictNoiseModel((gate_dict, {}))
+        circuit = STIMPhysicalCircuit("REPEAT 3 {\nX 0\n}", ["Q0"])
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 3
+        assert all(r.rep == "X 0" for r in reps)
+
+    def test_lookup_failure_raises_clear_error(self):
+        model = STIMDictNoiseModel(({}, {}))
+        circuit = STIMPhysicalCircuit("X 0", ["Q0"])
+        with pytest.raises(AssertionError, match="Failed to look up"):
+            model.get_reps(
+                circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+            )
+
+    def test_multiple_generic_commands_merge_independently(self):
+        """`get_reps`'s generic-command combining (the `common` dict) is
+        scoped to a single circuit line, not the whole circuit: each of
+        the 4 lines below produces its own single-qubit rep, and the two
+        "X" lines do NOT merge with each other since `stim` itself keeps
+        them on separate, non-adjacent lines (confirmed below via
+        `_unroll_repeats()`), unlike the consecutive-line case in
+        `test_twoq_gate_consecutive_lines_merge_via_stim_consolidation`.
+        This also confirms X's and Y's generic entries don't cross-
+        contaminate each other's content."""
+        gate_dict = {
+            "X": RepTuple("X 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+            "Y": RepTuple("Y 0", ("Q0",), GateRep.STIM_CIRCUIT_STR),
+        }
+        model = STIMDictNoiseModel((gate_dict, {}))
+        circuit = STIMPhysicalCircuit(
+            "X 0\nY 1\nX 2\nY 3", ["Q0", "Q1", "Q2", "Q3"]
+        )
+        assert circuit._unroll_repeats() == "X 0\nY 1\nX 2\nY 3"
+
+        reps = model.get_reps(
+            circuit, [GateRep.STIM_CIRCUIT_STR], [InstrumentRep.ZBASIS_PROJECTION]
+        )
+        assert len(reps) == 4
+        assert all(len(r.qubits) == 1 for r in reps)
+        x_reps = [r for r in reps if r.rep == "X 0"]
+        y_reps = [r for r in reps if r.rep == "Y 0"]
+        assert {r.qubits for r in x_reps} == {("Q0",), ("Q2",)}
+        assert {r.qubits for r in y_reps} == {("Q1",), ("Q3",)}
 
 @pytest.mark.skipif(
     NO_STIM,

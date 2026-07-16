@@ -140,6 +140,21 @@ class TestNumPyStatevectorQuantumState:
                 RepTuple(None, "Q0", GateRep.QSIM_SUPEROPERATOR)
             ])
 
+        with pytest.raises(ValueError):
+            test.apply_reps([
+                RepTuple(None, "Q0", GateRep.PROBABILISTIC_STIM_OPERATIONS)
+            ])
+
+    def test_input_reps(self):
+        state = SVState(1, ["Q0"])
+        assert set(state.input_reps) == {
+            GateRep.UNITARY,
+            GateRep.KRAUS_OPERATORS,
+            InstrumentRep.ZBASIS_PROJECTION,
+            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+        }
+
     @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
     def test_kraus_sampling_distribution(self, kraus_sampling):
         """Kraus channel sampling must match analytic Born-rule probabilities,
@@ -236,6 +251,94 @@ class TestNumPyStatevectorQuantumState:
             test._state = psi.copy()
             test.apply_reps_inplace([leaky])
             assert np.isclose(np.linalg.norm(test.state), 1)
+
+    def test_kraus_choice_renormalization_failure(self):
+        """`_apply_kraus_choice` must raise a clear ValueError (not
+        propagate numpy's cryptic one) when given probabilities are too
+        far from summing to 1 to safely renormalize.
+
+        The deviation must be small enough to pass the method's own
+        upfront `np.isclose(sum(probs), 1.0)` sanity assert (~1e-5
+        tolerance) but large enough that numpy's `rng.choice` (~1.5e-8
+        tolerance) rejects it and larger than the method's own
+        renormalization-fallback threshold (1e-7) -- i.e. a deviation of
+        about 5e-6."""
+        U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        eps = 2.5e-6
+        bad_probs = RepTuple(
+            [(U_X, 0.5 + eps), (np.eye(2), 0.5 + eps)],
+            ["Q0"],
+            GateRep.KRAUS_OPERATORS,
+        )
+        test = SVState([0], ["Q0"], seed=1, kraus_sampling="choice")
+        with pytest.raises(ValueError, match="too far from 1 to renormalize"):
+            test.apply_reps_inplace([bad_probs])
+
+    @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
+    def test_kraus_sampling_distribution_multiqubit(self, kraus_sampling):
+        """Same Born-rule/exact-post-state contract as
+        `test_kraus_sampling_distribution`, but for 2- and 3-qubit Kraus
+        operators, cross-checked against an independent analytic ground
+        truth (not just internal matmul-vs-einsum agreement)."""
+
+        def run_trials(psi, labels, Ks, n_trials, seed):
+            n_qubits = len(labels)
+            probs_exact = [np.linalg.norm(K @ psi) ** 2 for K in Ks]
+            posts_exact = [K @ psi / np.linalg.norm(K @ psi) for K in Ks]
+            assert np.isclose(sum(probs_exact), 1)
+
+            reptuple = RepTuple(
+                [(K, None) for K in Ks], labels, GateRep.KRAUS_OPERATORS
+            )
+            test = SVState(
+                psi.copy().reshape((2,) * n_qubits),
+                labels,
+                seed=seed,
+                kraus_sampling=kraus_sampling,
+            )
+            counts = [0] * len(Ks)
+            for _ in range(n_trials):
+                test._state = psi.copy().reshape((2,) * n_qubits)
+                test.apply_reps_inplace([reptuple])
+                out_flat = test.state.flatten()
+                fids = [
+                    np.abs(np.vdot(post, out_flat)) for post in posts_exact
+                ]
+                branch = int(np.argmax(fids))
+                assert np.isclose(fids[branch], 1)
+                counts[branch] += 1
+
+            for count, p in zip(counts, probs_exact):
+                sigma = np.sqrt(p * (1 - p) / n_trials)
+                assert abs(count / n_trials - p) < 5 * sigma
+
+        # Amplitude damping on the first qubit, identity elsewhere --
+        # kron'd up to 2 and 3 qubits so probabilities stay state-dependent
+        # (unlike e.g. two unitary branches, whose branch probabilities
+        # would be state-independent and so a much weaker test).
+        gamma = 0.3
+        A0_1q = np.array([[1, 0], [0, np.sqrt(1 - gamma)]])
+        A1_1q = np.array([[0, np.sqrt(gamma)], [0, 0]])
+
+        theta = 0.4
+        psi_1q = np.array([np.cos(theta), np.sin(theta)], dtype=np.complex128)
+        other_q = np.array([1, 0], dtype=np.complex128)
+
+        psi_2q = np.kron(psi_1q, other_q)
+        A0_2q, A1_2q = np.kron(A0_1q, np.eye(2)), np.kron(A1_1q, np.eye(2))
+        run_trials(
+            psi_2q, ["Q0", "Q1"], [A0_2q, A1_2q], n_trials=20_000, seed=20260710
+        )
+
+        psi_3q = np.kron(psi_2q, other_q)
+        A0_3q, A1_3q = np.kron(A0_2q, np.eye(2)), np.kron(A1_2q, np.eye(2))
+        run_trials(
+            psi_3q,
+            ["Q0", "Q1", "Q2"],
+            [A0_3q, A1_3q],
+            n_trials=10_000,
+            seed=20260710,
+        )
 
     def test_contraction_matmul_einsum_equivalence(self):
         """The matmul and einsum block-matvec implementations must produce
@@ -474,6 +577,114 @@ class TestNumPyStatevectorQuantumState:
         outcomes7 = outs["Q0"]
         assert outcomes7 == outcomes1
 
+    def test_unsupported_instrument_rep_raises(self):
+        test = SVState([0], ["Q0"])
+        with pytest.raises(NotImplementedError):
+            test.apply_reps_inplace([
+                RepTuple("M 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+            ])
+
+    def test_zbasis_projection_reset_to_1(self):
+        """`reset=1` must always leave the qubit in |1> (up to the
+        physically irrelevant global phase carried over from whichever
+        branch was measured -- each trial starts fresh from |0> to avoid
+        that phase compounding across reused, un-reset iterations)."""
+        U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
+        reset1_rep = RepTuple((1, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+
+        for trial in range(10):
+            test = SVState([0], ["Q0"], seed=20260711 + trial)
+            test.apply_reps_inplace([H_rep, reset1_rep])
+            assert np.allclose(np.abs(test.state), [0, 1])
+
+    def test_zbasis_projection_multiqubit(self):
+        """A single ZBASIS_PROJECTION rep applied to multiple qubits at
+        once must measure/reset every qubit in `qubits`."""
+        U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+        H_reps = [
+            RepTuple(U_H, ["Q0"], GateRep.UNITARY),
+            RepTuple(U_H, ["Q1"], GateRep.UNITARY),
+        ]
+        reset0_rep = RepTuple(
+            (0, True), ["Q0", "Q1"], InstrumentRep.ZBASIS_PROJECTION
+        )
+
+        state00 = SVState([0, 0], ["Q0", "Q1"], seed=20260711)
+        test = SVState([0, 0], ["Q0", "Q1"], seed=20260711)
+        for _ in range(10):
+            outs = test.apply_reps_inplace(H_reps + [reset0_rep])
+            assert set(outs.keys()) == {"Q0", "Q1"}
+            assert len(outs["Q0"]) == 1 and len(outs["Q1"]) == 1
+            # reset=0 must always leave both qubits in |00>
+            self._check(test, state00)
+
+    def test_zbasis_pre_post_operations_reset_and_no_outcomes(self):
+        """ZBASIS_PRE_POST_OPERATIONS with `reset=1` and
+        `include_outcomes=False` must suppress the outcome dict entry
+        while still always leaving the qubit reset to |1>."""
+        U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
+        U_I = np.eye(2)
+        idle_rep = RepTuple(U_I, ["Q0"], GateRep.UNITARY)
+
+        # reset=1, include_outcomes=False: measurement outcome should not
+        # be recorded, but the qubit must still always end up in |1> (up
+        # to global phase -- fresh state per trial, as above)
+        pre_H_reset1_no_outcomes = RepTuple(
+            [1, False, H_rep, idle_rep],
+            ["Q0"],
+            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+        )
+        for trial in range(10):
+            test = SVState([0], ["Q0"], seed=20260711 + trial)
+            outs = test.apply_reps_inplace([pre_H_reset1_no_outcomes])
+            assert len(outs) == 0
+            assert np.allclose(np.abs(test.state), [0, 1])
+
+    def test_zbasis_outcome_operation_dict_multiqubit_raises(self):
+        """ZBASIS_OUTCOME_OPERATION_DICT explicitly does not support more
+        than one qubit."""
+        dummy_maps = {0: object(), 1: object()}
+        rep = RepTuple(
+            (dummy_maps, True),
+            ["Q0", "Q1"],
+            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+        )
+        test = SVState([0, 0], ["Q0", "Q1"])
+        with pytest.raises(NotImplementedError):
+            test.apply_reps_inplace([rep])
+
+    def test_zbasis_outcome_operation_dict_no_outcomes_and_final_state(self):
+        """`include_outcomes=False` for ZBASIS_OUTCOME_OPERATION_DICT must
+        suppress the outcome dict entry, while the ideal projector map
+        must still always collapse to an exact computational basis
+        state."""
+        U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
+
+        effect0 = np.array([[1, 0]])
+        effect1 = np.array([[0, 1]])
+        ideal_maps = {
+            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.UNITARY),
+            1: RepTuple(effect1.T @ effect1, ["Q0"], GateRep.UNITARY),
+        }
+        ideal_map_rep_no_outcomes = RepTuple(
+            (ideal_maps, False), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT
+        )
+
+        for trial in range(10):
+            test = SVState([0], ["Q0"], seed=20260711 + trial)
+            outs = test.apply_reps_inplace([H_rep, ideal_map_rep_no_outcomes])
+            assert len(outs) == 0
+            # The ideal projector map collapses to the basis state matching
+            # whichever outcome was (invisibly) sampled -- so the final
+            # state must always be an exact computational basis state
+            # (up to global phase).
+            assert np.allclose(np.abs(test.state), [1, 0]) or np.allclose(
+                np.abs(test.state), [0, 1]
+            )
+
     def test_serialization(self, make_temp_path):
         # Start in the 10 state
         state10 = SVState([1, 0], ["Q0", "Q1"])
@@ -499,4 +710,39 @@ class TestNumPyStatevectorQuantumState:
         state11 = SVState([1, 1], ["Q0", "Q1"])
 
         self._check(test2, state11)
-                    
+
+    @pytest.mark.parametrize("kraus_sampling", ["lazy", "choice"])
+    @pytest.mark.parametrize("contraction", ["matmul", "einsum"])
+    def test_serialization_kraus_and_instruments(
+        self, make_temp_path, kraus_sampling, contraction
+    ):
+        """Serialization must round-trip KRAUS_OPERATORS gate application
+        and an InstrumentRep correctly, along with non-default
+        `kraus_sampling`/`contraction` settings (both `_SERIALIZE_ATTRS`)."""
+        U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        X_kraus = RepTuple(
+            [(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"], GateRep.KRAUS_OPERATORS
+        )
+        proj_rep = RepTuple(
+            (None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION
+        )
+
+        test = SVState(
+            [0], ["Q0"], seed=20260711,
+            kraus_sampling=kraus_sampling, contraction=contraction,
+        )
+        outs_before = test.apply_reps_inplace([X_kraus, proj_rep])
+
+        with make_temp_path(suffix=".json") as tmp_path:
+            test.write(tmp_path)
+            test2 = SVState.read(tmp_path)
+
+        assert isinstance(test2, SVState)
+        assert test2.kraus_sampling == kraus_sampling
+        assert test2.contraction == contraction
+        self._check(test2, test)
+        # Deterministic Kraus channel (prob 1.0/0.0) always flips to |1>,
+        # so the projector must always measure 1 both before and after
+        # the round trip.
+        assert outs_before["Q0"] == [1]
+
