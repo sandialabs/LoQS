@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import functools
 import itertools
+import warnings
 import numpy as np
 from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
         LabelTupTupWithTime,
         LabelTupWithTime,
     )
+    from pygsti.evotypes import Evotype
+    from pygsti.modelmembers.modelmember import ModelMember
     from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt, superop_to_unitary
@@ -43,6 +46,8 @@ else:
         LabelTupTupWithTime,
         LabelTupWithTime,
     )
+    from pygsti.evotypes import Evotype
+    from pygsti.modelmembers.modelmember import ModelMember
     from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
     from pygsti.tools import basistools as bt, superop_to_unitary
@@ -90,6 +95,179 @@ PyGSTiModelCastableTypes: TypeAlias = (
     ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
 )
 """Types of pyGSTi models this backend can handle"""
+
+
+# ---------------------------------------------------------------------------
+# Workaround/detection for a pyGSTi `EmbeddedOp` memory-blowup bug.
+#
+# See `issues/pygsti-543.md` and `issues/pr-543.md` in the LoQS workspace repo
+# for full details, and https://github.com/sandialabs/pyGSTi/issues/543 for
+# the upstream pyGSTi issue.
+#
+# In short: pyGSTi commit 5c5b06a6d ("First pass at updating default evotype
+# behavior") made `Evotype.cast(...)` prefer *dense* representations whenever
+# an operator's own state space has dimension <= 64 (i.e. up to ~3 qubits).
+# `EmbeddedOp` (used to embed a small local operator into a larger multi-qubit
+# model) naively reuses the *embedded* operator's `Evotype` object -- which was
+# decided based on that operator's own small local state space -- to decide
+# its own representation type, even though `EmbeddedOp` itself spans the much
+# larger *parent* state space. This can cause a single `EmbeddedOp` to
+# allocate a dense matrix scaling as O(dim(parent state space)^2) instead of a
+# much smaller "embedded" representation, e.g. ~2.1 GB for a single 1-qubit
+# idle gate embedded into a 7-qubit register. As of this writing the bug is
+# still present on pyGSTi's `develop` branch.
+#
+# This mainly bites user-defined custom (often time-dependent) pyGSTi
+# operators, such as those in the `timedepmodel.md` tutorial, which are
+# commonly built by subclassing `DenseOperator`/`LinearOperator`, passing
+# `evotype` as a bare string (e.g. `"densitymx"`) without an explicit
+# `state_space`, and then wrapping the result in an `EmbeddedOp` targeting a
+# larger multi-qubit model. PyGSTi's own model-construction helpers (e.g.
+# `create_crosstalk_free_model`) are unaffected, since they build their
+# operators/evotypes differently.
+# ---------------------------------------------------------------------------
+
+_DENSE_EMBEDDING_DIM_THRESHOLD = 64
+"""Mirrors the dimension threshold pyGSTi itself uses (as of the bug's
+introduction) to decide whether to prefer dense representations. Above this
+threshold, an `EmbeddedOp` choosing a dense representation is almost always
+a symptom of the bug described above rather than intentional."""
+
+
+class PyGSTiEmbeddedOpMemoryWarning(UserWarning):
+    """Warned when a pyGSTi `EmbeddedOp` appears to be using a dense
+    representation sized to its full (large) parent state space, rather than
+    a compact embedded representation.
+
+    This is a symptom of a known pyGSTi bug; see the module-level comment
+    above [](api:PyGSTiNoiseModel) for details, and
+    [](api:safe_time_dependent_evotype) for a workaround.
+
+    To turn this warning into a hard error (e.g. to fail fast in a script or
+    test suite), use the standard [](api:warnings) filtering mechanism:
+
+    >>> import warnings
+    >>> from loqs.backends.model.pygstimodel import PyGSTiEmbeddedOpMemoryWarning
+    >>> warnings.simplefilter("error", PyGSTiEmbeddedOpMemoryWarning)
+    """
+
+
+def safe_time_dependent_evotype(evotype: str = "densitymx") -> Evotype:
+    """Construct a pyGSTi [](api:pygsti.evotypes.Evotype) that is safe to use
+    for custom (often time-dependent) operators that will later be embedded
+    into a larger multi-qubit model via
+    [](api:pygsti.modelmembers.operations.EmbeddedOp).
+
+    This works around a pyGSTi bug where `EmbeddedOp` inherits the wrapped
+    operator's own dense-representation preference (typically decided based
+    on the wrapped operator's small, local state space) instead of deciding
+    based on its own, potentially much larger, parent state space -- which
+    can cause disproportionate (and potentially enormous) memory use. See the
+    module-level comment above [](api:PyGSTiNoiseModel) and
+    `issues/pr-543.md` for full details.
+
+    Explicitly forcing `default_prefer_dense_reps=False` here sidesteps the
+    issue entirely (regardless of pyGSTi version) since `EmbeddedOp` will
+    then correctly choose its compact "embedded" representation.
+
+    Parameters
+    ----------
+    evotype:
+        Name of the underlying pyGSTi evolution type, e.g. `"densitymx"`
+        (the default).
+
+    Returns
+    -------
+    Evotype
+        A pyGSTi `Evotype` object with dense representations disabled by
+        default. Pass this directly wherever you would otherwise pass a bare
+        evotype string, e.g. as the `evotype` argument of a custom
+        `DenseOperator` subclass's `__init__`.
+
+    Examples
+    --------
+    >>> class MyTimeDependentIdle(DenseOperator):
+    ...     def __init__(self):
+    ...         super().__init__(
+    ...             np.identity(4, 'd'),
+    ...             pygsti.BuiltinBasis("pp", 4),
+    ...             safe_time_dependent_evotype("densitymx"),
+    ...         )
+    """
+    return Evotype.cast(evotype, default_prefer_dense_reps=False)
+
+
+def _iter_embedded_ops(op: ModelMember):
+    """Recursively yield all `EmbeddedOp` instances reachable from `op`
+    (including `op` itself, if applicable), by walking `submembers()`.
+    """
+    if isinstance(op, EmbeddedOp):
+        yield op
+
+    submembers = getattr(op, "submembers", None)
+    if callable(submembers):
+        for sub in submembers():
+            yield from _iter_embedded_ops(sub)
+
+
+def _check_op_for_dense_embedding_blowup(
+    op: ModelMember,
+    label: object,
+    dim_threshold: int = _DENSE_EMBEDDING_DIM_THRESHOLD,
+) -> None:
+    """Check `op` (and anything nested within it) for the pyGSTi
+    `EmbeddedOp`/`Evotype` dense-representation memory-blowup bug described
+    in the module-level comment above, and warn (via
+    [](api:PyGSTiEmbeddedOpMemoryWarning)) if found.
+
+    Parameters
+    ----------
+    op:
+        The pyGSTi model member to check (e.g. a gate or instrument member
+        pulled from `gate_dict`/`inst_dict`).
+
+    label:
+        A label identifying `op`, used only to make the warning message
+        actionable (e.g. the gate/instrument key it was looked up with).
+
+    dim_threshold:
+        Parent state space dimension above which a "dense" `EmbeddedOp`
+        representation is treated as a bug symptom rather than intentional.
+    """
+    for embedded in _iter_embedded_ops(op):
+        rep_type = getattr(embedded, "_rep_type", None)
+        if rep_type != "dense":
+            continue
+
+        parent_dim = embedded.state_space.dim
+        child_dim = embedded.embedded_op.state_space.dim
+        if parent_dim <= dim_threshold or child_dim >= parent_dim:
+            # Either the dense representation is small regardless (cheap),
+            # or this isn't actually an embedding into a larger space.
+            continue
+
+        approx_bytes = parent_dim * parent_dim * 8  # assumes float64 entries
+        warnings.warn(
+            f"pyGSTi gate/instrument {label!r} contains an EmbeddedOp using "
+            f"a dense representation sized to its full parent state space "
+            f"(dim={parent_dim}, ~{approx_bytes / 1e9:.2f} GB) instead of a "
+            f"compact embedded representation (embedded operator only acts "
+            f"on a dim={child_dim} subspace). This is a known pyGSTi bug "
+            "(see issues/pygsti-543.md and issues/pr-543.md) where "
+            "EmbeddedOp inherits its wrapped operator's dense-representation "
+            "preference, which was decided based on the wrapped operator's "
+            "own small state space, rather than re-deciding based on its "
+            "own (larger) parent state space. This most commonly happens "
+            "when constructing a custom pyGSTi operator (e.g. subclassing "
+            "DenseOperator) with evotype passed as a bare string and no "
+            "explicit state_space, then embedding it via EmbeddedOp. "
+            "Workaround: construct the operator's evotype explicitly with "
+            "dense representations disabled, e.g. using "
+            "loqs.backends.model.pygstimodel.safe_time_dependent_evotype(...) "
+            "in place of a bare evotype string.",
+            PyGSTiEmbeddedOpMemoryWarning,
+            stacklevel=3,
+        )
 
 
 class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
@@ -202,6 +380,19 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         self._gate_rep_cache = {}
         self._inst_rep_cache = {}
+
+        # Tracks which gate_dict/inst_dict keys have already been checked for
+        # the pyGSTi EmbeddedOp dense-representation memory-blowup bug (see
+        # `_check_op_for_dense_embedding_blowup` above), so we only pay the
+        # (small) cost of checking -- and only warn -- once per op.
+        self._dense_embedding_checked_gate_keys: set = set()
+        self._dense_embedding_checked_inst_keys: set = set()
+        # Separate bookkeeping used by `check_for_dense_embedding_issues`,
+        # which is keyed on raw gate_dict/inst_dict (pyGSTi Label) keys
+        # rather than the (name, *qubits) tuples used internally by
+        # `_get_gate_rep`/`_get_instrument_rep`.
+        self._dense_embedding_checked_raw_gate_keys: set = set()
+        self._dense_embedding_checked_raw_inst_keys: set = set()
 
     @property
     def gate_keys(self) -> list:
@@ -372,6 +563,41 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         return duration
 
+    def check_for_dense_embedding_issues(self) -> None:
+        """Proactively scan every gate/instrument in this model for the
+        pyGSTi `EmbeddedOp` dense-representation memory-blowup bug (see the
+        module-level comment near the top of this file, and
+        `issues/pygsti-543.md` / `issues/pr-543.md`), warning (via
+        [](api:PyGSTiEmbeddedOpMemoryWarning)) for each affected gate/
+        instrument found.
+
+        This performs the same check that [](api:get_reps) already performs
+        lazily (once per gate/instrument, the first time it's used), but lets
+        you audit a model up front -- e.g. right after injecting custom
+        (often time-dependent) operators into `gate_dict`/`inst_dict` -- so
+        problems surface before running a potentially expensive/large
+        simulation, rather than partway through one.
+
+        This is not called automatically during `__init__` because
+        `gate_dict`/`inst_dict` are live references to the underlying pyGSTi
+        model's dictionaries, and users often mutate them (e.g. to inject
+        custom time-dependent gates) *after* constructing a
+        [](api:PyGSTiNoiseModel). Note that this method uses its own
+        bookkeeping (keyed on the raw pyGSTi `Label` objects used by
+        `gate_dict`/`inst_dict`) that is independent from -- and so may
+        result in a gate/instrument being checked more than once relative to
+        -- the lazy, per-(name, qubits) checks performed by `get_reps`.
+        """
+        for op_key, op in self.gate_dict.items():
+            if op_key not in self._dense_embedding_checked_raw_gate_keys:
+                _check_op_for_dense_embedding_blowup(op, op_key)
+                self._dense_embedding_checked_raw_gate_keys.add(op_key)
+
+        for inst_key, op in self.inst_dict.items():
+            if inst_key not in self._dense_embedding_checked_raw_inst_keys:
+                _check_op_for_dense_embedding_blowup(op, inst_key)
+                self._dense_embedding_checked_raw_inst_keys.add(inst_key)
+
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
@@ -425,6 +651,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         # Look up using unaliased qubits
         op = self.gate_dict[op_key]
         basis = self.model.basis
+
+        if op_key not in self._dense_embedding_checked_gate_keys:
+            _check_op_for_dense_embedding_blowup(op, op_key)
+            self._dense_embedding_checked_gate_keys.add(op_key)
 
         # if using time-dependence, update operator rep and clear cache
         if self.use_time_dependence:
@@ -548,6 +778,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 # TODO: What to do with key error?
                 # Look up using unaliased qubits
                 op = self.inst_dict[inst_key]
+
+                if inst_key not in self._dense_embedding_checked_inst_keys:
+                    _check_op_for_dense_embedding_blowup(op, inst_key)
+                    self._dense_embedding_checked_inst_keys.add(inst_key)
 
                 # if using time-dependence, update operator rep
                 if self.use_time_dependence:
