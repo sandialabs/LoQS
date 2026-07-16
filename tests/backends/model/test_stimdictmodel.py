@@ -34,6 +34,22 @@ class TestSTIMDictNoiseModel:
         assert isinstance(model.gate_dict, dict)
         assert isinstance(model.inst_dict, dict)
 
+    def test_init_rejects_unsupported_gatereps(self):
+        """STIMDictNoiseModel has reduced support compared to DictNoiseModel
+        -- it can only ever produce GateRep.STIM_CIRCUIT_STR/
+        PROBABILISTIC_STIM_OPERATIONS, so requesting any other GateRep as
+        an output type should be rejected up front."""
+        with pytest.raises(AssertionError, match="only supports"):
+            STIMDictNoiseModel(({}, {}), gatereps=[GateRep.UNITARY])
+
+    def test_init_rejects_unsupported_instreps(self):
+        """Same as above, but for InstrumentRep -- STIMDictNoiseModel
+        cannot produce InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT."""
+        with pytest.raises(AssertionError, match="only supports"):
+            STIMDictNoiseModel(
+                ({}, {}), instreps=[InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+            )
+
     def test_init_with_gate_dict(self):
         """Test initialization with gate dictionary.
 

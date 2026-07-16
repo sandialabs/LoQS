@@ -90,50 +90,37 @@ class TestConstruction:
         with pytest.raises(AssertionError, match="Model must use int or str"):
             PyGSTiNoiseModel(model)
 
-    def test_qubit_aliases_do_not_bypass_the_label_format_check(self):
-        """Documents a discovered discrepancy: the code comment above this
-        assertion (`pygstimodel.py` ~line 320) says the label-format check
-        exists "but allow[s] qubit label aliasing" for non-conforming
-        labels -- but the assertion actually checks the model's *raw*
-        `state_space.qubit_labels` unconditionally, before `qubit_aliases`
-        is even considered. So providing `qubit_aliases` does NOT let you
-        use a model with non-conforming raw qubit labels (e.g. `"A0"`); it
-        only lets you rename already-conforming labels (see
-        `test_qubit_aliases_mapping_renames_qubits` above). This test pins
-        down that current (arguably surprising, contrary to the docstring)
-        behavior; not fixed here since it wasn't part of this pass's scope.
-        """
+    def test_qubit_aliases_do_not_bypass_the_underlying_model_label_check(self):
+        """`qubit_aliases` lets you present different qubit labels to LoQS
+        on top of a conforming model; it does not let you use a model with
+        non-conforming raw labels (e.g. `"A0"`), since the label-format
+        restriction applies to the underlying pyGSTi model itself."""
         model = ExplicitOpModel(state_space=QubitSpace(["A0"]), basis="pp")
         model.operations[Label("Gxpi", "A0")] = FullArbitraryOp(np.eye(4), basis="pp")
         with pytest.raises(AssertionError, match="Model must use int or str"):
             PyGSTiNoiseModel(model, qubit_aliases={"A0": "Q0"})
 
-    # The next three tests document a single, shared discovered bug: the
-    # qubit-label-format assertion (`pygstimodel.py` ~line 324,
-    # `model.state_space.qubit_labels`) runs *unconditionally*, before the
-    # later `if isinstance(model, ExplicitOpModel): ... elif ...: ...`
-    # dispatch chain (~line 354 onwards) that's clearly intended to handle
-    # `PyGSTiNoiseModel` (copy), `DictNoiseModel` (NotImplementedError), and
-    # any other type (TypeError with a specific message) as special cases.
-    # Because none of those three input types have a `.state_space`
-    # attribute of their own, every one of them instead raises an opaque,
-    # unrelated `AttributeError` from line 324 -- the entire dispatch chain
-    # below `ExplicitOpModel`/`ImplicitOpModel` is effectively dead code.
-    # Not fixed here since it wasn't part of this pass's scope; pinned down
-    # so a future fix has regression tests to flip from
-    # `pytest.raises(AttributeError)` to the actually-intended behavior.
+    def test_copy_constructor_copies_model_and_aliases(self):
+        pgm = PyGSTiNoiseModel(_build_explicit_model(), qubit_aliases={"Q0": "MyQubit"})
+        pgm_copy = PyGSTiNoiseModel(pgm)
+        assert pgm_copy.model is pgm.model
+        assert pgm_copy.gate_dict is pgm.gate_dict
+        assert pgm_copy.inst_dict is pgm.inst_dict
+        assert pgm_copy.use_embedded_op == pgm.use_embedded_op
+        assert pgm_copy.qubit_aliases == pgm.qubit_aliases
+        assert pgm_copy.gate_keys == pgm.gate_keys
 
-    def test_copy_constructor_is_currently_broken(self):
+    def test_copy_constructor_allows_overriding_qubit_aliases(self):
         pgm = PyGSTiNoiseModel(_build_explicit_model())
-        with pytest.raises(AttributeError, match="state_space"):
-            PyGSTiNoiseModel(pgm)
+        pgm_copy = PyGSTiNoiseModel(pgm, qubit_aliases={"Q0": "OtherQubit"})
+        assert pgm_copy.qubit_aliases == {"Q0": "OtherQubit"}
 
-    def test_invalid_model_type_error_message_is_currently_unreachable(self):
-        with pytest.raises(AttributeError, match="state_space"):
+    def test_invalid_model_type_raises_type_error(self):
+        with pytest.raises(TypeError, match="Cannot cast .* to PyGSTiNoiseModel"):
             PyGSTiNoiseModel(42)
 
-    def test_dictnoisemodel_not_implemented_error_is_currently_unreachable(self):
-        with pytest.raises(AttributeError, match="state_space"):
+    def test_dictnoisemodel_raises_not_implemented_error(self):
+        with pytest.raises(NotImplementedError, match="Build explicit op model"):
             PyGSTiNoiseModel(DictNoiseModel(({}, {})))
 
 
@@ -163,11 +150,9 @@ class TestGetGateRep:
         assert np.shape(rep) == (4, 4)
 
     def test_fallback_skips_failing_candidate(self, pgm):
-        """The priority-ordered fallback loop this refactor (issue 72)
-        specifically wants to replace with a dedicated exception: request
-        GateRep.UNITARY first (fails for the non-unitary amplitude-damping
-        channel) and confirm it falls through to GateRep.QSIM_SUPEROPERATOR
-        rather than raising."""
+        """Requesting GateRep.UNITARY first (fails for the non-unitary
+        amplitude-damping channel) falls through to
+        GateRep.QSIM_SUPEROPERATOR rather than raising."""
         rep, reptype = pgm._get_gate_rep(
             "Gad", ["Q0"], [GateRep.UNITARY, GateRep.QSIM_SUPEROPERATOR]
         )

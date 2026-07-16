@@ -19,7 +19,7 @@ from loqs.internal.serializable import (
     IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
-from loqs.types import Float, Int
+from loqs.types import Bool, Float, Int
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
 
@@ -803,7 +803,10 @@ class JSONEncoder(BaseEncoder):
         Any
             The primitive value directly (for JSON).
         """
-        if isinstance(to_encode, Int):
+        if isinstance(to_encode, Bool):
+            # Checked before `Int`, since `bool` is a subclass of `int`.
+            to_encode = bool(to_encode)
+        elif isinstance(to_encode, Int):
             to_encode = int(to_encode)
         elif isinstance(to_encode, Float):
             to_encode = float(to_encode)

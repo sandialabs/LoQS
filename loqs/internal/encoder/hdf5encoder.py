@@ -386,8 +386,11 @@ class HDF5Encoder(BaseEncoder):
         hdf5_native_types = (int, float, bool, str, bytes)
         first_element = to_encode_list[0]
         first_type = type(first_element)
+        # NOTE: exact type comparison, not isinstance -- `bool` is a
+        # subclass of `int`, so isinstance would treat e.g. `(0, True)` as
+        # a homogeneous int tuple and silently coerce `True` to `1`.
         if first_type in hdf5_native_types and all(
-            isinstance(e, first_type) for e in to_encode
+            type(e) is first_type for e in to_encode
         ):
             # Use HDF5 dataset for optimized storage
             list_group.attrs["storage_format"] = "dataset"
@@ -1011,12 +1014,13 @@ class HDF5Encoder(BaseEncoder):
         h5_group.attrs["encode_type"] = "primitive"
         h5_group.attrs["version"] = SERIALIZATION_VERSION
 
-        if isinstance(to_encode, int):
+        if isinstance(to_encode, bool):
+            # Checked before `int`, since `bool` is a subclass of `int`.
+            h5_group.attrs["cast_to"] = "bool"
+        elif isinstance(to_encode, int):
             h5_group.attrs["cast_to"] = "int"
         elif isinstance(to_encode, float):
             h5_group.attrs["cast_to"] = "float"
-        elif isinstance(to_encode, bool):
-            h5_group.attrs["cast_to"] = "bool"
         elif isinstance(to_encode, complex):
             h5_group.attrs["cast_to"] = "complex"
         elif to_encode is None:

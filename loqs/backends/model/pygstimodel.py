@@ -317,39 +317,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             )
         from loqs.backends.model import DictNoiseModel
 
-        # Currently there is a pyGSTi bug deserializing models that have
-        # non-int or strs that do not start with "Q"
-        # We will enforce this upon the user here for the model itself,
-        # but allow qubit label aliasing
-        model_qubits = model.state_space.qubit_labels  # type: ignore
-        assert all(
-            [
-                isinstance(q, int)
-                or (isinstance(q, str) and q.startswith("Q"))
-                for q in model_qubits
-            ]
-        ), (
-            "Model must use int or str starting with Q labels for qubits. ",
-            "For qubit labels outside of these restrictions, use `qubit_aliases` "
-            "to map from model qubits to your desired qubit labels.",
-        )
-
-        if qubit_aliases is None:
-            self.qubit_aliases = {k: k for k in model_qubits}
-        elif isinstance(qubit_aliases, Mapping):
-            assert all([q in qubit_aliases for q in model_qubits])
-            self.qubit_aliases = dict(qubit_aliases)
-        elif isinstance(qubit_aliases, Sequence):
-            assert len(qubit_aliases) == len(model_qubits)
-            self.qubit_aliases = {
-                k: v for k, v in zip(model_qubits, qubit_aliases)
-            }
-        else:
-            raise TypeError("Invalid type for qubit aliases")
-        self.model_qubit_aliases = {
-            v: k for k, v in self.qubit_aliases.items()
-        }
-
+        # Dispatch on the input type first, so `self.model` is always set
+        # (or a specific error already raised) before it's used below.
         self.use_embedded_op = False
         if isinstance(model, ExplicitOpModel):
             self.model = model
@@ -369,6 +338,46 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             raise NotImplementedError("TODO: Build explicit op model")
         else:
             raise TypeError(f"Cannot cast {type(model)} to PyGSTiNoiseModel")
+
+        # Currently there is a pyGSTi bug deserializing models that have
+        # non-int or strs that do not start with "Q". We enforce this on
+        # the underlying pyGSTi model's own qubit labels, since the bug
+        # lives in pyGSTi's own (de)serialization and can't be worked
+        # around here. `qubit_aliases` lets you present different labels
+        # to LoQS, but does not bypass this restriction.
+        model_qubits = self.model.state_space.qubit_labels  # type: ignore
+        assert all(
+            [
+                isinstance(q, int)
+                or (isinstance(q, str) and q.startswith("Q"))
+                for q in model_qubits
+            ]
+        ), (
+            "Model must use int or str starting with Q labels for qubits. ",
+            "For qubit labels outside of these restrictions, use `qubit_aliases` "
+            "to present different labels to LoQS (the underlying pyGSTi model's "
+            "own labels must still conform).",
+        )
+
+        if qubit_aliases is None:
+            if isinstance(model, PyGSTiNoiseModel):
+                # Copy-constructor: inherit the source model's aliases.
+                self.qubit_aliases = dict(model.qubit_aliases)
+            else:
+                self.qubit_aliases = {k: k for k in model_qubits}
+        elif isinstance(qubit_aliases, Mapping):
+            assert all([q in qubit_aliases for q in model_qubits])
+            self.qubit_aliases = dict(qubit_aliases)
+        elif isinstance(qubit_aliases, Sequence):
+            assert len(qubit_aliases) == len(model_qubits)
+            self.qubit_aliases = {
+                k: v for k, v in zip(model_qubits, qubit_aliases)
+            }
+        else:
+            raise TypeError("Invalid type for qubit aliases")
+        self.model_qubit_aliases = {
+            v: k for k, v in self.qubit_aliases.items()
+        }
 
         self.zbasis_proj_resets = zbasis_proj_resets
 

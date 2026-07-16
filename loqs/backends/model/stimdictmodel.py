@@ -38,6 +38,23 @@ per-qubit index placeholders to combine), as opposed to e.g.
 carries no qubit-specific text at all.
 """
 
+_SUPPORTED_GATEREPS = (GateRep.STIM_CIRCUIT_STR, GateRep.PROBABILISTIC_STIM_OPERATIONS)
+"""`GateRep` members `STIMDictNoiseModel` (unlike the more general
+[](api:DictNoiseModel)) can actually produce -- see `convert_to_gatereptuple`
+in `__init__`.
+"""
+
+_SUPPORTED_INSTREPS = (
+    InstrumentRep.STIM_CIRCUIT_STR,
+    InstrumentRep.ZBASIS_PROJECTION,
+    InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+)
+"""`InstrumentRep` members `STIMDictNoiseModel` (unlike the more general
+[](api:DictNoiseModel)) can actually produce -- see the instrument dict
+loop in `__init__`. Notably, `InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT`
+is not supported.
+"""
+
 
 def _merge_common_rep(
     command: str,
@@ -187,8 +204,14 @@ class STIMDictNoiseModel(DictNoiseModel):
             return gr
 
         ## NOTE: This is a reduced support compared to DictNoiseModel
-        assert all([gr in self._gatereps for gr in gatereps])
-        assert all([ir in self._instreps for ir in instreps])
+        assert all(gr in _SUPPORTED_GATEREPS for gr in gatereps), (
+            f"STIMDictNoiseModel only supports {_SUPPORTED_GATEREPS} as "
+            f"gatereps, got {gatereps}"
+        )
+        assert all(ir in _SUPPORTED_INSTREPS for ir in instreps), (
+            f"STIMDictNoiseModel only supports {_SUPPORTED_INSTREPS} as "
+            f"instreps, got {instreps}"
+        )
         if gaterep_array_cast_rep is not None:
             warnings.warn(
                 "gaterep_array_cast_rep is set, but this option is not used by STIMDictNoiseModel"

@@ -233,24 +233,15 @@ class TestRepsFixtureRoundTrip:
         assert outcome_0.reptype == GateRep.PTM
         assert outcome_1.reptype == GateRep.QSIM_SUPEROPERATOR
 
-    def test_bool_payloads_are_coerced_to_int_on_round_trip(self):
-        """Documents a real, pre-existing (not #72-related) quirk of the
-        serialization framework found while writing this test: `bool` values
-        inside a `RepTuple` payload decode back as plain `int` (e.g. `True`
-        -> `1`), not `bool`, because `JSONEncoder.encode_primitive`/its HDF5
-        counterpart check `isinstance(x, Int)` and `bool` is a subclass of
-        `int` in Python, with no separate bool branch. This affects every
-        `include_outcomes: bool` field across `InstrumentRep` payloads. Not
-        fixed here (it's a pre-existing, independent limitation of
-        `loqs.internal.serializable`/`encoder`, out of scope for this
-        change) -- pinned down explicitly so it isn't mistaken for a new
-        regression later, and so any future serialization work is aware of
-        it.
-        """
+    def test_bool_payloads_round_trip_as_bool(self):
+        """`bool` values inside a `RepTuple` payload (e.g. `include_outcomes`
+        in `InstrumentRep` payloads) must round-trip as `bool`, not `int`
+        (`True` -> `1`), despite `bool` being a subclass of `int` in
+        Python."""
         encoded = Serializable.encode((0, True), format="json", reset_encode_id=True)
         decoded = Serializable.decode(json.loads(json.dumps(encoded)), format="json")
-        assert decoded == (0, 1)
-        assert type(decoded[1]) is int
+        assert decoded == (0, True)
+        assert type(decoded[1]) is bool
 
     def test_module_and_class_metadata(self):
         """The (module, class) metadata this fixture records is exactly the
