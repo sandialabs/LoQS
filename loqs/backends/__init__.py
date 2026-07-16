@@ -132,6 +132,26 @@ def __getattr__(name: str) -> Any:
                 f"PyGSTi model backend is not available. "
                 f"Error: {get_backend_error('pygsti_model')}"
             )
+    elif name == "safe_time_dependent_evotype":
+        if is_backend_available("pygsti_model"):
+            from .model.pygstimodel import safe_time_dependent_evotype
+
+            return safe_time_dependent_evotype
+        else:
+            raise ImportError(
+                f"PyGSTi model backend is not available. "
+                f"Error: {get_backend_error('pygsti_model')}"
+            )
+    elif name == "PyGSTiEmbeddedOpMemoryWarning":
+        if is_backend_available("pygsti_model"):
+            from .model.pygstimodel import PyGSTiEmbeddedOpMemoryWarning
+
+            return PyGSTiEmbeddedOpMemoryWarning
+        else:
+            raise ImportError(
+                f"PyGSTi model backend is not available. "
+                f"Error: {get_backend_error('pygsti_model')}"
+            )
     elif name == "STIMQuantumState":
         if is_backend_available("stim_state"):
             from .state.stimstate import STIMQuantumState

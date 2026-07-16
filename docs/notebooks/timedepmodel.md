@@ -236,6 +236,8 @@ But how do we actually define this operation? We can define our own custom PyGST
 
 (For advanced PyGSTi users, OperationFactories are also a common way to do a similar thing. The difference is that an OpFactory takes arguments from the Circuit label to generate the representation. In this case, we don't need to do that -- the model is feeding us the time via `set_time()` so we don't need any additional information.)
 
+**A note on constructing custom operators:** Some pyGSTi versions (see [pyGSTi issue #543](https://github.com/sandialabs/pyGSTi/issues/543)) have a bug where wrapping a custom operator like this in an `EmbeddedOp` (which we do below, to place it on a specific qubit within our larger multi-qubit model) can cause pyGSTi to allocate a dense representation sized to the *entire* model's state space, rather than a small representation local to the embedded operator. For a model with more than a handful of qubits, this can mean allocating many GB of memory for what should be a trivial single-qubit operator! To avoid this, we construct our operator's `evotype` explicitly via `safe_time_dependent_evotype` below, rather than passing the bare string `"densitymx"` -- this sidesteps the bug regardless of which pyGSTi version you're using.
+
 ```{code-cell} ipython3
 from copy import deepcopy
 import numpy as np
@@ -243,6 +245,8 @@ import numpy as np
 import pygsti
 from pygsti.baseobjs import Label
 from pygsti.modelmembers.operations import DenseOperator, EmbeddedOp
+
+from loqs.backends.model.pygstimodel import safe_time_dependent_evotype
 ```
 
 ```{code-cell} ipython3
@@ -250,7 +254,7 @@ class FlippingIdle(DenseOperator):
     """An idle that gets an X(pi) rotation applied every 134 units."""
     def __init__(self):
         # Initialize in identity as a PTM (superoperator in Pauli Product basis)
-        super().__init__(np.identity(4,'d'), pygsti.BuiltinBasis("pp", 4), "densitymx")
+        super().__init__(np.identity(4,'d'), pygsti.BuiltinBasis("pp", 4), safe_time_dependent_evotype("densitymx"))
         self.set_time(0.0)
 
     @property
@@ -364,7 +368,10 @@ class XRotatingIdle(DenseOperator):
     """An idle that has an X overrotation."""
     def __init__(self, overrot_period, overrot_shift):
         # Initialize in identity as a PTM (superoperator in Pauli Product basis)
-        super().__init__(np.identity(4,'d'), pygsti.BuiltinBasis("pp", 4), "densitymx")
+        # As before, we construct the evotype via safe_time_dependent_evotype to
+        # avoid a pyGSTi bug when this operator is later embedded into our
+        # larger multi-qubit model (see the note above).
+        super().__init__(np.identity(4,'d'), pygsti.BuiltinBasis("pp", 4), safe_time_dependent_evotype("densitymx"))
 
         # Initialize our parameters
         self.overrot_period = overrot_period
