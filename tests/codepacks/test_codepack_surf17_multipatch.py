@@ -24,7 +24,11 @@ from loqs.codepacks import codepack_surf17_multipatch as multipatch
 from loqs.tools import fttools
 
 NUM_STIM_SHOTS = 100
-NUM_KRAUS_SHOTS = 4
+# The dense-statevector smoke test below is fully deterministic (Zero/Plus
+# Prep product state, noiseless model), so a single shot is sufficient; the
+# dense backend is expensive enough that repeated shots would only add cost
+# without adding coverage.
+NUM_KRAUS_SHOTS = 1
 
 
 def layout_qubits(layout: str, suffix: str = "") -> list[str]:
@@ -476,7 +480,7 @@ class TestTransversalCnot:
             )
 
 
-def bell_joint_parity_stack(layout, ancilla="ANC", ft_measures=False):
+def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
     """Bell prep (Plus L0, Zero L1, transversal CNOT) + joint ZZ + XX parity.
 
     If `ft_measures` is set, both parities are followed by destructive FT
@@ -537,7 +541,7 @@ class TestJointParity:
         """|0>|0> has even joint Z parity; X_L|0>|0> has odd parity."""
         q0 = layout_qubits(layout, "_0")
         q1 = layout_qubits(layout, "_1")
-        ancilla = "ANC"
+        ancilla = "Qanc"
         all_q = q0 + q1 + [ancilla]
         zz = multipatch.build_joint_parity_zz_instruction(
             "L0", "L1", q0[:9], q1[:9], ancilla

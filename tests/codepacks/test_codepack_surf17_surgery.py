@@ -26,7 +26,11 @@ from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.tools import fttools
 
 NUM_STIM_SHOTS = 100
-NUM_KRAUS_SHOTS = 4
+# The dense-statevector smoke test below is fully deterministic (Zero Prep
+# product state, noiseless model), so a single shot is sufficient; the
+# dense backend is expensive enough (23-qubit statevector) that repeated
+# shots would only add cost without adding coverage.
+NUM_KRAUS_SHOTS = 1
 
 
 def layout_qubits(layout: str, suffix: str = "") -> list[str]:
@@ -90,7 +94,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
     )
 
 
-SEAMS = ["S0", "S1", "S2"]
+SEAMS = ["Qs0", "Qs1", "Qs2"]
 
 
 def two_patch_setup(layout):
@@ -623,8 +627,8 @@ class TestSimplifiedSurgeryBell:
         """
         q0 = layout_qubits(layout, "_0")
         q1 = layout_qubits(layout, "_1")
-        seams_v = ["SV0", "SV1", "SV2"]
-        seams_h = ["SH0", "SH1", "SH2"]
+        seams_v = ["Qsv0", "Qsv1", "Qsv2"]
+        seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = q0 + q1 + seams_v + seams_h
         cnot = multipatch.build_transversal_cnot_instruction(
             "L0", "L1", q0[:9], q1[:9]
@@ -737,8 +741,8 @@ class TestFTSurgery:
         """Bell pair: FT-mode surgery M_ZZ and M_XX both report 0."""
         q0 = layout_qubits(layout, "_0")
         q1 = layout_qubits(layout, "_1")
-        seams_v = ["SV0", "SV1", "SV2"]
-        seams_h = ["SH0", "SH1", "SH2"]
+        seams_v = ["Qsv0", "Qsv1", "Qsv2"]
+        seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = q0 + q1 + seams_v + seams_h
         cnot = multipatch.build_transversal_cnot_instruction(
             "L0", "L1", q0[:9], q1[:9]
@@ -904,8 +908,8 @@ class TestParityReadoutConsistencyA:
 class TestSurgeryCnot:
     """Phase H: lattice-surgery CNOT (M_ZZ . M_XX through a |+> ancilla).
 
-    L-shaped 3-patch layout: control C above ancilla ANC (vertical ZZ seam),
-    target T right of ANC (horizontal XX seam). Verifies the correction
+    L-shaped 3-patch layout: control C above ancilla Qanc (vertical ZZ seam),
+    target T right of Qanc (horizontal XX seam). Verifies the correction
     table Z_L(C)^m_xx, X_L(T)^(m_zz ^ m_anc) via both truth tables and Bell
     correlations (plan test group 7). surf17, FT mode, 57 qubits: stim only.
     """
@@ -915,17 +919,17 @@ class TestSurgeryCnot:
         qc = layout_qubits("surf17", "_c")
         qt = layout_qubits("surf17", "_t")
         qa = layout_qubits("surf17", "_a")
-        seams_v = ["SV0", "SV1", "SV2"]
-        seams_h = ["SH0", "SH1", "SH2"]
+        seams_v = ["Qsv0", "Qsv1", "Qsv2"]
+        seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = qc + qt + qa + seams_v + seams_h
         seq = surgery.build_surgery_cnot_sequence(
-            "C", "T", "ANC", qc, qt, qa, seams_v, seams_h, "surf17", mode="ft"
+            "C", "T", "Qanc", qc, qt, qa, seams_v, seams_h, "surf17", mode="ft"
         )
         prelude = [
             ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
             ("Init Patch SURF", None, ("C", qc)),
             ("Init Patch SURF", None, ("T", qt)),
-            ("Init Patch SURF", None, ("ANC", qa)),
+            ("Init Patch SURF", None, ("Qanc", qa)),
         ]
         return prelude, seq, all_q
 
