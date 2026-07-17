@@ -158,6 +158,60 @@ class OperationRep(ABC, Displayable):
         return new
 
 
+class StimCircuitPayloadMixin:
+    """Shared payload/construction logic for STIM circuit-string representations.
+
+    [](api:StimCircuitGateRep) and [](api:StimCircuitInstrumentRep) are
+    otherwise-unrelated concrete classes (one a [](api:GateRep), the other
+    an [](api:InstrumentRep)) that happen to wrap the exact same payload
+    shape: a single STIM circuit-string template with placeholder qubit
+    indices. This mixin holds that shared mechanics -- storage, structural
+    `matches`/`from_raw`, and serialization -- so it isn't duplicated
+    between the two; it does *not* encode either class's semantic
+    restriction on which STIM commands the string may contain (e.g. that a
+    [](api:StimCircuitGateRep) must not include measurement/reset
+    commands), since those restrictions differ between the two and aren't
+    checked by `matches`/`from_raw` anyway.
+
+    This is combined with [](api:GateRep)/[](api:InstrumentRep) via
+    multiple inheritance, e.g. ``class StimCircuitGateRep
+    (StimCircuitPayloadMixin, GateRep)``, with the mixin listed first so
+    its concrete `matches`/`from_raw` satisfy the abstract methods
+    declared on [](api:OperationRep). It is not itself an
+    [](api:OperationRep) subclass and cannot be instantiated on its own.
+
+    Also used as a shared type for `isinstance` capability checks (e.g. in
+    [](api:DictNoiseModel)'s STIM-text merging logic) that need to treat
+    any STIM-circuit-string-payload representation uniformly, regardless
+    of whether it's a gate or instrument representation.
+    """
+
+    circuit_str: str
+    """The STIM circuit-string template, with placeholder qubit indices."""
+
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["circuit_str", "qubits"]
+
+    def __init__(
+        self, circuit_str: str, qubits: str | int | Sequence[str | int] = ()
+    ) -> None:
+        super().__init__(qubits)  # type: ignore[call-arg]
+        self.circuit_str = circuit_str
+
+    @classmethod
+    def matches(cls, raw: object) -> bool:
+        return isinstance(raw, str)
+
+    @classmethod
+    def from_raw(
+        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+    ) -> "StimCircuitPayloadMixin":
+        if not cls.matches(raw):
+            raise RepConstructionError(
+                f"{raw!r} is not a valid {cls.__name__} payload (expected a str)"
+            )
+        return cls(raw, qubits)  # type: ignore[call-arg]
+
+
 def is_rep_compatible(
     output_cls: type[OperationRep], accepted: Sequence[type[OperationRep]]
 ) -> bool:

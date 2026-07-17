@@ -26,11 +26,18 @@ appropriate concrete class, given a list of candidate classes to try.
 [](api:RepTuple) is retained only so that `.json`/`.h5` files serialized
 before this class hierarchy existed continue to load correctly; it cannot
 be constructed by new code (see its docstring).
+
+[](api:StimCircuitPayloadMixin) factors out the storage/construction logic
+shared by [](api:StimCircuitGateRep) and [](api:StimCircuitInstrumentRep),
+which otherwise sit in unrelated branches of the [](api:GateRep)/
+[](api:InstrumentRep) hierarchy but wrap the exact same STIM
+circuit-string payload shape.
 """
 
 from loqs.backends.reps.base import (
     OperationRep,
     RepConstructionError,
+    StimCircuitPayloadMixin,
     is_rep_compatible,
 )
 from loqs.backends.reps.gatereps import (
@@ -56,6 +63,7 @@ from loqs.backends.reps.legacy import RepTuple
 __all__ = [
     "OperationRep",
     "RepConstructionError",
+    "StimCircuitPayloadMixin",
     "is_rep_compatible",
     "GateRep",
     "UnitaryGateRep",

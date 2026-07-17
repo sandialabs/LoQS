@@ -14,7 +14,11 @@ from collections.abc import Hashable, Mapping, Sequence
 from types import NoneType
 from typing import Callable, Literal
 
-from loqs.backends.reps.base import OperationRep, RepConstructionError
+from loqs.backends.reps.base import (
+    OperationRep,
+    RepConstructionError,
+    StimCircuitPayloadMixin,
+)
 from loqs.backends.reps.gatereps import GateRep
 
 GateUpgrader = Callable[[object, "str | int | Sequence[str | int]"], GateRep]
@@ -263,7 +267,7 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
         return cls(outcome_ops, include_outcome, qubits)
 
 
-class StimCircuitInstrumentRep(InstrumentRep):
+class StimCircuitInstrumentRep(StimCircuitPayloadMixin, InstrumentRep):
     """STIM circuit string representation for an instrument.
 
     This is the same as [](api:StimCircuitGateRep), except that it should
@@ -284,28 +288,7 @@ class StimCircuitInstrumentRep(InstrumentRep):
       `(0, True)` on the auxiliary.
 
     Qubit labels are placeholders indexing into [](api:OperationRep.qubits).
+
+    See [](api:StimCircuitPayloadMixin) for the shared storage/construction
+    logic this class shares with [](api:StimCircuitGateRep).
     """
-
-    circuit_str: str
-
-    _SERIALIZE_ATTRS = ["circuit_str", "qubits"]
-
-    def __init__(
-        self, circuit_str: str, qubits: str | int | Sequence[str | int] = ()
-    ) -> None:
-        super().__init__(qubits)
-        self.circuit_str = circuit_str
-
-    @classmethod
-    def matches(cls, raw: object) -> bool:
-        return isinstance(raw, str)
-
-    @classmethod
-    def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
-    ) -> "StimCircuitInstrumentRep":
-        if not cls.matches(raw):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a str)"
-            )
-        return cls(raw, qubits)  # type: ignore[arg-type]

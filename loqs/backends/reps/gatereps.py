@@ -16,7 +16,11 @@ import warnings
 
 import numpy as np
 
-from loqs.backends.reps.base import OperationRep, RepConstructionError
+from loqs.backends.reps.base import (
+    OperationRep,
+    RepConstructionError,
+    StimCircuitPayloadMixin,
+)
 from loqs.types import Float, NDArray
 
 TP_CHECK_TOL = 1e-8
@@ -162,7 +166,7 @@ class QSimSuperoperatorGateRep(GateRep):
         return cls(raw, qubits)
 
 
-class StimCircuitGateRep(GateRep):
+class StimCircuitGateRep(StimCircuitPayloadMixin, GateRep):
     """STIM circuit string representation for a gate.
 
     `circuit_str` should be a STIM circuit string with placeholder qubit
@@ -172,31 +176,10 @@ class StimCircuitGateRep(GateRep):
     use [](api:StimCircuitInstrumentRep) instead.
 
     Qubit labels are placeholders indexing into [](api:OperationRep.qubits).
+
+    See [](api:StimCircuitPayloadMixin) for the shared storage/construction
+    logic this class shares with [](api:StimCircuitInstrumentRep).
     """
-
-    circuit_str: str
-
-    _SERIALIZE_ATTRS = ["circuit_str", "qubits"]
-
-    def __init__(
-        self, circuit_str: str, qubits: str | int | Sequence[str | int] = ()
-    ) -> None:
-        super().__init__(qubits)
-        self.circuit_str = circuit_str
-
-    @classmethod
-    def matches(cls, raw: object) -> bool:
-        return isinstance(raw, str)
-
-    @classmethod
-    def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
-    ) -> "StimCircuitGateRep":
-        if not cls.matches(raw):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a str)"
-            )
-        return cls(raw, qubits)
 
 
 class ProbabilisticStimGateRep(GateRep):

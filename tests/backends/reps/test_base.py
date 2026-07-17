@@ -9,6 +9,7 @@ from loqs.backends.reps import (
     RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
+    StimCircuitPayloadMixin,
     UnitaryGateRep,
     is_rep_compatible,
 )
@@ -92,6 +93,37 @@ class TestIsRepCompatible:
 
     def test_empty_accepted_list_is_never_compatible(self):
         assert is_rep_compatible(UnitaryGateRep, []) is False
+
+
+class TestStimCircuitPayloadMixin:
+    """`StimCircuitGateRep`/`StimCircuitInstrumentRep` share their payload
+    storage and construction logic via `StimCircuitPayloadMixin` (rather
+    than duplicating it), since callers like `DictNoiseModel`'s STIM-text
+    merging logic need to treat both uniformly regardless of whether the
+    underlying rep is a gate or an instrument.
+    """
+
+    def test_stim_circuit_gaterep_is_a_mixin_instance(self):
+        assert isinstance(StimCircuitGateRep("X 0"), StimCircuitPayloadMixin)
+
+    def test_stim_circuit_instrumentrep_is_a_mixin_instance(self):
+        assert isinstance(StimCircuitInstrumentRep("M 0"), StimCircuitPayloadMixin)
+
+    def test_non_stim_circuit_reps_are_not_mixin_instances(self):
+        assert not isinstance(UnitaryGateRep(None), StimCircuitPayloadMixin)
+
+    def test_mixin_does_not_unify_gaterep_and_instrumentrep_dispatch(self):
+        """The mixin is purely a shared-mechanics helper; `StimCircuitGateRep`
+        and `StimCircuitInstrumentRep` remain unrelated to each other from a
+        `GateRep`/`InstrumentRep` dispatch perspective."""
+        assert not issubclass(StimCircuitGateRep, InstrumentRep)
+        assert not issubclass(StimCircuitInstrumentRep, GateRep)
+        assert issubclass(StimCircuitGateRep, GateRep)
+        assert issubclass(StimCircuitInstrumentRep, InstrumentRep)
+
+    def test_mixin_cannot_be_instantiated_as_an_operationrep(self):
+        """`StimCircuitPayloadMixin` is not itself an `OperationRep` subclass."""
+        assert not issubclass(StimCircuitPayloadMixin, OperationRep)
 
 
 class TestRepConstructionError:

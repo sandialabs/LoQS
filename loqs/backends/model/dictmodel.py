@@ -32,6 +32,7 @@ from loqs.backends.reps import (
     RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
+    StimCircuitPayloadMixin,
     ZBasisOutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
@@ -343,14 +344,6 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         return cls((gate_dict, inst_dict), gatereps, instreps)
 
 
-_STIM_CIRCUIT_STR_REPTYPES = (StimCircuitGateRep, StimCircuitInstrumentRep)
-"""Rep classes whose payload is STIM circuit-string text (and therefore has
-per-qubit index placeholders to combine), as opposed to e.g.
-[](api:ZBasisProjectionInstrumentRep)'s `(reset, include_outcome)` fields,
-which carry no qubit-specific text at all.
-"""
-
-
 def _merge_common_rep(
     command: str,
     qt: tuple,
@@ -359,10 +352,11 @@ def _merge_common_rep(
 ) -> None:
     """Merge a generic (name-only) dict entry into `common[command]`.
 
-    For [](api:StimCircuitGateRep)/[](api:StimCircuitInstrumentRep) reps,
-    generic templates are combined across multiple qubits by *appending*
-    further trailing qubit indices to every line for each additional qubit,
-    so a template must already reference its own qubit(s) as indices
+    For reps carrying a [](api:StimCircuitPayloadMixin) payload (i.e.
+    [](api:StimCircuitGateRep)/[](api:StimCircuitInstrumentRep)), generic
+    templates are combined across multiple qubits by *appending* further
+    trailing qubit indices to every line for each additional qubit, so a
+    template must already reference its own qubit(s) as indices
     ``0..len(qt)-1`` (e.g. `"X 0"` for a single-qubit template, `"CNOT 0 1"`
     for a two-qubit one) before it is used for the first time here. Without
     this, the first qubit's index would silently never be added -- this
@@ -377,7 +371,7 @@ def _merge_common_rep(
     """
     prev = common.get(command)
 
-    if not isinstance(generic, _STIM_CIRCUIT_STR_REPTYPES):
+    if not isinstance(generic, StimCircuitPayloadMixin):
         prev_qubits: tuple = prev.qubits if prev is not None else tuple()
         common[command] = generic.with_qubits(prev_qubits + qt)
         return

@@ -623,6 +623,22 @@ class TestMergeCommonRep:
         assert merged.include_outcome is True
         assert merged.qubits == ("Q0", "Q1")
 
+    def test_stim_circuit_instrumentrep_also_merges_by_appending_indices(self):
+        """`StimCircuitInstrumentRep` shares `StimCircuitPayloadMixin` with
+        `StimCircuitGateRep`, so it takes the same trailing-index-appending
+        merge path as the gate case above, not the plain-concatenation path
+        used by other instrument reps like `ZBasisProjectionInstrumentRep`.
+        """
+        from loqs.backends.model.dictmodel import _merge_common_rep
+
+        generic = StimCircuitInstrumentRep("M 0", ("Q0",))
+        common: dict = {}
+        _merge_common_rep("M", ("Q0",), generic, common)
+        _merge_common_rep("M", ("Q1",), generic, common)
+        merged = common["M"]
+        assert merged.circuit_str == "M 0 1"
+        assert merged.qubits == ("Q0", "Q1")
+
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
 class TestAddCommandAliases:
