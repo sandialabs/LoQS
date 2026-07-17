@@ -29,13 +29,6 @@ from typing import TYPE_CHECKING, Any
 from importlib import import_module
 from dataclasses import dataclass
 
-from .reps import RepEnum, GateRep, InstrumentRep, RepTuple
-
-from .circuit import BasePhysicalCircuit, ListPhysicalCircuit
-from .model import BaseNoiseModel, DictNoiseModel, TimeDependentBaseNoiseModel
-from .state import BaseQuantumState, NumpyStatevectorQuantumState
-from .state.basestate import OutcomeDict
-
 
 @dataclass
 class BackendAvailability:
@@ -91,12 +84,55 @@ def get_backend_error(backend_name: str) -> str | None:
     ).error
 
 
-# Check availability of all backends at import time
+# Check availability of all backends at import time.
+#
+# This block (and everything above it) must come *before* the `.reps`/
+# `.circuit`/`.model`/`.state` imports below. `stimcircuit.py`/`stimstate.py`
+# reach back into this package (`from loqs.backends import
+# BasePhysicalCircuit, is_backend_available`) -- safe today only because
+# they are exclusively loaded on-demand via `__getattr__`, by definition
+# after this module has finished executing. If any eagerly-imported
+# submodule below were to import one of those STIM modules at its own
+# top level, that import would run *during* this module's own execution,
+# before `is_backend_available` exists yet if it were defined later in this
+# file -- a circular-import false negative with nothing to do with whether
+# `stim` is actually installed, reproduced and confirmed while designing
+# LoQS#72's model-backend consolidation (see
+# `loqs.backends.model.dictmodel`, which does exactly this).
 _check_backend_availability("pygsti_circuit", "pygsti")
 _check_backend_availability("pygsti_model", "pygsti")
 _check_backend_availability("stim_circuit", "stim")
 _check_backend_availability("stim_state", "stim")
 _check_backend_availability("qsim_state", "quantumsim")
+
+
+from .reps import (  # noqa: E402
+    GateRep,
+    InstrumentRep,
+    KrausGateRep,
+    OperationRep,
+    PTMGateRep,
+    ProbabilisticStimGateRep,
+    QSimSuperoperatorGateRep,
+    RepConstructionError,
+    RepTuple,
+    StimCircuitGateRep,
+    StimCircuitInstrumentRep,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+    is_rep_compatible,
+)
+
+from .circuit import BasePhysicalCircuit, ListPhysicalCircuit  # noqa: E402
+from .model import (  # noqa: E402
+    BaseNoiseModel,
+    DictNoiseModel,
+    TimeDependentBaseNoiseModel,
+)
+from .state import BaseQuantumState, NumpyStatevectorQuantumState  # noqa: E402
+from .state.basestate import OutcomeDict  # noqa: E402
 
 
 # Import concrete backend classes with conditional availability
@@ -215,10 +251,13 @@ def propagate_state(
         If `inplace=True`, then the state is also returned
         to provide a consistent API.
     """
-    # Find a compatible model/state oprep
+    # Find a compatible model/state oprep. Compatibility is subclass-based
+    # (see `is_rep_compatible`): a state may declare a coarse-grained
+    # `input_reps` entry like `InstrumentRep` to accept any instrument
+    # representation a model can produce.
     opreps = []
     for oprep in model.output_gate_reps:
-        if oprep in state.input_reps:
+        if is_rep_compatible(oprep, state.input_reps):
             opreps.append(oprep)
     assert (
         len(opreps) > 0
@@ -226,7 +265,7 @@ def propagate_state(
 
     instreps = []
     for instrep in model.output_instrument_reps:
-        if instrep in state.input_reps:
+        if is_rep_compatible(instrep, state.input_reps):
             instreps.append(instrep)
     assert (
         len(instreps) > 0

@@ -15,7 +15,7 @@ from typing import List, Sequence, Tuple, TypeAlias
 
 import numpy as np
 
-from loqs.backends.reps import GateRep, RepTuple
+from loqs.backends.reps import GateRep, KrausGateRep, UnitaryGateRep
 
 Float: TypeAlias = float | np.floating
 
@@ -155,8 +155,8 @@ def pauli_eigvals_to_rates(eigvals: Sequence[Float]) -> List[float]:
 
 def create_pauli_stochastic_kraus_rep(
     rates: Sequence[Float], qubits: Sequence[str | int]
-) -> RepTuple:
-    """Create a Pauli-stochastic Kraus RepTuple.
+) -> KrausGateRep:
+    """Create a Pauli-stochastic [](api:KrausGateRep).
 
     Parameters
     ----------
@@ -164,12 +164,12 @@ def create_pauli_stochastic_kraus_rep(
         The coefficients of the Kraus terms.
 
     qubits:
-        The targeted qubits (needed for RepTuple construction)
+        The targeted qubits (needed for [](api:KrausGateRep) construction)
 
     Returns
     -------
-    RepTuple
-        The Pauli-stochasic Kraus RepTuple
+    KrausGateRep
+        The Pauli-stochasic Kraus representation
     """
     # Sanity checks
     assert all([p >= 0 and p <= 1 for p in rates])
@@ -202,13 +202,13 @@ def create_pauli_stochastic_kraus_rep(
         # Add the Kraus matrix to the reps
         kraus_reps.append((np.sqrt(prob) * pauli_NQ, prob))
 
-    return RepTuple(kraus_reps, qubits, GateRep.KRAUS_OPERATORS)
+    return KrausGateRep(kraus_reps, qubits)
 
 
 def create_depolarizing_kraus_rep(
     rate: Float, qubits: Sequence[str | int]
-) -> RepTuple:
-    """Create a depolarizing Kraus RepTuple.
+) -> KrausGateRep:
+    """Create a depolarizing [](api:KrausGateRep).
 
     This is a convenience function that wraps
     [](api:create_pauli_stochastic_kraus_rep).
@@ -219,12 +219,12 @@ def create_depolarizing_kraus_rep(
         The depolarizing rate.
 
     qubits : Sequence[str | int]
-        The targeted qubits (needed for RepTuple construction)
+        The targeted qubits (needed for [](api:KrausGateRep) construction)
 
     Returns
     -------
-    RepTuple
-        A Pauli-stochasic Kraus RepTuple
+    KrausGateRep
+        A Pauli-stochasic Kraus representation
     """
     N = 4 ** len(qubits)
     return create_pauli_stochastic_kraus_rep(
@@ -232,7 +232,7 @@ def create_depolarizing_kraus_rep(
     )
 
 
-def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> RepTuple:
+def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> KrausGateRep:
     """Create a 1-qubit amplitude damping channel.
 
     Parameters
@@ -241,11 +241,11 @@ def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> RepTuple:
         Probability of damping
 
     qubit : str | int
-        Target qubit for [](api:RepTuple) construction)
+        Target qubit for [](api:KrausGateRep) construction)
 
     Returns
     -------
-    RepTuple
+    KrausGateRep
         The amplitude damping channel
     """
     # Sanity checks
@@ -254,24 +254,23 @@ def create_1Q_amp_damp_kraus_rep(prob: Float, qubit: str | int) -> RepTuple:
     A0 = np.array([[1, 0], [0, np.sqrt(1 - prob)]])
     A1 = np.array([[0, np.sqrt(prob)], [0, 0]])
 
-    return RepTuple([(A0, None), (A1, None)], [qubit], GateRep.KRAUS_OPERATORS)
+    return KrausGateRep([(A0, None), (A1, None)], [qubit])
 
 
-def _get_kraus_rep(rt) -> List[Tuple[np.ndarray, float]]:
-    assert isinstance(rt, RepTuple)
-    assert rt.reptype in [GateRep.KRAUS_OPERATORS, GateRep.UNITARY]
+def _get_kraus_rep(rt: GateRep) -> List[Tuple[np.ndarray, float]]:
+    assert isinstance(rt, (KrausGateRep, UnitaryGateRep))
 
-    if rt.reptype == GateRep.UNITARY:
-        assert isinstance(rt.rep, np.ndarray)
-        return [(rt.rep, 1.0)]
+    if isinstance(rt, UnitaryGateRep):
+        assert isinstance(rt.unitary, np.ndarray)
+        return [(rt.unitary, 1.0)]
 
-    assert isinstance(rt.rep, list)
-    assert all([isinstance(r[0], np.ndarray) for r in rt.rep])
-    return rt.rep
+    assert isinstance(rt.kraus_operators, (list, tuple))
+    assert all([isinstance(r[0], np.ndarray) for r in rt.kraus_operators])
+    return rt.kraus_operators
 
 
-def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
-    """Deduplicate a Kraus RepTuple.
+def dedup_kraus_reptuple(rt: KrausGateRep) -> KrausGateRep:
+    """Deduplicate a [](api:KrausGateRep).
 
     The effectively normalizes all the Kraus operators
     and checks for any duplicates. If duplicates are found,
@@ -281,12 +280,12 @@ def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
     Parameters
     ----------
     rt:
-        The RepTuple to deduplicate
+        The [](api:KrausGateRep) to deduplicate
 
     Returns
     -------
-    RepTuple
-        The deduplicated RepTuple
+    KrausGateRep
+        The deduplicated Kraus representation
     """
     Ks = _get_kraus_rep(rt)
 
@@ -329,13 +328,13 @@ def dedup_kraus_reptuple(rt: RepTuple) -> RepTuple:
         (Kn[0] * np.sqrt(Kn[1]), Kn[1]) for Kn in normalized_Ks
     ]
 
-    return RepTuple(deduped_kraus_reps, rt.qubits, GateRep.KRAUS_OPERATORS)
+    return KrausGateRep(deduped_kraus_reps, rt.qubits)
 
 
 def compose_kraus_reptuples(
-    rt1: RepTuple, rt2: RepTuple, dedup: bool = True
-) -> RepTuple:
-    r"""Compose two Kraus [](api:RepTuple)s together.
+    rt1: GateRep, rt2: GateRep, dedup: bool = True
+) -> KrausGateRep:
+    r"""Compose two Kraus/unitary gate representations together.
 
     Essentially just foils them out:
 
@@ -352,11 +351,11 @@ def compose_kraus_reptuples(
 
     Parameters
     ----------
-    rt1 : RepTuple
-        The first [](api:RepTuple).
+    rt1 : GateRep
+        The first [](api:KrausGateRep) or [](api:UnitaryGateRep).
 
-    rt2 : RepTuple
-        The second [](api:RepTuple).
+    rt2 : GateRep
+        The second [](api:KrausGateRep) or [](api:UnitaryGateRep).
 
     dedup : bool, optional
         Whether (True, default) or not (False) to deduplicate
@@ -364,7 +363,7 @@ def compose_kraus_reptuples(
 
     Returns
     -------
-    RepTuple
+    KrausGateRep
         The output channel
     """
     assert rt1.qubits == rt2.qubits
@@ -387,7 +386,7 @@ def compose_kraus_reptuples(
 
             new_kraus_reps.append((new_K, new_prob))
 
-    new_rt = RepTuple(new_kraus_reps, rt1.qubits, GateRep.KRAUS_OPERATORS)
+    new_rt = KrausGateRep(new_kraus_reps, rt1.qubits)
 
     if dedup is False:
         return new_rt

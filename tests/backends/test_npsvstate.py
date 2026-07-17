@@ -8,7 +8,18 @@ import mock
 import numpy as np
 import pytest
 
-from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
+from loqs.backends.reps import (
+    KrausGateRep,
+    PTMGateRep,
+    ProbabilisticStimGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitGateRep,
+    StimCircuitInstrumentRep,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.backends import NumpyStatevectorQuantumState as SVState
 
 
@@ -60,19 +71,12 @@ class TestNumPyStatevectorQuantumState:
             "  NumPy statevector on 2 qubits ([Q0,...,Q1])\n"
         )
 
-    def test_apply_reps_inplace_unknown_reptype_raises(self):
-        """`apply_reps_inplace` must reject any `RepTuple.reptype` that is
-        neither a `GateRep` nor an `InstrumentRep` -- a third `RepEnum`
-        subclass is defined locally here since none exists elsewhere in
-        the codebase to construct such a case."""
-        from loqs.backends.reps import RepEnum
-
-        class _OtherRep(RepEnum):
-            FOO = 1
-
+    def test_apply_reps_inplace_unknown_rep_type_raises(self):
+        """`apply_reps_inplace` must reject any rep that is neither a
+        `GateRep` nor an `InstrumentRep` instance."""
         s = SVState([0], ["Q0"])
-        with pytest.raises(ValueError, match="Cannot apply unknown reptype"):
-            s.apply_reps_inplace([RepTuple(None, ["Q0"], _OtherRep.FOO)])
+        with pytest.raises(ValueError, match="Cannot apply unknown rep type"):
+            s.apply_reps_inplace([object()])
 
     @pytest.mark.parametrize("contraction", ["matmul", "einsum"])
     def test_block_matvec_unknown_qubit_raises(self, contraction):
@@ -83,7 +87,7 @@ class TestNumPyStatevectorQuantumState:
     def test_apply_gates(self):
         # Let's apply a X gate
         U_X = np.array([[0, 1], [1, 0]])
-        X_reps = [RepTuple(U_X, ["Q0"], GateRep.UNITARY)]
+        X_reps = [UnitaryGateRep(U_X, ["Q0"])]
 
         # Start in the 0 state
         state0 = SVState([0], ["Q0"])
@@ -104,9 +108,9 @@ class TestNumPyStatevectorQuantumState:
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
         U_CZ = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, -1]])
         CX_reps = [
-            RepTuple(U_H, ["Q1"], GateRep.UNITARY),
-            RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY),
-            RepTuple(U_H, ["Q1"], GateRep.UNITARY)
+            UnitaryGateRep(U_H, ["Q1"]),
+            UnitaryGateRep(U_CZ, ["Q0", "Q1"]),
+            UnitaryGateRep(U_H, ["Q1"])
         ]
 
         # Start in the |10> (big-endian) state
@@ -120,7 +124,7 @@ class TestNumPyStatevectorQuantumState:
 
         # TODO: Test Kraus
         # Test Kraus operator where applying X with prob 1, and I with prob 0
-        X_kraus_rep_w_prob = RepTuple([(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"], GateRep.KRAUS_OPERATORS)
+        X_kraus_rep_w_prob = KrausGateRep([(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"])
         for _ in range(10):
             test4 = state0.copy()
             test4.apply_reps_inplace([X_kraus_rep_w_prob])
@@ -128,7 +132,7 @@ class TestNumPyStatevectorQuantumState:
         
         # Test Kraus operator where bitflip happens with half the time
         outcomes1 = []
-        half_bitflip_w_prob = RepTuple([(1/np.sqrt(2)*U_X, 0.5), (1/np.sqrt(2)*np.eye(2), 0.5)], ["Q0"], GateRep.KRAUS_OPERATORS)
+        half_bitflip_w_prob = KrausGateRep([(1/np.sqrt(2)*U_X, 0.5), (1/np.sqrt(2)*np.eye(2), 0.5)], ["Q0"])
         test5 = SVState([0], ["Q0"], seed=20260122)
         for _ in range(10):
             test5.apply_reps_inplace([half_bitflip_w_prob])
@@ -143,7 +147,7 @@ class TestNumPyStatevectorQuantumState:
         # Lets do the same half bitflip, but force probability computation
         # Outcomes should be the same if we seed the same
         outcomes2 = []
-        half_bitflip_wout_prob = RepTuple([(1/np.sqrt(2)*U_X, None), (1/np.sqrt(2)*np.eye(2), None)], ["Q0"], GateRep.KRAUS_OPERATORS)
+        half_bitflip_wout_prob = KrausGateRep([(1/np.sqrt(2)*U_X, None), (1/np.sqrt(2)*np.eye(2), None)], ["Q0"])
         test6 = SVState([0], ["Q0"], seed=20260122)
         for _ in range(10):
             test6.apply_reps_inplace([half_bitflip_wout_prob])
@@ -158,32 +162,32 @@ class TestNumPyStatevectorQuantumState:
         # Let's try to pass in some unsupported reps
         with pytest.raises(ValueError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.PTM)
+                PTMGateRep(None, "Q0")
             ])
         
         with pytest.raises(ValueError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.STIM_CIRCUIT_STR)
+                StimCircuitGateRep(None, "Q0")
             ])
 
         with pytest.raises(ValueError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.QSIM_SUPEROPERATOR)
+                QSimSuperoperatorGateRep(None, "Q0")
             ])
 
         with pytest.raises(ValueError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.PROBABILISTIC_STIM_OPERATIONS)
+                ProbabilisticStimGateRep([("X 0", 1.0)], "Q0")
             ])
 
     def test_input_reps(self):
         state = SVState(1, ["Q0"])
         assert set(state.input_reps) == {
-            GateRep.UNITARY,
-            GateRep.KRAUS_OPERATORS,
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+            UnitaryGateRep,
+            KrausGateRep,
+            ZBasisProjectionInstrumentRep,
+            ZBasisPrePostInstrumentRep,
+            ZBasisOutcomeOperationDictInstrumentRep,
         }
 
     def test_base_str(self):
@@ -252,9 +256,7 @@ class TestNumPyStatevectorQuantumState:
         gamma = 0.3
         A0 = np.array([[1, 0], [0, np.sqrt(1 - gamma)]])
         A1 = np.array([[0, np.sqrt(gamma)], [0, 0]])
-        amp_damp = RepTuple(
-            [(A0, None), (A1, None)], ["Q0"], GateRep.KRAUS_OPERATORS
-        )
+        amp_damp = KrausGateRep([(A0, None), (A1, None)], ["Q0"])
         run_trials(amp_damp, [A0, A1], n_trials=20_000, seed=20260708)
 
         # Case 2: three operators with a mix of given and None probabilities
@@ -265,35 +267,23 @@ class TestNumPyStatevectorQuantumState:
         K_I = np.sqrt(1 - p_x - p_y) * np.eye(2)
         K_X = np.sqrt(p_x) * U_X
         K_Y = np.sqrt(p_y) * U_Y
-        mixed = RepTuple(
-            [(K_I, 1 - p_x - p_y), (K_X, None), (K_Y, p_y)],
-            ["Q0"],
-            GateRep.KRAUS_OPERATORS,
-        )
+        mixed = KrausGateRep([(K_I, 1 - p_x - p_y), (K_X, None), (K_Y, p_y)], ["Q0"])
         run_trials(mixed, [K_I, K_X, K_Y], n_trials=20_000, seed=20260708)
 
         # Case 3: same channel, operator list reversed -- frequencies must
         # match the same analytic probabilities regardless of list order
         # (i.e., ordering introduces no bias)
-        mixed_rev = RepTuple(
-            [(K_Y, p_y), (K_X, None), (K_I, 1 - p_x - p_y)],
-            ["Q0"],
-            GateRep.KRAUS_OPERATORS,
-        )
+        mixed_rev = KrausGateRep([(K_Y, p_y), (K_X, None), (K_I, 1 - p_x - p_y)], ["Q0"])
         run_trials(mixed_rev, [K_Y, K_X, K_I], n_trials=20_000, seed=20260708)
 
         # Case 4: given probabilities summing to slightly below 1 (float
         # roundoff) must not raise -- exercises the tail/renormalization
         # fallback -- and the output state must stay normalized
         eps = 5e-8
-        leaky = RepTuple(
-            [
+        leaky = KrausGateRep([
                 (np.sqrt(0.5) * U_X, 0.5),
                 (np.sqrt(0.5 - eps) * np.eye(2), 0.5 - eps),
-            ],
-            ["Q0"],
-            GateRep.KRAUS_OPERATORS,
-        )
+            ], ["Q0"])
         test = SVState(
             psi.copy(), ["Q0"], seed=20260709, kraus_sampling=kraus_sampling
         )
@@ -315,11 +305,7 @@ class TestNumPyStatevectorQuantumState:
         about 5e-6."""
         U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
         eps = 2.5e-6
-        bad_probs = RepTuple(
-            [(U_X, 0.5 + eps), (np.eye(2), 0.5 + eps)],
-            ["Q0"],
-            GateRep.KRAUS_OPERATORS,
-        )
+        bad_probs = KrausGateRep([(U_X, 0.5 + eps), (np.eye(2), 0.5 + eps)], ["Q0"])
         test = SVState([0], ["Q0"], seed=1, kraus_sampling="choice")
         with pytest.raises(ValueError, match="too far from 1 to renormalize"):
             test.apply_reps_inplace([bad_probs])
@@ -376,9 +362,7 @@ class TestNumPyStatevectorQuantumState:
             posts_exact = [K @ psi / np.linalg.norm(K @ psi) for K in Ks]
             assert np.isclose(sum(probs_exact), 1)
 
-            reptuple = RepTuple(
-                [(K, None) for K in Ks], labels, GateRep.KRAUS_OPERATORS
-            )
+            reptuple = KrausGateRep([(K, None) for K in Ks], labels)
             test = SVState(
                 psi.copy().reshape((2,) * n_qubits),
                 labels,
@@ -516,27 +500,19 @@ class TestNumPyStatevectorQuantumState:
         K_XX = np.sqrt(p_xx) * np.kron(U_X, U_X)
 
         reps = (
-            [RepTuple(U_H, [q], GateRep.UNITARY) for q in labels]
+            [UnitaryGateRep(U_H, [q]) for q in labels]
             + [
-                RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY),
-                RepTuple(U_CZ, ["Q2", "Q3"], GateRep.UNITARY),
+                UnitaryGateRep(U_CZ, ["Q0", "Q1"]),
+                UnitaryGateRep(U_CZ, ["Q2", "Q3"]),
             ]
             + [
-                RepTuple(
-                    [(A0, None), (A1, None)], [q], GateRep.KRAUS_OPERATORS
-                )
+                KrausGateRep([(A0, None), (A1, None)], [q])
                 for q in labels
             ]
             + [
-                RepTuple(
-                    [(K_II, 1 - p_xx), (K_XX, None)],
-                    ["Q3", "Q1"],
-                    GateRep.KRAUS_OPERATORS,
-                ),
-                RepTuple(
-                    (None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION
-                ),
-                RepTuple((0, True), ["Q2"], InstrumentRep.ZBASIS_PROJECTION),
+                KrausGateRep([(K_II, 1 - p_xx), (K_XX, None)], ["Q3", "Q1"]),
+                ZBasisProjectionInstrumentRep(None, True, ["Q0"]),
+                ZBasisProjectionInstrumentRep(0, True, ["Q2"]),
             ]
         )
 
@@ -563,7 +539,7 @@ class TestNumPyStatevectorQuantumState:
     def test_apply_instruments(self):
         # H gate to get + state for testing
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
-        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
+        H_rep = UnitaryGateRep(U_H, ["Q0"])
 
         state0 = SVState([0], ["Q0"], seed=20241016)
 
@@ -571,7 +547,7 @@ class TestNumPyStatevectorQuantumState:
 
         # In-place 10 times
         # Also test no reset
-        proj_rep = RepTuple((None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj_rep = ZBasisProjectionInstrumentRep(None, True, ["Q0"])
         test = state0.copy()
         outcomes1 = []
         for _ in range(10):
@@ -589,13 +565,13 @@ class TestNumPyStatevectorQuantumState:
                 self._check(test, state0)
         
         # Also test no outcomes
-        proj2_rep = RepTuple((None, False), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj2_rep = ZBasisProjectionInstrumentRep(None, False, ["Q0"])
         test1 = state0.copy()
         outs = test1.apply_reps_inplace([H_rep, proj2_rep]*10)
         assert len(outs) == 0
         
         # Now another copy ten times at once with reset
-        reset_rep = RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        reset_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0"])
         test2 = state0.copy()
         outs = test2.apply_reps_inplace([H_rep, reset_rep]*10)
         outcomes2 = outs["Q0"]
@@ -605,12 +581,10 @@ class TestNumPyStatevectorQuantumState:
 
         # Now lets test pre/post op
         U_I = np.eye(2)
-        idle_rep = RepTuple(U_I, ["Q0"], GateRep.UNITARY)
+        idle_rep = UnitaryGateRep(U_I, ["Q0"])
 
         # Lets do X(pi/2) error before and nothing after
-        pre_H_rep = RepTuple(
-            [0, True, H_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        pre_H_rep = ZBasisPrePostInstrumentRep(0, True, H_rep, idle_rep, ["Q0"])
 
         test3 = state0.copy()
         outs = test3.apply_reps_inplace([pre_H_rep]*10)
@@ -619,9 +593,7 @@ class TestNumPyStatevectorQuantumState:
 
         # Now let's do X(pi/2) after and no nothing before
         # Very first one we have to do X(pi/2) to get same outcomes
-        post_H_rep = RepTuple(
-            [0, True, idle_rep, H_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        post_H_rep = ZBasisPrePostInstrumentRep(0, True, idle_rep, H_rep, ["Q0"])
 
         test4 = state0.copy()
         outs = test4.apply_reps_inplace([H_rep] + [post_H_rep]*10)
@@ -633,10 +605,10 @@ class TestNumPyStatevectorQuantumState:
         effect1 = np.array([[0, 1]])
 
         ideal_maps = {
-            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.UNITARY),
-            1: RepTuple(effect1.T @ effect1, ["Q0"], GateRep.UNITARY)
+            0: UnitaryGateRep(effect0.T @ effect0, ["Q0"]),
+            1: UnitaryGateRep(effect1.T @ effect1, ["Q0"])
         }
-        ideal_map_rep = RepTuple((ideal_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        ideal_map_rep = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, True, ["Q0"])
 
         test5 = state0.copy()
         outs = test5.apply_reps_inplace([H_rep, ideal_map_rep]*10)
@@ -645,10 +617,10 @@ class TestNumPyStatevectorQuantumState:
 
         # Let's use the instrument to also do reset
         reset_maps = {
-            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.UNITARY),
-            1: RepTuple(effect0.T @ effect1, ["Q0"], GateRep.UNITARY)
+            0: UnitaryGateRep(effect0.T @ effect0, ["Q0"]),
+            1: UnitaryGateRep(effect0.T @ effect1, ["Q0"])
         }
-        reset_map_rep = RepTuple((reset_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(reset_maps, True, ["Q0"])
 
         test6 = state0.copy()
         outs = test6.apply_reps_inplace([H_rep, reset_map_rep]*10)
@@ -656,10 +628,10 @@ class TestNumPyStatevectorQuantumState:
         assert outcomes6 == outcomes1
 
         noisy_reset_maps = {
-            0: RepTuple(U_H @ effect0.T @ effect0, ["Q0"], GateRep.UNITARY),
-            1: RepTuple(U_H @ effect0.T @ effect1, ["Q0"], GateRep.UNITARY)
+            0: UnitaryGateRep(U_H @ effect0.T @ effect0, ["Q0"]),
+            1: UnitaryGateRep(U_H @ effect0.T @ effect1, ["Q0"])
         }
-        noisy_reset_map_rep = RepTuple((noisy_reset_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        noisy_reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(noisy_reset_maps, True, ["Q0"])
 
         test7 = state0.copy()
         outs = test7.apply_reps_inplace([H_rep] + [noisy_reset_map_rep]*10)
@@ -670,7 +642,7 @@ class TestNumPyStatevectorQuantumState:
         test = SVState([0], ["Q0"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([
-                RepTuple("M 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+                StimCircuitInstrumentRep("M 0", ["Q0"])
             ])
 
     def test_zbasis_projection_reset_to_1(self):
@@ -679,8 +651,8 @@ class TestNumPyStatevectorQuantumState:
         branch was measured -- each trial starts fresh from |0> to avoid
         that phase compounding across reused, un-reset iterations)."""
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
-        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
-        reset1_rep = RepTuple((1, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        H_rep = UnitaryGateRep(U_H, ["Q0"])
+        reset1_rep = ZBasisProjectionInstrumentRep(1, True, ["Q0"])
 
         for trial in range(10):
             test = SVState([0], ["Q0"], seed=20260711 + trial)
@@ -692,12 +664,10 @@ class TestNumPyStatevectorQuantumState:
         once must measure/reset every qubit in `qubits`."""
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
         H_reps = [
-            RepTuple(U_H, ["Q0"], GateRep.UNITARY),
-            RepTuple(U_H, ["Q1"], GateRep.UNITARY),
+            UnitaryGateRep(U_H, ["Q0"]),
+            UnitaryGateRep(U_H, ["Q1"]),
         ]
-        reset0_rep = RepTuple(
-            (0, True), ["Q0", "Q1"], InstrumentRep.ZBASIS_PROJECTION
-        )
+        reset0_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0", "Q1"])
 
         state00 = SVState([0, 0], ["Q0", "Q1"], seed=20260711)
         test = SVState([0, 0], ["Q0", "Q1"], seed=20260711)
@@ -713,18 +683,14 @@ class TestNumPyStatevectorQuantumState:
         `include_outcomes=False` must suppress the outcome dict entry
         while still always leaving the qubit reset to |1>."""
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
-        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
+        H_rep = UnitaryGateRep(U_H, ["Q0"])
         U_I = np.eye(2)
-        idle_rep = RepTuple(U_I, ["Q0"], GateRep.UNITARY)
+        idle_rep = UnitaryGateRep(U_I, ["Q0"])
 
         # reset=1, include_outcomes=False: measurement outcome should not
         # be recorded, but the qubit must still always end up in |1> (up
         # to global phase -- fresh state per trial, as above)
-        pre_H_reset1_no_outcomes = RepTuple(
-            [1, False, H_rep, idle_rep],
-            ["Q0"],
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-        )
+        pre_H_reset1_no_outcomes = ZBasisPrePostInstrumentRep(1, False, H_rep, idle_rep, ["Q0"])
         for trial in range(10):
             test = SVState([0], ["Q0"], seed=20260711 + trial)
             outs = test.apply_reps_inplace([pre_H_reset1_no_outcomes])
@@ -735,11 +701,7 @@ class TestNumPyStatevectorQuantumState:
         """ZBASIS_OUTCOME_OPERATION_DICT explicitly does not support more
         than one qubit."""
         dummy_maps = {0: object(), 1: object()}
-        rep = RepTuple(
-            (dummy_maps, True),
-            ["Q0", "Q1"],
-            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
-        )
+        rep = ZBasisOutcomeOperationDictInstrumentRep(dummy_maps, True, ["Q0", "Q1"])
         test = SVState([0, 0], ["Q0", "Q1"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([rep])
@@ -750,17 +712,15 @@ class TestNumPyStatevectorQuantumState:
         must still always collapse to an exact computational basis
         state."""
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
-        H_rep = RepTuple(U_H, ["Q0"], GateRep.UNITARY)
+        H_rep = UnitaryGateRep(U_H, ["Q0"])
 
         effect0 = np.array([[1, 0]])
         effect1 = np.array([[0, 1]])
         ideal_maps = {
-            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.UNITARY),
-            1: RepTuple(effect1.T @ effect1, ["Q0"], GateRep.UNITARY),
+            0: UnitaryGateRep(effect0.T @ effect0, ["Q0"]),
+            1: UnitaryGateRep(effect1.T @ effect1, ["Q0"]),
         }
-        ideal_map_rep_no_outcomes = RepTuple(
-            (ideal_maps, False), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT
-        )
+        ideal_map_rep_no_outcomes = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, False, ["Q0"])
 
         for trial in range(10):
             test = SVState([0], ["Q0"], seed=20260711 + trial)
@@ -784,8 +744,8 @@ class TestNumPyStatevectorQuantumState:
         U_H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
         U_CZ = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, -1]])
 
-        test, _ = state10.apply_reps([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
-        test.apply_reps_inplace([RepTuple(U_CZ, ["Q0", "Q1"], GateRep.UNITARY)])
+        test, _ = state10.apply_reps([UnitaryGateRep(U_H, ["Q1"])])
+        test.apply_reps_inplace([UnitaryGateRep(U_CZ, ["Q0", "Q1"])])
 
         with make_temp_path(suffix='.json') as tmp_path:
             test.write(tmp_path)
@@ -793,7 +753,7 @@ class TestNumPyStatevectorQuantumState:
         
         # And finish applying
         assert isinstance(test2, SVState)
-        test2.apply_reps_inplace([RepTuple(U_H, ["Q1"], GateRep.UNITARY)])
+        test2.apply_reps_inplace([UnitaryGateRep(U_H, ["Q1"])])
         
         # The expected 11 state
         state11 = SVState([1, 1], ["Q0", "Q1"])
@@ -809,12 +769,8 @@ class TestNumPyStatevectorQuantumState:
         and an InstrumentRep correctly, along with non-default
         `kraus_sampling`/`contraction` settings (both `_SERIALIZE_ATTRS`)."""
         U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
-        X_kraus = RepTuple(
-            [(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"], GateRep.KRAUS_OPERATORS
-        )
-        proj_rep = RepTuple(
-            (None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION
-        )
+        X_kraus = KrausGateRep([(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"])
+        proj_rep = ZBasisProjectionInstrumentRep(None, True, ["Q0"])
 
         test = SVState(
             [0], ["Q0"], seed=20260711,

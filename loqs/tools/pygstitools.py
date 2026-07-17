@@ -18,7 +18,7 @@ from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from loqs.backends.model.pygstimodel import PYGSTI_QSIM_BASES
-from loqs.backends.reps import GateRep, RepTuple
+from loqs.backends.reps import KrausGateRep, UnitaryGateRep
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions.instructionlabel import (
@@ -132,7 +132,7 @@ def kraus_to_ptm(Ks: Sequence[np.ndarray]) -> np.ndarray:
     return np.asarray(sum(ptms))
 
 
-def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
+def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> KrausGateRep:
     """Convert a Pauli transfer matrix into
 
     In contrast to [](api:ptm_to_kraus), this method *does*
@@ -147,7 +147,7 @@ def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
         PTM to convert
 
     qubits : list[int]
-        Qubit labels (for output RepTuple)
+        Qubit labels (for output [](api:KrausGateRep))
 
     ideal_ptm : np.ndarray | None, optional
         PTM for the ideal operation, by default None. If not None,
@@ -155,14 +155,14 @@ def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
 
     Returns
     -------
-    RepTuple
+    KrausGateRep
         Output Kraus representation
     """
     if pygsti.tools.superop_is_unitary(ptm, mx_basis="pp"):
         U = pygsti.tools.superop_to_unitary(
             ptm, mx_basis="pp", check_superop_is_unitary=False
         )
-        return RepTuple([(U, 1)], qubits, GateRep.KRAUS_OPERATORS)
+        return KrausGateRep([(U, 1)], qubits)
 
     # If ideal ptm, pre-screen for stochastic channel
     if ideal_ptm is not None and pygsti.tools.superop_is_unitary(ideal_ptm):
@@ -184,7 +184,7 @@ def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
             ideal_U = pygsti.tools.superop_to_unitary(
                 ideal_ptm, mx_basis="pp", check_superop_is_unitary=False
             )
-            ideal_rep = RepTuple(ideal_U, qubits, GateRep.UNITARY)
+            ideal_rep = UnitaryGateRep(ideal_U, qubits)
 
             # Re-compose ideal and noise operations
             return reptools.compose_kraus_reptuples(ideal_rep, noise_rep)
@@ -206,7 +206,7 @@ def get_kraus_rep_from_ptm(ptm, qubits, ideal_ptm=None) -> RepTuple:
             # Not the identity, so store None (signal states to compute on the fly)
             rep.append((K, None))
 
-    return RepTuple(rep, qubits, GateRep.KRAUS_OPERATORS)
+    return KrausGateRep(rep, qubits)
 
 
 ## EDESIGN CONVERSION TOOLS

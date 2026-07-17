@@ -5,7 +5,18 @@ import numpy as np
 
 stim = pytest.importorskip("stim")
 
-from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
+from loqs.backends.reps import (
+    KrausGateRep,
+    ProbabilisticStimGateRep,
+    PTMGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitGateRep,
+    StimCircuitInstrumentRep,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.backends import STIMQuantumState as STIMState
 
 
@@ -58,7 +69,7 @@ class TestSTIMQuantumState:
     
     def test_apply_gates(self):
         # Let's apply a X gate
-        X_reps = [RepTuple("X 0", ["Q0"], GateRep.STIM_CIRCUIT_STR)]
+        X_reps = [StimCircuitGateRep("X 0", ["Q0"])]
 
         # Start in the 0 state
         state0 = STIMState([0], ["Q0"])
@@ -77,10 +88,10 @@ class TestSTIMQuantumState:
 
         # Let's try a CNOT via H CZ H
         CX_reps = [
-            RepTuple("H 0", ["Q1"], GateRep.STIM_CIRCUIT_STR),
-            RepTuple("CZ 0 1", ["Q0", "Q1"], GateRep.STIM_CIRCUIT_STR),
+            StimCircuitGateRep("H 0", ["Q1"]),
+            StimCircuitGateRep("CZ 0 1", ["Q0", "Q1"]),
             # Not a normal way to specify H, but this should work
-            RepTuple("H 1", ["Q0", "Q1"], GateRep.STIM_CIRCUIT_STR)
+            StimCircuitGateRep("H 1", ["Q0", "Q1"])
         ]
 
         # Start in the 10 state
@@ -93,13 +104,13 @@ class TestSTIMQuantumState:
         self._check(test3, state11)
 
         # We should also be able to have all three commands in one rep
-        CX_reps2 = [RepTuple("H 1\nCZ 0 1\nH 1", ["Q0", "Q1"], GateRep.STIM_CIRCUIT_STR)]
+        CX_reps2 = [StimCircuitGateRep("H 1\nCZ 0 1\nH 1", ["Q0", "Q1"])]
         test4, _ = state10.apply_reps(CX_reps2)
         self._check(test4, state11)
 
         # Let's try the probabilistic operations
         prob_of_reset = 0.4
-        prob_reset_rep = RepTuple([("", 1-prob_of_reset), ("R 0", prob_of_reset)], ["Q0"], GateRep.PROBABILISTIC_STIM_OPERATIONS)
+        prob_reset_rep = ProbabilisticStimGateRep([("", 1-prob_of_reset), ("R 0", prob_of_reset)], ["Q0"])
         
         # Let's compute what the expected sampling should be
         rng = np.random.default_rng(20241026)
@@ -124,51 +135,51 @@ class TestSTIMQuantumState:
         # Let's try to pass in some unsupported reps
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.UNITARY)
+                UnitaryGateRep(None, "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.PTM)
+                PTMGateRep(None, "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.QSIM_SUPEROPERATOR)
+                QSimSuperoperatorGateRep(None, "Q0")
             ])
 
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.KRAUS_OPERATORS)
+                KrausGateRep([(np.eye(2), 1.0)], "Q0")
             ])
 
     def test_input_reps(self):
         state = STIMState(1, ["Q0"])
         assert set(state.input_reps) == {
-            GateRep.STIM_CIRCUIT_STR,
-            GateRep.PROBABILISTIC_STIM_OPERATIONS,
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-            InstrumentRep.STIM_CIRCUIT_STR,
+            StimCircuitGateRep,
+            ProbabilisticStimGateRep,
+            ZBasisProjectionInstrumentRep,
+            ZBasisPrePostInstrumentRep,
+            StimCircuitInstrumentRep,
         }
 
     def test_gate_zero_qubit_passthrough(self):
-        """A GateRep.STIM_CIRCUIT_STR rep with an empty `qubits` tuple
+        """A StimCircuitGateRep with an empty `qubits` tuple
         (used for annotations that take no qubit targets, such as TICK)
         is passed straight through to the applied-circuit log rather than
         going through qubit-index translation."""
         test = STIMState([0], ["Q0"])
-        tick_rep = RepTuple("TICK", [], GateRep.STIM_CIRCUIT_STR)
+        tick_rep = StimCircuitGateRep("TICK", [])
         test.apply_reps_inplace([tick_rep])
         assert "TICK" in str(test.latest_applied_circuit)
 
     def test_apply_gate_negated_qubit(self):
-        """A `!`-prefixed qubit label in `RepTuple.qubits` marks that
+        """A `!`-prefixed qubit label in `qubits` marks that
         target as negated when translated into the underlying STIM
         circuit string. STIM records the logical NOT of the actual
         measurement result for a negated measurement target."""
         state1 = STIMState([1], ["Q0"])
-        m_rep = RepTuple("M 0", ["!Q0"], GateRep.STIM_CIRCUIT_STR)
+        m_rep = StimCircuitGateRep("M 0", ["!Q0"])
         state1.apply_reps_inplace([m_rep])
         # Physical qubit is |1>, but the negated target flips the
         # recorded bit.
@@ -182,11 +193,7 @@ class TestSTIMQuantumState:
         afterward: unchanged (branch 0), only Q0 flipped (branch 1), or
         both flipped (branch 2)."""
         probs = [0.5, 0.25, 0.25]
-        two_qubit_rep = RepTuple(
-            [("", probs[0]), ("X 0", probs[1]), ("X 0 1", probs[2])],
-            ["Q0", "Q1"],
-            GateRep.PROBABILISTIC_STIM_OPERATIONS,
-        )
+        two_qubit_rep = ProbabilisticStimGateRep([("", probs[0]), ("X 0", probs[1]), ("X 0 1", probs[2])], ["Q0", "Q1"])
 
         n_trials = 300
         test = STIMState([0, 0], ["Q0", "Q1"], seed=20260712)
@@ -210,67 +217,59 @@ class TestSTIMQuantumState:
             assert abs(count / n_trials - p) < 5 * sigma
 
     def test_probabilistic_stim_operations_negative_probability_raises(self):
-        rep = RepTuple(
-            [("", 1.2), ("X 0", -0.2)], ["Q0"], GateRep.PROBABILISTIC_STIM_OPERATIONS
-        )
+        rep = ProbabilisticStimGateRep([("", 1.2), ("X 0", -0.2)], ["Q0"])
         test = STIMState([0], ["Q0"])
         with pytest.raises(AssertionError, match="positive"):
             test.apply_reps_inplace([rep])
 
     def test_probabilistic_stim_operations_bad_sum_raises(self):
-        rep = RepTuple(
-            [("", 0.5), ("X 0", 0.6)], ["Q0"], GateRep.PROBABILISTIC_STIM_OPERATIONS
-        )
+        rep = ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.6)], ["Q0"])
         test = STIMState([0], ["Q0"])
         with pytest.raises(AssertionError, match="sum to 1"):
             test.apply_reps_inplace([rep])
 
     def test_apply_instrument_stim_circuit_str(self):
-        """InstrumentRep.STIM_CIRCUIT_STR reuses the gate-apply code path
+        """StimCircuitInstrumentRep reuses the gate-apply code path
         and then extracts outcomes from STIM's measurement record. This
         covers the single-qubit M/MX/MY/MZ/MR/MRX/MRY/MRZ family, using
         STIM's own RX/RY/R reset instructions to prepare deterministic
         eigenstates so outcomes are exact rather than probabilistic."""
         # Z basis: M / MZ
         state0 = STIMState([0], ["Q0"])
-        m_rep = RepTuple("M 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+        m_rep = StimCircuitInstrumentRep("M 0", ["Q0"])
         outs = state0.apply_reps_inplace([m_rep])
         assert outs["Q0"] == [0]
 
         state1 = STIMState([1], ["Q0"])
-        mz_rep = RepTuple("MZ 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+        mz_rep = StimCircuitInstrumentRep("MZ 0", ["Q0"])
         outs = state1.apply_reps_inplace([mz_rep])
         assert outs["Q0"] == [1]
 
         # Measure-and-reset: outcome reported, but qubit ends in |0>
         state1b = STIMState([1], ["Q0"])
-        mr_rep = RepTuple("MR 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+        mr_rep = StimCircuitInstrumentRep("MR 0", ["Q0"])
         outs = state1b.apply_reps_inplace([mr_rep])
         assert outs["Q0"] == [1]
         self._check(state1b, state0)
 
         # X basis: reset into the +X eigenstate, MX must read 0 exactly
         state_rx = STIMState([0], ["Q0"])
-        rx_mx_rep = RepTuple(
-            "RX 0\nMX 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR
-        )
+        rx_mx_rep = StimCircuitInstrumentRep("RX 0\nMX 0", ["Q0"])
         outs = state_rx.apply_reps_inplace([rx_mx_rep])
         assert outs["Q0"] == [0]
 
         # Y basis: reset into the +Y eigenstate, MY must read 0 exactly
         state_ry = STIMState([0], ["Q0"])
-        ry_my_rep = RepTuple(
-            "RY 0\nMY 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR
-        )
+        ry_my_rep = StimCircuitInstrumentRep("RY 0\nMY 0", ["Q0"])
         outs = state_ry.apply_reps_inplace([ry_my_rep])
         assert outs["Q0"] == [0]
 
         # MRX/MRY/MRZ: measure-and-reset in a non-Z basis
         state_mrx = STIMState([0], ["Q0"])
         state_mrx.apply_reps_inplace(
-            [RepTuple("RX 0", ["Q0"], GateRep.STIM_CIRCUIT_STR)]
+            [StimCircuitGateRep("RX 0", ["Q0"])]
         )
-        mrx_rep = RepTuple("MRX 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+        mrx_rep = StimCircuitInstrumentRep("MRX 0", ["Q0"])
         outs = state_mrx.apply_reps_inplace([mrx_rep])
         assert outs["Q0"] == [0]
         # After MRX, the qubit is reset back to the +X eigenstate
@@ -279,20 +278,20 @@ class TestSTIMQuantumState:
         # Multi-qubit measurement in a single instrument rep must map
         # each outcome back to its correct global qubit label.
         state01 = STIMState([0, 1], ["Q0", "Q1"])
-        mm_rep = RepTuple("M 0 1", ["Q0", "Q1"], InstrumentRep.STIM_CIRCUIT_STR)
+        mm_rep = StimCircuitInstrumentRep("M 0 1", ["Q0", "Q1"])
         outs = state01.apply_reps_inplace([mm_rep])
         assert outs == {"Q0": [0], "Q1": [1]}
 
         # Negated target: physical qubit is |1>, negated target flips the
         # recorded outcome to 0.
         state1c = STIMState([1], ["Q0"])
-        neg_m_rep = RepTuple("M 0", ["!Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+        neg_m_rep = StimCircuitInstrumentRep("M 0", ["!Q0"])
         outs = state1c.apply_reps_inplace([neg_m_rep])
         assert outs["Q0"] == [0]
 
     def test_apply_instrument_stim_circuit_str_two_qubit_measurement_gap(self):
         """Documents current behavior for two-qubit Pauli-product
-        measurements (e.g. MZZ) applied via InstrumentRep.STIM_CIRCUIT_STR:
+        measurements (e.g. MZZ) applied via StimCircuitInstrumentRep:
         `_apply_gate_rep`'s `include_outcomes` list only recognizes the
         single-qubit M/MX/MY/MZ/MR/MRX/MRY/MRZ family, so MZZ's measurement
         bit is recorded in STIM's own measurement record but is not added
@@ -301,11 +300,9 @@ class TestSTIMQuantumState:
         itself is applied to the state correctly."""
         bell = STIMState([0, 0], ["Q0", "Q1"])
         bell.apply_reps_inplace(
-            [RepTuple("H 0\nCX 0 1", ["Q0", "Q1"], GateRep.STIM_CIRCUIT_STR)]
+            [StimCircuitGateRep("H 0\nCX 0 1", ["Q0", "Q1"])]
         )
-        mzz_rep = RepTuple(
-            "MZZ 0 1", ["Q0", "Q1"], InstrumentRep.STIM_CIRCUIT_STR
-        )
+        mzz_rep = StimCircuitInstrumentRep("MZZ 0 1", ["Q0", "Q1"])
         outs = bell.apply_reps_inplace([mzz_rep])
         assert outs == {}
         # The measurement itself was still applied to STIM's own record.
@@ -315,7 +312,7 @@ class TestSTIMQuantumState:
         test = STIMState([0], ["Q0"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([
-                RepTuple(({}, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+                ZBasisOutcomeOperationDictInstrumentRep({}, True, ["Q0"])
             ])
 
     def test_apply_instruments(self):
@@ -325,11 +322,11 @@ class TestSTIMQuantumState:
         state1 = STIMState([1], ["Q0"], seed=20241016)
 
         # Use a Hadamard to put us in the + state
-        h_rep = RepTuple("H 0", ["Q0"], GateRep.STIM_CIRCUIT_STR)
+        h_rep = StimCircuitGateRep("H 0", ["Q0"])
 
         # In-place 10 times
         # Also test no reset
-        proj_rep = RepTuple((None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj_rep = ZBasisProjectionInstrumentRep(None, True, ["Q0"])
         test = state0.copy()
         outcomes1 = []
         for _ in range(10):
@@ -346,13 +343,13 @@ class TestSTIMQuantumState:
                 self._check(test, state0)
         
         # Also test no outcomes
-        proj2_rep = RepTuple((None, False), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj2_rep = ZBasisProjectionInstrumentRep(None, False, ["Q0"])
         test1 = state0.copy()
         outs = test1.apply_reps_inplace([h_rep, proj2_rep]*10)
         assert len(outs) == 0
         
         # Now another copy ten times at once with reset
-        reset_rep = RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        reset_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0"])
         test2 = state0.copy()
         outs = test2.apply_reps_inplace([h_rep, reset_rep]*10)
         outcomes2 = outs["Q0"]
@@ -361,12 +358,10 @@ class TestSTIMQuantumState:
         assert outcomes1 == outcomes2
 
         # Now lets test pre/post op
-        idle_rep = RepTuple("", ["Q0"], GateRep.STIM_CIRCUIT_STR)
+        idle_rep = StimCircuitGateRep("", ["Q0"])
 
         # Lets do X(pi/2) error before and nothing after
-        pre_xpi2_rep = RepTuple(
-            [0, True, h_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        pre_xpi2_rep = ZBasisPrePostInstrumentRep(0, True, h_rep, idle_rep, ["Q0"])
 
         test3 = state0.copy()
         outs = test3.apply_reps_inplace([pre_xpi2_rep]*10)
@@ -375,9 +370,7 @@ class TestSTIMQuantumState:
 
         # Now let's do X(pi/2) after and no nothing before
         # Very first one we have to do X(pi/2) to get same outcomes
-        post_xpi2_rep = RepTuple(
-            [0, True, idle_rep, h_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        post_xpi2_rep = ZBasisPrePostInstrumentRep(0, True, idle_rep, h_rep, ["Q0"])
 
         test4 = state0.copy()
         outs = test4.apply_reps_inplace([h_rep] + [post_xpi2_rep]*10)
@@ -386,8 +379,8 @@ class TestSTIMQuantumState:
 
     def test_zbasis_projection_reset_to_1(self):
         state1 = STIMState([1], ["Q0"], seed=20260712)
-        h_rep = RepTuple("H 0", ["Q0"], GateRep.STIM_CIRCUIT_STR)
-        reset1_rep = RepTuple((1, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        h_rep = StimCircuitGateRep("H 0", ["Q0"])
+        reset1_rep = ZBasisProjectionInstrumentRep(1, True, ["Q0"])
 
         test = STIMState([0], ["Q0"], seed=20260712)
         for _ in range(10):
@@ -399,11 +392,9 @@ class TestSTIMQuantumState:
         qubit reset to |1>, mirroring `test_zbasis_projection_reset_to_1`
         (both route through the same underlying `_measure_and_reset`)."""
         state1 = STIMState([1], ["Q0"], seed=20260712)
-        h_rep = RepTuple("H 0", ["Q0"], GateRep.STIM_CIRCUIT_STR)
-        idle_rep = RepTuple("", ["Q0"], GateRep.STIM_CIRCUIT_STR)
-        pre_h_reset1_rep = RepTuple(
-            [1, True, h_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        h_rep = StimCircuitGateRep("H 0", ["Q0"])
+        idle_rep = StimCircuitGateRep("", ["Q0"])
+        pre_h_reset1_rep = ZBasisPrePostInstrumentRep(1, True, h_rep, idle_rep, ["Q0"])
 
         test = STIMState([0], ["Q0"], seed=20260712)
         for _ in range(10):
@@ -414,12 +405,10 @@ class TestSTIMQuantumState:
         """A single ZBASIS_PROJECTION rep applied to multiple qubits at
         once must measure/reset every qubit in `qubits`."""
         h_reps = [
-            RepTuple("H 0", ["Q0"], GateRep.STIM_CIRCUIT_STR),
-            RepTuple("H 0", ["Q1"], GateRep.STIM_CIRCUIT_STR),
+            StimCircuitGateRep("H 0", ["Q0"]),
+            StimCircuitGateRep("H 0", ["Q1"]),
         ]
-        reset0_rep = RepTuple(
-            (0, True), ["Q0", "Q1"], InstrumentRep.ZBASIS_PROJECTION
-        )
+        reset0_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0", "Q1"])
 
         state00 = STIMState([0, 0], ["Q0", "Q1"])
         test = STIMState([0, 0], ["Q0", "Q1"], seed=20260712)
@@ -442,8 +431,8 @@ class TestSTIMQuantumState:
     def test_serialization_after_instrument(self, make_temp_path):
         """Serialization must round-trip correctly after applying an
         InstrumentRep, not just a plain gate-only circuit."""
-        h_rep = RepTuple("H 0", ["Q0"], GateRep.STIM_CIRCUIT_STR)
-        reset_rep = RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        h_rep = StimCircuitGateRep("H 0", ["Q0"])
+        reset_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0"])
 
         test = STIMState([0], ["Q0"], seed=20260712)
         outs_before = test.apply_reps_inplace([h_rep, reset_rep])

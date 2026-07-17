@@ -31,12 +31,13 @@ Examples
 --------
 Preservation of logical state |0>_L over 3 QEC cycles under single-fault injection:
 
->>> from loqs.backends import PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState, GateRep
+>>> from loqs.backends import PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState
+>>> from loqs.backends.reps import StimCircuitGateRep
 >>> from loqs.core import QuantumProgram
 >>> from loqs.codepacks import codepack_surf17_tomita2014 as cp
 >>> code = cp.create_qec_code(layout="surf17", num_qec_rounds=3)
 >>> qubits = [f'D{i}' for i in range(9)] + [f'A{i}' for i in range(9, 17)]
->>> model = cp.create_ideal_model(qubits, gaterep=GateRep.STIM_CIRCUIT_STR, model_backend=DictNoiseModel)
+>>> model = cp.create_ideal_model(qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 >>> stack = [
 ...     ('Init State', None, (len(qubits),), {'qubit_labels': qubits}),
 ...     ('Init Patch SURF', None, ('L0', qubits)),
@@ -57,14 +58,18 @@ import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.backends.model.basemodel import (
-    BaseNoiseModel,
-    GateRep,
-    InstrumentRep,
-)
+from loqs.backends.model.basemodel import BaseNoiseModel
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.backends.reps import RepTuple
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    PTMGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitGateRep,
+    UnitaryGateRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -971,8 +976,8 @@ def create_qec_code(
 def create_ideal_model(
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
-    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
+    gaterep: type[GateRep] = QSimSuperoperatorGateRep,
+    instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
 ) -> BaseNoiseModel:
     """Create an ideal (noiseless) model for the Surface-17 / Surface-13 code.
 
@@ -984,11 +989,11 @@ def create_ideal_model(
     model_backend : type[BaseNoiseModel], optional
         The model backend to use. Default is PyGSTiNoiseModel.
 
-    gaterep : GateRep, optional
-        Gate representation. Default is GateRep.QSIM_SUPEROPERATOR.
+    gaterep : type[GateRep], optional
+        Gate representation class. Default is [](api:QSimSuperoperatorGateRep).
 
-    instrep : InstrumentRep, optional
-        Instrument representation. Default is InstrumentRep.ZBASIS_PROJECTION.
+    instrep : type[InstrumentRep], optional
+        Instrument representation class. Default is [](api:ZBasisProjectionInstrumentRep).
 
     Returns
     -------
@@ -1038,7 +1043,7 @@ def create_ideal_model(
 
     elif model_backend == DictNoiseModel:
         gate_dict = {}
-        if gaterep == GateRep.STIM_CIRCUIT_STR:
+        if gaterep is StimCircuitGateRep:
             name_to_stim_ops = {
                 "Gxpi": ["X"],
                 "Gypi": ["Y"],
@@ -1086,15 +1091,15 @@ def create_ideal_model(
                 num_qubits = int(np.log2(U.shape[0]))
                 qubit_perms = itertools.permutations(qubits, r=num_qubits)
                 for qs in qubit_perms:
-                    if gaterep == GateRep.UNITARY:
-                        gate_dict[(gate, qs)] = RepTuple(
-                            U, qs, GateRep.UNITARY
+                    if gaterep is UnitaryGateRep:
+                        gate_dict[(gate, qs)] = UnitaryGateRep(
+                            U, qs
                         )
-                    elif gaterep == GateRep.PTM:
+                    elif gaterep is PTMGateRep:
                         gate_dict[(gate, qs)] = (
                             pygsti.tools.unitary_to_pauligate(U)
                         )
-                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                    elif gaterep is QSimSuperoperatorGateRep:
                         import loqs.tools.pygstitools as pt
                         gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
                     else:

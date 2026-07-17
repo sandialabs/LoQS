@@ -16,7 +16,13 @@ from loqs.backends import (
     get_backend_error,
     is_backend_available,
 )
-from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
+from loqs.backends.reps import (
+    UnitaryGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+)
 
 
 class TestBackendAvailability:
@@ -40,6 +46,51 @@ class TestBackendAvailability:
 
     def test_get_backend_error_unknown_name_is_none(self):
         assert get_backend_error("_never_registered") is None
+
+    def test_fresh_import_registers_stim_dispatch_when_stim_available(self):
+        """`loqs/backends/__init__.py` must define `BackendAvailability`/
+        `_check_backend_availability`/`is_backend_available`/
+        `get_backend_error` *before* the `.reps`/`.circuit`/`.model`/
+        `.state` imports (LoQS#72's model-backend consolidation, see
+        `loqs.backends.model.dictmodel`, requires `dictmodel.py` to
+        import `loqs.backends.circuit.stimcircuit` eagerly, and
+        `stimcircuit.py` reaches back into `loqs.backends` for
+        `is_backend_available`).
+
+        If that ordering ever regresses, this does *not* crash the
+        import -- `dictmodel.py`'s own `try: from
+        loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        except ImportError: STIMPhysicalCircuit = None` silently catches
+        the resulting `ImportError` (it looks identical to `stim`
+        genuinely not being installed), so `DictNoiseModel.get_reps`
+        simply never gets its `STIMPhysicalCircuit` dispatch registered
+        -- a silent, no-crash false negative, confirmed by directly
+        reverting the import order and observing exactly this symptom
+        (`STIMPhysicalCircuit not in
+        DictNoiseModel.get_reps.dispatcher.registry`) rather than any
+        exception. This test therefore checks that the registration
+        actually happened (in a fresh subprocess, since Python caches
+        modules and this refactor's own test suite has already imported
+        `loqs.backends` once by the time any test runs), not merely that
+        import doesn't raise."""
+        pytest.importorskip("stim")
+        import subprocess
+        import sys
+
+        script = (
+            "import stim\n"
+            "from loqs.backends.model.dictmodel import DictNoiseModel\n"
+            "from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit\n"
+            "registry = DictNoiseModel.__dict__['get_reps'].dispatcher.registry\n"
+            "assert STIMPhysicalCircuit in registry, "
+            "f'STIM dispatch not registered: {registry.keys()}'\n"
+            "print('OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
 
 
 class TestLazyBackendImportErrors:
@@ -99,10 +150,10 @@ class TestPropagateState:
     def _build_model_and_state(self, instreps):
         model = DictNoiseModel(
             (
-                {"X": RepTuple(_X, (), GateRep.UNITARY)},
-                {"M": RepTuple((None, True), (), InstrumentRep.ZBASIS_PROJECTION)},
+                {"X": UnitaryGateRep(_X, ())},
+                {"M": ZBasisProjectionInstrumentRep(None, True, ())},
             ),
-            gatereps=[GateRep.UNITARY],
+            gatereps=[UnitaryGateRep],
             instreps=instreps,
         )
         state = NumpyStatevectorQuantumState(1, ["Q0"], seed=20260716)
@@ -111,7 +162,7 @@ class TestPropagateState:
 
     def test_inplace_default(self):
         model, state, circuit = self._build_model_and_state(
-            [InstrumentRep.ZBASIS_PROJECTION]
+            [ZBasisProjectionInstrumentRep]
         )
         result_state, outcomes = propagate_state(circuit, model, state)
         assert result_state is state
@@ -119,7 +170,7 @@ class TestPropagateState:
 
     def test_not_inplace_returns_new_state(self):
         model, state, circuit = self._build_model_and_state(
-            [InstrumentRep.ZBASIS_PROJECTION]
+            [ZBasisProjectionInstrumentRep]
         )
         result_state, outcomes = propagate_state(
             circuit, model, state, inplace=False
@@ -135,8 +186,8 @@ class TestPropagateState:
         just the first) when intersecting with `state.input_reps`."""
         model, state, circuit = self._build_model_and_state(
             [
-                InstrumentRep.ZBASIS_PROJECTION,
-                InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+                ZBasisProjectionInstrumentRep,
+                ZBasisPrePostInstrumentRep,
             ]
         )
         result_state, outcomes = propagate_state(circuit, model, state)
@@ -145,9 +196,9 @@ class TestPropagateState:
 
     def test_no_matching_gate_rep_raises(self):
         model = DictNoiseModel(
-            ({"X": RepTuple(np.eye(4), (), GateRep.QSIM_SUPEROPERATOR)}, {}),
-            gatereps=[GateRep.QSIM_SUPEROPERATOR],
-            instreps=[InstrumentRep.ZBASIS_PROJECTION],
+            ({"X": QSimSuperoperatorGateRep(np.eye(4), ())}, {}),
+            gatereps=[QSimSuperoperatorGateRep],
+            instreps=[ZBasisProjectionInstrumentRep],
         )
         state = NumpyStatevectorQuantumState(1, ["Q0"])
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
@@ -157,11 +208,11 @@ class TestPropagateState:
     def test_no_matching_instrument_rep_raises(self):
         model = DictNoiseModel(
             (
-                {"X": RepTuple(np.eye(2), (), GateRep.UNITARY)},
-                {"M": RepTuple("M 0", (), InstrumentRep.STIM_CIRCUIT_STR)},
+                {"X": UnitaryGateRep(np.eye(2), ())},
+                {"M": StimCircuitInstrumentRep("M 0", ())},
             ),
-            gatereps=[GateRep.UNITARY],
-            instreps=[InstrumentRep.STIM_CIRCUIT_STR],
+            gatereps=[UnitaryGateRep],
+            instreps=[StimCircuitInstrumentRep],
         )
         state = NumpyStatevectorQuantumState(1, ["Q0"])
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])

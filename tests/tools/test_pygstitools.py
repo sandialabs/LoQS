@@ -15,6 +15,7 @@ from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.instructions.instruction      import Instruction
 from loqs.core.frame import Frame
 from loqs.core import QuantumProgram
+from loqs.backends.reps import KrausGateRep
 from loqs.tools.pygstitools import (
     ptm_to_qsim_ptm,
     unitary_to_qsim_ptm,
@@ -155,10 +156,10 @@ class TestPyGSTITools:
         # Get Kraus representation
         result = get_kraus_rep_from_ptm(ptm_x, [0])
 
-        # Should be a RepTuple
-        assert hasattr(result, 'rep')
+        # Should be a KrausGateRep
+        assert isinstance(result, KrausGateRep)
+        assert hasattr(result, 'kraus_operators')
         assert hasattr(result, 'qubits')
-        assert hasattr(result, 'reptype')
 
         # Qubits should match
         assert result.qubits == (0,)
@@ -175,14 +176,13 @@ class TestPyGSTITools:
         # Get Kraus representation with ideal PTM
         result = get_kraus_rep_from_ptm(ptm_depol, [0], ideal_ptm)
 
-        # Should be a RepTuple
-        assert hasattr(result, 'rep')
+        # Should be a KrausGateRep
+        assert isinstance(result, KrausGateRep)
+        assert hasattr(result, 'kraus_operators')
         assert hasattr(result, 'qubits')
-        assert hasattr(result, 'reptype')
 
         # Should have multiple Kraus operators for depolarizing channel
-        if hasattr(result.rep, '__len__'):
-            assert len(result.rep) > 1
+        assert len(result.kraus_operators) > 1
 
     def test_get_kraus_rep_from_ptm_general_case(self):
         """Test Kraus rep from PTM for general non-stochastic case."""
@@ -199,10 +199,10 @@ class TestPyGSTITools:
         # Get Kraus representation without ideal PTM
         result = get_kraus_rep_from_ptm(ptm_ad, [0])
 
-        # Should be a RepTuple
-        assert hasattr(result, 'rep')
+        # Should be a KrausGateRep
+        assert isinstance(result, KrausGateRep)
+        assert hasattr(result, 'kraus_operators')
         assert hasattr(result, 'qubits')
-        assert hasattr(result, 'reptype')
 
     def test_ptm_to_kraus_invalid_input(self):
         """Test PTM to Kraus conversion with invalid input."""

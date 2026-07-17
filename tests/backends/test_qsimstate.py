@@ -12,7 +12,18 @@ quantumsim = pytest.importorskip("quantumsim")
 from quantumsim.sparsedm import SparseDM as _SparseDM
 from quantumsim import ptm as _ptm
 
-from loqs.backends.reps import GateRep, RepTuple, InstrumentRep
+from loqs.backends.reps import (
+    KrausGateRep,
+    ProbabilisticStimGateRep,
+    PTMGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitGateRep,
+    StimCircuitInstrumentRep,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.backends import QSimQuantumState as QSimState
 
 class TestQSimQuantumState:
@@ -52,7 +63,7 @@ class TestQSimQuantumState:
     def test_apply_gates(self):
         # Let's apply a X gate
         x_ptm = _ptm.rotate_x_ptm(np.pi)
-        X_reps = [RepTuple(x_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)]
+        X_reps = [QSimSuperoperatorGateRep(x_ptm, ["Q0"])]
 
         # Start in the 0 state
         state0 = QSimState(1, ["Q0"])
@@ -78,9 +89,9 @@ class TestQSimQuantumState:
         h_ptm = _ptm.hadamard_ptm()
         cz_ptm = state0.state._cphase_ptm
         CX_reps = [
-            RepTuple(h_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR),
-            RepTuple(cz_ptm, ["Q0", "Q1"], GateRep.QSIM_SUPEROPERATOR),
-            RepTuple(h_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR)
+            QSimSuperoperatorGateRep(h_ptm, ["Q1"]),
+            QSimSuperoperatorGateRep(cz_ptm, ["Q0", "Q1"]),
+            QSimSuperoperatorGateRep(h_ptm, ["Q1"])
         ]
 
         # Start in the 10 state
@@ -103,55 +114,55 @@ class TestQSimQuantumState:
         # Let's try to pass in some unsupported reps
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.UNITARY)
+                UnitaryGateRep(None, "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.PTM)
+                PTMGateRep(None, "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.STIM_CIRCUIT_STR)
+                StimCircuitGateRep(None, "Q0")
             ])
 
         # Try to pass in too many qubits
         with pytest.raises(ValueError):
             test.apply_reps([
-                RepTuple(None, ["Q0", "Q1", "Q2"], GateRep.QSIM_SUPEROPERATOR)
+                QSimSuperoperatorGateRep(None, ["Q0", "Q1", "Q2"])
             ])
 
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.KRAUS_OPERATORS)
+                KrausGateRep([(np.eye(2), 1.0)], "Q0")
             ])
 
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                RepTuple(None, "Q0", GateRep.PROBABILISTIC_STIM_OPERATIONS)
+                ProbabilisticStimGateRep([("X 0", 1.0)], "Q0")
             ])
 
     def test_input_reps(self):
         state = QSimState(1, ["Q0"])
         assert set(state.input_reps) == {
-            GateRep.QSIM_SUPEROPERATOR,
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+            QSimSuperoperatorGateRep,
+            ZBasisProjectionInstrumentRep,
+            ZBasisPrePostInstrumentRep,
+            ZBasisOutcomeOperationDictInstrumentRep,
         }
 
     def test_unsupported_instrument_rep_raises(self):
         test = QSimState(1, ["Q0"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([
-                RepTuple("M 0", ["Q0"], InstrumentRep.STIM_CIRCUIT_STR)
+                StimCircuitInstrumentRep("M 0", ["Q0"])
             ])
 
     def test_apply_instruments(self):
         # H gate to get + state for testing
         xpi2_ptm = _ptm.rotate_x_ptm(np.pi/2)
-        xpi2_rep = RepTuple(xpi2_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        xpi2_rep = QSimSuperoperatorGateRep(xpi2_ptm, ["Q0"])
 
         state0 = QSimState(1, ["Q0"], seed=20241016)
 
@@ -161,7 +172,7 @@ class TestQSimQuantumState:
 
         # In-place 10 times
         # Also test no reset
-        proj_rep = RepTuple((None, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj_rep = ZBasisProjectionInstrumentRep(None, True, ["Q0"])
         test = state0.copy()
         outcomes1 = []
         for _ in range(10):
@@ -179,13 +190,13 @@ class TestQSimQuantumState:
 
         
         # Also test no outcomes
-        proj2_rep = RepTuple((None, False), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        proj2_rep = ZBasisProjectionInstrumentRep(None, False, ["Q0"])
         test1 = state0.copy()
         outs = test1.apply_reps_inplace([xpi2_rep, proj2_rep]*10)
         assert len(outs) == 0
         
         # Now another copy ten times at once with reset
-        reset_rep = RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        reset_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0"])
         test2 = state0.copy()
         outs = test2.apply_reps_inplace([xpi2_rep, reset_rep]*10)
         outcomes2 = outs["Q0"]
@@ -195,12 +206,10 @@ class TestQSimQuantumState:
 
         # Now lets test pre/post op
         idle_ptm = _ptm.rotate_x_ptm(0)
-        idle_rep = RepTuple(idle_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        idle_rep = QSimSuperoperatorGateRep(idle_ptm, ["Q0"])
 
         # Lets do X(pi/2) error before and nothing after
-        pre_xpi2_rep = RepTuple(
-            [0, True, xpi2_rep, idle_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        pre_xpi2_rep = ZBasisPrePostInstrumentRep(0, True, xpi2_rep, idle_rep, ["Q0"])
 
         test3 = state0.copy()
         outs = test3.apply_reps_inplace([pre_xpi2_rep]*10)
@@ -209,9 +218,7 @@ class TestQSimQuantumState:
 
         # Now let's do X(pi/2) after and no nothing before
         # Very first one we have to do X(pi/2) to get same outcomes
-        post_xpi2_rep = RepTuple(
-            [0, True, idle_rep, xpi2_rep], ["Q0"], InstrumentRep.ZBASIS_PRE_POST_OPERATIONS
-        )
+        post_xpi2_rep = ZBasisPrePostInstrumentRep(0, True, idle_rep, xpi2_rep, ["Q0"])
 
         test4 = state0.copy()
         outs = test4.apply_reps_inplace([xpi2_rep] + [post_xpi2_rep]*10)
@@ -223,10 +230,10 @@ class TestQSimQuantumState:
         effect1 = np.array([[0, 0, 0, 1]])
 
         ideal_maps = {
-            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            1: RepTuple(effect1.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+            0: QSimSuperoperatorGateRep(effect0.T @ effect0, ["Q0"]),
+            1: QSimSuperoperatorGateRep(effect1.T @ effect1, ["Q0"])
         }
-        ideal_map_rep = RepTuple((ideal_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        ideal_map_rep = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, True, ["Q0"])
 
         test5 = state0.copy()
         outs = test5.apply_reps_inplace([xpi2_rep, ideal_map_rep]*10)
@@ -235,10 +242,10 @@ class TestQSimQuantumState:
 
         # Let's use the instrument to also do reset
         reset_maps = {
-            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            1: RepTuple(effect0.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+            0: QSimSuperoperatorGateRep(effect0.T @ effect0, ["Q0"]),
+            1: QSimSuperoperatorGateRep(effect0.T @ effect1, ["Q0"])
         }
-        reset_map_rep = RepTuple((reset_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(reset_maps, True, ["Q0"])
 
         test6 = state0.copy()
         outs = test6.apply_reps_inplace([xpi2_rep, reset_map_rep]*10)
@@ -246,10 +253,10 @@ class TestQSimQuantumState:
         assert outcomes6 == outcomes1
 
         noisy_reset_maps = {
-            0: RepTuple(xpi2_ptm @ effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            1: RepTuple(xpi2_ptm @ effect0.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+            0: QSimSuperoperatorGateRep(xpi2_ptm @ effect0.T @ effect0, ["Q0"]),
+            1: QSimSuperoperatorGateRep(xpi2_ptm @ effect0.T @ effect1, ["Q0"])
         }
-        noisy_reset_map_rep = RepTuple((noisy_reset_maps, True), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT)
+        noisy_reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(noisy_reset_maps, True, ["Q0"])
 
         test7 = state0.copy()
         outs = test7.apply_reps_inplace([xpi2_rep] + [noisy_reset_map_rep]*10)
@@ -258,8 +265,8 @@ class TestQSimQuantumState:
 
     def test_zbasis_projection_reset_to_1(self):
         xpi2_ptm = _ptm.rotate_x_ptm(np.pi / 2)
-        xpi2_rep = RepTuple(xpi2_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
-        reset1_rep = RepTuple((1, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        xpi2_rep = QSimSuperoperatorGateRep(xpi2_ptm, ["Q0"])
+        reset1_rep = ZBasisProjectionInstrumentRep(1, True, ["Q0"])
 
         state1 = QSimState(1, ["Q0"], seed=20260712)
         state1.state.set_bit("Q0", 1)
@@ -277,12 +284,10 @@ class TestQSimQuantumState:
         once must measure/reset every qubit in `qubits`."""
         xpi2_ptm = _ptm.rotate_x_ptm(np.pi / 2)
         xpi2_reps = [
-            RepTuple(xpi2_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            RepTuple(xpi2_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR),
+            QSimSuperoperatorGateRep(xpi2_ptm, ["Q0"]),
+            QSimSuperoperatorGateRep(xpi2_ptm, ["Q1"]),
         ]
-        reset0_rep = RepTuple(
-            (0, True), ["Q0", "Q1"], InstrumentRep.ZBASIS_PROJECTION
-        )
+        reset0_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0", "Q1"])
 
         state00 = QSimState(2, ["Q0", "Q1"])
         state00.state.ensure_dense("Q0")
@@ -303,11 +308,7 @@ class TestQSimQuantumState:
         """ZBASIS_OUTCOME_OPERATION_DICT explicitly does not support more
         than one qubit."""
         dummy_maps = {0: object(), 1: object()}
-        rep = RepTuple(
-            (dummy_maps, True),
-            ["Q0", "Q1"],
-            InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
-        )
+        rep = ZBasisOutcomeOperationDictInstrumentRep(dummy_maps, True, ["Q0", "Q1"])
         test = QSimState(2, ["Q0", "Q1"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([rep])
@@ -317,17 +318,15 @@ class TestQSimQuantumState:
         suppress the outcome dict entry, while the ideal projector map
         must still always collapse to an exact computational basis state."""
         xpi2_ptm = _ptm.rotate_x_ptm(np.pi / 2)
-        xpi2_rep = RepTuple(xpi2_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        xpi2_rep = QSimSuperoperatorGateRep(xpi2_ptm, ["Q0"])
 
         effect0 = np.array([[1, 0, 0, 0]])
         effect1 = np.array([[0, 0, 0, 1]])
         ideal_maps = {
-            0: RepTuple(effect0.T @ effect0, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
-            1: RepTuple(effect1.T @ effect1, ["Q0"], GateRep.QSIM_SUPEROPERATOR),
+            0: QSimSuperoperatorGateRep(effect0.T @ effect0, ["Q0"]),
+            1: QSimSuperoperatorGateRep(effect1.T @ effect1, ["Q0"]),
         }
-        ideal_map_rep_no_outcomes = RepTuple(
-            (ideal_maps, False), ["Q0"], InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT
-        )
+        ideal_map_rep_no_outcomes = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, False, ["Q0"])
 
         state0 = QSimState(1, ["Q0"])
         state0.state.ensure_dense("Q0")
@@ -349,15 +348,11 @@ class TestQSimQuantumState:
         `include_outcomes=False` must suppress the outcome dict entry
         while still always leaving the qubit reset to |1>."""
         xpi2_ptm = _ptm.rotate_x_ptm(np.pi / 2)
-        xpi2_rep = RepTuple(xpi2_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        xpi2_rep = QSimSuperoperatorGateRep(xpi2_ptm, ["Q0"])
         idle_ptm = _ptm.rotate_x_ptm(0)
-        idle_rep = RepTuple(idle_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
+        idle_rep = QSimSuperoperatorGateRep(idle_ptm, ["Q0"])
 
-        pre_reset1_no_outcomes = RepTuple(
-            [1, False, xpi2_rep, idle_rep],
-            ["Q0"],
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-        )
+        pre_reset1_no_outcomes = ZBasisPrePostInstrumentRep(1, False, xpi2_rep, idle_rep, ["Q0"])
 
         state1 = QSimState(1, ["Q0"], seed=20260712)
         state1.state.set_bit("Q0", 1)
@@ -384,11 +379,11 @@ class TestQSimQuantumState:
         h_ptm = _ptm.hadamard_ptm()
         cz_ptm = state10.state._cphase_ptm
 
-        test, _ = state10.apply_reps([RepTuple(h_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR)])
+        test, _ = state10.apply_reps([QSimSuperoperatorGateRep(h_ptm, ["Q1"])])
         test.state.combine_and_apply_single_ptm("Q0") # Actually force propogation
         test.state.combine_and_apply_single_ptm("Q1") # Actually force propogation
 
-        test.apply_reps_inplace([RepTuple(cz_ptm, ["Q0", "Q1"], GateRep.QSIM_SUPEROPERATOR)])
+        test.apply_reps_inplace([QSimSuperoperatorGateRep(cz_ptm, ["Q0", "Q1"])])
         # Don't force propagation here
         # So serialization should both serialize DM and operations to be applied
 
@@ -398,7 +393,7 @@ class TestQSimQuantumState:
         
         # And finish applying
         assert isinstance(test2, QSimState)
-        test2.apply_reps_inplace([RepTuple(h_ptm, ["Q1"], GateRep.QSIM_SUPEROPERATOR)])
+        test2.apply_reps_inplace([QSimSuperoperatorGateRep(h_ptm, ["Q1"])])
         test2.state.combine_and_apply_single_ptm("Q0") # Actually force propogation
         test2.state.combine_and_apply_single_ptm("Q1") # Actually force propogation
         
@@ -414,8 +409,8 @@ class TestQSimQuantumState:
         """Serialization must round-trip correctly after applying an
         InstrumentRep, not just a plain gate-only circuit."""
         xpi2_ptm = _ptm.rotate_x_ptm(np.pi / 2)
-        xpi2_rep = RepTuple(xpi2_ptm, ["Q0"], GateRep.QSIM_SUPEROPERATOR)
-        reset_rep = RepTuple((0, True), ["Q0"], InstrumentRep.ZBASIS_PROJECTION)
+        xpi2_rep = QSimSuperoperatorGateRep(xpi2_ptm, ["Q0"])
+        reset_rep = ZBasisProjectionInstrumentRep(0, True, ["Q0"])
 
         test = QSimState(1, ["Q0"], seed=20260712)
         outs_before = test.apply_reps_inplace([xpi2_rep, reset_rep])

@@ -19,7 +19,18 @@ from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
-from loqs.backends.reps import GateRep, InstrumentRep, RepEnum, RepTuple
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    KrausGateRep,
+    OperationRep,
+    PTMGateRep,
+    QSimSuperoperatorGateRep,
+    RepConstructionError,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
@@ -428,29 +439,29 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         return keys
 
     _output_gate_reps = [
-        GateRep.UNITARY,
-        GateRep.KRAUS_OPERATORS,
-        GateRep.PTM,
-        GateRep.QSIM_SUPEROPERATOR,
+        UnitaryGateRep,
+        KrausGateRep,
+        PTMGateRep,
+        QSimSuperoperatorGateRep,
     ]
 
     @property
-    def output_gate_reps(self) -> list[GateRep]:
+    def output_gate_reps(self) -> list[type[GateRep]]:
         return self._output_gate_reps
 
     _output_instrument_reps = [
-        InstrumentRep.ZBASIS_PROJECTION,
-        InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT,
+        ZBasisProjectionInstrumentRep,
+        ZBasisOutcomeOperationDictInstrumentRep,
     ]
 
     @property
-    def output_instrument_reps(self) -> list[InstrumentRep]:
-        """Get the list of instrument representations this model can output.
+    def output_instrument_reps(self) -> list[type[InstrumentRep]]:
+        """Get the list of instrument representation classes this model can output.
 
         Returns
         -------
-        list[InstrumentRep]
-            List of instrument representations that this model can output.
+        list[type[InstrumentRep]]
+            List of instrument representation classes that this model can output.
 
         Note
         ----
@@ -610,9 +621,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
-        gatereps: Sequence[GateRep],
-        instreps: Sequence[InstrumentRep],
-    ) -> list[RepTuple]:
+        gatereps: Sequence[type[GateRep]],
+        instreps: Sequence[type[InstrumentRep]],
+    ) -> list[OperationRep]:
         # Get bare circuit
         from loqs.backends import PyGSTiPhysicalCircuit
 
@@ -627,20 +638,22 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 aliased_qubits = comp.qubits  # The circuit is already aliased
                 qubits = [self.model_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
-                    rep, reptype = self._get_gate_rep(
+                    raw_rep, gaterep_cls = self._get_gate_rep(
                         comp.name, qubits, gatereps
                     )
+                    # We need to save with original (aliased) qubits
+                    rep = gaterep_cls(raw_rep, aliased_qubits)
                     duration = self.get_gate_duration(comp)
                 elif comp.name.startswith("I"):
-                    rep, reptype = self._get_instrument_rep(
-                        comp.name, qubits, instreps
+                    (payload, include_outcome), instrep_cls = (
+                        self._get_instrument_rep(comp.name, qubits, instreps)
                     )
+                    rep = instrep_cls(payload, include_outcome, aliased_qubits)
                     duration = self.get_instrument_duration(comp)
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
 
-                # We need to save with original (aliased) qubits
-                reps.append(RepTuple(rep, aliased_qubits, reptype))
+                reps.append(rep)
 
                 # If using time-dependence, update layer time
                 if self.use_time_dependence:
@@ -686,7 +699,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         rep = None
 
         def _get_rep(gaterep):
-            if gaterep == GateRep.UNITARY:
+            if gaterep is UnitaryGateRep:
                 try:
                     rep = op.to_dense(on_space="Hilbert")
                 except ValueError:
@@ -696,12 +709,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                         rep = superop_to_unitary(op.to_dense())
 
                     except (ValueError, IndexError) as e:
-                        raise ValueError(
+                        raise RepConstructionError(
                             "Failed to cast gate as a unitary. Consider "
                             + "using process matrices instead. PyGSTi error: "
                             + str(e),
                         ) from e
-            elif gaterep == GateRep.KRAUS_OPERATORS:
+            elif gaterep is KrausGateRep:
                 try:
                     # We'll upcast to DenseOperator to get access to the kraus property
                     # TODO for pygsti: This should probably be moved to optools instead of DenseOperator
@@ -725,13 +738,13 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                             # Not the identity, so store None (signal states to compute on the fly)
                             rep.append((K, None))
                 except (ValueError, AttributeError, ZeroDivisionError) as e:
-                    raise ValueError(
+                    raise RepConstructionError(
                         "Failed to cast gate as Kraus operators. Consider "
                         + "using process matrices instead."
                     ) from e
-            elif gaterep == GateRep.PTM:
+            elif gaterep is PTMGateRep:
                 rep = op.to_dense(on_space="HilbertSchmidt")
-            elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+            elif gaterep is QSimSuperoperatorGateRep:
                 rep = op.to_dense(on_space="HilbertSchmidt")
 
                 if len(qubits) in [1, 2]:
@@ -739,12 +752,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                         rep, basis, PYGSTI_QSIM_BASES[len(qubits)]
                     )
                 else:
-                    raise ValueError(
+                    raise RepConstructionError(
                         "Cannot change more than a 2 qubit operation into",
                         " the QuantumSim basis",
                     )
             else:
-                raise ValueError(f"Cannot create gate rep for {gaterep}")
+                raise RepConstructionError(f"Cannot create gate rep for {gaterep}")
 
             return rep
 
@@ -754,14 +767,14 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             try:
                 rep = _get_rep(gatereps[repidx])
                 break
-            except ValueError as e:
+            except RepConstructionError as e:
                 # Try next one
                 repidx += 1
 
                 errors.append(e)
 
         if repidx == len(gatereps):
-            raise ValueError(
+            raise RepConstructionError(
                 f"Failed to create gate rep for any of {gatereps}, with errors:"
                 + "\n".join([str(e) for e in errors])
             )
@@ -781,9 +794,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         rep = None
 
         def _get_rep(instrep):
-            if instrep == InstrumentRep.ZBASIS_PROJECTION:
+            if instrep is ZBasisProjectionInstrumentRep:
                 rep: None | int | dict = 0 if self.zbasis_proj_resets else None
-            elif instrep == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
+            elif instrep is ZBasisOutcomeOperationDictInstrumentRep:
                 # TODO: What to do with key error?
                 # Look up using unaliased qubits
                 op = self.inst_dict[inst_key]
@@ -808,7 +821,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                             else:
                                 label = (int(k),)
                         except ValueError as e:
-                            raise ValueError(
+                            raise RepConstructionError(
                                 "Failed to cast instrument keys to outcome labels"
                             ) from e
                     else:
@@ -819,7 +832,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
                     rep[label] = v
             else:
-                raise ValueError(f"Cannot create instrument rep for {instrep}")
+                raise RepConstructionError(
+                    f"Cannot create instrument rep for {instrep}"
+                )
 
             return rep
 
@@ -828,12 +843,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             try:
                 rep = _get_rep(instreps[repidx])
                 break
-            except ValueError:
+            except RepConstructionError:
                 # Try next one
                 repidx += 1
 
         if repidx == len(instreps):
-            raise ValueError(
+            raise RepConstructionError(
                 f"Failed to create instrument rep for any of {instreps}"
             )
 

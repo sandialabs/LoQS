@@ -16,6 +16,19 @@ non-trivial (multi-rep-type) `DictNoiseModel` and `STIMDictNoiseModel`, in
 both JSON and HDF5, as they are actually serialized by the current code.
 
 Run with: `python tests/backends/model/fixtures/generate_model_fixtures.py`
+
+Historical note (LoQS#72): this script uses the pre-refactor `RepTuple`/
+`GateRep`/`InstrumentRep` enum-based API and constructs a real
+`STIMDictNoiseModel`, neither of which are constructible after LoQS#72's
+class-hierarchy refactor (`STIMDictNoiseModel`'s constructor now
+unconditionally raises, matching `RepTuple`). This script can therefore no
+longer be executed against current code; it is kept only as a historical
+record of exactly how `dictmodel_v1.{json,h5}`/`stimdictmodel_v1.{json,h5}`
+(the frozen fixtures it originally produced) were generated. Those
+fixtures are still very much live -- `stimdictmodel_v1.{json,h5}` is the
+byte-for-byte regression oracle for `STIMDictNoiseModel`'s decode-only
+shim (see `loqs.backends.model.stimdictmodel` and
+`tests/backends/model/test_dictmodel.py`).
 """
 
 from __future__ import annotations

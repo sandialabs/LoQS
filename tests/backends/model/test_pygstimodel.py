@@ -15,12 +15,24 @@ from pygsti.models import ExplicitOpModel
 import loqs.backends as backends_module
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.backends.reps import GateRep, InstrumentRep
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    KrausGateRep,
+    PTMGateRep,
+    QSimSuperoperatorGateRep,
+    RepConstructionError,
+    StimCircuitGateRep,
+    StimCircuitInstrumentRep,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+)
 
 # TP-preserving (sum_i K_i K_i^dagger = I) amplitude-damping Kraus operators
 # -- a genuinely non-unitary channel, used to exercise the GateRep fallback
-# loop (GateRep.UNITARY fails for it; GateRep.PTM/QSIM_SUPEROPERATOR/
-# KRAUS_OPERATORS succeed).
+# loop (UnitaryGateRep fails for it; PTMGateRep/QSimSuperoperatorGateRep/
+# KrausGateRep succeed).
 _GAMMA = 0.1
 _K0 = np.array([[1.0, 0.0], [0.0, np.sqrt(1 - _GAMMA)]], dtype=complex)
 _K1 = np.array([[0.0, np.sqrt(_GAMMA)], [0.0, 0.0]], dtype=complex)
@@ -156,38 +168,38 @@ class TestGetGateRep:
         return PyGSTiNoiseModel(_build_explicit_model())
 
     def test_unitary(self, pgm):
-        rep, reptype = pgm._get_gate_rep("Gxpi", ["Q0"], [GateRep.UNITARY])
-        assert reptype == GateRep.UNITARY
+        rep, reptype = pgm._get_gate_rep("Gxpi", ["Q0"], [UnitaryGateRep])
+        assert reptype is UnitaryGateRep
         assert np.shape(rep) == (2, 2)
 
     def test_kraus_operators(self, pgm):
-        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [GateRep.KRAUS_OPERATORS])
-        assert reptype == GateRep.KRAUS_OPERATORS
+        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [KrausGateRep])
+        assert reptype is KrausGateRep
         assert len(rep) >= 1
 
     def test_ptm(self, pgm):
-        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [GateRep.PTM])
-        assert reptype == GateRep.PTM
+        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [PTMGateRep])
+        assert reptype is PTMGateRep
         assert np.shape(rep) == (4, 4)
 
     def test_qsim_superoperator(self, pgm):
-        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [GateRep.QSIM_SUPEROPERATOR])
-        assert reptype == GateRep.QSIM_SUPEROPERATOR
+        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [QSimSuperoperatorGateRep])
+        assert reptype is QSimSuperoperatorGateRep
         assert np.shape(rep) == (4, 4)
 
     def test_fallback_skips_failing_candidate(self, pgm):
-        """Requesting GateRep.UNITARY first (fails for the non-unitary
+        """Requesting UnitaryGateRep first (fails for the non-unitary
         amplitude-damping channel) falls through to
-        GateRep.QSIM_SUPEROPERATOR rather than raising."""
+        QSimSuperoperatorGateRep rather than raising."""
         rep, reptype = pgm._get_gate_rep(
-            "Gad", ["Q0"], [GateRep.UNITARY, GateRep.QSIM_SUPEROPERATOR]
+            "Gad", ["Q0"], [UnitaryGateRep, QSimSuperoperatorGateRep]
         )
-        assert reptype == GateRep.QSIM_SUPEROPERATOR
+        assert reptype is QSimSuperoperatorGateRep
         assert np.shape(rep) == (4, 4)
 
     def test_no_valid_candidate_raises(self, pgm):
-        with pytest.raises(ValueError, match="Failed to create gate rep for any of"):
-            pgm._get_gate_rep("Gad", ["Q0"], [GateRep.UNITARY])
+        with pytest.raises(RepConstructionError, match="Failed to create gate rep for any of"):
+            pgm._get_gate_rep("Gad", ["Q0"], [UnitaryGateRep])
 
 
 class TestGetInstrumentRep:
@@ -197,18 +209,18 @@ class TestGetInstrumentRep:
 
     def test_zbasis_projection(self, pgm):
         rep, reptype = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [InstrumentRep.ZBASIS_PROJECTION]
+            "Iz", ["Q0"], [ZBasisProjectionInstrumentRep]
         )
-        assert reptype == InstrumentRep.ZBASIS_PROJECTION
+        assert reptype is ZBasisProjectionInstrumentRep
         reset, include_outcomes = rep
         assert reset == 0  # zbasis_proj_resets=True by default
         assert include_outcomes is True
 
     def test_zbasis_outcome_operation_dict(self, pgm):
         rep, reptype = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
-        assert reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT
+        assert reptype is ZBasisOutcomeOperationDictInstrumentRep
         outcome_dict, include_outcomes = rep
         assert include_outcomes is True
         assert set(outcome_dict.keys()) == {(0,), (1,)}
@@ -219,9 +231,9 @@ class TestGetInstrumentRep:
         # ZBASIS_OUTCOME_OPERATION_DICT, so this exercises the same
         # "no candidate worked" final-failure path as the gate-rep case.
         with pytest.raises(
-            ValueError, match="Failed to create instrument rep for any of"
+            RepConstructionError, match="Failed to create instrument rep for any of"
         ):
-            pgm._get_instrument_rep("Iz", ["Q0"], [InstrumentRep.STIM_CIRCUIT_STR])
+            pgm._get_instrument_rep("Iz", ["Q0"], [StimCircuitInstrumentRep])
 
 
 class TestTimeDependence:
@@ -327,8 +339,8 @@ class TestTimeDependence:
         )
         pgm.get_reps(
             circuit,
-            [GateRep.UNITARY, GateRep.QSIM_SUPEROPERATOR],
-            [InstrumentRep.ZBASIS_PROJECTION],
+            [UnitaryGateRep, QSimSuperoperatorGateRep],
+            [ZBasisProjectionInstrumentRep],
         )
 
         # Gxpi (5) and Gad (2) can't share a layer (both act on Q0), and
@@ -369,15 +381,15 @@ class TestGetRepsErrorPaths:
         circuit = PyGSTiPhysicalCircuit([("Xpi", "Q0")], ["Q0"])
         with pytest.raises(NotImplementedError, match="G/I prefixes"):
             pgm.get_reps(
-                circuit, [GateRep.UNITARY], [InstrumentRep.ZBASIS_PROJECTION]
+                circuit, [UnitaryGateRep], [ZBasisProjectionInstrumentRep]
             )
 
     def test_gate_rep_unsupported_reptype_raises(self):
         pgm = PyGSTiNoiseModel(_build_explicit_model())
         with pytest.raises(
-            ValueError, match="Failed to create gate rep for any of"
+            RepConstructionError, match="Failed to create gate rep for any of"
         ):
-            pgm._get_gate_rep("Gxpi", ["Q0"], [GateRep.STIM_CIRCUIT_STR])
+            pgm._get_gate_rep("Gxpi", ["Q0"], [StimCircuitGateRep])
 
     def test_gate_rep_qsim_superoperator_more_than_2_qubits_raises(self):
         model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1", "Q2"]), basis="pp")
@@ -386,10 +398,10 @@ class TestGetRepsErrorPaths:
         )
         pgm = PyGSTiNoiseModel(model)
         with pytest.raises(
-            ValueError, match="Failed to create gate rep for any of"
+            RepConstructionError, match="Failed to create gate rep for any of"
         ):
             pgm._get_gate_rep(
-                "Gccx", ["Q0", "Q1", "Q2"], [GateRep.QSIM_SUPEROPERATOR]
+                "Gccx", ["Q0", "Q1", "Q2"], [QSimSuperoperatorGateRep]
             )
 
     def test_kraus_operators_identity_branch(self):
@@ -409,8 +421,8 @@ class TestGetRepsErrorPaths:
         model.operations[Label("Gbf", "Q0")] = FullArbitraryOp(superop, basis="pp")
         pgm = PyGSTiNoiseModel(model)
 
-        rep, reptype = pgm._get_gate_rep("Gbf", ["Q0"], [GateRep.KRAUS_OPERATORS])
-        assert reptype == GateRep.KRAUS_OPERATORS
+        rep, reptype = pgm._get_gate_rep("Gbf", ["Q0"], [KrausGateRep])
+        assert reptype is KrausGateRep
         probs = sorted(prob for _, prob in rep)
         assert all(prob is not None for prob in probs)
         assert np.allclose(probs, [p, 1 - p])
@@ -426,7 +438,7 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(model)
 
         rep, reptype = pgm._get_instrument_rep(
-            "Izz", ["Q0", "Q1"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+            "Izz", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         outcome_dict, include_outcomes = rep
         assert include_outcomes is True
@@ -443,7 +455,7 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(model)
 
         rep, reptype = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         outcome_dict, include_outcomes = rep
         assert set(outcome_dict.keys()) == {(0,), (1,)}
@@ -455,10 +467,10 @@ class TestGetRepsErrorPaths:
         )
         pgm = PyGSTiNoiseModel(model)
         with pytest.raises(
-            ValueError, match="Failed to create instrument rep for any of"
+            RepConstructionError, match="Failed to create instrument rep for any of"
         ):
             pgm._get_instrument_rep(
-                "Iz", ["Q0"], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+                "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
             )
 
     def test_get_reps_time_dependence_with_outcome_operation_dict(self):
@@ -476,10 +488,10 @@ class TestGetRepsErrorPaths:
         )
         circuit = PyGSTiPhysicalCircuit([("Iz", "Q0")], ["Q0"])
         reps = pgm.get_reps(
-            circuit, [GateRep.UNITARY], [InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT]
+            circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         assert len(reps) == 1
-        assert reps[0].reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT
+        assert isinstance(reps[0], ZBasisOutcomeOperationDictInstrumentRep)
 
 
 class TestSerialization:
@@ -497,6 +509,6 @@ class TestSerialization:
         assert pgm2.gate_keys == pgm.gate_keys
         assert pgm2.instrument_keys == pgm.instrument_keys
 
-        rep, reptype = pgm2._get_gate_rep("Gxpi", ["Q0"], [GateRep.UNITARY])
-        assert reptype == GateRep.UNITARY
+        rep, reptype = pgm2._get_gate_rep("Gxpi", ["Q0"], [UnitaryGateRep])
+        assert reptype is UnitaryGateRep
         assert np.shape(rep) == (2, 2)

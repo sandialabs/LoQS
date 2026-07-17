@@ -24,14 +24,18 @@ import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.backends.model.basemodel import (
-    BaseNoiseModel,
-    GateRep,
-    InstrumentRep,
-)
+from loqs.backends.model.basemodel import BaseNoiseModel
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.backends.reps import RepTuple
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    PTMGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitGateRep,
+    UnitaryGateRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -953,8 +957,8 @@ def _create_adaptive_qec_instructions(instructions, qubits):
 def create_ideal_model(  # noqa: C901
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
-    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
+    gaterep: type[GateRep] = QSimSuperoperatorGateRep,
+    instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
 ):
     """Create an ideal (i.e. noiseless) model for the [[7,1,3]] code.
 
@@ -972,11 +976,11 @@ def create_ideal_model(  # noqa: C901
         Currently, only [](api:PyGSTiNoiseModel) is allowed.
         Default is [](api:PyGSTiNoiseModel).
 
-    gaterep : GateRep, optional
-        Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
+    gaterep : type[GateRep], optional
+        Gate representation class to use. Default is [](api:QSimSuperoperatorGateRep).
 
-    instrep : InstrumentRep, optional
-        Instrument representation to use. Default is InstrumentRep.ZBASIS_PROJECTION.
+    instrep : type[InstrumentRep], optional
+        Instrument representation class to use. Default is [](api:ZBasisProjectionInstrumentRep).
 
     Returns
     -------
@@ -1030,7 +1034,7 @@ def create_ideal_model(  # noqa: C901
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
     elif model_backend == DictNoiseModel:
         gate_dict = {}
-        if gaterep == GateRep.STIM_CIRCUIT_STR:
+        if gaterep is StimCircuitGateRep:
             name_to_stim_ops = {
                 "Gxpi": ["X"],
                 "Gypi": ["Y"],
@@ -1081,15 +1085,15 @@ def create_ideal_model(  # noqa: C901
                 num_qubits = int(np.log2(U.shape[0]))
                 qubit_perms = itertools.permutations(qubits, r=num_qubits)
                 for qs in qubit_perms:
-                    if gaterep == GateRep.UNITARY:
-                        gate_dict[(gate, qs)] = RepTuple(
-                            U, qs, GateRep.UNITARY
+                    if gaterep is UnitaryGateRep:
+                        gate_dict[(gate, qs)] = UnitaryGateRep(
+                            U, qs
                         )
-                    elif gaterep == GateRep.PTM:
+                    elif gaterep is PTMGateRep:
                         gate_dict[(gate, qs)] = (
                             pygsti.tools.unitary_to_pauligate(U)
                         )
-                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
+                    elif gaterep is QSimSuperoperatorGateRep:
                         import loqs.tools.pygstitools as pt
                         gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
                     else:

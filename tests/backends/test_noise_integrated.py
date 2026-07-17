@@ -15,7 +15,14 @@ pygsti = pytest.importorskip("pygsti")
 
 stim = pytest.importorskip("stim")
 
-from loqs.backends.reps import GateRep, InstrumentRep
+from loqs.backends.reps import (
+    GateRep,
+    KrausGateRep,
+    ProbabilisticStimGateRep,
+    QSimSuperoperatorGateRep,
+    StimCircuitGateRep,
+    ZBasisProjectionInstrumentRep,
+)
 from loqs.backends import ListPhysicalCircuit, DictNoiseModel
 from loqs.backends import QSimQuantumState as QSimState
 from loqs.backends import STIMQuantumState as STIMState
@@ -48,12 +55,12 @@ class TestIntegratedNoise:
         code_1Q = self._create_code(qubits)
 
         ## QUANTUMSIM
-        gate_dict, inst_dict = self._create_model_dicts(qubits, GateRep.QSIM_SUPEROPERATOR)
+        gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperoperatorGateRep)
         gate_dict[("Gi", ("Q0",))] = qsim_native_ptm # Depolarizing idle
         depol_noise_model = DictNoiseModel(
             (gate_dict, inst_dict),
-            gatereps=[GateRep.QSIM_SUPEROPERATOR],
-            instreps=[InstrumentRep.ZBASIS_PROJECTION]
+            gatereps=[QSimSuperoperatorGateRep],
+            instreps=[ZBasisProjectionInstrumentRep]
         )
 
         stack_Zbasis = [
@@ -98,14 +105,14 @@ class TestIntegratedNoise:
         assert abs(Counter(outs)[1] - 50) < 10
 
         ## STIM
-        gate_dict, inst_dict = self._create_model_dicts(qubits, GateRep.STIM_CIRCUIT_STR)
+        gate_dict, inst_dict = self._create_model_dicts(qubits, StimCircuitGateRep)
         # Note that for STIM, it expects the rate of each Pauli flipping,
         # which has a conversion factor of 3/4 (i.e. non-I Paulis/all Paulis)
         gate_dict[("Gi", ("Q0",))] = f"DEPOLARIZE1({3/4 * p_depol}) 0" # Depolarizing idle
         depol_noise_model_stim = DictNoiseModel(
             (gate_dict, inst_dict),
-            gatereps=[GateRep.STIM_CIRCUIT_STR],
-            instreps=[InstrumentRep.ZBASIS_PROJECTION]
+            gatereps=[StimCircuitGateRep],
+            instreps=[ZBasisProjectionInstrumentRep]
         )
 
         program_stim = QuantumProgram.from_quantum_program(
@@ -158,7 +165,7 @@ class TestIntegratedNoise:
         (0.15, 0.2, 20241104, 100, [15, 58, 91], True)
     ]
     @pytest.mark.parametrize("p_damp,p_dephase,seed,shots,expected0s,run_stim",amp_damp_dephase_tests)
-    @pytest.mark.parametrize("stim_rep",[GateRep.PROBABILISTIC_STIM_OPERATIONS])
+    @pytest.mark.parametrize("stim_rep",[ProbabilisticStimGateRep])
     def test_amp_damp_dephase(self, p_damp, p_dephase, seed, shots, expected0s, run_stim, stim_rep):
         # I will test on 3 qubits, with qubit 0 in |1> and qubit 2 in |+>
         # and qubit 1 being the one being damped/dephased
@@ -169,12 +176,12 @@ class TestIntegratedNoise:
 
         ## QUANTUMSIM 
         qsim_native_ptm = _ptm.amp_ph_damping_ptm(p_damp, p_dephase) # type: ignore
-        gate_dict, inst_dict = self._create_model_dicts(qubits, GateRep.QSIM_SUPEROPERATOR)
+        gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperoperatorGateRep)
         gate_dict[("Gi", ("Q1",))] = qsim_native_ptm # Amplitude damping/dephasing idle
         noise_model = DictNoiseModel(
             (gate_dict, inst_dict),
-            gatereps=[GateRep.QSIM_SUPEROPERATOR],
-            instreps=[InstrumentRep.ZBASIS_PROJECTION]
+            gatereps=[QSimSuperoperatorGateRep],
+            instreps=[ZBasisProjectionInstrumentRep]
         )
 
         stack_Zbasis = [
@@ -253,12 +260,12 @@ class TestIntegratedNoise:
         ## STIM
         kappa = 1 - (1-p_dephase)/(1-p_damp)
         pz = 0.5*(1-np.sqrt(1-kappa))
-        if stim_rep == GateRep.PROBABILISTIC_STIM_OPERATIONS:
+        if stim_rep is ProbabilisticStimGateRep:
             damp_rep = [
                 (f"Z_ERROR({pz}) 0", (1-p_damp)),
                 ("R 0", p_damp),
             ]
-        elif stim_rep == GateRep.KRAUS_OPERATORS:
+        elif stim_rep is KrausGateRep:
             # The Kraus operators for the asym dephasing/damping channel
             # See operators M in Stefan's Mathematica notebook
             damp_rep = [
@@ -273,12 +280,12 @@ class TestIntegratedNoise:
         else:
             raise ValueError(f"Invalid stim rep {stim_rep} for testing")
 
-        gate_dict, inst_dict = self._create_model_dicts(qubits, GateRep.STIM_CIRCUIT_STR)
+        gate_dict, inst_dict = self._create_model_dicts(qubits, StimCircuitGateRep)
         gate_dict[("Gi", ("Q1",))] = damp_rep
         noise_model_stim = DictNoiseModel(
             (gate_dict, inst_dict),
-            gatereps=[stim_rep, GateRep.STIM_CIRCUIT_STR],
-            instreps=[InstrumentRep.ZBASIS_PROJECTION]
+            gatereps=[stim_rep, StimCircuitGateRep],
+            instreps=[ZBasisProjectionInstrumentRep]
         )
         program_stim = QuantumProgram.from_quantum_program(
             program_qsim,
@@ -326,11 +333,11 @@ class TestIntegratedNoise:
         return QECCode(instructions, qubits, qubits)
 
     @staticmethod
-    def _create_model_dicts(qubits: list[str], gaterep: GateRep):
-        assert gaterep in [GateRep.QSIM_SUPEROPERATOR, GateRep.STIM_CIRCUIT_STR]
+    def _create_model_dicts(qubits: list[str], gaterep: type[GateRep]):
+        assert gaterep in [QSimSuperoperatorGateRep, StimCircuitGateRep]
 
         gate_dict = {}
-        if gaterep == GateRep.QSIM_SUPEROPERATOR:
+        if gaterep is QSimSuperoperatorGateRep:
             for q in qubits:
                 gate_dict[('Gi', (q,))] = np.eye(4)
                 gate_dict[('Gh', (q,))] = _ptm.hadamard_ptm() # type: ignore
