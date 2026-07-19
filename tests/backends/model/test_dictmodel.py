@@ -152,7 +152,7 @@ class TestGateDispatch:
             )
 
     def test_sequence_matching_no_gaterep_raises(self):
-        with pytest.raises(Exception, match="Could not match"):
+        with pytest.raises(Exception, match="does not match any known rep class"):
             DictNoiseModel(({("X", ("Q0",)): ("not", "a", "valid", "shape")}, {}))
 
 

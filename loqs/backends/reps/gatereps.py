@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import functools
+import itertools
 from types import NoneType
 import warnings
 
@@ -20,6 +22,8 @@ from loqs.backends.reps.base import (
     OperationRep,
     RepConstructionError,
     StimCircuitPayloadMixin,
+    _num_qubits,
+    _resolve_qubits,
 )
 from loqs.types import Float, NDArray
 
@@ -32,15 +36,16 @@ class GateRep(OperationRep):
 
     @classmethod
     def _from_decoded_attrs(cls, attr_dict):
-        # `GateRep` is only ever the *recorded* class for an old, pre-refactor
-        # `Enum`-member value (new code can never produce a serialized object
-        # whose recorded class is this literal abstract base, since only
-        # concrete leaf classes are instantiable). Seeing `class: "GateRep"`
-        # in a file unambiguously means this came from the old `Enum`, so we
-        # return a legacy tag instead of trying to instantiate the ABC. See
+        # `GateRep` is only ever the *recorded* class for a value serialized
+        # under the legacy `RepTuple` enum-based format (only concrete leaf
+        # classes are instantiable, so current code never produces a
+        # serialized object whose recorded class is this abstract base).
+        # Seeing `class: "GateRep"` in a file unambiguously identifies a
+        # legacy-format value, so we return a legacy tag instead of trying
+        # to instantiate the ABC. See
         # `loqs.backends.reps.legacy.RepTuple._from_decoded_attrs`, which
         # consumes this tag (alongside the paired `rep`/`qubits`) to build
-        # the correct new concrete class. Deferred import avoids a circular
+        # the correct concrete class. Deferred import avoids a circular
         # dependency, since `legacy.py` itself imports from this module.
         if cls is GateRep:
             from loqs.backends.reps.legacy import _LegacyGateRepValue
@@ -67,28 +72,45 @@ class UnitaryGateRep(GateRep):
         self.unitary = unitary
 
     @classmethod
-    def matches(cls, raw: object) -> bool:
-        """Check whether `raw` is a bare array.
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
+        """Check whether `raw` is a bare array shaped like a unitary.
 
-        Note that this structurally overlaps with [](api:PTMGateRep) and
-        [](api:QSimSuperoperatorGateRep): a bare array cannot be
-        unambiguously classified as a unitary, a Pauli-transfer matrix, or a
-        QuantumSim-basis superoperator by shape alone. Callers that need to
-        upgrade a bare array (e.g. [](api:DictNoiseModel)) resolve this
-        ambiguity by choosing one of these three classes explicitly, rather
-        than relying on `matches`/[](api:upgrade_gate_rep)'s generic search.
+        Without a known qubit count, this structurally overlaps with
+        [](api:PTMGateRep) and [](api:QSimSuperoperatorGateRep): a bare
+        array cannot be unambiguously classified as a unitary, a
+        Pauli-transfer matrix, or a QuantumSim-basis superoperator by shape
+        alone. When `qubits` *is* known (not `None`), the qubit count
+        resolves this decisively: a unitary on `n` qubits has shape
+        `(2**n, 2**n)`, while a PTM/QSim-superoperator has shape
+        `(4**n, 4**n)` -- these are disjoint for any `n`. Callers that
+        don't have a qubit count yet (e.g. [](api:DictNoiseModel)'s
+        name-only dict entries) resolve the remaining ambiguity by
+        choosing one of these three classes explicitly, rather than
+        relying on `matches`/[](api:convert)'s generic search.
         """
-        return isinstance(raw, np.ndarray)
+        if not isinstance(raw, np.ndarray):
+            return False
+        n = _num_qubits(qubits)
+        if n is None:
+            return True
+        return raw.shape == (2**n, 2**n)
 
     @classmethod
     def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+        **kwargs,
     ) -> "UnitaryGateRep":
-        if not cls.matches(raw):
+        if not cls.matches(raw, qubits):
             raise RepConstructionError(
                 f"{raw!r} is not a valid {cls.__name__} payload (expected a numpy array)"
             )
-        return cls(raw, qubits)
+        return cls(raw, _resolve_qubits(qubits))
 
 
 class PTMGateRep(GateRep):
@@ -109,24 +131,37 @@ class PTMGateRep(GateRep):
         self.ptm = ptm
 
     @classmethod
-    def matches(cls, raw: object) -> bool:
-        """Check whether `raw` is a bare array.
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
+        """Check whether `raw` is a bare array shaped like a process matrix.
 
         See [](api:UnitaryGateRep.matches) for why this structurally
-        overlaps with [](api:UnitaryGateRep) and
-        [](api:QSimSuperoperatorGateRep).
+        overlaps with [](api:UnitaryGateRep) (resolved decisively when
+        `qubits` is known) and [](api:QSimSuperoperatorGateRep) (not
+        resolved by shape at all -- both are `(4**n, 4**n)`).
         """
-        return isinstance(raw, np.ndarray)
+        if not isinstance(raw, np.ndarray):
+            return False
+        n = _num_qubits(qubits)
+        if n is None:
+            return True
+        return raw.shape == (4**n, 4**n)
 
     @classmethod
     def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+        **kwargs,
     ) -> "PTMGateRep":
-        if not cls.matches(raw):
+        if not cls.matches(raw, qubits):
             raise RepConstructionError(
                 f"{raw!r} is not a valid {cls.__name__} payload (expected a numpy array)"
             )
-        return cls(raw, qubits)
+        return cls(raw, _resolve_qubits(qubits))
 
 
 class QSimSuperoperatorGateRep(GateRep):
@@ -147,23 +182,37 @@ class QSimSuperoperatorGateRep(GateRep):
         self.superop = superop
 
     @classmethod
-    def matches(cls, raw: object) -> bool:
-        """Check whether `raw` is a bare array.
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
+        """Check whether `raw` is a bare array shaped like a process matrix.
 
         See [](api:UnitaryGateRep.matches) for why this structurally
-        overlaps with [](api:UnitaryGateRep) and [](api:PTMGateRep).
+        overlaps with [](api:UnitaryGateRep) (resolved decisively when
+        `qubits` is known) and [](api:PTMGateRep) (not resolved by shape
+        at all -- both are `(4**n, 4**n)`).
         """
-        return isinstance(raw, np.ndarray)
+        if not isinstance(raw, np.ndarray):
+            return False
+        n = _num_qubits(qubits)
+        if n is None:
+            return True
+        return raw.shape == (4**n, 4**n)
 
     @classmethod
     def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+        **kwargs,
     ) -> "QSimSuperoperatorGateRep":
-        if not cls.matches(raw):
+        if not cls.matches(raw, qubits):
             raise RepConstructionError(
                 f"{raw!r} is not a valid {cls.__name__} payload (expected a numpy array)"
             )
-        return cls(raw, qubits)
+        return cls(raw, _resolve_qubits(qubits))
 
 
 class StimCircuitGateRep(StimCircuitPayloadMixin, GateRep):
@@ -209,7 +258,11 @@ class ProbabilisticStimGateRep(GateRep):
         self.operations = tuple(tuple(el) for el in operations)  # type: ignore[misc]
 
     @classmethod
-    def matches(cls, raw: object) -> bool:
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
         """Check that `raw` is a nonempty sequence of `(str, float)` 2-tuples."""
         if not isinstance(raw, Sequence) or isinstance(raw, str):
             return False
@@ -228,14 +281,17 @@ class ProbabilisticStimGateRep(GateRep):
 
     @classmethod
     def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+        **kwargs,
     ) -> "ProbabilisticStimGateRep":
-        if not cls.matches(raw):
+        if not cls.matches(raw, qubits):
             raise RepConstructionError(
                 f"{raw!r} is not a valid {cls.__name__} payload (expected a nonempty "
                 "sequence of (str, float) pairs)"
             )
-        return cls(raw, qubits)  # type: ignore[arg-type]
+        return cls(raw, _resolve_qubits(qubits))  # type: ignore[arg-type]
 
 
 class KrausGateRep(GateRep):
@@ -305,14 +361,18 @@ class KrausGateRep(GateRep):
         self.kraus_operators = tuple(tuple(el) for el in kraus_operators)  # type: ignore[misc]
 
     @classmethod
-    def matches(cls, raw: object) -> bool:
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
         """Check that `raw` is a nonempty sequence of `(ndarray, float | None)` pairs.
 
         This is a purely structural check; it does not perform the
         trace-preservation check (see [](api:KrausGateRep.from_raw)), since
         `matches` may be called speculatively on candidates that ultimately
-        aren't selected (e.g. by [](api:upgrade_gate_rep)), and emitting a
-        warning for a rejected candidate would be misleading.
+        aren't selected (e.g. by [](api:convert)), and emitting a warning
+        for a rejected candidate would be misleading.
         """
         if not isinstance(raw, Sequence) or isinstance(raw, str):
             return False
@@ -333,7 +393,7 @@ class KrausGateRep(GateRep):
     def from_raw(
         cls,
         raw: object,
-        qubits: str | int | Sequence[str | int] = (),
+        qubits: str | int | Sequence[str | int] | None = None,
         tp_check_abstol: Float = TP_CHECK_TOL,
         **kwargs,
     ) -> "KrausGateRep":
@@ -345,7 +405,8 @@ class KrausGateRep(GateRep):
             A sequence of `(kraus_operator, probability)` pairs.
 
         qubits:
-            Qubit label(s) this operation acts upon.
+            Qubit label(s) this operation acts upon, or `None` if not yet
+            known.
 
         tp_check_abstol:
             Absolute tolerance for a trace-preservation check performed on
@@ -355,7 +416,7 @@ class KrausGateRep(GateRep):
             more than this tolerance. Set to `float("inf")` to skip the
             check.
         """
-        if not cls.matches(raw):
+        if not cls.matches(raw, qubits):
             raise RepConstructionError(
                 f"{raw!r} is not a valid {cls.__name__} payload (expected a nonempty "
                 "sequence of (ndarray, float | None) pairs)"
@@ -370,4 +431,234 @@ class KrausGateRep(GateRep):
                 warnings.warn(
                     'Supplied "Kraus operators" do not constitute a TP channel.'
                 )
-        return cls(raw, qubits)  # type: ignore[arg-type]
+        return cls(raw, _resolve_qubits(qubits))  # type: ignore[arg-type]
+
+    @classmethod
+    def from_pauli_stochastic(
+        cls,
+        rates: Sequence[Float],
+        qubits: str | int | Sequence[str | int],
+    ) -> "KrausGateRep":
+        """Construct a Pauli-stochastic [](api:KrausGateRep) from per-Pauli rates.
+
+        Parameters
+        ----------
+        rates:
+            The probability of each `n`-qubit Pauli string, in
+            `itertools.product("IXYZ", repeat=n)` order (`n` inferred from
+            `qubits`). Must be nonnegative and sum to 1.
+
+        qubits:
+            The targeted qubits.
+
+        Returns
+        -------
+        KrausGateRep
+            The Pauli-stochastic Kraus representation. Terms with
+            negligible probability (`< 1e-10`) are omitted.
+        """
+        normalized_qubits: tuple[str | int, ...] = (
+            (qubits,) if isinstance(qubits, (str, int)) else tuple(qubits)
+        )
+        n = len(normalized_qubits)
+        assert all(0 <= p <= 1 for p in rates)
+        assert np.isclose(sum(rates), 1)
+        assert len(rates) == 4**n
+
+        paulis_1q = {
+            "I": np.eye(2),
+            "X": np.array([[0, 1], [1, 0]]),
+            "Y": np.array([[0, -1j], [1j, 0]]),
+            "Z": np.array([[1, 0], [0, -1]]),
+        }
+
+        kraus_reps = []
+        for prob, pauli_str in zip(rates, itertools.product("IXYZ", repeat=n)):
+            if prob < 1e-10:
+                # Skip this term
+                continue
+            pauli_nq = functools.reduce(
+                np.kron, [paulis_1q[c] for c in pauli_str]
+            )
+            kraus_reps.append((np.sqrt(prob) * pauli_nq, prob))
+
+        return cls(kraus_reps, qubits)
+
+    @classmethod
+    def from_depolarizing(
+        cls, rate: Float, qubits: str | int | Sequence[str | int]
+    ) -> "KrausGateRep":
+        """Construct a depolarizing [](api:KrausGateRep).
+
+        A convenience wrapper around [](api:KrausGateRep.from_pauli_stochastic).
+
+        Parameters
+        ----------
+        rate:
+            The depolarizing rate.
+
+        qubits:
+            The targeted qubits.
+
+        Returns
+        -------
+        KrausGateRep
+            The depolarizing Kraus representation.
+        """
+        normalized_qubits: tuple[str | int, ...] = (
+            (qubits,) if isinstance(qubits, (str, int)) else tuple(qubits)
+        )
+        n = 4 ** len(normalized_qubits)
+        return cls.from_pauli_stochastic(
+            [1 - (n - 1) / n * rate] + [rate / n] * (n - 1), qubits
+        )
+
+    @classmethod
+    def from_amplitude_damping(
+        cls, prob: Float, qubit: str | int
+    ) -> "KrausGateRep":
+        """Construct a single-qubit amplitude-damping [](api:KrausGateRep).
+
+        Parameters
+        ----------
+        prob:
+            Probability of damping.
+
+        qubit:
+            The targeted qubit.
+
+        Returns
+        -------
+        KrausGateRep
+            The amplitude-damping Kraus representation.
+        """
+        assert 0 <= prob <= 1
+        a0 = np.array([[1, 0], [0, np.sqrt(1 - prob)]])
+        a1 = np.array([[0, np.sqrt(prob)], [0, 0]])
+        return cls([(a0, None), (a1, None)], [qubit])
+
+    def compose(self, other: "GateRep", dedup: bool = True) -> "KrausGateRep":
+        r"""Compose this Kraus channel with another, applied afterward.
+
+        Essentially foils the two channels' Kraus operators out:
+
+        .. math:
+
+            M_{i,j} = \sum_i \sum_j c_i c_j K_i L_j
+
+        where `K` are `self`'s Kraus operators, `L` are `other`'s, and `M`
+        is the combined output channel (applying `self` first, then
+        `other`).
+
+        Parameters
+        ----------
+        other:
+            The [](api:KrausGateRep) or [](api:UnitaryGateRep) to apply
+            after `self`. Must act on the same `qubits`.
+
+        dedup:
+            Whether (`True`, default) or not to deduplicate the output
+            Kraus channel via [](api:KrausGateRep.dedup) (falling back to
+            the undeduplicated result if deduplication isn't possible,
+            e.g. for non-unital operators with no fixed probabilities).
+
+        Returns
+        -------
+        KrausGateRep
+            The composed channel.
+        """
+        if not isinstance(other, (KrausGateRep, UnitaryGateRep)):
+            raise TypeError(
+                f"Cannot compose {type(self).__name__} with "
+                f"{type(other).__name__}; expected a KrausGateRep or "
+                "UnitaryGateRep"
+            )
+        assert self.qubits == other.qubits
+
+        def _as_kraus_ops(rep):
+            if isinstance(rep, UnitaryGateRep):
+                return [(rep.unitary, 1.0)]
+            return list(rep.kraus_operators)
+
+        self_ops = _as_kraus_ops(self)
+        other_ops = _as_kraus_ops(other)
+
+        # Foil out the terms; probabilities multiply, if available.
+        new_kraus_reps = []
+        for self_k in self_ops:
+            for other_k in other_ops:
+                new_k = other_k[0] @ self_k[0]
+                try:
+                    new_prob = self_k[1] * other_k[1]
+                except TypeError:
+                    # One was None, we can't compute the probability
+                    new_prob = None
+                new_kraus_reps.append((new_k, new_prob))
+
+        composed = KrausGateRep(new_kraus_reps, self.qubits)
+        if not dedup:
+            return composed
+        try:
+            return composed.dedup()
+        except ValueError:
+            # Failed to dedup, just return undeduped version
+            return composed
+
+    def dedup(self) -> "KrausGateRep":
+        """Deduplicate this [](api:KrausGateRep).
+
+        Normalizes all the Kraus operators and checks for any duplicates
+        (the same operator up to phase). If duplicates are found, the
+        entries are consolidated into a single Kraus operator with the
+        combined magnitude of all duplicates.
+
+        Returns
+        -------
+        KrausGateRep
+            The deduplicated Kraus representation.
+
+        Raises
+        ------
+        ValueError
+            If any Kraus operator has no fixed probability (`None`) --
+            deduplicating non-unital operators without known probabilities
+            isn't currently supported.
+        """
+        kraus_ops = list(self.kraus_operators)
+
+        # Need to think about how to dedup non-unitaries with no fixed probabilities
+        if not all(k[1] is not None for k in kraus_ops):
+            raise ValueError(
+                "Cannot deduplicate non-unital Kraus operators currently"
+            )
+
+        n = len(self.qubits)
+        # This will be a list of [normalized K, total summed probability]
+        # entries. Unnormalized non-unital Kraus operators without a
+        # state-independent probability would need a third column here;
+        # for unital operators (the only case handled currently, per the
+        # check above), the magnitude and the probability coincide.
+        normalized_kraus_ops: list[list] = []
+
+        def _dedup_one(krep):
+            k_normed = krep[0] / np.sqrt(krep[1])
+            for entry in normalized_kraus_ops:
+                # Check the same up to phase
+                if np.isclose(np.abs(np.vdot(k_normed, entry[0])), 2**n):
+                    # Same as an existing (normalized) Kraus matrix --
+                    # update its accumulated probability instead of adding
+                    # a new entry.
+                    entry[1] += krep[1]
+                    return
+            normalized_kraus_ops.append([k_normed, krep[1]])
+
+        for krep in kraus_ops:
+            _dedup_one(krep)
+
+        # Unnormalize the resulting unique Kraus matrices
+        deduped_kraus_reps = [
+            (entry[0] * np.sqrt(entry[1]), entry[1])
+            for entry in normalized_kraus_ops
+        ]
+
+        return KrausGateRep(deduped_kraus_reps, self.qubits)

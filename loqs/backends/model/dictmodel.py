@@ -36,8 +36,7 @@ from loqs.backends.reps import (
     ZBasisOutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
-    upgrade_gate_rep,
-    upgrade_instrument_rep,
+    convert as convert_rep,
 )
 from loqs.backends.reps.legacy import (
     upgrade_legacy_gaterep_tag,
@@ -187,9 +186,11 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 ), f"Provided {gr} but not provided gatereps"
                 return gr
             if isinstance(gr, np.ndarray):
-                # matrix for dense rep
-                return gaterep_array_cast_rep(gr, qubits)
-            return upgrade_gate_rep(gr, qubits, _NON_ARRAY_GATEREPS)
+                # matrix for dense rep -- constructed directly rather than
+                # via `from_raw`, so `None` (unknown qubits) needs
+                # resolving to the empty tuple here explicitly.
+                return gaterep_array_cast_rep(gr, () if qubits is None else qubits)
+            return convert_rep(gr, _NON_ARRAY_GATEREPS, qubits)
 
         def convert_to_instrumentrep(ir, qubits) -> InstrumentRep:
             if isinstance(ir, InstrumentRep):
@@ -198,7 +199,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 ), f"Provided {ir} but reptype not in instreps"
                 return ir
             if isinstance(ir, (tuple, list)) and len(ir) == 2 and not (
-                ZBasisProjectionInstrumentRep.matches(ir)
+                ZBasisProjectionInstrumentRep.matches(ir, qubits)
             ):
                 assert ZBasisPrePostInstrumentRep in instreps, (
                     "Detected two ops for a pre/post operation instrument, but "
@@ -209,15 +210,15 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                     "Detected dict for a outcome-operation instrument, but "
                     + "ZBasisOutcomeOperationDictInstrumentRep not passed as a valid instrument rep"
                 )
-            return upgrade_instrument_rep(
+            return convert_rep(
                 ir,
-                qubits,
                 (
                     StimCircuitInstrumentRep,
                     ZBasisProjectionInstrumentRep,
                     ZBasisPrePostInstrumentRep,
                     ZBasisOutcomeOperationDictInstrumentRep,
                 ),
+                qubits,
                 reset=instrep_cast_reset,
                 include_outcome=instrep_cast_include_outcomes,
                 gate_upgrader=convert_to_gaterep,
@@ -225,12 +226,12 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
         # Run through gates and upgrade everything to GateReps
         for k, gr in gate_dict.items():
-            qubits = tuple() if isinstance(k, str) else k[1]
+            qubits = None if isinstance(k, str) else k[1]
             gate_dict[k] = convert_to_gaterep(gr, qubits)
 
         # Run through instrument dict and upgrade everything to InstrumentReps
         for k, ir in inst_dict.items():
-            qubits = tuple() if isinstance(k, str) else k[1]
+            qubits = None if isinstance(k, str) else k[1]
             inst_dict[k] = convert_to_instrumentrep(ir, qubits)
 
         self.gate_dict: dict[MemberLabel, GateRep] = gate_dict

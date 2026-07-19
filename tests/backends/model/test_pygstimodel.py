@@ -29,6 +29,13 @@ from loqs.backends.reps import (
     ZBasisProjectionInstrumentRep,
 )
 
+try:
+    import stim  # noqa: F401
+
+    NO_STIM = False
+except ImportError:
+    NO_STIM = True
+
 # TP-preserving (sum_i K_i K_i^dagger = I) amplitude-damping Kraus operators
 # -- a genuinely non-unitary channel, used to exercise the GateRep fallback
 # loop (UnitaryGateRep fails for it; PTMGateRep/QSimSuperoperatorGateRep/
@@ -385,11 +392,29 @@ class TestGetRepsErrorPaths:
             )
 
     def test_gate_rep_unsupported_reptype_raises(self):
+        """`Gad` (amplitude damping) is not unitary, so it can never reach
+        `StimCircuitGateRep` regardless of whether `stim` is installed --
+        unlike `Gxpi` (see `test_clifford_gate_reaches_stim_circuit_gaterep`
+        below), which is reachable since it's exactly Clifford (trivially
+        so, in this fixture, since it's actually the identity -- see
+        `_build_explicit_model`)."""
         pgm = PyGSTiNoiseModel(_build_explicit_model())
         with pytest.raises(
             RepConstructionError, match="Failed to create gate rep for any of"
         ):
-            pgm._get_gate_rep("Gxpi", ["Q0"], [StimCircuitGateRep])
+            pgm._get_gate_rep("Gad", ["Q0"], [StimCircuitGateRep])
+
+    @pytest.mark.skipif(NO_STIM, reason="stim is not installed")
+    def test_clifford_gate_reaches_stim_circuit_gaterep(self):
+        """Any exactly-Clifford gate -- including `Gxpi`, which in this
+        fixture's `_build_explicit_model` is actually the identity
+        superoperator -- is reachable via `PTMGateRep -> UnitaryGateRep ->
+        StimCircuitGateRep`, since a `UnitaryGateRep <-> StimCircuitGateRep`
+        conversion edge exists whenever `stim` is installed."""
+        pgm = PyGSTiNoiseModel(_build_explicit_model())
+        rep, reptype = pgm._get_gate_rep("Gxpi", ["Q0"], [StimCircuitGateRep])
+        assert reptype is StimCircuitGateRep
+        assert isinstance(rep, str)
 
     def test_gate_rep_qsim_superoperator_more_than_2_qubits_raises(self):
         model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1", "Q2"]), basis="pp")

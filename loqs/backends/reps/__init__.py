@@ -19,9 +19,12 @@ each concrete subclass (e.g. [](api:UnitaryGateRep),
 descriptive, named payload field(s) rather than a single untyped `rep`
 attribute paired with an enum tag.
 
-[](api:upgrade_gate_rep)/[](api:upgrade_instrument_rep) convert a raw,
-pre-refactor-style payload (e.g. a bare `numpy.ndarray` or `str`) into the
-appropriate concrete class, given a list of candidate classes to try.
+[](api:convert) converts a raw, unwrapped payload or an
+already-constructed [](api:OperationRep) into a requested target class (or
+the closest of several candidate classes), via `matches`/`from_raw` and/or
+a shortest-path search over a registry of pairwise numeric/structural
+converters between concrete classes (e.g. [](api:UnitaryGateRep) to
+[](api:PTMGateRep) to [](api:KrausGateRep)).
 
 [](api:RepTuple) is retained only so that `.json`/`.h5` files serialized
 before this class hierarchy existed continue to load correctly; it cannot
@@ -32,6 +35,12 @@ shared by [](api:StimCircuitGateRep) and [](api:StimCircuitInstrumentRep),
 which otherwise sit in unrelated branches of the [](api:GateRep)/
 [](api:InstrumentRep) hierarchy but wrap the exact same STIM
 circuit-string payload shape.
+
+[](api:STANDARD_GATE_UNITARIES) is a small, fixed set of well-known
+single/two-qubit gate unitaries (used internally to build the N-qubit
+Pauli basis the pure-numpy `GateRep` conversions are built on), exposed
+publicly so other callers needing common gate matrices don't need a
+second hand-copied set.
 """
 
 from loqs.backends.reps.base import (
@@ -57,7 +66,7 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
-from loqs.backends.reps.construction import upgrade_gate_rep, upgrade_instrument_rep
+from loqs.backends.reps.conversion import STANDARD_GATE_UNITARIES, convert
 from loqs.backends.reps.legacy import RepTuple
 
 __all__ = [
@@ -78,7 +87,7 @@ __all__ = [
     "ZBasisPrePostInstrumentRep",
     "ZBasisOutcomeOperationDictInstrumentRep",
     "StimCircuitInstrumentRep",
-    "upgrade_gate_rep",
-    "upgrade_instrument_rep",
+    "STANDARD_GATE_UNITARIES",
+    "convert",
     "RepTuple",
 ]

@@ -11,8 +11,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import functools
-import itertools
 import warnings
 import numpy as np
 from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
@@ -30,13 +28,14 @@ from loqs.backends.reps import (
     UnitaryGateRep,
     ZBasisOutcomeOperationDictInstrumentRep,
     ZBasisProjectionInstrumentRep,
+    convert as convert_rep,
 )
 from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
-    from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
+    from pygsti.baseobjs import TensorProdBasis
     from pygsti.baseobjs.label import (
         Label,
         LabelStr,
@@ -47,10 +46,9 @@ if TYPE_CHECKING:
     from pygsti.modelmembers.modelmember import ModelMember
     from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
-    from pygsti.tools import basistools as bt, superop_to_unitary
 else:
     # Runtime imports - these will be attempted only when needed
-    from pygsti.baseobjs import TensorProdBasis, ExplicitBasis
+    from pygsti.baseobjs import TensorProdBasis
     from pygsti.baseobjs.label import (
         Label,
         LabelStr,
@@ -61,46 +59,10 @@ else:
     from pygsti.modelmembers.modelmember import ModelMember
     from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
-    from pygsti.tools import basistools as bt, superop_to_unitary
 
 
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
-
-def compute_qsim_bases(num_qubits: int) -> ExplicitBasis:
-    """Compute QuantumSim bases.
-
-    Parameters
-    ----------
-    num_qubits:
-        Number of qubits in the state space
-
-    Returns
-    -------
-    ExplicitBasis
-        PyGSTi object containing the QuantumSim basis
-    """
-    # Prep QuantumSim bases
-    sig0q = np.array([[1.0, 0], [0, 0]], dtype="complex")
-    sigXq = np.array([[0, 1], [1, 0]], dtype="complex") / np.sqrt(2)
-    sigYq = np.array([[0, -1], [1, 0]], dtype="complex") * 1.0j / np.sqrt(2.0)
-    sig1q = np.array([[0, 0], [0, 1]], dtype="complex")
-
-    qbasis_prod = itertools.product(
-        [sig0q, sigXq, sigYq, sig1q], repeat=num_qubits
-    )
-    qbasis = [functools.reduce(np.kron, x) for x in qbasis_prod]
-
-    return ExplicitBasis(
-        qbasis,  # type: ignore
-        ["myEl%d" % i for i in range(4**num_qubits)],
-        name=f"qsim_{num_qubits}q",
-        longname=f"QuantumSim_{num_qubits}qubit",
-    )
-
-
-PYGSTI_QSIM_BASES = {nq: compute_qsim_bases(nq) for nq in [1, 2]}
-"""Precomputed 1- and 2-qubit basis for QSim PTMs"""
 
 PyGSTiModelCastableTypes: TypeAlias = (
     ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
@@ -663,7 +625,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 self.add_layer_duration_to_current_time()
         return reps
 
-    def _get_gate_rep(self, name, qubits, gatereps):  # noqa: C901
+    def _get_gate_rep(self, name, qubits, gatereps):
         op_key = (name,) + tuple(qubits)
         # Check cache
         for gaterep in gatereps:
@@ -672,7 +634,6 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         # Look up using unaliased qubits
         op = self.gate_dict[op_key]
-        basis = self.model.basis
 
         if op_key not in self._dense_embedding_checked_gate_keys:
             _check_op_for_dense_embedding_blowup(op, op_key)
@@ -683,106 +644,45 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             op.set_time(self.current_time)
 
         if self.use_embedded_op and isinstance(op, EmbeddedOp):
-            # Pull out the relevant part of the tensor prod basis
+            # Pull out the relevant part of the tensor prod basis. (The
+            # extracted `basis` isn't used below -- `op.to_dense` already
+            # returns a PTM in this per-gate basis regardless -- but the
+            # assertions here are still worth keeping as a sanity check on
+            # `self.model.basis`'s shape.)
             assert isinstance(self.model.basis, TensorProdBasis)
             assert op.target_labels is not None
             target_indices = [
                 op.state_space.qubit_labels.index(q) for q in op.target_labels
             ]
-            target_bases = [
-                self.model.basis.component_bases[i] for i in target_indices
-            ]
-            basis = TensorProdBasis(target_bases)
+            assert all(
+                i < len(self.model.basis.component_bases) for i in target_indices
+            )
 
             op = op.embedded_op
 
-        rep = None
+        # Compute the PTM once (verified to already be in the standard
+        # Pauli ("pp") basis that `loqs.backends.reps.convert`'s pure-numpy
+        # machinery assumes, for both the embedded-op case above and the
+        # non-embedded case), then let `convert` handle everything else.
+        ptm_rep = PTMGateRep(op.to_dense(on_space="HilbertSchmidt"), qubits)
 
-        def _get_rep(gaterep):
-            if gaterep is UnitaryGateRep:
-                try:
-                    rep = op.to_dense(on_space="Hilbert")
-                except ValueError:
-                    # Failed, could be because we have the densitymx evotype
-                    # Try to manually convert down to unitary
-                    try:
-                        rep = superop_to_unitary(op.to_dense())
-
-                    except (ValueError, IndexError) as e:
-                        raise RepConstructionError(
-                            "Failed to cast gate as a unitary. Consider "
-                            + "using process matrices instead. PyGSTi error: "
-                            + str(e),
-                        ) from e
-            elif gaterep is KrausGateRep:
-                try:
-                    # We'll upcast to DenseOperator to get access to the kraus property
-                    # TODO for pygsti: This should probably be moved to optools instead of DenseOperator
-                    dense_op = DenseOperator(
-                        op.to_dense(), basis, self.model.evotype
-                    )
-                    Ks = dense_op.kraus_operators
-
-                    rep = []
-                    # Pre-compute probabilities (if unitary)
-                    for K in Ks:
-                        KKdag = K @ K.conjugate().T
-                        prob = KKdag[0, 0]
-                        if np.all(
-                            np.isclose(KKdag / prob, np.eye(KKdag.shape[0]))
-                        ):
-                            # This was the identity when we pulled the probability out
-                            assert np.isreal(prob)
-                            rep.append((K, abs(prob.real)))
-                        else:
-                            # Not the identity, so store None (signal states to compute on the fly)
-                            rep.append((K, None))
-                except (ValueError, AttributeError, ZeroDivisionError) as e:
-                    raise RepConstructionError(
-                        "Failed to cast gate as Kraus operators. Consider "
-                        + "using process matrices instead."
-                    ) from e
-            elif gaterep is PTMGateRep:
-                rep = op.to_dense(on_space="HilbertSchmidt")
-            elif gaterep is QSimSuperoperatorGateRep:
-                rep = op.to_dense(on_space="HilbertSchmidt")
-
-                if len(qubits) in [1, 2]:
-                    rep = bt.change_basis(
-                        rep, basis, PYGSTI_QSIM_BASES[len(qubits)]
-                    )
-                else:
-                    raise RepConstructionError(
-                        "Cannot change more than a 2 qubit operation into",
-                        " the QuantumSim basis",
-                    )
-            else:
-                raise RepConstructionError(f"Cannot create gate rep for {gaterep}")
-
-            return rep
-
-        repidx = 0
         errors = []
-        while repidx < len(gatereps):
+        for gaterep in gatereps:
             try:
-                rep = _get_rep(gatereps[repidx])
-                break
+                result = convert_rep(ptm_rep, gaterep)
             except RepConstructionError as e:
-                # Try next one
-                repidx += 1
-
                 errors.append(e)
+                continue
 
-        if repidx == len(gatereps):
-            raise RepConstructionError(
-                f"Failed to create gate rep for any of {gatereps}, with errors:"
-                + "\n".join([str(e) for e in errors])
-            )
+            rep = getattr(result, result._SERIALIZE_ATTRS[0])
+            if not self.use_time_dependence:
+                self._gate_rep_cache[op_key, gaterep] = rep
+            return rep, gaterep
 
-        if not self.use_time_dependence:
-            self._gate_rep_cache[op_key, gatereps[repidx]] = rep
-
-        return rep, gatereps[repidx]
+        raise RepConstructionError(
+            f"Failed to create gate rep for any of {gatereps}, with errors:"
+            + "\n".join([str(e) for e in errors])
+        )
 
     def _get_instrument_rep(self, name, qubits, instreps):
         inst_key = (name,) + tuple(qubits)

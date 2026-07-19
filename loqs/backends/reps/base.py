@@ -18,17 +18,46 @@ from typing import ClassVar
 from loqs.internal import Displayable
 
 
+def _num_qubits(
+    qubits: str | int | Sequence[str | int] | None,
+) -> int | None:
+    """Normalize a `qubits` hint to a qubit count, or `None` if unknown.
+
+    A bare `str`/`int` counts as a single qubit; any other sequence counts
+    as its length; `None` (meaning the qubit labels aren't known) passes
+    through unchanged.
+    """
+    if qubits is None:
+        return None
+    if isinstance(qubits, (str, int)):
+        return 1
+    return len(qubits)
+
+
+def _resolve_qubits(
+    qubits: str | int | Sequence[str | int] | None,
+) -> str | int | Sequence[str | int]:
+    """Resolve a `qubits` hint to a concrete value for [](api:OperationRep.__init__).
+
+    `None` (meaning the qubit labels aren't known) resolves to the empty
+    tuple, [](api:OperationRep.__init__)'s own value for "no qubits
+    attached yet"; any other value passes through unchanged.
+    """
+    return () if qubits is None else qubits
+
+
 class RepConstructionError(Exception):
     """Raised when a raw value cannot be converted into an [](api:OperationRep) subclass.
 
     This is raised by a concrete [](api:OperationRep) subclass's `from_raw`
-    classmethod (and by [](api:upgrade_gate_rep)/[](api:upgrade_instrument_rep),
-    which call it) whenever a given raw value cannot be interpreted as that
-    class's expected payload shape. Catching this exception (rather than a
-    bare `ValueError`) around code that tries several candidate rep classes
-    in sequence ensures that a genuine bug inside a conversion routine
-    propagates instead of being silently treated as "this value doesn't
-    match this rep type."
+    classmethod (and by [](api:convert), which calls it, as well as the
+    pairwise numeric/structural converters `convert` dispatches to)
+    whenever a given raw value or existing representation cannot be
+    interpreted as/converted to a requested target's expected shape.
+    Catching this exception (rather than a bare `ValueError`) around code
+    that tries several candidate rep classes in sequence ensures that a
+    genuine bug inside a conversion routine propagates instead of being
+    silently treated as "this value doesn't match this rep type."
     """
 
 
@@ -38,10 +67,10 @@ class OperationRep(ABC, Displayable):
     An [](api:OperationRep) describes both the qubits an operation acts on and,
     via its concrete subclass, exactly how the operation itself is represented
     (e.g. as a unitary matrix, a STIM circuit string, a set of Kraus operators,
-    etc.). The concrete subclass's identity carries the "tag" that used to be
-    a separate `reptype` enum value: instead of a single untyped `rep` payload
-    field paired with an enum tag, each concrete subclass exposes descriptive,
-    named fields for exactly the data it needs.
+    etc.). The concrete subclass's identity itself serves as the
+    representation's type tag: each concrete subclass exposes descriptive,
+    named fields for exactly the data it needs, rather than a single
+    untyped `rep` payload field paired with a separate tag.
     """
 
     qubits: tuple[str | int, ...]
@@ -66,18 +95,33 @@ class OperationRep(ABC, Displayable):
 
     @classmethod
     @abstractmethod
-    def matches(cls, raw: object) -> bool:
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
         """Check whether `raw` structurally matches this class's expected payload.
 
-        `raw` is a "pre-refactor-style" value, e.g. a bare `numpy.ndarray`,
-        `str`, or `Sequence`/`Mapping`, of the kind users have always been
-        able to pass directly (without explicitly constructing an
-        [](api:OperationRep) subclass) to e.g. [](api:DictNoiseModel).
+        `raw` is a bare, unwrapped value, e.g. a `numpy.ndarray`, `str`, or
+        `Sequence`/`Mapping`, of the kind that can be passed directly
+        (without explicitly constructing an [](api:OperationRep) subclass)
+        to e.g. [](api:DictNoiseModel).
 
         Parameters
         ----------
         raw:
-            The raw, pre-refactor-style value to check.
+            The raw, unwrapped value to check.
+
+        qubits:
+            Qubit label(s) this operation would act upon, if known, or
+            `None` (the default) if not. Some subclasses (e.g.
+            [](api:UnitaryGateRep) vs.
+            [](api:PTMGateRep)/[](api:QSimSuperoperatorGateRep)) use the
+            qubit *count* to disambiguate an otherwise shape-ambiguous
+            `raw` array; when `qubits` is `None` -- e.g. for a name-only
+            dict entry not yet bound to specific qubits -- that
+            disambiguation is skipped and the check falls back to
+            whatever it can determine from `raw` alone.
 
         Returns
         -------
@@ -89,20 +133,27 @@ class OperationRep(ABC, Displayable):
     @classmethod
     @abstractmethod
     def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+        **kwargs,
     ) -> "OperationRep":
-        """Construct an instance of this class from a raw, pre-refactor-style payload.
+        """Construct an instance of this class from a raw, unwrapped payload.
 
-        Implementations should assume `matches(raw)` is `True`; if it is not,
-        implementations should raise [](api:RepConstructionError).
+        Implementations should assume `matches(raw, qubits)` is `True`; if
+        it is not, implementations should raise
+        [](api:RepConstructionError).
 
         Parameters
         ----------
         raw:
-            The raw, pre-refactor-style value to convert.
+            The raw, unwrapped value to convert.
 
         qubits:
-            Qubit label(s) this operation acts upon.
+            Qubit label(s) this operation acts upon, or `None` if not yet
+            known -- the constructed instance's own `qubits` attribute is
+            then left as the empty tuple, to be filled in later via
+            [](api:OperationRep.with_qubits).
 
         **kwargs:
             Additional class-specific construction parameters. Most concrete
@@ -198,18 +249,25 @@ class StimCircuitPayloadMixin:
         self.circuit_str = circuit_str
 
     @classmethod
-    def matches(cls, raw: object) -> bool:
+    def matches(
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+    ) -> bool:
         return isinstance(raw, str)
 
     @classmethod
     def from_raw(
-        cls, raw: object, qubits: str | int | Sequence[str | int] = (), **kwargs
+        cls,
+        raw: object,
+        qubits: str | int | Sequence[str | int] | None = None,
+        **kwargs,
     ) -> "StimCircuitPayloadMixin":
         if not cls.matches(raw):
             raise RepConstructionError(
                 f"{raw!r} is not a valid {cls.__name__} payload (expected a str)"
             )
-        return cls(raw, qubits)  # type: ignore[call-arg]
+        return cls(raw, _resolve_qubits(qubits))  # type: ignore[call-arg]
 
 
 def is_rep_compatible(

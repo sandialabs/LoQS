@@ -18,17 +18,18 @@ stim = pytest.importorskip("stim")
 from loqs.backends.reps import (
     GateRep,
     KrausGateRep,
+    PTMGateRep,
     ProbabilisticStimGateRep,
     QSimSuperoperatorGateRep,
     StimCircuitGateRep,
     ZBasisProjectionInstrumentRep,
+    convert as convert_rep,
 )
 from loqs.backends import ListPhysicalCircuit, DictNoiseModel
 from loqs.backends import QSimQuantumState as QSimState
 from loqs.backends import STIMQuantumState as STIMState
 from loqs.core import QuantumProgram, QECCode
 from loqs.core.instructions import builders
-from loqs.tools import pygstitools as pt
 
 
 class TestIntegratedNoise:
@@ -45,7 +46,7 @@ class TestIntegratedNoise:
         ])
 
         # Get it in the QuantumSim basis
-        qsim_ptm = pt.ptm_to_qsim_ptm(ptm)
+        qsim_ptm = convert_rep(PTMGateRep(ptm, ["Q0"]), QSimSuperoperatorGateRep).superop
 
         # Also create one from QuantumSim tools, and check they are the same
         qsim_native_ptm = _ptm.dephasing_ptm(p_depol, p_depol, p_depol) # type: ignore

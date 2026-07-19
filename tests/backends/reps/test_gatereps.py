@@ -156,7 +156,7 @@ class TestKrausGateRep:
         """`matches` is a pure structural check with no side effects --
         the TP-preservation warning only fires from `from_raw`, since
         `matches` may be called speculatively on candidates that
-        ultimately aren't selected (e.g. by `upgrade_gate_rep`)."""
+        ultimately aren't selected (e.g. by `convert`)."""
         assert KrausGateRep.matches(((_NON_TP_K, None),)) is True
         assert len(recwarn) == 0
 
@@ -186,3 +186,209 @@ class TestKrausGateRep:
         rep = KrausGateRep([[_TP_K0, None], [_TP_K1, None]], ("Q0",))
         assert isinstance(rep.kraus_operators, tuple)
         assert all(isinstance(k, tuple) for k in rep.kraus_operators)
+
+
+class TestKrausGateRepFromPauliStochastic:
+    def test_depolarizing_via_pauli_stochastic_1q(self):
+        p = 0.1
+        rep = KrausGateRep.from_pauli_stochastic(
+            [1 - 3 * p / 4, p / 4, p / 4, p / 4], ["Q0"]
+        )
+        from loqs.backends.reps.conversion import _kraus_to_ptm
+
+        ptm = _kraus_to_ptm(rep).ptm
+        expected = np.diag([1, 1 - p, 1 - p, 1 - p])
+        assert np.allclose(ptm, expected, atol=1e-10)
+
+    def test_2q_pauli_stochastic_matches_diagonal_ptm(self):
+        rng = np.random.default_rng(0)
+        non_i_rates = rng.random(15) * 0.05
+        rates = [1 - sum(non_i_rates)] + list(non_i_rates)
+        rep = KrausGateRep.from_pauli_stochastic(rates, ["Q0", "Q1"])
+
+        from loqs.backends.reps.conversion import _kraus_to_ptm
+
+        ptm = _kraus_to_ptm(rep).ptm
+        assert np.allclose(ptm, np.diag(np.diag(ptm)), atol=1e-10)
+        assert np.allclose(np.diag(ptm).real, rep_diag_from_rates(rates), atol=1e-8)
+
+    def test_negligible_terms_are_omitted(self):
+        rates = [1.0, 0.0, 0.0, 0.0]
+        rep = KrausGateRep.from_pauli_stochastic(rates, ["Q0"])
+        assert len(rep.kraus_operators) == 1
+
+
+def rep_diag_from_rates(rates):
+    """Cross-check helper: PTM diagonal (Pauli eigenvalues) for a Pauli-
+    stochastic channel, computed directly from the Kraus/PTM machinery
+    rather than the deleted Walsh-Hadamard-transform shortcut."""
+    from loqs.backends.reps.conversion import _kraus_to_ptm
+
+    rep = KrausGateRep.from_pauli_stochastic(rates, ["Q0", "Q1"])
+    return np.diag(_kraus_to_ptm(rep).ptm).real
+
+
+class TestKrausGateRepFromDepolarizing:
+    def test_matches_from_pauli_stochastic(self):
+        p = 0.1
+        via_depolarizing = KrausGateRep.from_depolarizing(p, ["Q0"])
+        via_pauli_stochastic = KrausGateRep.from_pauli_stochastic(
+            [1 - 3 * p / 4, p / 4, p / 4, p / 4], ["Q0"]
+        )
+        assert len(via_depolarizing.kraus_operators) == len(
+            via_pauli_stochastic.kraus_operators
+        )
+        for (k1, p1), (k2, p2) in zip(
+            via_depolarizing.kraus_operators, via_pauli_stochastic.kraus_operators
+        ):
+            assert np.allclose(k1, k2)
+            assert np.isclose(p1, p2)
+
+
+class TestKrausGateRepFromAmplitudeDamping:
+    def test_two_kraus_operators(self):
+        rep = KrausGateRep.from_amplitude_damping(0.4, "Q0")
+        assert len(rep.kraus_operators) == 2
+        assert rep.qubits == ("Q0",)
+
+    def test_action_matches_hand_built_channel(self):
+        gamma = 0.4
+        rep = KrausGateRep.from_amplitude_damping(gamma, "Q0")
+        a0 = np.array([[1, 0], [0, np.sqrt(1 - gamma)]])
+        a1 = np.array([[0, np.sqrt(gamma)], [0, 0]])
+        (k0, _), (k1, _) = rep.kraus_operators
+        assert np.allclose(k0, a0)
+        assert np.allclose(k1, a1)
+
+
+class TestKrausGateRepDedup:
+    def _assert_kraus_reps_equal(self, expected: KrausGateRep, actual: KrausGateRep):
+        assert isinstance(actual, KrausGateRep)
+        assert expected.qubits == actual.qubits
+        assert len(expected.kraus_operators) == len(actual.kraus_operators)
+        for (ek, ep), (ak, ap) in zip(
+            expected.kraus_operators, actual.kraus_operators
+        ):
+            assert np.allclose(ek, ak)
+            assert np.allclose(ep, ap)
+
+    def test_dedup_simple_duplicate(self):
+        rep = KrausGateRep(
+            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * np.eye(2), 0.4)], [0]
+        )
+        expected = KrausGateRep([(np.eye(2), 1.0)], [0])
+        self._assert_kraus_reps_equal(expected, rep.dedup())
+
+    def test_dedup_more_complicated_mix(self):
+        rep = KrausGateRep(
+            [
+                (np.sqrt(0.4) * np.eye(2), 0.4),
+                (np.sqrt(0.3) * np.eye(2), 0.3),
+                (np.sqrt(0.1) * np.eye(2), 0.1),
+                (np.sqrt(0.1) * np.array([[0, 1], [1, 0]]), 0.1),
+                (np.sqrt(0.05) * np.array([[0, 1], [1, 0]]), 0.05),
+                (np.sqrt(0.05) * np.array([[1, 0], [0, -1]]), 0.05),
+            ],
+            [0],
+        )
+        expected = KrausGateRep(
+            [
+                (np.sqrt(0.8) * np.eye(2), 0.8),
+                (np.sqrt(0.15) * np.array([[0, 1], [1, 0]]), 0.15),
+                (np.sqrt(0.05) * np.array([[1, 0], [0, -1]]), 0.05),
+            ],
+            [0],
+        )
+        self._assert_kraus_reps_equal(expected, rep.dedup())
+
+    def test_dedup_raises_for_non_unital_operators(self):
+        with pytest.raises(ValueError):
+            KrausGateRep([(np.eye(2), None)], [0]).dedup()
+
+
+class TestKrausGateRepCompose:
+    def _assert_kraus_reps_equal(self, expected: KrausGateRep, actual: KrausGateRep):
+        assert isinstance(actual, KrausGateRep)
+        assert expected.qubits == actual.qubits
+        assert len(expected.kraus_operators) == len(actual.kraus_operators)
+        for (ek, ep), (ak, ap) in zip(
+            expected.kraus_operators, actual.kraus_operators
+        ):
+            assert np.allclose(ek, ak)
+            assert np.allclose(ep, ap)
+
+    def test_compose_with_unitary_gaterep(self):
+        X = np.array([[0, 1], [1, 0]])
+        Z = np.array([[1, 0], [0, -1]])
+        rep1 = KrausGateRep([(Z, 1.0)], [0])
+        rep2 = UnitaryGateRep(X, [0])
+
+        # Z applied first, then X: X @ Z
+        expected = KrausGateRep([(X @ Z, 1.0)], [0])
+        self._assert_kraus_reps_equal(expected, rep1.compose(rep2))
+
+    def test_compose_two_kraus_reps(self):
+        X = np.array([[0, 1], [1, 0]])
+        Z = np.array([[1, 0], [0, -1]])
+        rep1 = KrausGateRep([(Z, 1.0)], [0])
+        rep2 = KrausGateRep(
+            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * X, 0.4)], [0]
+        )
+
+        # Z o ([I,X]) = [Z, ZX] -> applied Z first, then [I,X]
+        expected = KrausGateRep(
+            [
+                (np.sqrt(0.6) * Z, 0.6),
+                (np.sqrt(0.4) * (X @ Z), 0.4),
+            ],
+            [0],
+        )
+        self._assert_kraus_reps_equal(expected, rep1.compose(rep2))
+
+    def test_compose_without_dedup(self):
+        X = np.array([[0, 1], [1, 0]])
+        rep1 = KrausGateRep(
+            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * X, 0.4)], [0]
+        )
+        rep2 = KrausGateRep(
+            [(np.sqrt(0.3) * X, 0.3), (np.sqrt(0.7) * np.eye(2), 0.7)], [0]
+        )
+
+        result = rep1.compose(rep2, dedup=False)
+        expected = KrausGateRep(
+            [
+                (np.sqrt(0.6 * 0.3) * X, 0.6 * 0.3),
+                (np.sqrt(0.6 * 0.7) * np.eye(2), 0.6 * 0.7),
+                (np.sqrt(0.4 * 0.3) * np.eye(2), 0.4 * 0.3),
+                (np.sqrt(0.4 * 0.7) * X, 0.4 * 0.7),
+            ],
+            [0],
+        )
+        self._assert_kraus_reps_equal(expected, result)
+
+    def test_compose_with_dedup(self):
+        X = np.array([[0, 1], [1, 0]])
+        rep1 = KrausGateRep(
+            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * X, 0.4)], [0]
+        )
+        rep2 = KrausGateRep(
+            [(np.sqrt(0.3) * X, 0.3), (np.sqrt(0.7) * np.eye(2), 0.7)], [0]
+        )
+
+        result = rep1.compose(rep2, dedup=True)
+        expected = KrausGateRep(
+            [
+                (np.sqrt(0.6 * 0.3 + 0.4 * 0.7) * X, 0.6 * 0.3 + 0.4 * 0.7),
+                (
+                    np.sqrt(0.6 * 0.7 + 0.4 * 0.3) * np.eye(2),
+                    0.6 * 0.7 + 0.4 * 0.3,
+                ),
+            ],
+            [0],
+        )
+        self._assert_kraus_reps_equal(expected, result)
+
+    def test_compose_rejects_non_gaterep_argument(self):
+        rep1 = KrausGateRep([(np.eye(2), 1.0)], [0])
+        with pytest.raises(TypeError):
+            rep1.compose(PTMGateRep(np.eye(4), [0]))
