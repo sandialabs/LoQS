@@ -23,7 +23,6 @@ from loqs.backends.reps import (
     InstrumentRep,
     KrausGateRep,
     OperationRep,
-    RepConstructionError,
     UnitaryGateRep,
     ZBasisOutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
@@ -84,22 +83,20 @@ benchmarking. Amplitudes may differ from "matmul" at machine precision
 
 def _single_dense_operator(rep: GateRep) -> NDArray:
     """Extract the single dense `(2**n, 2**n)` operator underlying `rep`,
-    regardless of its concrete `GateRep` representation. Goes through
-    `KrausGateRep` rather than `convert(rep, UnitaryGateRep)`, since the
-    latter also requires the operator to be literally unitary.
+    regardless of its concrete `GateRep` representation. Passes
+    `unitarity_check_abstol=None` to skip `convert`'s literal-unitarity
+    check, since `rep` may be a projector-like operator (e.g. a
+    `ZBasisOutcomeOperationDictInstrumentRep` outcome operator) rather
+    than an actually-unitary one; the "exactly one dense term" structural
+    check still applies.
 
     Raises
     ------
     RepConstructionError
-        If `rep` isn't exactly one Kraus term.
+        If `rep` doesn't correspond to a single dense operator.
     """
-    kraus_rep = convert_rep(rep, KrausGateRep)
-    if len(kraus_rep.kraus_operators) != 1:
-        raise RepConstructionError(
-            f"{rep!r} does not correspond to a single dense operator "
-            f"(found {len(kraus_rep.kraus_operators)} Kraus terms)"
-        )
-    return kraus_rep.kraus_operators[0][0]
+    unitary_rep = convert_rep(rep, UnitaryGateRep, unitarity_check_abstol=None)
+    return unitary_rep.unitary
 
 
 class NumpyStatevectorQuantumState(BaseQuantumState):

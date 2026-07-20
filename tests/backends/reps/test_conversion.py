@@ -284,6 +284,20 @@ class TestPTMToUnitary:
         with pytest.raises(RepConstructionError):
             _ptm_to_unitary(ptm_rep)
 
+    def test_unitarity_check_abstol_none_skips_check_but_not_structural_one(self):
+        """`unitarity_check_abstol=None` accepts a single non-unitary Choi
+        term, but the "exactly one term" structural check still applies."""
+        ptm_rep = _kraus_to_ptm(
+            KrausGateRep(_amplitude_damping_kraus_ops(0.4), ("Q0",))
+        )
+        with pytest.raises(RepConstructionError):
+            _ptm_to_unitary(ptm_rep, unitarity_check_abstol=None)
+
+        non_unitary = np.array([[1, 0], [0, 0]], dtype=complex)
+        ptm_rep = _unitary_to_ptm(UnitaryGateRep(non_unitary, ("Q0",)))
+        result = _ptm_to_unitary(ptm_rep, unitarity_check_abstol=None)
+        assert isinstance(result, UnitaryGateRep)
+
 
 class TestKrausToUnitary:
     def test_succeeds_for_single_unitary_operator(self):
@@ -302,6 +316,18 @@ class TestKrausToUnitary:
         rep = KrausGateRep([(np.eye(2) * 0.5, 0.25)], ("Q0",))
         with pytest.raises(RepConstructionError):
             _kraus_to_unitary(rep)
+
+    def test_unitarity_check_abstol_none_skips_check(self):
+        non_unitary = np.eye(2) * 0.5
+        rep = KrausGateRep([(non_unitary, 0.25)], ("Q0",), tp_check_abstol=None)
+        result = _kraus_to_unitary(rep, unitarity_check_abstol=None)
+        assert isinstance(result, UnitaryGateRep)
+        assert np.array_equal(result.unitary, non_unitary)
+
+    def test_unitarity_check_abstol_none_still_requires_single_operator(self):
+        rep = KrausGateRep(_depolarizing_kraus_ops(0.3), ("Q0",))
+        with pytest.raises(RepConstructionError):
+            _kraus_to_unitary(rep, unitarity_check_abstol=None)
 
 
 class TestPTMQSimSuperoperatorRoundTrip:
@@ -823,6 +849,22 @@ class TestConvert:
             tp_check_abstol=None,
         )
         assert isinstance(result, KrausGateRep)
+
+    def test_kwargs_forwarded_to_hop_converters(self):
+        """`unitarity_check_abstol=None` reaches `_kraus_to_unitary` even
+        when hopping from an already-constructed `KrausGateRep` instance,
+        not just when constructing directly from a raw payload."""
+        from loqs.backends.reps.conversion import convert
+
+        non_unitary = np.eye(2) * 0.5
+        rep = KrausGateRep([(non_unitary, 1.0)], ("Q0",), tp_check_abstol=None)
+
+        with pytest.raises(RepConstructionError):
+            convert(rep, UnitaryGateRep)
+
+        result = convert(rep, UnitaryGateRep, unitarity_check_abstol=None)
+        assert isinstance(result, UnitaryGateRep)
+        assert np.array_equal(result.unitary, non_unitary)
 
     def test_raw_str_direct_match_to_stim_instrument_rep(self):
         from loqs.backends.reps.conversion import convert

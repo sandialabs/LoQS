@@ -34,7 +34,7 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
-from loqs.types import NDArray
+from loqs.types import Float, NDArray
 
 # `stim` is an optional dependency (soft-dependency idiom already used by
 # `stimcircuit.py`/`stimstate.py`) -- the `UnitaryGateRep <-> StimCircuitGateRep`
@@ -277,13 +277,19 @@ def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
     return KrausGateRep(kraus_reps, rep.qubits, tp_check_abstol=None)
 
 
-def _ptm_to_unitary(rep: PTMGateRep) -> UnitaryGateRep:
-    """Extract a unitary from a PTM, only if the channel is actually unitary.
+def _ptm_to_unitary(
+    rep: PTMGateRep, unitarity_check_abstol: Float | None = _UNITARY_CHECK_TOL
+) -> UnitaryGateRep:
+    """Extract a unitary from a PTM.
 
     A channel's Pauli-basis PTM has exactly one Kraus term (via
     `_choi_kraus_operators`) if and only if the channel is unitary -- e.g.
     Pauli gates and CNOT are unitary and produce exactly one term, while
     depolarizing noise and amplitude damping are not and produce more.
+    This structural check always applies; `unitarity_check_abstol` only
+    controls whether that single term is also required to be *literally*
+    unitary (`None` skips it, e.g. for a projector-like operator that's
+    only known to be the map's sole significant term).
     """
     n = len(rep.qubits)
     kraus_ops = _choi_kraus_operators(rep.ptm, n)
@@ -295,7 +301,9 @@ def _ptm_to_unitary(rep: PTMGateRep) -> UnitaryGateRep:
         )
     U = kraus_ops[0]
     d = 2**n
-    if not np.allclose(U.conj().T @ U, np.eye(d), atol=_UNITARY_CHECK_TOL):
+    if unitarity_check_abstol is not None and not np.allclose(
+        U.conj().T @ U, np.eye(d), atol=unitarity_check_abstol
+    ):
         raise RepConstructionError(
             "PTM's single Kraus term is not unitary; cannot convert to "
             "UnitaryGateRep"
@@ -303,16 +311,19 @@ def _ptm_to_unitary(rep: PTMGateRep) -> UnitaryGateRep:
     return UnitaryGateRep(U, rep.qubits)
 
 
-def _kraus_to_unitary(rep: KrausGateRep) -> UnitaryGateRep:
-    """Only succeeds for a single, exactly-unitary Kraus operator."""
+def _kraus_to_unitary(
+    rep: KrausGateRep, unitarity_check_abstol: Float | None = _UNITARY_CHECK_TOL
+) -> UnitaryGateRep:
+    """Only succeeds for a single Kraus operator; see `_ptm_to_unitary` for
+    `unitarity_check_abstol`."""
     if len(rep.kraus_operators) != 1:
         raise RepConstructionError(
             f"KrausGateRep has {len(rep.kraus_operators)} Kraus operators, "
             "not a single unitary one; cannot convert to UnitaryGateRep"
         )
     K = np.asarray(rep.kraus_operators[0][0], dtype=complex)
-    if not np.allclose(
-        K.conj().T @ K, np.eye(K.shape[0]), atol=_UNITARY_CHECK_TOL
+    if unitarity_check_abstol is not None and not np.allclose(
+        K.conj().T @ K, np.eye(K.shape[0]), atol=unitarity_check_abstol
     ):
         raise RepConstructionError(
             "KrausGateRep's single operator is not unitary; cannot convert "
@@ -760,11 +771,11 @@ resolve a raw payload's starting class when it doesn't directly match any
 of the requested targets (see `convert`'s docstring)."""
 
 
-def _accepted_kwargs(cls: type[OperationRep], kwargs: dict) -> dict:
-    """Filter `kwargs` down to what `cls.__init__` accepts by name, so
-    `convert` can forward the same `**kwargs` to every candidate class
-    without knowing which class-specific ones each accepts."""
-    params = inspect.signature(cls.__init__).parameters
+def _accepted_kwargs(func: Callable, kwargs: dict) -> dict:
+    """Filter `kwargs` down to what `func` accepts by name, so `convert`
+    can forward the same `**kwargs` to every candidate class/converter
+    without knowing which ones each accepts."""
+    params = inspect.signature(func).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
         return kwargs
     return {k: v for k, v in kwargs.items() if k in params}
@@ -784,7 +795,7 @@ def _try_construct(
     if inspect.isabstract(cls):
         return None
     try:
-        return cls(source, qubits=qubits, **_accepted_kwargs(cls, kwargs))
+        return cls(source, qubits=qubits, **_accepted_kwargs(cls.__init__, kwargs))
     except (RepConstructionError, TypeError):
         return None
 
@@ -818,8 +829,10 @@ def convert(
         Qubit label(s) this operation acts upon, if known, else `None`.
 
     **kwargs:
-        Forwarded to whichever candidate class's constructor accepts
-        them (e.g. [](api:KrausGateRep)'s `tp_check_abstol`).
+        Forwarded to whichever candidate class's constructor accepts them
+        (e.g. [](api:KrausGateRep)'s `tp_check_abstol`), and to each
+        pairwise converter used along a hop path that accepts them (e.g.
+        `_ptm_to_unitary`/`_kraus_to_unitary`'s `unitarity_check_abstol`).
 
     Returns
     -------
@@ -891,5 +904,5 @@ def convert(
     result = source_rep
     for step_cls in best_path[1:]:
         converter = _CONVERTERS[(type(result), step_cls)]
-        result = converter(result)
+        result = converter(result, **_accepted_kwargs(converter, kwargs))
     return result
