@@ -73,10 +73,7 @@ docs = [
 quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]
 pymatching = ["pymatching>=2"]
-stim = [
-    "stim>=1.6",
-    "pymatching>=2"
-]
+stim = ["stim>=1.6"]
 test = [
     "loqs[dev]",
     "mock>=5",

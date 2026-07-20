@@ -160,22 +160,22 @@ class TestNumPyStatevectorQuantumState:
         assert np.allclose(outcomes1, outcomes2)
 
         # Let's try to pass in some unsupported reps
-        with pytest.raises(ValueError):
+        with pytest.raises(NotImplementedError):
             test.apply_reps([
                 PTMGateRep(None, "Q0")
             ])
         
-        with pytest.raises(ValueError):
+        with pytest.raises(NotImplementedError):
             test.apply_reps([
                 StimCircuitGateRep(None, "Q0")
             ])
 
-        with pytest.raises(ValueError):
+        with pytest.raises(NotImplementedError):
             test.apply_reps([
                 QSimSuperoperatorGateRep(None, "Q0")
             ])
 
-        with pytest.raises(ValueError):
+        with pytest.raises(NotImplementedError):
             test.apply_reps([
                 ProbabilisticStimGateRep([("X 0", 1.0)], "Q0")
             ])

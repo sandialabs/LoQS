@@ -255,7 +255,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @singledispatchmethod
     def _apply_gate_rep(self, rep: GateRep) -> None:
-        raise ValueError(f"Cannot apply {type(rep).__name__} to {self.name}")
+        raise NotImplementedError(f"Cannot apply {type(rep).__name__} to {self.name}")
 
     @_apply_gate_rep.register
     def _(self, rep: UnitaryGateRep) -> None:
