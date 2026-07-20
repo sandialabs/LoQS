@@ -124,31 +124,34 @@ program = QuantumProgram(
 
 We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 100 times by specifying `num_shots=100` to the `run()` function.
 
+`run()` returns a [](api:ProgramResults) object, so we need to capture that return value to look at what happened during execution.
+
 ```{code-cell} ipython3
 # And now we can run it for real!
-program.run(num_shots=100)
+results = program.run(num_shots=100)
 ```
 
-The individual `History` objects are now available in `program.shot_histories` member variable.
+The individual `History` objects are now available in the `results.shot_histories` member variable, a `dict` keyed by (non-negative) shot index -- so unlike a `list`, negative indices like `-1` aren't supported.
 
 For example, we could print out the `History` corresponding to the last shot just to get a sense for what this object looks like.
 
 ```{code-cell} ipython3
 :tags: [scroll-output]
 
-print(program.shot_histories[-1])
+last_shot = max(results.shot_histories)
+print(results.shot_histories[last_shot])
 ```
 
 This is a bit unwieldy to parse all the text, so we can instead ask ``LoQS`` to display the object in an interactive viewer.
 
 ```{code-cell} ipython3
-program.shot_histories[-1].display()
+results.shot_histories[last_shot].display()
 ```
 
 While this is handy for looking at the details of a specific shot, we are often more interested in some collective result.
 In this case, we may be interested in the `"logical_measurement"` element of the final `Frame`.
 
-We can collect these using the `collect_shot_data()` function, where we specify a `Frame` key and a set of indices into the `History` for which frames to target (in this case, we are only interested in the final frame so use `-1`.)
+We can collect these using the `collect_shot_data()` function on our `results`, where we specify a `Frame` key and a set of indices into the `History` for which frames to target (in this case, we are only interested in the final frame so use `-1`.)
 
 This will return a list of 100 entries (one per shot), so we instead use a `Counter` collection to look at how many of these are 0 or 1.
 
@@ -158,7 +161,7 @@ from collections import Counter
 # collect_shot_data lets us pull out keys from the histories of every shot
 # In this case, we pull logical_measurement from the last frame (-1) of each shot
 # We pass it into Counter to get more convenient 0/1 counts
-Counter(program.collect_shot_data("logical_measurement", -1))
+Counter(results.collect_shot_data("logical_measurement", -1))
 
 # Because we prepped logical minus and did a logical X measurement, we expect to get all 1s here
 ```
@@ -186,9 +189,9 @@ stack = [
 # We want to use the same program settings, just swap out the stack and name
 program2 = QuantumProgram.from_quantum_program(program, stack, name="Prep 0, measure Z")
 
-program2.run(num_shots=100)
+results2 = program2.run(num_shots=100)
 
-Counter(program2.collect_shot_data("logical_measurement", -1))
+Counter(results2.collect_shot_data("logical_measurement", -1))
 ```
 
 ## Seeding RNG for Undeterminate Measurement Outcomes
@@ -211,9 +214,9 @@ stack = [
 # This one will be non-determinate outcome. Let's seed the RNG
 program3 = QuantumProgram.from_quantum_program(program, stack, default_base_seed=20240702, name="Prep -, measure Z")
 
-program3.run(num_shots=1000) # Let's also collect more statistics!
+results3 = program3.run(num_shots=1000) # Let's also collect more statistics!
 
-Counter(program3.collect_shot_data("logical_measurement", -1))
+Counter(results3.collect_shot_data("logical_measurement", -1))
 ```
 
 And now we create a copy of this program (i.e. it has the same base seed since we are not updating it) to demonstrate that we get the exact same counts out.
@@ -222,12 +225,12 @@ And now we create a copy of this program (i.e. it has the same base seed since w
 # And now we can show that it's deterministic counts with the same RNG seed
 program4 = QuantumProgram.from_quantum_program(program3, name="Prep -, measure Z... again")
 
-program4.run(num_shots=1000) # Let's also collect more statistics!
+results4 = program4.run(num_shots=1000) # Let's also collect more statistics!
 
-Counter(program4.collect_shot_data("logical_measurement", -1))
+Counter(results4.collect_shot_data("logical_measurement", -1))
 ```
 
-## Saving a QuantumProgram
+## Saving a QuantumProgram and its ProgramResults
 
 Any object that is derived from `loqs.internal.Serializable` can be easily serialized with the following API:
 
@@ -237,6 +240,8 @@ Any object that is derived from `loqs.internal.Serializable` can be easily seria
 - `write`: Similar to `dump`, but it takes a filename/path instead. This is likely to be the most commonly used serialization function.
 
 Deserialization is just as simple, and follows a similar API with reverse functions: `from_serialization` creates the object from a JSON-able dict, `loads` creates the object from the string version of the dict, `load` creates the object from a file pointer, and `read` creates the object from a filename/path.
+
+Note that a `QuantumProgram` and its [](api:ProgramResults) (the object returned by `run()`) are serialized independently of one another: a `QuantumProgram` only stores the *definition* of the program (its instruction stack, noise model, RNG seed, etc.), not any shot data, while a `ProgramResults` only stores the shot histories (plus a reference back to the program that produced them). So if you want to persist both the program and its results, you need to save both objects.
 
 ```{code-cell} ipython3
 # Note that this can take some time (~10 seconds)
@@ -248,38 +253,54 @@ program4.write('test.json')
 program5 = QuantumProgram.read('test.json')
 ```
 
+Because `program4` was created with a fixed `default_base_seed`, re-running the deserialized `program5` reproduces exactly the same shot outcomes, demonstrating that the program definition round-tripped correctly through serialization.
+
 ```{code-cell} ipython3
-# And we still have all our shot histories
-Counter(program5.collect_shot_data("logical_measurement", -1))
+results5 = program5.run(num_shots=1000)
+
+# Same counts as results4 above, since program5 has the same instruction stack, noise model, and RNG seed
+Counter(results5.collect_shot_data("logical_measurement", -1))
+```
+
+If instead you want to persist the *results* themselves (so you don't have to re-run the program to get the same shot data back), serialize the `ProgramResults` object directly.
+
+```{code-cell} ipython3
+results4.write('test-results.json')
+```
+
+```{code-cell} ipython3
+from loqs.core import ProgramResults
+
+reloaded_results4 = ProgramResults.read('test-results.json')
+
+# And we still have all our original shot histories, with no need to re-run anything
+Counter(reloaded_results4.collect_shot_data("logical_measurement", -1))
 ```
 
 ## Checkpointing QuantumProgram execution
 
-Now that we have serialization working, we can also easily checkpoint the execution of a ``QuantumProgram``. We can do this by passing in a ``checkpoint_dir`` kwarg.
+We can also checkpoint the execution of a `QuantumProgram` as it runs, writing completed shots to disk in batches. This is done by passing `checkpoint_batch_size` (how many shots to accumulate before writing a checkpoint file) and `checkpoint_dir` (where to write them) to `run()`.
 
-Note that enabling checkpointing will add some file I/O overhead to every shot. For the small jobs being run here, it is noticeable; for larger jobs where you would like to checkpoint, it should be less of a factor.
+Note that enabling checkpointing will add some file I/O overhead to every checkpointed batch. For the small jobs being run here, it is noticeable; for larger jobs where you would like to checkpoint, it should be less of a factor.
 
 ```{code-cell} ipython3
 program6 = QuantumProgram.from_quantum_program(program3, name="Prep -, measure Z... again")
 
-# Let's use a checkpoint directory and Ctrl-C this partway through
-program6.run(num_shots=1000, checkpoint_dir="test-checkpoint", override_checkpoints=True)
+# Checkpoint every 100 shots to the given directory
+results6 = program6.run(num_shots=1000, checkpoint_batch_size=100, checkpoint_dir="test-checkpoint")
 ```
 
-We can now load the program using the ``QuantumProgram.from_checkpoint_dir`` class function. Checking the number of shot histories, we should have as many as was completed before we interrupted the program above.
+If a run is interrupted partway through (e.g. a crash, or a manual `Ctrl-C`), the shots that were already checkpointed to disk are not lost. We can recover them by constructing a fresh `ProgramResults` and pointing `load_checkpoint()` at the checkpoint directory.
 
 ```{code-cell} ipython3
-program7 = QuantumProgram.from_checkpoint_dir('test-checkpoint')
+recovered_results6 = ProgramResults()
+recovered_results6.load_checkpoint(checkpoint_dir="test-checkpoint")
+
+len(recovered_results6.shot_histories)
 ```
 
-```{code-cell} ipython3
-len(program7.shot_histories)
-```
-
-And because our ``num_shots`` argument to ``QuantumProgram.run`` is the total number of shots, we can rerun the same command to finish off the job.
-
-```{code-cell} ipython3
-program7.run(num_shots=1000)
+```{note}
+Unlike the old (pre-`ProgramResults`) checkpointing API, `run()` currently always starts a fresh set of shots from 0 rather than resuming a previous, interrupted run -- there is currently no built-in way to feed `recovered_results6` back into a new `run()` call to "finish off" an interrupted job. Checkpointing today is primarily useful for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`/`load_checkpoint`). If you need true resume-and-continue support, please file a LoQS issue requesting it.
 ```
 
 ```{code-cell} ipython3

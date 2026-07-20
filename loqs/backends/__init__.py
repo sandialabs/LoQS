@@ -1,5 +1,5 @@
 #####################################################################################################################
-# Logical Qubit Simulator (LoQS) v. 1.1                                                                             #
+# Logical Qubit Simulator (LoQS) v. 1.1.1                                                                           #
 # Copyright 2026 National Technology & Engineering Solutions of Sandia, LLC (NTESS).                                #
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights in this software. #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except                  #
@@ -127,6 +127,26 @@ def __getattr__(name: str) -> Any:
             from .model.pygstimodel import PyGSTiNoiseModel
 
             return PyGSTiNoiseModel
+        else:
+            raise ImportError(
+                f"PyGSTi model backend is not available. "
+                f"Error: {get_backend_error('pygsti_model')}"
+            )
+    elif name == "safe_time_dependent_evotype":
+        if is_backend_available("pygsti_model"):
+            from .model.pygstimodel import safe_time_dependent_evotype
+
+            return safe_time_dependent_evotype
+        else:
+            raise ImportError(
+                f"PyGSTi model backend is not available. "
+                f"Error: {get_backend_error('pygsti_model')}"
+            )
+    elif name == "PyGSTiEmbeddedOpMemoryWarning":
+        if is_backend_available("pygsti_model"):
+            from .model.pygstimodel import PyGSTiEmbeddedOpMemoryWarning
+
+            return PyGSTiEmbeddedOpMemoryWarning
         else:
             raise ImportError(
                 f"PyGSTi model backend is not available. "

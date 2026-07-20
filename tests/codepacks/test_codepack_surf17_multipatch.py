@@ -24,7 +24,11 @@ from loqs.codepacks import codepack_surf17_multipatch as multipatch
 from loqs.tools import fttools
 
 NUM_STIM_SHOTS = 100
-NUM_KRAUS_SHOTS = 4
+# The dense-statevector smoke test below is fully deterministic (Zero/Plus
+# Prep product state, noiseless model), so a single shot is sufficient; the
+# dense backend is expensive enough that repeated shots would only add cost
+# without adding coverage.
+NUM_KRAUS_SHOTS = 1
 
 
 def layout_qubits(layout: str, suffix: str = "") -> list[str]:
@@ -59,16 +63,17 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
 
 
 class TestTwoPatchFoundations:
-    """Phase A: namespaced syndrome histories + reference rounds."""
+    """Phase A: per-patch tracked syndrome histories + reference rounds."""
 
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
     def test_two_patch_independence(self, layout):
         """Two patches with different prep bases decode independently.
 
-        L0 preps |0> and measures Z; L1 preps |+> and measures X. With the
-        old global syndrome-history keys, L1's decode would have seen L0's
-        (random, wrong-basis) syndromes and vice versa, giving nondeterministic
-        outcomes. With per-patch keys both are deterministic 0.
+        L0 preps |0> and measures Z; L1 preps |+> and measures X. With a
+        single global syndrome-history store shared across patches, L1's
+        decode would have seen L0's (random, wrong-basis) syndromes and vice
+        versa, giving nondeterministic outcomes. With syndrome history
+        tracked on each patch's own `.data`, both are deterministic 0.
         """
         q0 = layout_qubits(layout, "_0")
         q1 = layout_qubits(layout, "_1")
@@ -97,17 +102,19 @@ class TestTwoPatchFoundations:
             # [L0 outcome, L1 outcome]
             assert shot_outcomes == [0, 0]
 
-        # Namespaced histories exist per patch and hold one entry per round
-        for key in [
-            "syndrome_history_X_L0",
-            "syndrome_history_Z_L0",
-            "syndrome_history_X_L1",
-            "syndrome_history_Z_L1",
-        ]:
-            hists = results.collect_shot_data(key, -1)
-            assert all(
-                len(h) == 3 for h in hists
-            ), f"{key} should hold 3 rounds"
+        # Per-patch syndrome histories, tracked on each patch's own `.data`,
+        # hold one entry per round.
+        patches_per_shot = results.collect_shot_data("patches", -1)
+        for patch_label in ["L0", "L1"]:
+            for check_type in ["X", "Z"]:
+                hists = [
+                    p[patch_label].data[f"syndrome_history_{check_type}"]
+                    for p in patches_per_shot
+                ]
+                assert all(len(h) == 3 for h in hists), (
+                    f"{patch_label} syndrome_history_{check_type} should "
+                    "hold 3 rounds"
+                )
 
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
     @pytest.mark.parametrize("basis", ["Z", "X"])
@@ -473,7 +480,7 @@ class TestTransversalCnot:
             )
 
 
-def bell_joint_parity_stack(layout, ancilla="ANC", ft_measures=False):
+def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
     """Bell prep (Plus L0, Zero L1, transversal CNOT) + joint ZZ + XX parity.
 
     If `ft_measures` is set, both parities are followed by destructive FT
@@ -534,7 +541,7 @@ class TestJointParity:
         """|0>|0> has even joint Z parity; X_L|0>|0> has odd parity."""
         q0 = layout_qubits(layout, "_0")
         q1 = layout_qubits(layout, "_1")
-        ancilla = "ANC"
+        ancilla = "Qanc"
         all_q = q0 + q1 + [ancilla]
         zz = multipatch.build_joint_parity_zz_instruction(
             "L0", "L1", q0[:9], q1[:9], ancilla

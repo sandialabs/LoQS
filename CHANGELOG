@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [1.1.1] - 2026-07-15
+
+This patch release includes a Surface-17 fault-tolerance fix, a workaround for a pyGSTi memory-blowup bug affecting time-dependent models, and documentation/tutorial fixes.
+
+### Fixed
+- **Surface-17 schedule and patch-specific data fixes (@kmrudin):** The Z-syndrome-extraction CNOT order was changed from `b,a,d,c` to `b,d,a,c` on every Z plaquette (canonically known as the "NZ" schedule), making the ancilla hook error perpendicular to `Z_L` and restoring X-basis d=3 fault tolerance for the Surface-17/13/10 codepack. This previously caused 12/1552 (>1%) of injected errors in the QEC cycle to lead to logical failure; this is now completely corrected.
+Additionally, syndrome history is now stored on `QECCodePatch.data` instead of manually namespaced, propagating `Frame` keys, matching the pattern already used by the 5Q and Steane codepacks.
+- **pyGSTi `EmbeddedOp` memory-blowup workaround (@sserita):** Adds `loqs.backends.safe_time_dependent_evotype()` for constructing custom time-dependent pyGSTi operators without triggering a pyGSTi bug where `EmbeddedOp` allocates a dense matrix sized to its *entire* parent state space instead of a compact embedded representation (e.g. ~2.1 GB for a single 1-qubit idle gate embedded in a 7-qubit model). This bug is now fixed on pyGSTi's `develop` branch and is slated for the next release after 0.10.1, but this change is important for use with pyGSTi 0.9.13 through 0.10.1.
+- **`Displayable.launch_viewer()` JSON encoding (@sserita):** Explicitly requests JSON (rather than the `Serializable`-wide default of HDF5) since the viewer only needs an in-memory dict, and HDF5 encoding requires an open `h5py.Group` to write into.
+- **`ProgramResults` tutorial fixes (@sserita):** Updated the `timedepmodel` and `workflow` tutorials, which had fallen out of sync with the `ProgramResults` refactor introduced in 1.1 (`program.run()` now returns a `ProgramResults` object; `collect_shot_data` moved there from `QuantumProgram`).
+- **ReadTheDocs build fixes (@sserita):** Several fixes to get ReadTheDocs building correctly under the new two-stage MkDocs workflow introduced in 1.1 (`.readthedocs.yaml` configuration, `/reference` and API-reference cross-links, and a stray MyST admonition syntax issue in the `workflow` tutorial).
+
+
+**Full Changelog**: https://github.com/sandialabs/LoQS/compare/v1.1...v1.1.1
+
 ## [1.1] - 2026-07-09
 
 This release includes fixes to both the 5Q and Steane codepacks, the addition of a Surface-17/13/10 codepack, statevector performance upgrades, HDF5 serialization, upgraded documentation, alongside smaller bugfixes, refactors, and improvements.

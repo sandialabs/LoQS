@@ -946,8 +946,12 @@ def _merge_bookkeeping_apply_fn(
     Per-patch histories continue through the merge window with the grown
     boundary check recorded in place of the old one (a deterministic
     continuation, since the seam qubits are prepared in the grown check's
-    eigenbasis). The four new seam checks go to `seam_history_key`
-    (overwritten fresh each merge, so consecutive surgeries do not mix).
+    eigenbasis), tracked on each patch's own `.data`. The four new seam
+    checks go to `seam_history_key`, a `Frame`-global key namespaced by the
+    (patch_a_label, patch_b_label) pair (overwritten fresh each merge, so
+    consecutive surgeries do not mix). Unlike the per-patch histories, the
+    seam checks have no single owning patch, so they remain on the global
+    Frame for now.
     """
     if isinstance(merge_outcomes, MeasurementOutcomes):
         merge_outcomes = [merge_outcomes]
@@ -959,31 +963,27 @@ def _merge_bookkeeping_apply_fn(
     def row(labels, t):
         return [merge_outcomes[t][q][i] for (q, i) in labels]
 
-    try:
-        last = history[-1]
-    except (IndexError, AttributeError):
-        last = {}
-
-    out = {"patches": patches}
+    new_patches = patches.copy()
     for lbl, labels_X, labels_Z in (
         (patch_a_label, labels_X_a, labels_Z_a),
         (patch_b_label, labels_X_b, labels_Z_b),
     ):
-        key_X = f"syndrome_history_X_{lbl}"
-        key_Z = f"syndrome_history_Z_{lbl}"
-        hist_X = list(last.get(key_X, []) or [])
-        hist_Z = list(last.get(key_Z, []) or [])
+        new_patch = patches[lbl].copy()
+        hist_X = list(new_patch.data.get("syndrome_history_X", []))
+        hist_Z = list(new_patch.data.get("syndrome_history_Z", []))
         for t in range(num_merge_rounds):
             hist_X.append(row(labels_X, t))
             hist_Z.append(row(labels_Z, t))
-        history.propagating_keys.add(key_X)
-        history.propagating_keys.add(key_Z)
-        out[key_X] = hist_X
-        out[key_Z] = hist_Z
+        new_patch.data["syndrome_history_X"] = hist_X
+        new_patch.data["syndrome_history_Z"] = hist_Z
+        new_patches[lbl] = new_patch
 
-    out[seam_history_key] = [
-        row(labels_seam, t) for t in range(num_merge_rounds)
-    ]
+    out = {
+        "patches": new_patches,
+        seam_history_key: [
+            row(labels_seam, t) for t in range(num_merge_rounds)
+        ],
+    }
     history.propagating_keys.add(seam_history_key)
     return Frame(out)
 
@@ -1085,7 +1085,8 @@ def _split_bookkeeping_apply_fn(
         reference_correction = 0
         for lbl, check_type, row in telescope_reference:
             hist = (
-                last.get(f"syndrome_history_{check_type}_{lbl}", []) or []
+                patches[lbl].data.get(f"syndrome_history_{check_type}", [])
+                or []
             )
             assert hist, (
                 "Split bookkeeping needs pre-existing syndrome history "
@@ -1112,14 +1113,14 @@ def _split_bookkeeping_apply_fn(
         # matching, whose support-crossing corrections convert m
         # consistently.
         hist_a = (
-            last.get(
-                f"syndrome_history_{new_check_type}_{patch_a_label}", []
+            patches[patch_a_label].data.get(
+                f"syndrome_history_{new_check_type}", []
             )
             or []
         )
         hist_b = (
-            last.get(
-                f"syndrome_history_{new_check_type}_{patch_b_label}", []
+            patches[patch_b_label].data.get(
+                f"syndrome_history_{new_check_type}", []
             )
             or []
         )
@@ -1206,6 +1207,18 @@ def _split_bookkeeping_apply_fn(
         seam_history_key: [],  # consumed
     }
 
+    # Both the post-split boundary-check flips below and the conditional
+    # logical byproduct mutate individual patches' `.data`/Pauli frame, so
+    # lazily copy each touched patch exactly once into `new_patches`.
+    new_patches = patches.copy()
+    copied_labels: set = set()
+
+    def get_mutable_patch(lbl):
+        if lbl not in copied_labels:
+            new_patches[lbl] = patches[lbl].copy()
+            copied_labels.add(lbl)
+        return new_patches[lbl]
+
     # Post-split boundary-check flips: rewriting the full stored history
     # (decoding is deferred, nothing has consumed it yet) keeps every
     # interior diff transition defect-free; the residue lands only in the
@@ -1215,8 +1228,9 @@ def _split_bookkeeping_apply_fn(
     # makes this check type deterministic, e.g. the X sector after |+>
     # prep) subtracts it and loses no prep-fault coverage.
     for lbl, check_type, check_row, seam_pair in grown_flips:
-        key = f"syndrome_history_{check_type}_{lbl}"
-        hist = list(last.get(key, []) or [])
+        patch = get_mutable_patch(lbl)
+        key = f"syndrome_history_{check_type}"
+        hist = list(patch.data.get(key, []) or [])
         flip = 0
         for si in seam_pair:
             flip ^= seam_outcomes[si]
@@ -1225,8 +1239,7 @@ def _split_bookkeeping_apply_fn(
                 row = list(hist[t])
                 row[check_row] ^= 1
                 hist[t] = row
-        history.propagating_keys.add(key)
-        out[key] = hist
+        patch.data[key] = hist
         offset_key = f"syndrome_round0_offset_{check_type}_{lbl}"
         offset = list(
             last.get(offset_key, []) or [0] * len(hist[0])
@@ -1239,10 +1252,8 @@ def _split_bookkeeping_apply_fn(
     byproduct_bit = 0
     for si in byproduct["seam_indices"]:
         byproduct_bit ^= seam_outcomes[si]
-    new_patches = patches
     if byproduct_bit == 1:
-        new_patches = patches.copy()
-        patch = patches[byproduct["patch_label"]]
+        patch = get_mutable_patch(byproduct["patch_label"])
         new_frame = _multiply_pauli_into_frame(
             patch.pauli_frame, byproduct["support"], byproduct["pauli"]
         )
@@ -1327,13 +1338,12 @@ def _split_byproduct_repair_apply_fn(
       measurement error in the last pre-merge round, which would offset
       the whole comparison).
     """
-    last = history[-1]
     anchor = num_merge_rounds + num_post_split_rounds + 1
     min_rounds = anchor if fire_rule == "both" else anchor + 1
     defect = {}
     glitch = {}
     for lbl, check_type, row in grown_rows:
-        hist = last.get(f"syndrome_history_{check_type}_{lbl}", []) or []
+        hist = patches[lbl].data.get(f"syndrome_history_{check_type}", []) or []
         assert len(hist) >= min_rounds, (
             "Split byproduct repair needs pre-merge QEC history and at "
             "least one post-split QEC round on both patches "
