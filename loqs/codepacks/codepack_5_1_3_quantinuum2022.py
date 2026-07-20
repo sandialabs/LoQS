@@ -991,6 +991,17 @@ def _create_adaptive_measure_instruction(
         )
     )
 
+    # Shortcut composite function to kick off the adaptive measurement
+    instructions["FT Logical Z Measure"] = (
+        builders.build_composite_instruction(
+            [
+                instructions["H"],
+                instructions["FT Logical X Measure"],
+            ],
+            name="FT Logical Z Measure",
+        )
+    )
+
 
 def _create_adaptive_measure_instruction_part_I(
     instructions,
