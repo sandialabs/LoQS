@@ -21,7 +21,7 @@ from typing import ClassVar, TypeAlias, TypeVar
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     ZBasisOutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
@@ -88,7 +88,7 @@ class QSimQuantumState(BaseQuantumState):
     @property
     def input_reps(self) -> list[type[GateRep | InstrumentRep]]:
         return [
-            QSimSuperoperatorGateRep,
+            QSimSuperopGateRep,
             ZBasisProjectionInstrumentRep,
             ZBasisPrePostInstrumentRep,
             ZBasisOutcomeOperationDictInstrumentRep,
@@ -186,10 +186,9 @@ class QSimQuantumState(BaseQuantumState):
         )
 
     @_apply_gate_rep.register
-    def _(self, rep: QSimSuperoperatorGateRep) -> None:
-        # TODO: Can probably check this is an ndarray of the right shape
+    def _(self, rep: QSimSuperopGateRep) -> None:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
         superop = rep.superop
 
         if len(qubits) == 1:
@@ -209,7 +208,7 @@ class QSimQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         reset = rep.reset
@@ -226,20 +225,18 @@ class QSimQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         reset = rep.reset
         include_outcomes = rep.include_outcome
 
-        # Check we can apply the reps
+        # is_rep_compatible is backend-specific, so still checked here;
+        # the qubits checks guard against a stale `with_qubits` retarget.
         preop = rep.pre_op
         postop = rep.post_op
-        assert reset in [None, 0, 1]
         assert is_rep_compatible(type(preop), self.input_reps)
         assert is_rep_compatible(type(postop), self.input_reps)
-        assert isinstance(preop, GateRep)
-        assert isinstance(postop, GateRep)
         # TODO: Strict subsets is OK too
         assert preop.qubits == qubits
         assert postop.qubits == qubits
@@ -260,7 +257,7 @@ class QSimQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         include_outcomes = rep.include_outcome
@@ -283,10 +280,9 @@ class QSimQuantumState(BaseQuantumState):
         if include_outcomes:
             outcomes[qubits[0]].append(cbit)
 
-        # Apply the correct PTM based on the classical output we see
+        # Apply the correct PTM based on the classical output we see.
         rep_to_apply = instrument_dict[cbit]
         assert is_rep_compatible(type(rep_to_apply), self.input_reps)
-        assert isinstance(rep_to_apply, GateRep)
         self.apply_reps_inplace([rep_to_apply])
 
         # Propogate and renormalize (maybe not needed, but safer to do it now)

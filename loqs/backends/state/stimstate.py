@@ -250,11 +250,10 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: StimCircuitGateRep) -> None:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and all(
-            [isinstance(q, str) for q in qubits]
-        )
+        # String qubit labels are this backend's own requirement, not a
+        # general OperationRep invariant, so still checked here.
+        assert all(isinstance(q, str) for q in qubits)
         circuit_str = rep.circuit_str
-        assert isinstance(circuit_str, str)
 
         if len(qubits) == 0:
             # This is a STIM annotation or comment, pass it on to applied circuit directly
@@ -268,7 +267,6 @@ class STIMQuantumState(BaseQuantumState):
         local_to_global = {}
         local_to_internal = {}
         for i, q in enumerate(qubits):
-            assert isinstance(q, str)
             negated = q.startswith("!")
             global_label = q.strip("!")
             try:
@@ -337,16 +335,11 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: ProbabilisticStimGateRep) -> None:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and all(
-            [isinstance(q, str) for q in qubits]
-        )
+        # String qubit labels are this backend's own requirement (see
+        # the StimCircuitGateRep overload above).
+        assert all(isinstance(q, str) for q in qubits)
         operations = rep.operations
-        assert isinstance(operations, (list, tuple))
         probs = [r[1] for r in operations]
-        assert abs(1 - sum(probs)) < 1e-12, "Probabilities should sum to 1"
-        assert all(
-            [p >= 0 for p in probs]
-        ), "Probabilities should be positive"
 
         # Pick an op to apply
         idx_to_apply = self._rng.choice(list(range(len(operations))), p=probs)
@@ -365,7 +358,7 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         reset = rep.reset
@@ -380,20 +373,18 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         reset = rep.reset
         include_outcomes = rep.include_outcome
 
-        # Check we can apply the reps
+        # is_rep_compatible is backend-specific, so still checked here;
+        # the qubits checks guard against a stale `with_qubits` retarget.
         preop = rep.pre_op
         postop = rep.post_op
-        assert reset in [None, 0, 1]
         assert is_rep_compatible(type(preop), self.input_reps)
         assert is_rep_compatible(type(postop), self.input_reps)
-        assert isinstance(preop, GateRep)
-        assert isinstance(postop, GateRep)
         # TODO: Strict subsets is OK too
         assert preop.qubits == qubits
         assert postop.qubits == qubits
@@ -414,11 +405,10 @@ class STIMQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: StimCircuitInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         circuit_str = rep.circuit_str
-        assert isinstance(circuit_str, str)
 
         self.latest_measurement_labels = []
 

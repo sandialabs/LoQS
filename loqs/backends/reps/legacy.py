@@ -18,7 +18,7 @@ from loqs.backends.reps.gatereps import (
     KrausGateRep,
     PTMGateRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitGateRep,
     UnitaryGateRep,
 )
@@ -70,7 +70,7 @@ class _LegacyInstrumentRepValue(Enum):
 _LEGACY_GATEREP_CLASS: dict[_LegacyGateRepValue, type[GateRep]] = {
     _LegacyGateRepValue.UNITARY: UnitaryGateRep,
     _LegacyGateRepValue.PTM: PTMGateRep,
-    _LegacyGateRepValue.QSIM_SUPEROPERATOR: QSimSuperoperatorGateRep,
+    _LegacyGateRepValue.QSIM_SUPEROPERATOR: QSimSuperopGateRep,
     _LegacyGateRepValue.STIM_CIRCUIT_STR: StimCircuitGateRep,
     _LegacyGateRepValue.PROBABILISTIC_STIM_OPERATIONS: ProbabilisticStimGateRep,
     _LegacyGateRepValue.KRAUS_OPERATORS: KrausGateRep,
@@ -151,13 +151,16 @@ def _upgrade_legacy_gaterep(
     elif legacy_value is _LegacyGateRepValue.PTM:
         return PTMGateRep(ptm=rep, qubits=qubits)
     elif legacy_value is _LegacyGateRepValue.QSIM_SUPEROPERATOR:
-        return QSimSuperoperatorGateRep(superop=rep, qubits=qubits)
+        return QSimSuperopGateRep(superop=rep, qubits=qubits)
     elif legacy_value is _LegacyGateRepValue.STIM_CIRCUIT_STR:
         return StimCircuitGateRep(circuit_str=rep, qubits=qubits)
     elif legacy_value is _LegacyGateRepValue.PROBABILISTIC_STIM_OPERATIONS:
         return ProbabilisticStimGateRep(operations=rep, qubits=qubits)
     elif legacy_value is _LegacyGateRepValue.KRAUS_OPERATORS:
-        return KrausGateRep(kraus_operators=rep, qubits=qubits)
+        # Skip the TP check: this decodes already-accepted data, not new input.
+        return KrausGateRep(
+            kraus_operators=rep, qubits=qubits, tp_check_abstol=None
+        )
     raise MisformedDecodableError(
         f"Unrecognized legacy GateRep value {legacy_value!r}"
     )

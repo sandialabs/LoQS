@@ -12,7 +12,7 @@ from loqs.backends.reps import (
     KrausGateRep,
     PTMGateRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
@@ -124,7 +124,7 @@ class TestNumPyStatevectorQuantumState:
 
         # TODO: Test Kraus
         # Test Kraus operator where applying X with prob 1, and I with prob 0
-        X_kraus_rep_w_prob = KrausGateRep([(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"])
+        X_kraus_rep_w_prob = KrausGateRep([(U_X, 1.0), (np.zeros((2, 2)), 0.0)], ["Q0"])
         for _ in range(10):
             test4 = state0.copy()
             test4.apply_reps_inplace([X_kraus_rep_w_prob])
@@ -162,17 +162,17 @@ class TestNumPyStatevectorQuantumState:
         # Let's try to pass in some unsupported reps
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                PTMGateRep(None, "Q0")
+                PTMGateRep(np.eye(4), "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                StimCircuitGateRep(None, "Q0")
+                StimCircuitGateRep("I 0", "Q0")
             ])
 
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                QSimSuperoperatorGateRep(None, "Q0")
+                QSimSuperopGateRep(np.eye(4), "Q0")
             ])
 
         with pytest.raises(NotImplementedError):
@@ -700,7 +700,10 @@ class TestNumPyStatevectorQuantumState:
     def test_zbasis_outcome_operation_dict_multiqubit_raises(self):
         """ZBASIS_OUTCOME_OPERATION_DICT explicitly does not support more
         than one qubit."""
-        dummy_maps = {0: object(), 1: object()}
+        dummy_maps = {
+            0: UnitaryGateRep(np.eye(2), ["Q0"]),
+            1: UnitaryGateRep(np.eye(2), ["Q0"]),
+        }
         rep = ZBasisOutcomeOperationDictInstrumentRep(dummy_maps, True, ["Q0", "Q1"])
         test = SVState([0, 0], ["Q0", "Q1"])
         with pytest.raises(NotImplementedError):
@@ -769,7 +772,7 @@ class TestNumPyStatevectorQuantumState:
         and an InstrumentRep correctly, along with non-default
         `kraus_sampling`/`contraction` settings (both `_SERIALIZE_ATTRS`)."""
         U_X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
-        X_kraus = KrausGateRep([(U_X, 1.0), (np.eye(2), 0.0)], ["Q0"])
+        X_kraus = KrausGateRep([(U_X, 1.0), (np.zeros((2, 2)), 0.0)], ["Q0"])
         proj_rep = ZBasisProjectionInstrumentRep(None, True, ["Q0"])
 
         test = SVState(

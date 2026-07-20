@@ -1,5 +1,6 @@
 """Tester for loqs.backends.reps.base"""
 
+import numpy as np
 import pytest
 
 from loqs.backends.reps import (
@@ -31,15 +32,15 @@ class TestOperationRepAbstract:
 
 class TestQubitsNormalization:
     def test_single_str_qubit_is_wrapped_in_tuple(self):
-        rep = UnitaryGateRep(None, "Q0")
+        rep = UnitaryGateRep(np.eye(2), "Q0")
         assert rep.qubits == ("Q0",)
 
     def test_single_int_qubit_is_wrapped_in_tuple(self):
-        rep = UnitaryGateRep(None, 0)
+        rep = UnitaryGateRep(np.eye(2), 0)
         assert rep.qubits == (0,)
 
     def test_sequence_qubits_becomes_tuple(self):
-        rep = UnitaryGateRep(None, ["Q0", "Q1"])
+        rep = UnitaryGateRep(np.eye(4), ["Q0", "Q1"])
         assert rep.qubits == ("Q0", "Q1")
 
     def test_default_qubits_is_empty_tuple(self):
@@ -49,21 +50,21 @@ class TestQubitsNormalization:
 
 class TestStr:
     def test_str_includes_class_name_and_serialize_attrs(self):
-        rep = UnitaryGateRep(None, ("Q0",))
+        rep = UnitaryGateRep(np.eye(2), ("Q0",))
         s = str(rep)
         assert s.startswith("UnitaryGateRep(")
-        assert "unitary=None" in s
+        assert "unitary=" in s
         assert "qubits=('Q0',)" in s
 
 
 class TestWithQubits:
     def test_returns_shallow_copy_with_new_qubits(self):
-        rep = UnitaryGateRep("original_payload", ("Q0",))
+        rep = UnitaryGateRep(np.eye(2), ("Q0",))
         retargeted = rep.with_qubits(("Q1", "Q2"))
         assert retargeted is not rep
         assert retargeted.qubits == ("Q1", "Q2")
         assert rep.qubits == ("Q0",)  # original untouched
-        assert retargeted.unitary == "original_payload"  # payload preserved
+        assert np.array_equal(retargeted.unitary, np.eye(2))  # payload preserved
 
     def test_single_qubit_str_is_wrapped(self):
         rep = StimCircuitGateRep("X 0", ())
@@ -110,7 +111,7 @@ class TestStimCircuitPayloadMixin:
         assert isinstance(StimCircuitInstrumentRep("M 0"), StimCircuitPayloadMixin)
 
     def test_non_stim_circuit_reps_are_not_mixin_instances(self):
-        assert not isinstance(UnitaryGateRep(None), StimCircuitPayloadMixin)
+        assert not isinstance(UnitaryGateRep(np.eye(2)), StimCircuitPayloadMixin)
 
     def test_mixin_does_not_unify_gaterep_and_instrumentrep_dispatch(self):
         """The mixin is purely a shared-mechanics helper; `StimCircuitGateRep`

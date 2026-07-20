@@ -20,7 +20,7 @@ from loqs.backends.reps import (
     KrausGateRep,
     PTMGateRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitGateRep,
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
@@ -46,7 +46,7 @@ class TestIntegratedNoise:
         ])
 
         # Get it in the QuantumSim basis
-        qsim_ptm = convert_rep(PTMGateRep(ptm, ["Q0"]), QSimSuperoperatorGateRep).superop
+        qsim_ptm = convert_rep(PTMGateRep(ptm, ["Q0"]), QSimSuperopGateRep).superop
 
         # Also create one from QuantumSim tools, and check they are the same
         qsim_native_ptm = _ptm.dephasing_ptm(p_depol, p_depol, p_depol) # type: ignore
@@ -56,11 +56,11 @@ class TestIntegratedNoise:
         code_1Q = self._create_code(qubits)
 
         ## QUANTUMSIM
-        gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperoperatorGateRep)
+        gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperopGateRep)
         gate_dict[("Gi", ("Q0",))] = qsim_native_ptm # Depolarizing idle
         depol_noise_model = DictNoiseModel(
             (gate_dict, inst_dict),
-            gatereps=[QSimSuperoperatorGateRep],
+            gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisProjectionInstrumentRep]
         )
 
@@ -177,11 +177,11 @@ class TestIntegratedNoise:
 
         ## QUANTUMSIM 
         qsim_native_ptm = _ptm.amp_ph_damping_ptm(p_damp, p_dephase) # type: ignore
-        gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperoperatorGateRep)
+        gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperopGateRep)
         gate_dict[("Gi", ("Q1",))] = qsim_native_ptm # Amplitude damping/dephasing idle
         noise_model = DictNoiseModel(
             (gate_dict, inst_dict),
-            gatereps=[QSimSuperoperatorGateRep],
+            gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisProjectionInstrumentRep]
         )
 
@@ -335,10 +335,10 @@ class TestIntegratedNoise:
 
     @staticmethod
     def _create_model_dicts(qubits: list[str], gaterep: type[GateRep]):
-        assert gaterep in [QSimSuperoperatorGateRep, StimCircuitGateRep]
+        assert gaterep in [QSimSuperopGateRep, StimCircuitGateRep]
 
         gate_dict = {}
-        if gaterep is QSimSuperoperatorGateRep:
+        if gaterep is QSimSuperopGateRep:
             for q in qubits:
                 gate_dict[('Gi', (q,))] = np.eye(4)
                 gate_dict[('Gh', (q,))] = _ptm.hadamard_ptm() # type: ignore

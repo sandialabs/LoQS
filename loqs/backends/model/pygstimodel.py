@@ -23,7 +23,7 @@ from loqs.backends.reps import (
     KrausGateRep,
     OperationRep,
     PTMGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     RepConstructionError,
     UnitaryGateRep,
     ZBasisOutcomeOperationDictInstrumentRep,
@@ -404,7 +404,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         UnitaryGateRep,
         KrausGateRep,
         PTMGateRep,
-        QSimSuperoperatorGateRep,
+        QSimSuperopGateRep,
     ]
 
     @property
@@ -644,11 +644,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             op.set_time(self.current_time)
 
         if self.use_embedded_op and isinstance(op, EmbeddedOp):
-            # Pull out the relevant part of the tensor prod basis. (The
-            # extracted `basis` isn't used below -- `op.to_dense` already
-            # returns a PTM in this per-gate basis regardless -- but the
-            # assertions here are still worth keeping as a sanity check on
-            # `self.model.basis`'s shape.)
+            # Sanity-check the tensor-product basis shape; op.to_dense()
+            # already returns a PTM in the per-gate basis regardless.
             assert isinstance(self.model.basis, TensorProdBasis)
             assert op.target_labels is not None
             target_indices = [
@@ -660,10 +657,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
             op = op.embedded_op
 
-        # Compute the PTM once (verified to already be in the standard
-        # Pauli ("pp") basis that `loqs.backends.reps.convert`'s pure-numpy
-        # machinery assumes, for both the embedded-op case above and the
-        # non-embedded case), then let `convert` handle everything else.
+        # This is already in the "pp" basis convert()'s machinery assumes;
+        # let convert() produce whichever concrete GateRep is requested.
         ptm_rep = PTMGateRep(op.to_dense(on_space="HilbertSchmidt"), qubits)
 
         errors = []
@@ -730,7 +725,11 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     assert isinstance(label, tuple)
                     assert all([c in [0, 1] for c in label])
 
-                    rep[label] = v
+                    # Wrap as pyGSTi's native PTM; each consuming backend
+                    # converts to whatever concrete GateRep it needs.
+                    rep[label] = PTMGateRep(
+                        v.to_dense(on_space="HilbertSchmidt"), qubits
+                    )
             else:
                 raise RepConstructionError(
                     f"Cannot create instrument rep for {instrep}"

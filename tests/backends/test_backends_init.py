@@ -18,7 +18,7 @@ from loqs.backends import (
 )
 from loqs.backends.reps import (
     UnitaryGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
@@ -196,8 +196,8 @@ class TestPropagateState:
 
     def test_no_matching_gate_rep_raises(self):
         model = DictNoiseModel(
-            ({"X": QSimSuperoperatorGateRep(np.eye(4), ())}, {}),
-            gatereps=[QSimSuperoperatorGateRep],
+            ({"X": QSimSuperopGateRep(np.eye(4), ())}, {}),
+            gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisProjectionInstrumentRep],
         )
         state = NumpyStatevectorQuantumState(1, ["Q0"])

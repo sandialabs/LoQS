@@ -11,26 +11,14 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
-from types import NoneType
-from typing import Callable, Literal
+from typing import Literal
 
 from loqs.backends.reps.base import (
     OperationRep,
     RepConstructionError,
     StimCircuitPayloadMixin,
-    _resolve_qubits,
 )
 from loqs.backends.reps.gatereps import GateRep
-
-GateUpgrader = Callable[[object, "str | int | Sequence[str | int]"], GateRep]
-"""A callable converting a raw gate-level payload and qubits into a [](api:GateRep).
-
-Passed as the `gate_upgrader` keyword argument to `from_raw` for the
-composite instrument representations ([](api:ZBasisPrePostInstrumentRep),
-[](api:ZBasisOutcomeOperationDictInstrumentRep)) that recursively contain
-gate-level payloads, since a generic `from_raw` classmethod has no way to
-know which concrete [](api:GateRep) classes a given caller considers valid.
-"""
 
 
 class InstrumentRep(OperationRep):
@@ -70,43 +58,26 @@ class ZBasisProjectionInstrumentRep(InstrumentRep):
         self,
         reset: Literal[None, 0, 1],
         include_outcome: bool,
-        qubits: str | int | Sequence[str | int] = (),
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
+        """Construct a [](api:ZBasisProjectionInstrumentRep).
+
+        Raises
+        ------
+        RepConstructionError
+            If `reset` isn't `None`, `0`, or `1`, or `include_outcome`
+            isn't `True`/`False` (or, for compatibility with files
+            serialized before `include_outcome` was decoded as a `bool`,
+            the equivalent `1`/`0`).
+        """
+        if reset not in (None, 0, 1) or include_outcome not in (True, False):
+            raise RepConstructionError(
+                f"({reset!r}, {include_outcome!r}) is not a valid "
+                f"{type(self).__name__} (reset, include_outcome) pair"
+            )
         super().__init__(qubits)
         self.reset = reset
         self.include_outcome = include_outcome
-
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check that `raw` is a `(reset, include_outcome)` 2-tuple/list."""
-        if not isinstance(raw, (tuple, list)):
-            return False
-        if len(raw) != 2:
-            return False
-        if not isinstance(raw[0], (int, NoneType)):
-            return False
-        if not isinstance(raw[1], bool):
-            return False
-        return True
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        **kwargs,
-    ) -> "ZBasisProjectionInstrumentRep":
-        if not cls.matches(raw, qubits):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a "
-                "(reset, include_outcome) pair)"
-            )
-        assert isinstance(raw, (tuple, list))
-        return cls(raw[0], raw[1], _resolve_qubits(qubits))
 
 
 class ZBasisPrePostInstrumentRep(InstrumentRep):
@@ -136,75 +107,53 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
         include_outcome: bool,
         pre_op: GateRep,
         post_op: GateRep,
-        qubits: str | int | Sequence[str | int] = (),
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
+        """Construct a [](api:ZBasisPrePostInstrumentRep).
+
+        Parameters
+        ----------
+        reset, include_outcome:
+            See [](api:ZBasisProjectionInstrumentRep).
+
+        pre_op:
+            The noisy operation applied immediately before the
+            projection.
+
+        post_op:
+            The noisy operation applied immediately after the projection.
+
+        qubits:
+            Qubit label(s) this operation acts upon, or `None`/unattached
+            if not yet known.
+
+        Raises
+        ------
+        RepConstructionError
+            If `pre_op`/`post_op` aren't both [](api:GateRep) instances
+            acting on `qubits`, or if `reset` is out of range.
+        """
+        if not isinstance(pre_op, GateRep) or not isinstance(post_op, GateRep):
+            raise RepConstructionError(
+                f"pre_op={pre_op!r}/post_op={post_op!r} must both be "
+                "GateRep instances"
+            )
+        if reset not in (None, 0, 1):
+            raise RepConstructionError(
+                f"{reset!r} is not a valid reset value (expected None, "
+                "0, or 1)"
+            )
         super().__init__(qubits)
+        if pre_op.qubits != self.qubits or post_op.qubits != self.qubits:
+            raise RepConstructionError(
+                f"pre_op.qubits={pre_op.qubits!r}/"
+                f"post_op.qubits={post_op.qubits!r} must both equal "
+                f"qubits={self.qubits!r}"
+            )
         self.reset = reset
         self.include_outcome = include_outcome
         self.pre_op = pre_op
         self.post_op = post_op
-
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check that `raw` is a `(pre_op_raw, post_op_raw)` 2-tuple/list.
-
-        Note that this structurally overlaps with
-        [](api:ZBasisProjectionInstrumentRep)'s expected shape (both are
-        length-2 tuples/lists). Callers using `matches`-based dispatch
-        (e.g. [](api:convert), when given both classes as candidate
-        targets) must list [](api:ZBasisProjectionInstrumentRep) first to
-        get priority when a payload could otherwise match either shape.
-        """
-        return isinstance(raw, (tuple, list)) and len(raw) == 2
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        reset: Literal[None, 0, 1] = None,
-        include_outcome: bool = True,
-        gate_upgrader: GateUpgrader | None = None,
-        **kwargs,
-    ) -> "ZBasisPrePostInstrumentRep":
-        """Construct a [](api:ZBasisPrePostInstrumentRep) from a raw payload.
-
-        Parameters
-        ----------
-        raw:
-            A `(pre_op_raw, post_op_raw)` pair of raw, unwrapped
-            gate-level payloads.
-
-        qubits:
-            Qubit label(s) this operation acts upon, or `None` if not yet
-            known.
-
-        reset, include_outcome:
-            Passed through directly to the constructor; unlike `pre_op`/
-            `post_op`, these are not derived from `raw` itself.
-
-        gate_upgrader:
-            Required. A callable used to recursively convert `raw[0]`/
-            `raw[1]` into [](api:GateRep) instances.
-        """
-        if not cls.matches(raw, qubits):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a "
-                "(pre_op, post_op) pair)"
-            )
-        if gate_upgrader is None:
-            raise RepConstructionError(
-                f"{cls.__name__}.from_raw requires a `gate_upgrader` callable "
-                "to convert the raw pre-/post-operation payloads"
-            )
-        assert isinstance(raw, (tuple, list))
-        pre_op = gate_upgrader(raw[0], qubits)
-        post_op = gate_upgrader(raw[1], qubits)
-        return cls(reset, include_outcome, pre_op, post_op, _resolve_qubits(qubits))
 
 
 class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
@@ -229,60 +178,39 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
         self,
         outcome_ops: Mapping[Hashable, GateRep],
         include_outcome: bool,
-        qubits: str | int | Sequence[str | int] = (),
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
-        super().__init__(qubits)
-        self.outcome_ops = outcome_ops
-        self.include_outcome = include_outcome
-
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        return isinstance(raw, Mapping)
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        include_outcome: bool = True,
-        gate_upgrader: GateUpgrader | None = None,
-        **kwargs,
-    ) -> "ZBasisOutcomeOperationDictInstrumentRep":
-        """Construct a [](api:ZBasisOutcomeOperationDictInstrumentRep) from a raw payload.
+        """Construct a [](api:ZBasisOutcomeOperationDictInstrumentRep).
 
         Parameters
         ----------
-        raw:
-            A mapping from outcome label to a raw, unwrapped gate-level
-            payload.
-
-        qubits:
-            Qubit label(s) this operation acts upon, or `None` if not yet
-            known.
+        outcome_ops:
+            Mapping from outcome label to the CP map operation for that
+            outcome.
 
         include_outcome:
-            Passed through directly to the constructor.
+            Whether the measurement outcome should be recorded.
 
-        gate_upgrader:
-            Required. A callable used to recursively convert each value of
-            `raw` into a [](api:GateRep) instance.
+        qubits:
+            Qubit label(s) this operation acts upon, or `None`/unattached
+            if not yet known.
+
+        Raises
+        ------
+        RepConstructionError
+            If `outcome_ops` isn't a `Mapping`, or any value isn't a
+            [](api:GateRep) instance.
         """
-        if not cls.matches(raw, qubits):
+        if not isinstance(outcome_ops, Mapping) or not all(
+            isinstance(v, GateRep) for v in outcome_ops.values()
+        ):
             raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a Mapping)"
+                f"{outcome_ops!r} is not a valid {type(self).__name__} "
+                "payload (expected a Mapping with GateRep values)"
             )
-        if gate_upgrader is None:
-            raise RepConstructionError(
-                f"{cls.__name__}.from_raw requires a `gate_upgrader` callable "
-                "to convert the raw outcome-operation payloads"
-            )
-        assert isinstance(raw, Mapping)
-        outcome_ops = {k: gate_upgrader(v, qubits) for k, v in raw.items()}
-        return cls(outcome_ops, include_outcome, _resolve_qubits(qubits))
+        super().__init__(qubits)
+        self.outcome_ops = outcome_ops
+        self.include_outcome = include_outcome
 
 
 class StimCircuitInstrumentRep(StimCircuitPayloadMixin, InstrumentRep):

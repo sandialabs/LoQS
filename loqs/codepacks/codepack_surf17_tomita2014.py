@@ -64,7 +64,7 @@ from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     STANDARD_GATE_UNITARIES,
     UnitaryGateRep,
     ZBasisProjectionInstrumentRep,
@@ -976,7 +976,7 @@ def create_qec_code(
 def create_ideal_model(
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
-    gaterep: type[GateRep] = QSimSuperoperatorGateRep,
+    gaterep: type[GateRep] = QSimSuperopGateRep,
     instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
 ) -> BaseNoiseModel:
     """Create an ideal (noiseless) model for the Surface-17 / Surface-13 code.
@@ -990,7 +990,7 @@ def create_ideal_model(
         The model backend to use. Default is PyGSTiNoiseModel.
 
     gaterep : type[GateRep], optional
-        Gate representation class. Default is [](api:QSimSuperoperatorGateRep).
+        Gate representation class. Default is [](api:QSimSuperopGateRep).
 
     instrep : type[InstrumentRep], optional
         Instrument representation class. Default is [](api:ZBasisProjectionInstrumentRep).

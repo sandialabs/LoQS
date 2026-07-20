@@ -6,7 +6,7 @@ import pytest
 from loqs.backends.reps import (
     KrausGateRep,
     PTMGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     RepConstructionError,
     STANDARD_GATE_UNITARIES,
     StimCircuitGateRep,
@@ -309,7 +309,7 @@ class TestPTMQSimSuperoperatorRoundTrip:
         X = STANDARD_GATE_UNITARIES["X"]
         ptm_rep = _unitary_to_ptm(UnitaryGateRep(X, ("Q0",)))
         qsim_rep = _ptm_to_qsim_superoperator(ptm_rep)
-        assert isinstance(qsim_rep, QSimSuperoperatorGateRep)
+        assert isinstance(qsim_rep, QSimSuperopGateRep)
         back = _qsim_superoperator_to_ptm(qsim_rep)
         assert np.allclose(back.ptm, ptm_rep.ptm)
 
@@ -362,8 +362,8 @@ class TestShortestPath:
 
     def test_multi_hop_prefers_shortest(self):
         # Kraus -> QSimSuperoperator has no direct edge; must go via PTM.
-        path = _shortest_path(KrausGateRep, QSimSuperoperatorGateRep)
-        assert path == [KrausGateRep, PTMGateRep, QSimSuperoperatorGateRep]
+        path = _shortest_path(KrausGateRep, QSimSuperopGateRep)
+        assert path == [KrausGateRep, PTMGateRep, QSimSuperopGateRep]
 
     def test_no_path_returns_none(self):
         class _NotARep:
@@ -399,11 +399,9 @@ class TestIsIdentityGateRep:
         rep = KrausGateRep([(np.eye(2), 1.0)], ("Q0",))
         assert _is_identity_gaterep(rep) is False
 
-    def test_wrong_shape_for_declared_qubit_count_does_not_match(self):
-        """A `UnitaryGateRep` whose `.unitary` shape is inconsistent with
-        its own `qubits` count can't be the identity for that count."""
-        rep = UnitaryGateRep(np.eye(4), ("Q0",))
-        assert _is_identity_gaterep(rep) is False
+    def test_larger_identity_matches_for_its_own_qubit_count(self):
+        rep = UnitaryGateRep(np.eye(4), ("Q0", "Q1"))
+        assert _is_identity_gaterep(rep) is True
 
 
 class TestZBasisProjectionToZBasisPrePost:
@@ -502,7 +500,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
             _outcome_operation_dict_to_zbasis_projection(od)
 
     def test_reverse_direction_also_fails_for_more_than_one_qubit(self):
-        identity = UnitaryGateRep(np.eye(2), ("Q0", "Q1"))
+        identity = UnitaryGateRep(np.eye(4), ("Q0", "Q1"))
         od = ZBasisOutcomeOperationDictInstrumentRep(
             {0: identity, 1: identity}, True, ("Q0", "Q1")
         )
@@ -602,16 +600,6 @@ class TestZBasisProjectionStimCircuitRoundTrip:
         rep = StimCircuitInstrumentRep("", ("Q0",))
         with pytest.raises(RepConstructionError):
             _stim_circuit_to_zbasis_projection(rep)
-
-    def test_forward_direction_rejects_unrecognized_reset_value(self):
-        """Defensive check: `ZBasisProjectionInstrumentRep`'s own
-        `matches`/`from_raw` only loosely validate `reset` as `int | None`
-        (not specifically `{None, 0, 1}`), so a directly-constructed rep
-        with an out-of-range `reset` must still fail cleanly here rather
-        than silently produce a nonsensical circuit."""
-        rep = ZBasisProjectionInstrumentRep(5, True, ("Q0",))
-        with pytest.raises(RepConstructionError):
-            _zbasis_projection_to_stim_circuit(rep)
 
 
 @pytest.mark.skipif(NO_STIM, reason="stim is not installed")
@@ -764,8 +752,8 @@ class TestConvert:
 
         H = STANDARD_GATE_UNITARIES["H"]
         rep = UnitaryGateRep(H, ("Q0",))
-        result = convert(rep, QSimSuperoperatorGateRep)
-        assert isinstance(result, QSimSuperoperatorGateRep)
+        result = convert(rep, QSimSuperopGateRep)
+        assert isinstance(result, QSimSuperopGateRep)
 
     def test_raises_when_instance_has_no_path_to_target(self):
         from loqs.backends.reps.conversion import convert
@@ -780,11 +768,11 @@ class TestConvert:
         matching entry in the list wins."""
         from loqs.backends.reps.conversion import convert
 
-        result1 = convert(np.eye(4), [PTMGateRep, QSimSuperoperatorGateRep], ("Q0",))
+        result1 = convert(np.eye(4), [PTMGateRep, QSimSuperopGateRep], ("Q0",))
         assert isinstance(result1, PTMGateRep)
 
-        result2 = convert(np.eye(4), [QSimSuperoperatorGateRep, PTMGateRep], ("Q0",))
-        assert isinstance(result2, QSimSuperoperatorGateRep)
+        result2 = convert(np.eye(4), [QSimSuperopGateRep, PTMGateRep], ("Q0",))
+        assert isinstance(result2, QSimSuperopGateRep)
 
     def test_raw_payload_resolves_unambiguous_starting_class_then_hops(self):
         from loqs.backends.reps.conversion import convert
@@ -824,26 +812,6 @@ class TestConvert:
         with pytest.raises(RepConstructionError):
             convert(object(), PTMGateRep, ("Q0",))
 
-    def test_kwargs_forwarded_to_from_raw(self):
-        """Composite InstrumentRep construction needs `gate_upgrader`,
-        forwarded through `convert`'s `**kwargs`."""
-        from loqs.backends.reps.conversion import convert
-
-        def gate_upgrader(raw, qubits):
-            return convert(raw, UnitaryGateRep, qubits)
-
-        raw = (np.eye(2), np.eye(2))
-        result = convert(
-            raw,
-            ZBasisPrePostInstrumentRep,
-            ("Q0",),
-            reset=0,
-            include_outcome=True,
-            gate_upgrader=gate_upgrader,
-        )
-        assert isinstance(result, ZBasisPrePostInstrumentRep)
-        assert isinstance(result.pre_op, UnitaryGateRep)
-
     def test_kwargs_forwarded_to_kraus_from_raw(self):
         from loqs.backends.reps.conversion import convert
 
@@ -852,7 +820,7 @@ class TestConvert:
             ((non_tp, None),),
             KrausGateRep,
             ("Q0",),
-            tp_check_abstol=float("inf"),
+            tp_check_abstol=None,
         )
         assert isinstance(result, KrausGateRep)
 
@@ -866,12 +834,15 @@ class TestConvert:
         )
         assert isinstance(result, StimCircuitInstrumentRep)
 
-    def test_raw_pair_direct_match_to_zbasis_projection(self):
+    def test_raw_payload_cannot_construct_composite_instrument_reps(self):
+        """ZBasisProjectionInstrumentRep/ZBasisPrePostInstrumentRep/
+        ZBasisOutcomeOperationDictInstrumentRep all require multiple
+        distinct constructor arguments (not a single raw value), so
+        `convert` can never construct them from a raw payload -- only
+        `DictNoiseModel` (which knows how to unpack these specific raw
+        shapes and recursively convert nested gate-level payloads itself)
+        can build them from raw data."""
         from loqs.backends.reps.conversion import convert
 
-        result = convert(
-            (0, True),
-            [StimCircuitInstrumentRep, ZBasisProjectionInstrumentRep],
-            ("Q0",),
-        )
-        assert isinstance(result, ZBasisProjectionInstrumentRep)
+        with pytest.raises(RepConstructionError):
+            convert((0, True), ZBasisProjectionInstrumentRep, ("Q0",))

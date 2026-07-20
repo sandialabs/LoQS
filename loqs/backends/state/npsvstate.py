@@ -23,14 +23,17 @@ from loqs.backends.reps import (
     InstrumentRep,
     KrausGateRep,
     OperationRep,
+    RepConstructionError,
     UnitaryGateRep,
     ZBasisOutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
+    convert as convert_rep,
     is_rep_compatible,
 )
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 from loqs.internal.serializable import Serializable
+from loqs.types import NDArray
 
 T = TypeVar("T", bound="NumpyStatevectorQuantumState")
 
@@ -77,6 +80,26 @@ independent reference implementation for equivalence testing and
 benchmarking. Amplitudes may differ from "matmul" at machine precision
 (floating-point summation order), but not beyond.
 """
+
+
+def _single_dense_operator(rep: GateRep) -> NDArray:
+    """Extract the single dense `(2**n, 2**n)` operator underlying `rep`,
+    regardless of its concrete `GateRep` representation. Goes through
+    `KrausGateRep` rather than `convert(rep, UnitaryGateRep)`, since the
+    latter also requires the operator to be literally unitary.
+
+    Raises
+    ------
+    RepConstructionError
+        If `rep` isn't exactly one Kraus term.
+    """
+    kraus_rep = convert_rep(rep, KrausGateRep)
+    if len(kraus_rep.kraus_operators) != 1:
+        raise RepConstructionError(
+            f"{rep!r} does not correspond to a single dense operator "
+            f"(found {len(kraus_rep.kraus_operators)} Kraus terms)"
+        )
+    return kraus_rep.kraus_operators[0][0]
 
 
 class NumpyStatevectorQuantumState(BaseQuantumState):
@@ -260,10 +283,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: UnitaryGateRep) -> None:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
-
+        # Shape can go stale after a `with_qubits` retarget, so still checked.
+        assert len(qubits) > 0
         unitary = rep.unitary
-        assert isinstance(unitary, np.ndarray)
         assert unitary.shape == (2 ** len(qubits), 2 ** len(qubits))
 
         self._state = self._block_matvec(unitary, qubits, self.state)
@@ -271,19 +293,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: KrausGateRep) -> None:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         kraus_operators = rep.kraus_operators
-        assert isinstance(kraus_operators, (list, tuple))
         assert all(
-            [isinstance(r, tuple) and len(r) == 2 for r in kraus_operators]
-        )
-        assert all(
-            [
-                isinstance(r[0], np.ndarray)
-                and r[0].shape == (2 ** len(qubits), 2 ** len(qubits))
-                for r in kraus_operators
-            ]
+            K.shape == (2 ** len(qubits), 2 ** len(qubits))
+            for K, _ in kraus_operators
         )
 
         if self.kraus_sampling == "choice":
@@ -463,7 +478,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         reset = rep.reset
@@ -480,20 +495,18 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         reset = rep.reset
         include_outcomes = rep.include_outcome
 
-        # Check we can apply the reps
+        # is_rep_compatible is backend-specific, so still checked here;
+        # the qubits checks guard against a stale `with_qubits` retarget.
         preop = rep.pre_op
         postop = rep.post_op
-        assert reset in [None, 0, 1]
         assert is_rep_compatible(type(preop), self.input_reps)
         assert is_rep_compatible(type(postop), self.input_reps)
-        assert isinstance(preop, GateRep)
-        assert isinstance(postop, GateRep)
         # TODO: Strict subsets is OK too
         assert preop.qubits == qubits
         assert postop.qubits == qubits
@@ -514,7 +527,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
         qubits = rep.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
         include_outcomes = rep.include_outcome
@@ -529,7 +542,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         # Compute the probability of measuring 0
         # (Same as Kraus logic in _apply_gate_rep)
         prod = self._block_matvec(
-            instrument_dict[0].unitary, qubits, self.state
+            _single_dense_operator(instrument_dict[0]), qubits, self.state
         )
         prob_0 = np.vdot(prod, prod)
 
@@ -547,7 +560,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self._state = prod / np.sqrt(prob_0)
         else:
             self._state = self._block_matvec(
-                instrument_dict[1].unitary, qubits, self.state
+                _single_dense_operator(instrument_dict[1]), qubits, self.state
             ) / np.sqrt(1 - prob_0)
 
         return outcomes

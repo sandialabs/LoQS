@@ -30,7 +30,7 @@ from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     STANDARD_GATE_UNITARIES,
     UnitaryGateRep,
     ZBasisProjectionInstrumentRep,
@@ -957,7 +957,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
 def create_ideal_model(  # noqa: C901
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
-    gaterep: type[GateRep] = QSimSuperoperatorGateRep,
+    gaterep: type[GateRep] = QSimSuperopGateRep,
     instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
 ):
     """Create an ideal (i.e. noiseless) model for the [[7,1,3]] code.
@@ -977,7 +977,7 @@ def create_ideal_model(  # noqa: C901
         Default is [](api:PyGSTiNoiseModel).
 
     gaterep : type[GateRep], optional
-        Gate representation class to use. Default is [](api:QSimSuperoperatorGateRep).
+        Gate representation class to use. Default is [](api:QSimSuperopGateRep).
 
     instrep : type[InstrumentRep], optional
         Instrument representation class to use. Default is [](api:ZBasisProjectionInstrumentRep).

@@ -16,7 +16,7 @@ from loqs.backends.reps import (
     InstrumentRep,
     KrausGateRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
@@ -29,9 +29,10 @@ from loqs.internal.serializable import Serializable
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 _UNITARY_1Q = np.eye(2)
+_SUPEROP_1Q = np.eye(4)  # shape-correct QSimSuperopGateRep payload for 1 qubit
 _GAMMA = 0.1
 _TP_K0 = np.array([[1.0, 0.0], [0.0, np.sqrt(1 - _GAMMA)]])
-_TP_K1 = np.array([[0.0, 0.0], [np.sqrt(_GAMMA), 0.0]])
+_TP_K1 = np.array([[0.0, np.sqrt(_GAMMA)], [0.0, 0.0]])
 _KRAUS_SEQ = ((_TP_K0, None), (_TP_K1, None))
 _PROB_STIM_SEQ = (("X 0", 0.5), ("Y 0", 0.5))
 
@@ -85,13 +86,13 @@ class TestConstruction:
             def get_reps(self, circ, gatereps, instreps):
                 label = circ.circuit[0][0]
                 if label[0] == "X":
-                    return [[QSimSuperoperatorGateRep(np.eye(4), label[1])]]
+                    return [[QSimSuperopGateRep(np.eye(4), label[1])]]
                 return [[ZBasisProjectionInstrumentRep(None, True, label[1])]]
 
         model = DictNoiseModel(PyGSTiNoiseModel())
         assert ("X", ("Q0",)) in model.gate_dict
         assert isinstance(
-            model.gate_dict[("X", ("Q0",))], QSimSuperoperatorGateRep
+            model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
         )
         assert ("M", ("Q0",)) in model.inst_dict
         assert isinstance(
@@ -110,7 +111,7 @@ class TestGateDispatch:
     def test_ndarray_default_cast_rep_is_qsim_superoperator(self):
         model = DictNoiseModel(({("X", ("Q0",)): np.eye(4)}, {}))
         assert isinstance(
-            model.gate_dict[("X", ("Q0",))], QSimSuperoperatorGateRep
+            model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
         )
 
     def test_str_becomes_stim_circuit_str(self):
@@ -139,7 +140,7 @@ class TestGateDispatch:
         assert rep.operations == (("X 0", 0.5), ("Y 0", 0.5))
 
     def test_rep_passthrough(self):
-        rep = QSimSuperoperatorGateRep(np.eye(4), ("Q0",))
+        rep = QSimSuperopGateRep(np.eye(4), ("Q0",))
         model = DictNoiseModel(({("X", ("Q0",)): rep}, {}))
         assert model.gate_dict[("X", ("Q0",))] is rep
 
@@ -148,7 +149,7 @@ class TestGateDispatch:
         with pytest.raises(AssertionError, match="not provided gatereps"):
             DictNoiseModel(
                 ({("X", ("Q0",)): rep}, {}),
-                gatereps=[QSimSuperoperatorGateRep],
+                gatereps=[QSimSuperopGateRep],
             )
 
     def test_sequence_matching_no_gaterep_raises(self):
@@ -172,8 +173,8 @@ class TestInstrumentDispatch:
 
     def test_two_element_non_projection_becomes_pre_post_operations(self):
         model = DictNoiseModel(
-            ({}, {("M", ("Q0",)): (_UNITARY_1Q, _UNITARY_1Q)}),
-            gatereps=[QSimSuperoperatorGateRep],
+            ({}, {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q)}),
+            gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisPrePostInstrumentRep],
             instrep_cast_reset=0,
             instrep_cast_include_outcomes=False,
@@ -182,8 +183,8 @@ class TestInstrumentDispatch:
         assert isinstance(rep, ZBasisPrePostInstrumentRep)
         assert rep.reset == 0
         assert rep.include_outcome is False
-        assert isinstance(rep.pre_op, QSimSuperoperatorGateRep)
-        assert isinstance(rep.post_op, QSimSuperoperatorGateRep)
+        assert isinstance(rep.pre_op, QSimSuperopGateRep)
+        assert isinstance(rep.post_op, QSimSuperopGateRep)
 
     def test_pre_post_operations_without_instrep_declared_raises(self):
         with pytest.raises(
@@ -196,8 +197,8 @@ class TestInstrumentDispatch:
 
     def test_mapping_becomes_outcome_operation_dict(self):
         model = DictNoiseModel(
-            ({}, {("M", ("Q0",)): {0: _UNITARY_1Q, 1: _UNITARY_1Q}}),
-            gatereps=[QSimSuperoperatorGateRep],
+            ({}, {("M", ("Q0",)): {0: _SUPEROP_1Q, 1: _SUPEROP_1Q}}),
+            gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisOutcomeOperationDictInstrumentRep],
         )
         rep = model.inst_dict[("M", ("Q0",))]
@@ -205,7 +206,7 @@ class TestInstrumentDispatch:
         assert rep.include_outcome is True
         assert set(rep.outcome_ops.keys()) == {0, 1}
         assert all(
-            isinstance(v, QSimSuperoperatorGateRep)
+            isinstance(v, QSimSuperopGateRep)
             for v in rep.outcome_ops.values()
         )
 
@@ -236,17 +237,17 @@ class TestGetReps:
     def test_exact_label_match(self):
         model = DictNoiseModel(({("X", ("Q0",)): np.eye(4)}, {}))
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
-        reps = model.get_reps(circuit, [QSimSuperoperatorGateRep], [])
+        reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
         assert reps[0].qubits == ("Q0",)
 
     def test_generic_name_only_fallback_for_gates(self):
         model = DictNoiseModel(({"X": np.eye(4)}, {}))
         circuit = ListPhysicalCircuit([[("X", ("Q1",))]])
-        reps = model.get_reps(circuit, [QSimSuperoperatorGateRep], [])
+        reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
         assert reps[0].qubits == ("Q1",)
-        assert isinstance(reps[0], QSimSuperoperatorGateRep)
+        assert isinstance(reps[0], QSimSuperopGateRep)
 
     def test_generic_name_only_fallback_for_instruments(self):
         model = DictNoiseModel(({}, {"M": (None, True)}))
@@ -284,7 +285,7 @@ class TestDictModelFixtureRoundTrip:
         assert set(decoded.gate_dict.keys()) == {("X", ("Q0",)), ("KRAUS", ("Q0",))}
         assert set(decoded.inst_dict.keys()) == {("M", ("Q0",))}
         assert isinstance(
-            decoded.gate_dict[("X", ("Q0",))], QSimSuperoperatorGateRep
+            decoded.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
         )
         assert isinstance(decoded.gate_dict[("KRAUS", ("Q0",))], KrausGateRep)
         assert isinstance(
@@ -294,7 +295,7 @@ class TestDictModelFixtureRoundTrip:
         # upgrade_legacy_gaterep_tag -- confirm these are real classes,
         # not raw ints or legacy enum tags, post-decode.
         assert decoded.output_gate_reps == [
-            QSimSuperoperatorGateRep,
+            QSimSuperopGateRep,
             KrausGateRep,
         ]
         assert decoded.output_instrument_reps == [ZBasisProjectionInstrumentRep]

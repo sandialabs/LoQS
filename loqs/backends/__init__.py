@@ -113,7 +113,7 @@ from .reps import (  # noqa: E402
     OperationRep,
     PTMGateRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     RepConstructionError,
     RepTuple,
     StimCircuitGateRep,

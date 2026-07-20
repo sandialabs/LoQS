@@ -21,7 +21,7 @@ from loqs.backends.reps import (
     KrausGateRep,
     PTMGateRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     RepTuple,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
@@ -59,7 +59,7 @@ class TestRepsFixtureRoundTrip:
     EXPECTED_CLASSES = {
         "GATEREP_UNITARY": UnitaryGateRep,
         "GATEREP_PTM": PTMGateRep,
-        "GATEREP_QSIM_SUPEROPERATOR": QSimSuperoperatorGateRep,
+        "GATEREP_QSIM_SUPEROPERATOR": QSimSuperopGateRep,
         "GATEREP_STIM_CIRCUIT_STR": StimCircuitGateRep,
         "GATEREP_PROBABILISTIC_STIM_OPERATIONS": ProbabilisticStimGateRep,
         "GATEREP_KRAUS_OPERATORS": KrausGateRep,
@@ -133,7 +133,7 @@ class TestRepsFixtureRoundTrip:
             assert set(rep.outcome_ops.keys()) == {0, 1}
             outcome_0, outcome_1 = rep.outcome_ops[0], rep.outcome_ops[1]
         assert isinstance(outcome_0, PTMGateRep)
-        assert isinstance(outcome_1, QSimSuperoperatorGateRep)
+        assert isinstance(outcome_1, QSimSuperopGateRep)
 
     def test_module_and_class_metadata(self):
         """The (module, class) metadata this fixture records is exactly the
@@ -171,7 +171,7 @@ class TestLegacyGaterepValueUpgrade:
         expected = {
             _LegacyGateRepValue.UNITARY: UnitaryGateRep,
             _LegacyGateRepValue.PTM: PTMGateRep,
-            _LegacyGateRepValue.QSIM_SUPEROPERATOR: QSimSuperoperatorGateRep,
+            _LegacyGateRepValue.QSIM_SUPEROPERATOR: QSimSuperopGateRep,
             _LegacyGateRepValue.STIM_CIRCUIT_STR: StimCircuitGateRep,
             _LegacyGateRepValue.PROBABILISTIC_STIM_OPERATIONS: (
                 ProbabilisticStimGateRep

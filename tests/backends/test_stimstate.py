@@ -9,7 +9,8 @@ from loqs.backends.reps import (
     KrausGateRep,
     ProbabilisticStimGateRep,
     PTMGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
+    RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
@@ -135,17 +136,17 @@ class TestSTIMQuantumState:
         # Let's try to pass in some unsupported reps
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                UnitaryGateRep(None, "Q0")
+                UnitaryGateRep(np.eye(2), "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                PTMGateRep(None, "Q0")
+                PTMGateRep(np.eye(4), "Q0")
             ])
         
         with pytest.raises(NotImplementedError):
             test.apply_reps([
-                QSimSuperoperatorGateRep(None, "Q0")
+                QSimSuperopGateRep(np.eye(4), "Q0")
             ])
 
         with pytest.raises(NotImplementedError):
@@ -217,16 +218,12 @@ class TestSTIMQuantumState:
             assert abs(count / n_trials - p) < 5 * sigma
 
     def test_probabilistic_stim_operations_negative_probability_raises(self):
-        rep = ProbabilisticStimGateRep([("", 1.2), ("X 0", -0.2)], ["Q0"])
-        test = STIMState([0], ["Q0"])
-        with pytest.raises(AssertionError, match="positive"):
-            test.apply_reps_inplace([rep])
+        with pytest.raises(RepConstructionError, match="non-negative"):
+            ProbabilisticStimGateRep([("", 1.2), ("X 0", -0.2)], ["Q0"])
 
     def test_probabilistic_stim_operations_bad_sum_raises(self):
-        rep = ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.6)], ["Q0"])
-        test = STIMState([0], ["Q0"])
-        with pytest.raises(AssertionError, match="sum to 1"):
-            test.apply_reps_inplace([rep])
+        with pytest.raises(RepConstructionError, match="sum to 1"):
+            ProbabilisticStimGateRep([("", 0.5), ("X 0", 0.6)], ["Q0"])
 
     def test_apply_instrument_stim_circuit_str(self):
         """StimCircuitInstrumentRep reuses the gate-apply code path

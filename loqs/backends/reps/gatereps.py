@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import functools
 import itertools
+import math
 from types import NoneType
 import warnings
 
@@ -22,13 +23,46 @@ from loqs.backends.reps.base import (
     OperationRep,
     RepConstructionError,
     StimCircuitPayloadMixin,
-    _num_qubits,
-    _resolve_qubits,
 )
 from loqs.types import Float, NDArray
 
 TP_CHECK_TOL = 1e-8
 """Numerical tolerance for the [](api:KrausGateRep) trace-preservation check."""
+
+
+def _validate_process_shape(
+    value: object, qubits: tuple, base: int, cls_name: str
+) -> None:
+    """Require `value` to be a square array shaped `(base**n, base**n)`.
+
+    Uses `n = len(qubits)` if attached; otherwise only checks the
+    dimension is *some* power of `base`. Raises
+    [](api:RepConstructionError) if not.
+    """
+    if (
+        not isinstance(value, np.ndarray)
+        or value.ndim != 2
+        or value.shape[0] != value.shape[1]
+    ):
+        raise RepConstructionError(
+            f"{value!r} is not a valid {cls_name} payload (expected a "
+            "square numpy array)"
+        )
+    d = value.shape[0]
+    if qubits:
+        n = len(qubits)
+        if d != base**n:
+            raise RepConstructionError(
+                f"{value!r} has shape {value.shape}, but {cls_name} with "
+                f"{n} qubits expects shape ({base**n}, {base**n})"
+            )
+        return
+    power = round(math.log(d, base)) if d > 0 else -1
+    if d <= 0 or base**power != d:
+        raise RepConstructionError(
+            f"{value!r} has shape {value.shape}, not a valid {cls_name} "
+            f"payload (dimension must be a power of {base})"
+        )
 
 
 class GateRep(OperationRep):
@@ -66,51 +100,21 @@ class UnitaryGateRep(GateRep):
     _SERIALIZE_ATTRS = ["unitary", "qubits"]
 
     def __init__(
-        self, unitary: NDArray, qubits: str | int | Sequence[str | int] = ()
+        self,
+        unitary: NDArray,
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
-        super().__init__(qubits)
-        self.unitary = unitary
+        """Construct a [](api:UnitaryGateRep) from a `(2**n, 2**n)` array.
 
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check whether `raw` is a bare array shaped like a unitary.
-
-        Without a known qubit count, this structurally overlaps with
-        [](api:PTMGateRep) and [](api:QSimSuperoperatorGateRep): a bare
-        array cannot be unambiguously classified as a unitary, a
-        Pauli-transfer matrix, or a QuantumSim-basis superoperator by shape
-        alone. When `qubits` *is* known (not `None`), the qubit count
-        resolves this decisively: a unitary on `n` qubits has shape
-        `(2**n, 2**n)`, while a PTM/QSim-superoperator has shape
-        `(4**n, 4**n)` -- these are disjoint for any `n`. Callers that
-        don't have a qubit count yet (e.g. [](api:DictNoiseModel)'s
-        name-only dict entries) resolve the remaining ambiguity by
-        choosing one of these three classes explicitly, rather than
-        relying on `matches`/[](api:convert)'s generic search.
+        Raises
+        ------
+        RepConstructionError
+            If `unitary`'s shape is inconsistent with `qubits` (see
+            `_validate_process_shape`).
         """
-        if not isinstance(raw, np.ndarray):
-            return False
-        n = _num_qubits(qubits)
-        if n is None:
-            return True
-        return raw.shape == (2**n, 2**n)
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        **kwargs,
-    ) -> "UnitaryGateRep":
-        if not cls.matches(raw, qubits):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a numpy array)"
-            )
-        return cls(raw, _resolve_qubits(qubits))
+        super().__init__(qubits)
+        _validate_process_shape(unitary, self.qubits, 2, type(self).__name__)
+        self.unitary = unitary
 
 
 class PTMGateRep(GateRep):
@@ -125,46 +129,24 @@ class PTMGateRep(GateRep):
     _SERIALIZE_ATTRS = ["ptm", "qubits"]
 
     def __init__(
-        self, ptm: NDArray, qubits: str | int | Sequence[str | int] = ()
+        self,
+        ptm: NDArray,
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
+        """Construct a [](api:PTMGateRep) from a `(4**n, 4**n)` array.
+
+        Raises
+        ------
+        RepConstructionError
+            If `ptm`'s shape is inconsistent with `qubits` (see
+            `_validate_process_shape`).
+        """
         super().__init__(qubits)
+        _validate_process_shape(ptm, self.qubits, 4, type(self).__name__)
         self.ptm = ptm
 
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check whether `raw` is a bare array shaped like a process matrix.
 
-        See [](api:UnitaryGateRep.matches) for why this structurally
-        overlaps with [](api:UnitaryGateRep) (resolved decisively when
-        `qubits` is known) and [](api:QSimSuperoperatorGateRep) (not
-        resolved by shape at all -- both are `(4**n, 4**n)`).
-        """
-        if not isinstance(raw, np.ndarray):
-            return False
-        n = _num_qubits(qubits)
-        if n is None:
-            return True
-        return raw.shape == (4**n, 4**n)
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        **kwargs,
-    ) -> "PTMGateRep":
-        if not cls.matches(raw, qubits):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a numpy array)"
-            )
-        return cls(raw, _resolve_qubits(qubits))
-
-
-class QSimSuperoperatorGateRep(GateRep):
+class QSimSuperopGateRep(GateRep):
     """QuantumSim-basis superoperator representation for a gate.
 
     Process matrices in QuantumSim's non-standard basis. `superop` should be
@@ -176,43 +158,21 @@ class QSimSuperoperatorGateRep(GateRep):
     _SERIALIZE_ATTRS = ["superop", "qubits"]
 
     def __init__(
-        self, superop: NDArray, qubits: str | int | Sequence[str | int] = ()
+        self,
+        superop: NDArray,
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
-        super().__init__(qubits)
-        self.superop = superop
+        """Construct a [](api:QSimSuperopGateRep) from a `(4**n, 4**n)` array.
 
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check whether `raw` is a bare array shaped like a process matrix.
-
-        See [](api:UnitaryGateRep.matches) for why this structurally
-        overlaps with [](api:UnitaryGateRep) (resolved decisively when
-        `qubits` is known) and [](api:PTMGateRep) (not resolved by shape
-        at all -- both are `(4**n, 4**n)`).
+        Raises
+        ------
+        RepConstructionError
+            If `superop`'s shape is inconsistent with `qubits` (see
+            `_validate_process_shape`).
         """
-        if not isinstance(raw, np.ndarray):
-            return False
-        n = _num_qubits(qubits)
-        if n is None:
-            return True
-        return raw.shape == (4**n, 4**n)
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        **kwargs,
-    ) -> "QSimSuperoperatorGateRep":
-        if not cls.matches(raw, qubits):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a numpy array)"
-            )
-        return cls(raw, _resolve_qubits(qubits))
+        super().__init__(qubits)
+        _validate_process_shape(superop, self.qubits, 4, type(self).__name__)
+        self.superop = superop
 
 
 class StimCircuitGateRep(StimCircuitPayloadMixin, GateRep):
@@ -252,46 +212,46 @@ class ProbabilisticStimGateRep(GateRep):
     def __init__(
         self,
         operations: Sequence[tuple[str, Float]],
-        qubits: str | int | Sequence[str | int] = (),
+        qubits: str | int | Sequence[str | int] | None = (),
     ) -> None:
+        """Construct a [](api:ProbabilisticStimGateRep) from `(str, float)` pairs.
+
+        Raises
+        ------
+        RepConstructionError
+            If `operations` isn't a nonempty sequence of `(str, float)`
+            2-tuples, or the probabilities aren't all non-negative and
+            summing to 1.
+        """
+        if (
+            not isinstance(operations, Sequence)
+            or isinstance(operations, str)
+            or len(operations) == 0
+        ):
+            raise RepConstructionError(
+                f"{operations!r} is not a valid {type(self).__name__} payload "
+                "(expected a nonempty sequence of (str, float) pairs)"
+            )
+        for el in operations:
+            if (
+                not isinstance(el, (tuple, list))
+                or len(el) != 2
+                or not isinstance(el[0], str)
+                or not isinstance(el[1], (float, np.floating, int))
+            ):
+                raise RepConstructionError(
+                    f"{operations!r} is not a valid {type(self).__name__} "
+                    "payload (expected a nonempty sequence of (str, float) "
+                    "pairs)"
+                )
+        probs = [el[1] for el in operations]
+        if any(p < 0 for p in probs) or abs(1 - sum(probs)) >= 1e-12:
+            raise RepConstructionError(
+                f"{operations!r} probabilities must be non-negative and "
+                "sum to 1"
+            )
         super().__init__(qubits)
         self.operations = tuple(tuple(el) for el in operations)  # type: ignore[misc]
-
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check that `raw` is a nonempty sequence of `(str, float)` 2-tuples."""
-        if not isinstance(raw, Sequence) or isinstance(raw, str):
-            return False
-        if len(raw) == 0:
-            return False
-        for el in raw:
-            if not isinstance(el, (tuple, list)):
-                return False
-            if len(el) != 2:
-                return False
-            if not isinstance(el[0], str):
-                return False
-            if not isinstance(el[1], (float, np.floating, int)):
-                return False
-        return True
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        **kwargs,
-    ) -> "ProbabilisticStimGateRep":
-        if not cls.matches(raw, qubits):
-            raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a nonempty "
-                "sequence of (str, float) pairs)"
-            )
-        return cls(raw, _resolve_qubits(qubits))  # type: ignore[arg-type]
 
 
 class KrausGateRep(GateRep):
@@ -355,75 +315,62 @@ class KrausGateRep(GateRep):
     def __init__(
         self,
         kraus_operators: Sequence[tuple[NDArray, Float | None]],
-        qubits: str | int | Sequence[str | int] = (),
+        qubits: str | int | Sequence[str | int] | None = (),
+        tp_check_abstol: Float | None = TP_CHECK_TOL,
     ) -> None:
-        super().__init__(qubits)
-        self.kraus_operators = tuple(tuple(el) for el in kraus_operators)  # type: ignore[misc]
-
-    @classmethod
-    def matches(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-    ) -> bool:
-        """Check that `raw` is a nonempty sequence of `(ndarray, float | None)` pairs.
-
-        This is a purely structural check; it does not perform the
-        trace-preservation check (see [](api:KrausGateRep.from_raw)), since
-        `matches` may be called speculatively on candidates that ultimately
-        aren't selected (e.g. by [](api:convert)), and emitting a warning
-        for a rejected candidate would be misleading.
-        """
-        if not isinstance(raw, Sequence) or isinstance(raw, str):
-            return False
-        if len(raw) == 0:
-            return False
-        for el in raw:
-            if not isinstance(el, (tuple, list)):
-                return False
-            if len(el) != 2:
-                return False
-            if not isinstance(el[0], np.ndarray):
-                return False
-            if not isinstance(el[1], (float, np.floating, NoneType)):
-                return False
-        return True
-
-    @classmethod
-    def from_raw(
-        cls,
-        raw: object,
-        qubits: str | int | Sequence[str | int] | None = None,
-        tp_check_abstol: Float = TP_CHECK_TOL,
-        **kwargs,
-    ) -> "KrausGateRep":
-        """Construct a [](api:KrausGateRep) from a raw sequence of Kraus operators.
+        """Construct a [](api:KrausGateRep) from a sequence of Kraus operators.
 
         Parameters
         ----------
-        raw:
-            A sequence of `(kraus_operator, probability)` pairs.
+        kraus_operators:
+            A sequence of `(kraus_operator, probability)` pairs, each
+            `kraus_operator` shaped `(2**n, 2**n)` for `n` qubits.
 
         qubits:
-            Qubit label(s) this operation acts upon, or `None` if not yet
-            known.
+            Qubit label(s) this operation acts upon, or `None`/unattached
+            if not yet known.
 
         tp_check_abstol:
-            Absolute tolerance for a trace-preservation check performed on
-            the supplied Kraus operators. If finite (the default), a
-            [](api:UserWarning) is emitted when
-            \\( \\sum_i K_i^\\dagger K_i \\) deviates from the identity by
-            more than this tolerance. Set to `float("inf")` to skip the
-            check.
+            Tolerance for a trace-preservation warning on the supplied
+            Kraus operators; `None` skips the check.
+
+        Raises
+        ------
+        RepConstructionError
+            If `kraus_operators` isn't a nonempty sequence of
+            `(ndarray, float | None)` pairs shaped consistently with
+            `qubits`.
         """
-        if not cls.matches(raw, qubits):
+        if (
+            not isinstance(kraus_operators, Sequence)
+            or isinstance(kraus_operators, str)
+            or len(kraus_operators) == 0
+        ):
             raise RepConstructionError(
-                f"{raw!r} is not a valid {cls.__name__} payload (expected a nonempty "
-                "sequence of (ndarray, float | None) pairs)"
+                f"{kraus_operators!r} is not a valid {type(self).__name__} "
+                "payload (expected a nonempty sequence of (ndarray, "
+                "float | None) pairs)"
             )
-        assert isinstance(raw, Sequence)
-        if np.isfinite(tp_check_abstol):
-            ops = [K @ K.conj().T for K, _ in raw]
+        for el in kraus_operators:
+            if (
+                not isinstance(el, (tuple, list))
+                or len(el) != 2
+                or not isinstance(el[1], (float, np.floating, NoneType))
+            ):
+                raise RepConstructionError(
+                    f"{kraus_operators!r} is not a valid "
+                    f"{type(self).__name__} payload (expected a nonempty "
+                    "sequence of (ndarray, float | None) pairs)"
+                )
+        super().__init__(qubits)
+        for el in kraus_operators:
+            _validate_process_shape(el[0], self.qubits, 2, type(self).__name__)
+        self.kraus_operators = tuple(tuple(el) for el in kraus_operators)  # type: ignore[misc]
+
+        if tp_check_abstol is not None:
+            # Trace preservation is sum_i K_i^dagger K_i == I, not
+            # sum_i K_i K_i^dagger (they differ for non-normal K_i).
+            ops = [K.conj().T @ K for K, _ in self.kraus_operators]
             diff = np.zeros(ops[0].shape, complex)
             diff = np.sum(ops, out=diff, axis=0)
             diff[np.diag_indices_from(diff)] -= 1.0
@@ -431,7 +378,6 @@ class KrausGateRep(GateRep):
                 warnings.warn(
                     'Supplied "Kraus operators" do not constitute a TP channel.'
                 )
-        return cls(raw, _resolve_qubits(qubits))  # type: ignore[arg-type]
 
     @classmethod
     def from_pauli_stochastic(
@@ -482,7 +428,7 @@ class KrausGateRep(GateRep):
             )
             kraus_reps.append((np.sqrt(prob) * pauli_nq, prob))
 
-        return cls(kraus_reps, qubits)
+        return cls(kraus_reps, qubits, tp_check_abstol=None)
 
     @classmethod
     def from_depolarizing(
@@ -535,7 +481,7 @@ class KrausGateRep(GateRep):
         assert 0 <= prob <= 1
         a0 = np.array([[1, 0], [0, np.sqrt(1 - prob)]])
         a1 = np.array([[0, np.sqrt(prob)], [0, 0]])
-        return cls([(a0, None), (a1, None)], [qubit])
+        return cls([(a0, None), (a1, None)], [qubit], tp_check_abstol=None)
 
     def compose(self, other: "GateRep", dedup: bool = True) -> "KrausGateRep":
         r"""Compose this Kraus channel with another, applied afterward.
@@ -595,7 +541,7 @@ class KrausGateRep(GateRep):
                     new_prob = None
                 new_kraus_reps.append((new_k, new_prob))
 
-        composed = KrausGateRep(new_kraus_reps, self.qubits)
+        composed = KrausGateRep(new_kraus_reps, self.qubits, tp_check_abstol=None)
         if not dedup:
             return composed
         try:
@@ -661,4 +607,4 @@ class KrausGateRep(GateRep):
             for entry in normalized_kraus_ops
         ]
 
-        return KrausGateRep(deduped_kraus_reps, self.qubits)
+        return KrausGateRep(deduped_kraus_reps, self.qubits, tp_check_abstol=None)

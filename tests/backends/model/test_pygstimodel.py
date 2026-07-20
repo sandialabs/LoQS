@@ -20,7 +20,7 @@ from loqs.backends.reps import (
     InstrumentRep,
     KrausGateRep,
     PTMGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
@@ -38,15 +38,23 @@ except ImportError:
 
 # TP-preserving (sum_i K_i K_i^dagger = I) amplitude-damping Kraus operators
 # -- a genuinely non-unitary channel, used to exercise the GateRep fallback
-# loop (UnitaryGateRep fails for it; PTMGateRep/QSimSuperoperatorGateRep/
+# loop (UnitaryGateRep fails for it; PTMGateRep/QSimSuperopGateRep/
 # KrausGateRep succeed).
 _GAMMA = 0.1
 _K0 = np.array([[1.0, 0.0], [0.0, np.sqrt(1 - _GAMMA)]], dtype=complex)
 _K1 = np.array([[0.0, np.sqrt(_GAMMA)], [0.0, 0.0]], dtype=complex)
 _AMP_DAMP_SUPEROP = FullArbitraryOp.from_kraus_operators([_K0, _K1], "pp").to_dense()
 
-_ZBASIS_P0 = np.diag([1, 0, 0, 1]).astype(complex)
-_ZBASIS_P1 = np.diag([0, 1, 1, 0]).astype(complex)
+# Individual Z-basis measurement branches |0><0|(.)|0><0| and |1><1|(.)|1><1|
+# (each a single, non-trace-preserving-on-its-own Kraus operator; their sum
+# is the fully-dephasing channel, i.e. the identity restricted to the
+# computational basis).
+_ZBASIS_P0 = FullArbitraryOp.from_kraus_operators(
+    [np.diag([1.0, 0.0]).astype(complex)], "pp"
+).to_dense()
+_ZBASIS_P1 = FullArbitraryOp.from_kraus_operators(
+    [np.diag([0.0, 1.0]).astype(complex)], "pp"
+).to_dense()
 
 
 def _build_explicit_model():
@@ -190,18 +198,18 @@ class TestGetGateRep:
         assert np.shape(rep) == (4, 4)
 
     def test_qsim_superoperator(self, pgm):
-        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [QSimSuperoperatorGateRep])
-        assert reptype is QSimSuperoperatorGateRep
+        rep, reptype = pgm._get_gate_rep("Gad", ["Q0"], [QSimSuperopGateRep])
+        assert reptype is QSimSuperopGateRep
         assert np.shape(rep) == (4, 4)
 
     def test_fallback_skips_failing_candidate(self, pgm):
         """Requesting UnitaryGateRep first (fails for the non-unitary
         amplitude-damping channel) falls through to
-        QSimSuperoperatorGateRep rather than raising."""
+        QSimSuperopGateRep rather than raising."""
         rep, reptype = pgm._get_gate_rep(
-            "Gad", ["Q0"], [UnitaryGateRep, QSimSuperoperatorGateRep]
+            "Gad", ["Q0"], [UnitaryGateRep, QSimSuperopGateRep]
         )
-        assert reptype is QSimSuperoperatorGateRep
+        assert reptype is QSimSuperopGateRep
         assert np.shape(rep) == (4, 4)
 
     def test_no_valid_candidate_raises(self, pgm):
@@ -346,7 +354,7 @@ class TestTimeDependence:
         )
         pgm.get_reps(
             circuit,
-            [UnitaryGateRep, QSimSuperoperatorGateRep],
+            [UnitaryGateRep, QSimSuperopGateRep],
             [ZBasisProjectionInstrumentRep],
         )
 
@@ -426,7 +434,7 @@ class TestGetRepsErrorPaths:
             RepConstructionError, match="Failed to create gate rep for any of"
         ):
             pgm._get_gate_rep(
-                "Gccx", ["Q0", "Q1", "Q2"], [QSimSuperoperatorGateRep]
+                "Gccx", ["Q0", "Q1", "Q2"], [QSimSuperopGateRep]
             )
 
     def test_kraus_operators_identity_branch(self):

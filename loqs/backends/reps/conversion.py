@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Sequence
 import functools
+import inspect
 import itertools
 
 import numpy as np
@@ -23,7 +24,7 @@ from loqs.backends.reps.gatereps import (
     KrausGateRep,
     ProbabilisticStimGateRep,
     PTMGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitGateRep,
     UnitaryGateRep,
 )
@@ -125,7 +126,7 @@ _QSIM_1Q = (
 def _qsim_basis(n: int) -> tuple[NDArray, ...]:
     """The N-qubit QuantumSim basis, as `4**n` `(2**n, 2**n)` matrices.
 
-    Only defined for 1-2 qubits, matching [](api:QSimSuperoperatorGateRep)'s
+    Only defined for 1-2 qubits, matching [](api:QSimSuperopGateRep)'s
     existing scope (`pygstimodel.py`'s own `_get_gate_rep` already refuses
     to construct one for more than 2 qubits).
     """
@@ -237,7 +238,7 @@ def _kraus_to_ptm(rep: KrausGateRep) -> PTMGateRep:
 
 def _unitary_to_kraus(rep: UnitaryGateRep) -> KrausGateRep:
     """Trivial: a unitary is a single Kraus operator with probability 1."""
-    return KrausGateRep([(rep.unitary, 1.0)], rep.qubits)
+    return KrausGateRep([(rep.unitary, 1.0)], rep.qubits, tp_check_abstol=None)
 
 
 def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
@@ -273,7 +274,7 @@ def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
             # Not a scaled unitary, so store None (signal state backends
             # to compute the (state-dependent) probability on the fly).
             kraus_reps.append((K, None))
-    return KrausGateRep(kraus_reps, rep.qubits)
+    return KrausGateRep(kraus_reps, rep.qubits, tp_check_abstol=None)
 
 
 def _ptm_to_unitary(rep: PTMGateRep) -> UnitaryGateRep:
@@ -320,14 +321,14 @@ def _kraus_to_unitary(rep: KrausGateRep) -> UnitaryGateRep:
     return UnitaryGateRep(K, rep.qubits)
 
 
-def _ptm_to_qsim_superoperator(rep: PTMGateRep) -> QSimSuperoperatorGateRep:
+def _ptm_to_qsim_superoperator(rep: PTMGateRep) -> QSimSuperopGateRep:
     """Changes a PTM from the Pauli basis to the QuantumSim basis via `_change_basis`."""
     n = len(rep.qubits)
     result = _change_basis(rep.ptm, _pauli_basis(n), _qsim_basis(n))
-    return QSimSuperoperatorGateRep(result, rep.qubits)
+    return QSimSuperopGateRep(result, rep.qubits)
 
 
-def _qsim_superoperator_to_ptm(rep: QSimSuperoperatorGateRep) -> PTMGateRep:
+def _qsim_superoperator_to_ptm(rep: QSimSuperopGateRep) -> PTMGateRep:
     """The inverse of `_ptm_to_qsim_superoperator`."""
     n = len(rep.qubits)
     result = _change_basis(rep.superop, _qsim_basis(n), _pauli_basis(n))
@@ -437,10 +438,8 @@ def _is_identity_gaterep(rep: GateRep) -> bool:
     """
     if not isinstance(rep, UnitaryGateRep):
         return False
-    d = 2 ** len(rep.qubits)
     unitary = np.asarray(rep.unitary)
-    if unitary.shape != (d, d):
-        return False
+    d = unitary.shape[0]
     if np.isclose(unitary[0, 0], 0):
         return False
     return np.allclose(unitary, unitary[0, 0] * np.eye(d))
@@ -611,7 +610,8 @@ def _zbasis_projection_to_stim_circuit(
                 "unconditionally records its outcome"
             )
         circuit_str = f"M {indices}"
-    elif reset in (0, 1):
+    else:
+        # reset is constructor-validated to None/0/1, so this is {0, 1}.
         base_command = "MR" if include_outcome else "R"
         circuit_str = f"{base_command} {indices}"
         if reset == 1:
@@ -619,8 +619,6 @@ def _zbasis_projection_to_stim_circuit(
             # target, exactly like the "MR"/"R" line above -- no need for
             # one "X" line per qubit.
             circuit_str = f"{circuit_str}\nX {indices}"
-    else:
-        raise RepConstructionError(f"Unrecognized reset value {reset!r}")
 
     return StimCircuitInstrumentRep(circuit_str, rep.qubits)
 
@@ -685,8 +683,8 @@ _CONVERTERS: dict[
     (PTMGateRep, KrausGateRep): _ptm_to_kraus,
     (PTMGateRep, UnitaryGateRep): _ptm_to_unitary,
     (KrausGateRep, UnitaryGateRep): _kraus_to_unitary,
-    (PTMGateRep, QSimSuperoperatorGateRep): _ptm_to_qsim_superoperator,
-    (QSimSuperoperatorGateRep, PTMGateRep): _qsim_superoperator_to_ptm,
+    (PTMGateRep, QSimSuperopGateRep): _ptm_to_qsim_superoperator,
+    (QSimSuperopGateRep, PTMGateRep): _qsim_superoperator_to_ptm,
     (ZBasisProjectionInstrumentRep, ZBasisPrePostInstrumentRep): (
         _zbasis_projection_to_zbasis_pre_post
     ),
@@ -748,7 +746,7 @@ def _shortest_path(
 _ALL_CONCRETE_REPS: tuple[type[OperationRep], ...] = (
     UnitaryGateRep,
     PTMGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     StimCircuitGateRep,
     ProbabilisticStimGateRep,
     KrausGateRep,
@@ -762,6 +760,35 @@ resolve a raw payload's starting class when it doesn't directly match any
 of the requested targets (see `convert`'s docstring)."""
 
 
+def _accepted_kwargs(cls: type[OperationRep], kwargs: dict) -> dict:
+    """Filter `kwargs` down to what `cls.__init__` accepts by name, so
+    `convert` can forward the same `**kwargs` to every candidate class
+    without knowing which class-specific ones each accepts."""
+    params = inspect.signature(cls.__init__).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _try_construct(
+    cls: type[OperationRep],
+    source: object,
+    qubits: str | int | Sequence[str | int] | None,
+    kwargs: dict,
+) -> OperationRep | None:
+    """Attempt `cls(source, qubits=qubits, **kwargs)`, returning `None`
+    instead of raising if `cls` is abstract, or construction raises
+    [](api:RepConstructionError) or `TypeError` (e.g. a class like
+    [](api:ZBasisPrePostInstrumentRep) needs several distinct required
+    arguments, so a single `source` can never satisfy it)."""
+    if inspect.isabstract(cls):
+        return None
+    try:
+        return cls(source, qubits=qubits, **_accepted_kwargs(cls, kwargs))
+    except (RepConstructionError, TypeError):
+        return None
+
+
 def convert(
     source: object,
     target: type[OperationRep] | Sequence[type[OperationRep]],
@@ -770,30 +797,13 @@ def convert(
 ) -> OperationRep:
     """Convert `source` (a raw payload or an `OperationRep`) to `target`.
 
-    Behavior, in order:
-
-    1. If `source` is already an instance of `target` (or of any entry in
-       `target`, if a sequence): return it as-is.
-    2. If `source` is a raw (non-`OperationRep`) payload and directly
-       matches one of `target`'s entries (checked in order, so `target`
-       can be a caller-prioritized candidate list): construct and return
-       that class directly via `from_raw`, no hopping needed.
-    3. Otherwise, resolve a starting class -- either `type(source)` if
-       `source` is already some other `OperationRep`, or (for a raw
-       payload) whichever single concrete class in
-       [](api:OperationRep) matches it -- and search for the shortest
-       chain of registered pairwise converters (see `conversion.py`'s
-       module-level `_CONVERTERS` registry) from that starting class to
-       the closest requested target, applying each hop in turn.
-
-    A bare raw payload whose shape is consistent with more than one
-    concrete class (e.g. a `(4**n, 4**n)` array, ambiguous between
-    [](api:PTMGateRep) and [](api:QSimSuperoperatorGateRep)) is **not**
-    guessed at step 3 -- this raises [](api:RepConstructionError) asking
-    the caller to construct the source representation explicitly first
-    (e.g. `convert(PTMGateRep(raw_array, qubits), KrausGateRep)`), since
-    the two starting points reach a shared target via physically different
-    (non-equivalent) hop paths.
+    1. If `source` already is (or is an instance of) `target`, return it.
+    2. Else try constructing each entry of `target` directly from
+       `source`, in order; return the first that succeeds.
+    3. Else resolve `source`'s unique concrete starting class and hop
+       through `_CONVERTERS` to the closest target. A raw payload
+       matching more than one concrete class is never guessed at here --
+       construct the intended representation explicitly instead.
 
     Parameters
     ----------
@@ -802,23 +812,14 @@ def convert(
         [](api:OperationRep) instance.
 
     target:
-        The desired class, or a priority-ordered sequence of candidate
-        classes (only meaningful for step 2's direct-match behavior --
-        once hopping is needed, the *closest* entry in `target` wins,
-        regardless of its position in the sequence).
+        The desired class, or a priority-ordered sequence of candidates.
 
     qubits:
-        Qubit label(s) this operation acts upon, if known, or `None` (the
-        default) if not. Forwarded to `matches`/`from_raw` for structural
-        disambiguation (see [](api:OperationRep.matches)); if `source` is
-        a raw payload and `qubits` is still `None` when a new
-        representation is actually constructed, that representation's own
-        `qubits` attribute is left as the empty tuple, to be filled in
-        later via [](api:OperationRep.with_qubits).
+        Qubit label(s) this operation acts upon, if known, else `None`.
 
     **kwargs:
-        Forwarded to `from_raw`, for raw payloads that need it (e.g. the
-        composite `InstrumentRep`s' `gate_upgrader`).
+        Forwarded to whichever candidate class's constructor accepts
+        them (e.g. [](api:KrausGateRep)'s `tp_check_abstol`).
 
     Returns
     -------
@@ -842,17 +843,20 @@ def convert(
         source_cls: type[OperationRep] = type(source)
         source_rep: OperationRep = source
     else:
-        # Raw payload: try a direct match against `target` first, in
-        # priority order -- no hop needed, so a structurally-ambiguous
+        # Raw payload: try a direct construction against `target` first,
+        # in priority order -- no hop needed, so a structurally-ambiguous
         # payload resolves to whichever candidate is listed first.
         for candidate_target in targets:
-            if candidate_target.matches(source, qubits):
-                return candidate_target.from_raw(source, qubits, **kwargs)
+            result = _try_construct(candidate_target, source, qubits, kwargs)
+            if result is not None:
+                return result
 
         # No direct target match -- resolve a single, unambiguous starting
         # class among every known concrete rep class before hopping.
         starting_candidates = [
-            cls for cls in _ALL_CONCRETE_REPS if cls.matches(source, qubits)
+            (cls, rep)
+            for cls in _ALL_CONCRETE_REPS
+            if (rep := _try_construct(cls, source, qubits, kwargs)) is not None
         ]
         if not starting_candidates:
             raise RepConstructionError(
@@ -863,12 +867,12 @@ def convert(
         if len(starting_candidates) > 1:
             raise RepConstructionError(
                 f"{source!r} matches more than one rep class "
-                f"({[c.__name__ for c in starting_candidates]}); construct "
-                "the intended representation explicitly instead of passing "
-                "a raw payload here (e.g. PTMGateRep(source, qubits))"
+                f"({[c.__name__ for c, _ in starting_candidates]}); "
+                "construct the intended representation explicitly instead "
+                "of passing a raw payload here (e.g. "
+                "PTMGateRep(source, qubits))"
             )
-        source_cls = starting_candidates[0]
-        source_rep = source_cls.from_raw(source, qubits, **kwargs)
+        source_cls, source_rep = starting_candidates[0]
 
     if isinstance(source_rep, targets):
         return source_rep

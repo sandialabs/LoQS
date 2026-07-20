@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from functools import singledispatchmethod
+from types import NoneType
 import copy
 import warnings
 import numpy as np
@@ -28,7 +29,7 @@ from loqs.backends.reps import (
     KrausGateRep,
     OperationRep,
     ProbabilisticStimGateRep,
-    QSimSuperoperatorGateRep,
+    QSimSuperopGateRep,
     RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
@@ -75,7 +76,7 @@ _NON_ARRAY_GATEREPS: tuple[type[GateRep], ...] = (
 """Candidate [](api:GateRep) classes tried (in order) for a raw gate value
 that isn't a bare array. A bare array is handled separately (see
 `DictNoiseModel.__init__`'s `gaterep_array_cast_rep`), since
-[](api:UnitaryGateRep)/[](api:PTMGateRep)/[](api:QSimSuperoperatorGateRep)
+[](api:UnitaryGateRep)/[](api:PTMGateRep)/[](api:QSimSuperopGateRep)
 cannot be structurally distinguished from each other by shape alone.
 """
 
@@ -103,9 +104,9 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
     def __init__(  # noqa: C901
         self,
         model_or_dicts: DictModelCastableTypes,
-        gatereps: Sequence[type[GateRep]] = (QSimSuperoperatorGateRep,),
+        gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
         instreps: Sequence[type[InstrumentRep]] = (ZBasisProjectionInstrumentRep,),
-        gaterep_array_cast_rep: type[GateRep] = QSimSuperoperatorGateRep,
+        gaterep_array_cast_rep: type[GateRep] = QSimSuperopGateRep,
         instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
@@ -186,9 +187,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                 ), f"Provided {gr} but not provided gatereps"
                 return gr
             if isinstance(gr, np.ndarray):
-                # matrix for dense rep -- constructed directly rather than
-                # via `from_raw`, so `None` (unknown qubits) needs
-                # resolving to the empty tuple here explicitly.
+                # matrix for dense rep; None (unknown qubits) means "not attached yet".
                 return gaterep_array_cast_rep(gr, () if qubits is None else qubits)
             return convert_rep(gr, _NON_ARRAY_GATEREPS, qubits)
 
@@ -198,31 +197,42 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
                     isinstance(ir, cls) for cls in instreps
                 ), f"Provided {ir} but reptype not in instreps"
                 return ir
-            if isinstance(ir, (tuple, list)) and len(ir) == 2 and not (
-                ZBasisProjectionInstrumentRep.matches(ir, qubits)
-            ):
+            # A length-2 tuple/list is ambiguous between a (reset,
+            # include_outcome) pair and a (pre_op, post_op) pair.
+            looks_like_zbasis_projection = (
+                isinstance(ir, (tuple, list))
+                and len(ir) == 2
+                and isinstance(ir[0], (int, NoneType))
+                and isinstance(ir[1], bool)
+            )
+            if looks_like_zbasis_projection:
+                return ZBasisProjectionInstrumentRep(ir[0], ir[1], qubits)
+            if isinstance(ir, (tuple, list)) and len(ir) == 2:
                 assert ZBasisPrePostInstrumentRep in instreps, (
                     "Detected two ops for a pre/post operation instrument, but "
                     + "ZBasisPrePostInstrumentRep not passed as a valid instrument rep"
                 )
-            elif isinstance(ir, Mapping):
+                pre_op = convert_to_gaterep(ir[0], qubits)
+                post_op = convert_to_gaterep(ir[1], qubits)
+                return ZBasisPrePostInstrumentRep(
+                    instrep_cast_reset,
+                    instrep_cast_include_outcomes,
+                    pre_op,
+                    post_op,
+                    qubits,
+                )
+            if isinstance(ir, Mapping):
                 assert ZBasisOutcomeOperationDictInstrumentRep in instreps, (
                     "Detected dict for a outcome-operation instrument, but "
                     + "ZBasisOutcomeOperationDictInstrumentRep not passed as a valid instrument rep"
                 )
-            return convert_rep(
-                ir,
-                (
-                    StimCircuitInstrumentRep,
-                    ZBasisProjectionInstrumentRep,
-                    ZBasisPrePostInstrumentRep,
-                    ZBasisOutcomeOperationDictInstrumentRep,
-                ),
-                qubits,
-                reset=instrep_cast_reset,
-                include_outcome=instrep_cast_include_outcomes,
-                gate_upgrader=convert_to_gaterep,
-            )
+                outcome_ops = {
+                    k: convert_to_gaterep(v, qubits) for k, v in ir.items()
+                }
+                return ZBasisOutcomeOperationDictInstrumentRep(
+                    outcome_ops, instrep_cast_include_outcomes, qubits
+                )
+            return convert_rep(ir, StimCircuitInstrumentRep, qubits)
 
         # Run through gates and upgrade everything to GateReps
         for k, gr in gate_dict.items():
