@@ -697,6 +697,29 @@ def create_qec_code(
             hist_X = []
             hist_Z = []
 
+        # Known classical offsets baked into the ROUND-0 recorded values by
+        # bookkeeping rewrites (e.g. the lattice-surgery split flips the
+        # grown-check row of every stored round; interior diffs cancel but
+        # the round-0 absolute layer keeps the flip). Subtracted from the
+        # t=0 detector layer only, so round 0 stays usable as a detector
+        # when the prep basis makes it deterministic.
+        try:
+            offset_X = list(
+                history[-1].get(  # type: ignore
+                    f"syndrome_round0_offset_X_{patch_label}", []
+                )
+                or []
+            )
+            offset_Z = list(
+                history[-1].get(  # type: ignore
+                    f"syndrome_round0_offset_Z_{patch_label}", []
+                )
+                or []
+            )
+        except (IndexError, AttributeError, KeyError):
+            offset_X = []
+            offset_Z = []
+
         R = len(hist_X)  # number of previous syndrome rounds
 
         # 3. Final round R+1 syndrome from final measurements
@@ -765,13 +788,28 @@ def create_qec_code(
                         weight=0.9,
                         merge_strategy="smallest-weight",
                     )
+            # With a reference round the first detector layer diffs against
+            # a NOISY baseline: a measurement flip in the reference round
+            # leaves a single defect there. Escape edges (measurement
+            # weight, no fault ids) let the matcher explain it without a
+            # spurious data correction.
+            if reference_round_Z and num_layers > 0:
+                for i in range(4):
+                    matching_Z.add_boundary_edge(
+                        i,
+                        weight=0.9,
+                        merge_strategy="smallest-weight",
+                    )
 
             # Compute difference syndrome
             diff_sz = []
             first_t = 1 if reference_round_Z else 0
             for t in range(first_t, num_rounds):
                 if t == 0:
-                    diff_sz.extend(sz_history[0])
+                    row = sz_history[0]
+                    if offset_Z:
+                        row = [a ^ b for a, b in zip(row, offset_Z)]
+                    diff_sz.extend(row)
                 else:
                     diff_sz.extend(
                         [
@@ -858,13 +896,28 @@ def create_qec_code(
                         weight=0.9,
                         merge_strategy="smallest-weight",
                     )
+            # With a reference round the first detector layer diffs against
+            # a NOISY baseline: a measurement flip in the reference round
+            # leaves a single defect there. Escape edges (measurement
+            # weight, no fault ids) let the matcher explain it without a
+            # spurious data correction.
+            if reference_round_X and num_layers > 0:
+                for i in range(4):
+                    matching_X.add_boundary_edge(
+                        i,
+                        weight=0.9,
+                        merge_strategy="smallest-weight",
+                    )
 
             # Compute difference syndrome
             diff_sx = []
             first_t = 1 if reference_round_X else 0
             for t in range(first_t, num_rounds):
                 if t == 0:
-                    diff_sx.extend(sx_history[0])
+                    row = sx_history[0]
+                    if offset_X:
+                        row = [a ^ b for a, b in zip(row, offset_X)]
+                    diff_sx.extend(row)
                 else:
                     diff_sx.extend(
                         [

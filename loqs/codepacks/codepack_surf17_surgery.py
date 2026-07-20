@@ -44,6 +44,7 @@ codepack's syndrome-extraction template slot order `[a, b, c, d]`.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 
 import numpy as np
@@ -722,6 +723,9 @@ def pymatching_merged_window_decode(
     syndrome_window: Sequence[Sequence[int]],
     prev_round: Sequence[int],
     fresh_rows: Sequence[int],
+    fresh_start: int = 0,
+    noisy_prev: bool = False,
+    ref_rows: Sequence[int] = (),
 ) -> np.ndarray:
     """Decode a syndrome window on the 3D space-time graph of an arbitrary H.
 
@@ -745,13 +749,40 @@ def pymatching_merged_window_decode(
 
     fresh_rows:
         Rows of checks first measured inside the window (the new seam
-        checks). Their round 0 is a pure time boundary: no round-0
-        detector, no round-0 node. Consequences encoded in the graph:
-        a fresh check's round-0 reference absorbs one endpoint of any
-        round-0 data error it watches (so at t=0 a column shared with a
+        checks). Their first measured round is a pure time boundary: no
+        detector, no node. Consequences encoded in the graph: a fresh
+        check's first-round reference absorbs one endpoint of any data
+        error it watches in that round (so a column shared with a
         continuing check becomes a boundary edge on the continuing node),
-        and a round-0 measurement error on it is a weight-0.9 boundary
-        edge at its t=1 node.
+        and a measurement error on it in that round is a boundary edge
+        at its next-round node.
+
+    fresh_start:
+        Window layer at which the fresh rows are first measured. Before
+        this layer fresh rows do not exist: their detectors are 0 and
+        they participate in no edges (data columns they watch fall back
+        to the continuing rows only, reproducing separate-patch physics
+        for a window that extends back before the merge).
+
+    noisy_prev:
+        Set when `prev_round` holds raw measured values (e.g. the first
+        QEC round after a prep that leaves this check type random) rather
+        than trusted values. A measurement flip in that baseline round
+        leaves a single defect at layer 0; escape edges (measurement
+        weight) let the matcher explain it without a spurious data
+        correction.
+
+    ref_rows:
+        Rows whose `prev_round` value the CALLER consumes as a reference
+        (e.g. the telescoped-to-canonical conversion checks). Their
+        layer-0 escape edges carry fault ids `num_data + 1 + k` (k the
+        position in `ref_rows`): when the matcher routes a layer-0 defect
+        on such a row to the time boundary it is asserting the reference
+        value itself was mismeasured, and the caller must flip its read.
+        This keeps the observable consistent for BOTH interpretations of
+        the ambiguous single-defect signature (baseline measurement flip
+        vs. a data error just after the baseline that the matcher chose
+        to absorb).
 
     Notes
     -----
@@ -781,11 +812,14 @@ def pymatching_merged_window_decode(
     fresh = set(fresh_rows)
 
     matching = pymatching.Matching()
-    matching.ensure_num_fault_ids(num_data + 1)
+    matching.ensure_num_fault_ids(num_data + 1 + len(ref_rows))
+    ref_fault_id = {
+        row: num_data + 1 + k for k, row in enumerate(ref_rows)
+    }
     for t in range(num_rounds):
         for j in range(num_data):
             rows = [i for i in range(num_checks) if H[i, j] == 1]
-            if t == 0:
+            if t <= fresh_start:
                 rows = [i for i in rows if i not in fresh]
             if len(rows) == 2:
                 matching.add_edge(
@@ -804,16 +838,19 @@ def pymatching_merged_window_decode(
                 )
     for t in range(num_rounds - 1):
         for i in range(num_checks):
-            if t == 0 and i in fresh:
-                # Round-0 measurement error on a fresh check: only the
-                # t=1 diff fires (round 0 is its reference). Weight 1.0
-                # (not the 0.9 temporal weight): paired with the future
-                # boundary it must not undercut the weight-1.9
-                # temporal+spatial path of a staggered seam-qubit data
-                # error (caught by the serial seam checks one round
-                # apart), whose seam-column fault id keeps m correct.
+            if i in fresh and t < fresh_start:
+                continue  # fresh check does not exist yet: no node
+            if t == fresh_start and i in fresh:
+                # First-round measurement error on a fresh check: only
+                # the next round's diff fires (its first round is its
+                # reference). Weight 1.0 (not the 0.9 temporal weight):
+                # paired with the future boundary it must not undercut
+                # the weight-1.9 temporal+spatial path of a staggered
+                # seam-qubit data error (caught by the serial seam
+                # checks one round apart), whose seam-column fault id
+                # keeps m correct.
                 matching.add_boundary_edge(
-                    num_checks + i,
+                    (t + 1) * num_checks + i,
                     weight=1.0,
                     merge_strategy="smallest-weight",
                 )
@@ -824,6 +861,18 @@ def pymatching_merged_window_decode(
                     weight=0.9,
                     merge_strategy="smallest-weight",
                 )
+    if noisy_prev:
+        for i in range(num_checks):
+            if i in fresh:
+                continue  # fresh rows have no layer-0 detector
+            matching.add_boundary_edge(
+                i,
+                fault_ids=(
+                    {ref_fault_id[i]} if i in ref_fault_id else set()
+                ),
+                weight=0.9,
+                merge_strategy="smallest-weight",
+            )
     for i in fresh:
         matching.add_boundary_edge(
             (num_rounds - 1) * num_checks + i,
@@ -835,13 +884,10 @@ def pymatching_merged_window_decode(
     detectors = []
     for t in range(num_rounds):
         for i in range(num_checks):
-            if t == 0:
-                if i in fresh:
-                    detectors.append(0)
-                else:
-                    detectors.append(
-                        syndrome_window[0][i] ^ prev_round[i]
-                    )
+            if i in fresh and t <= fresh_start:
+                detectors.append(0)
+            elif t == 0:
+                detectors.append(syndrome_window[0][i] ^ prev_round[i])
             else:
                 detectors.append(
                     syndrome_window[t][i] ^ syndrome_window[t - 1][i]
@@ -999,9 +1045,12 @@ def _split_bookkeeping_apply_fn(
       entry of that check row is XORed with the seam pair. Decoding is
       fully deferred, so this leaves the diff syndrome defect-free at all
       interior transitions; the only residue lands in the round-0 absolute
-      layer, which is why post-surgery FT measurements in the grown-check
-      basis must pass `reference_round_X=True` (ZZ) / `reference_round_Z=True`
-      (XX).
+      layer. The residue is exported as `syndrome_round0_offset_*` so a
+      terminating measure in the grown-check basis can either drop round 0
+      (`reference_round_X=True` (ZZ) / `reference_round_Z=True` (XX)) or -
+      when the prep makes that check type deterministic in round 0, as in
+      the mzz Bell prep - keep round 0 as a detector layer and subtract
+      the offset, closing the prep blind window.
     - Split byproduct: the XOR of the three seam outcomes conditionally
       multiplies a logical Pauli into one patch's frame, preserving the
       anticommuting logical correlation across the surgery for the
@@ -1045,15 +1094,23 @@ def _split_bookkeeping_apply_fn(
             )
             reference_correction ^= hist[-1][row]
     else:  # ft
-        # Merged-window matching: assemble the seam-check-type syndrome
-        # window (A rows, B rows, seam rows) over the merge rounds, diff
-        # round 0 against the last pre-merge round, and decode data errors
-        # on the merged code. m is read from the LAST window round and
-        # corrected by the matched errors crossing the telescoped support;
-        # any syndrome-consistent correction has the same support parity
+        # Merged-window matching over the FULL history since prep: the
+        # window runs from QEC round 1 through the last merge round (A
+        # rows, B rows, seam rows; seam rows zero-padded and edge-free
+        # before the merge), diffing against round 0 as a noisy reference.
+        # This is the SAME reference the terminating per-patch decode
+        # uses, so any single fault is either visible to both decoders
+        # (both correct it) or baked into both references (both absorb it
+        # into the state) - never split between them, which is what kept
+        # breaking the m/readout consistency when the window started at
+        # the merge. m is read from the LAST window round and corrected
+        # by the matched errors crossing the telescoped support; any
+        # syndrome-consistent correction has the same support parity
         # because the telescoped operator is a product of merged-code
-        # stabilizers. Reference values come from the last PRE-merge round
-        # (mid-window errors belong to the matching, not the reference).
+        # stabilizers. Telescope reference values come from ROUND 0 (the
+        # shared reference layer): errors after round 0 belong to the
+        # matching, whose support-crossing corrections convert m
+        # consistently.
         hist_a = (
             last.get(
                 f"syndrome_history_{new_check_type}_{patch_a_label}", []
@@ -1070,22 +1127,46 @@ def _split_bookkeeping_apply_fn(
             "FT surgery decoding needs pre-merge QEC history on both "
             "patches to anchor the merge window"
         )
+        # Extend back by the DEEPEST shared pre-merge depth: for the
+        # symmetric mzz Bell prep this reaches round 0 (the terminating
+        # decode's reference), for asymmetric contexts (e.g. the CNOT's
+        # ancilla patch) each patch anchors the same number of rounds
+        # before the merge. Pre-merge the patches are uncoupled (block-
+        # diagonal H), so per-patch indexing from the end is sound.
+        k_shared = min(len(hist_a), len(hist_b)) - num_rounds
+        start_a = len(hist_a) - num_rounds - k_shared
+        start_b = len(hist_b) - num_rounds - k_shared
+        fresh_start = k_shared - 1
+        num_window = k_shared - 1 + num_rounds
         window = [
-            list(hist_a[len(hist_a) - num_rounds + t])
-            + list(hist_b[len(hist_b) - num_rounds + t])
-            + list(seam_hist[t])
-            for t in range(num_rounds)
+            list(hist_a[start_a + 1 + t])
+            + list(hist_b[start_b + 1 + t])
+            + (
+                list(seam_hist[t - fresh_start])
+                if t >= fresh_start
+                else [0, 0, 0, 0]
+            )
+            for t in range(num_window)
         ]
         prev_round = (
-            list(hist_a[-num_rounds - 1])
-            + list(hist_b[-num_rounds - 1])
-            + [0, 0, 0, 0]
+            list(hist_a[start_a]) + list(hist_b[start_b]) + [0, 0, 0, 0]
         )
+        # Merged-row indices of the telescope-reference checks (A rows
+        # 0-3, B rows 4-7): their layer-0 escapes carry fault ids so the
+        # reference read below stays consistent with the matching.
+        ref_rows = [
+            (row if lbl == patch_a_label else 4 + row)
+            for lbl, check_type, row in telescope_reference
+        ]
+        num_data = merged_H_new.shape[1]
         correction = pymatching_merged_window_decode(
             merged_H_new,
             window,
             prev_round,
             fresh_rows=range(8, 12),
+            fresh_start=fresh_start,
+            noisy_prev=True,
+            ref_rows=ref_rows,
         )
         m_raw = 0
         for b in seam_hist[-1]:
@@ -1094,11 +1175,20 @@ def _split_bookkeeping_apply_fn(
             m_raw ^= int(correction[col])
         # Virtual fault: an undetectable final-round seam measurement
         # error flipped the recorded product, not the state.
-        m_raw ^= int(correction[-1])
+        m_raw ^= int(correction[num_data])
+        # Telescope references at each patch's anchor round (the shared
+        # reference layer): errors after it belong to the matching, and
+        # a layer-0 escape on a reference row means the matcher judged
+        # the anchor value itself mismeasured - flip the read.
         reference_correction = 0
-        row_of = {patch_a_label: hist_a, patch_b_label: hist_b}
-        for lbl, check_type, row in telescope_reference:
-            reference_correction ^= row_of[lbl][-num_rounds - 1][row]
+        row_of = {
+            patch_a_label: (hist_a, start_a),
+            patch_b_label: (hist_b, start_b),
+        }
+        for k, (lbl, check_type, row) in enumerate(telescope_reference):
+            hist_ref, start_ref = row_of[lbl]
+            reference_correction ^= hist_ref[start_ref][row]
+            reference_correction ^= int(correction[num_data + 1 + k])
 
     frame_correction = 0
     for lbl, support in (
@@ -1119,7 +1209,11 @@ def _split_bookkeeping_apply_fn(
     # Post-split boundary-check flips: rewriting the full stored history
     # (decoding is deferred, nothing has consumed it yet) keeps every
     # interior diff transition defect-free; the residue lands only in the
-    # round-0 absolute layer, dropped by reference-round decoding.
+    # round-0 absolute layer. The residue is a KNOWN classical bit, so it
+    # is also exported as a round-0 offset: a terminating decode that
+    # keeps round 0 as a detector layer (possible when the prep basis
+    # makes this check type deterministic, e.g. the X sector after |+>
+    # prep) subtracts it and loses no prep-fault coverage.
     for lbl, check_type, check_row, seam_pair in grown_flips:
         key = f"syndrome_history_{check_type}_{lbl}"
         hist = list(last.get(key, []) or [])
@@ -1133,6 +1227,13 @@ def _split_bookkeeping_apply_fn(
                 hist[t] = row
         history.propagating_keys.add(key)
         out[key] = hist
+        offset_key = f"syndrome_round0_offset_{check_type}_{lbl}"
+        offset = list(
+            last.get(offset_key, []) or [0] * len(hist[0])
+        )
+        offset[check_row] ^= flip
+        history.propagating_keys.add(offset_key)
+        out[offset_key] = offset
 
     # Conditional logical byproduct
     byproduct_bit = 0
@@ -1162,6 +1263,118 @@ def _split_bookkeeping_map_qubits_fn(
     ]
     new_kwargs["support_a"] = [qubit_mapping.get(q, q) for q in support_a]
     new_kwargs["support_b"] = [qubit_mapping.get(q, q) for q in support_b]
+    new_byproduct = dict(byproduct)
+    new_byproduct["support"] = [
+        qubit_mapping.get(q, q) for q in byproduct["support"]
+    ]
+    new_kwargs["byproduct"] = new_byproduct
+    return new_kwargs
+
+
+def _split_byproduct_repair_apply_fn(
+    patches: PatchDict,
+    history: History,
+    patch_a_label: str,
+    patch_b_label: str,
+    grown_rows: list,
+    byproduct: dict,
+    num_merge_rounds: int,
+    num_post_split_rounds: int,
+    repair_key: str,
+    fire_rule: str = "both",
+) -> Frame:
+    """Repair the split byproduct against a middle-seam fault.
+
+    The split byproduct (XOR of the destructive seam outcomes -> one
+    conditional logical Pauli frame) is read from raw measurement data.
+    An effective seam-basis-conjugate error on a seam qubit anywhere in
+    the merge window makes that record wrong relative to the projected
+    state. For the two OUTER seam qubits this is self-correcting: the
+    fault also leaves exactly one defect in the adjacent patch's grown
+    boundary-check row, and that patch's termination decoder
+    boundary-matches it with a correction that crosses the logical
+    readout representative, cancelling the wrong byproduct in the
+    two-patch parity. The MIDDLE seam qubit sits in BOTH grown checks,
+    so both patches boundary-match independently: three net flips, and
+    the logical correlation breaks under a single fault.
+
+    This bookkeeping step (run after at least one post-split QEC round
+    on both patches) reads each patch's grown-check-row defect between
+    the last pre-merge round and the post-split rounds (the uniform
+    grown-row history rewrite at split cancels in this XOR) and applies
+    one extra byproduct Pauli when the signature indicates a net-odd
+    flip count. Which signature that is depends on which termination
+    decoders supply compensating flips - `fire_rule`:
+
+    - "both" (mzz Bell prep; XX merge of the surgery CNOT): BOTH
+      patches are eventually decoded in the byproduct-sensitive sector,
+      so single one-sided (outer-seam) faults self-correct and only the
+      two-sided middle-seam signature `d_A AND d_B` is net-odd. No
+      other single fault fakes it: post-split the patches are disjoint
+      circuits, so any single data/measurement fault flips at most one
+      patch's grown-row endpoints.
+    - "b_only" (ZZ merge of the surgery CNOT): only patch A (the
+      control) gets a byproduct-sensitive termination decode - patch B
+      is the ancilla, destructively measured in the conjugate basis, so
+      its grown-check defect never earns a compensating flip. The
+      middle-seam class (d_A AND d_B) is then already net-even, and the
+      uncompensated class is the B-side outer seam qubit:
+      `d_B AND NOT d_A`. A one-sided signature is easier for an
+      unrelated single fault to fake than a two-sided one, so d_B is
+      hardened: the defect must be present in EVERY post-split round
+      (rejects a final-round measurement error of the grown check) and
+      the anchor round must agree with the round before it (rejects a
+      measurement error in the last pre-merge round, which would offset
+      the whole comparison).
+    """
+    last = history[-1]
+    anchor = num_merge_rounds + num_post_split_rounds + 1
+    min_rounds = anchor if fire_rule == "both" else anchor + 1
+    defect = {}
+    glitch = {}
+    for lbl, check_type, row in grown_rows:
+        hist = last.get(f"syndrome_history_{check_type}_{lbl}", []) or []
+        assert len(hist) >= min_rounds, (
+            "Split byproduct repair needs pre-merge QEC history and at "
+            "least one post-split QEC round on both patches "
+            f"(have {len(hist)} rounds, need >= {min_rounds})"
+        )
+        if fire_rule == "both":
+            defect[lbl] = hist[-1][row] ^ hist[-anchor][row]
+        else:
+            base = hist[-anchor][row]
+            defect[lbl] = int(
+                all(
+                    hist[-j][row] ^ base
+                    for j in range(1, num_post_split_rounds + 1)
+                )
+            )
+            glitch[lbl] = hist[-anchor][row] ^ hist[-anchor - 1][row]
+    if fire_rule == "both":
+        fire = defect[patch_a_label] & defect[patch_b_label]
+    elif fire_rule == "b_only":
+        fire = (
+            defect[patch_b_label]
+            & (1 - defect[patch_a_label])
+            & (1 - glitch[patch_b_label])
+        )
+    else:
+        raise ValueError(f"Unknown fire_rule '{fire_rule}'")
+
+    new_patches = patches
+    if fire:
+        new_patches = patches.copy()
+        patch = patches[byproduct["patch_label"]]
+        new_patches[byproduct["patch_label"]] = patch.copy(
+            pauli_frame=_multiply_pauli_into_frame(
+                patch.pauli_frame, byproduct["support"], byproduct["pauli"]
+            )
+        )
+    return Frame({repair_key: fire, "patches": new_patches})
+
+
+def _split_byproduct_repair_map_qubits_fn(qubit_mapping, byproduct, **kwargs):
+    new_kwargs = kwargs.copy()
     new_byproduct = dict(byproduct)
     new_byproduct["support"] = [
         qubit_mapping.get(q, q) for q in byproduct["support"]
@@ -1360,10 +1573,13 @@ def build_split_instruction(
 
     The split rewrites the grown-check rows of both patches' stored
     syndrome histories (see [](api:_split_bookkeeping_apply_fn)), leaving a
-    residue only in the round-0 absolute detector layer. Subsequent FT
-    logical measurements in the grown-check basis must therefore pass
-    `reference_round_X=True` after a ZZ surgery (`reference_round_Z=True`
-    after XX); measurements in the other basis are unaffected.
+    residue only in the round-0 absolute detector layer, exported as a
+    `syndrome_round0_offset_*` key. Subsequent FT logical measurements in
+    the grown-check basis must either pass `reference_round_X=True` after
+    a ZZ surgery (`reference_round_Z=True` after XX) or - when the prep
+    makes that check type deterministic in round 0 - keep round 0 as a
+    detector layer, in which case the terminating decode subtracts the
+    offset; measurements in the other basis are unaffected.
     """
     meta = _surgery_metadata(
         kind,
@@ -1611,6 +1827,9 @@ def build_surgery_cnot_corrections_instruction(
     )
 
 
+_SURGERY_CNOT_WARNED = False
+
+
 def build_surgery_cnot_sequence(
     ctrl_patch_label: str,
     tgt_patch_label: str,
@@ -1623,6 +1842,7 @@ def build_surgery_cnot_sequence(
     layout: str,
     mode: str = "ft",
     num_merge_rounds: int = 3,
+    num_post_split_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     name: str | None = None,
 ) -> list:
@@ -1634,6 +1854,16 @@ def build_surgery_cnot_sequence(
     ancilla is destructively measured in the Z basis, and the outcome-
     conditioned logical Paulis `Z_L(ctrl)^m_xx`, `X_L(tgt)^(m_zz^m_anc)`
     are injected into the Pauli frames.
+
+    In ft mode each merge is followed by its split-byproduct repair (see
+    [](api:build_split_byproduct_repair_instruction)) after the post-split
+    QEC blocks of its two patches: the ZZ repair before the XX merge (the
+    ancilla's conditional Z_L frame must be settled before its X_L is
+    consumed), and the XX repair - which needs post-split syndrome rounds
+    on the TARGET as well - after an extra `("QEC", tgt)` entry inserted
+    for that purpose. `num_post_split_rounds` must equal the number of
+    syndrome rounds one `QEC` stack entry appends (the program's
+    `num_qec_rounds`).
 
     Returns a list of stack entries (mix of patch-scoped names and bare
     instructions) to splice into a program stack with `*`. The three
@@ -1652,7 +1882,31 @@ def build_surgery_cnot_sequence(
     ctrl also needs `reference_round_Z=True` (without it the decoder
     matches the round-0 layer as real defects and applies a random
     logical correction, which destroys e.g. Bell correlations).
+
+    .. warning::
+        KNOWN OPEN ISSUE: this path is NOT fully fault-tolerant even in
+        ft mode. Single Z-type hook faults during the M_ZZ merged-SE
+        rounds deposit multi-qubit Z chains on the ancilla patch that
+        miscorrect to an effective Z_L(anc), flipping the X_L(anc)
+        reading consumed by the XX merge (wrong m_xx -> wrong Z_L(ctrl)
+        correction, X-basis visible; Z basis is unaffected).
+        Additionally the ZZ repair's one-sided "b_only" fire rule can
+        false-fire on benign ancilla Z data errors. A proper fix needs an
+        X-sector decode of the ancilla spanning the ZZ window through the
+        XX merge to correct m_xx. The mzz Bell-prep path does not share
+        this hole.
     """
+    global _SURGERY_CNOT_WARNED
+    if not _SURGERY_CNOT_WARNED:
+        _SURGERY_CNOT_WARNED = True
+        print(
+            "WARNING: the lattice-surgery CNOT is NOT fully fault-tolerant "
+            "(known open issue): single Z-type hook faults in the M_ZZ "
+            "merge window can flip X-basis logical outcomes even in ft "
+            "mode (Z-basis outcomes are unaffected). The mzz Bell-prep "
+            "path does not share this issue.",
+            file=sys.stderr,
+        )
     base_name = name or f"Lattice-Surgery CNOT ({mode})"
     zz = build_surgery_parity_instruction(
         "ZZ",
@@ -1687,20 +1941,254 @@ def build_surgery_cnot_sequence(
         qubits_tgt,
         name=f"{base_name} corrections",
     )
-    return [
+    entries = [
         ("Plus Prep", anc_patch_label),
         ("QEC", anc_patch_label),
         (zz, None),
         ("QEC", ctrl_patch_label),
         ("QEC", anc_patch_label),
+    ]
+    if mode == "ft":
+        repair_zz = build_split_byproduct_repair_instruction(
+            "ZZ",
+            ctrl_patch_label,
+            anc_patch_label,
+            qubits_ctrl,
+            qubits_anc,
+            seam_qubits_zz,
+            layout,
+            num_merge_rounds=num_merge_rounds,
+            num_post_split_rounds=num_post_split_rounds,
+            fire_rule="b_only",
+            circuit_backend=circuit_backend,
+            name=f"{base_name} M_ZZ byproduct repair",
+        )
+        entries.append((repair_zz, None))
+    entries += [
         ("QEC", tgt_patch_label),
         (xx, None),
         ("QEC", anc_patch_label),
+    ]
+    if mode == "ft":
+        repair_xx = build_split_byproduct_repair_instruction(
+            "XX",
+            anc_patch_label,
+            tgt_patch_label,
+            qubits_anc,
+            qubits_tgt,
+            seam_qubits_xx,
+            layout,
+            num_merge_rounds=num_merge_rounds,
+            num_post_split_rounds=num_post_split_rounds,
+            circuit_backend=circuit_backend,
+            name=f"{base_name} M_XX byproduct repair",
+        )
+        entries += [
+            ("QEC", tgt_patch_label),
+            (repair_xx, None),
+        ]
+    entries += [
         (
             "FT Logical Z Measure",
             anc_patch_label,
             (),
             {"reference_round_Z": True},
         ),
+        (corrections, None),
+    ]
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# M_ZZ Bell preparation (|+>|+> -> M_ZZ -> conditional X_L; no ancilla patch)
+# ---------------------------------------------------------------------------
+
+
+def _mzz_bell_corrections_apply_fn(
+    patches: PatchDict,
+    zz_parity_history,
+    tgt_patch_label: str,
+    x_support_tgt: list,
+) -> Frame:
+    """Conditional Pauli-frame correction closing the M_ZZ Bell prep.
+
+    `X_L(tgt)^m_zz`, with m_zz the most recent surgery ZZ parity in the
+    history: projecting |+>_L |+>_L onto the m_zz eigenspace of Z_L Z_L
+    leaves (|00> + |11>)/sqrt(2) for m_zz = 0 and (|01> + |10>)/sqrt(2)
+    for m_zz = 1, so a frame X_L on either patch restores the Bell state.
+    """
+    m_zz = [m for m in zz_parity_history if m is not None][-1]
+
+    new_patches = patches.copy()
+    if m_zz:
+        patch = new_patches[tgt_patch_label]
+        new_patches[tgt_patch_label] = patch.copy(
+            pauli_frame=_multiply_pauli_into_frame(
+                patch.pauli_frame, x_support_tgt, "X"
+            )
+        )
+    return Frame(
+        {
+            "patches": new_patches,
+            "mzz_bell_correction": m_zz,
+        }
+    )
+
+
+def build_split_byproduct_repair_instruction(
+    kind: str,
+    patch_a_label: str,
+    patch_b_label: str,
+    qubits_a: Sequence,
+    qubits_b: Sequence,
+    seam_qubits: Sequence,
+    layout: str,
+    num_merge_rounds: int = 3,
+    num_post_split_rounds: int = 3,
+    fire_rule: str = "both",
+    circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    name: str | None = None,
+) -> Instruction:
+    """Post-split repair of the surgery byproduct (seam-fault FT hole).
+
+    Place AFTER at least one QEC block on both patches following the
+    merge/split of the same `kind` and geometry (the QEC block must add
+    `num_post_split_rounds` syndrome rounds per patch). Detects the
+    grown-check defect signature of a single effective seam-conjugate
+    error on the seam qubit whose byproduct flip is NOT compensated by
+    the downstream termination decoders, and applies one extra
+    byproduct logical Pauli frame, restoring single-fault tolerance of
+    the logical correlation in the byproduct-sensitive basis. Records
+    the applied bit under `split_byproduct_repair_{kind.lower()}`.
+
+    `fire_rule` selects the uncompensated signature for the context:
+    "both" when both patches get a byproduct-sensitive termination
+    decode (mzz Bell prep; the surgery CNOT's XX merge - the ancilla's
+    Z decode feeds m_anc into the X_L(tgt) correction), "b_only" when
+    only patch A does (the surgery CNOT's ZZ merge, whose patch B is
+    the ancilla, terminated in the conjugate basis). See
+    [](api:_split_byproduct_repair_apply_fn).
+
+    Without this step a single fault on the middle seam qubit (or a
+    hook error reaching it) flips the decoded logical XOR: the raw
+    byproduct record is wrong AND both patches' termination decoders
+    independently boundary-match the resulting grown-check defects -
+    three net flips (see [](api:_split_byproduct_repair_apply_fn)).
+    """
+    meta = _surgery_metadata(
+        kind,
+        patch_a_label,
+        patch_b_label,
+        qubits_a,
+        qubits_b,
+        seam_qubits,
+        layout,
+        circuit_backend,
+    )
+    return Instruction(
+        _split_byproduct_repair_apply_fn,
+        data={
+            "patch_a_label": meta["patch_a_label"],
+            "patch_b_label": meta["patch_b_label"],
+            "grown_rows": [
+                (lbl, check_type, row)
+                for lbl, check_type, row, _ in meta["grown_flips"]
+            ],
+            "byproduct": meta["byproduct"],
+            "num_merge_rounds": num_merge_rounds,
+            "num_post_split_rounds": num_post_split_rounds,
+            "repair_key": f"split_byproduct_repair_{kind.lower()}",
+            "fire_rule": fire_rule,
+        },
+        map_qubits_fn=_split_byproduct_repair_map_qubits_fn,
+        name=name or f"Lattice-Surgery {kind} byproduct repair",
+    )
+
+
+def build_mzz_bell_corrections_instruction(
+    tgt_patch_label: str,
+    data_qubits_tgt: Sequence,
+    name: str = "M_ZZ Bell prep corrections",
+) -> Instruction:
+    """The conditional-correction step of the M_ZZ Bell preparation.
+
+    Applies `X_L(tgt)^m_zz` (frame X on the X_L support D2, D4, D6), with
+    m_zz the most recent `surgery_parity_zz` value anywhere in the history,
+    and records the applied bit under `mzz_bell_correction`.
+    """
+
+    def map_qubits_fn(qubit_mapping, x_support_tgt, **kwargs):
+        new_kwargs = kwargs.copy()
+        new_kwargs["x_support_tgt"] = [
+            qubit_mapping.get(q, q) for q in x_support_tgt
+        ]
+        return new_kwargs
+
+    return Instruction(
+        _mzz_bell_corrections_apply_fn,
+        data={
+            "tgt_patch_label": tgt_patch_label,
+            "x_support_tgt": [data_qubits_tgt[i] for i in (2, 4, 6)],
+        },
+        map_qubits_fn=map_qubits_fn,
+        param_priorities={
+            "zz_parity_history": ["history[all]"],
+        },
+        param_aliases={
+            "zz_parity_history": "surgery_parity_zz",
+        },
+        name=name,
+    )
+
+
+def build_mzz_bell_prep_sequence(
+    patch_a_label: str,
+    patch_b_label: str,
+    qubits_a: Sequence,
+    qubits_b: Sequence,
+    seam_qubits: Sequence,
+    layout: str,
+    mode: str = "ft",
+    num_merge_rounds: int = 3,
+    circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    name: str | None = None,
+) -> list:
+    """Stack-entry sequence for Bell prep by a direct M_ZZ merge.
+
+    Measures `Z_L(A) Z_L(B)` on the |+>_L (x) |+>_L product state with a
+    single merge/split through one 3-qubit seam (no ancilla patch), then
+    injects the outcome-conditioned frame correction `X_L(B)^m_zz`,
+    leaving the Bell state (|00> + |11>)/sqrt(2). The caller preps both
+    patches in |+>_L and runs QEC before and after the returned entries.
+
+    Measurement flags for the caller (cf. build_surgery_cnot_sequence):
+    both patches are |+>-prepped so their round-0 Z syndrome layer is
+    random (use `reference_round_Z=True` for FT Z measures), but the
+    round-0 X layer is DETERMINISTIC — use `reference_round_X=False` for
+    FT X measures so faults in the prep window stay detectable; the
+    grown-X-check history rewrite at split is absorbed by the exported
+    round-0 offset key, not by dropping round 0.
+    """
+    base_name = name or "M_ZZ Bell prep"
+    zz = build_surgery_parity_instruction(
+        "ZZ",
+        patch_a_label,
+        patch_b_label,
+        qubits_a,
+        qubits_b,
+        seam_qubits,
+        layout,
+        mode=mode,
+        num_merge_rounds=num_merge_rounds,
+        circuit_backend=circuit_backend,
+        name=f"{base_name} M_ZZ",
+    )
+    corrections = build_mzz_bell_corrections_instruction(
+        patch_b_label,
+        qubits_b,
+        name=f"{base_name} corrections",
+    )
+    return [
+        (zz, None),
         (corrections, None),
     ]
