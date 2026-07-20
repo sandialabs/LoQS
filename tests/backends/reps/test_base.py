@@ -12,6 +12,8 @@ from loqs.backends.reps import (
     StimCircuitInstrumentRep,
     StimCircuitPayloadMixin,
     UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisPrePostInstrumentRep,
     is_rep_compatible,
 )
 
@@ -58,11 +60,11 @@ class TestStr:
 
 
 class TestWithQubits:
-    def test_returns_shallow_copy_with_new_qubits(self):
+    def test_returns_new_instance_with_new_qubits(self):
         rep = UnitaryGateRep(np.eye(2), ("Q0",))
-        retargeted = rep.with_qubits(("Q1", "Q2"))
+        retargeted = rep.with_qubits(("Q1",))
         assert retargeted is not rep
-        assert retargeted.qubits == ("Q1", "Q2")
+        assert retargeted.qubits == ("Q1",)
         assert rep.qubits == ("Q0",)  # original untouched
         assert np.array_equal(retargeted.unitary, np.eye(2))  # payload preserved
 
@@ -76,6 +78,46 @@ class TestWithQubits:
         retargeted = rep.with_qubits(("Q0",))
         assert retargeted.qubits == ("Q0",)
         assert retargeted.circuit_str == "M 0"
+
+    def test_revalidates_against_new_qubit_count(self):
+        """Retargeting reconstructs via `__init__`, so a payload that's
+        no longer shape-consistent with the new qubit count is rejected
+        immediately, rather than silently producing an inconsistent
+        instance."""
+        rep = UnitaryGateRep(np.eye(2), ("Q0",))
+        with pytest.raises(RepConstructionError):
+            rep.with_qubits(("Q0", "Q1"))
+
+    def test_cascades_to_nested_operation_rep_fields(self):
+        """A composite rep's nested `OperationRep` fields (e.g. `pre_op`/
+        `post_op`) are retargeted along with the outer rep, since
+        reconstruction requires them to remain consistent with the new
+        `qubits`."""
+        pre_op = UnitaryGateRep(np.eye(2))
+        post_op = UnitaryGateRep(np.eye(2))
+        rep = ZBasisPrePostInstrumentRep(None, True, pre_op, post_op)
+
+        retargeted = rep.with_qubits(("Q0",))
+
+        assert retargeted.qubits == ("Q0",)
+        assert retargeted.pre_op.qubits == ("Q0",)
+        assert retargeted.post_op.qubits == ("Q0",)
+        # Originals untouched
+        assert pre_op.qubits == ()
+        assert post_op.qubits == ()
+
+    def test_cascades_to_mapping_values(self):
+        """Nested `OperationRep` values inside a `Mapping` field (e.g.
+        `outcome_ops`) are retargeted too."""
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {0: UnitaryGateRep(np.eye(2)), 1: UnitaryGateRep(np.eye(2))}, True
+        )
+
+        retargeted = rep.with_qubits(("Q0",))
+
+        assert retargeted.qubits == ("Q0",)
+        assert retargeted.outcome_ops[0].qubits == ("Q0",)
+        assert retargeted.outcome_ops[1].qubits == ("Q0",)
 
 
 class TestIsRepCompatible:

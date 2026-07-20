@@ -11,8 +11,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
-import copy
+from collections.abc import Mapping, Sequence
 from typing import ClassVar
 
 from loqs.internal import Displayable
@@ -70,12 +69,11 @@ class OperationRep(ABC, Displayable):
         return f"{type(self).__name__}({attrs})"
 
     def with_qubits(self, qubits: str | int | Sequence[str | int]) -> "OperationRep":
-        """Return a shallow copy of this representation retargeted onto different qubits.
+        """Return a copy of this representation retargeted onto different qubits.
 
-        Used when a representation was looked up via a name-only key (no
-        qubits attached) and needs to be attached to the qubits from the
-        actual circuit label that matched, without needing to know the
-        concrete subclass's specific payload field name(s).
+        Reconstructs via `type(self)`'s own `__init__` (also retargeting
+        any nested `OperationRep`/`Mapping` fields), so the result is
+        re-validated and can't drift from its own type contract.
 
         Parameters
         ----------
@@ -85,14 +83,28 @@ class OperationRep(ABC, Displayable):
         Returns
         -------
         OperationRep
-            A shallow copy of `self` with `qubits` replaced.
+            A new `type(self)` instance with `qubits` replaced.
+
+        Raises
+        ------
+        RepConstructionError
+            If retargeting the payload onto `qubits` would be invalid.
         """
-        new = copy.copy(self)
-        if isinstance(qubits, (str, int)):
-            new.qubits = (qubits,)
-        else:
-            new.qubits = tuple(qubits)
-        return new
+        kwargs = {}
+        for attr in self._SERIALIZE_ATTRS:
+            if attr == "qubits":
+                kwargs[attr] = qubits
+                continue
+            value = getattr(self, attr)
+            if isinstance(value, OperationRep):
+                value = value.with_qubits(qubits)
+            elif isinstance(value, Mapping):
+                value = {
+                    k: (v.with_qubits(qubits) if isinstance(v, OperationRep) else v)
+                    for k, v in value.items()
+                }
+            kwargs[attr] = value
+        return type(self)(**kwargs)
 
 
 class StimCircuitPayloadMixin:

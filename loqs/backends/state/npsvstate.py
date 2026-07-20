@@ -283,10 +283,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     @_apply_gate_rep.register
     def _(self, rep: UnitaryGateRep) -> None:
         qubits = rep.qubits
-        # Shape can go stale after a `with_qubits` retarget, so still checked.
         assert len(qubits) > 0
         unitary = rep.unitary
-        assert unitary.shape == (2 ** len(qubits), 2 ** len(qubits))
 
         self._state = self._block_matvec(unitary, qubits, self.state)
 
@@ -501,15 +499,11 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         reset = rep.reset
         include_outcomes = rep.include_outcome
 
-        # is_rep_compatible is backend-specific, so still checked here;
-        # the qubits checks guard against a stale `with_qubits` retarget.
+        # is_rep_compatible is backend-specific, so still checked here.
         preop = rep.pre_op
         postop = rep.post_op
         assert is_rep_compatible(type(preop), self.input_reps)
         assert is_rep_compatible(type(postop), self.input_reps)
-        # TODO: Strict subsets is OK too
-        assert preop.qubits == qubits
-        assert postop.qubits == qubits
 
         # Apply the pre-op
         self.apply_reps_inplace([preop])

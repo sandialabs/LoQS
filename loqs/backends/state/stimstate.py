@@ -379,15 +379,11 @@ class STIMQuantumState(BaseQuantumState):
         reset = rep.reset
         include_outcomes = rep.include_outcome
 
-        # is_rep_compatible is backend-specific, so still checked here;
-        # the qubits checks guard against a stale `with_qubits` retarget.
+        # is_rep_compatible is backend-specific, so still checked here.
         preop = rep.pre_op
         postop = rep.post_op
         assert is_rep_compatible(type(preop), self.input_reps)
         assert is_rep_compatible(type(postop), self.input_reps)
-        # TODO: Strict subsets is OK too
-        assert preop.qubits == qubits
-        assert postop.qubits == qubits
 
         # Apply the pre-op
         self.apply_reps_inplace([preop])
