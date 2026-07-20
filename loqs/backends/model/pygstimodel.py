@@ -600,17 +600,15 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 aliased_qubits = comp.qubits  # The circuit is already aliased
                 qubits = [self.model_qubit_aliases[q] for q in aliased_qubits]
                 if name.startswith("G"):
-                    raw_rep, gaterep_cls = self._get_gate_rep(
-                        comp.name, qubits, gatereps
-                    )
+                    gate_rep = self._get_gate_rep(comp.name, qubits, gatereps)
                     # We need to save with original (aliased) qubits
-                    rep = gaterep_cls(raw_rep, aliased_qubits)
+                    rep = gate_rep.with_qubits(aliased_qubits)
                     duration = self.get_gate_duration(comp)
                 elif comp.name.startswith("I"):
-                    (payload, include_outcome), instrep_cls = (
-                        self._get_instrument_rep(comp.name, qubits, instreps)
+                    instrument_rep = self._get_instrument_rep(
+                        comp.name, qubits, instreps
                     )
-                    rep = instrep_cls(payload, include_outcome, aliased_qubits)
+                    rep = instrument_rep.with_qubits(aliased_qubits)
                     duration = self.get_instrument_duration(comp)
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")
@@ -630,7 +628,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         # Check cache
         for gaterep in gatereps:
             if (op_key, gaterep) in self._gate_rep_cache:
-                return (self._gate_rep_cache[op_key, gaterep], gaterep)
+                return self._gate_rep_cache[op_key, gaterep]
 
         # Look up using unaliased qubits
         op = self.gate_dict[op_key]
@@ -664,15 +662,14 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         errors = []
         for gaterep in gatereps:
             try:
-                result = convert_rep(ptm_rep, gaterep)
+                gate_rep = convert_rep(ptm_rep, gaterep)
             except RepConstructionError as e:
                 errors.append(e)
                 continue
 
-            rep = getattr(result, result._SERIALIZE_ATTRS[0])
             if not self.use_time_dependence:
-                self._gate_rep_cache[op_key, gaterep] = rep
-            return rep, gaterep
+                self._gate_rep_cache[op_key, gaterep] = gate_rep
+            return gate_rep
 
         raise RepConstructionError(
             f"Failed to create gate rep for any of {gatereps}, with errors:"
@@ -684,13 +681,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         # Check cache
         for instrep in instreps:
             if (inst_key, instrep) in self._inst_rep_cache:
-                return (self._inst_rep_cache[inst_key, instrep], instrep)
+                return self._inst_rep_cache[inst_key, instrep]
 
-        rep = None
-
-        def _get_rep(instrep):
+        def _make_rep(instrep):
             if instrep is ZBasisProjectionInstrumentRep:
-                rep: None | int | dict = 0 if self.zbasis_proj_resets else None
+                reset = 0 if self.zbasis_proj_resets else None
+                return ZBasisProjectionInstrumentRep(reset, True, qubits)
             elif instrep is ZBasisOutcomeOperationDictInstrumentRep:
                 # TODO: What to do with key error?
                 # Look up using unaliased qubits
@@ -707,7 +703,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                     for member_op in op.values():
                         member_op.set_time(self.current_time)
 
-                rep = {}
+                outcome_ops = {}
                 for k, v in op.items():
                     if isinstance(k, str):
                         try:
@@ -727,34 +723,33 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
                     # Wrap as pyGSTi's native PTM; each consuming backend
                     # converts to whatever concrete GateRep it needs.
-                    rep[label] = PTMGateRep(
+                    outcome_ops[label] = PTMGateRep(
                         v.to_dense(on_space="HilbertSchmidt"), qubits
                     )
+                return ZBasisOutcomeOperationDictInstrumentRep(
+                    outcome_ops, True, qubits
+                )
             else:
                 raise RepConstructionError(
                     f"Cannot create instrument rep for {instrep}"
                 )
 
-            return rep
-
-        repidx = 0
-        while repidx < len(instreps):
+        errors = []
+        for instrep in instreps:
             try:
-                rep = _get_rep(instreps[repidx])
-                break
-            except RepConstructionError:
-                # Try next one
-                repidx += 1
+                instrument_rep = _make_rep(instrep)
+            except RepConstructionError as e:
+                errors.append(e)
+                continue
 
-        if repidx == len(instreps):
-            raise RepConstructionError(
-                f"Failed to create instrument rep for any of {instreps}"
-            )
+            if not self.use_time_dependence:
+                self._inst_rep_cache[inst_key, instrep] = instrument_rep
+            return instrument_rep
 
-        if not self.use_time_dependence:
-            self._inst_rep_cache[inst_key, instreps[repidx]] = (rep, True)
-
-        return (rep, True), instreps[repidx]
+        raise RepConstructionError(
+            f"Failed to create instrument rep for any of {instreps}, with errors:"
+            + "\n".join([str(e) for e in errors])
+        )
 
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         if attr == "model":
