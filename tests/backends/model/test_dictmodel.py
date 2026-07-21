@@ -30,6 +30,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 _UNITARY_1Q = np.eye(2)
 _SUPEROP_1Q = np.eye(4)  # shape-correct QSimSuperopGateRep payload for 1 qubit
+_SUPEROP_1Q_ALT = np.diag([1.0, -1.0, -1.0, 1.0])  # distinguishable from above
 _GAMMA = 0.1
 _TP_K0 = np.array([[1.0, 0.0], [0.0, np.sqrt(1 - _GAMMA)]])
 _TP_K1 = np.array([[0.0, np.sqrt(_GAMMA)], [0.0, 0.0]])
@@ -172,8 +173,10 @@ class TestInstrumentDispatch:
         assert rep.include_outcome is True
 
     def test_two_element_non_projection_becomes_pre_post_operations(self):
+        # pre_op/post_op payloads are deliberately distinct so a test
+        # failure would show if they got swapped.
         model = DictNoiseModel(
-            ({}, {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q)}),
+            ({}, {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q_ALT)}),
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisPrePostInstrumentRep],
             instrep_cast_reset=0,
@@ -185,6 +188,8 @@ class TestInstrumentDispatch:
         assert rep.include_outcome is False
         assert isinstance(rep.pre_op, QSimSuperopGateRep)
         assert isinstance(rep.post_op, QSimSuperopGateRep)
+        assert np.array_equal(rep.pre_op.superop, _SUPEROP_1Q)
+        assert np.array_equal(rep.post_op.superop, _SUPEROP_1Q_ALT)
 
     def test_pre_post_operations_without_instrep_declared_raises(self):
         with pytest.raises(

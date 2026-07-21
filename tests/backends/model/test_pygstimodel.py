@@ -216,6 +216,20 @@ class TestGetGateRep:
         with pytest.raises(RepConstructionError, match="Failed to create gate rep for any of"):
             pgm._get_gate_rep("Gad", ["Q0"], [UnitaryGateRep])
 
+    def test_caches_result_when_not_time_dependent(self, pgm):
+        assert pgm._gate_rep_cache == {}
+        rep = pgm._get_gate_rep("Gxpi", ["Q0"], [UnitaryGateRep])
+        assert pgm._gate_rep_cache == {(("Gxpi", "Q0"), UnitaryGateRep): rep}
+        # Second call reuses the cached instance rather than recomputing.
+        assert pgm._get_gate_rep("Gxpi", ["Q0"], [UnitaryGateRep]) is rep
+
+    def test_does_not_cache_result_when_time_dependent(self):
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), use_time_dependence=True
+        )
+        pgm._get_gate_rep("Gxpi", ["Q0"], [UnitaryGateRep])
+        assert pgm._gate_rep_cache == {}
+
 
 class TestGetInstrumentRep:
     @pytest.fixture
@@ -247,6 +261,26 @@ class TestGetInstrumentRep:
             RepConstructionError, match="Failed to create instrument rep for any of"
         ):
             pgm._get_instrument_rep("Iz", ["Q0"], [StimCircuitInstrumentRep])
+
+    def test_caches_result_when_not_time_dependent(self, pgm):
+        assert pgm._inst_rep_cache == {}
+        rep = pgm._get_instrument_rep(
+            "Iz", ["Q0"], [ZBasisProjectionInstrumentRep]
+        )
+        assert pgm._inst_rep_cache == {
+            (("Iz", "Q0"), ZBasisProjectionInstrumentRep): rep
+        }
+        assert (
+            pgm._get_instrument_rep("Iz", ["Q0"], [ZBasisProjectionInstrumentRep])
+            is rep
+        )
+
+    def test_does_not_cache_result_when_time_dependent(self):
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), use_time_dependence=True
+        )
+        pgm._get_instrument_rep("Iz", ["Q0"], [ZBasisProjectionInstrumentRep])
+        assert pgm._inst_rep_cache == {}
 
 
 class TestTimeDependence:

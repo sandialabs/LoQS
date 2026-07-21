@@ -53,6 +53,12 @@ class TestUnitaryGateRep:
         with pytest.raises(RepConstructionError):
             UnitaryGateRep(np.eye(3))
 
+    def test_rejects_1x1_payload_without_qubits(self):
+        """`1 = 2**0` would otherwise pass the "some power of 2" check,
+        but there's no such thing as a 0-qubit gate."""
+        with pytest.raises(RepConstructionError):
+            UnitaryGateRep(np.array([[2.0]]))
+
 
 class TestPTMGateRep:
     def test_constructs_instance(self):
@@ -67,6 +73,10 @@ class TestPTMGateRep:
     def test_rejects_wrong_shape_for_known_qubits(self):
         with pytest.raises(RepConstructionError):
             PTMGateRep(np.eye(2), ("Q0",))
+
+    def test_rejects_1x1_payload_without_qubits(self):
+        with pytest.raises(RepConstructionError):
+            PTMGateRep(np.array([[1.0]]))
 
 
 class TestQSimSuperopGateRep:
@@ -386,3 +396,18 @@ class TestKrausGateRepCompose:
         rep1 = KrausGateRep([(np.eye(2), 1.0)], [0])
         with pytest.raises(TypeError):
             rep1.compose(PTMGateRep(np.eye(4), [0]))
+
+    def test_compose_with_none_probability_operand(self):
+        """When either operand's probability is `None` (e.g. a non-unital
+        channel with no fixed probability), the composed term's
+        probability can't be computed and is also `None`."""
+        X = np.array([[0, 1], [1, 0]])
+        Z = np.array([[1, 0], [0, -1]])
+        rep1 = KrausGateRep([(Z, None)], [0])
+        rep2 = KrausGateRep([(X, 1.0)], [0])
+
+        result = rep1.compose(rep2, dedup=False)
+        assert len(result.kraus_operators) == 1
+        op, prob = result.kraus_operators[0]
+        assert np.allclose(op, X @ Z)
+        assert prob is None

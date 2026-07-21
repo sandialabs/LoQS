@@ -17,6 +17,8 @@ from loqs.backends.reps import (
     ZBasisProjectionInstrumentRep,
 )
 from loqs.backends.reps.conversion import (
+    _accepted_kwargs,
+    _change_basis,
     _choi_kraus_operators,
     _extract_permutation_entry,
     _is_identity_gaterep,
@@ -124,6 +126,28 @@ class TestQSimBasis:
     def test_3q_not_supported(self):
         with pytest.raises(RepConstructionError):
             _qsim_basis(3)
+
+
+class TestChangeBasis:
+    def test_normalizes_by_each_basis_element_s_own_norm(self):
+        """`_pauli_basis`/`_qsim_basis` both happen to have a *uniform*
+        norm across every element, so a wrong per-element normalization
+        there would cancel out as a global scalar in `T^-1 @ ptm @ T`
+        and be unobservable (this is why mutating the normalizing
+        division into a multiplication doesn't fail any test that only
+        goes through those two bases). Use a synthetic orthogonal basis
+        with deliberately *different* norms across elements instead:
+        with `from_basis == to_basis`, the transform must be the
+        identity regardless of `ptm`, which only holds if each element
+        is divided by its own norm (not some shared/wrong scale)."""
+        I2 = np.eye(2, dtype=complex)
+        two_X = 2 * np.array([[0, 1], [1, 0]], dtype=complex)
+        assert np.vdot(I2, two_X) == 0  # orthogonal
+        basis = (I2, two_X)  # norms 2 and 8, respectively
+
+        ptm = np.array([[1, 2], [3, 4]], dtype=complex)
+        result = _change_basis(ptm, basis, basis)
+        assert np.allclose(result, ptm)
 
 
 class TestUnitaryToPTM:
@@ -751,6 +775,24 @@ class TestUnitaryStimCircuitDefensiveStimNoneChecks:
             _stim_circuit_to_unitary(rep)
 
 
+class TestAcceptedKwargs:
+    def test_filters_to_named_parameters(self):
+        def f(a, b=1):
+            pass
+
+        assert _accepted_kwargs(f, {"b": 2, "c": 3}) == {"b": 2}
+
+    def test_passes_everything_through_for_var_keyword(self):
+        """No `OperationRep.__init__`/converter currently declares
+        `**kwargs`, so this branch isn't reachable via `convert` -- test
+        it directly against a synthetic function instead."""
+        def f(a, **kwargs):
+            pass
+
+        kwargs = {"b": 2, "c": 3}
+        assert _accepted_kwargs(f, kwargs) == kwargs
+
+
 class TestConvert:
     def test_passthrough_for_already_matching_instance(self):
         from loqs.backends.reps.conversion import convert
@@ -780,6 +822,21 @@ class TestConvert:
         rep = UnitaryGateRep(H, ("Q0",))
         result = convert(rep, QSimSuperopGateRep)
         assert isinstance(result, QSimSuperopGateRep)
+
+    def test_multi_target_hop_picks_shortest_path_regardless_of_list_order(self):
+        """Unlike the raw-payload direct-match case (which uses list
+        order as a priority), hopping from an already-typed instance
+        picks whichever target has the *shortest* path -- a later,
+        longer-path candidate must not override an already-found
+        shorter one."""
+        from loqs.backends.reps.conversion import convert
+
+        H = STANDARD_GATE_UNITARIES["H"]
+        rep = UnitaryGateRep(H, ("Q0",))
+        # PTMGateRep is 1 hop away; QSimSuperopGateRep is 2 hops away
+        # (via PTM) -- listed in that (shorter-first) order on purpose.
+        result = convert(rep, [PTMGateRep, QSimSuperopGateRep])
+        assert isinstance(result, PTMGateRep)
 
     def test_raises_when_instance_has_no_path_to_target(self):
         from loqs.backends.reps.conversion import convert

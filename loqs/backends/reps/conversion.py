@@ -154,9 +154,9 @@ def _change_basis(
     n_basis = len(from_basis)
     T = np.zeros((n_basis, n_basis), dtype=complex)
     for j, Aj in enumerate(from_basis):
-        norm_j = np.trace(Aj.conj().T @ Aj)
+        norm2_j = np.vdot(Aj, Aj)
         for i, Bi in enumerate(to_basis):
-            T[j, i] = np.trace(Aj.conj().T @ Bi) / norm_j
+            T[j, i] = np.vdot(Aj, Bi) / norm2_j
     return np.linalg.inv(T) @ np.asarray(ptm, dtype=complex) @ T
 
 

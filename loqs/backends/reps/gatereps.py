@@ -33,10 +33,12 @@ TP_CHECK_TOL = 1e-8
 def _validate_process_shape(
     value: object, qubits: tuple, base: int, cls_name: str
 ) -> None:
-    """Require `value` to be a square array shaped `(base**n, base**n)`.
+    """Require `value` to be a square array shaped `(base**n, base**n)`
+    for some `n >= 1`.
 
     Uses `n = len(qubits)` if attached; otherwise only checks the
-    dimension is *some* power of `base`. Raises
+    dimension is *some* power of `base` -- `base**0 = 1` doesn't count,
+    since there's no such thing as a 0-qubit gate. Raises
     [](api:RepConstructionError) if not.
     """
     if (
@@ -57,11 +59,12 @@ def _validate_process_shape(
                 f"{n} qubits expects shape ({base**n}, {base**n})"
             )
         return
-    power = round(math.log(d, base)) if d > 0 else -1
-    if d <= 0 or base**power != d:
+    power = round(math.log(d, base)) if d > 1 else -1
+    if d <= 1 or base**power != d:
         raise RepConstructionError(
             f"{value!r} has shape {value.shape}, not a valid {cls_name} "
-            f"payload (dimension must be a power of {base})"
+            f"payload (dimension must be a power of {base}, for at least "
+            "1 qubit)"
         )
 
 
