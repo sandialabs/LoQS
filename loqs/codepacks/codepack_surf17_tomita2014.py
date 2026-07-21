@@ -65,7 +65,7 @@ from loqs.backends.model.basemodel import (
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import RepTuple
-from loqs.core import Instruction, QECCode
+from loqs.core import Instruction, QECCode, History
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
@@ -658,6 +658,7 @@ def create_qec_code(
         data_qubits: list[str],
         measurement_basis: Literal["Z", "X"],
         measurement_outcomes: MeasurementOutcomes,
+        history: History,
         reference_round_X: bool = False,
         reference_round_Z: bool = False,
     ) -> Frame:
