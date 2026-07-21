@@ -1,0 +1,246 @@
+{
+  "encode_type": "Serializable",
+  "module": "loqs.backends.model.stimdictmodel",
+  "class": "STIMDictNoiseModel",
+  "version": 1,
+  "gate_dict": {
+    "encode_type": "dict",
+    "version": 1,
+    "items": {
+      "X": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "RepTuple",
+        "version": 1,
+        "rep": {
+          "encode_type": "primitive",
+          "version": 1,
+          "value": "X 0"
+        },
+        "qubits": {
+          "encode_type": "iterable",
+          "version": 1,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q0"
+            }
+          ]
+        },
+        "reptype": {
+          "encode_type": "Serializable",
+          "module": "loqs.backends.reps",
+          "class": "GateRep",
+          "version": 1,
+          "value": {
+            "encode_type": "primitive",
+            "version": 1,
+            "value": 4
+          }
+        }
+      },
+      "H": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "RepTuple",
+        "version": 1,
+        "rep": {
+          "encode_type": "primitive",
+          "version": 1,
+          "value": "H 0"
+        },
+        "qubits": {
+          "encode_type": "iterable",
+          "version": 1,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q0"
+            }
+          ]
+        },
+        "reptype": {
+          "encode_type": "Serializable",
+          "module": "loqs.backends.reps",
+          "class": "GateRep",
+          "version": 1,
+          "value": {
+            "encode_type": "primitive",
+            "version": 1,
+            "value": 4
+          }
+        }
+      },
+      "CNOT": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "RepTuple",
+        "version": 1,
+        "rep": {
+          "encode_type": "primitive",
+          "version": 1,
+          "value": "CNOT 0 1"
+        },
+        "qubits": {
+          "encode_type": "iterable",
+          "version": 1,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q0"
+            },
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q1"
+            }
+          ]
+        },
+        "reptype": {
+          "encode_type": "Serializable",
+          "module": "loqs.backends.reps",
+          "class": "GateRep",
+          "version": 1,
+          "value": {
+            "encode_type": "primitive",
+            "version": 1,
+            "value": 4
+          }
+        }
+      },
+      "CX": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "RepTuple",
+        "version": 1,
+        "rep": {
+          "encode_type": "primitive",
+          "version": 1,
+          "value": "CNOT 0 1"
+        },
+        "qubits": {
+          "encode_type": "iterable",
+          "version": 1,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q0"
+            },
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q1"
+            }
+          ]
+        },
+        "reptype": {
+          "encode_type": "Serializable",
+          "module": "loqs.backends.reps",
+          "class": "GateRep",
+          "version": 1,
+          "value": {
+            "encode_type": "primitive",
+            "version": 1,
+            "value": 4
+          }
+        }
+      }
+    }
+  },
+  "inst_dict": {
+    "encode_type": "dict",
+    "version": 1,
+    "items": {
+      "M": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "RepTuple",
+        "version": 1,
+        "rep": {
+          "encode_type": "iterable",
+          "version": 1,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": null
+            },
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": 1
+            }
+          ]
+        },
+        "qubits": {
+          "encode_type": "iterable",
+          "version": 1,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 1,
+              "value": "Q0"
+            }
+          ]
+        },
+        "reptype": {
+          "encode_type": "Serializable",
+          "module": "loqs.backends.reps",
+          "class": "InstrumentRep",
+          "version": 1,
+          "value": {
+            "encode_type": "primitive",
+            "version": 1,
+            "value": 1
+          }
+        }
+      }
+    }
+  },
+  "_gatereps": {
+    "encode_type": "iterable",
+    "version": 1,
+    "iterable_type": "list",
+    "items": [
+      {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "GateRep",
+        "version": 1,
+        "value": {
+          "encode_type": "primitive",
+          "version": 1,
+          "value": 4
+        }
+      }
+    ]
+  },
+  "_instreps": {
+    "encode_type": "iterable",
+    "version": 1,
+    "iterable_type": "list",
+    "items": [
+      {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps",
+        "class": "InstrumentRep",
+        "version": 1,
+        "value": {
+          "encode_type": "primitive",
+          "version": 1,
+          "value": 1
+        }
+      }
+    ]
+  }
+}

@@ -963,14 +963,15 @@ def build_physical_circuit_instruction(
 
     Examples
     --------
-    >>> from loqs.backends import ListPhysicalCircuit as PhysCirc, DictNoiseModel, NumpyStatevectorQuantumState, GateRep, InstrumentRep
+    >>> from loqs.backends import ListPhysicalCircuit as PhysCirc, DictNoiseModel, NumpyStatevectorQuantumState
+    >>> from loqs.backends.reps import UnitaryGateRep, ZBasisProjectionInstrumentRep
     >>> from loqs.core.recordables import PatchDict
     >>> from loqs.core.instructions.builders import build_physical_circuit_instruction
     >>> circ = PhysCirc(circuit=[], qubit_labels=[0, 1])
     >>> inst = build_physical_circuit_instruction(circuit=circ, name="PhysCirc")
     >>> inst.name
     'PhysCirc'
-    >>> model = DictNoiseModel(({}, {}), gatereps=[GateRep.UNITARY], instreps=[InstrumentRep.ZBASIS_PROJECTION])
+    >>> model = DictNoiseModel(({}, {}), gatereps=[UnitaryGateRep], instreps=[ZBasisProjectionInstrumentRep])
     >>> state = NumpyStatevectorQuantumState(2, qubit_labels=[0, 1])
     >>> patches = PatchDict()
     >>> f = inst.apply(

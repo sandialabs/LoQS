@@ -7,7 +7,8 @@ quantumsim = pytest.importorskip("quantumsim")
 pygsti = pytest.importorskip("pygsti")
 stim = pytest.importorskip("stim")
 
-from loqs.backends import GateRep, PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
+from loqs.backends import PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
+from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 from loqs.core.recordables import MeasurementOutcomes
@@ -23,9 +24,9 @@ class Test5QCodepack:
         qubits = ["A0", "A1"] + [f"D{i+2}" for i in range(5)]
 
         if state_backend == QSimQuantumState:
-            gaterep = GateRep.QSIM_SUPEROPERATOR
+            gaterep = QSimSuperopGateRep
         else:
-            gaterep = GateRep.STIM_CIRCUIT_STR
+            gaterep = StimCircuitGateRep
 
         ideal_model = codepack_5_1_3.create_ideal_model(qubits, gaterep=gaterep, model_backend=model_backend)
 
