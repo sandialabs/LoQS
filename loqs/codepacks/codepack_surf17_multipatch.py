@@ -57,6 +57,11 @@ import warnings
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
+from loqs.codepacks.codepack_surf17_tomita2014 import (
+    DEFAULT_GATE_DURATIONS,
+    DEFAULT_IDLE_GATES,
+    layout_qubits,
+)
 from loqs.core import Instruction
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -64,8 +69,12 @@ from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 from loqs.core.recordables.pauliframe import PauliFrame
 
-PATCH_QUBIT_COUNTS = {"surf17": 17, "surf13": 13, "surf10": 10}
-"""Physical qubits (data + auxiliary) per patch for each layout."""
+PATCH_QUBIT_COUNTS = {
+    layout: len(layout_qubits(layout)) for layout in ("surf17", "surf13", "surf10")
+}
+"""Physical qubits (data + auxiliary) per patch for each layout -- sourced
+from codepack_surf17_tomita2014.layout_qubits, the single canonical
+definition."""
 
 
 def _pauli_from_bits(x_bit: int, z_bit: int) -> str:
@@ -134,13 +143,18 @@ def build_transversal_cnot_circuit_instruction(
     ctrl_data_qubits: Sequence[str],
     tgt_data_qubits: Sequence[str],
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    include_idles: bool = False,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str = "Transversal CNOT physical circuit",
 ) -> Instruction:
     """Build the physical-circuit half of a transversal logical CNOT.
 
-    One `Gcnot` per data-qubit pair, control patch -> target patch.
-    The circuit is defined only on the involved data qubits so discrete
-    error-injection tools enumerate a minimal set of fault locations.
+    One `Gcnot` per data-qubit pair, control patch -> target patch, all in
+    a single layer (every pair acts on disjoint qubits, so they commute
+    freely and can run in parallel). The circuit is defined only on the
+    involved data qubits so discrete error-injection tools enumerate a
+    minimal set of fault locations.
 
     Parameters
     ----------
@@ -153,6 +167,18 @@ def build_transversal_cnot_circuit_instruction(
     circuit_backend:
         The circuit backend. Default is PyGSTiPhysicalCircuit.
 
+    include_idles:
+        Whether to pad the layer's non-participating qubits with an idle
+        gate (True) or leave them genuinely blank (False, default). With
+        all 9 pairs sharing one layer, every one of the 18 involved
+        qubits is active, so this has no effect unless the circuit is
+        merged/tiled alongside other qubits later.
+
+    gate_durations, idle_gates:
+        See [](api:codepack_surf17_tomita2014.create_qec_code); defaults
+        to a duration-2 Gcnot padded with Gi2Q, matching that codepack's
+        convention.
+
     name:
         Name for logging purposes.
 
@@ -164,13 +190,17 @@ def build_transversal_cnot_circuit_instruction(
     """
     assert len(ctrl_data_qubits) == len(tgt_data_qubits)
     layers = [
-        [("Gcnot", c, t)]
-        for c, t in zip(ctrl_data_qubits, tgt_data_qubits)
+        [("Gcnot", c, t) for c, t in zip(ctrl_data_qubits, tgt_data_qubits)]
     ]
     circuit = circuit_backend(
         layers,  # type: ignore[arg-type]
         qubit_labels=list(ctrl_data_qubits) + list(tgt_data_qubits),
     )
+    if include_idles:
+        circuit.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates or DEFAULT_IDLE_GATES,
+            gate_durations or DEFAULT_GATE_DURATIONS,
+        )
     return builders.build_physical_circuit_instruction(circuit, name=name)
 
 
@@ -310,6 +340,9 @@ def build_transversal_cnot_instruction(
     ctrl_data_qubits: Sequence[str],
     tgt_data_qubits: Sequence[str],
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    include_idles: bool = False,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str = "Transversal Logical CNOT",
 ) -> Instruction:
     """Build a transversal logical CNOT between two same-layout patches.
@@ -335,6 +368,9 @@ def build_transversal_cnot_instruction(
     circuit_backend:
         The circuit backend. Default is PyGSTiPhysicalCircuit.
 
+    include_idles, gate_durations, idle_gates:
+        See [](api:build_transversal_cnot_circuit_instruction).
+
     name:
         Name for logging purposes.
 
@@ -347,6 +383,9 @@ def build_transversal_cnot_instruction(
         ctrl_data_qubits,
         tgt_data_qubits,
         circuit_backend=circuit_backend,
+        include_idles=include_idles,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
         name=f"{name} (physical circuit)",
     )
     bookkeeping_inst = build_cnot_bookkeeping_instruction(
@@ -371,6 +410,9 @@ def _build_joint_parity_instruction(
     ancilla: str,
     circuit_backend: type[BasePhysicalCircuit],
     name: str,
+    include_idles: bool = False,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
 ) -> Instruction:
     """Shared builder for the joint ZZ / XX parity instructions."""
     assert basis in ("ZZ", "XX")
@@ -408,6 +450,11 @@ def _build_joint_parity_instruction(
         layers,  # type: ignore[arg-type]
         qubit_labels=supports_a + supports_b + [ancilla],
     )
+    if include_idles:
+        circuit.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates or DEFAULT_IDLE_GATES,
+            gate_durations or DEFAULT_GATE_DURATIONS,
+        )
     circuit_inst = builders.build_physical_circuit_instruction(
         circuit, name=f"{name} (physical circuit)"
     )
@@ -477,6 +524,9 @@ def build_joint_parity_zz_instruction(
     data_qubits_b: Sequence[str],
     ancilla: str,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    include_idles: bool = False,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str = "Joint ZZ Parity Measurement",
 ) -> Instruction:
     """Ancilla-mediated measurement of Z_L(A) Z_L(B) (non fault-tolerant).
@@ -513,6 +563,10 @@ def build_joint_parity_zz_instruction(
     circuit_backend:
         The circuit backend. Default is PyGSTiPhysicalCircuit.
 
+    include_idles, gate_durations, idle_gates:
+        See [](api:codepack_surf17_tomita2014.create_qec_code); pads every
+        non-participating qubit at each layer (default: off).
+
     name:
         Name for logging purposes.
 
@@ -530,6 +584,9 @@ def build_joint_parity_zz_instruction(
         ancilla,
         circuit_backend,
         name,
+        include_idles=include_idles,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
 
 
@@ -540,6 +597,9 @@ def build_joint_parity_xx_instruction(
     data_qubits_b: Sequence[str],
     ancilla: str,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    include_idles: bool = False,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str = "Joint XX Parity Measurement",
 ) -> Instruction:
     """Ancilla-mediated measurement of X_L(A) X_L(B) (non fault-tolerant).
@@ -561,6 +621,9 @@ def build_joint_parity_xx_instruction(
         ancilla,
         circuit_backend,
         name,
+        include_idles=include_idles,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
 
 

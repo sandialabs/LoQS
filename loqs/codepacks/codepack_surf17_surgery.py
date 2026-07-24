@@ -51,6 +51,18 @@ import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
+from loqs.codepacks.codepack_surf17_tomita2014 import (
+    DEFAULT_GATE_DURATIONS as _DEFAULT_GATE_DURATIONS,
+    DEFAULT_IDLE_GATES as _DEFAULT_IDLE_GATES,
+    LAYOUT_SE_SPECS as _LAYOUT_SE_SPECS,
+    X_TILE_DATA as _X_TILE_DATA,
+    X_TILE_ROWS as _X_TILE_ROWS,
+    Z_TILE_DATA as _Z_TILE_DATA,
+    Z_TILE_ROWS as _Z_TILE_ROWS,
+    _LAYOUT_PARALLELISM,
+    build_se_templates as _se_templates,
+    layout_qubits,
+)
 from loqs.core import Instruction, History
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -349,81 +361,17 @@ def build_merged_check_matrices(
 # ---------------------------------------------------------------------------
 
 TEMPLATE_QUBITS = {
-    "surf10": [f"D{i}" for i in range(9)] + ["A9"],
-    "surf13": [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)],
-    "surf17": [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)],
+    layout: layout_qubits(layout) for layout in ("surf17", "surf13", "surf10")
 }
-"""Template qubit labels per layout (matches codepack_surf17_tomita2014)."""
+"""Template qubit labels per layout -- sourced from
+codepack_surf17_tomita2014.layout_qubits, the single canonical definition."""
 
-# Patch syndrome-extraction tiles in execution order (template data labels),
-# ported from codepack_surf17_tomita2014. Slot order is [NW, NE, SW, SE]
-# matching the 7-layer templates' [a, b, c, d].
-_X_TILE_DATA = [
-    [None, None, "D1", "D2"],  # geometric SX1 (H row 1, top boundary)
-    ["D0", "D1", "D3", "D4"],  # SX0 (H row 0)
-    ["D4", "D5", "D7", "D8"],  # SX2 (H row 2)
-    ["D6", "D7", None, None],  # SX3 (H row 3, bottom boundary)
-]
-_X_TILE_ROWS = [1, 0, 2, 3]  # H row measured by each execution tile
-_Z_TILE_DATA = [
-    [None, "D0", None, "D3"],  # SZ0 (H row 0, left boundary)
-    ["D1", "D2", "D4", "D5"],  # SZ1
-    ["D3", "D4", "D6", "D7"],  # SZ2
-    ["D5", None, "D8", None],  # SZ3 (H row 3, right boundary)
-]
-_Z_TILE_ROWS = [0, 1, 2, 3]
-
-# Auxiliary qubits per execution tile and block scheduling per layout
-# (ported from codepack_surf17_tomita2014's tile lists).
-_LAYOUT_SE_SPECS = {
-    "surf17": {
-        "X_aux": ["A9", "A11", "A14", "A16"],
-        "Z_aux": ["A10", "A12", "A13", "A15"],
-        "mode": "parallel",  # X and Z tilings merged at offset 0
-    },
-    "surf13": {
-        "X_aux": ["A9", "A11", "A10", "A12"],
-        "Z_aux": ["A10", "A12", "A9", "A11"],
-        "mode": "blocks",  # X block appended by Z block
-    },
-    "surf10": {
-        "X_aux": ["A9"] * 4,
-        "Z_aux": ["A9"] * 4,
-        "mode": "serial",  # 8 serial single-tile extractions
-    },
-}
-
-
-def _se_templates(circuit_backend: type[BasePhysicalCircuit]):
-    """The codepack's 7-layer X/Z syndrome-extraction templates."""
-    X_template = circuit_backend(
-        [
-            ("Gh", "aux"),
-            ("Gcnot", "aux", "b"),
-            ("Gcnot", "aux", "a"),
-            ("Gcnot", "aux", "d"),
-            ("Gcnot", "aux", "c"),
-            ("Gh", "aux"),
-            ("Iz", "aux"),
-        ],
-        qubit_labels=["a", "b", "c", "d", "aux"],
-    )
-    # CNOT order b,d,a,c matches codepack_surf17_tomita2014: the Z-ancilla
-    # hook after two CNOTs then lands on the vertical pair {a,c},
-    # perpendicular to Z_L (see the base codepack for the derivation).
-    Z_template = circuit_backend(
-        [
-            [],
-            ("Gcnot", "b", "aux"),
-            ("Gcnot", "d", "aux"),
-            ("Gcnot", "a", "aux"),
-            ("Gcnot", "c", "aux"),
-            [],
-            ("Iz", "aux"),
-        ],
-        qubit_labels=["a", "b", "c", "d", "aux"],
-    )
-    return X_template, Z_template
+# Patch syndrome-extraction tiles (_X_TILE_DATA/_X_TILE_ROWS/etc.), the
+# per-layout ancilla/mode specs (_LAYOUT_SE_SPECS), the shared 7-layer
+# templates (_se_templates), and the default gate-duration/idle-name
+# tables (_DEFAULT_GATE_DURATIONS/_DEFAULT_IDLE_GATES) are all imported
+# from codepack_surf17_tomita2014 above -- this module only adds the
+# grown-check substitution and the seam-specific machinery on top.
 
 
 def _build_patch_se_block(
@@ -515,31 +463,132 @@ def _build_seam_block(
     circuit_backend: type[BasePhysicalCircuit],
     counter: dict,
 ):
-    """The four new seam checks, extracted serially with borrowed ancillas.
+    """The four new seam checks, extracted with borrowed ancillas.
 
     Ancillas are borrowed from patch A (they are free after A's own block;
-    every `Iz` is measure-and-reset). Returns `(circuit, labels_seam)`.
+    every `Iz` is measure-and-reset). When at least as many distinct
+    ancillas are available as there are new checks (surf17/surf13), all
+    four checks are tiled into a single 7-layer block: their seam-qubit
+    supports pairwise overlap, but always at a different relative layer
+    for each check that shares them (verified directly against the
+    checks' tile role assignments), so merging is conflict-free -- see
+    the CNOT-order comment on `_se_templates` for the analogous argument.
+    Surf10 has only one ancilla to borrow, so the checks must stay serial
+    there (a single ancilla cannot run two checks at once). Returns
+    `(circuit, labels_seam)`.
     """
     X_template, Z_template = _se_templates(circuit_backend)
     template = (
         Z_template if geometry["new_check_type"] == "Z" else X_template
     )
     borrow = list(qubits_a[9:])
-    block = None
+    new_checks = geometry["new_checks"]
     labels_seam = []
-    for i, check in enumerate(geometry["new_checks"]):
+
+    def tile_for(i, check):
         aux = borrow[i % len(borrow)]
         tile = [
             resolve(e) if e is not None else None for e in check["tile"]
         ] + [aux]
-        c = circuit_backend.from_circuit_tiling(
-            template, all_labels, [tile], merge_offsets=0
-        )
-        block = c if block is None else block.append(c)
         occ = counter.get(aux, 0)
         counter[aux] = occ + 1
         labels_seam.append((aux, occ))
+        return tile
+
+    if len(borrow) >= len(new_checks):
+        tiles = [tile_for(i, check) for i, check in enumerate(new_checks)]
+        block = circuit_backend.from_circuit_tiling(
+            template, all_labels, tiles, merge_offsets=0
+        )
+    else:
+        block = None
+        for i, check in enumerate(new_checks):
+            c = circuit_backend.from_circuit_tiling(
+                template, all_labels, [tile_for(i, check)], merge_offsets=0
+            )
+            block = c if block is None else block.append(c)
     return block, labels_seam
+
+
+def _build_reference_se_circuit(
+    kind: str,
+    qubits_a: Sequence,
+    qubits_b: Sequence,
+    seam_qubits: Sequence,
+    idle_layout: str,
+    circuit_backend: type[BasePhysicalCircuit],
+):
+    """A fully self-padded `se_circuit` for `idle_layout`, reusing the real
+    data/seam qubit names but fresh scratch ancilla names sized for
+    `idle_layout`'s own ancilla count.
+
+    Used as a [](api:BasePhysicalCircuit.transplant_idle_schedule_inplace)
+    reference: the per-patch blocks are structurally identical to
+    codepack_surf17_tomita2014's own Syndrome Extraction circuit for
+    existing data qubits (the grown-check substitution only fills
+    previously-blank template slots with seam qubits, never changing an
+    existing qubit's own role/timing -- verified directly), and the seam
+    checks' geometry is layout-independent the same way (only the ancilla
+    borrowing scheme differs per layout). Scratch ancillas never appear in
+    the transplant's own qubit list, so their exact names don't matter --
+    only that patch A's and patch B's scratch pools are disjoint from each
+    other (they get merged together) and large enough for `idle_layout`.
+    """
+    geometry = SEAM_GEOMETRIES[kind]
+    ref_template_qubits = layout_qubits(idle_layout)
+    num_scratch_anc = len(ref_template_qubits) - 9
+    scratch_a = [f"__idle_ref_anc_a{i}" for i in range(num_scratch_anc)]
+    scratch_b = [f"__idle_ref_anc_b{i}" for i in range(num_scratch_anc)]
+
+    data_a = list(qubits_a[:9])
+    data_b = list(qubits_b[:9])
+    map_a = dict(zip(ref_template_qubits, data_a + scratch_a))
+    map_b = dict(zip(ref_template_qubits, data_b + scratch_b))
+
+    def resolve(elem):
+        patch, i = elem
+        if patch == "A":
+            return data_a[i]
+        if patch == "S":
+            return seam_qubits[i]
+        return data_b[i]
+
+    all_labels = data_a + scratch_a + data_b + scratch_b + list(seam_qubits)
+    grown_type = geometry["grown_check_type"]
+    grown_a = geometry["grown_checks"]["A"]
+    grown_b = geometry["grown_checks"]["B"]
+    counter: dict = {}
+
+    block_a, *_ = _build_patch_se_block(
+        idle_layout,
+        map_a,
+        grown_type,
+        grown_a["check_row"],
+        [resolve(e) if e is not None else None for e in grown_a["tile"]],
+        all_labels,
+        circuit_backend,
+        counter,
+    )
+    block_b, *_ = _build_patch_se_block(
+        idle_layout,
+        map_b,
+        grown_type,
+        grown_b["check_row"],
+        [resolve(e) if e is not None else None for e in grown_b["tile"]],
+        all_labels,
+        circuit_backend,
+        counter,
+    )
+    # The reference seam block borrows from patch A's reference ancilla
+    # pool, matching the real structure (seam checks borrow from qubits_a).
+    seam_block, _ = _build_seam_block(
+        geometry, resolve, data_a + scratch_a, all_labels, circuit_backend, counter
+    )
+    se_circuit_ref = block_a.merge(block_b, 0).append(seam_block)
+    se_circuit_ref.pad_single_qubit_idles_by_duration_inplace(
+        _DEFAULT_IDLE_GATES, _DEFAULT_GATE_DURATIONS
+    )
+    return se_circuit_ref
 
 
 def _surgery_metadata(
@@ -551,8 +600,21 @@ def _surgery_metadata(
     seam_qubits: Sequence,
     layout: str,
     circuit_backend: type[BasePhysicalCircuit],
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
 ) -> dict:
-    """Circuits, outcome labels, and bookkeeping data shared by merge/split."""
+    """Circuits, outcome labels, and bookkeeping data shared by merge/split.
+
+    `idle_layout`, if given, self-pads (`idle_layout == layout`) or borrows
+    an equally-or-more-parallel layout's idle schedule (matching
+    codepack_surf17_tomita2014.create_qec_code's convention), except that
+    "surf10" cannot supply its own idle schedule either way -- its single
+    shared ancilla forces heavy serialization in both the per-patch blocks
+    and the seam-check extraction, so self-padding it would give a far
+    larger idle budget than surf17/surf13, the same inflation problem the
+    base codepack's idle_layout avoids.
+    """
     geometry = SEAM_GEOMETRIES[kind]
     template_qubits = TEMPLATE_QUBITS[layout]
     assert len(qubits_a) == len(template_qubits), (
@@ -602,7 +664,42 @@ def _surgery_metadata(
     seam_block, labels_seam = _build_seam_block(
         geometry, resolve, qubits_a, all_labels, circuit_backend, counter
     )
-    se_circuit = block_a.append(block_b).append(seam_block)
+    # block_a and block_b act on entirely disjoint qubits (each patch's own
+    # data + ancilla labels are distinct, even where template positions
+    # match, e.g. "A9" resolves differently per patch) -- verified
+    # conflict-free for every layout, so they can run in parallel rather
+    # than sequentially.
+    se_circuit = block_a.merge(block_b, 0).append(seam_block)
+
+    if idle_layout is not None:
+        if idle_layout not in _LAYOUT_PARALLELISM:
+            raise ValueError(f"Unknown idle_layout: {idle_layout}")
+        if _LAYOUT_PARALLELISM[idle_layout] > _LAYOUT_PARALLELISM[layout]:
+            raise ValueError(
+                f"idle_layout={idle_layout!r} is more serialized than layout={layout!r}; "
+                "an idle schedule can only be borrowed from an equally or more parallel "
+                "layout (e.g. layout='surf10' may use idle_layout='surf17', not the reverse)."
+            )
+        if idle_layout == layout == "surf10":
+            raise ValueError(
+                "surf10 has no well-defined idle schedule of its own for lattice "
+                "surgery (its single shared ancilla forces heavy serialization in "
+                "both the per-patch blocks and the seam-check extraction); "
+                "specify idle_layout='surf17' or 'surf13' instead."
+            )
+        if idle_layout == layout:
+            se_circuit.pad_single_qubit_idles_by_duration_inplace(
+                idle_gates or _DEFAULT_IDLE_GATES,
+                gate_durations or _DEFAULT_GATE_DURATIONS,
+            )
+        else:
+            reference_se = _build_reference_se_circuit(
+                kind, qubits_a, qubits_b, seam_qubits, idle_layout, circuit_backend
+            )
+            transplant_qubits = list(qubits_a[:9]) + list(qubits_b[:9]) + list(seam_qubits)
+            se_circuit.transplant_idle_schedule_inplace(
+                reference_se, transplant_qubits, list((idle_gates or _DEFAULT_IDLE_GATES).values())
+            )
 
     # Seam prep / split-measurement circuits (defined on the seam qubits
     # only so error-injection tools enumerate a minimal set of locations)
@@ -1045,12 +1142,15 @@ def _split_bookkeeping_apply_fn(
       entry of that check row is XORed with the seam pair. Decoding is
       fully deferred, so this leaves the diff syndrome defect-free at all
       interior transitions; the only residue lands in the round-0 absolute
-      layer. The residue is exported as `syndrome_round0_offset_*` so a
-      terminating measure in the grown-check basis can either drop round 0
-      (`reference_round_X=True` (ZZ) / `reference_round_Z=True` (XX)) or -
-      when the prep makes that check type deterministic in round 0, as in
-      the mzz Bell prep - keep round 0 as a detector layer and subtract
-      the offset, closing the prep blind window.
+      layer. The residue is exported to the affected patch's own tracked
+      data (`patch.data["syndrome_round0_offset_X"]` /
+      `["syndrome_round0_offset_Z"]`, same convention as
+      `syndrome_history_X/Z`) so a terminating measure in the grown-check
+      basis can either drop round 0 (`reference_round_X=True` (ZZ) /
+      `reference_round_Z=True` (XX)) or - when the prep makes that check
+      type deterministic in round 0, as in the mzz Bell prep - keep round 0
+      as a detector layer and subtract the offset, closing the prep blind
+      window.
     - Split byproduct: the XOR of the three seam outcomes conditionally
       multiplies a logical Pauli into one patch's frame, preserving the
       anticommuting logical correlation across the surgery for the
@@ -1223,10 +1323,11 @@ def _split_bookkeeping_apply_fn(
     # (decoding is deferred, nothing has consumed it yet) keeps every
     # interior diff transition defect-free; the residue lands only in the
     # round-0 absolute layer. The residue is a KNOWN classical bit, so it
-    # is also exported as a round-0 offset: a terminating decode that
-    # keeps round 0 as a detector layer (possible when the prep basis
-    # makes this check type deterministic, e.g. the X sector after |+>
-    # prep) subtracts it and loses no prep-fault coverage.
+    # is also exported as a round-0 offset, tracked on the patch's own
+    # data (same convention as syndrome_history_X/Z above): a terminating
+    # decode that keeps round 0 as a detector layer (possible when the
+    # prep basis makes this check type deterministic, e.g. the X sector
+    # after |+> prep) subtracts it and loses no prep-fault coverage.
     for lbl, check_type, check_row, seam_pair in grown_flips:
         patch = get_mutable_patch(lbl)
         key = f"syndrome_history_{check_type}"
@@ -1240,13 +1341,10 @@ def _split_bookkeeping_apply_fn(
                 row[check_row] ^= 1
                 hist[t] = row
         patch.data[key] = hist
-        offset_key = f"syndrome_round0_offset_{check_type}_{lbl}"
-        offset = list(
-            last.get(offset_key, []) or [0] * len(hist[0])
-        )
+        offset_key = f"syndrome_round0_offset_{check_type}"
+        offset = list(patch.data.get(offset_key, []) or [0] * len(hist[0]))
         offset[check_row] ^= flip
-        history.propagating_keys.add(offset_key)
-        out[offset_key] = offset
+        patch.data[offset_key] = offset
 
     # Conditional logical byproduct
     byproduct_bit = 0
@@ -1499,6 +1597,9 @@ def build_merge_instruction(
     layout: str,
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
 ) -> Instruction:
     """Merge two patches through a seam for `num_merge_rounds` SE rounds.
@@ -1533,6 +1634,9 @@ def build_merge_instruction(
     circuit_backend:
         The circuit backend. Default is PyGSTiPhysicalCircuit.
 
+    idle_layout, gate_durations, idle_gates:
+        See [](api:_surgery_metadata); idle padding is off by default.
+
     name:
         Name for logging purposes.
 
@@ -1550,6 +1654,9 @@ def build_merge_instruction(
         seam_qubits,
         layout,
         circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
     return _merge_instruction_from_metadata(
         meta, num_merge_rounds, name or f"Lattice-Surgery {kind} Merge"
@@ -1566,6 +1673,9 @@ def build_split_instruction(
     layout: str,
     mode: str = "simple",
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
 ) -> Instruction:
     """Split a merged patch pair and extract the joint logical parity.
@@ -1583,13 +1693,18 @@ def build_split_instruction(
 
     The split rewrites the grown-check rows of both patches' stored
     syndrome histories (see [](api:_split_bookkeeping_apply_fn)), leaving a
-    residue only in the round-0 absolute detector layer, exported as a
-    `syndrome_round0_offset_*` key. Subsequent FT logical measurements in
+    residue only in the round-0 absolute detector layer, exported to the
+    affected patch's own tracked data (`patch.data["syndrome_round0_offset_X"]`
+    / `["syndrome_round0_offset_Z"]`). Subsequent FT logical measurements in
     the grown-check basis must either pass `reference_round_X=True` after
     a ZZ surgery (`reference_round_Z=True` after XX) or - when the prep
     makes that check type deterministic in round 0 - keep round 0 as a
     detector layer, in which case the terminating decode subtracts the
     offset; measurements in the other basis are unaffected.
+
+    `idle_layout`, `gate_durations`, `idle_gates`: see
+    [](api:_surgery_metadata); must match the preceding
+    [](api:build_merge_instruction) call's values.
     """
     meta = _surgery_metadata(
         kind,
@@ -1600,6 +1715,9 @@ def build_split_instruction(
         seam_qubits,
         layout,
         circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
     return _split_instruction_from_metadata(
         meta, mode, name or f"Lattice-Surgery {kind} Split"
@@ -1617,6 +1735,9 @@ def build_surgery_parity_instruction(
     mode: str = "simple",
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
 ) -> Instruction:
     """Full merge+split lattice-surgery joint parity measurement.
@@ -1638,6 +1759,9 @@ def build_surgery_parity_instruction(
         seam_qubits,
         layout,
         circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
     merge_inst = _merge_instruction_from_metadata(
         meta, num_merge_rounds, f"{base_name} merge"
@@ -1662,6 +1786,9 @@ def build_surgery_parity_instruction_sequence(
     mode: str = "ft",
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
 ) -> list[Instruction]:
     """The surgery parity measurement as a flat instruction list.
@@ -1672,6 +1799,9 @@ def build_surgery_parity_instruction_sequence(
     instructions, so error-injection tools (which attach `error_injections`
     kwargs to individual stack entries) can target a single merged-SE round
     or the seam circuits directly.
+
+    `idle_layout`, `gate_durations`, `idle_gates`: see
+    [](api:_surgery_metadata).
     """
     base_name = name or f"Lattice-Surgery {kind} Parity ({mode})"
     meta = _surgery_metadata(
@@ -1683,6 +1813,9 @@ def build_surgery_parity_instruction_sequence(
         seam_qubits,
         layout,
         circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
     prep_inst, se_inst, merge_book = _merge_instruction_parts(
         meta, num_merge_rounds, f"{base_name} merge"
@@ -1706,6 +1839,9 @@ def get_surgery_stage_circuits(
     seam_qubits: Sequence,
     layout: str,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
 ) -> dict:
     """The three physical circuits of one merge/split surgery, for drawing.
 
@@ -1716,6 +1852,9 @@ def get_surgery_stage_circuits(
     Z basis for XX). These are the same circuit objects the merge/split
     instructions execute; the classical bookkeeping steps (history
     extension, decode, byproduct frames) have no circuit representation.
+
+    `idle_layout`, `gate_durations`, `idle_gates`: see
+    [](api:_surgery_metadata).
     """
     meta = _surgery_metadata(
         kind,
@@ -1726,6 +1865,9 @@ def get_surgery_stage_circuits(
         seam_qubits,
         layout,
         circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
     )
     return {
         "seam_prep": meta["prep_circuit"],
@@ -1854,6 +1996,9 @@ def build_surgery_cnot_sequence(
     num_merge_rounds: int = 3,
     num_post_split_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
 ) -> list:
     """Stack-entry sequence for a logical CNOT via lattice surgery.
@@ -1929,6 +2074,9 @@ def build_surgery_cnot_sequence(
         mode=mode,
         num_merge_rounds=num_merge_rounds,
         circuit_backend=circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
         name=f"{base_name} M_ZZ",
     )
     xx = build_surgery_parity_instruction(
@@ -1942,6 +2090,9 @@ def build_surgery_cnot_sequence(
         mode=mode,
         num_merge_rounds=num_merge_rounds,
         circuit_backend=circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
         name=f"{base_name} M_XX",
     )
     corrections = build_surgery_cnot_corrections_instruction(
@@ -2161,6 +2312,9 @@ def build_mzz_bell_prep_sequence(
     mode: str = "ft",
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
+    idle_layout: str | None = None,
+    gate_durations: dict[str, int | float] | None = None,
+    idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
 ) -> list:
     """Stack-entry sequence for Bell prep by a direct M_ZZ merge.
@@ -2178,6 +2332,9 @@ def build_mzz_bell_prep_sequence(
     FT X measures so faults in the prep window stay detectable; the
     grown-X-check history rewrite at split is absorbed by the exported
     round-0 offset key, not by dropping round 0.
+
+    `idle_layout`, `gate_durations`, `idle_gates`: see
+    [](api:_surgery_metadata).
     """
     base_name = name or "M_ZZ Bell prep"
     zz = build_surgery_parity_instruction(
@@ -2191,6 +2348,9 @@ def build_mzz_bell_prep_sequence(
         mode=mode,
         num_merge_rounds=num_merge_rounds,
         circuit_backend=circuit_backend,
+        idle_layout=idle_layout,
+        gate_durations=gate_durations,
+        idle_gates=idle_gates,
         name=f"{base_name} M_ZZ",
     )
     corrections = build_mzz_bell_corrections_instruction(
