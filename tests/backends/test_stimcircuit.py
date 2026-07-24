@@ -538,6 +538,56 @@ class TestSTIMPhysicalCircuitMutators(unittest.TestCase):
         # And the original circuit should be untouched after the failures.
         self.assertEqual(circ.qubit_labels, ['Q0', 'Q1'])
 
+    @staticmethod
+    def _count_gate_qubit_targets(circ, gate_name):
+        """Count individual (gate, qubit) touches for `gate_name`,
+        regardless of how many targets STIM packs onto one instruction
+        line."""
+        count = 0
+        for instr in circ.circuit:
+            if instr.name != gate_name:
+                continue
+            for t in instr.targets_copy():
+                if t.is_qubit_target:
+                    count += 1
+        return count
+
+    def test_transplant_idle_schedule(self):
+        # Reference: a "parallel" 3-layer round where Q0 and Q1 are both
+        # idle, then both real (a CX), then both idle again.
+        reference = STIMPhysicalCircuit(
+            "I 0\nI 1\nTICK\nCX 0 1\nTICK\nI 0\nI 1\nTICK\n", ['Q0', 'Q1']
+        )
+
+        # Target: the same real gate, but serialized across more layers --
+        # blank before and after it, with the real gate itself moved later.
+        target = STIMPhysicalCircuit(
+            "TICK\nTICK\nCX 0 1\nTICK\nTICK\nTICK\n", ['Q0', 'Q1']
+        )
+        target.transplant_idle_schedule_inplace(reference, ['Q0', 'Q1'], ['I'])
+
+        # The real gate is untouched (one CX instruction touching 2 qubits);
+        # each qubit gets exactly 2 idle insertions (matching the reference's
+        # idle-real-idle pattern), for 4 total idle (gate, qubit) touches.
+        self.assertEqual(self._count_gate_qubit_targets(target, 'CX'), 2)
+        self.assertEqual(self._count_gate_qubit_targets(target, 'I'), 4)
+
+    def test_transplant_idle_schedule_mismatch_raises(self):
+        # Reference has only one real gate for Q0; a target with two real
+        # gates for Q0 has no matching reference event for the second one.
+        reference = STIMPhysicalCircuit("I 0\nTICK\nX 0\nTICK\nI 0\nTICK\n", ['Q0'])
+        target = STIMPhysicalCircuit("X 0\nTICK\nX 0\nTICK\n", ['Q0'])
+        with self.assertRaises(ValueError):
+            target.transplant_idle_schedule_inplace(reference, ['Q0'], ['I'])
+
+    def test_transplant_idle_schedule_insufficient_target_layers_raises(self):
+        # Reference has trailing idles after its real gate, but the target
+        # runs out of layers before it can place them all.
+        reference = STIMPhysicalCircuit("X 0\nTICK\nI 0\nTICK\nI 0\nTICK\n", ['Q0'])
+        target = STIMPhysicalCircuit("X 0\nTICK\n", ['Q0'])
+        with self.assertRaises(ValueError):
+            target.transplant_idle_schedule_inplace(reference, ['Q0'], ['I'])
+
 
 @pytest.mark.skipif(
     NO_STIM,

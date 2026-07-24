@@ -263,6 +263,47 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
             for qubit in missing_qubits:
                 self._circuit[lidx].append((layer_idle, (qubit,)))
 
+    def transplant_idle_schedule_inplace(
+        self,
+        reference: BasePhysicalCircuit,
+        qubits: Sequence[QubitTypes],
+        idle_names: Sequence[str],
+    ) -> None:
+        reference = ListPhysicalCircuit.cast(reference)
+        idle_names = set(idle_names)
+
+        for qubit in qubits:
+            true_seq: list[tuple[str, str]] = []
+            for layer in reference._circuit:
+                for name, qs in layer:
+                    if qubit in qs:
+                        kind = "idle" if name in idle_names else "real"
+                        true_seq.append((kind, name))
+
+            ptr = 0
+            for lidx in range(self.depth):
+                is_real = any(
+                    qubit in qs and name not in idle_names
+                    for name, qs in self._circuit[lidx]
+                )
+                if is_real:
+                    if ptr >= len(true_seq) or true_seq[ptr][0] != "real":
+                        raise ValueError(
+                            f"Qubit {qubit!r}: real operation at layer {lidx} does not "
+                            f"match the reference sequence at position {ptr}"
+                        )
+                    ptr += 1
+                    continue
+                if ptr < len(true_seq) and true_seq[ptr][0] == "idle":
+                    self._circuit[lidx].append((true_seq[ptr][1], (qubit,)))
+                    ptr += 1
+            if ptr != len(true_seq):
+                raise ValueError(
+                    f"Qubit {qubit!r}: only matched {ptr}/{len(true_seq)} reference "
+                    "operations -- this circuit does not have enough layers/real "
+                    "operations to receive the full reference idle schedule"
+                )
+
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:

@@ -234,3 +234,99 @@ class TestSurf17Codepack:
             [0],
         )
         assert len(failed) == 0
+
+
+_IDLE_NAMES = {"Gi1Q", "Gi2Q", "GiMCM", "Gi"}
+_DATA_QUBITS = [f"D{i}" for i in range(9)]
+
+
+def _per_qubit_idle_counts(code) -> dict[str, int]:
+    """Count idle-gate instances per data qubit in a codepack's Syndrome
+    Extraction circuit."""
+    circuit = code.instructions["Syndrome Extraction"].data["circuit"].circuit
+    counts = {q: 0 for q in _DATA_QUBITS}
+    for lidx in range(circuit.depth):
+        for comp in circuit._layer_components(lidx):
+            if comp.qubits and comp.name in _IDLE_NAMES:
+                for q in comp.qubits:
+                    if q in counts:
+                        counts[q] += 1
+    return counts
+
+
+class TestSurf17IdleLayout:
+    """Tests for the idle_layout parameter of create_qec_code, covering
+    self-padding (idle_layout == layout) and borrowing a more-parallel
+    layout's idle schedule onto a more-serialized one."""
+
+    # Hand-derived from surf17's 7-layer merged Syndrome Extraction round:
+    # each data qubit's idle count is 7 minus how many of the 8 checks
+    # touch it with a real gate.
+    SURF17_IDLE_COUNTS = {
+        "D0": 5, "D1": 4, "D2": 5, "D3": 4, "D4": 3,
+        "D5": 4, "D6": 5, "D7": 4, "D8": 5,
+    }
+
+    # surf13's own self-padded schedule runs X and Z checks in 2 sequential
+    # 7-layer passes (14 layers total) rather than surf17's single merged
+    # round, so it accumulates roughly double the idle time -- this is
+    # exactly the discrepancy idle_layout="surf17" (below) is meant to fix.
+    SURF13_SELF_IDLE_COUNTS = {
+        "D0": 10, "D1": 9, "D2": 10, "D3": 9, "D4": 8,
+        "D5": 9, "D6": 10, "D7": 9, "D8": 10,
+    }
+
+    def test_no_idle_layout_omits_idles(self):
+        code = codepack_surf17.create_qec_code(
+            layout="surf10", circuit_backend=PyGSTiPhysicalCircuit
+        )
+        counts = _per_qubit_idle_counts(code)
+        assert all(c == 0 for c in counts.values())
+
+    def test_self_idle_layout_surf17(self):
+        code = codepack_surf17.create_qec_code(
+            layout="surf17", idle_layout="surf17", circuit_backend=PyGSTiPhysicalCircuit
+        )
+        counts = _per_qubit_idle_counts(code)
+        assert counts == self.SURF17_IDLE_COUNTS
+
+    def test_self_idle_layout_surf13(self):
+        code = codepack_surf17.create_qec_code(
+            layout="surf13", idle_layout="surf13", circuit_backend=PyGSTiPhysicalCircuit
+        )
+        counts = _per_qubit_idle_counts(code)
+        assert counts == self.SURF13_SELF_IDLE_COUNTS
+
+    @pytest.mark.parametrize("layout", ["surf10", "surf13"])
+    def test_borrow_idle_layout_from_surf17(self, layout):
+        code = codepack_surf17.create_qec_code(
+            layout=layout, idle_layout="surf17", circuit_backend=PyGSTiPhysicalCircuit
+        )
+        counts = _per_qubit_idle_counts(code)
+        assert counts == self.SURF17_IDLE_COUNTS
+
+    def test_surf10_cannot_self_supply_idle_layout(self):
+        with pytest.raises(ValueError):
+            codepack_surf17.create_qec_code(
+                layout="surf10", idle_layout="surf10",
+                circuit_backend=PyGSTiPhysicalCircuit,
+            )
+
+    def test_cannot_borrow_from_more_serialized_layout(self):
+        with pytest.raises(ValueError):
+            codepack_surf17.create_qec_code(
+                layout="surf17", idle_layout="surf10",
+                circuit_backend=PyGSTiPhysicalCircuit,
+            )
+        with pytest.raises(ValueError):
+            codepack_surf17.create_qec_code(
+                layout="surf13", idle_layout="surf10",
+                circuit_backend=PyGSTiPhysicalCircuit,
+            )
+
+    def test_unknown_idle_layout_raises(self):
+        with pytest.raises(ValueError):
+            codepack_surf17.create_qec_code(
+                layout="surf17", idle_layout="surf99",  # type: ignore
+                circuit_backend=PyGSTiPhysicalCircuit,
+            )

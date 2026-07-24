@@ -220,6 +220,51 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             # Substitute new padded layer
             self._circuit.set_labels(comps, lidx)
 
+    def transplant_idle_schedule_inplace(
+        self,
+        reference: BasePhysicalCircuit,
+        qubits: Sequence[QubitTypes],
+        idle_names: Sequence[str],
+    ) -> None:
+        reference = PyGSTiPhysicalCircuit.cast(reference)
+        idle_names = set(idle_names)
+        ref_circuit = reference.circuit
+
+        for qubit in qubits:
+            true_seq: list[tuple[str, str]] = []
+            for lidx in range(ref_circuit.depth):
+                for comp in ref_circuit._layer_components(lidx):
+                    if comp.qubits and qubit in comp.qubits:  # type: ignore
+                        kind = "idle" if comp.name in idle_names else "real"  # type: ignore
+                        true_seq.append((kind, comp.name))  # type: ignore
+
+            ptr = 0
+            for lidx in range(self._circuit.depth):
+                comps = self._circuit._layer_components(lidx)
+                is_real = any(
+                    comp.qubits and qubit in comp.qubits and comp.name not in idle_names  # type: ignore
+                    for comp in comps
+                )
+                if is_real:
+                    if ptr >= len(true_seq) or true_seq[ptr][0] != "real":
+                        raise ValueError(
+                            f"Qubit {qubit!r}: real operation at layer {lidx} does not "
+                            f"match the reference sequence at position {ptr}"
+                        )
+                    ptr += 1
+                    continue
+                if ptr < len(true_seq) and true_seq[ptr][0] == "idle":
+                    comps = list(comps)
+                    comps.append(_Label(true_seq[ptr][1], (qubit,)))  # type: ignore
+                    self._circuit.set_labels(comps, lidx)
+                    ptr += 1
+            if ptr != len(true_seq):
+                raise ValueError(
+                    f"Qubit {qubit!r}: only matched {ptr}/{len(true_seq)} reference "
+                    "operations -- this circuit does not have enough layers/real "
+                    "operations to receive the full reference idle schedule"
+                )
+
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:

@@ -117,6 +117,53 @@ class TestPyGSTiPhysicalCircuit:
         pc5.map_qubit_labels_inplace({"Q0": 0, "Q1": 1})
         self._check(pc5, self.test_circ_intlbls)
 
+    def test_transplant_idle_schedule(self):
+        # Reference: a "parallel" 3-layer round where Q0 and Q1 are both
+        # idle, then both real (a CNOT), then both idle again.
+        reference = PhysCirc(
+            [[('Gi', 'Q0'), ('Gi', 'Q1')], ('Gcnot', 'Q0', 'Q1'), [('Gi', 'Q0'), ('Gi', 'Q1')]],
+            qubit_labels=["Q0", "Q1"],
+        )
+
+        # Target: the same real gate, but serialized across more layers --
+        # blank before and after it, with the real gate itself moved later.
+        target = PhysCirc(
+            [[], [], ('Gcnot', 'Q0', 'Q1'), [], []],
+            qubit_labels=["Q0", "Q1"],
+        )
+        target.transplant_idle_schedule_inplace(reference, ["Q0", "Q1"], ["Gi"])
+
+        expected = Circuit([
+            [('Gi', 'Q0'), ('Gi', 'Q1')], [],
+            ('Gcnot', 'Q0', 'Q1'),
+            [('Gi', 'Q0'), ('Gi', 'Q1')], [],
+        ], line_labels=["Q0", "Q1"])  # type: ignore
+        self._check(target, expected)
+
+    def test_transplant_idle_schedule_mismatch_raises(self):
+        # Reference has only one real gate for Q0; a target with two real
+        # gates for Q0 has no matching reference event for the second one.
+        reference = PhysCirc(
+            [[('Gi', 'Q0')], ('Gxpi2', 'Q0'), [('Gi', 'Q0')]],
+            qubit_labels=["Q0"],
+        )
+        target = PhysCirc(
+            [('Gxpi2', 'Q0'), ('Gxpi2', 'Q0')],
+            qubit_labels=["Q0"],
+        )
+        with pytest.raises(ValueError):
+            target.transplant_idle_schedule_inplace(reference, ["Q0"], ["Gi"])
+
+    def test_transplant_idle_schedule_insufficient_target_layers_raises(self):
+        # Reference has trailing idles after its real gate, but the target
+        # runs out of layers before it can place them all.
+        reference = PhysCirc(
+            [('Gxpi2', 'Q0'), [('Gi', 'Q0')], [('Gi', 'Q0')]], qubit_labels=["Q0"]
+        )
+        target = PhysCirc([('Gxpi2', 'Q0')], qubit_labels=["Q0"])
+        with pytest.raises(ValueError):
+            target.transplant_idle_schedule_inplace(reference, ["Q0"], ["Gi"])
+
 
 # class TestPyGSTiPhysicalCircuitFailedImport:
 #         # Mock not having the pygsti available
