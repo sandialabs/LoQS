@@ -65,7 +65,7 @@ from loqs.backends.model.basemodel import (
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import RepTuple
-from loqs.core import Instruction, QECCode, History
+from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
@@ -728,7 +728,6 @@ def create_qec_code(
         data_qubits: list[str],
         measurement_basis: Literal["Z", "X"],
         measurement_outcomes: MeasurementOutcomes,
-        history: History,
         reference_round_X: bool = False,
         reference_round_Z: bool = False,
     ) -> Frame:
@@ -752,23 +751,10 @@ def create_qec_code(
         # grown-check row of every stored round; interior diffs cancel but
         # the round-0 absolute layer keeps the flip). Subtracted from the
         # t=0 detector layer only, so round 0 stays usable as a detector
-        # when the prep basis makes it deterministic.
-        try:
-            offset_X = list(
-                history[-1].get(  # type: ignore
-                    f"syndrome_round0_offset_X_{patch_label}", []
-                )
-                or []
-            )
-            offset_Z = list(
-                history[-1].get(  # type: ignore
-                    f"syndrome_round0_offset_Z_{patch_label}", []
-                )
-                or []
-            )
-        except (IndexError, AttributeError, KeyError):
-            offset_X = []
-            offset_Z = []
+        # when the prep basis makes it deterministic. Tracked on the
+        # patch's own data, same as syndrome_history_X/Z above.
+        offset_X = list(patch.data.get("syndrome_round0_offset_X", []) or [])
+        offset_Z = list(patch.data.get("syndrome_round0_offset_Z", []) or [])
 
         R = len(hist_X)  # number of previous syndrome rounds
 
