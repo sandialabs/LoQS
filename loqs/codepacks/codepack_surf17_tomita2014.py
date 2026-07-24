@@ -339,14 +339,6 @@ def create_qec_code(
         qubit_labels=["a", "b", "c", "d", "aux"],
     )
 
-    if include_idles:
-        X_template.pad_single_qubit_idles_by_duration_inplace(
-            idle_gates, gate_durations
-        )
-        Z_template.pad_single_qubit_idles_by_duration_inplace(
-            idle_gates, gate_durations
-        )
-
     if layout == "surf17":
         # Surface-17
         X_tiles = [
@@ -420,6 +412,15 @@ def create_qec_code(
         full_syndrome_circ = circuits[0]
         for c in circuits[1:]:
             full_syndrome_circ = full_syndrome_circ.append(c)
+
+    # Idle padding
+    # TODO: This fills in all open spaces. For surf-13 and surf-10,
+    # we could compute where the surf-17 idles are and insert those selectively
+    # so we can simulate surf-17 with idles "exactly" with surf-13/10
+    if include_idles:
+        full_syndrome_circ.pad_single_qubit_idles_by_duration_inplace(
+            idle_gates, gate_durations
+        )
 
     instructions["Syndrome Extraction"] = (
         builders.build_physical_circuit_instruction(
