@@ -31,10 +31,10 @@ class TestInstructionStack:
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
         self._check(s, ["L0", "L1"])
 
-        s1 = InstructionStack.cast([self.ilbl1, self.ilbl2])
+        s1 = InstructionStack([self.ilbl1, self.ilbl2])
         self._check(s1, ["L0", "L1"])
 
-        s2 = InstructionStack.cast(s)
+        s2 = InstructionStack(s)
         self._check(s2, ["L0", "L1"])
     
     def test_list_operations(self):

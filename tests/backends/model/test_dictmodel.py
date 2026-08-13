@@ -3,6 +3,7 @@
 import json
 import warnings
 from pathlib import Path
+from unittest import mock
 
 import h5py
 import numpy as np
@@ -267,6 +268,22 @@ class TestGetReps:
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
         with pytest.raises(AssertionError, match="Failed to look up"):
             model.get_reps(circuit, [], [])
+
+    def test_get_reps_does_not_reconstruct_already_correct_circuit_type(self):
+        """A `circuit` that's already a `ListPhysicalCircuit` is read
+        directly, without constructing or copying a second one."""
+        model = DictNoiseModel(({("X", ("Q0",)): np.eye(4)}, {}))
+        circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
+        original_init = ListPhysicalCircuit.__init__
+        call_count = [0]
+
+        def counting_init(self, *args, **kwargs):
+            call_count[0] += 1
+            return original_init(self, *args, **kwargs)
+
+        with mock.patch.object(ListPhysicalCircuit, "__init__", counting_init):
+            model.get_reps(circuit, [QSimSuperopGateRep], [])
+        assert call_count[0] == 0
 
 
 class TestDictModelFixtureRoundTrip:

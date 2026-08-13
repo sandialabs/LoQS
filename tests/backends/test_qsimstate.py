@@ -45,15 +45,15 @@ class TestQSimQuantumState:
         s3 = QSimState(qsim_dm)
         self._check(s3, s)
 
-        # Cast checks
-        s4 = QSimState.cast(s)
+        # Direct construction handles the same shapes .cast() used to.
+        s4 = QSimState(s)
         self._check(s4, s)
 
-        s5 = QSimState.cast(qsim_dm)
+        s5 = QSimState(qsim_dm)
         self._check(s5, s)
 
         # This one won't have same labels
-        s6 = QSimState.cast(5)
+        s6 = QSimState(5)
         self._check(QSimState(5), s6)
 
         # Copy check

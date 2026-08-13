@@ -1,5 +1,7 @@
 """Tester for loqs.backends.model.pygstimodel"""
 
+from unittest import mock
+
 import numpy as np
 import pytest
 
@@ -393,6 +395,24 @@ class TestTimeDependence:
         # Gxpi (5) and Gad (2) can't share a layer (both act on Q0), and
         # Iz (3) is its own layer too -- so total elapsed time is 5+2+3=10.
         assert pgm.current_time == 10.0
+
+    def test_get_reps_does_not_reconstruct_already_correct_circuit_type(self):
+        """A `circuit` that's already a `PyGSTiPhysicalCircuit` is read
+        directly, without constructing or copying a second one."""
+        from loqs.backends import PyGSTiPhysicalCircuit
+
+        pgm = PyGSTiNoiseModel(_build_explicit_model())
+        circuit = PyGSTiPhysicalCircuit([("Gxpi", "Q0")], ["Q0"])
+        original_init = PyGSTiPhysicalCircuit.__init__
+        call_count = [0]
+
+        def counting_init(self, *args, **kwargs):
+            call_count[0] += 1
+            return original_init(self, *args, **kwargs)
+
+        with mock.patch.object(PyGSTiPhysicalCircuit, "__init__", counting_init):
+            pgm.get_reps(circuit, [UnitaryGateRep, QSimSuperopGateRep], [])
+        assert call_count[0] == 0
 
 
 class TestDenseEmbeddingWarningHelpers:
