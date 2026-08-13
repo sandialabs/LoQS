@@ -118,8 +118,12 @@ class BasePhysicalCircuit(SeqCastable, Displayable):
         # Initialize empty circuit with full labels
         tiled_circuit = cls([], qubit_labels)
 
-        # Cast the template to same type as this class for interoperability
-        circuit = cls.cast(template_circuit)
+        # Convert the template to this class, avoiding a redundant copy if
+        # it's already the right type.
+        if isinstance(template_circuit, cls):
+            circuit = template_circuit
+        else:
+            circuit = cls(template_circuit)
 
         if isinstance(merge_offsets, int):
             merge_offsets = [merge_offsets] * len(tile_qubits)

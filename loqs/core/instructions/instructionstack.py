@@ -82,7 +82,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         # If the first entry is an Instruction or str, this is an InstructionLabel cast
         # Otherwise it is a list of InstructionLabel casts (probably)
         if isinstance(instructions[0], (Instruction, str)):
-            self._instructions = [InstructionLabel.cast(instructions)]  # type: ignore
+            self._instructions = [InstructionLabel(*instructions)]  # type: ignore
             return
 
         # Otherwise we must be a list of castable tuples

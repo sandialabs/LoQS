@@ -577,7 +577,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idx:
             Starting index to begin insert. If -1, append to the end.
         """
-        other_circuit = STIMPhysicalCircuit.cast(circuit)
+        other_circuit = STIMPhysicalCircuit(circuit)
 
         unrolled = self._unroll_repeats()
         layers = unrolled.split("TICK\n")
@@ -621,7 +621,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idx : int
             Layer index to start merge
         """
-        other_circuit = STIMPhysicalCircuit.cast(circuit)
+        other_circuit = STIMPhysicalCircuit(circuit)
 
         # Build index map for the other circuit
         index_map = {}

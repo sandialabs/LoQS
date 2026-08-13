@@ -84,7 +84,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self.qubits = qubits
         """The qubits this patch acts on."""
 
-        self.pauli_frame = PauliFrame.cast(pauli_frame)
+        self.pauli_frame = PauliFrame(pauli_frame)
         """The Pauli frame tracking errors on these qubits."""
 
         import copy

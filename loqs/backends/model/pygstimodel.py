@@ -586,10 +586,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         gatereps: Sequence[type[GateRep]],
         instreps: Sequence[type[InstrumentRep]],
     ) -> list[OperationRep]:
-        # Get bare circuit
+        # Get bare circuit (avoiding a redundant copy if it's already the
+        # right type).
         from loqs.backends import PyGSTiPhysicalCircuit
 
-        circuit = PyGSTiPhysicalCircuit.cast(circuit)
+        if not isinstance(circuit, PyGSTiPhysicalCircuit):
+            circuit = PyGSTiPhysicalCircuit(circuit)
         pygsti_circuit = circuit.circuit
 
         # Iterate through circuit and pull out representations

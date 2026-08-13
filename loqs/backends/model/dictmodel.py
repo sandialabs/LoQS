@@ -302,8 +302,10 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         list
             List of operation representations for the circuit
         """
-        # Get builtin circuit for easy processing
-        circuit = ListPhysicalCircuit.cast(circuit)
+        # Get builtin circuit for easy processing (avoiding a redundant
+        # copy if it's already the right type).
+        if not isinstance(circuit, ListPhysicalCircuit):
+            circuit = ListPhysicalCircuit(circuit)
 
         # Iterate through circuit and pull out representations
         reps = []

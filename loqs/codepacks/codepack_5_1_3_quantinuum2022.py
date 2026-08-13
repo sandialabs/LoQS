@@ -1142,7 +1142,7 @@ def _create_adaptive_measure_instruction_part_I(
             ]
 
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel.cast(ilbl)
+            new_label = InstructionLabel(*ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         return Frame(
@@ -1346,7 +1346,7 @@ def _create_adaptive_measure_instruction_part_II(
 
         # We need to make sure and feed the patch label forward
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel.cast(ilbl)
+            new_label = InstructionLabel(*ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
@@ -1563,7 +1563,7 @@ def _create_adaptive_measure_instruction_part_III(
 
         # We need to make sure and feed the patch label forward
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel.cast(ilbl)
+            new_label = InstructionLabel(*ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
@@ -1826,7 +1826,7 @@ def _create_unflagged_QEC_instruction(
         # Extract syndrome across multiple historical check frames using SyndromeLabel
         syndrome_labels_raw = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
         syndrome_labels = [
-            SyndromeLabel.cast(lbl) for lbl in syndrome_labels_raw
+            SyndromeLabel(*lbl) for lbl in syndrome_labels_raw
         ]
         syndrome: list[int] = []
         for synlbl in syndrome_labels:

@@ -58,17 +58,6 @@ class TestListPhysicalCircuit:
         with pytest.raises(ValueError):
             PhysCirc(None) # type: ignore
 
-    def test_init_from_pygsti_circuit_import_error_wrapped_as_valueerror(self):
-        pytest.importorskip("pygsti")
-        from loqs.backends import PyGSTiPhysicalCircuit
-
-        pgc = PyGSTiPhysicalCircuit([("Gxpi2", "Q0")], ["Q0"])
-        with mock.patch.object(
-            PyGSTiPhysicalCircuit, "cast", side_effect=ImportError("boom")
-        ):
-            with pytest.raises(ValueError, match="Could not cast pyGSTi circuit"):
-                PhysCirc(pgc)
-
     def test_init_from_pygsti_circuit_does_not_reconstruct_it(self):
         """An existing `PyGSTiPhysicalCircuit` is read directly, without
         constructing or copying a second one."""

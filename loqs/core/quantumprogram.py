@@ -186,9 +186,7 @@ class QuantumProgram(Displayable):
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
             try:
-                self.instruction_stack = InstructionStack.cast(
-                    instruction_stack
-                )
+                self.instruction_stack = InstructionStack(instruction_stack)
                 """The [](api:InstructionStack) that holds
                 [](api:InstructionLabelCastableTypes) object to execute."""
             except ValueError as e:
@@ -196,7 +194,7 @@ class QuantumProgram(Displayable):
                     "InstructionStack failed to cast, check all instructions/labels are well-formed"
                 ) from e
         else:
-            self.instruction_stack = InstructionStack.cast(
+            self.instruction_stack = InstructionStack(
                 self.initial_history[-1]["stack"]
             )
 
@@ -663,7 +661,7 @@ class QuantumProgram(Displayable):
 
             history.append(applied_frame)
 
-            stack = InstructionStack.cast(applied_frame["stack"])
+            stack = InstructionStack(applied_frame["stack"])
 
             num_frames += 1
 
@@ -707,7 +705,10 @@ class QuantumProgram(Displayable):
         [](api:Instruction)
             The resolved [](api:Instruction)
         """
-        ilbl = InstructionLabel.cast(inst_lbl)
+        # Always already an InstructionLabel: the sole caller passes
+        # inst_lbl straight from InstructionStack.pop_instruction().
+        assert isinstance(inst_lbl, InstructionLabel)
+        ilbl = inst_lbl
 
         if ilbl.instruction is not None:
             return ilbl.instruction
