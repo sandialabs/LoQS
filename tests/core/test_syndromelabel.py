@@ -12,27 +12,35 @@ class TestSyndromeLabel:
         assert l.frame_idx == fi
         assert l.outcome_idx == oi
 
+    @pytest.mark.xfail(
+        strict=True, reason="SyndromeLabel.from_raw does not exist yet"
+    )
     def test_init(self):
         l = SyndromeLabel("Q0", 1, 2)
         self._check(l, "Q0", 1, 2)
 
-        l2 = SyndromeLabel.cast(("Q0", 1, 2))
+        l2 = SyndromeLabel.from_raw(("Q0", 1, 2))
         self._check(l2, "Q0", 1, 2)
 
         l3 = SyndromeLabel("Q0", 1)
         self._check(l3, "Q0", 1, 0)
 
-        l4 = SyndromeLabel.cast(("Q0", 1))
+        l4 = SyndromeLabel.from_raw(("Q0", 1))
         self._check(l4, "Q0", 1, 0)
 
         l5 = SyndromeLabel("Q0")
         self._check(l5, "Q0", -1, 0)
 
-        l6 = SyndromeLabel.cast(("Q0",))
+        l6 = SyndromeLabel.from_raw(("Q0",))
         self._check(l6, "Q0", -1, 0)
 
-        l7 = SyndromeLabel.cast("Q0")
+        l7 = SyndromeLabel.from_raw("Q0")
         self._check(l7, "Q0", -1, 0)
+
+        # An already-built SyndromeLabel is returned as a value-equal
+        # instance (not necessarily the same object).
+        l8 = SyndromeLabel.from_raw(l)
+        self._check(l8, "Q0", 1, 2)
 
         with pytest.raises(TypeError):
             SyndromeLabel() # type: ignore

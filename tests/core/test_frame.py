@@ -28,11 +28,11 @@ class TestFrame:
         assert f3._data == data
         assert f3.log == "test 2"
 
-        f4 = Frame.cast(f1)
+        f4 = Frame(f1)
         assert f4._data == data
         assert f4.log == "test"
 
-        f5 = Frame.cast(data)
+        f5 = Frame(data)
         assert f5._data == data
         assert f5.log == "N/A"
 
@@ -41,7 +41,21 @@ class TestFrame:
             Frame("abc") # type: ignore
         with pytest.raises(ValueError):
             Frame([1, 2, 3]) # type: ignore
-    
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Frame.__init__'s existing-instance branch resets "
+        "_expired_keys/_no_serialize_keys instead of copying them",
+    )
+    def test_init_from_existing_frame_preserves_expiry_and_no_serialize(self):
+        f1 = Frame({"a": 1, "b": 2, "c": 3})
+        f1.expire("a")
+        f1.no_serialize("b")
+
+        f2 = Frame(f1)
+        assert f2._expired_keys == ["a"]
+        assert f2._no_serialize_keys == ["b"]
+
     def test_expire(self):
         f = Frame({"a": 1, "b": 2})
         f.expire("b")

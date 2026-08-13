@@ -32,6 +32,11 @@ from loqs.core import QuantumProgram, QECCode
 from loqs.core.instructions import builders
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+    "as separate parameters",
+)
 class TestIntegratedNoise:
 
     def test_1q_depolarizing(self):
@@ -59,7 +64,7 @@ class TestIntegratedNoise:
         gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperopGateRep)
         gate_dict[("Gi", ("Q0",))] = qsim_native_ptm # Depolarizing idle
         depol_noise_model = DictNoiseModel(
-            (gate_dict, inst_dict),
+            gate_dict, inst_dict,
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisProjectionInstrumentRep]
         )
@@ -111,7 +116,7 @@ class TestIntegratedNoise:
         # which has a conversion factor of 3/4 (i.e. non-I Paulis/all Paulis)
         gate_dict[("Gi", ("Q0",))] = f"DEPOLARIZE1({3/4 * p_depol}) 0" # Depolarizing idle
         depol_noise_model_stim = DictNoiseModel(
-            (gate_dict, inst_dict),
+            gate_dict, inst_dict,
             gatereps=[StimCircuitGateRep],
             instreps=[ZBasisProjectionInstrumentRep]
         )
@@ -180,7 +185,7 @@ class TestIntegratedNoise:
         gate_dict, inst_dict = self._create_model_dicts(qubits, QSimSuperopGateRep)
         gate_dict[("Gi", ("Q1",))] = qsim_native_ptm # Amplitude damping/dephasing idle
         noise_model = DictNoiseModel(
-            (gate_dict, inst_dict),
+            gate_dict, inst_dict,
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisProjectionInstrumentRep]
         )
@@ -284,7 +289,7 @@ class TestIntegratedNoise:
         gate_dict, inst_dict = self._create_model_dicts(qubits, StimCircuitGateRep)
         gate_dict[("Gi", ("Q1",))] = damp_rep
         noise_model_stim = DictNoiseModel(
-            (gate_dict, inst_dict),
+            gate_dict, inst_dict,
             gatereps=[stim_rep, StimCircuitGateRep],
             instreps=[ZBasisProjectionInstrumentRep]
         )

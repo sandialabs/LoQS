@@ -47,27 +47,32 @@ except ImportError:
     NO_STIM = True
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+    "as separate parameters, and .from_model does not exist yet",
+)
 class TestConstruction:
-    def test_from_tuple_of_dicts(self):
-        model = DictNoiseModel(({}, {}))
+    def test_from_separate_dicts(self):
+        model = DictNoiseModel({}, {})
         assert model.gate_dict == {}
         assert model.inst_dict == {}
 
     def test_str(self):
-        model = DictNoiseModel(({}, {}))
+        model = DictNoiseModel({}, {})
         assert str(model) == f"Physical {model.name} noise model\n"
 
     def test_copy_constructor(self):
         gate_dict = {("X", ("Q0",)): np.eye(4)}
-        original = DictNoiseModel((gate_dict, {}))
-        copy = DictNoiseModel(original)
+        original = DictNoiseModel(gate_dict, {})
+        copy = DictNoiseModel.from_model(original)
         assert copy.gate_dict.keys() == original.gate_dict.keys()
         assert copy is not original
         assert copy.gate_dict is not original.gate_dict
 
-    def test_invalid_type_raises_type_error(self):
-        with pytest.raises(TypeError, match="Can only other NoiseModels"):
-            DictNoiseModel(42)
+    def test_invalid_gate_dict_type_raises_type_error(self):
+        with pytest.raises(TypeError, match="not iterable"):
+            DictNoiseModel(42, {})
 
     def test_pygsti_duck_typed_conversion(self):
         """`DictNoiseModel.__init__` dispatches on `type(...).__name__ ==
@@ -91,7 +96,7 @@ class TestConstruction:
                     return [[QSimSuperopGateRep(np.eye(4), label[1])]]
                 return [[ZBasisProjectionInstrumentRep(None, True, label[1])]]
 
-        model = DictNoiseModel(PyGSTiNoiseModel())
+        model = DictNoiseModel.from_model(PyGSTiNoiseModel())
         assert ("X", ("Q0",)) in model.gate_dict
         assert isinstance(
             model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
@@ -102,23 +107,28 @@ class TestConstruction:
         )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+    "as separate parameters",
+)
 class TestGateDispatch:
     def test_ndarray_uses_gaterep_array_cast_rep(self):
         model = DictNoiseModel(
-            ({("X", ("Q0",)): _UNITARY_1Q}, {}),
+            {("X", ("Q0",)): _UNITARY_1Q}, {},
             gaterep_array_cast_rep=UnitaryGateRep,
         )
         assert isinstance(model.gate_dict[("X", ("Q0",))], UnitaryGateRep)
 
     def test_ndarray_default_cast_rep_is_qsim_superoperator(self):
-        model = DictNoiseModel(({("X", ("Q0",)): np.eye(4)}, {}))
+        model = DictNoiseModel({("X", ("Q0",)): np.eye(4)}, {})
         assert isinstance(
             model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
         )
 
     def test_str_becomes_stim_circuit_str(self):
         model = DictNoiseModel(
-            ({("X", ("Q0",)): "X 0"}, {}), gatereps=[StimCircuitGateRep]
+            {("X", ("Q0",)): "X 0"}, {}, gatereps=[StimCircuitGateRep]
         )
         rep = model.gate_dict[("X", ("Q0",))]
         assert isinstance(rep, StimCircuitGateRep)
@@ -126,7 +136,7 @@ class TestGateDispatch:
 
     def test_kraus_sequence_becomes_kraus_operators(self):
         model = DictNoiseModel(
-            ({("X", ("Q0",)): _KRAUS_SEQ}, {}), gatereps=[KrausGateRep]
+            {("X", ("Q0",)): _KRAUS_SEQ}, {}, gatereps=[KrausGateRep]
         )
         rep = model.gate_dict[("X", ("Q0",))]
         assert isinstance(rep, KrausGateRep)
@@ -134,7 +144,7 @@ class TestGateDispatch:
 
     def test_probabilistic_stim_sequence_becomes_probabilistic_stim_operations(self):
         model = DictNoiseModel(
-            ({("X", ("Q0",)): _PROB_STIM_SEQ}, {}),
+            {("X", ("Q0",)): _PROB_STIM_SEQ}, {},
             gatereps=[ProbabilisticStimGateRep],
         )
         rep = model.gate_dict[("X", ("Q0",))]
@@ -143,31 +153,36 @@ class TestGateDispatch:
 
     def test_rep_passthrough(self):
         rep = QSimSuperopGateRep(np.eye(4), ("Q0",))
-        model = DictNoiseModel(({("X", ("Q0",)): rep}, {}))
+        model = DictNoiseModel({("X", ("Q0",)): rep}, {})
         assert model.gate_dict[("X", ("Q0",))] is rep
 
     def test_rep_with_disallowed_type_raises(self):
         rep = StimCircuitGateRep("X 0", ("Q0",))
         with pytest.raises(AssertionError, match="not provided gatereps"):
             DictNoiseModel(
-                ({("X", ("Q0",)): rep}, {}),
+                {("X", ("Q0",)): rep}, {},
                 gatereps=[QSimSuperopGateRep],
             )
 
     def test_sequence_matching_no_gaterep_raises(self):
         with pytest.raises(Exception, match="does not match any known rep class"):
-            DictNoiseModel(({("X", ("Q0",)): ("not", "a", "valid", "shape")}, {}))
+            DictNoiseModel({("X", ("Q0",)): ("not", "a", "valid", "shape")}, {})
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+    "as separate parameters",
+)
 class TestInstrumentDispatch:
     def test_bare_string_becomes_stim_circuit_str(self):
-        model = DictNoiseModel(({}, {("M", ("Q0",)): "M 0"}))
+        model = DictNoiseModel({}, {("M", ("Q0",)): "M 0"})
         rep = model.inst_dict[("M", ("Q0",))]
         assert isinstance(rep, StimCircuitInstrumentRep)
         assert rep.circuit_str == "M 0"
 
     def test_zbasis_projection_tuple(self):
-        model = DictNoiseModel(({}, {("M", ("Q0",)): (0, True)}))
+        model = DictNoiseModel({}, {("M", ("Q0",)): (0, True)})
         rep = model.inst_dict[("M", ("Q0",))]
         assert isinstance(rep, ZBasisProjectionInstrumentRep)
         assert rep.reset == 0
@@ -177,7 +192,7 @@ class TestInstrumentDispatch:
         # pre_op/post_op payloads are deliberately distinct so a test
         # failure would show if they got swapped.
         model = DictNoiseModel(
-            ({}, {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q_ALT)}),
+            {}, {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q_ALT)},
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisPrePostInstrumentRep],
             instrep_cast_reset=0,
@@ -197,13 +212,13 @@ class TestInstrumentDispatch:
             AssertionError, match="ZBasisPrePostInstrumentRep not passed"
         ):
             DictNoiseModel(
-                ({}, {("M", ("Q0",)): (_UNITARY_1Q, _UNITARY_1Q)}),
+                {}, {("M", ("Q0",)): (_UNITARY_1Q, _UNITARY_1Q)},
                 instreps=[ZBasisProjectionInstrumentRep],
             )
 
     def test_mapping_becomes_outcome_operation_dict(self):
         model = DictNoiseModel(
-            ({}, {("M", ("Q0",)): {0: _SUPEROP_1Q, 1: _SUPEROP_1Q}}),
+            {}, {("M", ("Q0",)): {0: _SUPEROP_1Q, 1: _SUPEROP_1Q}},
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisOutcomeOperationDictInstrumentRep],
         )
@@ -221,34 +236,39 @@ class TestInstrumentDispatch:
             AssertionError, match="ZBasisOutcomeOperationDictInstrumentRep not passed"
         ):
             DictNoiseModel(
-                ({}, {("M", ("Q0",)): {0: _UNITARY_1Q, 1: _UNITARY_1Q}}),
+                {}, {("M", ("Q0",)): {0: _UNITARY_1Q, 1: _UNITARY_1Q}},
                 instreps=[ZBasisProjectionInstrumentRep],
             )
 
     def test_rep_passthrough(self):
         rep = ZBasisProjectionInstrumentRep(None, True, ("Q0",))
-        model = DictNoiseModel(({}, {("M", ("Q0",)): rep}))
+        model = DictNoiseModel({}, {("M", ("Q0",)): rep})
         assert model.inst_dict[("M", ("Q0",))] is rep
 
     def test_rep_with_disallowed_type_raises(self):
         rep = StimCircuitInstrumentRep("M 0", ("Q0",))
         with pytest.raises(AssertionError, match="reptype not in instreps"):
             DictNoiseModel(
-                ({}, {("M", ("Q0",)): rep}),
+                {}, {("M", ("Q0",)): rep},
                 instreps=[ZBasisProjectionInstrumentRep],
             )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+    "as separate parameters",
+)
 class TestGetReps:
     def test_exact_label_match(self):
-        model = DictNoiseModel(({("X", ("Q0",)): np.eye(4)}, {}))
+        model = DictNoiseModel({("X", ("Q0",)): np.eye(4)}, {})
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
         reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
         assert reps[0].qubits == ("Q0",)
 
     def test_generic_name_only_fallback_for_gates(self):
-        model = DictNoiseModel(({"X": np.eye(4)}, {}))
+        model = DictNoiseModel({"X": np.eye(4)}, {})
         circuit = ListPhysicalCircuit([[("X", ("Q1",))]])
         reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
@@ -256,7 +276,7 @@ class TestGetReps:
         assert isinstance(reps[0], QSimSuperopGateRep)
 
     def test_generic_name_only_fallback_for_instruments(self):
-        model = DictNoiseModel(({}, {"M": (None, True)}))
+        model = DictNoiseModel({}, {"M": (None, True)})
         circuit = ListPhysicalCircuit([[("M", ("Q1",))]])
         reps = model.get_reps(circuit, [], [ZBasisProjectionInstrumentRep])
         assert len(reps) == 1
@@ -264,7 +284,7 @@ class TestGetReps:
         assert isinstance(reps[0], ZBasisProjectionInstrumentRep)
 
     def test_lookup_failure_raises(self):
-        model = DictNoiseModel(({}, {}))
+        model = DictNoiseModel({}, {})
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
         with pytest.raises(AssertionError, match="Failed to look up"):
             model.get_reps(circuit, [], [])
@@ -272,7 +292,7 @@ class TestGetReps:
     def test_get_reps_does_not_reconstruct_already_correct_circuit_type(self):
         """A `circuit` that's already a `ListPhysicalCircuit` is read
         directly, without constructing or copying a second one."""
-        model = DictNoiseModel(({("X", ("Q0",)): np.eye(4)}, {}))
+        model = DictNoiseModel({("X", ("Q0",)): np.eye(4)}, {})
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
         original_init = ListPhysicalCircuit.__init__
         call_count = [0]
@@ -324,12 +344,17 @@ class TestDictModelFixtureRoundTrip:
 
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.xfail(
+    strict=True,
+    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+    "as separate parameters",
+)
 class TestSTIMGetReps:
     """`DictNoiseModel.get_reps`'s `STIMPhysicalCircuit`-registered
     implementation (formerly `STIMDictNoiseModel.get_reps`)."""
 
     def test_init_basic(self):
-        model = DictNoiseModel(({}, {}))
+        model = DictNoiseModel({}, {})
         assert isinstance(model.gate_dict, dict)
         assert isinstance(model.inst_dict, dict)
 
@@ -340,7 +365,7 @@ class TestSTIMGetReps:
         `__init__` override at all: normalization happens purely in the
         registered `get_reps` implementation, at lookup time."""
         model = DictNoiseModel(
-            ({"x": "x 0", "h": "h 0"}, {}), gatereps=[StimCircuitGateRep]
+            {"x": "x 0", "h": "h 0"}, {}, gatereps=[StimCircuitGateRep]
         )
         # Keys are stored exactly as given -- no construction-time
         # normalization.
@@ -364,7 +389,7 @@ class TestSTIMGetReps:
                 "CX 0 1", ("Q0", "Q1")
             ),
         }
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("CNOT 0 1", ["Q0", "Q1"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -374,7 +399,7 @@ class TestSTIMGetReps:
 
     def test_get_reps_basic_circuit(self):
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 0", ["Q0"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -388,7 +413,7 @@ class TestSTIMGetReps:
             "H": StimCircuitGateRep("H 0", ("Q0",)),
             "CNOT": StimCircuitGateRep("CNOT 0 1", ("Q0", "Q1")),
         }
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("H 0\nCNOT 0 1\nX 0", ["Q0", "Q1"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -403,7 +428,7 @@ class TestSTIMGetReps:
             "M": ZBasisProjectionInstrumentRep(None, True, ("Q0",)),
         }
         model = DictNoiseModel(
-            (gate_dict, inst_dict),
+            gate_dict, inst_dict,
             gatereps=[StimCircuitGateRep],
             instreps=[StimCircuitInstrumentRep, ZBasisProjectionInstrumentRep],
         )
@@ -414,7 +439,7 @@ class TestSTIMGetReps:
         assert len(reps) == 2
 
     def test_warnings_for_noise_channels(self):
-        model = DictNoiseModel(({}, {}))
+        model = DictNoiseModel({}, {})
         circuit = STIMPhysicalCircuit("X_ERROR(0.1) 0", ["Q0"])
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -428,7 +453,7 @@ class TestSTIMGetReps:
     def test_warnings_for_measure_noise(self):
         inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
         model = DictNoiseModel(
-            ({}, inst_dict),
+            {}, inst_dict,
             instreps=[StimCircuitInstrumentRep, ZBasisProjectionInstrumentRep],
         )
         circuit = STIMPhysicalCircuit("M(0.1) 0", ["Q0"])
@@ -442,7 +467,7 @@ class TestSTIMGetReps:
 
     def test_qubit_label_mapping(self):
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 0", ["A0"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -451,7 +476,7 @@ class TestSTIMGetReps:
         assert isinstance(reps[0], StimCircuitGateRep)
 
     def test_empty_circuit(self):
-        model = DictNoiseModel(({}, {}))
+        model = DictNoiseModel({}, {})
         circuit = STIMPhysicalCircuit("", [])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -463,7 +488,7 @@ class TestSTIMGetReps:
         string, so `get_reps` never actually sees them (verified below via
         `circuit._unroll_repeats()`)."""
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("# This is a comment\nX 0", ["Q0"])
         assert circuit._unroll_repeats() == "X 0"
         reps = model.get_reps(
@@ -480,7 +505,7 @@ class TestSTIMGetReps:
                 "CNOT 0 1", ("Q0", "Q1")
             ),
         }
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("CX 0 1", ["Q0", "Q1"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -491,7 +516,7 @@ class TestSTIMGetReps:
     def test_negated_qubit_mapping(self):
         inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
         model = DictNoiseModel(
-            ({}, inst_dict), instreps=[ZBasisProjectionInstrumentRep]
+            {}, inst_dict, instreps=[ZBasisProjectionInstrumentRep]
         )
         circuit = STIMPhysicalCircuit("M !0", ["Q0"])
         reps = model.get_reps(
@@ -503,7 +528,7 @@ class TestSTIMGetReps:
     def test_generic_instrument_merging_multiqubit(self):
         inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
         model = DictNoiseModel(
-            ({}, inst_dict), instreps=[ZBasisProjectionInstrumentRep]
+            {}, inst_dict, instreps=[ZBasisProjectionInstrumentRep]
         )
         circuit = STIMPhysicalCircuit("M 0 1 2", ["Q0", "Q1", "Q2"])
         reps = model.get_reps(
@@ -516,7 +541,7 @@ class TestSTIMGetReps:
 
     def test_repeat_block_unrolling_through_get_reps(self):
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("REPEAT 3 {\nX 0\n}", ["Q0"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -525,7 +550,7 @@ class TestSTIMGetReps:
         assert all(r.circuit_str == "X 0" for r in reps)
 
     def test_lookup_failure_raises_clear_error(self):
-        model = DictNoiseModel(({}, {}))
+        model = DictNoiseModel({}, {})
         circuit = STIMPhysicalCircuit("X 0", ["Q0"])
         with pytest.raises(AssertionError, match="Failed to look up"):
             model.get_reps(
@@ -534,7 +559,7 @@ class TestSTIMGetReps:
 
     def test_multiple_same_command_combining(self):
         gate_dict = {"X": StimCircuitGateRep("X 0", ("Q0",))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -547,7 +572,7 @@ class TestSTIMGetReps:
 
     def test_common_command_combining_requires_self_indexed_template(self):
         gate_dict = {"X": StimCircuitGateRep("X", ("Q0",))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
         with pytest.raises(ValueError, match="must already reference its own qubit"):
             model.get_reps(
@@ -560,7 +585,7 @@ class TestSTIMGetReps:
             ("X", ("Q1",)): StimCircuitGateRep("X 1", ("Q1",)),
             ("X", ("Q2",)): StimCircuitGateRep("X 2", ("Q2",)),
         }
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -574,7 +599,7 @@ class TestSTIMGetReps:
             "X": StimCircuitGateRep("X 0", ("Q0",)),
             ("X", ("Q1",)): StimCircuitGateRep("Y 0", ("Q1",)),
         }
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 1", ["Q0", "Q1"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -585,7 +610,7 @@ class TestSTIMGetReps:
 
     def test_twoq_gate_multiple_pairs_one_line(self):
         gate_dict = {"CX": StimCircuitGateRep("CX 0 1", ("Q0", "Q1"))}
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("CX 0 1 2 3", ["Q0", "Q1", "Q2", "Q3"])
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
@@ -601,7 +626,7 @@ class TestSTIMGetReps:
             "X": StimCircuitGateRep("X 0", ("Q0",)),
             "Y": StimCircuitGateRep("Y 0", ("Q0",)),
         }
-        model = DictNoiseModel((gate_dict, {}), gatereps=[StimCircuitGateRep])
+        model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit(
             "X 0\nY 1\nX 2\nY 3", ["Q0", "Q1", "Q2", "Q3"]
         )

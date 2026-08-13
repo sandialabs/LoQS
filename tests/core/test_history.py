@@ -21,12 +21,12 @@ class TestHistory:
             assert frame._data == data
             assert frame.log == "N/A"
 
-        h3 = History.cast(h)
+        h3 = History(h)
         for frame in h3:
             assert frame._data == data
             assert frame.log == "test"
 
-        h4 = History.cast([data,]*3)
+        h4 = History([data,]*3)
         for frame in h4:
             assert frame._data == data
             assert frame.log == "N/A"
@@ -36,7 +36,26 @@ class TestHistory:
             History("abc") # type: ignore
         with pytest.raises(ValueError):
             History([1, 2, 3]) # type: ignore
-    
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="History.__init__'s existing-instance branch unions "
+        "expiring_keys/propagating_keys/no_serialize_keys with this "
+        "call's own defaults instead of adopting the source as-is",
+    )
+    def test_init_from_existing_history_does_not_force_union_with_defaults(self):
+        h = History([{"a": 1}], expiring_keys=[], propagating_keys=[])
+        assert h.expiring_keys == set()
+        assert h.propagating_keys == set()
+
+        # Constructing from an existing History (leaving expiring_keys/
+        # propagating_keys unspecified) must adopt its key-sets as-is, not
+        # silently reunion them with this constructor's own ("state",
+        # ("state", "patches")) defaults.
+        h2 = History(h)
+        assert h2.expiring_keys == set()
+        assert h2.propagating_keys == set()
+
     def test_expiring_propagating_keys(self):
         h = History([{'a': 1, "b": 2}, {'c': 3}, {'d': 4, 'a': 5}, {'b': 6}],
                     expiring_keys=["b"], propagating_keys=["a"])

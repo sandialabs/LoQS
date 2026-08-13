@@ -1,5 +1,7 @@
 """Tester for loqs.core.instructions.instructionlabel"""
 
+import pytest
+
 from loqs.core.instructions import Instruction, InstructionLabel
 
 
@@ -26,45 +28,52 @@ class TestInstructionLabel:
         else:
             assert ilbl.inst_kwargs == k
 
+    @pytest.mark.xfail(
+        strict=True, reason="InstructionLabel.from_raw does not exist yet"
+    )
     def test_init(self):
         ilbl = InstructionLabel("Label")
         self._check(ilbl, None, "Label", None, (), {})
 
-        ilbl2 = InstructionLabel.cast("Label")
+        ilbl2 = InstructionLabel.from_raw("Label")
         self._check(ilbl2, None, "Label", None, (), {})
 
-        ilbl3 = InstructionLabel.cast(("Label",))
+        ilbl3 = InstructionLabel.from_raw(("Label",))
         self._check(ilbl3, None, "Label", None, (), {})
 
         # With patch label
         ilbl4 = InstructionLabel("Label", "L0")
         self._check(ilbl4, None, "Label", "L0", (), {})
 
-        ilbl5 = InstructionLabel.cast(("Label", "L0"))
+        ilbl5 = InstructionLabel.from_raw(("Label", "L0"))
         self._check(ilbl5, None, "Label", "L0", (), {})
 
         # With args and kwargs
         ilbl6 = InstructionLabel("Label", "L0", self.args, self.kwargs)
         self._check(ilbl6, None, "Label", "L0", self.args, self.kwargs)
 
-        ilbl7 = InstructionLabel.cast(("Label", "L0", self.args, self.kwargs))
+        ilbl7 = InstructionLabel.from_raw(("Label", "L0", self.args, self.kwargs))
         self._check(ilbl7, None, "Label", "L0", self.args, self.kwargs)
 
         # With instruction instead of label
         ilbl8 = InstructionLabel(self.ins, "L0", self.args, self.kwargs)
         self._check(ilbl8, self.ins, None, "L0", self.args, self.kwargs)
 
-        ilbl9 = InstructionLabel.cast((self.ins, "L0", self.args, self.kwargs))
+        ilbl9 = InstructionLabel.from_raw((self.ins, "L0", self.args, self.kwargs))
         self._check(ilbl9, self.ins, None, "L0", self.args, self.kwargs)
 
         # and the solo instruction casts
-        ilbl10 = InstructionLabel.cast(self.ins)
+        ilbl10 = InstructionLabel.from_raw(self.ins)
         self._check(ilbl10, self.ins, None, None, (), {})
 
-        ilbl11 = InstructionLabel.cast((self.ins,))
+        ilbl11 = InstructionLabel.from_raw((self.ins,))
         self._check(ilbl11, self.ins, None, None, (), {})
 
-    
+        # An already-built InstructionLabel is returned as a value-equal
+        # instance (not necessarily the same object).
+        ilbl12 = InstructionLabel.from_raw(ilbl6)
+        self._check(ilbl12, None, "Label", "L0", self.args, self.kwargs)
+
     def test_serialization(self, make_temp_path):
         # Test string version
         ilbl = InstructionLabel("Label", "L0", self.args, self.kwargs)

@@ -174,9 +174,14 @@ class TestConstruction:
         with pytest.raises(TypeError, match="Cannot cast .* to PyGSTiNoiseModel"):
             PyGSTiNoiseModel(42)
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
+        "as separate parameters",
+    )
     def test_dictnoisemodel_raises_not_implemented_error(self):
         with pytest.raises(NotImplementedError, match="Build explicit op model"):
-            PyGSTiNoiseModel(DictNoiseModel(({}, {})))
+            PyGSTiNoiseModel(DictNoiseModel({}, {}))
 
 
 class TestGetGateRep:
