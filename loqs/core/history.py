@@ -21,16 +21,6 @@ from loqs.internal import Displayable
 
 T = TypeVar("T", bound="History")
 
-
-class _Unset:
-    """Sentinel distinguishing "caller didn't pass this" from an explicit
-    `None`, so [](api:History.__init__) can tell whether to adopt a source
-    [](api:History)'s key-set as-is or to use the value the caller gave.
-    """
-
-
-_UNSET = _Unset()
-
 HistoryLike: TypeAlias = (
     "History | FrameLike | Sequence[FrameLike] | None"
 )
@@ -136,17 +126,17 @@ class History(Sequence[Frame], Displayable):
     def __init__(
         self,
         history: HistoryLike = None,
-        expiring_keys: Sequence[str] | None | _Unset = _UNSET,
-        propagating_keys: Sequence[str] | None | _Unset = _UNSET,
-        no_serialize_keys: Sequence[str] | None | _Unset = _UNSET,
+        expiring_keys: Sequence[str] | None = None,
+        propagating_keys: Sequence[str] | None = None,
+        no_serialize_keys: Sequence[str] | None = None,
     ) -> None:
         """
-        Each of `expiring_keys`/`propagating_keys`/`no_serialize_keys` has
-        a two-part default: if not passed at all, it adopts `history`'s own
-        value as-is when `history` is an existing [](api:History) (empty
-        otherwise), but an explicitly passed value (including `None`, for
-        an empty set) always replaces rather than merges with `history`'s
-        own keys.
+        Each of `expiring_keys`/`propagating_keys`/`no_serialize_keys`
+        defaults to `None`, meaning "not given": this adopts `history`'s
+        own value as-is when `history` is an existing [](api:History)
+        (its own built-in default otherwise). Any other value (including
+        an empty sequence) always replaces rather than merges with
+        `history`'s own keys.
 
         Parameters
         ----------
@@ -157,25 +147,25 @@ class History(Sequence[Frame], Displayable):
         expiring_keys:
             Keys that should "expire" when a new [](api:Frame) is added,
             i.e. [](api:Frame.expire) is called on old frames when a new
-            frame containing that key is added. Defaults to `["state"]`
-            (assuming the quantum state is propagated in-place) unless
-            adopted from `history`; see above.
+            frame containing that key is added. Built-in default is
+            `["state"]` (assuming the quantum state is propagated
+            in-place); see above.
 
         propagating_keys:
             Keys that should be added to an incoming [](api:Frame) if it
-            does not already have it. Defaults to `["state", "patches"]`
-            (keeping the most up-to-date BaseQuantumState and PatchDict
-            available in the last frame; other common additions include
-            syndrome bits for decoders that need the previous syndrome)
-            unless adopted from `history`; see above.
+            does not already have it. Built-in default is `["state",
+            "patches"]` (keeping the most up-to-date BaseQuantumState and
+            PatchDict available in the last frame; other common additions
+            include syndrome bits for decoders that need the previous
+            syndrome); see above.
 
         no_serialize_keys:
             Keys that should not be serialized by each [](api:Frame),
             i.e. [](api:Frame.no_serialize) is called on frames as they
-            are added. Defaults to an empty set (a common explicit choice
-            is `["state"]` when the quantum state is large or there are no
-            plans to rerun a shot from that point) unless adopted from
-            `history`; see above.
+            are added. Built-in default is an empty set (a common
+            explicit choice is `["state"]` when the quantum state is
+            large or there are no plans to rerun a shot from that point);
+            see above.
         """
         self._history = []
         self._expiring_key_locs: dict[str, int] = {}
@@ -183,8 +173,8 @@ class History(Sequence[Frame], Displayable):
         source = history if isinstance(history, History) else None
 
         def resolve(given, source_keys, default):
-            if given is not _UNSET:
-                return set(given) if given is not None else set()
+            if given is not None:
+                return set(given)
             if source is not None:
                 return set(source_keys)
             return set(default)
