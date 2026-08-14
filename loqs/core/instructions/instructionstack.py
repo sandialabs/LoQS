@@ -78,14 +78,19 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
             self._instructions = [InstructionLabel.from_raw(instructions)]
             return
 
-        # If we are here, we are a sequence of some kind
-        # If the first entry is an Instruction or str, this is an InstructionLabel cast
-        # Otherwise it is a list of InstructionLabel casts (probably)
-        if isinstance(instructions[0], (Instruction, str)):
+        # If we are here, we are a sequence of some kind. A tuple is always
+        # one InstructionLabel's own flat positional args (matching
+        # InstructionLabelLike's tuple variants); anything else (e.g. a
+        # list) is a sequence of raw items to convert individually. This
+        # can't instead be decided by inspecting instructions[0]'s type, as
+        # done previously: a list of multiple bare Instruction/str labels
+        # (e.g. ["LabelA", "LabelB"]) would then be misread as one
+        # InstructionLabel's own args, silently dropping every entry past
+        # the first two.
+        if isinstance(instructions, tuple):
             self._instructions = [InstructionLabel(*instructions)]  # type: ignore
             return
 
-        # Otherwise we must be a list of castable tuples
         for inst in instructions:
             self._instructions.append(InstructionLabel.from_raw(inst))
 

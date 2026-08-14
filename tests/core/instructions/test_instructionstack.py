@@ -36,7 +36,21 @@ class TestInstructionStack:
 
         s2 = InstructionStack(s)
         self._check(s2, ["L0", "L1"])
-    
+
+    def test_init_from_bare_labels(self):
+        """A list of multiple bare instruction labels is a sequence of
+        separate items, not one InstructionLabel's own flat args."""
+        s = InstructionStack(["LabelA", "LabelB"])
+        assert len(s) == 2
+        assert s[0].inst_label == "LabelA"
+        assert s[1].inst_label == "LabelB"
+
+        # A bare tuple, in contrast, is one InstructionLabel's own args.
+        s2 = InstructionStack(("Label", "L0"))
+        assert len(s2) == 1
+        assert s2[0].inst_label == "Label"
+        assert s2[0].patch_label == "L0"
+
     def test_list_operations(self):
         s = InstructionStack([self.ilbl1, self.ilbl2]) # type: ignore
         self._check(s, ["L0", "L1"])
