@@ -152,7 +152,7 @@ class QuantumProgram(Displayable):
 
         """
         # Do history before instruction stack in case it already has one
-        self.initial_history = History.cast(initial_history)
+        self.initial_history = History(initial_history)
         """The initial history that all shots start from."""
 
         if instruction_stack is None and (
@@ -729,7 +729,7 @@ class QuantumProgram(Displayable):
 
         # Otherwise, we must be a patch instruction
         try:
-            patchdict = PatchDict.cast(frame["patches"])
+            patchdict = PatchDict(frame["patches"])
         except KeyError:
             raise RuntimeError(
                 f"'patches' not available in last frame for resolving {ilbl}"

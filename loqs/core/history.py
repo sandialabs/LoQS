@@ -209,14 +209,14 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             self._history = history._history.copy()
         elif isinstance(history, Sequence):
             for frame in history:
-                frame = Frame.cast(frame)
+                frame = Frame(frame)
                 self.append(frame)
         elif history is None:
             # Stick with empty list
             pass
         else:  # Just a single HistoryFrame
             try:
-                frame = Frame.cast(history)
+                frame = Frame(history)
             except ValueError as e:
                 raise ValueError(
                     f"Cannot create HistoryStack from {history}"
@@ -253,7 +253,7 @@ class History(Sequence[Frame], SeqCastable, Displayable):
         item : FrameCastableTypes
             The frame-castable object to append.
         """
-        item = Frame.cast(item)
+        item = Frame(item)
 
         # Propagate any keys that are not existing in new frame
         if len(self._history):

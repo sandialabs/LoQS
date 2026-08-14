@@ -178,7 +178,7 @@ class ProgramResults(Displayable):
         history:
             The History object for the shot.
         """
-        history = History.cast(history)
+        history = History(history)
         self.shot_histories[shot_index] = history
         self._unwritten_shots.add(shot_index)
 

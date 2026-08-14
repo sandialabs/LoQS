@@ -172,7 +172,7 @@ def build_composite_instruction(
                     inst_or_label, patch_label, inst_kwargs=kwargs
                 )
             else:
-                inst_or_label = InstructionLabel.cast(inst_or_label)
+                inst_or_label = InstructionLabel.from_raw(inst_or_label)
                 new_kwargs = kwargs.copy()
                 new_kwargs.update(inst_or_label.inst_kwargs)
                 first_entry = (
@@ -438,7 +438,7 @@ def build_lookup_decoder_instruction(
         return frame
 
     # We store lookup table and syndrome labels
-    cast_labels = [SyndromeLabel.cast(sl) for sl in syndrome_labels]
+    cast_labels = [SyndromeLabel.from_raw(sl) for sl in syndrome_labels]
     data = {
         "lookup_table": dict(lookup_table),
         "syndrome_labels": cast_labels,
@@ -1260,7 +1260,7 @@ def build_repeat_until_success_instruction(
 
         # TODO: InstructionStack cast misbehaved, track that down
         # new_labels = InstructionStack.cast(instructions)._instructions
-        new_labels = [InstructionLabel.cast(ilbl) for ilbl in instructions]
+        new_labels = [InstructionLabel.from_raw(ilbl) for ilbl in instructions]
 
         # Create a new RUS label with updated count
         rus_label = InstructionLabel(

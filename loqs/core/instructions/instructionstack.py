@@ -75,7 +75,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             self._instructions = []
             return
         if isinstance(instructions, (Instruction, str, InstructionLabel)):
-            self._instructions = [InstructionLabel.cast(instructions)]
+            self._instructions = [InstructionLabel.from_raw(instructions)]
             return
 
         # If we are here, we are a sequence of some kind
@@ -87,7 +87,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
 
         # Otherwise we must be a list of castable tuples
         for inst in instructions:
-            self._instructions.append(InstructionLabel.cast(inst))
+            self._instructions.append(InstructionLabel.from_raw(inst))
 
     def __getitem__(self, i):
         return self._instructions[i]
@@ -176,7 +176,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             The modified stack
         """
         instructions = self._instructions.copy()
-        instructions.insert(i, InstructionLabel.cast(item))
+        instructions.insert(i, InstructionLabel.from_raw(item))
         return InstructionStack(instructions)
 
     def insert_instructions(
@@ -198,7 +198,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             The modified stack
         """
         instructions = self._instructions.copy()
-        items_to_add = [InstructionLabel.cast(item) for item in items]
+        items_to_add = [InstructionLabel.from_raw(item) for item in items]
         instructions = (
             self._instructions[:i] + items_to_add + self._instructions[i:]
         )
