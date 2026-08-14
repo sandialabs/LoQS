@@ -147,19 +147,19 @@ def _upgrade_legacy_gaterep(
 ) -> GateRep:
     """Reshape an old `(rep, qubits, reptype)` gate payload into a new `GateRep`."""
     if legacy_value is _LegacyGateRepValue.UNITARY:
-        return UnitaryGateRep(unitary=rep, qubits=qubits)
+        return UnitaryGateRep(unitary=rep, qubit_labels=qubits)
     elif legacy_value is _LegacyGateRepValue.PTM:
-        return PTMGateRep(ptm=rep, qubits=qubits)
+        return PTMGateRep(ptm=rep, qubit_labels=qubits)
     elif legacy_value is _LegacyGateRepValue.QSIM_SUPEROPERATOR:
-        return QSimSuperopGateRep(superop=rep, qubits=qubits)
+        return QSimSuperopGateRep(superop=rep, qubit_labels=qubits)
     elif legacy_value is _LegacyGateRepValue.STIM_CIRCUIT_STR:
-        return StimCircuitGateRep(circuit_str=rep, qubits=qubits)
+        return StimCircuitGateRep(circuit_str=rep, qubit_labels=qubits)
     elif legacy_value is _LegacyGateRepValue.PROBABILISTIC_STIM_OPERATIONS:
-        return ProbabilisticStimGateRep(operations=rep, qubits=qubits)
+        return ProbabilisticStimGateRep(operations=rep, qubit_labels=qubits)
     elif legacy_value is _LegacyGateRepValue.KRAUS_OPERATORS:
         # Skip the TP check: this decodes already-accepted data, not new input.
         return KrausGateRep(
-            kraus_operators=rep, qubits=qubits, tp_check_abstol=None
+            kraus_operators=rep, qubit_labels=qubits, tp_check_abstol=None
         )
     raise MisformedDecodableError(
         f"Unrecognized legacy GateRep value {legacy_value!r}"
@@ -181,7 +181,7 @@ def _upgrade_legacy_instrumentrep(
     if legacy_value is _LegacyInstrumentRepValue.ZBASIS_PROJECTION:
         reset, include_outcome = rep
         return ZBasisProjectionInstrumentRep(
-            reset=reset, include_outcome=include_outcome, qubits=qubits
+            reset=reset, include_outcome=include_outcome, qubit_labels=qubits
         )
     elif legacy_value is _LegacyInstrumentRepValue.ZBASIS_PRE_POST_OPERATIONS:
         reset, include_outcome, pre_op, post_op = rep
@@ -190,15 +190,17 @@ def _upgrade_legacy_instrumentrep(
             include_outcome=include_outcome,
             pre_op=pre_op,
             post_op=post_op,
-            qubits=qubits,
+            qubit_labels=qubits,
         )
     elif legacy_value is _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT:
         outcome_ops, include_outcome = rep
         return ZBasisOutcomeOperationDictInstrumentRep(
-            outcome_ops=outcome_ops, include_outcome=include_outcome, qubits=qubits
+            outcome_ops=outcome_ops,
+            include_outcome=include_outcome,
+            qubit_labels=qubits,
         )
     elif legacy_value is _LegacyInstrumentRepValue.STIM_CIRCUIT_STR:
-        return StimCircuitInstrumentRep(circuit_str=rep, qubits=qubits)
+        return StimCircuitInstrumentRep(circuit_str=rep, qubit_labels=qubits)
     raise MisformedDecodableError(
         f"Unrecognized legacy InstrumentRep value {legacy_value!r}"
     )

@@ -52,13 +52,13 @@ class ZBasisProjectionInstrumentRep(InstrumentRep):
     E.g. `reset=0, include_outcome=False` would look like a pure reset.
     """
 
-    _SERIALIZE_ATTRS = ["reset", "include_outcome", "qubits"]
+    _SERIALIZE_ATTRS = ["reset", "include_outcome", "qubit_labels"]
 
     def __init__(
         self,
         reset: Literal[None, 0, 1],
         include_outcome: bool,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         """Construct a [](api:ZBasisProjectionInstrumentRep).
 
@@ -75,7 +75,7 @@ class ZBasisProjectionInstrumentRep(InstrumentRep):
                 f"({reset!r}, {include_outcome!r}) is not a valid "
                 f"{type(self).__name__} (reset, include_outcome) pair"
             )
-        super().__init__(qubits)
+        super().__init__(qubit_labels)
         self.reset = reset
         self.include_outcome = include_outcome
 
@@ -99,7 +99,7 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
     post_op: GateRep
     """Noisy operation applied immediately after the projection."""
 
-    _SERIALIZE_ATTRS = ["reset", "include_outcome", "pre_op", "post_op", "qubits"]
+    _SERIALIZE_ATTRS = ["reset", "include_outcome", "pre_op", "post_op", "qubit_labels"]
 
     def __init__(
         self,
@@ -107,7 +107,7 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
         include_outcome: bool,
         pre_op: GateRep,
         post_op: GateRep,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         """Construct a [](api:ZBasisPrePostInstrumentRep).
 
@@ -123,7 +123,7 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
         post_op:
             The noisy operation applied immediately after the projection.
 
-        qubits:
+        qubit_labels:
             Qubit label(s) this operation acts upon, or `None`/unattached
             if not yet known.
 
@@ -131,7 +131,7 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
         ------
         RepConstructionError
             If `pre_op`/`post_op` aren't both [](api:GateRep) instances
-            acting on `qubits`, or if `reset` is out of range.
+            acting on `qubit_labels`, or if `reset` is out of range.
         """
         if not isinstance(pre_op, GateRep) or not isinstance(post_op, GateRep):
             raise RepConstructionError(
@@ -143,12 +143,15 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
                 f"{reset!r} is not a valid reset value (expected None, "
                 "0, or 1)"
             )
-        super().__init__(qubits)
-        if pre_op.qubits != self.qubits or post_op.qubits != self.qubits:
+        super().__init__(qubit_labels)
+        if (
+            pre_op.qubit_labels != self.qubit_labels
+            or post_op.qubit_labels != self.qubit_labels
+        ):
             raise RepConstructionError(
-                f"pre_op.qubits={pre_op.qubits!r}/"
-                f"post_op.qubits={post_op.qubits!r} must both equal "
-                f"qubits={self.qubits!r}"
+                f"pre_op.qubit_labels={pre_op.qubit_labels!r}/"
+                f"post_op.qubit_labels={post_op.qubit_labels!r} must both "
+                f"equal qubit_labels={self.qubit_labels!r}"
             )
         self.reset = reset
         self.include_outcome = include_outcome
@@ -172,13 +175,13 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
     E.g. `include_outcome=False` would look like a noisy reset.
     """
 
-    _SERIALIZE_ATTRS = ["outcome_ops", "include_outcome", "qubits"]
+    _SERIALIZE_ATTRS = ["outcome_ops", "include_outcome", "qubit_labels"]
 
     def __init__(
         self,
         outcome_ops: Mapping[Hashable, GateRep],
         include_outcome: bool,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         """Construct a [](api:ZBasisOutcomeOperationDictInstrumentRep).
 
@@ -191,7 +194,7 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
         include_outcome:
             Whether the measurement outcome should be recorded.
 
-        qubits:
+        qubit_labels:
             Qubit label(s) this operation acts upon, or `None`/unattached
             if not yet known.
 
@@ -208,7 +211,7 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
                 f"{outcome_ops!r} is not a valid {type(self).__name__} "
                 "payload (expected a Mapping with GateRep values)"
             )
-        super().__init__(qubits)
+        super().__init__(qubit_labels)
         self.outcome_ops = outcome_ops
         self.include_outcome = include_outcome
 
@@ -233,7 +236,8 @@ class StimCircuitInstrumentRep(StimCircuitPayloadMixin, InstrumentRep):
       measuring the parity on an auxiliary qubit and then performing a
       `(0, True)` on the auxiliary.
 
-    Qubit labels are placeholders indexing into [](api:OperationRep.qubits).
+    Qubit labels are placeholders indexing into
+    [](api:OperationRep.qubit_labels).
 
     See [](api:StimCircuitPayloadMixin) for the shared storage/construction
     logic this class shares with [](api:StimCircuitGateRep).

@@ -602,13 +602,13 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 if name.startswith("G"):
                     gate_rep = self._get_gate_rep(comp.name, qubits, gatereps)
                     # We need to save with original (aliased) qubits
-                    rep = gate_rep.with_qubits(aliased_qubits)
+                    rep = gate_rep.with_qubit_labels(aliased_qubits)
                     duration = self.get_gate_duration(comp)
                 elif comp.name.startswith("I"):
                     instrument_rep = self._get_instrument_rep(
                         comp.name, qubits, instreps
                     )
-                    rep = instrument_rep.with_qubits(aliased_qubits)
+                    rep = instrument_rep.with_qubit_labels(aliased_qubits)
                     duration = self.get_instrument_duration(comp)
                 else:
                     raise NotImplementedError("Can only handle G/I prefixes")

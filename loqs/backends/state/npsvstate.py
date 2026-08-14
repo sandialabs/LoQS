@@ -309,7 +309,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_gate_rep.register
     def _(self, rep: UnitaryGateRep) -> None:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
         unitary = rep.unitary
 
@@ -325,7 +325,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_gate_rep.register
     def _(self, rep: KrausGateRep) -> None:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         kraus_operators = rep.kraus_operators
@@ -519,7 +519,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -536,7 +536,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -564,7 +564,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)

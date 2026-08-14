@@ -35,19 +35,19 @@ class TestOperationRepAbstract:
 class TestQubitsNormalization:
     def test_single_str_qubit_is_wrapped_in_tuple(self):
         rep = UnitaryGateRep(np.eye(2), "Q0")
-        assert rep.qubits == ("Q0",)
+        assert rep.qubit_labels == ("Q0",)
 
     def test_single_int_qubit_is_wrapped_in_tuple(self):
         rep = UnitaryGateRep(np.eye(2), 0)
-        assert rep.qubits == (0,)
+        assert rep.qubit_labels == (0,)
 
     def test_sequence_qubits_becomes_tuple(self):
         rep = UnitaryGateRep(np.eye(4), ["Q0", "Q1"])
-        assert rep.qubits == ("Q0", "Q1")
+        assert rep.qubit_labels == ("Q0", "Q1")
 
     def test_default_qubits_is_empty_tuple(self):
         rep = StimCircuitGateRep("X 0")
-        assert rep.qubits == ()
+        assert rep.qubit_labels == ()
 
 
 class TestStr:
@@ -56,27 +56,27 @@ class TestStr:
         s = str(rep)
         assert s.startswith("UnitaryGateRep(")
         assert "unitary=" in s
-        assert "qubits=('Q0',)" in s
+        assert "qubit_labels=('Q0',)" in s
 
 
 class TestWithQubits:
     def test_returns_new_instance_with_new_qubits(self):
         rep = UnitaryGateRep(np.eye(2), ("Q0",))
-        retargeted = rep.with_qubits(("Q1",))
+        retargeted = rep.with_qubit_labels(("Q1",))
         assert retargeted is not rep
-        assert retargeted.qubits == ("Q1",)
-        assert rep.qubits == ("Q0",)  # original untouched
+        assert retargeted.qubit_labels == ("Q1",)
+        assert rep.qubit_labels == ("Q0",)  # original untouched
         assert np.array_equal(retargeted.unitary, np.eye(2))  # payload preserved
 
     def test_single_qubit_str_is_wrapped(self):
         rep = StimCircuitGateRep("X 0", ())
-        retargeted = rep.with_qubits("Q0")
-        assert retargeted.qubits == ("Q0",)
+        retargeted = rep.with_qubit_labels("Q0")
+        assert retargeted.qubit_labels == ("Q0",)
 
     def test_works_for_instrument_reps_too(self):
         rep = StimCircuitInstrumentRep("M 0", ())
-        retargeted = rep.with_qubits(("Q0",))
-        assert retargeted.qubits == ("Q0",)
+        retargeted = rep.with_qubit_labels(("Q0",))
+        assert retargeted.qubit_labels == ("Q0",)
         assert retargeted.circuit_str == "M 0"
 
     def test_revalidates_against_new_qubit_count(self):
@@ -86,25 +86,25 @@ class TestWithQubits:
         instance."""
         rep = UnitaryGateRep(np.eye(2), ("Q0",))
         with pytest.raises(RepConstructionError):
-            rep.with_qubits(("Q0", "Q1"))
+            rep.with_qubit_labels(("Q0", "Q1"))
 
     def test_cascades_to_nested_operation_rep_fields(self):
         """A composite rep's nested `OperationRep` fields (e.g. `pre_op`/
         `post_op`) are retargeted along with the outer rep, since
         reconstruction requires them to remain consistent with the new
-        `qubits`."""
+        `qubit_labels`."""
         pre_op = UnitaryGateRep(np.eye(2))
         post_op = UnitaryGateRep(np.eye(2))
         rep = ZBasisPrePostInstrumentRep(None, True, pre_op, post_op)
 
-        retargeted = rep.with_qubits(("Q0",))
+        retargeted = rep.with_qubit_labels(("Q0",))
 
-        assert retargeted.qubits == ("Q0",)
-        assert retargeted.pre_op.qubits == ("Q0",)
-        assert retargeted.post_op.qubits == ("Q0",)
+        assert retargeted.qubit_labels == ("Q0",)
+        assert retargeted.pre_op.qubit_labels == ("Q0",)
+        assert retargeted.post_op.qubit_labels == ("Q0",)
         # Originals untouched
-        assert pre_op.qubits == ()
-        assert post_op.qubits == ()
+        assert pre_op.qubit_labels == ()
+        assert post_op.qubit_labels == ()
 
     def test_cascades_to_mapping_values(self):
         """Nested `OperationRep` values inside a `Mapping` field (e.g.
@@ -113,11 +113,11 @@ class TestWithQubits:
             {0: UnitaryGateRep(np.eye(2)), 1: UnitaryGateRep(np.eye(2))}, True
         )
 
-        retargeted = rep.with_qubits(("Q0",))
+        retargeted = rep.with_qubit_labels(("Q0",))
 
-        assert retargeted.qubits == ("Q0",)
-        assert retargeted.outcome_ops[0].qubits == ("Q0",)
-        assert retargeted.outcome_ops[1].qubits == ("Q0",)
+        assert retargeted.qubit_labels == ("Q0",)
+        assert retargeted.outcome_ops[0].qubit_labels == ("Q0",)
+        assert retargeted.outcome_ops[1].qubit_labels == ("Q0",)
 
 
 class TestIsRepCompatible:

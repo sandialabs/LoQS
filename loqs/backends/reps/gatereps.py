@@ -32,7 +32,7 @@ TP_CHECK_TOL = 1e-8
 
 def _validate_process_shape(
     value: object,
-    qubits: tuple,
+    qubit_labels: tuple,
     base: int,
     cls_name: str,
     dims: Sequence[int] | None = None,
@@ -41,7 +41,7 @@ def _validate_process_shape(
     for some `n >= 1`, or, if `dims` is given, shaped `(prod(dims),
     prod(dims))`.
 
-    Uses `n = len(qubits)` if attached; otherwise only checks the
+    Uses `n = len(qubit_labels)` if attached; otherwise only checks the
     dimension is *some* power of `base` -- `base**0 = 1` doesn't count,
     since there's no such thing as a 0-qubit gate. Raises
     [](api:RepConstructionError) if not.
@@ -68,10 +68,10 @@ def _validate_process_shape(
                 f"dims={dims!r} is invalid for {cls_name} (every subsystem "
                 "dimension must be >= 2)"
             )
-        if qubits and len(dims) != len(qubits):
+        if qubit_labels and len(dims) != len(qubit_labels):
             raise RepConstructionError(
                 f"dims={dims!r} has length {len(dims)}, but {cls_name} was "
-                f"given {len(qubits)} qubits"
+                f"given {len(qubit_labels)} qubits"
             )
         expected = int(np.prod(dims))
         if d != expected:
@@ -81,8 +81,8 @@ def _validate_process_shape(
             )
         return
 
-    if qubits:
-        n = len(qubits)
+    if qubit_labels:
+        n = len(qubit_labels)
         if d != base**n:
             raise RepConstructionError(
                 f"{value!r} has shape {value.shape}, but {cls_name} with "
@@ -135,12 +135,12 @@ class UnitaryGateRep(GateRep):
     operations, e.g. `dims=(2, 3)` for a joint qubit-qutrit gate. `None`
     (the default) assumes every targeted qubit has dimension 2."""
 
-    _SERIALIZE_ATTRS = ["unitary", "qubits", "dims"]
+    _SERIALIZE_ATTRS = ["unitary", "qubit_labels", "dims"]
 
     def __init__(
         self,
         unitary: NDArray,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
         dims: Sequence[int] | None = None,
     ) -> None:
         """Construct a [](api:UnitaryGateRep) from a `(2**n, 2**n)` array.
@@ -151,7 +151,7 @@ class UnitaryGateRep(GateRep):
             The unitary matrix, shaped `(2**n, 2**n)` for `n` qubits, or
             `(prod(dims), prod(dims))` if `dims` is given.
 
-        qubits:
+        qubit_labels:
             Qubit label(s) this operation acts upon, or `None`/unattached
             if not yet known.
 
@@ -163,12 +163,12 @@ class UnitaryGateRep(GateRep):
         Raises
         ------
         RepConstructionError
-            If `unitary`'s shape is inconsistent with `qubits`/`dims` (see
-            `_validate_process_shape`).
+            If `unitary`'s shape is inconsistent with `qubit_labels`/`dims`
+            (see `_validate_process_shape`).
         """
-        super().__init__(qubits)
+        super().__init__(qubit_labels)
         _validate_process_shape(
-            unitary, self.qubits, 2, type(self).__name__, dims=dims
+            unitary, self.qubit_labels, 2, type(self).__name__, dims=dims
         )
         self.unitary = unitary
         self.dims = tuple(dims) if dims is not None else None
@@ -183,23 +183,23 @@ class PTMGateRep(GateRep):
 
     ptm: NDArray
 
-    _SERIALIZE_ATTRS = ["ptm", "qubits"]
+    _SERIALIZE_ATTRS = ["ptm", "qubit_labels"]
 
     def __init__(
         self,
         ptm: NDArray,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         """Construct a [](api:PTMGateRep) from a `(4**n, 4**n)` array.
 
         Raises
         ------
         RepConstructionError
-            If `ptm`'s shape is inconsistent with `qubits` (see
+            If `ptm`'s shape is inconsistent with `qubit_labels` (see
             `_validate_process_shape`).
         """
-        super().__init__(qubits)
-        _validate_process_shape(ptm, self.qubits, 4, type(self).__name__)
+        super().__init__(qubit_labels)
+        _validate_process_shape(ptm, self.qubit_labels, 4, type(self).__name__)
         self.ptm = ptm
 
 
@@ -212,23 +212,23 @@ class QSimSuperopGateRep(GateRep):
 
     superop: NDArray
 
-    _SERIALIZE_ATTRS = ["superop", "qubits"]
+    _SERIALIZE_ATTRS = ["superop", "qubit_labels"]
 
     def __init__(
         self,
         superop: NDArray,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         """Construct a [](api:QSimSuperopGateRep) from a `(4**n, 4**n)` array.
 
         Raises
         ------
         RepConstructionError
-            If `superop`'s shape is inconsistent with `qubits` (see
+            If `superop`'s shape is inconsistent with `qubit_labels` (see
             `_validate_process_shape`).
         """
-        super().__init__(qubits)
-        _validate_process_shape(superop, self.qubits, 4, type(self).__name__)
+        super().__init__(qubit_labels)
+        _validate_process_shape(superop, self.qubit_labels, 4, type(self).__name__)
         self.superop = superop
 
 
@@ -241,7 +241,8 @@ class StimCircuitGateRep(StimCircuitPayloadMixin, GateRep):
     However, this should not include measurement or reset gates; for those,
     use [](api:StimCircuitInstrumentRep) instead.
 
-    Qubit labels are placeholders indexing into [](api:OperationRep.qubits).
+    Qubit labels are placeholders indexing into
+    [](api:OperationRep.qubit_labels).
 
     See [](api:StimCircuitPayloadMixin) for the shared storage/construction
     logic this class shares with [](api:StimCircuitInstrumentRep).
@@ -264,12 +265,12 @@ class ProbabilisticStimGateRep(GateRep):
 
     operations: tuple[tuple[str, Float], ...]
 
-    _SERIALIZE_ATTRS = ["operations", "qubits"]
+    _SERIALIZE_ATTRS = ["operations", "qubit_labels"]
 
     def __init__(
         self,
         operations: Sequence[tuple[str, Float]],
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         """Construct a [](api:ProbabilisticStimGateRep) from `(str, float)` pairs.
 
@@ -307,7 +308,7 @@ class ProbabilisticStimGateRep(GateRep):
                 f"{operations!r} probabilities must be non-negative and "
                 "sum to 1"
             )
-        super().__init__(qubits)
+        super().__init__(qubit_labels)
         self.operations = tuple(tuple(el) for el in operations)  # type: ignore[misc]
 
 
@@ -372,12 +373,12 @@ class KrausGateRep(GateRep):
     operations, e.g. `dims=(2, 3)` for a joint qubit-qutrit channel. `None`
     (the default) assumes every targeted qubit has dimension 2."""
 
-    _SERIALIZE_ATTRS = ["kraus_operators", "qubits", "dims"]
+    _SERIALIZE_ATTRS = ["kraus_operators", "qubit_labels", "dims"]
 
     def __init__(
         self,
         kraus_operators: Sequence[tuple[NDArray, Float | None]],
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
         tp_check_abstol: Float | None = TP_CHECK_TOL,
         dims: Sequence[int] | None = None,
     ) -> None:
@@ -390,7 +391,7 @@ class KrausGateRep(GateRep):
             `kraus_operator` shaped `(2**n, 2**n)` for `n` qubits, or
             `(prod(dims), prod(dims))` if `dims` is given.
 
-        qubits:
+        qubit_labels:
             Qubit label(s) this operation acts upon, or `None`/unattached
             if not yet known.
 
@@ -408,7 +409,7 @@ class KrausGateRep(GateRep):
         RepConstructionError
             If `kraus_operators` isn't a nonempty sequence of
             `(ndarray, float | None)` pairs shaped consistently with
-            `qubits`.
+            `qubit_labels`.
         """
         if (
             not isinstance(kraus_operators, Sequence)
@@ -431,10 +432,10 @@ class KrausGateRep(GateRep):
                     f"{type(self).__name__} payload (expected a nonempty "
                     "sequence of (ndarray, float | None) pairs)"
                 )
-        super().__init__(qubits)
+        super().__init__(qubit_labels)
         for el in kraus_operators:
             _validate_process_shape(
-                el[0], self.qubits, 2, type(self).__name__, dims=dims
+                el[0], self.qubit_labels, 2, type(self).__name__, dims=dims
             )
         self.kraus_operators = tuple(tuple(el) for el in kraus_operators)  # type: ignore[misc]
         self.dims = tuple(dims) if dims is not None else None
@@ -455,7 +456,7 @@ class KrausGateRep(GateRep):
     def from_pauli_stochastic(
         cls,
         rates: Sequence[Float],
-        qubits: str | int | Sequence[str | int],
+        qubit_labels: str | int | Sequence[str | int],
     ) -> "KrausGateRep":
         """Construct a Pauli-stochastic [](api:KrausGateRep) from per-Pauli rates.
 
@@ -464,9 +465,9 @@ class KrausGateRep(GateRep):
         rates:
             The probability of each `n`-qubit Pauli string, in
             `itertools.product("IXYZ", repeat=n)` order (`n` inferred from
-            `qubits`). Must be nonnegative and sum to 1.
+            `qubit_labels`). Must be nonnegative and sum to 1.
 
-        qubits:
+        qubit_labels:
             The targeted qubits.
 
         Returns
@@ -476,7 +477,9 @@ class KrausGateRep(GateRep):
             negligible probability (`< 1e-10`) are omitted.
         """
         normalized_qubits: tuple[str | int, ...] = (
-            (qubits,) if isinstance(qubits, (str, int)) else tuple(qubits)
+            (qubit_labels,)
+            if isinstance(qubit_labels, (str, int))
+            else tuple(qubit_labels)
         )
         n = len(normalized_qubits)
         assert all(0 <= p <= 1 for p in rates)
@@ -500,11 +503,11 @@ class KrausGateRep(GateRep):
             )
             kraus_reps.append((np.sqrt(prob) * pauli_nq, prob))
 
-        return cls(kraus_reps, qubits, tp_check_abstol=None)
+        return cls(kraus_reps, qubit_labels, tp_check_abstol=None)
 
     @classmethod
     def from_depolarizing(
-        cls, rate: Float, qubits: str | int | Sequence[str | int]
+        cls, rate: Float, qubit_labels: str | int | Sequence[str | int]
     ) -> "KrausGateRep":
         """Construct a depolarizing [](api:KrausGateRep).
 
@@ -515,7 +518,7 @@ class KrausGateRep(GateRep):
         rate:
             The depolarizing rate.
 
-        qubits:
+        qubit_labels:
             The targeted qubits.
 
         Returns
@@ -524,11 +527,13 @@ class KrausGateRep(GateRep):
             The depolarizing Kraus representation.
         """
         normalized_qubits: tuple[str | int, ...] = (
-            (qubits,) if isinstance(qubits, (str, int)) else tuple(qubits)
+            (qubit_labels,)
+            if isinstance(qubit_labels, (str, int))
+            else tuple(qubit_labels)
         )
         n = 4 ** len(normalized_qubits)
         return cls.from_pauli_stochastic(
-            [1 - (n - 1) / n * rate] + [rate / n] * (n - 1), qubits
+            [1 - (n - 1) / n * rate] + [rate / n] * (n - 1), qubit_labels
         )
 
     @classmethod
@@ -572,7 +577,7 @@ class KrausGateRep(GateRep):
         ----------
         other:
             The [](api:KrausGateRep) or [](api:UnitaryGateRep) to apply
-            after `self`. Must act on the same `qubits`.
+            after `self`. Must act on the same `qubit_labels`.
 
         dedup:
             Whether (`True`, default) or not to deduplicate the output
@@ -591,7 +596,7 @@ class KrausGateRep(GateRep):
                 f"{type(other).__name__}; expected a KrausGateRep or "
                 "UnitaryGateRep"
             )
-        assert self.qubits == other.qubits
+        assert self.qubit_labels == other.qubit_labels
         if self.dims is not None and other.dims is not None:
             assert self.dims == other.dims, (
                 f"Cannot compose operators with different dims: "
@@ -620,7 +625,7 @@ class KrausGateRep(GateRep):
                 new_kraus_reps.append((new_k, new_prob))
 
         composed = KrausGateRep(
-            new_kraus_reps, self.qubits, tp_check_abstol=None, dims=dims
+            new_kraus_reps, self.qubit_labels, tp_check_abstol=None, dims=dims
         )
         if not dedup:
             return composed
@@ -691,5 +696,5 @@ class KrausGateRep(GateRep):
         ]
 
         return KrausGateRep(
-            deduped_kraus_reps, self.qubits, tp_check_abstol=None, dims=self.dims
+            deduped_kraus_reps, self.qubit_labels, tp_check_abstol=None, dims=self.dims
         )
