@@ -15,7 +15,7 @@ from loqs.internal import Displayable
 
 U = TypeVar("U", bound="PauliFrame")
 
-PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"
+PauliFrameLike: TypeAlias = "PauliFrame | Sequence[str | int]"
 """Types that can be cast into a [](api:PauliFrame)."""
 
 
@@ -49,7 +49,7 @@ class PauliFrame(Displayable):
 
     def __init__(
         self,
-        frame_or_labels: PauliFrameCastableTypes,
+        frame_or_labels: PauliFrameLike,
         initial_paulis: Sequence[str] | str | None = None,
     ) -> None:
         """

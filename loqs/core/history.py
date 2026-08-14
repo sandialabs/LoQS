@@ -16,7 +16,7 @@ import h5py
 from typing import ClassVar, Literal, TypeAlias, TypeVar, overload
 import textwrap
 
-from loqs.core.frame import Frame, FrameCastableTypes
+from loqs.core.frame import Frame, FrameLike
 from loqs.internal import Displayable
 
 T = TypeVar("T", bound="History")
@@ -31,8 +31,8 @@ class _Unset:
 
 _UNSET = _Unset()
 
-HistoryCastableTypes: TypeAlias = (
-    "History | FrameCastableTypes | Sequence[FrameCastableTypes] | None"
+HistoryLike: TypeAlias = (
+    "History | FrameLike | Sequence[FrameLike] | None"
 )
 """Things that can be cast to [](api:History)."""
 
@@ -135,7 +135,7 @@ class History(Sequence[Frame], Displayable):
 
     def __init__(
         self,
-        history: HistoryCastableTypes = None,
+        history: HistoryLike = None,
         expiring_keys: Sequence[str] | None | _Unset = _UNSET,
         propagating_keys: Sequence[str] | None | _Unset = _UNSET,
         no_serialize_keys: Sequence[str] | None | _Unset = _UNSET,
@@ -245,12 +245,12 @@ class History(Sequence[Frame], Displayable):
             s += sf + "\n"
         return s
 
-    def append(self, item: FrameCastableTypes) -> None:
+    def append(self, item: FrameLike) -> None:
         """Add a [](api:Frame) to the end of the [](api:History).
 
         Parameters
         ----------
-        item : FrameCastableTypes
+        item : FrameLike
             The frame-castable object to append.
         """
         item = Frame(item)

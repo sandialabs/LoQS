@@ -20,7 +20,7 @@ from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="InstructionLabel")
 
-InstructionLabelCastableTypes: TypeAlias = (
+InstructionLabelLike: TypeAlias = (
     "Instruction | str | tuple[Instruction | str, str | None] | tuple[Instruction | str, str | None, Sequence | None] | tuple[Instruction | str, str | None, Sequence | None, Mapping | None] | InstructionLabel"
 )
 """Objects that can be cast to a [](api:InstructionLabel)."""

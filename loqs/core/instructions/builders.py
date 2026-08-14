@@ -42,11 +42,11 @@ from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import (
     InstructionLabel,
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 from loqs.core.instructions.instructionstack import (
     InstructionStack,
-    InstructionStackCastableTypes,
+    InstructionStackLike,
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import (
@@ -57,7 +57,7 @@ from loqs.core.recordables import (
 )
 from loqs.core.syndromelabel import (
     SyndromeLabel,
-    SyndromeLabelCastableTypes,
+    SyndromeLabelLike,
 )
 
 # Conditional imports for PyGSTi
@@ -83,7 +83,7 @@ else:
 
 
 def build_composite_instruction(
-    instructions: Sequence[InstructionLabelCastableTypes],
+    instructions: Sequence[InstructionLabelLike],
     extra_data: KwargDict | None = None,
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
@@ -228,7 +228,7 @@ def build_composite_instruction(
 
 def build_lookup_decoder_instruction(
     lookup_table: Mapping[str, str],
-    syndrome_labels: Sequence[SyndromeLabelCastableTypes],
+    syndrome_labels: Sequence[SyndromeLabelLike],
     raw_syndrome_frame_key: str,
     diff_prev_syndrome: bool = True,
     name: str = "(Unnamed lookup decoder)",
@@ -1153,7 +1153,7 @@ def build_physical_circuit_instruction(
 
 
 def build_repeat_until_success_instruction(
-    instructions: InstructionStackCastableTypes,
+    instructions: InstructionStackLike,
     rus_key: str,
     test_frame_key: str = "rus_success",
     expected: object = True,
@@ -1241,7 +1241,7 @@ def build_repeat_until_success_instruction(
         rus_key: str,
         patch_label: str,
         repeat_count: int,
-        instructions: InstructionStackCastableTypes,
+        instructions: InstructionStackLike,
         max_repeats: int,
         stack: InstructionStack,
     ) -> Frame:

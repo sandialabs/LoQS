@@ -26,7 +26,7 @@ OperationTypes: TypeAlias = LabelType | Sequence[LabelType]
 """Type alias for things allowed to be in circuit layer
 """
 
-ListCircuitCastableTypes: TypeAlias = (
+ListCircuitLike: TypeAlias = (
     BasePhysicalCircuit | Sequence[OperationTypes]
 )
 """Types we can cast to a built-in circuit.
@@ -45,7 +45,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: ListCircuitCastableTypes,
+        circuit: ListCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         from loqs.backends import is_backend_available

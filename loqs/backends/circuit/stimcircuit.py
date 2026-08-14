@@ -36,7 +36,7 @@ else:
 QubitTypes: TypeAlias = str | int
 """Qubit types for builtins"""
 
-STIMCircuitCastableTypes: TypeAlias = BasePhysicalCircuit | str | _Circuit
+STIMCircuitLike: TypeAlias = BasePhysicalCircuit | str | _Circuit
 """Types we can cast to a STIM circuit."""
 
 r"""
@@ -404,7 +404,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: STIMCircuitCastableTypes,
+        circuit: STIMCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         suppress_tick_warning: bool = False,
     ) -> None:

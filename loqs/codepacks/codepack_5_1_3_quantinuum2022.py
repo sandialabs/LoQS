@@ -45,7 +45,7 @@ from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import (
     InstructionLabel,
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
@@ -1118,7 +1118,7 @@ def _create_adaptive_measure_instruction_part_I(
         # Do classical feed forward
         if F1 == 0:
             # We go to part II (forward reference, must match key later)
-            ilbls: list[InstructionLabelCastableTypes] = [
+            ilbls: list[InstructionLabelLike] = [
                 ("FT Logical X Measure Part II Circuit", patch_label),
                 ("FT Logical X Measure Part II Feed-Forward", patch_label),
             ]
@@ -1326,7 +1326,7 @@ def _create_adaptive_measure_instruction_part_II(
             )
         elif inferred_M1 == inferred_M2:
             # We go to part III (forward reference, must match key later)
-            ilbls: list[InstructionLabelCastableTypes] = [
+            ilbls: list[InstructionLabelLike] = [
                 ("FT Logical X Measure Part III Circuit", patch_label),
                 ("FT Logical X Measure Part III Feed-Forward", patch_label),
             ]

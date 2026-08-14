@@ -20,7 +20,7 @@ from loqs.internal import Displayable
 T = TypeVar("T", bound="SyndromeLabel")
 
 
-SyndromeLabelCastableTypes: TypeAlias = (
+SyndromeLabelLike: TypeAlias = (
     "str | tuple[str] | tuple[str, int] | tuple[str, int, int] | SyndromeLabel"
 )
 """Objects that can be cast to [](api:SyndromeLabel) objects."""

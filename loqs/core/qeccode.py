@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from typing import ClassVar, TypeVar
 
 from loqs.core.instructions import Instruction
-from loqs.core.recordables.pauliframe import PauliFrameCastableTypes
+from loqs.core.recordables.pauliframe import PauliFrameLike
 from loqs.core.recordables.qeccodepatch import QECCodePatch
 from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
@@ -98,7 +98,7 @@ class QECCode(Displayable):
     def create_patch(
         self,
         qubits: Sequence[str | int],
-        pauli_frame: PauliFrameCastableTypes | None = None,
+        pauli_frame: PauliFrameLike | None = None,
     ) -> QECCodePatch:
         """Create a [](api:QECCodePatch) based on this [](api:QECCode).
 

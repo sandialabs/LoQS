@@ -48,7 +48,7 @@ e.g. ('Gxpi2', 0) or ['Gcnot', ("Q0", "Q1")]
 OperationTypes: TypeAlias = LayerTypes | Sequence[LayerTypes]
 """PyGSTi backend operations type (one or several gates/layers)"""
 
-PyGSTiCircuitCastableTypes: TypeAlias = (
+PyGSTiCircuitLike: TypeAlias = (
     BasePhysicalCircuit | _Circuit | str | Sequence[OperationTypes]
 )
 """Types we can cast to a pyGSTi circuit.
@@ -64,7 +64,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: PyGSTiCircuitCastableTypes,
+        circuit: PyGSTiCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         from loqs.backends import is_backend_available

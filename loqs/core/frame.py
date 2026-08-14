@@ -22,7 +22,7 @@ from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="Frame")
 
-FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
+FrameLike: TypeAlias = "Frame | Mapping[str, object] | None"
 """Things that can be cast to [](api:Frame)."""
 
 
@@ -55,7 +55,7 @@ class Frame(Mapping[str, object], Displayable):
 
     _SERIALIZE_ATTRS = ["log", "_data", "_expired_keys", "_no_serialize_keys"]
 
-    def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
+    def __init__(self, data: FrameLike = None, log: str = "N/A"):
         """
         Parameters
         ----------

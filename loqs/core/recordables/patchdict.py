@@ -19,7 +19,7 @@ from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="PatchDict")
 
-PatchDictCastableTypes: TypeAlias = (
+PatchDictLike: TypeAlias = (
     "PatchDict | Mapping[str, QECCodePatch] | None"
 )
 """Objects that can be cast to a [](api:PatchDict)."""
@@ -53,7 +53,7 @@ class PatchDict(MutableMapping[str, QECCodePatch], Displayable):
     """Underlying dict of patch labels and [](api:QECCodePatch) objects.
     """
 
-    def __init__(self, patches: PatchDictCastableTypes = None) -> None:
+    def __init__(self, patches: PatchDictLike = None) -> None:
         """
         Parameters
         ----------

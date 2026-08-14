@@ -20,7 +20,7 @@ from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="MeasurementOutcomes")
 
-MeasurementOutcomesCastableTypes: TypeAlias = (
+MeasurementOutcomesLike: TypeAlias = (
     "MeasurementOutcomes | Mapping[str | int, int | Sequence[int]]"
 )
 "Things that can be cast to [](api:MeasurementOutcomes)."
@@ -51,7 +51,7 @@ class MeasurementOutcomes(Mapping[str | int, list[int]], Displayable):
     e.g. auxiliary qubit reuse in a single circuit.
     """
 
-    def __init__(self, outcomes: MeasurementOutcomesCastableTypes) -> None:
+    def __init__(self, outcomes: MeasurementOutcomesLike) -> None:
         """
         Parameters
         ----------

@@ -30,15 +30,15 @@ from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, Frame
 from loqs.core.history import (
     History,
-    HistoryCastableTypes,
+    HistoryLike,
     HistoryCollectDataIndexTypes,
 )
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 from loqs.core.instructions.instructionstack import (
-    InstructionStackCastableTypes,
+    InstructionStackLike,
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
@@ -81,8 +81,8 @@ class QuantumProgram(Displayable):
 
     def __init__(
         self,
-        instruction_stack: InstructionStackCastableTypes = None,
-        initial_history: HistoryCastableTypes = None,
+        instruction_stack: InstructionStackLike = None,
+        initial_history: HistoryLike = None,
         default_noise_model: BaseNoiseModel | str | None = None,
         default_base_seed: int | None = None,
         expiring_state: bool = True,
@@ -188,7 +188,7 @@ class QuantumProgram(Displayable):
             try:
                 self.instruction_stack = InstructionStack(instruction_stack)
                 """The [](api:InstructionStack) that holds
-                [](api:InstructionLabelCastableTypes) object to execute."""
+                [](api:InstructionLabelLike) object to execute."""
             except ValueError as e:
                 raise ValueError(
                     "InstructionStack failed to cast, check all instructions/labels are well-formed"
@@ -281,7 +281,7 @@ class QuantumProgram(Displayable):
     def from_quantum_program(
         cls,
         other: QuantumProgram,
-        instruction_stack: InstructionStackCastableTypes = None,
+        instruction_stack: InstructionStackLike = None,
         default_noise_model: BaseNoiseModel | str | None = None,
         default_base_seed: int | None = None,
         global_instructions: Mapping[str, Instruction] | None = None,
@@ -673,7 +673,7 @@ class QuantumProgram(Displayable):
         return history
 
     def _resolve_instruction(
-        self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
+        self, inst_lbl: InstructionLabelLike, frame: Frame
     ) -> Instruction:
         """An internal function to resolve instruction names.
 

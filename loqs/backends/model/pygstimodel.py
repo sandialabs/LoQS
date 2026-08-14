@@ -64,7 +64,7 @@ else:
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
-PyGSTiModelCastableTypes: TypeAlias = (
+PyGSTiModelLike: TypeAlias = (
     ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
 )
 """Types of pyGSTi models this backend can handle"""
@@ -263,7 +263,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     def __init__(
         self,
-        model: PyGSTiModelCastableTypes,
+        model: PyGSTiModelLike,
         qubit_aliases: Mapping | Sequence | None = None,
         zbasis_proj_resets: bool = True,
         use_time_dependence: bool = False,

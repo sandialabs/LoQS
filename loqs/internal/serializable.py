@@ -72,9 +72,14 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.syndromelabel",
             "SyndromeLabel",
         ),
+        # NOTE: new-location name renamed from SyndromeLabelCastableTypes to
+        # SyndromeLabelLike well after version 1 was cut -- really a
+        # version-2-worthy change folded into version 1's entry rather than
+        # given its own SERIALIZATION_VERSION bump (other renamed
+        # *CastableTypes -> *Like names have no compat entry at all yet).
         ("loqs.core.syndrome", "SyndromeLabelCastableTypes"): (
             "loqs.core.syndromelabel",
-            "SyndromeLabelCastableTypes",
+            "SyndromeLabelLike",
         ),
         ("loqs.core.syndrome", "PauliFrame"): (
             "loqs.core.recordables.pauliframe",
