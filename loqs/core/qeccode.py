@@ -92,6 +92,14 @@ class QECCode(Displayable):
 
         self.name = name
 
+        # Cache of qubit-mapped instructions, keyed by (instruction key,
+        # qubit tuple), so that repeated QECCodePatch lookups on patches
+        # sharing this code and qubit set (e.g. after patch.copy()) don't
+        # redo the map_qubits deep-copy of the instruction's circuit data.
+        self._mapped_instruction_cache: dict[
+            tuple[str, tuple], Instruction
+        ] = {}
+
     def __str__(self) -> str:
         return f"QECCode {self.name}"
 

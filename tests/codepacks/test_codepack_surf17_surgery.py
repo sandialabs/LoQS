@@ -778,6 +778,7 @@ class TestFTSurgery:
             [[0]] * NUM_STIM_SHOTS
         )
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_weight1_injection_sweep(self, kind):
         """Every weight-1 Pauli fault in the merge window is tolerated.
@@ -1034,6 +1035,7 @@ class TestSurgeryCnot:
 class TestSurgeryDenseSmoke:
     """Phase F: statevector smoke on the intended dense configuration."""
 
+    @pytest.mark.slow
     def test_zz_statevector_surf10(self):
         """2x surf10 + 3 seams (23 qubits): |00> -> m_ZZ = 0."""
         layout = "surf10"
@@ -1188,6 +1190,8 @@ class TestMzzFaultTolerance:
     zero failures; `simple` decode is characterized (xfail with counts)
     rather than asserted.
     """
+
+    pytestmark = pytest.mark.slow
 
     WEIGHT1_LABELS = ["Gxpi", "Gypi", "Gzpi"]
     # seq[i] sits at stack index 7 + i in _mzz_program's stack.
@@ -1357,6 +1361,8 @@ class TestSurgeryCnotFaultTolerance:
     zero failures; simple decode is characterized (xfail with counts).
     """
 
+    pytestmark = pytest.mark.slow
+
     WEIGHT1_LABELS = ["Gxpi", "Gypi", "Gzpi"]
     WEIGHT1_SEQ_IDXS = (0, 1, 2, 3, 5)  # seam prep, SE x3, seam measure
     POST2Q_SEQ_IDXS = (1, 2, 3)  # only the SE rounds contain 2q gates
@@ -1371,8 +1377,8 @@ class TestSurgeryCnotFaultTolerance:
         qc = layout_qubits(layout, "_c")
         qt = layout_qubits(layout, "_t")
         qa = layout_qubits(layout, "_a")
-        seams_v = ["SV0", "SV1", "SV2"]
-        seams_h = ["SH0", "SH1", "SH2"]
+        seams_v = ["Qsv0", "Qsv1", "Qsv2"]
+        seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = qc + qt + qa + seams_v + seams_h
         zzseq = surgery.build_surgery_parity_instruction_sequence(
             "ZZ", "C", "ANC", qc, qa, seams_v, layout, mode=mode
@@ -1514,3 +1520,112 @@ class TestSurgeryCnotFaultTolerance:
     def test_post2q_sweep_simple(self, layout, basis):
         """Characterize the simple decode under post-2Q correlated pairs."""
         self._characterize_simple(layout, basis, post_twoq=True)
+
+
+class TestMzzFaultToleranceSmoke:
+    """Fast, non-exhaustive companion to `TestMzzFaultTolerance`.
+
+    Samples a handful of weight-1 fault locations per merge-window
+    component on the cheapest (surf10) layout instead of every location
+    on all three layouts, so the default test run still catches gross
+    breakage in the mzz-merge FT machinery without paying for the full
+    sweep (marked `slow`; run it explicitly with `-m slow` for the
+    exhaustive check).
+    """
+
+    SAMPLES_PER_LOCATION = 2
+    # Subset of TestMzzFaultTolerance.WEIGHT1_SEQ_IDXS: seam prep (cheap,
+    # 6 locations) plus one merged-SE round (the richest component, 164
+    # locations, and where hook errors matter most). Building the full
+    # per-location list (before sampling) is what costs time, so this
+    # subset -- not just SAMPLES_PER_LOCATION -- is what keeps this fast.
+    SEQ_IDXS = (0, 1)
+
+    def test_weight1_smoke_surf10(self):
+        """A handful of weight-1 faults per merge-window component are
+        tolerated on surf10/Z, sampled from the exhaustive sweep's full
+        location set."""
+        failed, total = self._smoke_sweep("surf10", "ft", "Z")
+        assert not failed, (
+            f"{len(failed)}/{total} sampled fault locations broke the "
+            f"XOR invariant, e.g. "
+            f"{TestMzzFaultTolerance._error_tags(failed)}"
+        )
+
+    @classmethod
+    def _smoke_sweep(cls, layout, mode, basis):
+        base_program, seq = TestMzzFaultTolerance._mzz_program(
+            layout, mode, basis
+        )
+        failed, total = [], 0
+        for i in cls.SEQ_IDXS:
+            injected = fttools.build_discrete_error_injection_programs(
+                base_program=base_program,
+                instruction_to_analyze=seq[i],
+                stack_idx_to_modify=7 + i,
+                error_circuit_labels=TestMzzFaultTolerance.WEIGHT1_LABELS,
+            )
+            if not injected:
+                continue
+            step = max(1, len(injected) // cls.SAMPLES_PER_LOCATION)
+            sample = injected[::step][: cls.SAMPLES_PER_LOCATION]
+            total += len(sample)
+            failed += TestMzzFaultTolerance._run_xor_sweep(sample)
+        return failed, total
+
+
+class TestSurgeryCnotFaultToleranceSmoke:
+    """Fast, non-exhaustive companion to `TestSurgeryCnotFaultTolerance`.
+
+    Samples a handful of weight-1 fault locations per merge-window
+    component on the cheapest (surf10) layout instead of the full
+    ~3000-program sweep per layout/basis combination, so the default
+    test run still catches gross breakage in the surgery-CNOT FT
+    machinery without the exhaustive cost (marked `slow`; run it
+    explicitly with `-m slow` for the exhaustive check).
+    """
+
+    SAMPLES_PER_LOCATION = 2
+    # Subset of TestSurgeryCnotFaultTolerance.WEIGHT1_SEQ_IDXS: seam prep
+    # (cheap, 6 locations) plus one merged-SE round (the richest
+    # component, 164 locations). Building the full per-location list
+    # (before sampling) is what costs time, so this subset -- not just
+    # SAMPLES_PER_LOCATION -- is what keeps this fast.
+    SEQ_IDXS = (0, 1)
+
+    def test_weight1_smoke_surf10(self):
+        """A handful of weight-1 faults per merge-window component are
+        tolerated on surf10/Z, sampled from the exhaustive sweep's full
+        location set."""
+        failed, total = self._smoke_sweep("surf10", "ft", "Z")
+        assert not failed, (
+            f"{len(failed)}/{total} sampled fault locations broke the "
+            f"Bell XOR invariant, e.g. "
+            f"{TestSurgeryCnotFaultTolerance._error_tags(failed)}"
+        )
+
+    @classmethod
+    def _smoke_sweep(cls, layout, mode, basis):
+        base_program, targets = TestSurgeryCnotFaultTolerance._cnot_program(
+            layout, mode, basis
+        )
+        failed, total = [], 0
+        for seq, base in targets.values():
+            for i in cls.SEQ_IDXS:
+                injected = fttools.build_discrete_error_injection_programs(
+                    base_program=base_program,
+                    instruction_to_analyze=seq[i],
+                    stack_idx_to_modify=base + i,
+                    error_circuit_labels=(
+                        TestSurgeryCnotFaultTolerance.WEIGHT1_LABELS
+                    ),
+                )
+                if not injected:
+                    continue
+                step = max(1, len(injected) // cls.SAMPLES_PER_LOCATION)
+                sample = injected[::step][: cls.SAMPLES_PER_LOCATION]
+                total += len(sample)
+                failed += TestSurgeryCnotFaultTolerance._run_xor_sweep(
+                    sample
+                )
+        return failed, total

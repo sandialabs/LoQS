@@ -138,6 +138,7 @@ class TestTwoPatchFoundations:
         outcomes = results.collect_shot_data("logical_measurement", -1)
         assert outcomes == [0] * NUM_STIM_SHOTS
 
+    @pytest.mark.slow
     def test_reference_round_ft_semantics(self):
         """Reference round drops the round-0 detector layer -- and only that.
 
@@ -371,6 +372,7 @@ class TestTransversalCnot:
             assert l0 ^ l1 == 0
         assert {tuple(s) for s in per_shot} == {(0, 0), (1, 1)}
 
+    @pytest.mark.slow
     def test_fault_tolerance(self):
         """Single faults around the CNOT never cause a logical error.
 
@@ -680,6 +682,7 @@ class TestBackendFeasibilityWarning:
 class TestDenseBackendSmoke:
     """Phase C: statevector smoke test on the intended dense configuration."""
 
+    @pytest.mark.slow
     def test_bell_joint_parities_statevector(self):
         """2x surf10 + 1 ancilla (21 qubits), Bell + joint ZZ/XX parities."""
         layout = "surf10"
