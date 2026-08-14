@@ -449,7 +449,7 @@ class TestSimplifiedSurgeryZZ:
                 "FT Logical Z Measure",
                 "L1",
                 (),
-                {"reference_round_Z": True},  # |+> prep: Z round 0 is random
+                {"reference_round_mode_Z": "guarded_diff"},  # |+> prep: Z round 0 is random
             ),
         ]
         program = make_stim_program(layout, stack, all_q)
@@ -488,8 +488,8 @@ class TestSimplifiedSurgeryZZ:
             (zz, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            ("FT Logical X Measure", "L0", (), {"reference_round_X": True}),
-            ("FT Logical X Measure", "L1", (), {"reference_round_X": True}),
+            ("FT Logical X Measure", "L0", (), {"reference_round_mode_X": "guarded_diff"}),
+            ("FT Logical X Measure", "L1", (), {"reference_round_mode_X": "guarded_diff"}),
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -564,7 +564,7 @@ class TestSimplifiedSurgeryXX:
                 "FT Logical X Measure",
                 "L1",
                 (),
-                {"reference_round_X": True},  # |0> prep: X round 0 is random
+                {"reference_round_mode_X": "guarded_diff"},  # |0> prep: X round 0 is random
             ),
         ]
         program = make_stim_program(layout, stack, all_q)
@@ -598,8 +598,8 @@ class TestSimplifiedSurgeryXX:
             (xx, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            ("FT Logical Z Measure", "L0", (), {"reference_round_Z": True}),
-            ("FT Logical Z Measure", "L1", (), {"reference_round_Z": True}),
+            ("FT Logical Z Measure", "L0", (), {"reference_round_mode_Z": "guarded_diff"}),
+            ("FT Logical Z Measure", "L1", (), {"reference_round_mode_Z": "guarded_diff"}),
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -870,11 +870,11 @@ class TestParityReadoutConsistencyA:
         if kind == "ZZ":
             prep0, prep1 = "Plus Prep", "Zero Prep"
             meas = "FT Logical Z Measure"
-            flag = {"reference_round_Z": True}
+            flag = {"reference_round_mode_Z": "guarded_diff"}
         else:
             prep0, prep1 = "Zero Prep", "Plus Prep"
             meas = "FT Logical X Measure"
-            flag = {"reference_round_X": True}
+            flag = {"reference_round_mode_X": "guarded_diff"}
         stack = [
             ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
             ("Init Patch SURF", None, ("L0", q0)),
@@ -956,9 +956,9 @@ class TestSurgeryCnot:
             *seq,
             ("QEC", "C"),
             ("QEC", "T"),
-            # T's XX merge grows a Z check -> reference_round_Z on T.
+            # T's XX merge grows a Z check -> reference_round_mode_Z="guarded_diff" on T.
             ("FT Logical Z Measure", "C"),
-            ("FT Logical Z Measure", "T", (), {"reference_round_Z": True}),
+            ("FT Logical Z Measure", "T", (), {"reference_round_mode_Z": "guarded_diff"}),
         ]
         program = make_stim_program("surf17", stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -989,8 +989,8 @@ class TestSurgeryCnot:
             *seq,
             ("QEC", "C"),
             ("QEC", "T"),
-            # C's ZZ merge grows an X check -> reference_round_X on C.
-            ("FT Logical X Measure", "C", (), {"reference_round_X": True}),
+            # C's ZZ merge grows an X check -> reference_round_mode_X="guarded_diff" on C.
+            ("FT Logical X Measure", "C", (), {"reference_round_mode_X": "guarded_diff"}),
             ("FT Logical X Measure", "T"),
         ]
         program = make_stim_program("surf17", stack, all_q)
@@ -1010,7 +1010,7 @@ class TestSurgeryCnot:
         (C prepped |+> -> FT Z; T prepped |0> -> FT X).
         """
         prelude, seq, all_q = self._cnot_setup()
-        flag = {f"reference_round_{basis}": True}
+        flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack = prelude + [
             ("Plus Prep", "C"),
             ("Zero Prep", "T"),
@@ -1108,9 +1108,9 @@ class TestMzzBellPrep:
             ("QEC", "L0"),
             ("QEC", "L1"),
         ]
-        # |+> prep -> random round-0 Z layer (reference_round_Z); the ZZ
-        # merge grows an X check on both patches (reference_round_X).
-        flag = {f"reference_round_{basis}": True}
+        # |+> prep -> random round-0 Z layer ("guarded_diff"); the ZZ
+        # merge grows an X check on both patches (also "guarded_diff").
+        flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
             (f"FT Logical {basis} Measure", "L0", (), dict(flag)),
             (f"FT Logical {basis} Measure", "L1", (), dict(flag)),
@@ -1211,11 +1211,15 @@ class TestMzzFaultTolerance:
         corrections = surgery.build_mzz_bell_corrections_instruction(
             "L1", q1[:9]
         )
-        # Z round 0 is random after |+> prep -> reference round. X round 0
-        # is deterministic -> kept as a detector layer (the split
+        # Z round 0 is random after |+> prep -> guarded_diff. X round 0
+        # is deterministic -> kept as a detector layer ("raw", the split
         # bookkeeping's round-0 offset absorbs the grown-check rewrite),
         # closing the prep blind window.
-        flag = {f"reference_round_{basis}": basis == "Z"}
+        flag = {
+            f"reference_round_mode_{basis}": (
+                "guarded_diff" if basis == "Z" else "raw"
+            )
+        }
         meas = f"FT Logical {basis} Measure"
         stack = [
             ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
@@ -1428,9 +1432,9 @@ class TestSurgeryCnotFaultTolerance:
                     None,
                 ),
             ]
-        flag = {f"reference_round_{basis}": True}
+        flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
-            ("FT Logical Z Measure", "ANC", (), {"reference_round_Z": True}),
+            ("FT Logical Z Measure", "ANC", (), {"reference_round_mode_Z": "guarded_diff"}),
             (corrections, None),
             ("QEC", "C"),
             ("QEC", "T"),

@@ -1146,11 +1146,11 @@ def _split_bookkeeping_apply_fn(
       data (`patch.data["syndrome_round0_offset_X"]` /
       `["syndrome_round0_offset_Z"]`, same convention as
       `syndrome_history_X/Z`) so a terminating measure in the grown-check
-      basis can either drop round 0 (`reference_round_X=True` (ZZ) /
-      `reference_round_Z=True` (XX)) or - when the prep makes that check
-      type deterministic in round 0, as in the mzz Bell prep - keep round 0
-      as a detector layer and subtract the offset, closing the prep blind
-      window.
+      basis can either drop round 0 (`reference_round_mode_X="guarded_diff"`
+      (ZZ) / `reference_round_mode_Z="guarded_diff"` (XX)) or - when the
+      prep makes that check type deterministic in round 0, as in the mzz
+      Bell prep - keep round 0 as a detector layer (`"raw"`, the default)
+      and subtract the offset, closing the prep blind window.
     - Split byproduct: the XOR of the three seam outcomes conditionally
       multiplies a logical Pauli into one patch's frame, preserving the
       anticommuting logical correlation across the surgery for the
@@ -1696,11 +1696,13 @@ def build_split_instruction(
     residue only in the round-0 absolute detector layer, exported to the
     affected patch's own tracked data (`patch.data["syndrome_round0_offset_X"]`
     / `["syndrome_round0_offset_Z"]`). Subsequent FT logical measurements in
-    the grown-check basis must either pass `reference_round_X=True` after
-    a ZZ surgery (`reference_round_Z=True` after XX) or - when the prep
+    the grown-check basis must either pass
+    `reference_round_mode_X="guarded_diff"` after a ZZ surgery
+    (`reference_round_mode_Z="guarded_diff"` after XX) or - when the prep
     makes that check type deterministic in round 0 - keep round 0 as a
-    detector layer, in which case the terminating decode subtracts the
-    offset; measurements in the other basis are unaffected.
+    detector layer (`"raw"`, the default), in which case the terminating
+    decode subtracts the offset; measurements in the other basis are
+    unaffected.
 
     `idle_layout`, `gate_durations`, `idle_gates`: see
     [](api:_surgery_metadata); must match the preceding
@@ -2024,19 +2026,21 @@ def build_surgery_cnot_sequence(
     instructions) to splice into a program stack with `*`. The three
     patches must already be initialized (`Init Patch`), ctrl/tgt prepped
     and QEC'd by the caller; the ancilla is prepped here. The ancilla's
-    destructive measure uses `reference_round_Z=True` because the XX split
-    rewrites its Z-check history (grown-check basis change).
+    destructive measure uses `reference_round_mode_Z="guarded_diff"`
+    because the XX split rewrites its Z-check history (grown-check basis
+    change).
 
     Post-CNOT measurement flags for the caller: the ZZ merge grows an X
-    check on ctrl (use `reference_round_X=True` for an FT X measure of
-    ctrl) and the XX merge grows a Z check on tgt (use
-    `reference_round_Z=True` for an FT Z measure of tgt). Independently
-    of the surgery, the usual prep-basis rule still applies: a patch
-    prepped in the conjugate basis of the measurement has a random
-    round-0 syndrome layer, so e.g. an FT Z measure of a |+>-prepped
-    ctrl also needs `reference_round_Z=True` (without it the decoder
-    matches the round-0 layer as real defects and applies a random
-    logical correction, which destroys e.g. Bell correlations).
+    check on ctrl (use `reference_round_mode_X="guarded_diff"` for an FT
+    X measure of ctrl) and the XX merge grows a Z check on tgt (use
+    `reference_round_mode_Z="guarded_diff"` for an FT Z measure of tgt).
+    Independently of the surgery, the usual prep-basis rule still
+    applies: a patch prepped in the conjugate basis of the measurement
+    has a random round-0 syndrome layer, so e.g. an FT Z measure of a
+    |+>-prepped ctrl also needs `reference_round_mode_Z="guarded_diff"`
+    (without it the decoder matches the round-0 layer as real defects and
+    applies a random logical correction, which destroys e.g. Bell
+    correlations).
 
     .. warning::
         KNOWN OPEN ISSUE: this path is NOT fully fault-tolerant even in
@@ -2153,7 +2157,7 @@ def build_surgery_cnot_sequence(
             "FT Logical Z Measure",
             anc_patch_label,
             (),
-            {"reference_round_Z": True},
+            {"reference_round_mode_Z": "guarded_diff"},
         ),
         (corrections, None),
     ]
@@ -2327,10 +2331,11 @@ def build_mzz_bell_prep_sequence(
 
     Measurement flags for the caller (cf. build_surgery_cnot_sequence):
     both patches are |+>-prepped so their round-0 Z syndrome layer is
-    random (use `reference_round_Z=True` for FT Z measures), but the
-    round-0 X layer is DETERMINISTIC — use `reference_round_X=False` for
-    FT X measures so faults in the prep window stay detectable; the
-    grown-X-check history rewrite at split is absorbed by the exported
+    random (use `reference_round_mode_Z="guarded_diff"` for FT Z
+    measures), but the round-0 X layer is DETERMINISTIC — use
+    `reference_round_mode_X="raw"` (the default) for FT X measures so
+    faults in the prep window stay detectable; the grown-X-check history
+    rewrite at split is absorbed by the exported
     round-0 offset key, not by dropping round 0.
 
     `idle_layout`, `gate_durations`, `idle_gates`: see

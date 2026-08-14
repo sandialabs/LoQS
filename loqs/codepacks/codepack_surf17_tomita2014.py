@@ -739,8 +739,12 @@ def create_qec_code(
         data_qubits: list[str],
         measurement_basis: Literal["Z", "X"],
         measurement_outcomes: MeasurementOutcomes,
-        reference_round_X: bool = False,
-        reference_round_Z: bool = False,
+        reference_round_mode_X: Literal[
+            "raw", "clean_diff", "guarded_diff"
+        ] = "raw",
+        reference_round_mode_Z: Literal[
+            "raw", "clean_diff", "guarded_diff"
+        ] = "raw",
     ) -> Frame:
         import pymatching
 
@@ -797,10 +801,16 @@ def create_qec_code(
             sz_history = hist_Z + [sz_final]
             num_rounds = R + 1
 
-            # With a reference round (e.g. prep basis does not stabilize the
-            # Z checks, so round 0 is random), round 0 only serves as the
-            # reference for later diffs and contributes no detector layer
-            num_layers = num_rounds - 1 if reference_round_Z else num_rounds
+            # In "raw" mode round 0 is a trusted, standalone detector layer.
+            # In "clean_diff"/"guarded_diff" mode (e.g. prep basis does not
+            # stabilize the Z checks, so round 0 is random), round 0 instead
+            # only serves as the reference for later diffs and contributes
+            # no detector layer of its own.
+            num_layers = (
+                num_rounds - 1
+                if reference_round_mode_Z != "raw"
+                else num_rounds
+            )
 
             # Construct 3D space-time matching graph matching_Z dynamically
             matching_Z = pymatching.Matching()
@@ -835,12 +845,15 @@ def create_qec_code(
                         weight=0.9,
                         merge_strategy="smallest-weight",
                     )
-            # With a reference round the first detector layer diffs against
-            # a NOISY baseline: a measurement flip in the reference round
-            # leaves a single defect there. Escape edges (measurement
-            # weight, no fault ids) let the matcher explain it without a
-            # spurious data correction.
-            if reference_round_Z and num_layers > 0:
+            # In "guarded_diff" mode, round 0 itself may not be a reliable
+            # measurement (not just non-deterministic in expectation), so
+            # the first detector layer diffs against a baseline that could
+            # itself be wrong: a measurement flip in round 0 would leave a
+            # single defect there. Escape edges (measurement weight, no
+            # fault ids) let the matcher explain that without applying a
+            # spurious data correction. "clean_diff" mode skips this,
+            # trusting the diff as an ordinary detector layer.
+            if reference_round_mode_Z == "guarded_diff" and num_layers > 0:
                 for i in range(4):
                     matching_Z.add_boundary_edge(
                         i,
@@ -850,7 +863,7 @@ def create_qec_code(
 
             # Compute difference syndrome
             diff_sz = []
-            first_t = 1 if reference_round_Z else 0
+            first_t = 1 if reference_round_mode_Z != "raw" else 0
             for t in range(first_t, num_rounds):
                 if t == 0:
                     row = sz_history[0]
@@ -905,10 +918,16 @@ def create_qec_code(
             sx_history = hist_X + [sx_final]
             num_rounds = R + 1
 
-            # With a reference round (e.g. prep basis does not stabilize the
-            # X checks, so round 0 is random), round 0 only serves as the
-            # reference for later diffs and contributes no detector layer
-            num_layers = num_rounds - 1 if reference_round_X else num_rounds
+            # In "raw" mode round 0 is a trusted, standalone detector layer.
+            # In "clean_diff"/"guarded_diff" mode (e.g. prep basis does not
+            # stabilize the X checks, so round 0 is random), round 0 instead
+            # only serves as the reference for later diffs and contributes
+            # no detector layer of its own.
+            num_layers = (
+                num_rounds - 1
+                if reference_round_mode_X != "raw"
+                else num_rounds
+            )
 
             # Construct 3D space-time matching graph matching_X dynamically
             matching_X = pymatching.Matching()
@@ -943,12 +962,15 @@ def create_qec_code(
                         weight=0.9,
                         merge_strategy="smallest-weight",
                     )
-            # With a reference round the first detector layer diffs against
-            # a NOISY baseline: a measurement flip in the reference round
-            # leaves a single defect there. Escape edges (measurement
-            # weight, no fault ids) let the matcher explain it without a
-            # spurious data correction.
-            if reference_round_X and num_layers > 0:
+            # In "guarded_diff" mode, round 0 itself may not be a reliable
+            # measurement (not just non-deterministic in expectation), so
+            # the first detector layer diffs against a baseline that could
+            # itself be wrong: a measurement flip in round 0 would leave a
+            # single defect there. Escape edges (measurement weight, no
+            # fault ids) let the matcher explain that without applying a
+            # spurious data correction. "clean_diff" mode skips this,
+            # trusting the diff as an ordinary detector layer.
+            if reference_round_mode_X == "guarded_diff" and num_layers > 0:
                 for i in range(4):
                     matching_X.add_boundary_edge(
                         i,
@@ -958,7 +980,7 @@ def create_qec_code(
 
             # Compute difference syndrome
             diff_sx = []
-            first_t = 1 if reference_round_X else 0
+            first_t = 1 if reference_round_mode_X != "raw" else 0
             for t in range(first_t, num_rounds):
                 if t == 0:
                     row = sx_history[0]
@@ -1036,8 +1058,8 @@ def create_qec_code(
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
             "measurement_basis": "Z",
-            "reference_round_X": False,
-            "reference_round_Z": False,
+            "reference_round_mode_X": "raw",
+            "reference_round_mode_Z": "raw",
         },
         map_qubits_fn=pymatching_global_meas_map_qubits_fn,
         param_priorities={"measurement_outcomes": ["history[-1]"]},
@@ -1049,8 +1071,8 @@ def create_qec_code(
             # Declared here so stack-level kwargs thread through to the
             # global parity calculation (label kwargs only reach declared params)
             extra_data={
-                "reference_round_X": False,
-                "reference_round_Z": False,
+                "reference_round_mode_X": "raw",
+                "reference_round_mode_Z": "raw",
             },
             name="FT logical Z measurement with PyMatching",
         )
@@ -1065,8 +1087,8 @@ def create_qec_code(
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
             "measurement_basis": "X",
-            "reference_round_X": False,
-            "reference_round_Z": False,
+            "reference_round_mode_X": "raw",
+            "reference_round_mode_Z": "raw",
         },
         map_qubits_fn=pymatching_global_meas_map_qubits_fn,
         param_priorities={"measurement_outcomes": ["history[-1]"]},
@@ -1076,8 +1098,8 @@ def create_qec_code(
         builders.build_composite_instruction(
             [instructions["Raw X Data Measure"], X_global_meas],
             extra_data={
-                "reference_round_X": False,
-                "reference_round_Z": False,
+                "reference_round_mode_X": "raw",
+                "reference_round_mode_Z": "raw",
             },
             name="FT logical X measurement with PyMatching",
         )
