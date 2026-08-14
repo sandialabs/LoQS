@@ -26,7 +26,7 @@ OperationTypes: TypeAlias = LabelType | Sequence[LabelType]
 """Type alias for things allowed to be in circuit layer
 """
 
-ListCircuitCastableTypes: TypeAlias = (
+ListCircuitLike: TypeAlias = (
     BasePhysicalCircuit | Sequence[OperationTypes]
 )
 """Types we can cast to a built-in circuit.
@@ -45,7 +45,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: ListCircuitCastableTypes,
+        circuit: ListCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         from loqs.backends import is_backend_available
@@ -62,21 +62,17 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         elif is_backend_available("pygsti_circuit") and isinstance(
             circuit, PyGSTiPhysicalCircuit
         ):
-            try:
-                circuit = PyGSTiPhysicalCircuit.cast(circuit)
+            # circuit is already a PyGSTiPhysicalCircuit (checked above).
+            layers = []
+            for layer in circuit.circuit.layertup:  # type: ignore
+                new_layer = []
+                for comp in layer.components:  # type: ignore
+                    new_layer.append((comp.name, comp.qubits))
+                layers.append(new_layer)
+            self._circuit = layers
 
-                layers = []
-                for layer in circuit.circuit.layertup:  # type: ignore
-                    new_layer = []
-                    for comp in layer.components:  # type: ignore
-                        new_layer.append((comp.name, comp.qubits))
-                    layers.append(new_layer)
-                self._circuit = layers
-
-                if qubit_labels is None:
-                    qubit_labels = circuit.circuit.line_labels  # type: ignore
-            except ImportError as e:
-                raise ValueError("Could not cast pyGSTi circuit") from e
+            if qubit_labels is None:
+                qubit_labels = circuit.circuit.line_labels  # type: ignore
         elif isinstance(circuit, Sequence):
             seen_qubits = set()
 
@@ -181,7 +177,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         return circuit_locations
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit = ListPhysicalCircuit.cast(circuit)
+        other_circuit = ListPhysicalCircuit(circuit)
         self._circuit = (
             self._circuit[:idx] + other_circuit._circuit + self._circuit[idx:]
         )
@@ -209,7 +205,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         self._qubit_labels = [complete_mapping[q] for q in self.qubit_labels]
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit = ListPhysicalCircuit.cast(circuit)
+        other_circuit = ListPhysicalCircuit(circuit)
 
         # Ensure circuit is long enough for merge
         end = idx + other_circuit.depth

@@ -30,15 +30,15 @@ from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, Frame
 from loqs.core.history import (
     History,
-    HistoryCastableTypes,
+    HistoryLike,
     HistoryCollectDataIndexTypes,
 )
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 from loqs.core.instructions.instructionstack import (
-    InstructionStackCastableTypes,
+    InstructionStackLike,
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchDict
@@ -81,8 +81,8 @@ class QuantumProgram(Displayable):
 
     def __init__(
         self,
-        instruction_stack: InstructionStackCastableTypes = None,
-        initial_history: HistoryCastableTypes = None,
+        instruction_stack: InstructionStackLike = None,
+        initial_history: HistoryLike = None,
         default_noise_model: BaseNoiseModel | str | None = None,
         default_base_seed: int | None = None,
         expiring_state: bool = True,
@@ -152,7 +152,7 @@ class QuantumProgram(Displayable):
 
         """
         # Do history before instruction stack in case it already has one
-        self.initial_history = History.cast(initial_history)
+        self.initial_history = History(initial_history)
         """The initial history that all shots start from."""
 
         if instruction_stack is None and (
@@ -186,17 +186,15 @@ class QuantumProgram(Displayable):
         # Create the instruction stack and add it to the history
         if instruction_stack is not None:
             try:
-                self.instruction_stack = InstructionStack.cast(
-                    instruction_stack
-                )
+                self.instruction_stack = InstructionStack(instruction_stack)
                 """The [](api:InstructionStack) that holds
-                [](api:InstructionLabelCastableTypes) object to execute."""
+                [](api:InstructionLabelLike) object to execute."""
             except ValueError as e:
                 raise ValueError(
                     "InstructionStack failed to cast, check all instructions/labels are well-formed"
                 ) from e
         else:
-            self.instruction_stack = InstructionStack.cast(
+            self.instruction_stack = InstructionStack(
                 self.initial_history[-1]["stack"]
             )
 
@@ -283,7 +281,7 @@ class QuantumProgram(Displayable):
     def from_quantum_program(
         cls,
         other: QuantumProgram,
-        instruction_stack: InstructionStackCastableTypes = None,
+        instruction_stack: InstructionStackLike = None,
         default_noise_model: BaseNoiseModel | str | None = None,
         default_base_seed: int | None = None,
         global_instructions: Mapping[str, Instruction] | None = None,
@@ -663,7 +661,7 @@ class QuantumProgram(Displayable):
 
             history.append(applied_frame)
 
-            stack = InstructionStack.cast(applied_frame["stack"])
+            stack = InstructionStack(applied_frame["stack"])
 
             num_frames += 1
 
@@ -675,7 +673,7 @@ class QuantumProgram(Displayable):
         return history
 
     def _resolve_instruction(
-        self, inst_lbl: InstructionLabelCastableTypes, frame: Frame
+        self, inst_lbl: InstructionLabelLike, frame: Frame
     ) -> Instruction:
         """An internal function to resolve instruction names.
 
@@ -707,7 +705,10 @@ class QuantumProgram(Displayable):
         [](api:Instruction)
             The resolved [](api:Instruction)
         """
-        ilbl = InstructionLabel.cast(inst_lbl)
+        # Always already an InstructionLabel: the sole caller passes
+        # inst_lbl straight from InstructionStack.pop_instruction().
+        assert isinstance(inst_lbl, InstructionLabel)
+        ilbl = inst_lbl
 
         if ilbl.instruction is not None:
             return ilbl.instruction
@@ -728,7 +729,7 @@ class QuantumProgram(Displayable):
 
         # Otherwise, we must be a patch instruction
         try:
-            patchdict = PatchDict.cast(frame["patches"])
+            patchdict = PatchDict(frame["patches"])
         except KeyError:
             raise RuntimeError(
                 f"'patches' not available in last frame for resolving {ilbl}"

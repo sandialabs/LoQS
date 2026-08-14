@@ -42,11 +42,11 @@ from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
 from loqs.core.instructions.instructionlabel import (
     InstructionLabel,
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 from loqs.core.instructions.instructionstack import (
     InstructionStack,
-    InstructionStackCastableTypes,
+    InstructionStackLike,
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import (
@@ -57,7 +57,7 @@ from loqs.core.recordables import (
 )
 from loqs.core.syndromelabel import (
     SyndromeLabel,
-    SyndromeLabelCastableTypes,
+    SyndromeLabelLike,
 )
 
 # Conditional imports for PyGSTi
@@ -83,7 +83,7 @@ else:
 
 
 def build_composite_instruction(
-    instructions: Sequence[InstructionLabelCastableTypes],
+    instructions: Sequence[InstructionLabelLike],
     extra_data: KwargDict | None = None,
     name: str = "(Unnamed composite instruction)",
 ) -> Instruction:
@@ -172,7 +172,7 @@ def build_composite_instruction(
                     inst_or_label, patch_label, inst_kwargs=kwargs
                 )
             else:
-                inst_or_label = InstructionLabel.cast(inst_or_label)
+                inst_or_label = InstructionLabel.from_raw(inst_or_label)
                 new_kwargs = kwargs.copy()
                 new_kwargs.update(inst_or_label.inst_kwargs)
                 first_entry = (
@@ -228,7 +228,7 @@ def build_composite_instruction(
 
 def build_lookup_decoder_instruction(
     lookup_table: Mapping[str, str],
-    syndrome_labels: Sequence[SyndromeLabelCastableTypes],
+    syndrome_labels: Sequence[SyndromeLabelLike],
     raw_syndrome_frame_key: str,
     diff_prev_syndrome: bool = True,
     name: str = "(Unnamed lookup decoder)",
@@ -438,7 +438,7 @@ def build_lookup_decoder_instruction(
         return frame
 
     # We store lookup table and syndrome labels
-    cast_labels = [SyndromeLabel.cast(sl) for sl in syndrome_labels]
+    cast_labels = [SyndromeLabel.from_raw(sl) for sl in syndrome_labels]
     data = {
         "lookup_table": dict(lookup_table),
         "syndrome_labels": cast_labels,
@@ -971,7 +971,7 @@ def build_physical_circuit_instruction(
     >>> inst = build_physical_circuit_instruction(circuit=circ, name="PhysCirc")
     >>> inst.name
     'PhysCirc'
-    >>> model = DictNoiseModel(({}, {}), gatereps=[UnitaryGateRep], instreps=[ZBasisProjectionInstrumentRep])
+    >>> model = DictNoiseModel({}, {}, gatereps=[UnitaryGateRep], instreps=[ZBasisProjectionInstrumentRep])
     >>> state = NumpyStatevectorQuantumState(2, qubit_labels=[0, 1])
     >>> patches = PatchDict()
     >>> f = inst.apply(
@@ -1153,7 +1153,7 @@ def build_physical_circuit_instruction(
 
 
 def build_repeat_until_success_instruction(
-    instructions: InstructionStackCastableTypes,
+    instructions: InstructionStackLike,
     rus_key: str,
     test_frame_key: str = "rus_success",
     expected: object = True,
@@ -1241,7 +1241,7 @@ def build_repeat_until_success_instruction(
         rus_key: str,
         patch_label: str,
         repeat_count: int,
-        instructions: InstructionStackCastableTypes,
+        instructions: InstructionStackLike,
         max_repeats: int,
         stack: InstructionStack,
     ) -> Frame:
@@ -1258,9 +1258,8 @@ def build_repeat_until_success_instruction(
                 "Hit max repeats in repeat-until-success instruction"
             )
 
-        # TODO: InstructionStack cast misbehaved, track that down
-        # new_labels = InstructionStack.cast(instructions)._instructions
-        new_labels = [InstructionLabel.cast(ilbl) for ilbl in instructions]
+        # Build InstructionLabels for each raw instruction spec.
+        new_labels = list(InstructionStack(instructions))
 
         # Create a new RUS label with updated count
         rus_label = InstructionLabel(

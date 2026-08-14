@@ -45,7 +45,7 @@ from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionlabel import (
     InstructionLabel,
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
@@ -710,7 +710,7 @@ def create_ideal_model(  # noqa: C901
         inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
-            (gate_dict, inst_dict), gatereps=[gaterep], instreps=[instrep]
+            gate_dict, inst_dict, gatereps=[gaterep], instreps=[instrep]
         )
 
     elif issubclass(model_backend, BaseNoiseModel):
@@ -1118,7 +1118,7 @@ def _create_adaptive_measure_instruction_part_I(
         # Do classical feed forward
         if F1 == 0:
             # We go to part II (forward reference, must match key later)
-            ilbls: list[InstructionLabelCastableTypes] = [
+            ilbls: list[InstructionLabelLike] = [
                 ("FT Logical X Measure Part II Circuit", patch_label),
                 ("FT Logical X Measure Part II Feed-Forward", patch_label),
             ]
@@ -1142,7 +1142,7 @@ def _create_adaptive_measure_instruction_part_I(
             ]
 
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel.cast(ilbl)
+            new_label = InstructionLabel(*ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         return Frame(
@@ -1326,7 +1326,7 @@ def _create_adaptive_measure_instruction_part_II(
             )
         elif inferred_M1 == inferred_M2:
             # We go to part III (forward reference, must match key later)
-            ilbls: list[InstructionLabelCastableTypes] = [
+            ilbls: list[InstructionLabelLike] = [
                 ("FT Logical X Measure Part III Circuit", patch_label),
                 ("FT Logical X Measure Part III Feed-Forward", patch_label),
             ]
@@ -1346,7 +1346,7 @@ def _create_adaptive_measure_instruction_part_II(
 
         # We need to make sure and feed the patch label forward
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel.cast(ilbl)
+            new_label = InstructionLabel(*ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
@@ -1563,7 +1563,7 @@ def _create_adaptive_measure_instruction_part_III(
 
         # We need to make sure and feed the patch label forward
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel.cast(ilbl)
+            new_label = InstructionLabel(*ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
@@ -1826,7 +1826,7 @@ def _create_unflagged_QEC_instruction(
         # Extract syndrome across multiple historical check frames using SyndromeLabel
         syndrome_labels_raw = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
         syndrome_labels = [
-            SyndromeLabel.cast(lbl) for lbl in syndrome_labels_raw
+            SyndromeLabel(*lbl) for lbl in syndrome_labels_raw
         ]
         syndrome: list[int] = []
         for synlbl in syndrome_labels:

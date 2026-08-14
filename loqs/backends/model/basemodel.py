@@ -16,10 +16,10 @@ from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
-from loqs.internal import Castable, Displayable
+from loqs.internal import Displayable
 
 
-class BaseNoiseModel(Castable, Displayable):
+class BaseNoiseModel(Displayable):
     """Base class for an object that holds noisy operation specifications.
 
     This class is primarily designed to translate between a circuit description

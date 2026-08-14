@@ -16,7 +16,7 @@ import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
-from loqs.internal import Castable, Displayable
+from loqs.internal import Displayable
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
@@ -25,7 +25,7 @@ OutcomeDict: TypeAlias = dict[str | int, list[int]]
 """A type alias for outcome dictionaries."""
 
 
-class BaseQuantumState(Castable, Displayable):
+class BaseQuantumState(Displayable):
     """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str]

@@ -20,7 +20,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 from loqs.core import QuantumProgram
 from loqs.core.history import HistoryCollectDataArgsType
 from loqs.core.instructions.instructionlabel import (
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
 
 try:
@@ -41,7 +41,7 @@ def convert_edesign_to_programs(
     edesign: ExperimentDesign,
     model: ExplicitOpModel,
     physical_to_logical: Mapping[
-        str | tuple, list[InstructionLabelCastableTypes]
+        str | tuple, list[InstructionLabelLike]
     ],
     **kwargs,
 ) -> list[QuantumProgram]:
@@ -56,9 +56,9 @@ def convert_edesign_to_programs(
         pyGSTi model for the edesign. Currently only used
         for `model.complete_circuit`, to be removed soon.
 
-    physical_to_logical : Mapping[str | tuple, list[InstructionLabelCastableTypes]]
+    physical_to_logical : Mapping[str | tuple, list[InstructionLabelLike]]
         A mapping from pyGSTi physical circuit labels to
-        [](api:InstructionStackCastableTypes) to build up
+        [](api:InstructionStackLike) to build up
         the [](api:InstructionStack) for each program.
 
     **kwargs : Any

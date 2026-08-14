@@ -36,7 +36,7 @@ else:
 QubitTypes: TypeAlias = str | int
 """Qubit types for builtins"""
 
-STIMCircuitCastableTypes: TypeAlias = BasePhysicalCircuit | str | _Circuit
+STIMCircuitLike: TypeAlias = BasePhysicalCircuit | str | _Circuit
 """Types we can cast to a STIM circuit."""
 
 r"""
@@ -404,7 +404,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: STIMCircuitCastableTypes,
+        circuit: STIMCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         suppress_tick_warning: bool = False,
     ) -> None:
@@ -577,7 +577,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idx:
             Starting index to begin insert. If -1, append to the end.
         """
-        other_circuit = STIMPhysicalCircuit.cast(circuit)
+        other_circuit = STIMPhysicalCircuit(circuit)
 
         unrolled = self._unroll_repeats()
         layers = unrolled.split("TICK\n")
@@ -621,7 +621,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idx : int
             Layer index to start merge
         """
-        other_circuit = STIMPhysicalCircuit.cast(circuit)
+        other_circuit = STIMPhysicalCircuit(circuit)
 
         # Build index map for the other circuit
         index_map = {}

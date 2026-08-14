@@ -64,7 +64,7 @@ else:
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
-PyGSTiModelCastableTypes: TypeAlias = (
+PyGSTiModelLike: TypeAlias = (
     ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
 )
 """Types of pyGSTi models this backend can handle"""
@@ -263,7 +263,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     def __init__(
         self,
-        model: PyGSTiModelCastableTypes,
+        model: PyGSTiModelLike,
         qubit_aliases: Mapping | Sequence | None = None,
         zbasis_proj_resets: bool = True,
         use_time_dependence: bool = False,
@@ -586,10 +586,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         gatereps: Sequence[type[GateRep]],
         instreps: Sequence[type[InstrumentRep]],
     ) -> list[OperationRep]:
-        # Get bare circuit
+        # Get bare circuit (avoiding a redundant copy if it's already the
+        # right type).
         from loqs.backends import PyGSTiPhysicalCircuit
 
-        circuit = PyGSTiPhysicalCircuit.cast(circuit)
+        if not isinstance(circuit, PyGSTiPhysicalCircuit):
+            circuit = PyGSTiPhysicalCircuit(circuit)
         pygsti_circuit = circuit.circuit
 
         # Iterate through circuit and pull out representations

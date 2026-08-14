@@ -42,23 +42,16 @@ class TestPyGSTiPhysicalCircuit:
         pc2 = PhysCirc(pc)
         self._check(pc2, self.test_circ)
 
-        # We can also test our casting function since this IsCastable
-        pc = PhysCirc.cast(self.test_circ)
-        self._check(pc, self.test_circ)
-
-        pc2 = PhysCirc.cast(pc)
-        self._check(pc2, self.test_circ)
-
         # We should also be able to do string versions and just layers
-        pc = PhysCirc.cast(repr(self.test_circ)[8:-2])
+        pc = PhysCirc(repr(self.test_circ)[8:-2])
         self._check(pc, self.test_circ)
 
-        pc = PhysCirc.cast(self.test_circ.layertup)
+        pc = PhysCirc(self.test_circ.layertup)
         self._check(pc, self.test_circ)
 
         # Test failure raises error
         with pytest.raises(ValueError):
-            PhysCirc.cast(None)
+            PhysCirc(None) # type: ignore
 
     def test_init_raises_import_error_when_unavailable(self):
         original = backends_module._backend_availability["pygsti_circuit"]

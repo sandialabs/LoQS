@@ -43,7 +43,6 @@ from loqs.backends.reps.legacy import (
     upgrade_legacy_gaterep_tag,
     upgrade_legacy_instrumentrep_tag,
 )
-from loqs.internal import SeqCastable
 from loqs.internal.serializable import Serializable
 
 # `STIMPhysicalCircuit` is used opportunistically, not required: `dictmodel`
@@ -62,10 +61,6 @@ else:
 
 T = TypeVar("T", bound="DictNoiseModel")
 
-# Type aliases for static type checking
-DictModelCastableTypes: TypeAlias = BaseNoiseModel | tuple[Mapping, Mapping]
-"""Types of objects this backend can cast to dict models"""
-
 MemberLabel: TypeAlias = str | tuple[str, tuple[str | int, ...]]
 
 _NON_ARRAY_GATEREPS: tuple[type[GateRep], ...] = (
@@ -81,7 +76,7 @@ cannot be structurally distinguished from each other by shape alone.
 """
 
 
-class DictNoiseModel(BaseNoiseModel, SeqCastable):
+class DictNoiseModel(BaseNoiseModel):
     """Model backend for handling generic operation dicts.
 
     This natively handles both [](api:ListPhysicalCircuit) circuits (via a
@@ -103,7 +98,8 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
     def __init__(  # noqa: C901
         self,
-        model_or_dicts: DictModelCastableTypes,
+        gate_dict: Mapping | None = None,
+        inst_dict: Mapping | None = None,
         gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
         instreps: Sequence[type[InstrumentRep]] = (ZBasisProjectionInstrumentRep,),
         gaterep_array_cast_rep: type[GateRep] = QSimSuperopGateRep,
@@ -114,8 +110,13 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
 
         Parameters
         ----------
-        model_or_dicts:
-            A model to convert or pair of dictionaries to use
+        gate_dict:
+            See [](api:gate_dict). Defaults to `None`, which uses an
+            empty `dict`.
+
+        inst_dict:
+            See [](api:inst_dict). Defaults to `None`, which uses an
+            empty `dict`.
 
         gatereps:
             [](api:GateRep) classes this model will return
@@ -147,35 +148,8 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         # NOTE: We set self.gate_dict and self.inst_dict at the end of this
         #  function. The next two variables are like gate_dict and inst_dict,
         #  but have more lax types.
-        gate_dict: dict[MemberLabel, Any] = {}
-        inst_dict: dict[MemberLabel, Any] = {}
-
-        if isinstance(model_or_dicts, DictNoiseModel):
-            gate_dict = model_or_dicts.gate_dict.copy()
-            inst_dict = model_or_dicts.inst_dict.copy()
-        elif type(model_or_dicts).__name__ == "PyGSTiNoiseModel":
-            pygsti_model: Any = model_or_dicts
-            for gate_key in pygsti_model.gate_keys:
-                label = (gate_key.name, gate_key.qubits)
-                circ = ListPhysicalCircuit([[label]])
-                gate_dict[label] = pygsti_model.get_reps(
-                    circ, gatereps=gatereps, instreps=instreps
-                )[0][0]
-
-            for inst_key in pygsti_model.instrument_keys:
-                label = (inst_key.name, inst_key.qubits)
-                circ = ListPhysicalCircuit([[label]])
-                inst_dict[label] = pygsti_model.get_reps(
-                    circ, gatereps=gatereps, instreps=instreps
-                )[0][0]
-
-        elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
-            gate_dict = dict(model_or_dicts[0])
-            inst_dict = dict(model_or_dicts[1])
-        else:
-            raise TypeError(
-                "Can only other NoiseModels or a 2-tuple of gate/inst dicts"
-            )
+        gate_dict = dict(gate_dict) if gate_dict is not None else {}
+        inst_dict = dict(inst_dict) if inst_dict is not None else {}
 
         self._gatereps = list(gatereps)
         self._instreps = list(instreps)
@@ -250,6 +224,72 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         # TODO: Crosstalk specification?
         return
 
+    @classmethod
+    def from_model(
+        cls: type[T],
+        model: BaseNoiseModel,
+        gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
+        instreps: Sequence[type[InstrumentRep]] = (ZBasisProjectionInstrumentRep,),
+        **kwargs,
+    ) -> T:
+        """Build a [](api:DictNoiseModel) by converting an existing model.
+
+        Unlike [](api:DictNoiseModel.__init__) (which takes already
+        laid-out `gate_dict`/`inst_dict` mappings), this converts between
+        two already fully-built model objects: either copying another
+        [](api:DictNoiseModel)'s dicts, or building fresh ones from a
+        `PyGSTiNoiseModel` (matched by `type(model).__name__` rather than
+        `isinstance`, so this works without hard-requiring `pygsti` to be
+        importable).
+
+        Parameters
+        ----------
+        model:
+            The model to convert from.
+
+        gatereps:
+            [](api:GateRep) classes this model will return. Also used
+            when querying `model`'s own representations, if `model` is a
+            `PyGSTiNoiseModel`.
+
+        instreps:
+            [](api:InstrumentRep) classes this model will return. Also
+            used when querying `model`'s own representations, if `model`
+            is a `PyGSTiNoiseModel`.
+
+        **kwargs:
+            Forwarded to [](api:DictNoiseModel.__init__).
+
+        Returns
+        -------
+            A [](api:DictNoiseModel) equivalent to `model`.
+        """
+        gate_dict: dict[MemberLabel, Any] = {}
+        inst_dict: dict[MemberLabel, Any] = {}
+
+        if isinstance(model, DictNoiseModel):
+            gate_dict = model.gate_dict.copy()
+            inst_dict = model.inst_dict.copy()
+        elif type(model).__name__ == "PyGSTiNoiseModel":
+            pygsti_model: Any = model
+            for gate_key in pygsti_model.gate_keys:
+                label = (gate_key.name, gate_key.qubits)
+                circ = ListPhysicalCircuit([[label]])
+                gate_dict[label] = pygsti_model.get_reps(
+                    circ, gatereps=gatereps, instreps=instreps
+                )[0][0]
+
+            for inst_key in pygsti_model.instrument_keys:
+                label = (inst_key.name, inst_key.qubits)
+                circ = ListPhysicalCircuit([[label]])
+                inst_dict[label] = pygsti_model.get_reps(
+                    circ, gatereps=gatereps, instreps=instreps
+                )[0][0]
+        else:
+            raise TypeError("Can only convert from other NoiseModels")
+
+        return cls(gate_dict, inst_dict, gatereps=gatereps, instreps=instreps, **kwargs)
+
     @property
     def gate_keys(self) -> list:
         return list(self.gate_dict.keys())
@@ -302,8 +342,10 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         list
             List of operation representations for the circuit
         """
-        # Get builtin circuit for easy processing
-        circuit = ListPhysicalCircuit.cast(circuit)
+        # Get builtin circuit for easy processing (avoiding a redundant
+        # copy if it's already the right type).
+        if not isinstance(circuit, ListPhysicalCircuit):
+            circuit = ListPhysicalCircuit(circuit)
 
         # Iterate through circuit and pull out representations
         reps = []
@@ -352,7 +394,7 @@ class DictNoiseModel(BaseNoiseModel, SeqCastable):
         instreps = [
             upgrade_legacy_instrumentrep_tag(v) for v in attr_dict["_instreps"]
         ]
-        return cls((gate_dict, inst_dict), gatereps, instreps)
+        return cls(gate_dict, inst_dict, gatereps, instreps)
 
 
 def _merge_common_rep(
