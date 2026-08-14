@@ -226,7 +226,10 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         qubits: Sequence[QubitTypes],
         idle_names: Sequence[str],
     ) -> None:
-        reference = PyGSTiPhysicalCircuit.cast(reference)
+        # Convert the reference to this class, avoiding a redundant copy if
+        # it's already the right type (reference is only ever read below).
+        if not isinstance(reference, PyGSTiPhysicalCircuit):
+            reference = PyGSTiPhysicalCircuit(reference)
         idle_names = set(idle_names)
         ref_circuit = reference.circuit
 

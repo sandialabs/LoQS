@@ -698,7 +698,10 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         qubits: Sequence[QubitTypes],
         idle_names: Sequence[str],
     ) -> None:
-        reference = STIMPhysicalCircuit.cast(reference)
+        # Convert the reference to this class, avoiding a redundant copy if
+        # it's already the right type (reference is only ever read below).
+        if not isinstance(reference, STIMPhysicalCircuit):
+            reference = STIMPhysicalCircuit(reference)
         idle_names = set(idle_names)
         qubits = set(qubits)
 

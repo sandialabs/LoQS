@@ -269,7 +269,10 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         qubits: Sequence[QubitTypes],
         idle_names: Sequence[str],
     ) -> None:
-        reference = ListPhysicalCircuit.cast(reference)
+        # Convert the reference to this class, avoiding a redundant copy if
+        # it's already the right type (reference is only ever read below).
+        if not isinstance(reference, ListPhysicalCircuit):
+            reference = ListPhysicalCircuit(reference)
         idle_names = set(idle_names)
 
         for qubit in qubits:
