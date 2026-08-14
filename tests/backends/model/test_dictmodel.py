@@ -47,11 +47,6 @@ except ImportError:
     NO_STIM = True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters, and .from_model does not exist yet",
-)
 class TestConstruction:
     def test_from_separate_dicts(self):
         model = DictNoiseModel({}, {})
@@ -107,11 +102,6 @@ class TestConstruction:
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters",
-)
 class TestGateDispatch:
     def test_ndarray_uses_gaterep_array_cast_rep(self):
         model = DictNoiseModel(
@@ -169,11 +159,6 @@ class TestGateDispatch:
             DictNoiseModel({("X", ("Q0",)): ("not", "a", "valid", "shape")}, {})
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters",
-)
 class TestInstrumentDispatch:
     def test_bare_string_becomes_stim_circuit_str(self):
         model = DictNoiseModel({}, {("M", ("Q0",)): "M 0"})
@@ -254,11 +239,6 @@ class TestInstrumentDispatch:
             )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters",
-)
 class TestGetReps:
     def test_exact_label_match(self):
         model = DictNoiseModel({("X", ("Q0",)): np.eye(4)}, {})
@@ -344,11 +324,6 @@ class TestDictModelFixtureRoundTrip:
 
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters",
-)
 class TestSTIMGetReps:
     """`DictNoiseModel.get_reps`'s `STIMPhysicalCircuit`-registered
     implementation (formerly `STIMDictNoiseModel.get_reps`)."""

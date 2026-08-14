@@ -22,11 +22,6 @@ class TestMeasurementOutcomes:
         with pytest.raises(AssertionError):
             PatchDict({"key": "not a patch"}) # type: ignore
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="PatchDict.__init__'s existing-instance branch reads "
-        "self.patches before it is ever assigned",
-    )
     def test_init_from_existing_patchdict(self):
         code = QECCode({}, ["Q0", "Q1"], ["Q0"])
         patch1 = code.create_patch(["D0", "A0"])

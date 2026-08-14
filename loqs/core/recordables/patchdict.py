@@ -65,7 +65,7 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
             patches = {}
 
         if isinstance(patches, PatchDict):
-            self.patches = self.patches
+            self.patches = dict(patches.patches)
         else:
             assert all([isinstance(k, str) for k in patches.keys()])
             assert all([isinstance(v, QECCodePatch) for v in patches.values()])

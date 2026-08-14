@@ -42,11 +42,6 @@ class TestFrame:
         with pytest.raises(ValueError):
             Frame([1, 2, 3]) # type: ignore
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Frame.__init__'s existing-instance branch resets "
-        "_expired_keys/_no_serialize_keys instead of copying them",
-    )
     def test_init_from_existing_frame_preserves_expiry_and_no_serialize(self):
         f1 = Frame({"a": 1, "b": 2, "c": 3})
         f1.expire("a")

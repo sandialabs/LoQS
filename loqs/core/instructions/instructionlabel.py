@@ -189,6 +189,32 @@ class InstructionLabel(SeqCastable, Displayable):
         -------
             A [](api:InstructionLabel) object
         """
+        return cls.from_raw(obj)
+
+    @classmethod
+    def from_raw(cls, obj: object) -> InstructionLabel:
+        """Build an [](api:InstructionLabel) from a loosely-typed raw value.
+
+        Several call sites hand this class a genuinely ambiguous raw
+        blob -- a bare `str`/[](api:Instruction), a variable-length tuple
+        to unpack, an already-built [](api:InstructionLabel), or a kwarg
+        dict -- which a constructor's positional-argument signature alone
+        cannot disambiguate (in particular, it cannot un-blob a tuple
+        handed to it as a single object).
+
+        Parameters
+        ----------
+        obj:
+            A raw value that is either:
+            - Already an [](api:InstructionLabel) object
+            - A kwarg dict that is passed into the constructor
+            - A sequence of the arguments of the
+            [](api:InstructionLabel) constructor
+
+        Returns
+        -------
+            An [](api:InstructionLabel) object
+        """
         if isinstance(obj, InstructionLabel):
             # We are already the correct class, perform no copy
             return obj

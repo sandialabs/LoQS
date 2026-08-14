@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, TypeVar
 
@@ -46,3 +47,39 @@ class SyndromeLabel(Castable, Displayable):
     Defaults to 0, the first outcome on [](api:qubit_label).
     Could be >0 if multiple checks were measured on [](api:qubit_label).
     """
+
+    @classmethod
+    def from_raw(cls, obj: object) -> SyndromeLabel:
+        """Build a [](api:SyndromeLabel) from a loosely-typed raw value.
+
+        Several call sites hand this class a genuinely ambiguous raw
+        blob -- a bare `str`, a variable-length tuple to unpack, or an
+        already-built [](api:SyndromeLabel) -- which a constructor's
+        positional-argument signature alone cannot disambiguate.
+
+        Parameters
+        ----------
+        obj:
+            A raw value that is either:
+            - Already a [](api:SyndromeLabel) object
+            - A kwarg dict that is passed into the constructor
+            - A sequence of the arguments of the
+            [](api:SyndromeLabel) constructor
+            - A bare `qubit_label`
+
+        Returns
+        -------
+            A [](api:SyndromeLabel) object
+        """
+        if isinstance(obj, SyndromeLabel):
+            # We are already the correct class, perform no copy
+            return obj
+        elif isinstance(obj, Mapping):
+            # Assume this is a kwarg dict, pass in all kwargs
+            return cls(**obj)
+        elif isinstance(obj, Sequence) and not isinstance(obj, str):
+            # Assume this is a tuple of arguments, pass all in
+            return cls(*obj)
+
+        # Otherwise, assume this is the bare qubit_label
+        return cls(obj)  # type: ignore

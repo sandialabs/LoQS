@@ -12,9 +12,6 @@ class TestSyndromeLabel:
         assert l.frame_idx == fi
         assert l.outcome_idx == oi
 
-    @pytest.mark.xfail(
-        strict=True, reason="SyndromeLabel.from_raw does not exist yet"
-    )
     def test_init(self):
         l = SyndromeLabel("Q0", 1, 2)
         self._check(l, "Q0", 1, 2)

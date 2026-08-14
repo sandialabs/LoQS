@@ -21,6 +21,16 @@ from loqs.internal import SeqCastable, Displayable
 
 T = TypeVar("T", bound="History")
 
+
+class _Unset:
+    """Sentinel distinguishing "caller didn't pass this" from an explicit
+    `None`, so [](api:History.__init__) can tell whether to adopt a source
+    [](api:History)'s key-set as-is or to use the value the caller gave.
+    """
+
+
+_UNSET = _Unset()
+
 HistoryCastableTypes: TypeAlias = (
     "History | FrameCastableTypes | Sequence[FrameCastableTypes] | None"
 )
@@ -126,14 +136,18 @@ class History(Sequence[Frame], SeqCastable, Displayable):
     def __init__(
         self,
         history: HistoryCastableTypes = None,
-        expiring_keys: Sequence[str] | None = ("state",),
-        propagating_keys: Sequence[str] | None = (
-            "state",
-            "patches",
-        ),
-        no_serialize_keys: Sequence[str] | None = None,
+        expiring_keys: Sequence[str] | None | _Unset = _UNSET,
+        propagating_keys: Sequence[str] | None | _Unset = _UNSET,
+        no_serialize_keys: Sequence[str] | None | _Unset = _UNSET,
     ) -> None:
         """
+        Each of `expiring_keys`/`propagating_keys`/`no_serialize_keys` has
+        a two-part default: if not passed at all, it adopts `history`'s own
+        value as-is when `history` is an existing [](api:History) (empty
+        otherwise), but an explicitly passed value (including `None`, for
+        an empty set) always replaces rather than merges with `history`'s
+        own keys.
+
         Parameters
         ----------
         history:
@@ -141,61 +155,58 @@ class History(Sequence[Frame], SeqCastable, Displayable):
             which initializes an empty list.
 
         expiring_keys:
-            A list of keys that should "expire" when a new
-            [](api:Frame) is added. Specifically, it calls
-            [](api:Frame.expire) on old frames when a new
-            frame containing that key is added.
-            It defaults to `["state"]`, assuming that the
-            quantum state is being propagated in-place.
+            Keys that should "expire" when a new [](api:Frame) is added,
+            i.e. [](api:Frame.expire) is called on old frames when a new
+            frame containing that key is added. Defaults to `["state"]`
+            (assuming the quantum state is propagated in-place) unless
+            adopted from `history`; see above.
 
         propagating_keys:
-            A list of keys that should be added to an
-            incoming [](api:Frame) if it does not already
-            have it.
-            The default is `["state", "patches"]`, ensuring
-            that the most up-to-date BaseQuantumState
-            and PatchDict are always available in the
-            last frame.
-            Common other additions including syndrome bits
-            for decoders that require the previous syndrome.
+            Keys that should be added to an incoming [](api:Frame) if it
+            does not already have it. Defaults to `["state", "patches"]`
+            (keeping the most up-to-date BaseQuantumState and PatchDict
+            available in the last frame; other common additions include
+            syndrome bits for decoders that need the previous syndrome)
+            unless adopted from `history`; see above.
 
         no_serialize_keys:
-            A list of keys that should not be serialized by
-            each [](api:Frame). Specifically, it calls
-            [](api:Frame.no_serialize) on frames as they
-            are added.
-            It defaults to `None`, but a common choice would
-            also be `["state"]` in cases where the quantum
-            state is large or there is no need to keep it,
-            i.e. no plans to rerun a shot starting from that point.
+            Keys that should not be serialized by each [](api:Frame),
+            i.e. [](api:Frame.no_serialize) is called on frames as they
+            are added. Defaults to an empty set (a common explicit choice
+            is `["state"]` when the quantum state is large or there are no
+            plans to rerun a shot from that point) unless adopted from
+            `history`; see above.
         """
         self._history = []
-
-        if expiring_keys is None:
-            expiring_keys = []
-        self.expiring_keys = set(expiring_keys)
         self._expiring_key_locs: dict[str, int] = {}
 
-        if propagating_keys is None:
-            propagating_keys = []
-        self.propagating_keys = set(propagating_keys)
+        source = history if isinstance(history, History) else None
 
-        if no_serialize_keys is None:
-            no_serialize_keys = []
-        self.no_serialize_keys = set(no_serialize_keys)
+        def resolve(given, source_keys, default):
+            if given is not _UNSET:
+                return set(given) if given is not None else set()
+            if source is not None:
+                return set(source_keys)
+            return set(default)
+
+        self.expiring_keys = resolve(
+            expiring_keys,
+            source.expiring_keys if source is not None else None,
+            ("state",),
+        )
+        self.propagating_keys = resolve(
+            propagating_keys,
+            source.propagating_keys if source is not None else None,
+            ("state", "patches"),
+        )
+        self.no_serialize_keys = resolve(
+            no_serialize_keys,
+            source.no_serialize_keys if source is not None else None,
+            (),
+        )
 
         if isinstance(history, History):
             self._history = history._history.copy()
-            # Take union of expiring/propagating keys
-            self.expiring_keys = self.expiring_keys.union(
-                history.expiring_keys
-            )
-            self.propagating_keys = self.propagating_keys.union(
-                history.propagating_keys
-            )
-            self.no_serialize_keys = self.no_serialize_keys.union(
-                history.no_serialize_keys
-            )
         elif isinstance(history, Sequence):
             for frame in history:
                 frame = Frame.cast(frame)

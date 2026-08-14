@@ -146,11 +146,6 @@ class TestLazyBackendImportErrors:
 _X = np.array([[0, 1], [1, 0]], dtype=complex)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters",
-)
 class TestPropagateState:
     def _build_model_and_state(self, instreps):
         model = DictNoiseModel(

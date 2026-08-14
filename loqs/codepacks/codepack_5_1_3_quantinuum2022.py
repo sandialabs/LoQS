@@ -710,7 +710,7 @@ def create_ideal_model(  # noqa: C901
         inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
-            (gate_dict, inst_dict), gatereps=[gaterep], instreps=[instrep]
+            gate_dict, inst_dict, gatereps=[gaterep], instreps=[instrep]
         )
 
     elif issubclass(model_backend, BaseNoiseModel):

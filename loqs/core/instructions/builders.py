@@ -971,7 +971,7 @@ def build_physical_circuit_instruction(
     >>> inst = build_physical_circuit_instruction(circuit=circ, name="PhysCirc")
     >>> inst.name
     'PhysCirc'
-    >>> model = DictNoiseModel(({}, {}), gatereps=[UnitaryGateRep], instreps=[ZBasisProjectionInstrumentRep])
+    >>> model = DictNoiseModel({}, {}, gatereps=[UnitaryGateRep], instreps=[ZBasisProjectionInstrumentRep])
     >>> state = NumpyStatevectorQuantumState(2, qubit_labels=[0, 1])
     >>> patches = PatchDict()
     >>> f = inst.apply(

@@ -72,14 +72,15 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         if isinstance(data, Frame):
             self._data = deepcopy(data._data)
             self.log = data.log if log == "N/A" else log
+            self._expired_keys = data._expired_keys.copy()
+            self._no_serialize_keys = data._no_serialize_keys.copy()
         elif isinstance(data, Mapping):
             self._data = dict(data)
             self.log = log
+            self._expired_keys = []
+            self._no_serialize_keys = []
         else:
             raise ValueError(f"Cannot cast {data} to a HistoryFrame")
-
-        self._expired_keys: list[str] = []
-        self._no_serialize_keys: list[str] = []
 
     # We define this one to avoid __getitem__ warning until value is actually returned
     def __contains__(self, key: object) -> bool:

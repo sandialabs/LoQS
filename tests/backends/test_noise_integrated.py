@@ -32,11 +32,6 @@ from loqs.core import QuantumProgram, QECCode
 from loqs.core.instructions import builders
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DictNoiseModel.__init__ does not yet accept gate_dict/inst_dict "
-    "as separate parameters",
-)
 class TestIntegratedNoise:
 
     def test_1q_depolarizing(self):

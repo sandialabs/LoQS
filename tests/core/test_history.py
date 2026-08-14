@@ -37,12 +37,6 @@ class TestHistory:
         with pytest.raises(ValueError):
             History([1, 2, 3]) # type: ignore
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="History.__init__'s existing-instance branch unions "
-        "expiring_keys/propagating_keys/no_serialize_keys with this "
-        "call's own defaults instead of adopting the source as-is",
-    )
     def test_init_from_existing_history_does_not_force_union_with_defaults(self):
         h = History([{"a": 1}], expiring_keys=[], propagating_keys=[])
         assert h.expiring_keys == set()

@@ -28,9 +28,6 @@ class TestInstructionLabel:
         else:
             assert ilbl.inst_kwargs == k
 
-    @pytest.mark.xfail(
-        strict=True, reason="InstructionLabel.from_raw does not exist yet"
-    )
     def test_init(self):
         ilbl = InstructionLabel("Label")
         self._check(ilbl, None, "Label", None, (), {})
