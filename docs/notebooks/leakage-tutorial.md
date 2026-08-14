@@ -41,7 +41,7 @@ from loqs.core.qeccode import QECCode
 from loqs.backends import ListPhysicalCircuit
 from loqs.backends.state.npsvstate import NumpyStatevectorQuantumState
 from loqs.backends.model import DictNoiseModel
-from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
+from loqs.backends.reps import KrausGateRep, ZBasisProjectionInstrumentRep
 
 def build_compute_parity_instruction(parity_key: str, aux_qubit: str) -> Instruction:
     """
@@ -142,8 +142,8 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
 
     noise_model = DictNoiseModel(
         (gate_dict, inst_dict),
-        gatereps=[GateRep.KRAUS_OPERATORS],
-        instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        gatereps=[KrausGateRep],
+        instreps=[ZBasisProjectionInstrumentRep]
     )
 
     instruction_stack = []
@@ -287,11 +287,15 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
     # Perfect 9x9 qutrit CZ gate
     cz_matrix = np.diag([1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0]).astype(complex)
 
+    # Each qutrit gate is 3x3 (or 9x9 for the joint 2-qutrit CZ), rather than
+    # the usual 2x2/4x4 for qubits, so we build the KrausGateRep objects
+    # explicitly with `dims` set, instead of relying on DictNoiseModel's
+    # automatic (qubit-only) array-to-rep casting.
     gate_dict = {
-        "H": [(h_matrix, None)],
-        "CZ": [(cz_matrix, None)],
-        "X": [(x_matrix, None)],
-        "Z": [(z_matrix, None)],
+        "H": KrausGateRep([(h_matrix, None)], dims=[3]),
+        "CZ": KrausGateRep([(cz_matrix, None)], dims=[3, 3]),
+        "X": KrausGateRep([(x_matrix, None)], dims=[3]),
+        "Z": KrausGateRep([(z_matrix, None)], dims=[3]),
     }
     inst_dict = {
         "Iz": (0, True) # Reset to 0 after measurement
@@ -299,8 +303,8 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
 
     noise_model = DictNoiseModel(
         (gate_dict, inst_dict),
-        gatereps=[GateRep.KRAUS_OPERATORS],
-        instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        gatereps=[KrausGateRep],
+        instreps=[ZBasisProjectionInstrumentRep]
     )
 
     instruction_stack = []
@@ -335,7 +339,7 @@ run_and_report_program(create_noiseless_leakage_program, d=3)
 
 ## Stage 3: Noisy leakage CZ modeling
 
-Now we import the post-gate leakage noise Kraus operators ($27 \times 9 \times 9$) from `kraus_ops.npy` and compose them with the perfect $9 \times 9$ noiseless `CZ` using `compose_kraus_reptuples`. 
+Now we construct a post-gate leakage channel -- each qutrit independently has some probability of leaking from $|1\rangle$ to $|2\rangle$ -- and compose it with the perfect $9 \times 9$ noiseless `CZ` using [](api:KrausGateRep.compose).
 
 This simulates physical post-gate noise acting on the qutrit CZ gate.
 
@@ -404,41 +408,35 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
 
     # Perfect 9x9 noiseless qutrit CZ
     cz_matrix = np.diag([1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0]).astype(complex)
-    rt_ideal_cz = RepTuple([(cz_matrix, None)], (), GateRep.KRAUS_OPERATORS)
+    ideal_cz = KrausGateRep([(cz_matrix, None)], dims=[3, 3])
 
-    # Load post-gate leakage noise from kraus_ops.npy
-    import os
-    try:
-        # Check several directories to be portable (including docs/notebooks/ to find examples/Jordan-leakage/)
-        possible_paths = [
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "kraus_ops.npy"),
-            "kraus_ops.npy",
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../examples/Jordan-leakage/kraus_ops.npy"),
-            os.path.join(os.getcwd(), "examples/Jordan-leakage/kraus_ops.npy"),
-            "/workspaces/LoQS-opencode/examples/Jordan-leakage/kraus_ops.npy"
-        ]
-        kraus_ops_path = None
-        for p in possible_paths:
-            if os.path.exists(p):
-                kraus_ops_path = p
-                break
-        if kraus_ops_path is None:
-            raise FileNotFoundError("Could not find kraus_ops.npy in any of the search paths")
-    except NameError:
-        kraus_ops_path = "examples/Jordan-leakage/kraus_ops.npy"
-        
-    kraus_ops = np.load(kraus_ops_path)
-    rt_noise_cz = RepTuple([(K, None) for K in kraus_ops], (), GateRep.KRAUS_OPERATORS)
+    # Post-gate leakage noise: each qutrit independently has probability
+    # `leak_prob` of leaking from |1> to |2> (analogous to amplitude
+    # damping, but into the leakage level instead of |0>). K0 leaves |0>
+    # and |2> alone and shrinks |1> by sqrt(1 - leak_prob); K1 moves the
+    # leaked amplitude from |1> to |2>. Together they form a 1-qutrit,
+    # trace-preserving channel.
+    leak_prob = 0.05
+    K0 = np.diag([1.0, np.sqrt(1 - leak_prob), 1.0]).astype(complex)
+    K1 = np.zeros((3, 3), dtype=complex)
+    K1[2, 1] = np.sqrt(leak_prob)
 
-    # Compose them using compose_kraus_reptuples
-    from loqs.tools.reptools import compose_kraus_reptuples
-    rt_combined_cz = compose_kraus_reptuples(rt_ideal_cz, rt_noise_cz, dedup=True)
+    # The joint 2-qutrit post-gate channel is this leakage applied
+    # independently to both qutrits, i.e. every pairing of the two
+    # single-qutrit Kraus operators, tensored together.
+    noise_cz = KrausGateRep(
+        [(np.kron(Ka, Kb), None) for Ka in (K0, K1) for Kb in (K0, K1)],
+        dims=[3, 3],
+    )
+
+    # Compose the ideal CZ with the post-gate noise channel
+    combined_cz = ideal_cz.compose(noise_cz, dedup=True)
 
     gate_dict = {
-        "H": [(h_matrix, None)],
-        "CZ": rt_combined_cz,
-        "X": [(x_matrix, None)],
-        "Z": [(z_matrix, None)],
+        "H": KrausGateRep([(h_matrix, None)], dims=[3]),
+        "CZ": combined_cz,
+        "X": KrausGateRep([(x_matrix, None)], dims=[3]),
+        "Z": KrausGateRep([(z_matrix, None)], dims=[3]),
     }
     inst_dict = {
         "Iz": (0, True)
@@ -446,8 +444,8 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
 
     noise_model = DictNoiseModel(
         (gate_dict, inst_dict),
-        gatereps=[GateRep.KRAUS_OPERATORS],
-        instreps=[InstrumentRep.ZBASIS_PROJECTION]
+        gatereps=[KrausGateRep],
+        instreps=[ZBasisProjectionInstrumentRep]
     )
 
     instruction_stack = []
