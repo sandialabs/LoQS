@@ -358,10 +358,12 @@ class TestEncoderParameterized:
                 assert encoded_str["encode_type"] == "primitive"
                 assert encoded_str["value"] == "hello"
                 
-                # Test boolean
+                # Test boolean (must stay a bool, not be coerced to int --
+                # `bool` is a subclass of `int` in Python)
                 encoded_bool = JSONEncoder.encode_primitive(True)
                 assert encoded_bool["encode_type"] == "primitive"
                 assert encoded_bool["value"] == True
+                assert type(encoded_bool["value"]) is bool
                 
                 # Test None
                 encoded_none = JSONEncoder.encode_primitive(None)
@@ -398,9 +400,11 @@ class TestEncoderParameterized:
                         encoded_group = HDF5Encoder.encode_primitive("hello", h5_group=root_group)
                         assert isinstance(encoded_group, h5py.Group)
                         
-                        # Test boolean
+                        # Test boolean (must be tagged "bool", not "int" --
+                        # `bool` is a subclass of `int` in Python)
                         encoded_group = HDF5Encoder.encode_primitive(True, h5_group=root_group)
                         assert isinstance(encoded_group, h5py.Group)
+                        assert encoded_group.attrs["cast_to"] == "bool"
                         
                         # Test None
                         encoded_group = HDF5Encoder.encode_primitive(None, h5_group=root_group)
@@ -503,6 +507,7 @@ class TestEncoderParameterized:
                         # HDF5 stores primitives as attributes directly, not in a subgroup
                         decoded = HDF5Encoder.decode_primitive(root_group)
                         assert decoded == True
+                        assert type(decoded) is bool
                     
                     # Test special characters
                     with h5py.File(temp_file, "w") as h5_file:
@@ -800,7 +805,31 @@ class TestHDFIterableOptimizations:
                     decoded = HDF5Encoder.decode_iterable(root_group) # type: ignore
                     assert isinstance(decoded, list)
                     assert decoded == test_list
+                    if test_list == [True, False, True]:
+                        # A homogeneous bool list/tuple must decode back
+                        # as `bool`, not plain `int` (since `True == 1`
+                        # would otherwise hide the coercion).
+                        assert all(type(x) is bool for x in decoded)
 
+    def test_encode_iterable_bool_int_mix_falls_back_to_groups(self, make_temp_path):
+        """A list mixing `int` and `bool` (e.g. `(reset, include_outcomes)`
+        style payloads) must not be treated as a homogeneous `int` dataset,
+        since that would silently coerce every bool to a plain int. It
+        should fall back to the per-element "groups" storage format, which
+        preserves each element's exact type."""
+        test_list = [0, True, False, 1]
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                encoded_group = HDF5Encoder.encode_iterable(test_list, h5_group=root_group)
+                assert encoded_group.attrs["storage_format"] == "groups"
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                decoded = HDF5Encoder.decode_iterable(root_group)  # type: ignore
+                assert decoded == test_list
+                assert [type(x) for x in decoded] == [int, bool, bool, int]
 
     def test_encode_iterable_mixed_types_fallback(self, make_temp_path):
         """Test that HDF5 encoder falls back to groups for mixed types."""

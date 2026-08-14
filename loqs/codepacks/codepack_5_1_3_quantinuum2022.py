@@ -27,10 +27,15 @@ import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.backends.model.basemodel import (
-    BaseNoiseModel,
+from loqs.backends.model.basemodel import BaseNoiseModel
+from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
+    QSimSuperopGateRep,
+    STANDARD_GATE_UNITARIES,
+    UnitaryGateRep,
+    ZBasisProjectionInstrumentRep,
+    convert as convert_rep,
 )
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
@@ -590,8 +595,8 @@ def create_qec_code(
 def create_ideal_model(  # noqa: C901
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
-    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
+    gaterep: type[GateRep] = QSimSuperopGateRep,
+    instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
 ):
     """Create an ideal (i.e. noiseless) model for the [[5,1,3]] code.
 
@@ -609,11 +614,11 @@ def create_ideal_model(  # noqa: C901
         Currently, only [](api:PyGSTiNoiseModel) is allowed.
         Default is [](api:PyGSTiNoiseModel).
 
-    gaterep : GateRep, optional
-        Gate representation to use. Default is GateRep.QSIM_SUPEROPERATOR.
+    gaterep : type[GateRep], optional
+        Gate representation class to use. Default is [](api:QSimSuperopGateRep).
 
-    instrep : InstrumentRep, optional
-        Instrument representation to use. Default is InstrumentRep.ZBASIS_PROJECTION.
+    instrep : type[InstrumentRep], optional
+        Instrument representation class to use. Default is [](api:ZBasisProjectionInstrumentRep).
 
     Returns
     -------
@@ -673,73 +678,32 @@ def create_ideal_model(  # noqa: C901
 
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
     elif model_backend == DictNoiseModel:
+        # Standard-gate-name unitaries needed alongside `nonstd_unitaries`
+        # (which already covers "Gk"/"Gi1Q"/"Gi2Q"/"GiMCM" above). Sourced
+        # from `STANDARD_GATE_UNITARIES` rather than
+        # `pygsti.tools.internalgates.standard_gatename_unitaries()` so
+        # this branch doesn't need pyGSTi installed at all (matching the
+        # STIM-only path's pre-existing pyGSTi-free behavior).
+        standard_unitaries = {
+            "Gxpi": STANDARD_GATE_UNITARIES["X"],
+            "Gypi": STANDARD_GATE_UNITARIES["Y"],
+            "Gzpi": STANDARD_GATE_UNITARIES["Z"],
+            "Gzpi2": STANDARD_GATE_UNITARIES["S"],
+            "Gzmpi2": STANDARD_GATE_UNITARIES["S_DAG"],
+            "Gh": STANDARD_GATE_UNITARIES["H"],
+            "Gcnot": STANDARD_GATE_UNITARIES["CX"],
+            "Gcphase": STANDARD_GATE_UNITARIES["CZ"],
+            "Gi": STANDARD_GATE_UNITARIES["I"],
+        }
+
         gate_dict = {}
-        if gaterep == GateRep.STIM_CIRCUIT_STR:
-            name_to_stim_ops = {
-                "Gxpi": ["X"],
-                "Gypi": ["Y"],
-                "Gzpi": ["Z"],
-                "Gzpi2": ["SQRT_Z"],
-                "Gzmpi2": ["SQRT_Z_DAG"],
-                "Gh": ["H"],
-                "Gk": ["H", "SQRT_Z"],
-                "Gcnot": ["CX"],
-                "Gcphase": ["CZ"],
-                "Gi": ["I"],
-                "Gi1Q": ["I"],
-                "Gi2Q": ["I"],
-                "GiMCM": ["I"],
-            }
-
-            for gate in gate_names:
-                num_qubits = 2 if gate in ["Gcnot", "Gcphase"] else 1
-
-                # For stim strings, all the representations are "local"
-                stim_str = ""
-                for stim_op in name_to_stim_ops[gate]:
-                    stim_str += stim_op
-                    for i in range(num_qubits):
-                        stim_str += f" {i}"
-                    stim_str += "\n"
-
-                qubit_perms = itertools.permutations(qubits, r=num_qubits)
-                for qs in qubit_perms:
-                    gate_dict[(gate, qs)] = stim_str
-        else:
-            # Currently we use pyGSTi to look up definitions for dense reps
-            # TODO: Remove if needed
-            try:
-                import pygsti
-            except ImportError:
-                raise ImportError(
-                    "pyGSTi not found, cannot construct dict noise model"
+        for gate in gate_names:
+            U = standard_unitaries.get(gate, nonstd_unitaries.get(gate))
+            num_qubits = int(np.log2(U.shape[0]))
+            for qs in itertools.permutations(qubits, r=num_qubits):
+                gate_dict[(gate, qs)] = convert_rep(
+                    UnitaryGateRep(U, qs), gaterep, qs
                 )
-
-            std_unitaries = (
-                pygsti.tools.internalgates.standard_gatename_unitaries()
-            )
-
-            for gate in gate_names:
-                U = std_unitaries.get(gate, None)
-                if U is None:
-                    U = nonstd_unitaries[gate]
-
-                num_qubits = int(np.log2(U.shape[0]))
-                qubit_perms = itertools.permutations(qubits, r=num_qubits)
-                for qs in qubit_perms:
-                    if gaterep == GateRep.UNITARY:
-                        gate_dict[(gate, qs)] = U
-                    elif gaterep == GateRep.PTM:
-                        gate_dict[(gate, qs)] = (
-                            pygsti.tools.unitary_to_pauligate(U)
-                        )
-                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
-                        import loqs.tools.pygstitools as pt
-                        gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
-                    else:
-                        raise NotImplementedError(
-                            "Conversion to this rep is not implemented yet."
-                        )
 
         # Setting the value as (0, True) here means it will reset to 0 state
         # and it will record the outcomes
@@ -1024,6 +988,17 @@ def _create_adaptive_measure_instruction(
                 instructions["FT Logical X Measure Part I Feed-Forward"],
             ],
             name="FT Logical X Measure",
+        )
+    )
+
+    # Shortcut composite function to kick off the adaptive measurement
+    instructions["FT Logical Z Measure"] = (
+        builders.build_composite_instruction(
+            [
+                instructions["H"],
+                instructions["FT Logical X Measure"],
+            ],
+            name="FT Logical Z Measure",
         )
     )
 

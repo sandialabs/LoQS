@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.reps import GateRep, InstrumentRep, RepTuple
+from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
 from loqs.internal import Castable, Displayable
 
 
@@ -48,23 +48,23 @@ class BaseNoiseModel(Castable, Displayable):
 
     @property
     @abstractmethod
-    def output_gate_reps(self) -> list[GateRep]:
-        """[](api:GateRep) this model can output."""
+    def output_gate_reps(self) -> list[type[GateRep]]:
+        """[](api:GateRep) classes this model can output."""
         pass
 
     @property
     @abstractmethod
-    def output_instrument_reps(self) -> list[InstrumentRep]:
-        """[](api:InstrumentRep) this model can output."""
+    def output_instrument_reps(self) -> list[type[InstrumentRep]]:
+        """[](api:InstrumentRep) classes this model can output."""
         pass
 
     @abstractmethod
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
-        gatereps: Sequence[GateRep],
-        instreps: Sequence[InstrumentRep],
-    ) -> list[RepTuple]:
+        gatereps: Sequence[type[GateRep]],
+        instreps: Sequence[type[InstrumentRep]],
+    ) -> list[OperationRep]:
         """Get list of operator representations that can be applied.
 
         Parameters
@@ -73,12 +73,11 @@ class BaseNoiseModel(Castable, Displayable):
             Physical circuit to get the representations for
 
         gatereps:
-            Output representations for gate operations.
-            For more details, look at [](api:GateRep).
+            Allowed output [](api:GateRep) classes for gate operations.
 
         instreps:
-            Output representations for instrument operations.
-            For more details, look at [](api:InstrumentRep).
+            Allowed output [](api:InstrumentRep) classes for instrument
+            operations.
 
         Returns
         -------
@@ -86,8 +85,9 @@ class BaseNoiseModel(Castable, Displayable):
             List of operation representations for the circuit
 
         TODO: describe the conditions under which this function is allowed to error.
-        DictNoiseModel.get_reps and StimDictNoiseModel.get_reps both ignore the
-        gatereps and instreps arguments.
+        DictNoiseModel.get_reps ignores the gatereps and instreps arguments
+        for circuit types where the representation to use is unambiguous
+        from the circuit's own labels/values.
         """
         pass
 

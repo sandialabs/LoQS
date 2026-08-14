@@ -315,6 +315,18 @@ class TestSTIMPhysicalCircuitMutators(unittest.TestCase):
         with self.assertRaises(ValueError):
             circ.delete_qubits_inplace(['Q2'])  # Q2 is not in qubit_labels
 
+    def test_delete_qubits_with_repeat_block(self):
+        """delete_qubits_inplace must succeed (not crash) on a circuit
+        containing a REPEAT block."""
+        circ = STIMPhysicalCircuit(
+            "X 0\nREPEAT 3 {\nCX 0 1\n}\nM 1", [0, 1]
+        )
+        circ.delete_qubits_inplace([0])
+        self.assertEqual(circ.qubit_labels, [1])
+        circ_str = str(circ.circuit)
+        self.assertNotIn("CX", circ_str)
+        self.assertIn("M 0", circ_str)
+
     def test_merge(self):
         # Create two circuits with overlapping and new qubits
         circ1_str = "H Q0\nTICK\nX Q1"
@@ -801,3 +813,87 @@ class TestSTIMHelpers(unittest.TestCase):
 
         empty_reindexed = _reindex_stim_circuit(empty_circ, {})
         self.assertEqual(str(empty_reindexed), "")
+
+    def test_repeat_block_indices_and_reindexing(self):
+        """Qubits referenced only inside a REPEAT block must still be
+        detected as used, and REPEAT blocks must be reindexed (not
+        crash) rather than being skipped like `_get_used_stim_indices`
+        does."""
+        import stim
+        from loqs.backends.circuit.stimcircuit import (
+            _get_used_stim_indices,
+            _reindex_stim_circuit,
+        )
+
+        circ = stim.Circuit("X 0\nREPEAT 3 {\nCX 0 1\n}\nM 1")
+        self.assertEqual(_get_used_stim_indices(circ), [0, 1])
+
+        reindexed = _reindex_stim_circuit(circ, {0: 1, 1: 0})
+        circ_str = str(reindexed)
+        self.assertIn("X 1", circ_str)
+        self.assertIn("REPEAT 3 {", circ_str)
+        self.assertIn("CX 1 0", circ_str)
+        self.assertIn("M 0", circ_str)
+        # Confirm it's still a real, valid, 3x-repeating REPEAT block
+        self.assertEqual(reindexed[1].repeat_count, 3)
+
+    def test_gate_args_reindexing(self):
+        """Gate arguments must be reattached in parentheses directly
+        after the instruction name (STIM's actual syntax), not as
+        separate space-separated tokens."""
+        import stim
+        from loqs.backends.circuit.stimcircuit import _reindex_stim_circuit
+
+        circ = stim.Circuit("X_ERROR(0.25) 0\nPAULI_CHANNEL_1(0.1, 0.2, 0.3) 1")
+        reindexed = _reindex_stim_circuit(circ, {0: 1, 1: 0})
+        circ_str = str(reindexed)
+        self.assertIn("X_ERROR(0.25) 1", circ_str)
+        self.assertIn("PAULI_CHANNEL_1(0.1, 0.2, 0.3) 0", circ_str)
+
+    def test_pauli_targets_reindexing(self):
+        """MPP-style Pauli-basis-annotated targets (X0/Y1/Z2) are not
+        `is_qubit_target`, but must still be detected as qubit usage and
+        correctly reindexed with their Pauli-letter prefix preserved."""
+        import stim
+        from loqs.backends.circuit.stimcircuit import (
+            _get_used_stim_indices,
+            _reindex_stim_circuit,
+        )
+
+        circ = stim.Circuit("MPP X0*Y1*Z2")
+        self.assertEqual(_get_used_stim_indices(circ), [0, 1, 2])
+
+        reindexed = _reindex_stim_circuit(circ, {0: 2, 1: 1, 2: 0})
+        circ_str = str(reindexed)
+        self.assertIn("X2", circ_str)
+        self.assertIn("Y1", circ_str)
+        self.assertIn("Z0", circ_str)
+        self.assertIn("*", circ_str)
+
+    def test_sweep_bit_target_reindexing(self):
+        """A `sweep[N]` target is not a qubit target and must be passed
+        through unchanged, while the real qubit target on the same
+        instruction is still remapped."""
+        import stim
+        from loqs.backends.circuit.stimcircuit import (
+            _get_used_stim_indices,
+            _reindex_stim_circuit,
+        )
+
+        circ = stim.Circuit("CX sweep[0] 0")
+        # sweep[0] is not a qubit target; only qubit 0 is used.
+        self.assertEqual(_get_used_stim_indices(circ), [0])
+
+        reindexed = _reindex_stim_circuit(circ, {0: 5})
+        self.assertIn("sweep[0] 5", str(reindexed))
+
+    def test_comment_and_annotation_lines_skipped_during_reindex(self):
+        import stim
+        from loqs.backends.circuit.stimcircuit import _reindex_stim_circuit
+
+        # stim itself strips comment lines before they ever reach
+        # _reindex_stim_circuit's instruction iteration, so this mainly
+        # confirms the reindex still succeeds for a circuit that had one.
+        circ = stim.Circuit("# a comment\nX 0")
+        reindexed = _reindex_stim_circuit(circ, {0: 0})
+        self.assertEqual(str(reindexed), "X 0")
