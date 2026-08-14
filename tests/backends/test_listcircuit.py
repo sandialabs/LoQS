@@ -47,13 +47,6 @@ class TestListPhysicalCircuit:
         pc2 = PhysCirc(pc)
         self._check(pc2, self.expected_circ, self.test_labels)
 
-        # Direct construction handles the same shapes .cast() used to.
-        pc = PhysCirc(self.test_circ)
-        self._check(pc, self.expected_circ, self.test_labels)
-
-        pc2 = PhysCirc(pc)
-        self._check(pc2, self.expected_circ, self.test_labels)
-
         # Test failure raises error
         with pytest.raises(ValueError):
             PhysCirc(None) # type: ignore

@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions.instruction import Instruction
-from loqs.internal import SeqCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="InstructionLabel")
@@ -26,7 +26,7 @@ InstructionLabelCastableTypes: TypeAlias = (
 """Objects that can be cast to a [](api:InstructionLabel)."""
 
 
-class InstructionLabel(SeqCastable, Displayable):
+class InstructionLabel(Displayable):
     """Instruction labels intended to be elements of an [](api:InstructionStack).
 
     These are also castable from 1- to 4-tuples, so users
@@ -165,31 +165,6 @@ class InstructionLabel(SeqCastable, Displayable):
                 s += ","
         s += "})\n"
         return s
-
-    @classmethod
-    def cast(cls, obj: object) -> InstructionLabel:
-        """Cast to a [](api:InstructionLabel) object.
-
-        Unlike most castable objects, [](api:InstructionLabel)
-        requires at least two inputs. This version of cast additionally
-        allows a tuple/list variant for the multiple arguments and
-        disallows a single object being passed in.
-
-        Parameters
-        ----------
-        obj:
-            A castable object that is either:
-            - Already a [](api:InstructionLabel) object,
-            in which case `obj` is returned
-            - A kwarg dict that is passed into the constructor
-            - A sequence of the arguments of the
-            [](api:InstructionLabel) constructor
-
-        Returns
-        -------
-            A [](api:InstructionLabel) object
-        """
-        return cls.from_raw(obj)
 
     @classmethod
     def from_raw(cls, obj: object) -> InstructionLabel:

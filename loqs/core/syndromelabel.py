@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, TypeVar
 
-from loqs.internal import Castable, Displayable
+from loqs.internal import Displayable
 
 T = TypeVar("T", bound="SyndromeLabel")
 
@@ -27,7 +27,7 @@ SyndromeLabelCastableTypes: TypeAlias = (
 
 
 @dataclass
-class SyndromeLabel(Castable, Displayable):
+class SyndromeLabel(Displayable):
     """Label that indicates which past outcome was a syndrome bit."""
 
     _SERIALIZE_ATTRS = ["qubit_label", "frame_idx", "outcome_idx"]

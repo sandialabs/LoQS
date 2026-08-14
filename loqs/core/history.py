@@ -17,7 +17,7 @@ from typing import ClassVar, Literal, TypeAlias, TypeVar, overload
 import textwrap
 
 from loqs.core.frame import Frame, FrameCastableTypes
-from loqs.internal import SeqCastable, Displayable
+from loqs.internal import Displayable
 
 T = TypeVar("T", bound="History")
 
@@ -47,7 +47,7 @@ HistoryCollectDataArgsType: TypeAlias = tuple[
 """Type alias for arguments to [](api:History.collect_data)"""
 
 
-class History(Sequence[Frame], SeqCastable, Displayable):
+class History(Sequence[Frame], Displayable):
     """A semi-mutable list of [](api:Frame) objects.
 
     The intention is to provide a list-like object where existing

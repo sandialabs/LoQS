@@ -19,7 +19,7 @@ from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelCastableTypes,
 )
-from loqs.internal import SeqCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.encoder.jsonencoder import JSONEncoder
 from loqs.internal.serializable import Serializable
@@ -32,7 +32,7 @@ InstructionStackCastableTypes: TypeAlias = (
 """Objects that can be cast to a [](api:InstructionStack)."""
 
 
-class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
+class InstructionStack(Sequence[InstructionLabel], Displayable):
     """A list of [](api:InstructionLabel) objects to execute.
 
     This is intended to be an immutable list of [](api:InstructionLabel)

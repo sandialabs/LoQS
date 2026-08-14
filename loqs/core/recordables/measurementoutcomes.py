@@ -15,7 +15,7 @@ from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 from loqs.backends.state.basestate import OutcomeDict
 from loqs.core.recordables.pauliframe import PauliFrame
-from loqs.internal import MapCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="MeasurementOutcomes")
@@ -26,9 +26,7 @@ MeasurementOutcomesCastableTypes: TypeAlias = (
 "Things that can be cast to [](api:MeasurementOutcomes)."
 
 
-class MeasurementOutcomes(
-    Mapping[str | int, list[int]], MapCastable, Displayable
-):
+class MeasurementOutcomes(Mapping[str | int, list[int]], Displayable):
     """Measurement outcomes from physical circuit instructions.
 
     This is a dict-like object with qubit label keys and lists of 0/1

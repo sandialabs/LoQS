@@ -49,7 +49,8 @@ class TestSTIMQuantumState:
         s5.state.cx(0,1)
         self._check(s5, s)
 
-        # Direct construction handles the same shapes .cast() used to.
+        # Copy-construct from an existing instance with qubit_labels omitted
+        # (defaults to None), unlike s2 above which passes them explicitly.
         s6 = STIMState(s)
         self._check(s6, s)
 

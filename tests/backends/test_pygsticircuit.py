@@ -42,13 +42,6 @@ class TestPyGSTiPhysicalCircuit:
         pc2 = PhysCirc(pc)
         self._check(pc2, self.test_circ)
 
-        # Direct construction handles the same shapes .cast() used to.
-        pc = PhysCirc(self.test_circ)
-        self._check(pc, self.test_circ)
-
-        pc2 = PhysCirc(pc)
-        self._check(pc2, self.test_circ)
-
         # We should also be able to do string versions and just layers
         pc = PhysCirc(repr(self.test_circ)[8:-2])
         self._check(pc, self.test_circ)

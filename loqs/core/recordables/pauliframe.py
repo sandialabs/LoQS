@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Sequence, TypeAlias, TypeVar
 
-from loqs.internal import SeqCastable, Displayable
+from loqs.internal import Displayable
 
 U = TypeVar("U", bound="PauliFrame")
 
@@ -19,7 +19,7 @@ PauliFrameCastableTypes: TypeAlias = "PauliFrame | Sequence[str | int]"
 """Types that can be cast into a [](api:PauliFrame)."""
 
 
-class PauliFrame(SeqCastable, Displayable):
+class PauliFrame(Displayable):
     """Tracks a Pauli frame on a set of qubits.
 
     Commonly this is used to track data errors without applying

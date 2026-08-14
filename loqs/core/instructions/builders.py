@@ -1258,8 +1258,9 @@ def build_repeat_until_success_instruction(
                 "Hit max repeats in repeat-until-success instruction"
             )
 
-        # TODO: InstructionStack cast misbehaved, track that down
-        # new_labels = InstructionStack.cast(instructions)._instructions
+        # TODO: constructing InstructionStack(instructions) directly here
+        # (instead of building InstructionLabel.from_raw(...) per-item) previously
+        # misbehaved; track that down.
         new_labels = [InstructionLabel.from_raw(ilbl) for ilbl in instructions]
 
         # Create a new RUS label with updated count
