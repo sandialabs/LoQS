@@ -17,22 +17,22 @@ from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
-    InstructionLabelCastableTypes,
+    InstructionLabelLike,
 )
-from loqs.internal import SeqCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.encoder.jsonencoder import JSONEncoder
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="InstructionStack")
 
-InstructionStackCastableTypes: TypeAlias = (
-    "InstructionStack | InstructionLabelCastableTypes | Sequence[InstructionLabelCastableTypes] | None"
+InstructionStackLike: TypeAlias = (
+    "InstructionStack | InstructionLabelLike | Sequence[InstructionLabelLike] | None"
 )
 """Objects that can be cast to a [](api:InstructionStack)."""
 
 
-class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
+class InstructionStack(Sequence[InstructionLabel], Displayable):
     """A list of [](api:InstructionLabel) objects to execute.
 
     This is intended to be an immutable list of [](api:InstructionLabel)
@@ -56,7 +56,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
     """Internal list of [](api:InstructionLabels)"""
 
     def __init__(
-        self, instructions: InstructionStackCastableTypes = None
+        self, instructions: InstructionStackLike = None
     ) -> None:
         """
         Parameters
@@ -75,19 +75,24 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             self._instructions = []
             return
         if isinstance(instructions, (Instruction, str, InstructionLabel)):
-            self._instructions = [InstructionLabel.cast(instructions)]
+            self._instructions = [InstructionLabel.from_raw(instructions)]
             return
 
-        # If we are here, we are a sequence of some kind
-        # If the first entry is an Instruction or str, this is an InstructionLabel cast
-        # Otherwise it is a list of InstructionLabel casts (probably)
-        if isinstance(instructions[0], (Instruction, str)):
-            self._instructions = [InstructionLabel.cast(instructions)]  # type: ignore
+        # If we are here, we are a sequence of some kind. A tuple is always
+        # one InstructionLabel's own flat positional args (matching
+        # InstructionLabelLike's tuple variants); anything else (e.g. a
+        # list) is a sequence of raw items to convert individually. This
+        # can't instead be decided by inspecting instructions[0]'s type, as
+        # done previously: a list of multiple bare Instruction/str labels
+        # (e.g. ["LabelA", "LabelB"]) would then be misread as one
+        # InstructionLabel's own args, silently dropping every entry past
+        # the first two.
+        if isinstance(instructions, tuple):
+            self._instructions = [InstructionLabel(*instructions)]  # type: ignore
             return
 
-        # Otherwise we must be a list of castable tuples
         for inst in instructions:
-            self._instructions.append(InstructionLabel.cast(inst))
+            self._instructions.append(InstructionLabel.from_raw(inst))
 
     def __getitem__(self, i):
         return self._instructions[i]
@@ -107,7 +112,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             return "Empty InstructionStack"
 
     def append_instruction(
-        self, item: InstructionLabelCastableTypes
+        self, item: InstructionLabelLike
     ) -> InstructionStack:
         """Add an entry to the end of the stack.
 
@@ -124,7 +129,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         return self.insert_instruction(len(self), item)
 
     def append_instructions(
-        self, items: Sequence[InstructionLabelCastableTypes]
+        self, items: Sequence[InstructionLabelLike]
     ) -> InstructionStack:
         """Add a series of entries to the end of the stack.
 
@@ -158,7 +163,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
         return InstructionStack(instructions)
 
     def insert_instruction(
-        self, i: int, item: InstructionLabelCastableTypes
+        self, i: int, item: InstructionLabelLike
     ) -> InstructionStack:
         """Add an entry to a position in the stack.
 
@@ -176,11 +181,11 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             The modified stack
         """
         instructions = self._instructions.copy()
-        instructions.insert(i, InstructionLabel.cast(item))
+        instructions.insert(i, InstructionLabel.from_raw(item))
         return InstructionStack(instructions)
 
     def insert_instructions(
-        self, i: int, items: Sequence[InstructionLabelCastableTypes]
+        self, i: int, items: Sequence[InstructionLabelLike]
     ) -> InstructionStack:
         """Add a series of entries to a position in the stack.
 
@@ -198,7 +203,7 @@ class InstructionStack(Sequence[InstructionLabel], SeqCastable, Displayable):
             The modified stack
         """
         instructions = self._instructions.copy()
-        items_to_add = [InstructionLabel.cast(item) for item in items]
+        items_to_add = [InstructionLabel.from_raw(item) for item in items]
         instructions = (
             self._instructions[:i] + items_to_add + self._instructions[i:]
         )

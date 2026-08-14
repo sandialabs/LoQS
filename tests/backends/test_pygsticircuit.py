@@ -7,7 +7,8 @@ pygsti = pytest.importorskip("pygsti")
 from pygsti.baseobjs import Label
 from pygsti.circuits import Circuit
 
-from loqs.backends import PyGSTiPhysicalCircuit as PhysCirc
+import loqs.backends as backends_module
+from loqs.backends import ListPhysicalCircuit, PyGSTiPhysicalCircuit as PhysCirc
 
 
 class TestPyGSTiPhysicalCircuit:
@@ -41,26 +42,50 @@ class TestPyGSTiPhysicalCircuit:
         pc2 = PhysCirc(pc)
         self._check(pc2, self.test_circ)
 
-        # We can also test our casting function since this IsCastable
-        pc = PhysCirc.cast(self.test_circ)
-        self._check(pc, self.test_circ)
-
-        pc2 = PhysCirc.cast(pc)
-        self._check(pc2, self.test_circ)
-
         # We should also be able to do string versions and just layers
-        pc = PhysCirc.cast(repr(self.test_circ)[8:-2])
+        pc = PhysCirc(repr(self.test_circ)[8:-2])
         self._check(pc, self.test_circ)
 
-        pc = PhysCirc.cast(self.test_circ.layertup)
+        pc = PhysCirc(self.test_circ.layertup)
         self._check(pc, self.test_circ)
 
         # Test failure raises error
         with pytest.raises(ValueError):
-            PhysCirc.cast(None)
-    
+            PhysCirc(None) # type: ignore
+
+    def test_init_raises_import_error_when_unavailable(self):
+        original = backends_module._backend_availability["pygsti_circuit"]
+        backends_module._backend_availability["pygsti_circuit"] = (
+            backends_module.BackendAvailability("pygsti_circuit", False)
+        )
+        try:
+            with pytest.raises(ImportError, match="PyGSTi backend is not available"):
+                PhysCirc([("Gxpi2", "Q0")], ["Q0"])
+        finally:
+            backends_module._backend_availability["pygsti_circuit"] = original
+
+    def test_init_from_list_circuit_cast_failure_wrapped_as_valueerror(self):
+        lc = ListPhysicalCircuit([[("Gxpi2", ("Q0",))]], ["Q0"])
+        with mock.patch(
+            "loqs.backends.circuit.pygsticircuit._Circuit.cast",
+            side_effect=Exception("boom"),
+        ):
+            with pytest.raises(
+                ValueError, match="Failed to cast list circuit to pyGSTi circuit"
+            ):
+                PhysCirc(lc)
+
     def test_from_tiling(self):
-        pass
+        template = PhysCirc([("Gxpi2", "A")], ["A"])
+        tiled = PhysCirc.from_circuit_tiling(
+            template,
+            qubit_labels=["Q0", "Q1"],
+            tile_qubits=[["Q0"], {"A": "Q1"}],
+        )
+        expected = Circuit(
+            [[("Gxpi2", "Q0"), ("Gxpi2", "Q1")]], line_labels=["Q0", "Q1"]
+        )
+        self._check(tiled, expected)
     
     def test_append(self):
         circ1 = Circuit([('Gxpi2', 'Q0'), ('Gypi2', 'Q1')])
@@ -163,6 +188,47 @@ class TestPyGSTiPhysicalCircuit:
         target = PhysCirc([('Gxpi2', 'Q0')], qubit_labels=["Q0"])
         with pytest.raises(ValueError):
             target.transplant_idle_schedule_inplace(reference, ["Q0"], ["Gi"])
+
+    def test_get_possible_discrete_error_locations(self):
+        pc = PhysCirc(
+            [("Gxpi2", "Q0"), ("Gcnot", "Q0", "Q1")], ["Q0", "Q1"]
+        )
+
+        default_locs = pc.get_possible_discrete_error_locations()
+        assert sorted(default_locs) == [(0, 0), (1, 0), (1, 1)]
+
+        post_twoq_locs = pc.get_possible_discrete_error_locations(
+            post_twoq_gates=True
+        )
+        assert post_twoq_locs == [(2, (0, 1))]
+
+    def test_pad_by_duration_missing_duration_raises(self):
+        pc = PhysCirc([("Gxpi2", "Q0")], ["Q0"])
+        with pytest.raises(KeyError, match="No duration for Gxpi2"):
+            pc.pad_single_qubit_idles_by_duration_inplace(
+                idle_names={1: "Gi"}, durations={}
+            )
+
+    def test_pad_by_duration_empty_layer_idle(self):
+        pc = PhysCirc([[], []], ["Q0"])
+        pc.pad_single_qubit_idles_by_duration_inplace(
+            idle_names={1: "Gi"}, durations={}, empty_layer_idle="GEmptyIdle"
+        )
+        expected = Circuit(
+            [[("GEmptyIdle", "Q0")], [("GEmptyIdle", "Q0")]],
+            line_labels=["Q0"],
+        )
+        self._check(pc, expected)
+
+    def test_serialization(self, make_temp_path):
+        pc = PhysCirc(self.test_circ, self.test_circ.line_labels)
+
+        with make_temp_path(suffix=".json") as tmp_path:
+            pc.write(tmp_path)
+            pc2 = PhysCirc.read(tmp_path)
+
+        assert isinstance(pc2, PhysCirc)
+        self._check(pc2, self.test_circ)
 
 
 # class TestPyGSTiPhysicalCircuitFailedImport:

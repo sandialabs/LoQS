@@ -12,10 +12,11 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 
 from loqs.backends import (
-    GateRep,
     DictNoiseModel,
     NumpyStatevectorQuantumState,
     STIMQuantumState,
+    StimCircuitGateRep,
+    UnitaryGateRep,
 )
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.core import QuantumProgram
@@ -83,7 +84,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
     )
     model = codepack_surf17.create_ideal_model(
         all_qubits,
-        gaterep=GateRep.STIM_CIRCUIT_STR,
+        gaterep=StimCircuitGateRep,
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
@@ -131,7 +132,7 @@ class TestSyndromeRowOrdering:
         )
         model = codepack_surf17.create_ideal_model(
             qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
         if check_type == "X":
@@ -1066,7 +1067,7 @@ class TestSurgeryDenseSmoke:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=2)
         model = codepack_surf17.create_ideal_model(
             all_q,
-            gaterep=GateRep.UNITARY,
+            gaterep=UnitaryGateRep,
             model_backend=DictNoiseModel,
         )
         program = QuantumProgram(

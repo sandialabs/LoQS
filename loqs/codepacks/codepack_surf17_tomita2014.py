@@ -31,12 +31,13 @@ Examples
 --------
 Preservation of logical state |0>_L over 3 QEC cycles under single-fault injection:
 
->>> from loqs.backends import PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState, GateRep
+>>> from loqs.backends import PyGSTiPhysicalCircuit, DictNoiseModel, STIMQuantumState
+>>> from loqs.backends.reps import StimCircuitGateRep
 >>> from loqs.core import QuantumProgram
 >>> from loqs.codepacks import codepack_surf17_tomita2014 as cp
 >>> code = cp.create_qec_code(layout="surf17", num_qec_rounds=3)
 >>> qubits = [f'D{i}' for i in range(9)] + [f'A{i}' for i in range(9, 17)]
->>> model = cp.create_ideal_model(qubits, gaterep=GateRep.STIM_CIRCUIT_STR, model_backend=DictNoiseModel)
+>>> model = cp.create_ideal_model(qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 >>> stack = [
 ...     ('Init State', None, (len(qubits),), {'qubit_labels': qubits}),
 ...     ('Init Patch SURF', None, ('L0', qubits)),
@@ -57,14 +58,18 @@ import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.backends.model.basemodel import (
-    BaseNoiseModel,
-    GateRep,
-    InstrumentRep,
-)
+from loqs.backends.model.basemodel import BaseNoiseModel
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.backends.reps import RepTuple
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    QSimSuperopGateRep,
+    STANDARD_GATE_UNITARIES,
+    UnitaryGateRep,
+    ZBasisProjectionInstrumentRep,
+    convert as convert_rep,
+)
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
@@ -1114,8 +1119,8 @@ def create_qec_code(
 def create_ideal_model(
     qubits: Sequence[str],
     model_backend: type[BaseNoiseModel] = PyGSTiNoiseModel,
-    gaterep: GateRep = GateRep.QSIM_SUPEROPERATOR,
-    instrep: InstrumentRep = InstrumentRep.ZBASIS_PROJECTION,
+    gaterep: type[GateRep] = QSimSuperopGateRep,
+    instrep: type[InstrumentRep] = ZBasisProjectionInstrumentRep,
 ) -> BaseNoiseModel:
     """Create an ideal (noiseless) model for the Surface-17 / Surface-13 code.
 
@@ -1127,11 +1132,11 @@ def create_ideal_model(
     model_backend : type[BaseNoiseModel], optional
         The model backend to use. Default is PyGSTiNoiseModel.
 
-    gaterep : GateRep, optional
-        Gate representation. Default is GateRep.QSIM_SUPEROPERATOR.
+    gaterep : type[GateRep], optional
+        Gate representation class. Default is [](api:QSimSuperopGateRep).
 
-    instrep : InstrumentRep, optional
-        Instrument representation. Default is InstrumentRep.ZBASIS_PROJECTION.
+    instrep : type[InstrumentRep], optional
+        Instrument representation class. Default is [](api:ZBasisProjectionInstrumentRep).
 
     Returns
     -------
@@ -1180,75 +1185,36 @@ def create_ideal_model(
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
 
     elif model_backend == DictNoiseModel:
+        # Standard-gate-name unitaries needed alongside `nonstd_unitaries`
+        # (which already covers "Gi1Q"/"Gi2Q"/"GiMCM" above). Sourced from
+        # `STANDARD_GATE_UNITARIES` rather than
+        # `pygsti.tools.internalgates.standard_gatename_unitaries()` so
+        # this branch doesn't need pyGSTi installed at all (matching the
+        # STIM-only path's pre-existing pyGSTi-free behavior).
+        standard_unitaries = {
+            "Gxpi": STANDARD_GATE_UNITARIES["X"],
+            "Gypi": STANDARD_GATE_UNITARIES["Y"],
+            "Gzpi": STANDARD_GATE_UNITARIES["Z"],
+            "Gzpi2": STANDARD_GATE_UNITARIES["S"],
+            "Gzmpi2": STANDARD_GATE_UNITARIES["S_DAG"],
+            "Gh": STANDARD_GATE_UNITARIES["H"],
+            "Gcnot": STANDARD_GATE_UNITARIES["CX"],
+            "Gi": STANDARD_GATE_UNITARIES["I"],
+        }
+
         gate_dict = {}
-        if gaterep == GateRep.STIM_CIRCUIT_STR:
-            name_to_stim_ops = {
-                "Gxpi": ["X"],
-                "Gypi": ["Y"],
-                "Gzpi": ["Z"],
-                "Gzpi2": ["SQRT_Z"],
-                "Gzmpi2": ["SQRT_Z_DAG"],
-                "Gh": ["H"],
-                "Gcnot": ["CX"],
-                "Gi": ["I"],
-                "Gi1Q": ["I"],
-                "Gi2Q": ["I"],
-                "GiMCM": ["I"],
-            }
-
-            for gate in gate_names:
-                num_qubits = 2 if gate in ["Gcnot", "Gcphase"] else 1
-
-                stim_str = ""
-                for stim_op in name_to_stim_ops[gate]:
-                    stim_str += stim_op
-                    for i in range(num_qubits):
-                        stim_str += f" {i}"
-                    stim_str += "\n"
-
-                qubit_perms = itertools.permutations(qubits, r=num_qubits)
-                for qs in qubit_perms:
-                    gate_dict[(gate, qs)] = stim_str
-        else:
-            try:
-                import pygsti
-            except ImportError:
-                raise ImportError(
-                    "pyGSTi not found, cannot construct dict noise model"
+        for gate in gate_names:
+            U = standard_unitaries.get(gate, nonstd_unitaries.get(gate))
+            num_qubits = int(np.log2(U.shape[0]))
+            for qs in itertools.permutations(qubits, r=num_qubits):
+                gate_dict[(gate, qs)] = convert_rep(
+                    UnitaryGateRep(U, qs), gaterep, qs
                 )
-
-            std_unitaries = (
-                pygsti.tools.internalgates.standard_gatename_unitaries()
-            )
-
-            for gate in gate_names:
-                U = std_unitaries.get(gate, None)
-                if U is None:
-                    U = nonstd_unitaries[gate]
-
-                num_qubits = int(np.log2(U.shape[0]))
-                qubit_perms = itertools.permutations(qubits, r=num_qubits)
-                for qs in qubit_perms:
-                    if gaterep == GateRep.UNITARY:
-                        gate_dict[(gate, qs)] = RepTuple(
-                            U, qs, GateRep.UNITARY
-                        )
-                    elif gaterep == GateRep.PTM:
-                        gate_dict[(gate, qs)] = (
-                            pygsti.tools.unitary_to_pauligate(U)
-                        )
-                    elif gaterep == GateRep.QSIM_SUPEROPERATOR:
-                        import loqs.tools.pygstitools as pt
-                        gate_dict[(gate, qs)] = pt.unitary_to_qsim_ptm(U)
-                    else:
-                        raise NotImplementedError(
-                            "Conversion to this rep is not implemented yet."
-                        )
 
         inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
-            (gate_dict, inst_dict), gatereps=[gaterep], instreps=[instrep]
+            gate_dict, inst_dict, gatereps=[gaterep], instreps=[instrep]
         )
 
     elif issubclass(model_backend, BaseNoiseModel):

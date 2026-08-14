@@ -13,13 +13,22 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from functools import singledispatchmethod
 import h5py
 import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
-from loqs.backends import GateRep, is_backend_available
-from loqs.backends.model.basemodel import InstrumentRep
-from loqs.backends.reps import RepTuple
+from loqs.backends import is_backend_available
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    ProbabilisticStimGateRep,
+    StimCircuitGateRep,
+    StimCircuitInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+    is_rep_compatible,
+)
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.encoder.jsonencoder import JSONEncoder
@@ -47,7 +56,7 @@ else:
 T = TypeVar("T", bound="STIMQuantumState")
 
 # Type aliases for static type checking
-STIMStateCastableTypes: TypeAlias = (
+STIMStateLike: TypeAlias = (
     "STIMQuantumState | _TableauSimulator | _Tableau | int | Sequence[int]"
 )
 """Types that this backend can cast to an underlying state object."""
@@ -75,7 +84,7 @@ class STIMQuantumState(BaseQuantumState):
 
     These are used to map local ints
     to global ints in
-    [](api:GateRep.STIM_CIRCUIT_STR) reps.
+    [](api:StimCircuitGateRep) reps.
     """
 
     @property
@@ -90,18 +99,18 @@ class STIMQuantumState(BaseQuantumState):
         return self._state
 
     @property
-    def input_reps(self) -> list[GateRep | InstrumentRep]:
+    def input_reps(self) -> list[type[GateRep | InstrumentRep]]:
         return [
-            GateRep.STIM_CIRCUIT_STR,
-            GateRep.PROBABILISTIC_STIM_OPERATIONS,
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
-            InstrumentRep.STIM_CIRCUIT_STR,
+            StimCircuitGateRep,
+            ProbabilisticStimGateRep,
+            ZBasisProjectionInstrumentRep,
+            ZBasisPrePostInstrumentRep,
+            StimCircuitInstrumentRep,
         ]
 
     def __init__(
         self,
-        state: STIMStateCastableTypes,
+        state: STIMStateLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         seed: int | None = None,
     ) -> None:
@@ -188,19 +197,18 @@ class STIMQuantumState(BaseQuantumState):
         if reset_latest_circ:
             self.latest_applied_circuit = _Circuit()
 
-        for reptuple in reps:
-            reptype = reptuple.reptype
-            if isinstance(reptype, GateRep):
-                self._apply_gate_rep(reptuple)
-            elif isinstance(reptype, InstrumentRep):
-                rep_outcomes = self._apply_instrument_rep(reptuple)
+        for rep in reps:
+            if isinstance(rep, GateRep):
+                self._apply_gate_rep(rep)
+            elif isinstance(rep, InstrumentRep):
+                rep_outcomes = self._apply_instrument_rep(rep)
 
                 # Merge outcomes with already observed outcomes
                 for k, v in rep_outcomes.items():
                     outcomes[k].extend(v)
             else:
                 raise NotImplementedError(
-                    f"Cannot apply unknown reptype {reptype}"
+                    f"Cannot apply unknown rep type {type(rep).__name__}"
                 )
 
         return outcomes
@@ -233,191 +241,188 @@ class STIMQuantumState(BaseQuantumState):
         self.seed = new_seed
         self._rng = np.random.default_rng(new_seed)
 
-    def _apply_gate_rep(self, reptuple: RepTuple):
-        rep = reptuple.rep
-
-        qubits = reptuple.qubits
-        assert isinstance(qubits, (tuple, list)) and all(
-            [isinstance(q, str) for q in qubits]
+    @singledispatchmethod
+    def _apply_gate_rep(self, rep: GateRep) -> None:
+        raise NotImplementedError(
+            f"Cannot apply {type(rep).__name__} to {self.name}"
         )
 
-        reptype = reptuple.reptype
-        assert isinstance(reptype, GateRep)
+    @_apply_gate_rep.register
+    def _(self, rep: StimCircuitGateRep) -> None:
+        qubits = rep.qubits
+        # String qubit labels are this backend's own requirement, not a
+        # general OperationRep invariant, so still checked here.
+        assert all(isinstance(q, str) for q in qubits)
+        circuit_str = rep.circuit_str
 
         if len(qubits) == 0:
             # This is a STIM annotation or comment, pass it on to applied circuit directly
-            assert isinstance(rep, str) and reptype == GateRep.STIM_CIRCUIT_STR
-            self.latest_applied_circuit += _Circuit(rep)
+            self.latest_applied_circuit += _Circuit(circuit_str)
             return
 
-        if reptype == GateRep.STIM_CIRCUIT_STR:
-            assert isinstance(rep, str)
-
-            # We have three types of indices here
-            # Local: The placeholder/template qubit used in the rep
-            # Global: The qubit label
-            # Internal: The qubit label index
-            local_to_global = {}
-            local_to_internal = {}
-            for i, q in enumerate(qubits):
-                assert isinstance(q, str)
-                negated = q.startswith("!")
-                global_label = q.strip("!")
-                try:
-                    index = self.qubit_labels.index(global_label)
-                except ValueError:
-                    index = self.qubit_labels.index(int(global_label))
-                local_to_internal[str(i)] = f"{'!' if negated else ''}{index}"
-                local_to_global[str(i)] = q
-
-            # Split string for easy processing
-            internal_lines = []
-            global_lines = []
-            for line in rep.split("\n"):
-                if len(line) == 0:
-                    # Skip empty line
-                    continue
-
-                entries = line.split()
-
-                internal_entries = [entries[0]]  # instruction is unchanged
-                internal_entries += [local_to_internal[e] for e in entries[1:]]
-
-                # Pull measurement labels, if they exist
-                command = entries[0].split("(")[0]
-                # Subset of measure/reset gates that we want to record
-                include_outcomes = [
-                    "M",
-                    "MX",
-                    "MY",
-                    "MZ",
-                    "MR",
-                    "MRX",
-                    "MRY",
-                    "MRZ",
-                ]
-                if command in include_outcomes:
-                    noneg_internal_entries = [
-                        self.qubit_labels[int(me.strip("!"))]
-                        for me in internal_entries[1:]
-                    ]
-                    self.latest_measurement_labels.extend(
-                        noneg_internal_entries
-                    )
-
-                internal_lines.append(" ".join(internal_entries))
-
-                global_entries = [entries[0]]  # instruction is unchanged
-                global_entries += [local_to_global[e] for e in entries[1:]]
-                global_lines.append(" ".join(global_entries))
-
-            internal_circuit_str = "\n".join(internal_lines)
-            internal_circuit = _Circuit(internal_circuit_str)
-            self.state.do_circuit(internal_circuit)
-
-            # Save executed circuit, needed for decoding via pymatching
-            # This one we do in global labels since we don't need the smaller internal space,
-            # and this is less confusing to read off
+        # We have three types of indices here
+        # Local: The placeholder/template qubit used in the rep
+        # Global: The qubit label
+        # Internal: The qubit label index
+        local_to_global = {}
+        local_to_internal = {}
+        for i, q in enumerate(qubits):
+            negated = q.startswith("!")
+            global_label = q.strip("!")
             try:
-                global_circuit_str = "\n".join(global_lines)
-                self.latest_applied_circuit += _Circuit(global_circuit_str)
+                index = self.qubit_labels.index(global_label)
             except ValueError:
-                # STIM failed to convert, our global labels are probably non-int strings
-                # Fall back to internal representation
-                self.latest_applied_circuit += internal_circuit
-        elif reptype == GateRep.PROBABILISTIC_STIM_OPERATIONS:
-            assert isinstance(rep, (list, tuple))
-            probs = [r[1] for r in rep]
-            assert abs(1 - sum(probs)) < 1e-12, "Probabilities should sum to 1"
-            assert all(
-                [p >= 0 for p in probs]
-            ), "Probabilities should be positive"
+                index = self.qubit_labels.index(int(global_label))
+            local_to_internal[str(i)] = f"{'!' if negated else ''}{index}"
+            local_to_global[str(i)] = q
 
-            # Pick an op to apply
-            idx_to_apply = self._rng.choice(list(range(len(rep))), p=probs)
+        # Split string for easy processing
+        internal_lines = []
+        global_lines = []
+        for line in circuit_str.split("\n"):
+            if len(line) == 0:
+                # Skip empty line
+                continue
 
-            rep_to_apply = RepTuple(
-                rep[idx_to_apply][0], qubits, GateRep.STIM_CIRCUIT_STR
-            )
+            entries = line.split()
 
-            # Apply chosen op
-            self.apply_reps_inplace([rep_to_apply], reset_latest_circ=False)
-        else:
-            raise NotImplementedError(f"Cannot apply GateRep {reptype}")
+            internal_entries = [entries[0]]  # instruction is unchanged
+            internal_entries += [local_to_internal[e] for e in entries[1:]]
 
-    def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
-        rep = reptuple.rep
+            # Pull measurement labels, if they exist
+            command = entries[0].split("(")[0]
+            # Subset of measure/reset gates that we want to record
+            include_outcomes = [
+                "M",
+                "MX",
+                "MY",
+                "MZ",
+                "MR",
+                "MRX",
+                "MRY",
+                "MRZ",
+            ]
+            if command in include_outcomes:
+                noneg_internal_entries = [
+                    self.qubit_labels[int(me.strip("!"))]
+                    for me in internal_entries[1:]
+                ]
+                self.latest_measurement_labels.extend(
+                    noneg_internal_entries
+                )
 
-        qubits = reptuple.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+            internal_lines.append(" ".join(internal_entries))
 
-        reptype = reptuple.reptype
-        assert isinstance(reptype, InstrumentRep)
+            global_entries = [entries[0]]  # instruction is unchanged
+            global_entries += [local_to_global[e] for e in entries[1:]]
+            global_lines.append(" ".join(global_entries))
+
+        internal_circuit_str = "\n".join(internal_lines)
+        internal_circuit = _Circuit(internal_circuit_str)
+        self.state.do_circuit(internal_circuit)
+
+        # Save executed circuit, needed for decoding via pymatching
+        # This one we do in global labels since we don't need the smaller internal space,
+        # and this is less confusing to read off
+        try:
+            global_circuit_str = "\n".join(global_lines)
+            self.latest_applied_circuit += _Circuit(global_circuit_str)
+        except ValueError:
+            # STIM failed to convert, our global labels are probably non-int strings
+            # Fall back to internal representation
+            self.latest_applied_circuit += internal_circuit
+
+    @_apply_gate_rep.register
+    def _(self, rep: ProbabilisticStimGateRep) -> None:
+        qubits = rep.qubits
+        # String qubit labels are this backend's own requirement (see
+        # the StimCircuitGateRep overload above).
+        assert all(isinstance(q, str) for q in qubits)
+        operations = rep.operations
+        probs = [r[1] for r in operations]
+
+        # Pick an op to apply
+        idx_to_apply = self._rng.choice(list(range(len(operations))), p=probs)
+
+        rep_to_apply = StimCircuitGateRep(operations[idx_to_apply][0], qubits)
+
+        # Apply chosen op
+        self.apply_reps_inplace([rep_to_apply], reset_latest_circ=False)
+
+    @singledispatchmethod
+    def _apply_instrument_rep(self, rep: InstrumentRep) -> OutcomeDict:
+        raise NotImplementedError(
+            f"Cannot apply {type(rep).__name__} to {self.name}"
+        )
+
+    @_apply_instrument_rep.register
+    def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
+        qubits = rep.qubits
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
+        reset = rep.reset
+        include_outcomes = rep.include_outcome
 
-        if reptype == InstrumentRep.ZBASIS_PROJECTION:
-            assert isinstance(rep, (tuple, list)) and len(rep) > 1
-            reset = rep[0]
-            include_outcomes = rep[1]
-
-            for qbit in qubits:
-                cbit = self._measure_and_reset(qbit, reset)
-                if include_outcomes:
-                    outcomes[qbit].append(cbit)
-        elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
-            assert isinstance(rep, (tuple, list)) and len(rep) > 1
-            reset = rep[0]
-            include_outcomes = rep[1]
-
-            # Check we can apply the reps
-            preop = rep[2]
-            postop = rep[3]
-            assert reset in [None, 0, 1]
-            assert preop.reptype in self.input_reps
-            assert postop.reptype in self.input_reps
-            assert isinstance(preop.reptype, GateRep)
-            assert isinstance(postop.reptype, GateRep)
-            # TODO: Strict subsets is OK too
-            assert preop.qubits == qubits
-            assert postop.qubits == qubits
-
-            # Apply the pre-op
-            self.apply_reps_inplace([preop])
-
-            # Do perfect measurement
-            for qbit in qubits:
-                cbit = self._measure_and_reset(qbit, reset)
-                if include_outcomes:
-                    outcomes[qbit].append(cbit)
-
-            # Apply the post-op
-            self.apply_reps_inplace([postop])
-        elif reptype == InstrumentRep.STIM_CIRCUIT_STR:
-            assert isinstance(rep, str)
-
-            self.latest_measurement_labels = []
-
-            # We'll reuse the gate apply code...
-            self.apply_reps_inplace(
-                [RepTuple(rep, qubits, GateRep.STIM_CIRCUIT_STR)],
-                reset_latest_circ=False,
-            )
-
-            # but then post-process to grab the outcomes from the measurement record
-            current_mr = self.state.current_measurement_record()
-            # print(current_mr[-len(self.latest_measurement_labels):])
-            mr_entries = [
-                int(mre)
-                for mre in current_mr[-len(self.latest_measurement_labels) :]
-            ]
-            # print(mr_entries)
-            # print()
-
-            for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
+        for qbit in qubits:
+            cbit = self._measure_and_reset(qbit, reset)
+            if include_outcomes:
                 outcomes[qbit].append(cbit)
-        else:
-            raise NotImplementedError(f"Cannot apply InstrumentRep {reptype}")
+        return outcomes
+
+    @_apply_instrument_rep.register
+    def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
+        qubits = rep.qubits
+        assert len(qubits) > 0
+
+        outcomes: OutcomeDict = defaultdict(list)
+        reset = rep.reset
+        include_outcomes = rep.include_outcome
+
+        # is_rep_compatible is backend-specific, so still checked here.
+        preop = rep.pre_op
+        postop = rep.post_op
+        assert is_rep_compatible(type(preop), self.input_reps)
+        assert is_rep_compatible(type(postop), self.input_reps)
+
+        # Apply the pre-op
+        self.apply_reps_inplace([preop])
+
+        # Do perfect measurement
+        for qbit in qubits:
+            cbit = self._measure_and_reset(qbit, reset)
+            if include_outcomes:
+                outcomes[qbit].append(cbit)
+
+        # Apply the post-op
+        self.apply_reps_inplace([postop])
+        return outcomes
+
+    @_apply_instrument_rep.register
+    def _(self, rep: StimCircuitInstrumentRep) -> OutcomeDict:
+        qubits = rep.qubits
+        assert len(qubits) > 0
+
+        outcomes: OutcomeDict = defaultdict(list)
+        circuit_str = rep.circuit_str
+
+        self.latest_measurement_labels = []
+
+        # We'll reuse the gate apply code...
+        self.apply_reps_inplace(
+            [StimCircuitGateRep(circuit_str, qubits)],
+            reset_latest_circ=False,
+        )
+
+        # but then post-process to grab the outcomes from the measurement record
+        current_mr = self.state.current_measurement_record()
+        mr_entries = [
+            int(mre)
+            for mre in current_mr[-len(self.latest_measurement_labels) :]
+        ]
+
+        for qbit, cbit in zip(self.latest_measurement_labels, mr_entries):
+            outcomes[qbit].append(cbit)
 
         return outcomes
 

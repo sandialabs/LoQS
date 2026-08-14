@@ -17,16 +17,16 @@ import warnings
 from collections.abc import Iterator, Mapping
 from typing import TypeAlias, TypeVar
 
-from loqs.internal import MapCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="Frame")
 
-FrameCastableTypes: TypeAlias = "Frame | Mapping[str, object] | None"
+FrameLike: TypeAlias = "Frame | Mapping[str, object] | None"
 """Things that can be cast to [](api:Frame)."""
 
 
-class Frame(Mapping[str, object], MapCastable, Displayable):
+class Frame(Mapping[str, object], Displayable):
     """A record of the state of the simulation at a given time.
 
     The core functionality is a `dict` that relates keys to stateful objects.
@@ -55,7 +55,7 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
 
     _SERIALIZE_ATTRS = ["log", "_data", "_expired_keys", "_no_serialize_keys"]
 
-    def __init__(self, data: FrameCastableTypes = None, log: str = "N/A"):
+    def __init__(self, data: FrameLike = None, log: str = "N/A"):
         """
         Parameters
         ----------
@@ -72,14 +72,15 @@ class Frame(Mapping[str, object], MapCastable, Displayable):
         if isinstance(data, Frame):
             self._data = deepcopy(data._data)
             self.log = data.log if log == "N/A" else log
+            self._expired_keys = data._expired_keys.copy()
+            self._no_serialize_keys = data._no_serialize_keys.copy()
         elif isinstance(data, Mapping):
             self._data = dict(data)
             self.log = log
+            self._expired_keys = []
+            self._no_serialize_keys = []
         else:
             raise ValueError(f"Cannot cast {data} to a HistoryFrame")
-
-        self._expired_keys: list[str] = []
-        self._no_serialize_keys: list[str] = []
 
     # We define this one to avoid __getitem__ warning until value is actually returned
     def __contains__(self, key: object) -> bool:

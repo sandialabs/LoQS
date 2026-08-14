@@ -48,7 +48,7 @@ e.g. ('Gxpi2', 0) or ['Gcnot', ("Q0", "Q1")]
 OperationTypes: TypeAlias = LayerTypes | Sequence[LayerTypes]
 """PyGSTi backend operations type (one or several gates/layers)"""
 
-PyGSTiCircuitCastableTypes: TypeAlias = (
+PyGSTiCircuitLike: TypeAlias = (
     BasePhysicalCircuit | _Circuit | str | Sequence[OperationTypes]
 )
 """Types we can cast to a pyGSTi circuit.
@@ -64,7 +64,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: PyGSTiCircuitCastableTypes,
+        circuit: PyGSTiCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         from loqs.backends import is_backend_available
@@ -142,7 +142,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return circuit_locations
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit: _Circuit = PyGSTiPhysicalCircuit.cast(circuit).circuit
+        other_circuit: _Circuit = PyGSTiPhysicalCircuit(circuit).circuit
         self.circuit.insert_circuit_inplace(other_circuit, idx)
 
     def map_qubit_labels_inplace(
@@ -156,7 +156,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         self.circuit.map_state_space_labels_inplace(complete_mapping)
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit: _Circuit = PyGSTiPhysicalCircuit.cast(circuit).circuit
+        other_circuit: _Circuit = PyGSTiPhysicalCircuit(circuit).circuit
         end = idx + other_circuit.depth
 
         # Ensure circuit is long enough for merge

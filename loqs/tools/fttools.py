@@ -81,10 +81,10 @@ def build_discrete_error_injection_programs(
         post_twoq_gates=post_twoq_gates
     )
 
-    # Build instruction label that we will modify
-    instruction_label = InstructionLabel.cast(
-        base_program.instruction_stack[stack_idx_to_modify]
-    )
+    # Build instruction label that we will modify. Always already an
+    # InstructionLabel: InstructionStack.__getitem__ guarantees it.
+    instruction_label = base_program.instruction_stack[stack_idx_to_modify]
+    assert isinstance(instruction_label, InstructionLabel)
 
     # TODO: Split these out so we can inject one error at will at a higher level of API
     def insert_2q_error(layer, eclabel1, eclabel2, qubit1, qubit2):

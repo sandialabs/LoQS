@@ -13,19 +13,31 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from copy import deepcopy
+from functools import singledispatchmethod
 import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar
 
 
-from loqs.backends.model.basemodel import GateRep, InstrumentRep
-from loqs.backends.reps import RepTuple
+from loqs.backends.reps import (
+    GateRep,
+    InstrumentRep,
+    KrausGateRep,
+    OperationRep,
+    UnitaryGateRep,
+    ZBasisOutcomeOperationDictInstrumentRep,
+    ZBasisPrePostInstrumentRep,
+    ZBasisProjectionInstrumentRep,
+    convert as convert_rep,
+    is_rep_compatible,
+)
 from loqs.backends.state import BaseQuantumState, OutcomeDict
 from loqs.internal.serializable import Serializable
+from loqs.types import NDArray
 
 T = TypeVar("T", bound="NumpyStatevectorQuantumState")
 
 # Type aliases for static type checking
-NumpyStatevectorCastableTypes: TypeAlias = (
+NumpyStatevectorLike: TypeAlias = (
     "NumpyStatevectorQuantumState | int | np.ndarray | Sequence[int]"
 )
 """Types that this backend can cast to an underlying state object."""
@@ -69,6 +81,24 @@ benchmarking. Amplitudes may differ from "matmul" at machine precision
 """
 
 
+def _single_dense_operator(rep: GateRep) -> NDArray:
+    """Extract the single dense `(2**n, 2**n)` operator underlying `rep`,
+    regardless of its concrete `GateRep` representation. Passes
+    `unitarity_check_abstol=None` to skip `convert`'s literal-unitarity
+    check, since `rep` may be a projector-like operator (e.g. a
+    `ZBasisOutcomeOperationDictInstrumentRep` outcome operator) rather
+    than an actually-unitary one; the "exactly one dense term" structural
+    check still applies.
+
+    Raises
+    ------
+    RepConstructionError
+        If `rep` doesn't correspond to a single dense operator.
+    """
+    unitary_rep = convert_rep(rep, UnitaryGateRep, unitarity_check_abstol=None)
+    return unitary_rep.unitary
+
+
 class NumpyStatevectorQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "NumPy Statevector"
@@ -107,17 +137,18 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return self._state
 
     @property
-    def input_reps(self) -> list[GateRep | InstrumentRep]:
+    def input_reps(self) -> list[type[GateRep | InstrumentRep]]:
         return [
-            GateRep.UNITARY,
-            GateRep.KRAUS_OPERATORS,
-            InstrumentRep.ZBASIS_PROJECTION,
-            InstrumentRep.ZBASIS_PRE_POST_OPERATIONS,
+            UnitaryGateRep,
+            KrausGateRep,
+            ZBasisProjectionInstrumentRep,
+            ZBasisPrePostInstrumentRep,
+            ZBasisOutcomeOperationDictInstrumentRep,
         ]
 
     def __init__(
         self,
-        state: NumpyStatevectorCastableTypes,
+        state: NumpyStatevectorLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         seed: int | None = None,
         kraus_sampling: str | None = None,
@@ -219,60 +250,58 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return a[(slice(None),) * (axis % a.ndim) + (slice(start, end, step),)]
 
     def apply_reps(
-        self, reps: Sequence[RepTuple]
+        self, reps: Sequence[OperationRep]
     ) -> tuple[NumpyStatevectorQuantumState, OutcomeDict]:
         return super().apply_reps(reps)
 
-    def apply_reps_inplace(self, reps: Sequence[RepTuple]) -> OutcomeDict:
+    def apply_reps_inplace(self, reps: Sequence[OperationRep]) -> OutcomeDict:
         outcomes: OutcomeDict = defaultdict(list)
 
-        for reptuple in reps:
-            reptype = reptuple.reptype
-            if isinstance(reptype, GateRep):
-                self._apply_gate_rep(reptuple)
-            elif isinstance(reptype, InstrumentRep):
-                rep_outcomes = self._apply_instrument_rep(reptuple)
+        for rep in reps:
+            if isinstance(rep, GateRep):
+                self._apply_gate_rep(rep)
+            elif isinstance(rep, InstrumentRep):
+                rep_outcomes = self._apply_instrument_rep(rep)
 
                 # Merge outcomes with already observed outcomes
                 for k, v in rep_outcomes.items():
                     outcomes[k].extend(v)
             else:
-                raise ValueError(f"Cannot apply unknown reptype {reptype}")
+                raise ValueError(
+                    f"Cannot apply unknown rep type {type(rep).__name__}"
+                )
 
         return outcomes
 
-    def _apply_gate_rep(self, reptuple: RepTuple) -> None:
-        rep = reptuple.rep
+    @singledispatchmethod
+    def _apply_gate_rep(self, rep: GateRep) -> None:
+        raise NotImplementedError(f"Cannot apply {type(rep).__name__} to {self.name}")
 
-        qubits = reptuple.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
+    @_apply_gate_rep.register
+    def _(self, rep: UnitaryGateRep) -> None:
+        qubits = rep.qubits
+        assert len(qubits) > 0
+        unitary = rep.unitary
 
-        reptype = reptuple.reptype
+        self._state = self._block_matvec(unitary, qubits, self.state)
 
-        if reptype == GateRep.UNITARY:
-            assert isinstance(rep, np.ndarray)
-            assert rep.shape == (2 ** len(qubits), 2 ** len(qubits))
+    @_apply_gate_rep.register
+    def _(self, rep: KrausGateRep) -> None:
+        qubits = rep.qubits
+        assert len(qubits) > 0
 
-            self._state = self._block_matvec(rep, qubits, self.state)
-        elif reptype == GateRep.KRAUS_OPERATORS:
-            assert isinstance(rep, (list, tuple))
-            assert all([isinstance(r, tuple) and len(r) == 2 for r in rep])
-            assert all(
-                [
-                    isinstance(r[0], np.ndarray)
-                    and r[0].shape == (2 ** len(qubits), 2 ** len(qubits))
-                    for r in rep
-                ]
-            )
+        kraus_operators = rep.kraus_operators
+        assert all(
+            K.shape == (2 ** len(qubits), 2 ** len(qubits))
+            for K, _ in kraus_operators
+        )
 
-            if self.kraus_sampling == "choice":
-                self._apply_kraus_choice(rep, qubits)
-            else:
-                self._apply_kraus_lazy(rep, qubits)
-
-            assert np.isclose(np.linalg.norm(self.state), 1)
+        if self.kraus_sampling == "choice":
+            self._apply_kraus_choice(kraus_operators, qubits)
         else:
-            raise ValueError(f"Cannot apply GateRep {reptype}")
+            self._apply_kraus_lazy(kraus_operators, qubits)
+
+        assert np.isclose(np.linalg.norm(self.state), 1)
 
     def _apply_kraus_lazy(self, rep, qubits) -> None:
         """Apply a Kraus channel using lazy inverse-CDF sampling.
@@ -435,83 +464,95 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             vec, vec_in_idxs, submat, submat_idxs, vec_out_idxs, optimize=True
         )
 
-    def _apply_instrument_rep(self, reptuple: RepTuple) -> OutcomeDict:
-        rep = reptuple.rep
-        assert isinstance(rep, (tuple, list)) and len(rep) > 1
-        reset = rep[0]
-        include_outcomes = rep[1]
+    @singledispatchmethod
+    def _apply_instrument_rep(self, rep: InstrumentRep) -> OutcomeDict:
+        raise NotImplementedError(
+            f"Cannot apply {type(rep).__name__} to {self.name}"
+        )
 
-        qubits = reptuple.qubits
-        assert isinstance(qubits, (tuple, list)) and len(qubits) > 0
-
-        reptype = reptuple.reptype
-        assert isinstance(reptype, InstrumentRep)
+    @_apply_instrument_rep.register
+    def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
+        qubits = rep.qubits
+        assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
+        reset = rep.reset
+        include_outcomes = rep.include_outcome
 
-        if reptype == InstrumentRep.ZBASIS_PROJECTION:
-            # TODO: Could do it all at once probably
-            # but currently just copying measureRenormalizeQubit behavior
-            for qbit in qubits:
-                cbit = self._apply_projective_z_measure(qbit, reset)
-                if include_outcomes:
-                    outcomes[qbit].append(cbit)
-        elif reptype == InstrumentRep.ZBASIS_PRE_POST_OPERATIONS:
-            # Check we can apply the reps
-            preop = rep[2]
-            postop = rep[3]
-            assert reset in [None, 0, 1]
-            assert preop.reptype in self.input_reps
-            assert postop.reptype in self.input_reps
-            assert isinstance(preop.reptype, GateRep)
-            assert isinstance(postop.reptype, GateRep)
-            # TODO: Strict subsets is OK too
-            assert preop.qubits == qubits
-            assert postop.qubits == qubits
-
-            # Apply the pre-op
-            self.apply_reps_inplace([preop])
-
-            # Do perfect measurement
-            for qbit in qubits:
-                cbit = self._apply_projective_z_measure(qbit, reset)
-                if include_outcomes:
-                    outcomes[qbit].append(cbit)
-
-            # Apply the post-op
-            self.apply_reps_inplace([postop])
-        elif reptype == InstrumentRep.ZBASIS_OUTCOME_OPERATION_DICT:
-            if len(qubits) > 1:
-                raise NotImplementedError(
-                    "More than 1-qubit instruments not yet implemented"
-                )
-            instrument_dict = rep[0]
-            assert set(instrument_dict.keys()) == set((0, 1))
-
-            # Compute the probability of measuring 0
-            # (Same as Kraus logic in _apply_gate_rep)
-            prod = self._block_matvec(
-                instrument_dict[0].rep, qubits, self.state
-            )
-            prob_0 = np.vdot(prod, prod)
-
-            # Use RNG to see if we measure 0 or 1
-            assert self._rng is not None
-            m = self._rng.random()
-            cbit = 0 if m < prob_0 else 1
+        # TODO: Could do it all at once probably
+        # but currently just copying measureRenormalizeQubit behavior
+        for qbit in qubits:
+            cbit = self._apply_projective_z_measure(qbit, reset)
             if include_outcomes:
-                outcomes[qubits[0]].append(cbit)
+                outcomes[qbit].append(cbit)
+        return outcomes
 
-            # Apply the correct PTM based on the classical output we see
-            # and renormalize
-            if cbit == 0:
-                # We already computed this product
-                self._state = prod / np.sqrt(prob_0)
-            else:
-                print(f"{instrument_dict[1].rep=}")
-                self._state = self._block_matvec(
-                    instrument_dict[1].rep, qubits, self.state
-                ) / np.sqrt(1 - prob_0)
+    @_apply_instrument_rep.register
+    def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
+        qubits = rep.qubits
+        assert len(qubits) > 0
+
+        outcomes: OutcomeDict = defaultdict(list)
+        reset = rep.reset
+        include_outcomes = rep.include_outcome
+
+        # is_rep_compatible is backend-specific, so still checked here.
+        preop = rep.pre_op
+        postop = rep.post_op
+        assert is_rep_compatible(type(preop), self.input_reps)
+        assert is_rep_compatible(type(postop), self.input_reps)
+
+        # Apply the pre-op
+        self.apply_reps_inplace([preop])
+
+        # Do perfect measurement
+        for qbit in qubits:
+            cbit = self._apply_projective_z_measure(qbit, reset)
+            if include_outcomes:
+                outcomes[qbit].append(cbit)
+
+        # Apply the post-op
+        self.apply_reps_inplace([postop])
+        return outcomes
+
+    @_apply_instrument_rep.register
+    def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
+        qubits = rep.qubits
+        assert len(qubits) > 0
+
+        outcomes: OutcomeDict = defaultdict(list)
+        include_outcomes = rep.include_outcome
+
+        if len(qubits) > 1:
+            raise NotImplementedError(
+                "More than 1-qubit instruments not yet implemented"
+            )
+        instrument_dict = rep.outcome_ops
+        assert set(instrument_dict.keys()) == set((0, 1))
+
+        # Compute the probability of measuring 0
+        # (Same as Kraus logic in _apply_gate_rep)
+        prod = self._block_matvec(
+            _single_dense_operator(instrument_dict[0]), qubits, self.state
+        )
+        prob_0 = np.vdot(prod, prod)
+
+        # Use RNG to see if we measure 0 or 1
+        assert self._rng is not None
+        m = self._rng.random()
+        cbit = 0 if m < prob_0 else 1
+        if include_outcomes:
+            outcomes[qubits[0]].append(cbit)
+
+        # Apply the correct PTM based on the classical output we see
+        # and renormalize
+        if cbit == 0:
+            # We already computed this product
+            self._state = prod / np.sqrt(prob_0)
+        else:
+            self._state = self._block_matvec(
+                _single_dense_operator(instrument_dict[1]), qubits, self.state
+            ) / np.sqrt(1 - prob_0)
 
         return outcomes
 

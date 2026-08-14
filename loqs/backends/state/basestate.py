@@ -15,9 +15,8 @@ from collections.abc import Sequence
 import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
-from loqs.backends.model.basemodel import GateRep, InstrumentRep
-from loqs.backends.reps import RepTuple
-from loqs.internal import Castable, Displayable
+from loqs.backends.reps import GateRep, InstrumentRep, OperationRep
+from loqs.internal import Displayable
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="BaseQuantumState")
@@ -26,7 +25,7 @@ OutcomeDict: TypeAlias = dict[str | int, list[int]]
 """A type alias for outcome dictionaries."""
 
 
-class BaseQuantumState(Castable, Displayable):
+class BaseQuantumState(Displayable):
     """Base class for an object that holds a (physical) quantum state."""
 
     name: ClassVar[str]
@@ -53,19 +52,23 @@ class BaseQuantumState(Castable, Displayable):
 
     @property
     @abstractmethod
-    def input_reps(self) -> list[GateRep | InstrumentRep]:
-        """Gate and instrument reps this state can take as input.
+    def input_reps(self) -> list[type[GateRep | InstrumentRep]]:
+        """Gate and instrument rep classes this state can take as input.
 
         Returns
         -------
-        list[GateRep | InstrumentRep]
-            List of operation representation types that this quantum state backend
-            can process and apply.
+        list[type[GateRep | InstrumentRep]]
+            List of operation representation classes that this quantum
+            state backend can process and apply. Compatibility with a
+            model's declared output representations is checked via
+            `issubclass` (see [](api:is_rep_compatible)), so a state may
+            declare a coarse-grained entry like `InstrumentRep` to accept
+            any instrument representation.
         """
         pass
 
     @abstractmethod
-    def apply_reps_inplace(self, reps: Sequence[RepTuple]) -> OutcomeDict:
+    def apply_reps_inplace(self, reps: Sequence[OperationRep]) -> OutcomeDict:
         """Apply the reps to the state in-place.
 
         Parameters
@@ -82,7 +85,7 @@ class BaseQuantumState(Castable, Displayable):
         pass
 
     @abstractmethod
-    def apply_reps(self: T, reps: Sequence[RepTuple]) -> tuple[T, OutcomeDict]:
+    def apply_reps(self: T, reps: Sequence[OperationRep]) -> tuple[T, OutcomeDict]:
         """Apply the reps to the state in-place.
 
         Parameters

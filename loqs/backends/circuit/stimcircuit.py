@@ -22,18 +22,21 @@ from loqs.backends import BasePhysicalCircuit, is_backend_available
 if TYPE_CHECKING:
     # Type checking imports - these won't be executed at runtime
     from stim import Circuit as _Circuit
+    from stim import CircuitRepeatBlock as _CircuitRepeatBlock
 else:
     # Runtime imports - these will be attempted only when needed
     try:
         from stim import Circuit as _Circuit
+        from stim import CircuitRepeatBlock as _CircuitRepeatBlock
     except ImportError:
         _Circuit = Any  # type: ignore
+        _CircuitRepeatBlock = Any  # type: ignore
 
 ## Type aliases for static type checking
 QubitTypes: TypeAlias = str | int
 """Qubit types for builtins"""
 
-STIMCircuitCastableTypes: TypeAlias = BasePhysicalCircuit | str | _Circuit
+STIMCircuitLike: TypeAlias = BasePhysicalCircuit | str | _Circuit
 """Types we can cast to a STIM circuit."""
 
 r"""
@@ -61,17 +64,98 @@ STIM circuit grammar
 """
 
 
+def _is_pauli_target(target) -> bool:
+    """Whether `target` is a Pauli-basis-annotated qubit target (e.g. the
+    `X0`/`Y1`/`Z2` targets of an `MPP` instruction) -- these reference a
+    qubit index just like a plain qubit target, but `is_qubit_target` is
+    `False` for them.
+    """
+    return target.is_x_target or target.is_y_target or target.is_z_target
+
+
 def _get_used_stim_indices(circuit: _Circuit) -> list[int]:
-    """Return sorted list of qubit indices that appear as qubit targets."""
+    """Return sorted list of qubit indices that appear as qubit targets.
+
+    Recurses into ``REPEAT`` block bodies, since qubits referenced only
+    inside a repeat block are still genuinely used by the circuit.
+    """
     used_indices = set()
     for instruction in circuit:
-        # Skip REPEAT blocks as they don't have qubit targets
-        if instruction.name == "REPEAT":
+        if isinstance(instruction, _CircuitRepeatBlock):
+            used_indices.update(
+                _get_used_stim_indices(instruction.body_copy())
+            )
             continue
         for target in instruction.targets_copy():
-            if target.is_qubit_target:
+            if target.is_qubit_target or _is_pauli_target(target):
                 used_indices.add(target.value)
     return sorted(used_indices)
+
+
+def _reindex_stim_circuit_lines(
+    circuit: _Circuit, index_map: dict[int, int]
+) -> list[str]:
+    """Return the list of remapped circuit-text lines for `circuit`
+    (recursing into any `REPEAT` block bodies), without parsing them back
+    into a `stim.Circuit` -- used by `_reindex_stim_circuit` itself, and
+    recursively for nested `REPEAT` blocks.
+    """
+    circuit_lines = []
+
+    for instruction in circuit:
+        if isinstance(instruction, _CircuitRepeatBlock):
+            body_lines = _reindex_stim_circuit_lines(
+                instruction.body_copy(), index_map
+            )
+            circuit_lines.append(f"REPEAT {instruction.repeat_count} {{")
+            circuit_lines.extend(body_lines)
+            circuit_lines.append("}")
+            continue
+
+        if instruction.name == "" or instruction.name.startswith("#"):
+            # Skip comments and annotations for now
+            continue
+
+        # Start with instruction name, attaching any gate arguments
+        # directly in parentheses (e.g. "X_ERROR(0.1)"), matching STIM's
+        # actual syntax -- these are not separate space-separated tokens.
+        gate_args = instruction.gate_args_copy()
+        if gate_args:
+            args_str = ", ".join(str(arg) for arg in gate_args)
+            line_parts = [f"{instruction.name}({args_str})"]
+        else:
+            line_parts = [instruction.name]
+
+        # Process targets
+        for target in instruction.targets_copy():
+            if target.is_qubit_target or _is_pauli_target(target):
+                # Remap qubit target (optionally Pauli-basis-annotated,
+                # e.g. the X0/Y1/Z2 targets of an MPP instruction)
+                new_idx = index_map[target.value]
+                prefix = (
+                    "X"
+                    if target.is_x_target
+                    else "Y" if target.is_y_target else "Z" if target.is_z_target else ""
+                )
+                inv = "!" if target.is_inverted_result_target else ""
+                line_parts.append(f"{inv}{prefix}{new_idx}")
+            else:
+                # Pass through non-qubit targets unchanged
+                if target.is_inverted_result_target:
+                    line_parts.append(f"!{target.value}")
+                elif target.is_measurement_record_target:
+                    line_parts.append(f"rec[{target.value}]")
+                elif target.is_combiner:
+                    line_parts.append("*")
+                elif target.is_sweep_bit_target:
+                    line_parts.append(f"sweep[{target.value}]")
+                else:
+                    # Fallback: use the string representation
+                    line_parts.append(str(target.value))
+
+        circuit_lines.append(" ".join(line_parts))
+
+    return circuit_lines
 
 
 def _reindex_stim_circuit(
@@ -80,45 +164,7 @@ def _reindex_stim_circuit(
     """Return a new STIM circuit with qubit targets remapped according to index_map."""
     # Build the circuit string and parse it - this is more reliable than trying to
     # reconstruct instructions manually with the STIM API
-    circuit_lines = []
-
-    for instruction in circuit:
-        if instruction.name == "" or instruction.name.startswith("#"):
-            # Skip comments and annotations for now
-            continue
-
-        # Start with instruction name
-        line_parts = [instruction.name]
-
-        # Add gate arguments if any
-        gate_args = instruction.gate_args_copy()
-        if gate_args:
-            line_parts.extend(str(arg) for arg in gate_args)
-
-        # Process targets
-        for target in instruction.targets_copy():
-            if target.is_qubit_target:
-                # Remap qubit target
-                new_idx = index_map[target.value]
-                if target.is_inverted_result_target:
-                    line_parts.append(f"!{new_idx}")
-                else:
-                    line_parts.append(str(new_idx))
-            else:
-                # Pass through non-qubit targets unchanged
-                if target.is_inverted_result_target:
-                    line_parts.append(f"!{target.value}")
-                elif target.is_measurement_record_target:
-                    line_parts.append(f"rec[{target.value}]")
-                elif target.is_combiner_target:
-                    line_parts.append("*")
-                elif target.is_relative_target:
-                    line_parts.append(f"+{target.value}")
-                else:
-                    # Fallback: use the string representation
-                    line_parts.append(str(target.value))
-
-        circuit_lines.append(" ".join(line_parts))
+    circuit_lines = _reindex_stim_circuit_lines(circuit, index_map)
 
     # Create new circuit from the rebuilt string
     return _Circuit("\n".join(circuit_lines))
@@ -358,7 +404,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: STIMCircuitCastableTypes,
+        circuit: STIMCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         suppress_tick_warning: bool = False,
     ) -> None:
@@ -531,7 +577,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idx:
             Starting index to begin insert. If -1, append to the end.
         """
-        other_circuit = STIMPhysicalCircuit.cast(circuit)
+        other_circuit = STIMPhysicalCircuit(circuit)
 
         unrolled = self._unroll_repeats()
         layers = unrolled.split("TICK\n")
@@ -575,7 +621,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idx : int
             Layer index to start merge
         """
-        other_circuit = STIMPhysicalCircuit.cast(circuit)
+        other_circuit = STIMPhysicalCircuit(circuit)
 
         # Build index map for the other circuit
         index_map = {}

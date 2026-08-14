@@ -15,18 +15,18 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeVar
 
 from loqs.core.instructions.instruction import Instruction
-from loqs.internal import SeqCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="InstructionLabel")
 
-InstructionLabelCastableTypes: TypeAlias = (
+InstructionLabelLike: TypeAlias = (
     "Instruction | str | tuple[Instruction | str, str | None] | tuple[Instruction | str, str | None, Sequence | None] | tuple[Instruction | str, str | None, Sequence | None, Mapping | None] | InstructionLabel"
 )
 """Objects that can be cast to a [](api:InstructionLabel)."""
 
 
-class InstructionLabel(SeqCastable, Displayable):
+class InstructionLabel(Displayable):
     """Instruction labels intended to be elements of an [](api:InstructionStack).
 
     These are also castable from 1- to 4-tuples, so users
@@ -167,27 +167,28 @@ class InstructionLabel(SeqCastable, Displayable):
         return s
 
     @classmethod
-    def cast(cls, obj: object) -> InstructionLabel:
-        """Cast to a [](api:InstructionLabel) object.
+    def from_raw(cls, obj: object) -> InstructionLabel:
+        """Build an [](api:InstructionLabel) from a loosely-typed raw value.
 
-        Unlike most castable objects, [](api:InstructionLabel)
-        requires at least two inputs. This version of cast additionally
-        allows a tuple/list variant for the multiple arguments and
-        disallows a single object being passed in.
+        Several call sites hand this class a genuinely ambiguous raw
+        blob -- a bare `str`/[](api:Instruction), a variable-length tuple
+        to unpack, an already-built [](api:InstructionLabel), or a kwarg
+        dict -- which a constructor's positional-argument signature alone
+        cannot disambiguate (in particular, it cannot un-blob a tuple
+        handed to it as a single object).
 
         Parameters
         ----------
         obj:
-            A castable object that is either:
-            - Already a [](api:InstructionLabel) object,
-            in which case `obj` is returned
+            A raw value that is either:
+            - Already an [](api:InstructionLabel) object
             - A kwarg dict that is passed into the constructor
             - A sequence of the arguments of the
             [](api:InstructionLabel) constructor
 
         Returns
         -------
-            A [](api:InstructionLabel) object
+            An [](api:InstructionLabel) object
         """
         if isinstance(obj, InstructionLabel):
             # We are already the correct class, perform no copy

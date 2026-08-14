@@ -12,10 +12,11 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 
 from loqs.backends import (
-    GateRep,
     DictNoiseModel,
     NumpyStatevectorQuantumState,
     STIMQuantumState,
+    StimCircuitGateRep,
+    UnitaryGateRep,
 )
 from loqs.core import QuantumProgram
 from loqs.core.recordables.pauliframe import PauliFrame
@@ -51,7 +52,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
     )
     model = codepack_surf17.create_ideal_model(
         all_qubits,
-        gaterep=GateRep.STIM_CIRCUIT_STR,
+        gaterep=StimCircuitGateRep,
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
@@ -165,7 +166,7 @@ class TestTwoPatchFoundations:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=3)
         model = codepack_surf17.create_ideal_model(
             qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
 
@@ -406,7 +407,7 @@ class TestTransversalCnot:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=3)
         model = codepack_surf17.create_ideal_model(
             all_q,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
 
@@ -703,7 +704,7 @@ class TestDenseBackendSmoke:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=2)
         model = codepack_surf17.create_ideal_model(
             all_q,
-            gaterep=GateRep.UNITARY,
+            gaterep=UnitaryGateRep,
             model_backend=DictNoiseModel,
         )
         program = QuantumProgram(

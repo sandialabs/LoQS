@@ -37,7 +37,7 @@ def on_nav(nav, config, files):
     def walk_items(items):
         for item in items:
             if hasattr(item, "url") and item.url == "/reference":
-                item.url = f"{rtd_prefix}/reference"
+                item.url = f"{rtd_prefix}/reference/"
             if hasattr(item, "children") and item.children:
                 walk_items(item.children)
 

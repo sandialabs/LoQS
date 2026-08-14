@@ -8,7 +8,8 @@ pygsti = pytest.importorskip("pygsti")
 stim = pytest.importorskip("stim")
 
 
-from loqs.backends import GateRep, PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
+from loqs.backends import PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
+from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.core.instructions import builders
@@ -25,9 +26,9 @@ class TestSteaneCodepack:
         qubits = ["A0", "A1", "A2"] + [f"D{i+3}" for i in range(7)]
 
         if state_backend == QSimQuantumState:
-            gaterep = GateRep.QSIM_SUPEROPERATOR
+            gaterep = QSimSuperopGateRep
         else:
-            gaterep = GateRep.STIM_CIRCUIT_STR
+            gaterep = StimCircuitGateRep
 
         ideal_model = codepack_steane.create_ideal_model(qubits, gaterep=gaterep, model_backend=model_backend)
 
@@ -169,7 +170,7 @@ class TestSteaneCodepack:
         code = codepack_steane.create_qec_code(circuit_backend=circuit_backend)
         model = codepack_steane.create_ideal_model(
             self.qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
 

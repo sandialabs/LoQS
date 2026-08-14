@@ -14,18 +14,18 @@ from collections.abc import Iterator, Mapping, MutableMapping
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core.recordables.qeccodepatch import QECCodePatch
-from loqs.internal import MapCastable, Displayable
+from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="PatchDict")
 
-PatchDictCastableTypes: TypeAlias = (
+PatchDictLike: TypeAlias = (
     "PatchDict | Mapping[str, QECCodePatch] | None"
 )
 """Objects that can be cast to a [](api:PatchDict)."""
 
 
-class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
+class PatchDict(MutableMapping[str, QECCodePatch], Displayable):
     """A collection of [](api:QECCodePatch) objects.
 
     This is a dict-like object where the keys are patch labels (literally,
@@ -53,7 +53,7 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
     """Underlying dict of patch labels and [](api:QECCodePatch) objects.
     """
 
-    def __init__(self, patches: PatchDictCastableTypes = None) -> None:
+    def __init__(self, patches: PatchDictLike = None) -> None:
         """
         Parameters
         ----------
@@ -65,7 +65,7 @@ class PatchDict(MutableMapping[str, QECCodePatch], MapCastable, Displayable):
             patches = {}
 
         if isinstance(patches, PatchDict):
-            self.patches = self.patches
+            self.patches = dict(patches.patches)
         else:
             assert all([isinstance(k, str) for k in patches.keys()])
             assert all([isinstance(v, QECCodePatch) for v in patches.values()])
