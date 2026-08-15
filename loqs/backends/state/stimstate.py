@@ -249,7 +249,7 @@ class STIMQuantumState(BaseQuantumState):
 
     @_apply_gate_rep.register
     def _(self, rep: StimCircuitGateRep) -> None:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         # String qubit labels are this backend's own requirement, not a
         # general OperationRep invariant, so still checked here.
         assert all(isinstance(q, str) for q in qubits)
@@ -334,7 +334,7 @@ class STIMQuantumState(BaseQuantumState):
 
     @_apply_gate_rep.register
     def _(self, rep: ProbabilisticStimGateRep) -> None:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         # String qubit labels are this backend's own requirement (see
         # the StimCircuitGateRep overload above).
         assert all(isinstance(q, str) for q in qubits)
@@ -357,7 +357,7 @@ class STIMQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -372,7 +372,7 @@ class STIMQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -400,7 +400,7 @@ class STIMQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: StimCircuitInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)

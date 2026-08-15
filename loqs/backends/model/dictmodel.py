@@ -359,7 +359,7 @@ class DictNoiseModel(BaseNoiseModel):
                     generic = self.gate_dict.get(label[0], None)
                     if generic is not None:
                         assert isinstance(generic, GateRep)
-                        rep = generic.with_qubits(label[1])
+                        rep = generic.with_qubit_labels(label[1])
 
                 if rep is None:
                     # Failed, now look up in instruments
@@ -370,7 +370,7 @@ class DictNoiseModel(BaseNoiseModel):
                     generic = self.inst_dict.get(label[0], None)
                     if generic is not None:
                         assert isinstance(generic, InstrumentRep)
-                        rep = generic.with_qubits(label[1])
+                        rep = generic.with_qubit_labels(label[1])
 
                 assert rep is not None, f"Failed to look up {label}"
                 assert isinstance(rep, OperationRep)
@@ -425,8 +425,8 @@ def _merge_common_rep(
     prev = common.get(command)
 
     if not isinstance(generic, StimCircuitPayloadMixin):
-        prev_qubits: tuple = prev.qubits if prev is not None else tuple()
-        common[command] = generic.with_qubits(prev_qubits + qt)
+        prev_qubits: tuple = prev.qubit_labels if prev is not None else tuple()
+        common[command] = generic.with_qubit_labels(prev_qubits + qt)
         return
 
     if prev is None:
@@ -447,16 +447,16 @@ def _merge_common_rep(
                     "qubits are handled by appending further trailing "
                     f"indices; got trailing tokens {trailing!r}."
                 )
-        common[command] = generic.with_qubits(qt)
+        common[command] = generic.with_qubit_labels(qt)
         return
 
     new_lines = [
-        line + "".join(f" {len(prev.qubits) + i}" for i in range(len(qt)))
+        line + "".join(f" {len(prev.qubit_labels) + i}" for i in range(len(qt)))
         for line in prev.circuit_str.split("\n")
     ]
     merged = copy.copy(generic)
     merged.circuit_str = "\n".join(new_lines)
-    merged.qubits = prev.qubits + qt
+    merged.qubit_labels = prev.qubit_labels + qt
     common[command] = merged
 
 

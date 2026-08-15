@@ -109,6 +109,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         "seed",
         "kraus_sampling",
         "contraction",
+        "d",
     ]
 
     _SERIALIZE_ATTRS_MAP = {"_state": "state"}
@@ -124,6 +125,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     contraction: str
     """Operator contraction mode; see [](api:CONTRACTION_MODES)."""
+
+    d: list[int]
+    """List of dimensions of each subsystem (e.g. 2 for qubits, 3 for qutrits)."""
 
     @property
     def state(self) -> np.ndarray:
@@ -153,6 +157,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         seed: int | None = None,
         kraus_sampling: str | None = None,
         contraction: str | None = None,
+        d: int | Sequence[int] = 2,
     ) -> None:
         """
         Parameters
@@ -184,31 +189,56 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         self.kraus_sampling = kraus_sampling
         self.contraction = contraction
 
+        # Determine number of subsystems
+        if qubit_labels is not None:
+            num_subsystems = len(qubit_labels)
+        elif isinstance(state, NumpyStatevectorQuantumState):
+            num_subsystems = len(state.qubit_labels)
+        elif isinstance(state, int):
+            num_subsystems = state
+        elif isinstance(state, np.ndarray):
+            if len(state.shape) > 1:
+                num_subsystems = len(state.shape)
+            else:
+                if isinstance(d, int):
+                    num_subsystems = int(np.round(np.log2(state.flatten().shape[0])))
+                else:
+                    num_subsystems = len(d)
+        elif isinstance(state, Sequence) and not isinstance(state, str):
+            num_subsystems = len(state)
+        else:
+            raise ValueError(f"Cannot determine number of subsystems from {state}")
+
+        # Resolve dimensions list
+        if isinstance(d, int):
+            self.d = [d] * num_subsystems
+        else:
+            self.d = list(d)
+        assert len(self.d) == num_subsystems, f"Length of d ({len(self.d)}) must match number of subsystems ({num_subsystems})"
+
         if isinstance(state, NumpyStatevectorQuantumState):
             self._state = state._state
             self.qubit_labels = state.qubit_labels
             self.seed = state.seed
             self._rng = state._rng
+            self.d = state.d
             if kraus_sampling is None:
                 self.kraus_sampling = state.kraus_sampling
             if contraction is None:
                 self.contraction = state.contraction
         elif isinstance(state, int):
-            self._state = np.zeros((2,) * state, np.complex128)
+            self._state = np.zeros(tuple(self.d), np.complex128)
             self._state[(0,) * state] = 1
         elif isinstance(state, np.ndarray):
             self._state = state.copy()
             curr_shape = state.shape
-            if not all([dim == 2 for dim in curr_shape]):
-                # This is not the right shape
-                # Flatten and take as (2,)*num_qubits
-                num_qubits = np.log2(self.state.flatten().shape[0])
-                assert num_qubits.is_integer()
-                self._state = self.state.reshape((2,) * int(num_qubits))
+            if list(curr_shape) != self.d:
+                # Flat or mismatch, reshape to self.d
+                self._state = self.state.reshape(tuple(self.d))
         elif isinstance(state, Sequence) and all(
-            [el in [0, 1] for el in state]
+            [el in range(self.d[i]) for i, el in enumerate(state)]
         ):
-            self._state = np.zeros((2,) * len(state), np.complex128)
+            self._state = np.zeros(tuple(self.d), np.complex128)
             self._state[*state] = 1
         else:
             raise ValueError(
@@ -239,8 +269,8 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         )
 
     def __str__(self) -> str:
-        s = f"Physical {self.name} state:\n"
-        s += f"  NumPy statevector on {self.state.shape[0]} qubits"
+        s = f"Physical {self.name} state (ds={self.d}):\n"
+        s += f"  NumPy statevector on {len(self.qubit_labels)} subsystems"
         s += f" ([{self.qubit_labels[0]},...,{self.qubit_labels[-1]}])\n"
         return s
 
@@ -279,21 +309,34 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_gate_rep.register
     def _(self, rep: UnitaryGateRep) -> None:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
         unitary = rep.unitary
+
+        target_dims = [self.d[self.qubit_labels.index(q)] for q in qubits]
+        total_target_dim = int(np.prod(target_dims))
+        assert unitary.shape == (total_target_dim, total_target_dim), (
+            f"UnitaryGateRep on {qubits} has shape {unitary.shape}, but "
+            f"the state's subsystem dimensions {target_dims} expect shape "
+            f"({total_target_dim}, {total_target_dim})"
+        )
 
         self._state = self._block_matvec(unitary, qubits, self.state)
 
     @_apply_gate_rep.register
     def _(self, rep: KrausGateRep) -> None:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         kraus_operators = rep.kraus_operators
+        target_dims = [self.d[self.qubit_labels.index(q)] for q in qubits]
+        total_target_dim = int(np.prod(target_dims))
         assert all(
-            K.shape == (2 ** len(qubits), 2 ** len(qubits))
+            K.shape == (total_target_dim, total_target_dim)
             for K, _ in kraus_operators
+        ), (
+            f"KrausGateRep on {qubits} has an operator shape inconsistent "
+            f"with the state's subsystem dimensions {target_dims}"
         )
 
         if self.kraus_sampling == "choice":
@@ -409,7 +452,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     def _block_matvec_matmul(self, submat, sublbls, vec) -> np.ndarray:
         n_sub = len(sublbls)
-        assert len(submat.flat) == 4**n_sub
 
         # Axes of the state tensor targeted by the operator
         try:
@@ -418,6 +460,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             raise ValueError(
                 "Rep's qubit is not in state's qubit labels\n" + str(e)
             )
+        target_dims = [self.d[axis] for axis in axes]
+        total_target_dim = int(np.prod(target_dims))
+        assert len(submat.flat) == total_target_dim ** 2
 
         # Bring the target axes to the front (in sublbls order, matching the
         # operator's row/column qubit ordering), contract with a single BLAS
@@ -425,7 +470,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         # result contiguously: returning a strided view makes every
         # downstream contraction read badly-ordered memory and is a net loss
         moved = np.moveaxis(vec, axes, range(n_sub))
-        out = submat.reshape(2**n_sub, 2**n_sub) @ moved.reshape(2**n_sub, -1)
+        out = submat.reshape(total_target_dim, total_target_dim) @ moved.reshape(total_target_dim, -1)
         return np.ascontiguousarray(
             np.moveaxis(out.reshape(moved.shape), range(n_sub), axes)
         )
@@ -435,12 +480,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         # implementation; must remain equivalent to _block_matvec_matmul
         n_sub = len(sublbls)
         n_tot = len(vec.shape)
-        assert len(submat.flat) == 4**n_sub
-        submat = submat.reshape((2,) * 2 * n_sub)
-
-        # Get contraction indices
-        # Our vector will just have 0..n_qubits-1 indices to start
-        vec_in_idxs = list(range(n_tot))
 
         # We will need n_qubits..n_qubits+n_subqubits temp indices (vals of the dict below)
         # These will map to the qubit labels in our qubit subset (keys of the dict below)
@@ -453,6 +492,14 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             raise ValueError(
                 "Rep's qubit is not in state's qubit labels\n" + str(e)
             )
+        target_dims = [self.d[axis] for axis in sub_idx_map]
+        total_target_dim = int(np.prod(target_dims))
+        assert len(submat.flat) == total_target_dim ** 2
+        submat = submat.reshape(tuple(target_dims) + tuple(target_dims))
+
+        # Get contraction indices
+        # Our vector will just have 0..n_qubits-1 indices to start
+        vec_in_idxs = list(range(n_tot))
         # Our submatrix has indices of temp labels (rows, output states) and subset labels (cols, input states)
         submat_idxs = list(sub_idx_map.values()) + list(sub_idx_map.keys())
 
@@ -472,7 +519,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisProjectionInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -489,7 +536,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisPrePostInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -517,7 +564,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @_apply_instrument_rep.register
     def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
-        qubits = rep.qubits
+        qubits = rep.qubit_labels
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
@@ -558,28 +605,30 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     def _apply_projective_z_measure(self, qbit, reset) -> int:
         target_idx = self.qubit_labels.index(qbit)
+        dim = self.d[target_idx]
 
-        # Compute probability of measuring 0 on the target qubit
-        target_slice = self._slice(self.state, target_idx, end=1)
-        prob_0 = np.vdot(target_slice.flat, target_slice.flat)
+        probs = []
+        for c in range(dim):
+            target_slice = self._slice(self.state, target_idx, start=c, end=c+1)
+            prob_c = np.vdot(target_slice.flat, target_slice.flat).real
+            probs.append(max(prob_c, 0.0))
+        
+        probs = np.array(probs)
+        sum_probs = np.sum(probs)
+        if sum_probs > 0:
+            probs = probs / sum_probs
+        else:
+            probs = np.ones(dim) / dim
 
-        # Probabilistically select 0 or 1 outcome
         assert self._rng is not None
-        cbit = 0 if self._rng.random() < prob_0 else 1
+        cbit = self._rng.choice(dim, p=probs)
 
-        # Get the projector (I'll wrap normalization into it)
-        proj_mat = np.zeros((2, 2), np.complex128)
+        proj_mat = np.zeros((dim, dim), np.complex128)
         if reset is None:
             reset = cbit
-        assert reset in [0, 1], "reset must be None, 0, or 1"
-        if cbit == 0:
-            # Measuring 0 (normalize by prob 0) and reset determines output row
-            proj_mat[reset, 0] = 1 / np.sqrt(prob_0)
-        else:
-            # Measuring 1 (normalize by prob 1) and reset determines output row
-            proj_mat[reset, 1] = 1 / np.sqrt(1 - prob_0)
+        assert reset in range(dim), f"reset must be in range(dim), got {reset}"
+        proj_mat[reset, cbit] = 1 / np.sqrt(probs[cbit])
 
-        # Apply projector
         self._state = self._block_matvec(proj_mat, [qbit], self.state)
 
         return cbit
@@ -595,6 +644,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             seed=self.seed,
             kraus_sampling=self.kraus_sampling,
             contraction=self.contraction,
+            d=self.d,
         )
         new_state._rng = deepcopy(self._rng)
         return new_state
@@ -607,9 +657,18 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         """
         n_qubits = len(self.qubit_labels)
         print(self.qubit_labels)
-        for i in range(2**n_qubits):
-            bs = bin(i)[2:].zfill(n_qubits)
-            idx = list(reversed([int(b) for b in bs]))
+        total_dim = int(np.prod(self.d))
+        for i in range(total_dim):
+            temp = i
+            idx = [0] * n_qubits
+            for j in reversed(range(n_qubits)):
+                base = self.d[j]
+                idx[j] = temp % base
+                temp //= base
             amp = self.state[*idx]
-            if amp > 1e-6:
+            if np.abs(amp) > 1e-6:
+                # Printed digit order is reversed relative to qubit_labels
+                # (last qubit's digit printed first), matching this
+                # method's original qubit-only convention.
+                bs = "".join(str(x) for x in reversed(idx))
                 print(f"{bs}: {amp}")

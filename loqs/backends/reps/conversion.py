@@ -204,7 +204,7 @@ def _choi_kraus_operators(ptm: NDArray, n: int) -> list[NDArray]:
 
 def _unitary_to_ptm(rep: UnitaryGateRep) -> PTMGateRep:
     """Reproduces `pygsti.tools.unitary_to_pauligate`."""
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     d = 2**n
     U = np.asarray(rep.unitary, dtype=complex)
     paulis = _pauli_basis(n)
@@ -214,13 +214,13 @@ def _unitary_to_ptm(rep: UnitaryGateRep) -> PTMGateRep:
             for Pi in paulis
         ]
     )
-    return PTMGateRep(ptm, rep.qubits)
+    return PTMGateRep(ptm, rep.qubit_labels)
 
 
 def _kraus_to_ptm(rep: KrausGateRep) -> PTMGateRep:
     """Reproduces `pygsti.tools.unitary_to_pauligate`, summed over each
     Kraus operator in `rep`."""
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     d = 2**n
     kraus_ops = [np.asarray(K, dtype=complex) for K, _ in rep.kraus_operators]
     paulis = _pauli_basis(n)
@@ -233,12 +233,12 @@ def _kraus_to_ptm(rep: KrausGateRep) -> PTMGateRep:
             for Pi in paulis
         ]
     )
-    return PTMGateRep(ptm, rep.qubits)
+    return PTMGateRep(ptm, rep.qubit_labels)
 
 
 def _unitary_to_kraus(rep: UnitaryGateRep) -> KrausGateRep:
     """Trivial: a unitary is a single Kraus operator with probability 1."""
-    return KrausGateRep([(rep.unitary, 1.0)], rep.qubits, tp_check_abstol=None)
+    return KrausGateRep([(rep.unitary, 1.0)], rep.qubit_labels, tp_check_abstol=None)
 
 
 def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
@@ -252,7 +252,7 @@ def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
     non-unital contribution) is left with probability `None`, to be
     computed at simulation time instead.
     """
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     kraus_ops = _choi_kraus_operators(rep.ptm, n)
     if not kraus_ops:
         raise RepConstructionError(
@@ -274,7 +274,7 @@ def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
             # Not a scaled unitary, so store None (signal state backends
             # to compute the (state-dependent) probability on the fly).
             kraus_reps.append((K, None))
-    return KrausGateRep(kraus_reps, rep.qubits, tp_check_abstol=None)
+    return KrausGateRep(kraus_reps, rep.qubit_labels, tp_check_abstol=None)
 
 
 def _ptm_to_unitary(
@@ -291,7 +291,7 @@ def _ptm_to_unitary(
     unitary (`None` skips it, e.g. for a projector-like operator that's
     only known to be the map's sole significant term).
     """
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     kraus_ops = _choi_kraus_operators(rep.ptm, n)
     if len(kraus_ops) != 1:
         raise RepConstructionError(
@@ -308,7 +308,7 @@ def _ptm_to_unitary(
             "PTM's single Kraus term is not unitary; cannot convert to "
             "UnitaryGateRep"
         )
-    return UnitaryGateRep(U, rep.qubits)
+    return UnitaryGateRep(U, rep.qubit_labels)
 
 
 def _kraus_to_unitary(
@@ -329,21 +329,21 @@ def _kraus_to_unitary(
             "KrausGateRep's single operator is not unitary; cannot convert "
             "to UnitaryGateRep"
         )
-    return UnitaryGateRep(K, rep.qubits)
+    return UnitaryGateRep(K, rep.qubit_labels)
 
 
 def _ptm_to_qsim_superoperator(rep: PTMGateRep) -> QSimSuperopGateRep:
     """Changes a PTM from the Pauli basis to the QuantumSim basis via `_change_basis`."""
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     result = _change_basis(rep.ptm, _pauli_basis(n), _qsim_basis(n))
-    return QSimSuperopGateRep(result, rep.qubits)
+    return QSimSuperopGateRep(result, rep.qubit_labels)
 
 
 def _qsim_superoperator_to_ptm(rep: QSimSuperopGateRep) -> PTMGateRep:
     """The inverse of `_ptm_to_qsim_superoperator`."""
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     result = _change_basis(rep.superop, _qsim_basis(n), _pauli_basis(n))
-    return PTMGateRep(result, rep.qubits)
+    return PTMGateRep(result, rep.qubit_labels)
 
 
 #####################################################################################################################
@@ -352,7 +352,7 @@ def _qsim_superoperator_to_ptm(rep: QSimSuperopGateRep) -> PTMGateRep:
 #
 # `endian="big"` is the correct, self-consistent choice for both
 # directions, matching LoQS's own multi-qubit convention, where
-# `rep.qubits[0]` is the most-significant/leftmost tensor factor (e.g.
+# `rep.qubit_labels[0]` is the most-significant/leftmost tensor factor (e.g.
 # `STANDARD_GATE_UNITARIES["CX"]` treats `qubits[0]` as the control): it's
 # the endianness under which `stim.Tableau.from_unitary_matrix`/
 # `.to_unitary_matrix` round-trip correctly *and* under which a STIM
@@ -389,7 +389,7 @@ def _unitary_to_stim_circuit(rep: UnitaryGateRep) -> StimCircuitGateRep:
             "convert to StimCircuitGateRep"
         ) from e
     circuit_str = str(tableau.to_circuit())
-    return StimCircuitGateRep(circuit_str, rep.qubits)
+    return StimCircuitGateRep(circuit_str, rep.qubit_labels)
 
 
 def _stim_circuit_to_unitary(rep: StimCircuitGateRep) -> UnitaryGateRep:
@@ -408,7 +408,7 @@ def _stim_circuit_to_unitary(rep: StimCircuitGateRep) -> UnitaryGateRep:
             "Converting a StimCircuitGateRep to a UnitaryGateRep requires "
             "the optional `stim` dependency (`pip install loqs[stim]`)"
         )
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     indices = " ".join(str(i) for i in range(n))
     # Prepend a no-op `I <indices>` line so STIM recognizes exactly `n`
     # qubits even if `circuit_str` doesn't happen to reference all of them
@@ -424,7 +424,7 @@ def _stim_circuit_to_unitary(rep: StimCircuitGateRep) -> UnitaryGateRep:
             "cannot convert to UnitaryGateRep"
         ) from e
     unitary = tableau.to_unitary_matrix(endian=_STIM_ENDIAN)
-    return UnitaryGateRep(unitary, rep.qubits)
+    return UnitaryGateRep(unitary, rep.qubit_labels)
 
 
 #####################################################################################################################
@@ -460,11 +460,11 @@ def _zbasis_projection_to_zbasis_pre_post(
     rep: ZBasisProjectionInstrumentRep,
 ) -> ZBasisPrePostInstrumentRep:
     """Add identity `pre_op`/`post_op` `GateRep`s -- always succeeds."""
-    d = 2 ** len(rep.qubits)
-    pre_op = UnitaryGateRep(np.eye(d), rep.qubits)
-    post_op = UnitaryGateRep(np.eye(d), rep.qubits)
+    d = 2 ** len(rep.qubit_labels)
+    pre_op = UnitaryGateRep(np.eye(d), rep.qubit_labels)
+    post_op = UnitaryGateRep(np.eye(d), rep.qubit_labels)
     return ZBasisPrePostInstrumentRep(
-        rep.reset, rep.include_outcome, pre_op, post_op, rep.qubits
+        rep.reset, rep.include_outcome, pre_op, post_op, rep.qubit_labels
     )
 
 
@@ -479,7 +479,7 @@ def _zbasis_pre_post_to_zbasis_projection(
             "ZBasisPrePostInstrumentRep's pre_op/post_op are not both "
             "identity; cannot convert to ZBasisProjectionInstrumentRep"
         )
-    return ZBasisProjectionInstrumentRep(rep.reset, rep.include_outcome, rep.qubits)
+    return ZBasisProjectionInstrumentRep(rep.reset, rep.include_outcome, rep.qubit_labels)
 
 
 def _zbasis_projection_to_outcome_operation_dict(
@@ -501,21 +501,21 @@ def _zbasis_projection_to_outcome_operation_dict(
     of `npsvstate.py`/`qsimstate.py`'s own `ZBasisOutcomeOperationDictInstrumentRep`
     handling (both raise `NotImplementedError` beyond 1 qubit).
     """
-    if len(rep.qubits) != 1:
+    if len(rep.qubit_labels) != 1:
         raise RepConstructionError(
             "ZBasisOutcomeOperationDictInstrumentRep is only supported for "
-            f"exactly 1 qubit, got {len(rep.qubits)}"
+            f"exactly 1 qubit, got {len(rep.qubit_labels)}"
         )
 
     def _outcome_operator(b: int) -> UnitaryGateRep:
         target = b if rep.reset is None else rep.reset
         matrix = np.zeros((2, 2))
         matrix[target, b] = 1.0
-        return UnitaryGateRep(matrix, rep.qubits)
+        return UnitaryGateRep(matrix, rep.qubit_labels)
 
     outcome_ops = {0: _outcome_operator(0), 1: _outcome_operator(1)}
     return ZBasisOutcomeOperationDictInstrumentRep(
-        outcome_ops, rep.include_outcome, rep.qubits
+        outcome_ops, rep.include_outcome, rep.qubit_labels
     )
 
 
@@ -543,10 +543,10 @@ def _outcome_operation_dict_to_zbasis_projection(
     different generalized instrument, e.g. a POVM not corresponding to a
     simple projection) is not attempted.
     """
-    if len(rep.qubits) != 1:
+    if len(rep.qubit_labels) != 1:
         raise RepConstructionError(
             "ZBasisOutcomeOperationDictInstrumentRep is only supported for "
-            f"exactly 1 qubit, got {len(rep.qubits)}"
+            f"exactly 1 qubit, got {len(rep.qubit_labels)}"
         )
     if set(rep.outcome_ops.keys()) != {0, 1}:
         raise RepConstructionError(
@@ -579,7 +579,7 @@ def _outcome_operation_dict_to_zbasis_projection(
             "optional reset (its targets are neither the identity nor a "
             "single fixed reset value)"
         )
-    return ZBasisProjectionInstrumentRep(reset, rep.include_outcome, rep.qubits)
+    return ZBasisProjectionInstrumentRep(reset, rep.include_outcome, rep.qubit_labels)
 
 
 #####################################################################################################################
@@ -609,7 +609,7 @@ def _zbasis_projection_to_stim_circuit(
     command either, and is composed as a reset-to-0 measurement (or bare
     reset) followed by a flip.
     """
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     indices = " ".join(str(i) for i in range(n))
     reset, include_outcome = rep.reset, rep.include_outcome
 
@@ -631,7 +631,7 @@ def _zbasis_projection_to_stim_circuit(
             # one "X" line per qubit.
             circuit_str = f"{circuit_str}\nX {indices}"
 
-    return StimCircuitInstrumentRep(circuit_str, rep.qubits)
+    return StimCircuitInstrumentRep(circuit_str, rep.qubit_labels)
 
 
 def _stim_circuit_to_zbasis_projection(
@@ -646,7 +646,7 @@ def _stim_circuit_to_zbasis_projection(
     produces (or hand-written equivalents), not a general STIM-measurement
     circuit parser.
     """
-    n = len(rep.qubits)
+    n = len(rep.qubit_labels)
     expected_targets = [str(i) for i in range(n)]
     lines = [line for line in rep.circuit_str.split("\n") if line.strip()]
 
@@ -659,7 +659,7 @@ def _stim_circuit_to_zbasis_projection(
         if command in _STIM_SINGLE_LINE_PROJECTIONS and targets == expected_targets:
             reset, include_outcome = _STIM_SINGLE_LINE_PROJECTIONS[command]
             return ZBasisProjectionInstrumentRep(
-                reset, include_outcome, rep.qubits
+                reset, include_outcome, rep.qubit_labels
             )
     elif len(lines) == 2:
         command0, targets0 = _parse(lines[0])
@@ -671,7 +671,7 @@ def _stim_circuit_to_zbasis_projection(
             and command0 in ("MR", "R")
         ):
             return ZBasisProjectionInstrumentRep(
-                1, command0 == "MR", rep.qubits
+                1, command0 == "MR", rep.qubit_labels
             )
 
     raise RepConstructionError(
@@ -787,15 +787,17 @@ def _try_construct(
     qubits: str | int | Sequence[str | int] | None,
     kwargs: dict,
 ) -> OperationRep | None:
-    """Attempt `cls(source, qubits=qubits, **kwargs)`, returning `None`
-    instead of raising if `cls` is abstract, or construction raises
+    """Attempt `cls(source, qubit_labels=qubits, **kwargs)`, returning
+    `None` instead of raising if `cls` is abstract, or construction raises
     [](api:RepConstructionError) or `TypeError` (e.g. a class like
     [](api:ZBasisPrePostInstrumentRep) needs several distinct required
     arguments, so a single `source` can never satisfy it)."""
     if inspect.isabstract(cls):
         return None
     try:
-        return cls(source, qubits=qubits, **_accepted_kwargs(cls.__init__, kwargs))
+        return cls(
+            source, qubit_labels=qubits, **_accepted_kwargs(cls.__init__, kwargs)
+        )
     except (RepConstructionError, TypeError):
         return None
 
