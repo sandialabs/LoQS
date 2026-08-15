@@ -12,10 +12,11 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 
 from loqs.backends import (
-    GateRep,
     DictNoiseModel,
     NumpyStatevectorQuantumState,
     STIMQuantumState,
+    StimCircuitGateRep,
+    UnitaryGateRep,
 )
 from loqs.core import QuantumProgram
 from loqs.core.recordables.pauliframe import PauliFrame
@@ -51,7 +52,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
     )
     model = codepack_surf17.create_ideal_model(
         all_qubits,
-        gaterep=GateRep.STIM_CIRCUIT_STR,
+        gaterep=StimCircuitGateRep,
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
@@ -119,11 +120,16 @@ class TestTwoPatchFoundations:
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
     @pytest.mark.parametrize("basis", ["Z", "X"])
     def test_reference_round_noiseless(self, layout, basis):
-        """Reference-round decoding is still deterministic when noiseless."""
+        """"clean_diff" mode is still deterministic when noiseless.
+
+        Prep matches the measurement basis here, so round 0 is actually
+        deterministic; "clean_diff" mode (drop round 0 as its own detector,
+        diff round 1 against it, no escape edges) is the correct choice.
+        """
         qubits = layout_qubits(layout)
         prep = "Zero Prep" if basis == "Z" else "Plus Prep"
         meas = f"FT Logical {basis} Measure"
-        ref_kwarg = {f"reference_round_{basis}": True}
+        ref_kwarg = {f"reference_round_mode_{basis}": "clean_diff"}
 
         stack = [
             ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
@@ -138,22 +144,29 @@ class TestTwoPatchFoundations:
         outcomes = results.collect_shot_data("logical_measurement", -1)
         assert outcomes == [0] * NUM_STIM_SHOTS
 
+    @pytest.mark.slow
     def test_reference_round_ft_semantics(self):
         """Reference round drops the round-0 detector layer -- and only that.
 
-        Single faults injected into syndrome-extraction rounds 2 and 3 must
-        still be fully corrected. Single faults in round 1 are provably
-        ambiguous under a reference round (the round-0 diff detector is gone),
-        so at least one injection there must produce a logical failure. The
-        latter also proves the reference_round_Z kwarg actually reaches the
-        decoder through the composite instruction.
+        Zero Prep already makes round 0 deterministic, so this exercises
+        "clean_diff" mode: the round-0 layer is dropped and round 1 is
+        diffed against it, but round 0 itself isn't assumed noisy (no
+        escape edges), unlike the "guarded_diff" mode genuinely-random-prep
+        callers need. Single faults injected into syndrome-extraction
+        rounds 2 and 3 must still be fully corrected. Single faults in
+        round 1 are provably ambiguous under a reference round (the
+        round-0 diff detector is gone, so a persistent fault there is
+        identical, before and after, to having no fault at all), so at
+        least one injection there must produce a logical failure. The
+        latter also proves the reference_round_mode_Z kwarg actually
+        reaches the decoder through the composite instruction.
         """
         layout = "surf17"
         qubits = layout_qubits(layout)
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=3)
         model = codepack_surf17.create_ideal_model(
             qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
 
@@ -169,7 +182,7 @@ class TestTwoPatchFoundations:
                 "FT Logical Z Measure",
                 "L0",
                 (),
-                {"reference_round_Z": True},
+                {"reference_round_mode_Z": "clean_diff"},
             ),
         ]
 
@@ -324,16 +337,17 @@ class TestTransversalCnot:
     def test_bell_zz_correlations(self, layout):
         """Bell pair: per-patch Z outcomes are random but always equal.
 
-        Plus Prep on L0 makes the round-0 Z syndromes random on L0, and the
-        CNOT history XOR spreads that to L1, so BOTH measures decode with
-        reference_round_Z=True.
+        Plus Prep on L0 makes the round-0 Z syndromes genuinely random (not
+        just non-deterministic-in-expectation) on L0, and the CNOT history
+        XOR spreads that to L1, so BOTH measures decode with
+        reference_round_mode_Z="guarded_diff".
         """
         stack, all_q = two_patch_cnot_stack(
             layout,
             "Plus Prep",
             "Zero Prep",
             "FT Logical Z Measure",
-            {"reference_round_Z": True},
+            {"reference_round_mode_Z": "guarded_diff"},
         )
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -350,16 +364,17 @@ class TestTransversalCnot:
     def test_bell_xx_correlations(self, layout):
         """Bell pair: per-patch X outcomes are random but always equal.
 
-        Zero Prep on L1 makes the round-0 X syndromes random on L1, and the
-        CNOT history XOR spreads that to L0, so BOTH measures decode with
-        reference_round_X=True.
+        Zero Prep on L1 makes the round-0 X syndromes genuinely random (not
+        just non-deterministic-in-expectation) on L1, and the CNOT history
+        XOR spreads that to L0, so BOTH measures decode with
+        reference_round_mode_X="guarded_diff".
         """
         stack, all_q = two_patch_cnot_stack(
             layout,
             "Plus Prep",
             "Zero Prep",
             "FT Logical X Measure",
-            {"reference_round_X": True},
+            {"reference_round_mode_X": "guarded_diff"},
         )
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -371,6 +386,7 @@ class TestTransversalCnot:
             assert l0 ^ l1 == 0
         assert {tuple(s) for s in per_shot} == {(0, 0), (1, 1)}
 
+    @pytest.mark.slow
     def test_fault_tolerance(self):
         """Single faults around the CNOT never cause a logical error.
 
@@ -391,7 +407,7 @@ class TestTransversalCnot:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=3)
         model = codepack_surf17.create_ideal_model(
             all_q,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
 
@@ -520,13 +536,13 @@ def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
                 "FT Logical Z Measure",
                 "L0",
                 (),
-                {"reference_round_Z": True},
+                {"reference_round_mode_Z": "guarded_diff"},
             ),
             (
                 "FT Logical Z Measure",
                 "L1",
                 (),
-                {"reference_round_Z": True},
+                {"reference_round_mode_Z": "guarded_diff"},
             ),
         ]
     return stack, all_q
@@ -680,6 +696,7 @@ class TestBackendFeasibilityWarning:
 class TestDenseBackendSmoke:
     """Phase C: statevector smoke test on the intended dense configuration."""
 
+    @pytest.mark.slow
     def test_bell_joint_parities_statevector(self):
         """2x surf10 + 1 ancilla (21 qubits), Bell + joint ZZ/XX parities."""
         layout = "surf10"
@@ -687,7 +704,7 @@ class TestDenseBackendSmoke:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=2)
         model = codepack_surf17.create_ideal_model(
             all_q,
-            gaterep=GateRep.UNITARY,
+            gaterep=UnitaryGateRep,
             model_backend=DictNoiseModel,
         )
         program = QuantumProgram(

@@ -27,6 +27,231 @@ from loqs.core.instructions import Instruction, InstructionLabel
 # from loqs.tools.dasktools import run_program_list
 
 
+def build_discrete_error_injection_program_for_combo(
+    base_program: QuantumProgram,
+    stack_idx_to_modify: int,
+    error_injections: Sequence[tuple[int, str, int]],
+) -> QuantumProgram:
+    """Build a single discrete-error-injected program for one explicit
+    combination of `(layer, error_circuit_label, qubit)` injections.
+
+    A lower-level building block factored out of the per-combo body of
+    [](api:build_discrete_error_injection_programs), for callers that
+    have already decided exactly which fault combination(s) to build
+    (e.g. one representative per Pauli-propagation equivalence class)
+    rather than the full location x label enumeration.
+
+    Parameters
+    ----------
+    base_program : QuantumProgram
+        The base program to modify.
+
+    stack_idx_to_modify : int
+        The entry in the [](api:InstructionStack) of `base_program` to
+        modify with `error_injections` as a label kwarg.
+
+    error_injections : Sequence[tuple[int, str, int]]
+        One entry for a weight-1 error, two for a correlated weight-2
+        error: `(layer, error_circuit_label, qubit)`.
+
+    Returns
+    -------
+    QuantumProgram
+        The program with this exact fault combination injected.
+    """
+    instruction_label = base_program.instruction_stack[stack_idx_to_modify]
+    assert isinstance(instruction_label, InstructionLabel)
+
+    new_label = deepcopy(instruction_label)
+    new_label.inst_kwargs["error_injections"] = list(error_injections)
+
+    new_stack = base_program.instruction_stack.delete_instruction(
+        stack_idx_to_modify
+    )
+    new_stack = new_stack.insert_instruction(
+        stack_idx_to_modify, new_label
+    )
+
+    tag = "/".join(f"{lbl} on qubit {q}" for _, lbl, q in error_injections)
+    layer = error_injections[0][0] if error_injections else "?"
+    new_name = (
+        f"{base_program.name} + injected error {tag} at layer {layer} "
+        f"of stack location {stack_idx_to_modify}"
+    )
+
+    return QuantumProgram.from_quantum_program(
+        base_program, instruction_stack=new_stack, name=new_name
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pauli-propagation equivalence-class pruning.
+#
+# For a circuit built entirely from Clifford gates (no mid-circuit
+# measurement in the segment being swept), propagating an injected Pauli
+# fault forward to the end of that segment is exact, deterministic
+# algebra: two fault locations that propagate to the identical final
+# Pauli support are guaranteed to have identical downstream
+# detection/correction behavior (same effect on every instruction after
+# this one in the stack), so only one representative per class needs to
+# actually be simulated. This uses STIM's own tested tableau machinery
+# (`stim.PauliString.after`) rather than hand-derived propagation rules,
+# and is skipped entirely (falling back to the untouched exhaustive
+# combo list) if `stim` isn't importable, since it's the thing doing the
+# propagation math.
+#
+# Using this relaxes a sweep from "test every circuit location" to "test
+# every distinct propagated error" -- a narrower guarantee than a raw
+# exhaustive sweep, so it's opt-in (see `build_pruned_discrete_error_
+# injection_programs`), not part of the default
+# `build_discrete_error_injection_programs` behavior below.
+# ---------------------------------------------------------------------------
+
+PAULI_PROPAGATION_GATE_MAP: dict[str, str] = {"Gh": "H", "Gcnot": "CX"}
+"""LoQS gate name -> STIM gate name, for gates this propagation utility
+knows how to conjugate a Pauli through. Extend as needed for other
+Clifford gates; anything not here or in
+[](api:PAULI_PROPAGATION_IDLE_GATES) raises rather than silently
+mis-pruning."""
+
+PAULI_PROPAGATION_IDLE_GATES: frozenset[str] = frozenset(
+    {"Iz", "Gi1Q", "Gi2Q", "GiMCM"}
+)
+"""LoQS idle-gate names, which never change a Pauli's support/type and
+so are skipped during propagation."""
+
+_PAULI_LABEL_TO_CHAR: dict[str, str] = {
+    "Gxpi": "X", "Gypi": "Y", "Gzpi": "Z",
+}
+
+
+def is_stim_pauli_propagation_available() -> bool:
+    """Whether the STIM-tableau-based propagation utility can run."""
+    try:
+        import stim  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def propagate_pauli_signature(
+    circuit: BasePhysicalCircuit,
+    start_layer: int,
+    seed: dict[int, str],
+) -> tuple[tuple[int, str], ...]:
+    """Propagate a seed Pauli fault (`{qubit_idx: 'X'/'Y'/'Z'}`, applied
+    starting at `start_layer`, inclusive) forward through `circuit`'s
+    remaining gates using STIM's tableau machinery, and return a
+    hashable, sign-independent signature of the resulting Pauli support
+    at the circuit's end (empty tuple if it propagates away entirely).
+
+    Only supports `PyGSTiPhysicalCircuit`-backed circuits built entirely
+    from gates in [](api:PAULI_PROPAGATION_GATE_MAP)/
+    [](api:PAULI_PROPAGATION_IDLE_GATES) (this needs to be verified by
+    the caller, e.g. no mid-circuit measurement in the segment being
+    propagated through); raises on any other gate so an unrecognized
+    one fails loudly rather than silently mis-pruning.
+    """
+    import stim
+
+    qubit_labels = circuit.qubit_labels
+    p = stim.PauliString(len(qubit_labels))
+    for qidx, pauli in seed.items():
+        p[qidx] = pauli
+    for lidx in range(start_layer, circuit.depth):
+        for comp in circuit._circuit._layer_components(lidx):
+            name = comp.name
+            if name in PAULI_PROPAGATION_IDLE_GATES:
+                continue
+            stim_name = PAULI_PROPAGATION_GATE_MAP.get(name)
+            if stim_name is None:
+                raise ValueError(
+                    f"No Pauli-propagation rule for gate {name!r}; "
+                    "extend PAULI_PROPAGATION_GATE_MAP or disable pruning."
+                )
+            idxs = [qubit_labels.index(q) for q in comp.qubits]
+            p = p.after(stim.CircuitInstruction(stim_name, idxs))
+    return tuple(
+        (i, "IXYZ"[p[i]]) for i in range(len(qubit_labels)) if p[i] != 0
+    )
+
+
+def prune_error_combos_by_propagation(
+    circuit: BasePhysicalCircuit,
+    error_labels: Sequence[str],
+    post_twoq_gates: bool = False,
+) -> tuple[list[list[tuple[int, str, int]]], int]:
+    """(representative combos, total combos before pruning).
+
+    Each representative combo is in `error_injections` format (one
+    `(layer, label, qubit)` entry for weight-1, two for weight-2/
+    post-2-qubit-gate errors), one per distinct propagated-Pauli
+    equivalence class, per [](api:propagate_pauli_signature). If STIM
+    isn't available, returns every combo unpruned (see module comment
+    above).
+    """
+    locations = circuit.get_possible_discrete_error_locations(
+        post_twoq_gates=post_twoq_gates
+    )
+    all_combos: list[list[tuple[int, str, int]]] = []
+    for layer, target in locations:
+        if post_twoq_gates:
+            q1, q2 = target
+            for lbl1 in error_labels:
+                for lbl2 in error_labels:
+                    all_combos.append(
+                        [(layer, lbl1, q1), (layer, lbl2, q2)]
+                    )
+        else:
+            for lbl in error_labels:
+                all_combos.append([(layer, lbl, target)])
+
+    if not is_stim_pauli_propagation_available():
+        return all_combos, len(all_combos)
+
+    seen_signatures: set[tuple] = set()
+    representatives: list[list[tuple[int, str, int]]] = []
+    for combo in all_combos:
+        seed = {
+            qubit: _PAULI_LABEL_TO_CHAR[lbl] for _, lbl, qubit in combo
+        }
+        layer = combo[0][0]
+        signature = propagate_pauli_signature(circuit, layer, seed)
+        if signature not in seen_signatures:
+            seen_signatures.add(signature)
+            representatives.append(combo)
+    return representatives, len(all_combos)
+
+
+def build_pruned_discrete_error_injection_programs(
+    base_program: QuantumProgram,
+    instruction_to_analyze: Instruction,
+    stack_idx_to_modify: int,
+    error_circuit_labels: Sequence[str],
+    post_twoq_gates: bool = False,
+) -> tuple[list[QuantumProgram], int]:
+    """(programs, total combos before pruning) -- like
+    [](api:build_discrete_error_injection_programs), but builds only one
+    program per Pauli-propagation equivalence-class representative (see
+    [](api:prune_error_combos_by_propagation)) instead of every
+    location x label combination. Relaxes "test every circuit location"
+    to "test every distinct propagated error"; use only where that's an
+    acceptable substitution for the exhaustive sweep.
+    """
+    circuit = instruction_to_analyze.data["circuit"]
+    assert isinstance(circuit, BasePhysicalCircuit)
+    representatives, total = prune_error_combos_by_propagation(
+        circuit, error_circuit_labels, post_twoq_gates
+    )
+    programs = [
+        build_discrete_error_injection_program_for_combo(
+            base_program, stack_idx_to_modify, combo
+        )
+        for combo in representatives
+    ]
+    return programs, total
+
+
 def build_discrete_error_injection_programs(
     base_program: QuantumProgram,
     instruction_to_analyze: Instruction,
@@ -81,10 +306,10 @@ def build_discrete_error_injection_programs(
         post_twoq_gates=post_twoq_gates
     )
 
-    # Build instruction label that we will modify
-    instruction_label = InstructionLabel.cast(
-        base_program.instruction_stack[stack_idx_to_modify]
-    )
+    # Build instruction label that we will modify. Always already an
+    # InstructionLabel: InstructionStack.__getitem__ guarantees it.
+    instruction_label = base_program.instruction_stack[stack_idx_to_modify]
+    assert isinstance(instruction_label, InstructionLabel)
 
     # TODO: Split these out so we can inject one error at will at a higher level of API
     def insert_2q_error(layer, eclabel1, eclabel2, qubit1, qubit2):

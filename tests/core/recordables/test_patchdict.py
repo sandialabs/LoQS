@@ -21,7 +21,21 @@ class TestMeasurementOutcomes:
 
         with pytest.raises(AssertionError):
             PatchDict({"key": "not a patch"}) # type: ignore
-    
+
+    def test_init_from_existing_patchdict(self):
+        code = QECCode({}, ["Q0", "Q1"], ["Q0"])
+        patch1 = code.create_patch(["D0", "A0"])
+        original = PatchDict({"L0": patch1})
+
+        copied = PatchDict(original)
+        assert copied.all_qubit_labels == ["D0", "A0"]
+        assert copied["L0"] is patch1
+
+        # A copy, not an alias: mutating one must not affect the other.
+        patch2 = code.create_patch(["D1", "A1"])
+        copied["L1"] = patch2
+        assert "L1" not in original
+
     def test_serialization(self, make_temp_path):
         code = QECCode({}, ["Q0", "Q1"], ["Q0"])
         patch1 = code.create_patch(["D0", "A0"])

@@ -22,10 +22,14 @@ class TestPauliFrame:
         pf4 = PauliFrame(pf2, "ZYXI")
         self._check(pf4, "ZYXI")
 
-        pf5 = PauliFrame.cast(pf2)
-        assert pf5 is pf2
+        # Constructing from an existing PauliFrame builds a new object, but
+        # aliases the underlying qubit_labels/pauli_frame lists.
+        pf5 = PauliFrame(pf2)
+        self._check(pf5, "IXYZ")
+        assert pf5.pauli_frame is pf2.pauli_frame
+        assert pf5.qubit_labels is pf2.qubit_labels
 
-        pf6 = PauliFrame.cast(["Q0", "Q1", "Q2", "Q3"])
+        pf6 = PauliFrame(["Q0", "Q1", "Q2", "Q3"])
         self._check(pf6, "IIII")
     
     def test_getters(self):

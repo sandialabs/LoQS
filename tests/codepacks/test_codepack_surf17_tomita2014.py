@@ -6,12 +6,12 @@ from typing import Literal
 pygsti = pytest.importorskip("pygsti")
 
 from loqs.backends import (
-    GateRep,
     PyGSTiPhysicalCircuit,
     DictNoiseModel,
     NumpyStatevectorQuantumState,
     STIMQuantumState,
 )
+from loqs.backends.reps import StimCircuitGateRep, UnitaryGateRep
 from loqs.core import QuantumProgram
 from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.tools import fttools
@@ -33,7 +33,7 @@ class TestSurf17Codepack:
         else:
             qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
 
-        gaterep = GateRep.UNITARY
+        gaterep = UnitaryGateRep
         ideal_model = codepack_surf17.create_ideal_model(
             qubits,
             gaterep=gaterep,
@@ -144,7 +144,7 @@ class TestSurf17Codepack:
 
         ideal_model = codepack_surf17.create_ideal_model(
             qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=model_backend,
         )
 
@@ -201,7 +201,7 @@ class TestSurf17Codepack:
 
         ideal_model = codepack_surf17.create_ideal_model(
             qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=model_backend,
         )
 

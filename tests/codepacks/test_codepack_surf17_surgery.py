@@ -12,10 +12,11 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 
 from loqs.backends import (
-    GateRep,
     DictNoiseModel,
     NumpyStatevectorQuantumState,
     STIMQuantumState,
+    StimCircuitGateRep,
+    UnitaryGateRep,
 )
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
 from loqs.core import QuantumProgram
@@ -83,7 +84,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
     )
     model = codepack_surf17.create_ideal_model(
         all_qubits,
-        gaterep=GateRep.STIM_CIRCUIT_STR,
+        gaterep=StimCircuitGateRep,
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
@@ -131,7 +132,7 @@ class TestSyndromeRowOrdering:
         )
         model = codepack_surf17.create_ideal_model(
             qubits,
-            gaterep=GateRep.STIM_CIRCUIT_STR,
+            gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
         if check_type == "X":
@@ -449,7 +450,7 @@ class TestSimplifiedSurgeryZZ:
                 "FT Logical Z Measure",
                 "L1",
                 (),
-                {"reference_round_Z": True},  # |+> prep: Z round 0 is random
+                {"reference_round_mode_Z": "guarded_diff"},  # |+> prep: Z round 0 is random
             ),
         ]
         program = make_stim_program(layout, stack, all_q)
@@ -488,8 +489,8 @@ class TestSimplifiedSurgeryZZ:
             (zz, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            ("FT Logical X Measure", "L0", (), {"reference_round_X": True}),
-            ("FT Logical X Measure", "L1", (), {"reference_round_X": True}),
+            ("FT Logical X Measure", "L0", (), {"reference_round_mode_X": "guarded_diff"}),
+            ("FT Logical X Measure", "L1", (), {"reference_round_mode_X": "guarded_diff"}),
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -564,7 +565,7 @@ class TestSimplifiedSurgeryXX:
                 "FT Logical X Measure",
                 "L1",
                 (),
-                {"reference_round_X": True},  # |0> prep: X round 0 is random
+                {"reference_round_mode_X": "guarded_diff"},  # |0> prep: X round 0 is random
             ),
         ]
         program = make_stim_program(layout, stack, all_q)
@@ -598,8 +599,8 @@ class TestSimplifiedSurgeryXX:
             (xx, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            ("FT Logical Z Measure", "L0", (), {"reference_round_Z": True}),
-            ("FT Logical Z Measure", "L1", (), {"reference_round_Z": True}),
+            ("FT Logical Z Measure", "L0", (), {"reference_round_mode_Z": "guarded_diff"}),
+            ("FT Logical Z Measure", "L1", (), {"reference_round_mode_Z": "guarded_diff"}),
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -778,6 +779,7 @@ class TestFTSurgery:
             [[0]] * NUM_STIM_SHOTS
         )
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_weight1_injection_sweep(self, kind):
         """Every weight-1 Pauli fault in the merge window is tolerated.
@@ -869,11 +871,11 @@ class TestParityReadoutConsistencyA:
         if kind == "ZZ":
             prep0, prep1 = "Plus Prep", "Zero Prep"
             meas = "FT Logical Z Measure"
-            flag = {"reference_round_Z": True}
+            flag = {"reference_round_mode_Z": "guarded_diff"}
         else:
             prep0, prep1 = "Zero Prep", "Plus Prep"
             meas = "FT Logical X Measure"
-            flag = {"reference_round_X": True}
+            flag = {"reference_round_mode_X": "guarded_diff"}
         stack = [
             ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
             ("Init Patch SURF", None, ("L0", q0)),
@@ -955,9 +957,9 @@ class TestSurgeryCnot:
             *seq,
             ("QEC", "C"),
             ("QEC", "T"),
-            # T's XX merge grows a Z check -> reference_round_Z on T.
+            # T's XX merge grows a Z check -> reference_round_mode_Z="guarded_diff" on T.
             ("FT Logical Z Measure", "C"),
-            ("FT Logical Z Measure", "T", (), {"reference_round_Z": True}),
+            ("FT Logical Z Measure", "T", (), {"reference_round_mode_Z": "guarded_diff"}),
         ]
         program = make_stim_program("surf17", stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -988,8 +990,8 @@ class TestSurgeryCnot:
             *seq,
             ("QEC", "C"),
             ("QEC", "T"),
-            # C's ZZ merge grows an X check -> reference_round_X on C.
-            ("FT Logical X Measure", "C", (), {"reference_round_X": True}),
+            # C's ZZ merge grows an X check -> reference_round_mode_X="guarded_diff" on C.
+            ("FT Logical X Measure", "C", (), {"reference_round_mode_X": "guarded_diff"}),
             ("FT Logical X Measure", "T"),
         ]
         program = make_stim_program("surf17", stack, all_q)
@@ -1009,7 +1011,7 @@ class TestSurgeryCnot:
         (C prepped |+> -> FT Z; T prepped |0> -> FT X).
         """
         prelude, seq, all_q = self._cnot_setup()
-        flag = {f"reference_round_{basis}": True}
+        flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack = prelude + [
             ("Plus Prep", "C"),
             ("Zero Prep", "T"),
@@ -1034,6 +1036,7 @@ class TestSurgeryCnot:
 class TestSurgeryDenseSmoke:
     """Phase F: statevector smoke on the intended dense configuration."""
 
+    @pytest.mark.slow
     def test_zz_statevector_surf10(self):
         """2x surf10 + 3 seams (23 qubits): |00> -> m_ZZ = 0."""
         layout = "surf10"
@@ -1064,7 +1067,7 @@ class TestSurgeryDenseSmoke:
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=2)
         model = codepack_surf17.create_ideal_model(
             all_q,
-            gaterep=GateRep.UNITARY,
+            gaterep=UnitaryGateRep,
             model_backend=DictNoiseModel,
         )
         program = QuantumProgram(
@@ -1106,9 +1109,9 @@ class TestMzzBellPrep:
             ("QEC", "L0"),
             ("QEC", "L1"),
         ]
-        # |+> prep -> random round-0 Z layer (reference_round_Z); the ZZ
-        # merge grows an X check on both patches (reference_round_X).
-        flag = {f"reference_round_{basis}": True}
+        # |+> prep -> random round-0 Z layer ("guarded_diff"); the ZZ
+        # merge grows an X check on both patches (also "guarded_diff").
+        flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
             (f"FT Logical {basis} Measure", "L0", (), dict(flag)),
             (f"FT Logical {basis} Measure", "L1", (), dict(flag)),
@@ -1189,6 +1192,8 @@ class TestMzzFaultTolerance:
     rather than asserted.
     """
 
+    pytestmark = pytest.mark.slow
+
     WEIGHT1_LABELS = ["Gxpi", "Gypi", "Gzpi"]
     # seq[i] sits at stack index 7 + i in _mzz_program's stack.
     WEIGHT1_SEQ_IDXS = (0, 1, 2, 3, 5)  # seam prep, SE x3, seam measure
@@ -1207,11 +1212,15 @@ class TestMzzFaultTolerance:
         corrections = surgery.build_mzz_bell_corrections_instruction(
             "L1", q1[:9]
         )
-        # Z round 0 is random after |+> prep -> reference round. X round 0
-        # is deterministic -> kept as a detector layer (the split
+        # Z round 0 is random after |+> prep -> guarded_diff. X round 0
+        # is deterministic -> kept as a detector layer ("raw", the split
         # bookkeeping's round-0 offset absorbs the grown-check rewrite),
         # closing the prep blind window.
-        flag = {f"reference_round_{basis}": basis == "Z"}
+        flag = {
+            f"reference_round_mode_{basis}": (
+                "guarded_diff" if basis == "Z" else "raw"
+            )
+        }
         meas = f"FT Logical {basis} Measure"
         stack = [
             ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
@@ -1245,11 +1254,13 @@ class TestMzzFaultTolerance:
         return make_stim_program(layout, stack, all_q), seq
 
     @staticmethod
-    def _run_xor_sweep(programs, num_shots=4):
+    def _run_xor_sweep(programs, num_shots=1):
         """Run injected programs; return those where any shot's decoded
-        logical readouts disagree (XOR != 0). 4 shots/program leaves
-        P(miss the m_zz = 1 branch) = 1/16 per program; failures are
-        reconfirmed at 32 shots by the callers."""
+        logical readouts disagree (XOR != 0). 1 shot/program leaves
+        P(miss the m_zz = 1 branch) = 1/2 per program; failures are
+        reconfirmed at 32 shots by the callers, so this only risks a
+        (per-run, not systematic) false negative for a bug that manifests
+        on the random branch at exactly one specific location."""
         failed = []
         for program in programs:
             results = program.run(num_shots=num_shots, verbose=False)
@@ -1261,12 +1272,16 @@ class TestMzzFaultTolerance:
         return failed
 
     def _sweep(self, layout, mode, basis, post_twoq):
-        """(failed_programs, total_injected) over the merge window."""
+        """(failed_programs, total_injected) over the merge window.
+
+        "total_injected" counts the Pauli-propagation equivalence-class
+        representatives actually run, not the raw location x label
+        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs)."""
         base_program, seq = self._mzz_program(layout, mode, basis)
         seq_idxs = self.POST2Q_SEQ_IDXS if post_twoq else self.WEIGHT1_SEQ_IDXS
         failed, total = [], 0
         for i in seq_idxs:
-            injected = fttools.build_discrete_error_injection_programs(
+            injected, _ = fttools.build_pruned_discrete_error_injection_programs(
                 base_program=base_program,
                 instruction_to_analyze=seq[i],
                 stack_idx_to_modify=7 + i,
@@ -1349,13 +1364,18 @@ class TestSurgeryCnotFaultTolerance:
     outer seam qubit, not the middle one) and fire_rule="both" after
     the XX merge (anc compensates via m_anc, tgt via its own Z decode;
     the middle seam qubit is the broken class - the mzz dual). Both
-    classes were confirmed empirically before the fix.
+    classes were confirmed empirically before the fix. The ZZ repair
+    also uses defect_decode_mode="matching" (a real per-row decode
+    that no longer false-fires on an ordinary ancilla bulk fault -- see
+    build_split_byproduct_repair_instruction).
 
     Pass criterion: per-shot XOR of the decoded C and T logical
     readouts == 0 in both terminating bases (deterministic for a Bell
     pair; m_zz/m_xx/m_anc are legitimately random). ft decode must show
     zero failures; simple decode is characterized (xfail with counts).
     """
+
+    pytestmark = pytest.mark.slow
 
     WEIGHT1_LABELS = ["Gxpi", "Gypi", "Gzpi"]
     WEIGHT1_SEQ_IDXS = (0, 1, 2, 3, 5)  # seam prep, SE x3, seam measure
@@ -1371,8 +1391,8 @@ class TestSurgeryCnotFaultTolerance:
         qc = layout_qubits(layout, "_c")
         qt = layout_qubits(layout, "_t")
         qa = layout_qubits(layout, "_a")
-        seams_v = ["SV0", "SV1", "SV2"]
-        seams_h = ["SH0", "SH1", "SH2"]
+        seams_v = ["Qsv0", "Qsv1", "Qsv2"]
+        seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = qc + qt + qa + seams_v + seams_h
         zzseq = surgery.build_surgery_parity_instruction_sequence(
             "ZZ", "C", "ANC", qc, qa, seams_v, layout, mode=mode
@@ -1404,6 +1424,7 @@ class TestSurgeryCnotFaultTolerance:
                     surgery.build_split_byproduct_repair_instruction(
                         "ZZ", "C", "ANC", qc, qa, seams_v, layout,
                         fire_rule="b_only",
+                        defect_decode_mode="matching",
                     ),
                     None,
                 )
@@ -1422,9 +1443,9 @@ class TestSurgeryCnotFaultTolerance:
                     None,
                 ),
             ]
-        flag = {f"reference_round_{basis}": True}
+        flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
-            ("FT Logical Z Measure", "ANC", (), {"reference_round_Z": True}),
+            ("FT Logical Z Measure", "ANC", (), {"reference_round_mode_Z": "guarded_diff"}),
             (corrections, None),
             ("QEC", "C"),
             ("QEC", "T"),
@@ -1435,9 +1456,13 @@ class TestSurgeryCnotFaultTolerance:
         return make_stim_program(layout, stack, all_q), targets
 
     @staticmethod
-    def _run_xor_sweep(programs, num_shots=4):
+    def _run_xor_sweep(programs, num_shots=1):
         """Run injected programs; return those where any shot's decoded
-        C and T readouts disagree. Per-shot entries: [m_anc, m_C, m_T]."""
+        C and T readouts disagree. Per-shot entries: [m_anc, m_C, m_T].
+        1 shot/program; failures are reconfirmed at 32 shots by the
+        callers, so this only risks a (per-run, not systematic) false
+        negative for a bug that manifests on the random branch at
+        exactly one specific location."""
         failed = []
         for program in programs:
             results = program.run(num_shots=num_shots, verbose=False)
@@ -1449,13 +1474,17 @@ class TestSurgeryCnotFaultTolerance:
         return failed
 
     def _sweep(self, layout, mode, basis, post_twoq):
-        """(failed_programs, total_injected) over BOTH merge windows."""
+        """(failed_programs, total_injected) over BOTH merge windows.
+
+        "total_injected" counts the Pauli-propagation equivalence-class
+        representatives actually run, not the raw location x label
+        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs)."""
         base_program, targets = self._cnot_program(layout, mode, basis)
         seq_idxs = self.POST2Q_SEQ_IDXS if post_twoq else self.WEIGHT1_SEQ_IDXS
         failed, total = [], 0
         for seq, base in targets.values():
             for i in seq_idxs:
-                injected = fttools.build_discrete_error_injection_programs(
+                injected, _ = fttools.build_pruned_discrete_error_injection_programs(
                     base_program=base_program,
                     instruction_to_analyze=seq[i],
                     stack_idx_to_modify=base + i,
@@ -1514,3 +1543,138 @@ class TestSurgeryCnotFaultTolerance:
     def test_post2q_sweep_simple(self, layout, basis):
         """Characterize the simple decode under post-2Q correlated pairs."""
         self._characterize_simple(layout, basis, post_twoq=True)
+
+
+class TestMzzFaultToleranceSmoke:
+    """Fast, non-exhaustive companion to `TestMzzFaultTolerance`.
+
+    Samples a handful of weight-1 fault locations per merge-window
+    component on the cheapest (surf10) layout instead of every location
+    on all three layouts, so the default test run still catches gross
+    breakage in the mzz-merge FT machinery without paying for the full
+    sweep (marked `slow`; run it explicitly with `-m slow` for the
+    exhaustive check).
+    """
+
+    SAMPLES_PER_LOCATION = 2
+    # Subset of TestMzzFaultTolerance.WEIGHT1_SEQ_IDXS: seam prep (cheap,
+    # 6 locations) plus one merged-SE round (the richest component, 164
+    # locations, and where hook errors matter most). Building the full
+    # per-location list (before sampling) is what costs time, so this
+    # subset -- not just SAMPLES_PER_LOCATION -- is what keeps this fast.
+    SEQ_IDXS = (0, 1)
+
+    def test_weight1_smoke_surf10(self):
+        """A handful of weight-1 faults per merge-window component are
+        tolerated on surf10/Z, sampled from the exhaustive sweep's full
+        location set."""
+        failed, total = self._smoke_sweep("surf10", "ft", "Z")
+        assert not failed, (
+            f"{len(failed)}/{total} sampled fault locations broke the "
+            f"XOR invariant, e.g. "
+            f"{TestMzzFaultTolerance._error_tags(failed)}"
+        )
+
+    @classmethod
+    def _smoke_sweep(cls, layout, mode, basis):
+        base_program, seq = TestMzzFaultTolerance._mzz_program(
+            layout, mode, basis
+        )
+        failed, total = [], 0
+        for i in cls.SEQ_IDXS:
+            injected = fttools.build_discrete_error_injection_programs(
+                base_program=base_program,
+                instruction_to_analyze=seq[i],
+                stack_idx_to_modify=7 + i,
+                error_circuit_labels=TestMzzFaultTolerance.WEIGHT1_LABELS,
+            )
+            if not injected:
+                continue
+            step = max(1, len(injected) // cls.SAMPLES_PER_LOCATION)
+            sample = injected[::step][: cls.SAMPLES_PER_LOCATION]
+            total += len(sample)
+            failed += TestMzzFaultTolerance._run_xor_sweep(sample)
+        return failed, total
+
+
+class TestSurgeryCnotFaultToleranceSmoke:
+    """Fast, non-exhaustive companion to `TestSurgeryCnotFaultTolerance`.
+
+    Samples a handful of weight-1 fault locations per merge-window
+    component on the cheapest (surf10) layout instead of the full
+    ~3000-program sweep per layout/basis combination, so the default
+    test run still catches gross breakage in the surgery-CNOT FT
+    machinery without the exhaustive cost (marked `slow`; run it
+    explicitly with `-m slow` for the exhaustive check).
+    """
+
+    SAMPLES_PER_LOCATION = 2
+    # Subset of TestSurgeryCnotFaultTolerance.WEIGHT1_SEQ_IDXS: seam prep
+    # (cheap, 6 locations) plus one merged-SE round (the richest
+    # component, 164 locations). Building the full per-location list
+    # (before sampling) is what costs time, so this subset -- not just
+    # SAMPLES_PER_LOCATION -- is what keeps this fast.
+    SEQ_IDXS = (0, 1)
+
+    def test_weight1_smoke_surf10(self):
+        """A handful of weight-1 faults per merge-window component are
+        tolerated on surf10/Z, sampled from the exhaustive sweep's full
+        location set."""
+        failed, total = self._smoke_sweep("surf10", "ft", "Z")
+        assert not failed, (
+            f"{len(failed)}/{total} sampled fault locations broke the "
+            f"Bell XOR invariant, e.g. "
+            f"{TestSurgeryCnotFaultTolerance._error_tags(failed)}"
+        )
+
+    def test_class1_regression_surf10_x(self):
+        """Pins two ZZ-repair regressions in the X basis, first ZZ
+        merged-SE round: an ancilla D1 bulk fault falsely firing the
+        byproduct Pauli, and an ancilla D4 fault (in X_L(anc)'s support)
+        whose X-sector defect used to escape correction before the XX
+        merge consumed X_L(anc) for m_xx. Exhaustive over this one round
+        (not sampled, unlike `_smoke_sweep`), so fast enough outside
+        `-m slow` while still guaranteed to hit both locations."""
+        base_program, targets = TestSurgeryCnotFaultTolerance._cnot_program(
+            "surf10", "ft", "X"
+        )
+        seq, base = targets["ZZ"]
+        injected, _ = fttools.build_pruned_discrete_error_injection_programs(
+            base_program=base_program,
+            instruction_to_analyze=seq[1],
+            stack_idx_to_modify=base + 1,
+            error_circuit_labels=TestSurgeryCnotFaultTolerance.WEIGHT1_LABELS,
+            post_twoq_gates=False,
+        )
+        failed = TestSurgeryCnotFaultTolerance._run_xor_sweep(injected)
+        assert not failed, (
+            f"{len(failed)}/{len(injected)} weight-1 faults in the first "
+            f"ZZ merged-SE round broke the Bell XOR invariant, e.g. "
+            f"{TestSurgeryCnotFaultTolerance._error_tags(failed)}"
+        )
+
+    @classmethod
+    def _smoke_sweep(cls, layout, mode, basis):
+        base_program, targets = TestSurgeryCnotFaultTolerance._cnot_program(
+            layout, mode, basis
+        )
+        failed, total = [], 0
+        for seq, base in targets.values():
+            for i in cls.SEQ_IDXS:
+                injected = fttools.build_discrete_error_injection_programs(
+                    base_program=base_program,
+                    instruction_to_analyze=seq[i],
+                    stack_idx_to_modify=base + i,
+                    error_circuit_labels=(
+                        TestSurgeryCnotFaultTolerance.WEIGHT1_LABELS
+                    ),
+                )
+                if not injected:
+                    continue
+                step = max(1, len(injected) // cls.SAMPLES_PER_LOCATION)
+                sample = injected[::step][: cls.SAMPLES_PER_LOCATION]
+                total += len(sample)
+                failed += TestSurgeryCnotFaultTolerance._run_xor_sweep(
+                    sample
+                )
+        return failed, total

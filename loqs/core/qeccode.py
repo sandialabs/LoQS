@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from typing import ClassVar, TypeVar
 
 from loqs.core.instructions import Instruction
-from loqs.core.recordables.pauliframe import PauliFrameCastableTypes
+from loqs.core.recordables.pauliframe import PauliFrameLike
 from loqs.core.recordables.qeccodepatch import QECCodePatch
 from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
@@ -92,13 +92,21 @@ class QECCode(Displayable):
 
         self.name = name
 
+        # Cache of qubit-mapped instructions, keyed by (instruction key,
+        # qubit tuple), so that repeated QECCodePatch lookups on patches
+        # sharing this code and qubit set (e.g. after patch.copy()) don't
+        # redo the map_qubits deep-copy of the instruction's circuit data.
+        self._mapped_instruction_cache: dict[
+            tuple[str, tuple], Instruction
+        ] = {}
+
     def __str__(self) -> str:
         return f"QECCode {self.name}"
 
     def create_patch(
         self,
         qubits: Sequence[str | int],
-        pauli_frame: PauliFrameCastableTypes | None = None,
+        pauli_frame: PauliFrameLike | None = None,
     ) -> QECCodePatch:
         """Create a [](api:QECCodePatch) based on this [](api:QECCode).
 

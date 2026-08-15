@@ -28,9 +28,9 @@ import warnings
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, QuantumProgram
-from loqs.core.history import HistoryCastableTypes, HistoryCollectDataArgsType
+from loqs.core.history import HistoryLike, HistoryCollectDataArgsType
 from loqs.core.instructions.instructionstack import (
-    InstructionStackCastableTypes,
+    InstructionStackLike,
 )
 from loqs.core.programresults import ProgramResults
 from loqs.core.qeccode import QECCode
@@ -165,11 +165,11 @@ class NoiseSweepRunner(Displayable):
         base_seed: int = 0,
         seed_stride: int | None = None,
         instruction_stack: (
-            InstructionStackCastableTypes
-            | Callable[[Any], InstructionStackCastableTypes]
+            InstructionStackLike
+            | Callable[[Any], InstructionStackLike]
         ) = None,
         initial_history: (
-            HistoryCastableTypes | Callable[[Any], HistoryCastableTypes]
+            HistoryLike | Callable[[Any], HistoryLike]
         ) = None,
         default_noise_model: (
             BaseNoiseModel | str | Callable[[Any], BaseNoiseModel | str] | None

@@ -204,4 +204,5 @@ def main() -> None:
     disk_path.write_text(json.dumps(inv_json, indent=2, sort_keys=True), encoding="utf-8")
 
 
-main()
+if __name__ in ("__main__", "<run_path>"):  # "<run_path>" is what mkdocs-gen-files' runpy.run_path(...) uses
+    main()

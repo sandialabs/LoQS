@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, ClassVar, Sequence, TypeVar
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.recordables.pauliframe import (
     PauliFrame,
-    PauliFrameCastableTypes,
+    PauliFrameLike,
 )
 from loqs.internal.displayable import Displayable
 from loqs.internal.serializable import Serializable
@@ -54,7 +54,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self,
         code: "QECCode",  # to avoid circular import
         qubits: Sequence[str | int],
-        pauli_frame: PauliFrameCastableTypes,
+        pauli_frame: PauliFrameLike,
         data: dict | None = None,
     ):
         """
@@ -84,7 +84,7 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self.qubits = qubits
         """The qubits this patch acts on."""
 
-        self.pauli_frame = PauliFrame.cast(pauli_frame)
+        self.pauli_frame = PauliFrame(pauli_frame)
         """The Pauli frame tracking errors on these qubits."""
 
         import copy
@@ -92,12 +92,12 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self.data = copy.deepcopy(data) if data is not None else {}
         """Extra patch-specific data to be tracked."""
 
-    def copy(self: U, pauli_frame: PauliFrameCastableTypes | None = None) -> U:
+    def copy(self: U, pauli_frame: PauliFrameLike | None = None) -> U:
         """Create a copy of this QECCodePatch, deep-copying its tracked data.
 
         Parameters
         ----------
-        pauli_frame : PauliFrameCastableTypes, optional
+        pauli_frame : PauliFrameLike, optional
             A new Pauli frame to associate with the copied patch.
             If None (default), the copied patch retains the original
             patch's Pauli frame.
@@ -111,6 +111,16 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         )
 
     def __getitem__(self, key: str) -> Instruction:
+        # The mapped instruction only depends on the code and this patch's
+        # qubits (not its Pauli frame or tracked data), and patches are
+        # frequently re-copied with the same qubits, so cache on the code
+        # to avoid repeatedly deep-copying (via map_qubits) the same
+        # instruction data, which can include large circuit objects.
+        cache_key = (key, tuple(self.qubits))
+        cache = self.code._mapped_instruction_cache
+        if cache_key in cache:
+            return cache[cache_key]
+
         try:
             template_op = self.code.instructions[key]
         except KeyError:
@@ -121,7 +131,9 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         mapping = {
             k: v for k, v in zip(self.code.template_qubits, self.qubits)
         }
-        return template_op.map_qubits(mapping)
+        mapped = template_op.map_qubits(mapping)
+        cache[cache_key] = mapped
+        return mapped
 
     def __len__(self) -> int:
         return len(self.code.instructions)
