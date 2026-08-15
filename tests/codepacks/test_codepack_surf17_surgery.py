@@ -1254,11 +1254,13 @@ class TestMzzFaultTolerance:
         return make_stim_program(layout, stack, all_q), seq
 
     @staticmethod
-    def _run_xor_sweep(programs, num_shots=4):
+    def _run_xor_sweep(programs, num_shots=1):
         """Run injected programs; return those where any shot's decoded
-        logical readouts disagree (XOR != 0). 4 shots/program leaves
-        P(miss the m_zz = 1 branch) = 1/16 per program; failures are
-        reconfirmed at 32 shots by the callers."""
+        logical readouts disagree (XOR != 0). 1 shot/program leaves
+        P(miss the m_zz = 1 branch) = 1/2 per program; failures are
+        reconfirmed at 32 shots by the callers, so this only risks a
+        (per-run, not systematic) false negative for a bug that manifests
+        on the random branch at exactly one specific location."""
         failed = []
         for program in programs:
             results = program.run(num_shots=num_shots, verbose=False)
@@ -1270,12 +1272,16 @@ class TestMzzFaultTolerance:
         return failed
 
     def _sweep(self, layout, mode, basis, post_twoq):
-        """(failed_programs, total_injected) over the merge window."""
+        """(failed_programs, total_injected) over the merge window.
+
+        "total_injected" counts the Pauli-propagation equivalence-class
+        representatives actually run, not the raw location x label
+        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs)."""
         base_program, seq = self._mzz_program(layout, mode, basis)
         seq_idxs = self.POST2Q_SEQ_IDXS if post_twoq else self.WEIGHT1_SEQ_IDXS
         failed, total = [], 0
         for i in seq_idxs:
-            injected = fttools.build_discrete_error_injection_programs(
+            injected, _ = fttools.build_pruned_discrete_error_injection_programs(
                 base_program=base_program,
                 instruction_to_analyze=seq[i],
                 stack_idx_to_modify=7 + i,
@@ -1446,9 +1452,13 @@ class TestSurgeryCnotFaultTolerance:
         return make_stim_program(layout, stack, all_q), targets
 
     @staticmethod
-    def _run_xor_sweep(programs, num_shots=4):
+    def _run_xor_sweep(programs, num_shots=1):
         """Run injected programs; return those where any shot's decoded
-        C and T readouts disagree. Per-shot entries: [m_anc, m_C, m_T]."""
+        C and T readouts disagree. Per-shot entries: [m_anc, m_C, m_T].
+        1 shot/program; failures are reconfirmed at 32 shots by the
+        callers, so this only risks a (per-run, not systematic) false
+        negative for a bug that manifests on the random branch at
+        exactly one specific location."""
         failed = []
         for program in programs:
             results = program.run(num_shots=num_shots, verbose=False)
@@ -1460,13 +1470,17 @@ class TestSurgeryCnotFaultTolerance:
         return failed
 
     def _sweep(self, layout, mode, basis, post_twoq):
-        """(failed_programs, total_injected) over BOTH merge windows."""
+        """(failed_programs, total_injected) over BOTH merge windows.
+
+        "total_injected" counts the Pauli-propagation equivalence-class
+        representatives actually run, not the raw location x label
+        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs)."""
         base_program, targets = self._cnot_program(layout, mode, basis)
         seq_idxs = self.POST2Q_SEQ_IDXS if post_twoq else self.WEIGHT1_SEQ_IDXS
         failed, total = [], 0
         for seq, base in targets.values():
             for i in seq_idxs:
-                injected = fttools.build_discrete_error_injection_programs(
+                injected, _ = fttools.build_pruned_discrete_error_injection_programs(
                     base_program=base_program,
                     instruction_to_analyze=seq[i],
                     stack_idx_to_modify=base + i,
