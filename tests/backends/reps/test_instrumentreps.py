@@ -22,7 +22,7 @@ class TestZBasisProjectionInstrumentRep:
         assert isinstance(rep, InstrumentRep)
         assert rep.reset == reset
         assert rep.include_outcome == include_outcome
-        assert rep.qubits == ("Q0",)
+        assert rep.qubit_labels == ("Q0",)
 
     @pytest.mark.parametrize(
         "reset,include_outcome",

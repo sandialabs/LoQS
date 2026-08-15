@@ -245,14 +245,14 @@ class TestGetReps:
         circuit = ListPhysicalCircuit([[("X", ("Q0",))]])
         reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
-        assert reps[0].qubits == ("Q0",)
+        assert reps[0].qubit_labels == ("Q0",)
 
     def test_generic_name_only_fallback_for_gates(self):
         model = DictNoiseModel({"X": np.eye(4)}, {})
         circuit = ListPhysicalCircuit([[("X", ("Q1",))]])
         reps = model.get_reps(circuit, [QSimSuperopGateRep], [])
         assert len(reps) == 1
-        assert reps[0].qubits == ("Q1",)
+        assert reps[0].qubit_labels == ("Q1",)
         assert isinstance(reps[0], QSimSuperopGateRep)
 
     def test_generic_name_only_fallback_for_instruments(self):
@@ -260,7 +260,7 @@ class TestGetReps:
         circuit = ListPhysicalCircuit([[("M", ("Q1",))]])
         reps = model.get_reps(circuit, [], [ZBasisProjectionInstrumentRep])
         assert len(reps) == 1
-        assert reps[0].qubits == ("Q1",)
+        assert reps[0].qubit_labels == ("Q1",)
         assert isinstance(reps[0], ZBasisProjectionInstrumentRep)
 
     def test_lookup_failure_raises(self):
@@ -471,7 +471,7 @@ class TestSTIMGetReps:
         )
         assert len(reps) == 1
         assert reps[0].circuit_str == "X 0"
-        assert reps[0].qubits == ("Q0",)
+        assert reps[0].qubit_labels == ("Q0",)
 
     def test_tuple_key_aliasing(self):
         assert STIMPhysicalCircuit.stim_command_aliases.get("CNOT") == "CX"
@@ -498,7 +498,7 @@ class TestSTIMGetReps:
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
         )
         assert len(reps) == 1
-        assert reps[0].qubits == ("!Q0",)
+        assert reps[0].qubit_labels == ("!Q0",)
 
     def test_generic_instrument_merging_multiqubit(self):
         inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
@@ -510,7 +510,7 @@ class TestSTIMGetReps:
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
         )
         assert len(reps) == 1
-        assert reps[0].qubits == ("Q0", "Q1", "Q2")
+        assert reps[0].qubit_labels == ("Q0", "Q1", "Q2")
         assert reps[0].reset is None
         assert reps[0].include_outcome is True
 
@@ -539,11 +539,11 @@ class TestSTIMGetReps:
         reps = model.get_reps(
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
         )
-        combined_reps = [r for r in reps if len(r.qubits) > 1]
+        combined_reps = [r for r in reps if len(r.qubit_labels) > 1]
         assert len(combined_reps) == 1
         merged = combined_reps[0]
         assert merged.circuit_str == "X 0 1 2"
-        assert merged.qubits == ("Q0", "Q1", "Q2")
+        assert merged.qubit_labels == ("Q0", "Q1", "Q2")
 
     def test_common_command_combining_requires_self_indexed_template(self):
         gate_dict = {"X": StimCircuitGateRep("X", ("Q0",))}
@@ -566,7 +566,7 @@ class TestSTIMGetReps:
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
         )
         assert len(reps) >= 3
-        individual_reps = [r for r in reps if len(r.qubits) == 1]
+        individual_reps = [r for r in reps if len(r.qubit_labels) == 1]
         assert len(individual_reps) >= 3
 
     def test_exact_entry_takes_priority_over_generic(self):
@@ -592,7 +592,7 @@ class TestSTIMGetReps:
         )
         assert len(reps) == 1
         assert reps[0].circuit_str == "CX 0 1 2 3"
-        assert reps[0].qubits == ("Q0", "Q1", "Q2", "Q3")
+        assert reps[0].qubit_labels == ("Q0", "Q1", "Q2", "Q3")
 
     def test_multiple_generic_commands_merge_independently(self):
         """`get_reps`'s generic-command combining (the `common` dict) is
@@ -610,11 +610,11 @@ class TestSTIMGetReps:
             circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
         )
         assert len(reps) == 4
-        assert all(len(r.qubits) == 1 for r in reps)
+        assert all(len(r.qubit_labels) == 1 for r in reps)
         x_reps = [r for r in reps if r.circuit_str == "X 0"]
         y_reps = [r for r in reps if r.circuit_str == "Y 0"]
-        assert {r.qubits for r in x_reps} == {("Q0",), ("Q2",)}
-        assert {r.qubits for r in y_reps} == {("Q1",), ("Q3",)}
+        assert {r.qubit_labels for r in x_reps} == {("Q0",), ("Q2",)}
+        assert {r.qubit_labels for r in y_reps} == {("Q1",), ("Q3",)}
 
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
@@ -632,7 +632,7 @@ class TestMergeCommonRep:
         _merge_common_rep("HS", ("Q2",), generic, common)
         merged = common["HS"]
         assert merged.circuit_str == "H 0 1 2\nS 0 1 2"
-        assert merged.qubits == ("Q0", "Q1", "Q2")
+        assert merged.qubit_labels == ("Q0", "Q1", "Q2")
 
     def test_instrument_reptype_merges_by_concatenating_qubits(self):
         from loqs.backends.model.dictmodel import _merge_common_rep
@@ -644,7 +644,7 @@ class TestMergeCommonRep:
         merged = common["M"]
         assert merged.reset is None
         assert merged.include_outcome is True
-        assert merged.qubits == ("Q0", "Q1")
+        assert merged.qubit_labels == ("Q0", "Q1")
 
     def test_stim_circuit_instrumentrep_also_merges_by_appending_indices(self):
         """`StimCircuitInstrumentRep` shares `StimCircuitPayloadMixin` with
@@ -660,7 +660,7 @@ class TestMergeCommonRep:
         _merge_common_rep("M", ("Q1",), generic, common)
         merged = common["M"]
         assert merged.circuit_str == "M 0 1"
-        assert merged.qubits == ("Q0", "Q1")
+        assert merged.qubit_labels == ("Q0", "Q1")
 
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")

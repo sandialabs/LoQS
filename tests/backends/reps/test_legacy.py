@@ -89,7 +89,7 @@ class TestRepsFixtureRoundTrip:
                 f"{expected_cls.__name__}"
             )
             assert not isinstance(rep, RepTuple)
-            assert rep.qubits == ("Q0",)
+            assert rep.qubit_labels == ("Q0",)
 
     def test_flat_gate_rep_payloads_round_trip(self, decoded):
         assert decoded["GATEREP_STIM_CIRCUIT_STR"].circuit_str == "X 0"
@@ -115,8 +115,8 @@ class TestRepsFixtureRoundTrip:
         assert rep.include_outcome == True  # noqa: E712
         assert isinstance(rep.pre_op, UnitaryGateRep)
         assert isinstance(rep.post_op, UnitaryGateRep)
-        assert rep.pre_op.qubits == ("Q0",)
-        assert rep.post_op.qubits == ("Q0",)
+        assert rep.pre_op.qubit_labels == ("Q0",)
+        assert rep.post_op.qubit_labels == ("Q0",)
 
     def test_nested_outcome_operation_dict_round_trip(self, decoded, request):
         """NOTE: JSON round-trips the `{0: ..., 1: ...}` outcome dict's keys
@@ -292,7 +292,7 @@ class TestLegacyValueDecoding:
         )
         assert isinstance(result, UnitaryGateRep)
         assert np.array_equal(result.unitary, np.eye(2))
-        assert result.qubits == ("Q0",)
+        assert result.qubit_labels == ("Q0",)
 
     def test_concrete_instrumentrep_subclass_does_not_use_legacy_path(self):
         """Same as above, but for `InstrumentRep`'s equivalent
@@ -306,7 +306,7 @@ class TestLegacyValueDecoding:
         assert isinstance(result, ZBasisProjectionInstrumentRep)
         assert result.reset == 0
         assert result.include_outcome is True
-        assert result.qubits == ("Q0",)
+        assert result.qubit_labels == ("Q0",)
 
 
 class TestMisformedLegacyDecode:

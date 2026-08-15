@@ -29,7 +29,7 @@ class TestUnitaryGateRep:
         assert isinstance(rep, UnitaryGateRep)
         assert isinstance(rep, GateRep)
         assert np.array_equal(rep.unitary, np.eye(2))
-        assert rep.qubits == ("Q0",)
+        assert rep.qubit_labels == ("Q0",)
 
     def test_rejects_non_ndarray(self):
         with pytest.raises(RepConstructionError):
@@ -253,7 +253,7 @@ class TestKrausGateRepFromAmplitudeDamping:
     def test_two_kraus_operators(self):
         rep = KrausGateRep.from_amplitude_damping(0.4, "Q0")
         assert len(rep.kraus_operators) == 2
-        assert rep.qubits == ("Q0",)
+        assert rep.qubit_labels == ("Q0",)
 
     def test_action_matches_hand_built_channel(self):
         gamma = 0.4
@@ -268,7 +268,7 @@ class TestKrausGateRepFromAmplitudeDamping:
 class TestKrausGateRepDedup:
     def _assert_kraus_reps_equal(self, expected: KrausGateRep, actual: KrausGateRep):
         assert isinstance(actual, KrausGateRep)
-        assert expected.qubits == actual.qubits
+        assert expected.qubit_labels == actual.qubit_labels
         assert len(expected.kraus_operators) == len(actual.kraus_operators)
         for (ek, ep), (ak, ap) in zip(
             expected.kraus_operators, actual.kraus_operators
@@ -313,7 +313,7 @@ class TestKrausGateRepDedup:
 class TestKrausGateRepCompose:
     def _assert_kraus_reps_equal(self, expected: KrausGateRep, actual: KrausGateRep):
         assert isinstance(actual, KrausGateRep)
-        assert expected.qubits == actual.qubits
+        assert expected.qubit_labels == actual.qubit_labels
         assert len(expected.kraus_operators) == len(actual.kraus_operators)
         for (ek, ep), (ak, ap) in zip(
             expected.kraus_operators, actual.kraus_operators

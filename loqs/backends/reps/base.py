@@ -32,14 +32,20 @@ class OperationRep(ABC, Displayable):
     [](api:RepConstructionError) for an invalid value.
     """
 
-    qubits: tuple[str | int, ...]
+    qubit_labels: tuple[str | int, ...]
     """Qubit labels that this representation should be applied to."""
 
-    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["qubits"]
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["qubit_labels"]
+
+    _SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {"qubits": "qubit_labels"}
+    """Lets old serialized files (which stored this field under the
+    pre-rename key `"qubits"`) still decode correctly: `_from_decoded_attrs`
+    (see [](api:Serializable._from_decoded_attrs)) maps a decoded
+    `"qubits"` key to the modern `qubit_labels` constructor kwarg."""
 
     @abstractmethod
     def __init__(
-        self, qubits: str | int | Sequence[str | int] | None = ()
+        self, qubit_labels: str | int | Sequence[str | int] | None = ()
     ) -> None:
         """Initialize the qubits this representation applies to.
 
@@ -49,18 +55,19 @@ class OperationRep(ABC, Displayable):
 
         Parameters
         ----------
-        qubits:
+        qubit_labels:
             Qubit label(s) this operation acts upon. A bare `str`/`int` is
             wrapped into a single-element tuple; any other sequence is
             converted to a tuple; `None` is treated as the empty tuple
-            (no qubits attached yet -- see [](api:OperationRep.with_qubits)).
+            (no qubits attached yet -- see
+            [](api:OperationRep.with_qubit_labels)).
         """
-        if qubits is None:
-            self.qubits = ()
-        elif isinstance(qubits, (str, int)):
-            self.qubits = (qubits,)
+        if qubit_labels is None:
+            self.qubit_labels = ()
+        elif isinstance(qubit_labels, (str, int)):
+            self.qubit_labels = (qubit_labels,)
         else:
-            self.qubits = tuple(qubits)
+            self.qubit_labels = tuple(qubit_labels)
 
     def __str__(self) -> str:
         attrs = ", ".join(
@@ -68,7 +75,9 @@ class OperationRep(ABC, Displayable):
         )
         return f"{type(self).__name__}({attrs})"
 
-    def with_qubits(self, qubits: str | int | Sequence[str | int]) -> "OperationRep":
+    def with_qubit_labels(
+        self, qubit_labels: str | int | Sequence[str | int]
+    ) -> "OperationRep":
         """Return a copy of this representation retargeted onto different qubits.
 
         Reconstructs via `type(self)`'s own `__init__` (also retargeting
@@ -77,30 +86,34 @@ class OperationRep(ABC, Displayable):
 
         Parameters
         ----------
-        qubits:
+        qubit_labels:
             The new qubit label(s) to attach.
 
         Returns
         -------
         OperationRep
-            A new `type(self)` instance with `qubits` replaced.
+            A new `type(self)` instance with `qubit_labels` replaced.
 
         Raises
         ------
         RepConstructionError
-            If retargeting the payload onto `qubits` would be invalid.
+            If retargeting the payload onto `qubit_labels` would be invalid.
         """
         kwargs = {}
         for attr in self._SERIALIZE_ATTRS:
-            if attr == "qubits":
-                kwargs[attr] = qubits
+            if attr == "qubit_labels":
+                kwargs[attr] = qubit_labels
                 continue
             value = getattr(self, attr)
             if isinstance(value, OperationRep):
-                value = value.with_qubits(qubits)
+                value = value.with_qubit_labels(qubit_labels)
             elif isinstance(value, Mapping):
                 value = {
-                    k: (v.with_qubits(qubits) if isinstance(v, OperationRep) else v)
+                    k: (
+                        v.with_qubit_labels(qubit_labels)
+                        if isinstance(v, OperationRep)
+                        else v
+                    )
                     for k, v in value.items()
                 }
             kwargs[attr] = value
@@ -118,19 +131,19 @@ class StimCircuitPayloadMixin:
     circuit_str: str
     """The STIM circuit-string template, with placeholder qubit indices."""
 
-    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["circuit_str", "qubits"]
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = ["circuit_str", "qubit_labels"]
 
     def __init__(
         self,
         circuit_str: str,
-        qubits: str | int | Sequence[str | int] | None = (),
+        qubit_labels: str | int | Sequence[str | int] | None = (),
     ) -> None:
         if not isinstance(circuit_str, str):
             raise RepConstructionError(
                 f"{circuit_str!r} is not a valid {type(self).__name__} "
                 "payload (expected a str)"
             )
-        super().__init__(qubits)  # type: ignore[call-arg]
+        super().__init__(qubit_labels)  # type: ignore[call-arg]
         self.circuit_str = circuit_str
 
 
