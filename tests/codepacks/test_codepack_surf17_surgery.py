@@ -1364,7 +1364,10 @@ class TestSurgeryCnotFaultTolerance:
     outer seam qubit, not the middle one) and fire_rule="both" after
     the XX merge (anc compensates via m_anc, tgt via its own Z decode;
     the middle seam qubit is the broken class - the mzz dual). Both
-    classes were confirmed empirically before the fix.
+    classes were confirmed empirically before the fix. The ZZ repair
+    also uses defect_decode_mode="matching" (a real per-row decode
+    that no longer false-fires on an ordinary ancilla bulk fault -- see
+    build_split_byproduct_repair_instruction).
 
     Pass criterion: per-shot XOR of the decoded C and T logical
     readouts == 0 in both terminating bases (deterministic for a Bell
@@ -1421,6 +1424,7 @@ class TestSurgeryCnotFaultTolerance:
                     surgery.build_split_byproduct_repair_instruction(
                         "ZZ", "C", "ANC", qc, qa, seams_v, layout,
                         fire_rule="b_only",
+                        defect_decode_mode="matching",
                     ),
                     None,
                 )
@@ -1620,6 +1624,32 @@ class TestSurgeryCnotFaultToleranceSmoke:
         assert not failed, (
             f"{len(failed)}/{total} sampled fault locations broke the "
             f"Bell XOR invariant, e.g. "
+            f"{TestSurgeryCnotFaultTolerance._error_tags(failed)}"
+        )
+
+    def test_class1_regression_surf10_x(self):
+        """Pins two ZZ-repair regressions in the X basis, first ZZ
+        merged-SE round: an ancilla D1 bulk fault falsely firing the
+        byproduct Pauli, and an ancilla D4 fault (in X_L(anc)'s support)
+        whose X-sector defect used to escape correction before the XX
+        merge consumed X_L(anc) for m_xx. Exhaustive over this one round
+        (not sampled, unlike `_smoke_sweep`), so fast enough outside
+        `-m slow` while still guaranteed to hit both locations."""
+        base_program, targets = TestSurgeryCnotFaultTolerance._cnot_program(
+            "surf10", "ft", "X"
+        )
+        seq, base = targets["ZZ"]
+        injected, _ = fttools.build_pruned_discrete_error_injection_programs(
+            base_program=base_program,
+            instruction_to_analyze=seq[1],
+            stack_idx_to_modify=base + 1,
+            error_circuit_labels=TestSurgeryCnotFaultTolerance.WEIGHT1_LABELS,
+            post_twoq_gates=False,
+        )
+        failed = TestSurgeryCnotFaultTolerance._run_xor_sweep(injected)
+        assert not failed, (
+            f"{len(failed)}/{len(injected)} weight-1 faults in the first "
+            f"ZZ merged-SE round broke the Bell XOR invariant, e.g. "
             f"{TestSurgeryCnotFaultTolerance._error_tags(failed)}"
         )
 

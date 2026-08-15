@@ -44,8 +44,8 @@ codepack's syndrome-extraction template slot order `[a, b, c, d]`.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 
@@ -823,6 +823,8 @@ def pymatching_merged_window_decode(
     fresh_start: int = 0,
     noisy_prev: bool = False,
     ref_rows: Sequence[int] = (),
+    continuing_rows: dict[int, int] | None = None,
+    settled_rows: dict[int, int] | None = None,
 ) -> np.ndarray:
     """Decode a syndrome window on the 3D space-time graph of an arbitrary H.
 
@@ -881,6 +883,25 @@ def pymatching_merged_window_decode(
         vs. a data error just after the baseline that the matcher chose
         to absorb).
 
+    continuing_rows:
+        Rows -> the window layer at which each one's own pre-window
+        history stops being reachable (e.g. a shallower-history second
+        patch that only starts contributing partway through a window
+        sized to a deeper block's reach). Unlike `fresh_rows` (checks
+        with no prior existence at all), a continuing row DOES have real
+        history before its start layer; `prev_round` there is trusted
+        the same (untrusted, `noisy_prev`-style) way as at layer 0, just
+        time-shifted. No node/edges before the start layer.
+
+    settled_rows:
+        Same shape as `continuing_rows`, but for a baseline that is
+        CONFIRMED rather than noisy (e.g. a row an earlier merge's own
+        repair already examined and took full responsibility for). No
+        escape edge: a new defect after it must be explained by a real
+        correction, not cheaply blamed on the settled baseline -- using
+        `continuing_rows` here would let the matcher absorb a genuine
+        new defect for free instead.
+
     Notes
     -----
     The correction is referenced to the LAST window round (the joint
@@ -907,6 +928,20 @@ def pymatching_merged_window_decode(
     num_checks, num_data = H.shape
     num_rounds = len(syndrome_window)
     fresh = set(fresh_rows)
+    continuing = dict(continuing_rows or {})
+    settled = dict(settled_rows or {})
+    assert not (fresh & continuing.keys()), (
+        "a row cannot be both a fresh row and a continuing row"
+    )
+    assert not (fresh & settled.keys()), (
+        "a row cannot be both a fresh row and a settled row"
+    )
+    assert not (continuing.keys() & settled.keys()), (
+        "a row cannot be both a continuing row and a settled row"
+    )
+    # Rows that have no node before their own start layer, for the loops
+    # below that don't need to distinguish WHY (continuing vs settled).
+    late_start = {**continuing, **settled}
 
     matching = pymatching.Matching()
     matching.ensure_num_fault_ids(num_data + 1 + len(ref_rows))
@@ -918,6 +953,9 @@ def pymatching_merged_window_decode(
             rows = [i for i in range(num_checks) if H[i, j] == 1]
             if t <= fresh_start:
                 rows = [i for i in rows if i not in fresh]
+            rows = [
+                i for i in rows if not (i in late_start and t < late_start[i])
+            ]
             if len(rows) == 2:
                 matching.add_edge(
                     t * num_checks + rows[0],
@@ -937,6 +975,8 @@ def pymatching_merged_window_decode(
         for i in range(num_checks):
             if i in fresh and t < fresh_start:
                 continue  # fresh check does not exist yet: no node
+            if i in late_start and t < late_start[i]:
+                continue  # continuing/settled row does not exist yet: no node
             if t == fresh_start and i in fresh:
                 # First-round measurement error on a fresh check: only
                 # the next round's diff fires (its first round is its
@@ -952,6 +992,8 @@ def pymatching_merged_window_decode(
                     merge_strategy="smallest-weight",
                 )
             else:
+                # A continuing/settled row's own start round falls here
+                # too: just the ordinary temporal edge onward from it.
                 matching.add_edge(
                     t * num_checks + i,
                     (t + 1) * num_checks + i,
@@ -960,10 +1002,14 @@ def pymatching_merged_window_decode(
                 )
     if noisy_prev:
         for i in range(num_checks):
-            if i in fresh:
-                continue  # fresh rows have no layer-0 detector
+            if i in fresh or i in settled:
+                # Fresh rows have no baseline-mismeasurement node; settled
+                # rows have a CONFIRMED baseline, not a noisy one -- no
+                # escape (see `settled_rows` above).
+                continue
+            s = continuing.get(i, 0)
             matching.add_boundary_edge(
-                i,
+                s * num_checks + i,
                 fault_ids=(
                     {ref_fault_id[i]} if i in ref_fault_id else set()
                 ),
@@ -983,6 +1029,10 @@ def pymatching_merged_window_decode(
         for i in range(num_checks):
             if i in fresh and t <= fresh_start:
                 detectors.append(0)
+            elif i in late_start and t < late_start[i]:
+                detectors.append(0)
+            elif i in late_start and t == late_start[i]:
+                detectors.append(syndrome_window[t][i] ^ prev_round[i])
             elif t == 0:
                 detectors.append(syndrome_window[0][i] ^ prev_round[i])
             else:
@@ -1212,6 +1262,12 @@ def _split_bookkeeping_apply_fn(
         # shared reference layer): errors after round 0 belong to the
         # matching, whose support-crossing corrections convert m
         # consistently.
+        #
+        # Each of the 8 rows reaches back to round 0 independently,
+        # unless an earlier merge's own repair already claimed it (see
+        # `byproduct_settled_{new_check_type}` in
+        # [](api:_split_byproduct_repair_apply_fn)), in which case it
+        # anchors no further back than that repair's last round.
         hist_a = (
             patches[patch_a_label].data.get(
                 f"syndrome_history_{new_check_type}", []
@@ -1228,20 +1284,45 @@ def _split_bookkeeping_apply_fn(
             "FT surgery decoding needs pre-merge QEC history on both "
             "patches to anchor the merge window"
         )
-        # Extend back by the DEEPEST shared pre-merge depth: for the
-        # symmetric mzz Bell prep this reaches round 0 (the terminating
-        # decode's reference), for asymmetric contexts (e.g. the CNOT's
-        # ancilla patch) each patch anchors the same number of rounds
-        # before the merge. Pre-merge the patches are uncoupled (block-
-        # diagonal H), so per-patch indexing from the end is sound.
-        k_shared = min(len(hist_a), len(hist_b)) - num_rounds
-        start_a = len(hist_a) - num_rounds - k_shared
-        start_b = len(hist_b) - num_rounds - k_shared
+        settled_a = (
+            patches[patch_a_label].data.get(
+                f"byproduct_settled_{new_check_type}", {}
+            )
+            or {}
+        )
+        settled_b = (
+            patches[patch_b_label].data.get(
+                f"byproduct_settled_{new_check_type}", {}
+            )
+            or {}
+        )
+        hists = [hist_a] * 4 + [hist_b] * 4
+        settled_maps = [settled_a] * 4 + [settled_b] * 4
+        local_rows = [0, 1, 2, 3] * 2
+        is_settled = [local_rows[i] in settled_maps[i] for i in range(8)]
+        # Per-row (0-3 = A, 4-7 = B) reach: round 0 by default, or an
+        # earlier repair's last examined round if this row is settled.
+        reach_start = [
+            settled_maps[i].get(local_rows[i], 0) for i in range(8)
+        ]
+        k_shared_rows = [
+            len(hists[i]) - num_rounds - reach_start[i] for i in range(8)
+        ]
+        k_shared = max(k_shared_rows)
         fresh_start = k_shared - 1
         num_window = k_shared - 1 + num_rounds
+        # Window round at which each row's own contribution starts (0
+        # for whichever row(s) set `k_shared`, i.e. reach the deepest).
+        row_offset = [k_shared - ks for ks in k_shared_rows]
+
+        def row_value(i: int, t: int) -> int:
+            if t < row_offset[i]:
+                return 0
+            idx = reach_start[i] + 1 + (t - row_offset[i])
+            return hists[i][idx][local_rows[i]]
+
         window = [
-            list(hist_a[start_a + 1 + t])
-            + list(hist_b[start_b + 1 + t])
+            [row_value(i, t) for i in range(8)]
             + (
                 list(seam_hist[t - fresh_start])
                 if t >= fresh_start
@@ -1249,9 +1330,9 @@ def _split_bookkeeping_apply_fn(
             )
             for t in range(num_window)
         ]
-        prev_round = (
-            list(hist_a[start_a]) + list(hist_b[start_b]) + [0, 0, 0, 0]
-        )
+        prev_round = [
+            hists[i][reach_start[i]][local_rows[i]] for i in range(8)
+        ] + [0, 0, 0, 0]
         # Merged-row indices of the telescope-reference checks (A rows
         # 0-3, B rows 4-7): their layer-0 escapes carry fault ids so the
         # reference read below stays consistent with the matching.
@@ -1260,6 +1341,19 @@ def _split_bookkeeping_apply_fn(
             for lbl, check_type, row in telescope_reference
         ]
         num_data = merged_H_new.shape[1]
+        # A shorter-patch-history offset is a NOISY baseline
+        # (`continuing_rows`); a settled-row offset is CONFIRMED
+        # (`settled_rows`) -- see [](api:pymatching_merged_window_decode).
+        continuing_rows = {
+            i: row_offset[i]
+            for i in range(8)
+            if row_offset[i] > 0 and not is_settled[i]
+        }
+        settled_rows_arg = {
+            i: row_offset[i]
+            for i in range(8)
+            if row_offset[i] > 0 and is_settled[i]
+        }
         correction = pymatching_merged_window_decode(
             merged_H_new,
             window,
@@ -1268,6 +1362,8 @@ def _split_bookkeeping_apply_fn(
             fresh_start=fresh_start,
             noisy_prev=True,
             ref_rows=ref_rows,
+            continuing_rows=continuing_rows,
+            settled_rows=settled_rows_arg,
         )
         m_raw = 0
         for b in seam_hist[-1]:
@@ -1277,18 +1373,14 @@ def _split_bookkeeping_apply_fn(
         # Virtual fault: an undetectable final-round seam measurement
         # error flipped the recorded product, not the state.
         m_raw ^= int(correction[num_data])
-        # Telescope references at each patch's anchor round (the shared
-        # reference layer): errors after it belong to the matching, and
-        # a layer-0 escape on a reference row means the matcher judged
-        # the anchor value itself mismeasured - flip the read.
+        # Telescope references at each patch's own anchor round: errors
+        # after it belong to the matching, and a layer-0 escape on a
+        # reference row means the matcher judged the anchor value itself
+        # mismeasured - flip the read.
         reference_correction = 0
-        row_of = {
-            patch_a_label: (hist_a, start_a),
-            patch_b_label: (hist_b, start_b),
-        }
         for k, (lbl, check_type, row) in enumerate(telescope_reference):
-            hist_ref, start_ref = row_of[lbl]
-            reference_correction ^= hist_ref[start_ref][row]
+            merged_row = row if lbl == patch_a_label else 4 + row
+            reference_correction ^= prev_round[merged_row]
             reference_correction ^= int(correction[num_data + 1 + k])
 
     frame_correction = 0
@@ -1380,6 +1472,50 @@ def _split_bookkeeping_map_qubits_fn(
     return new_kwargs
 
 
+def _byproduct_repair_row_decode(
+    hist: list,
+    check_type: str,
+    row: int,
+    anchor: int,
+    num_post_split_rounds: int,
+) -> int:
+    """Discriminate a genuine seam-qubit fault from an ordinary bulk fault
+    on `row` (a grown-check row) using a real matching decode, instead of
+    [](api:_split_byproduct_repair_apply_fn)'s raw persistence check.
+
+    `row`'s reformed support always has one column private to it (weight
+    1 in the patch's own check matrix, e.g. `D2` for `SX1 = {D1, D2}`)
+    and one shared with an adjacent row (weight 2, `D1` here). A genuine
+    seam fault and a bulk fault on the PRIVATE column look identical --
+    intentionally not discriminated, since `_split_byproduct_repair_apply_fn`
+    already treats that ambiguity as self-correcting. Only a bulk fault
+    on the SHARED column (correlated with the adjacent row) is real and
+    needs excluding, which the raw single-row heuristic never checked.
+
+    Decodes `[hist[-anchor-1], hist[-anchor], hist[-num_post_split_rounds:]]`,
+    skipping the merge-round entries (the split's history rewrite already
+    makes every round read as if the reformed check were used
+    throughout, so comparing snapshots across the gap is exact).
+    Including the anchor as its own window layer -- not a `noisy_prev`
+    escape -- matters: a one-round anchor glitch then costs two ordinary
+    temporal edges (reverting), while a true persistent defect (never
+    reverting) is cheapest via a single data correction; a `noisy_prev`
+    escape there would let the matcher blame ANY persistent defect on
+    the anchor for free, defeating the discrimination.
+    """
+    H = BASE_H_X if check_type == "X" else BASE_H_Z
+    col_weights = H.sum(axis=0)
+    private_cols = [
+        j for j in range(H.shape[1]) if H[row, j] == 1 and col_weights[j] == 1
+    ]
+    window = [hist[-anchor]] + hist[-num_post_split_rounds:]
+    prev_round = hist[-anchor - 1]
+    correction = pymatching_merged_window_decode(
+        H, window, prev_round, fresh_rows=(), noisy_prev=False
+    )
+    return int(any(correction[j] for j in private_cols))
+
+
 def _split_byproduct_repair_apply_fn(
     patches: PatchDict,
     history: History,
@@ -1391,6 +1527,7 @@ def _split_byproduct_repair_apply_fn(
     num_post_split_rounds: int,
     repair_key: str,
     fire_rule: str = "both",
+    defect_decode_mode: Literal["heuristic", "matching"] = "heuristic",
 ) -> Frame:
     """Repair the split byproduct against a middle-seam fault.
 
@@ -1435,11 +1572,29 @@ def _split_byproduct_repair_apply_fn(
       the anchor round must agree with the round before it (rejects a
       measurement error in the last pre-merge round, which would offset
       the whole comparison).
+
+    `defect_decode_mode` selects how each row's `defect[lbl]` bit is
+    computed: `"heuristic"` (default) is the raw check above, kept for
+    backward compatibility; `"matching"` replaces it with a real per-row
+    decode ([](api:_byproduct_repair_row_decode)) that fixes a real
+    false-fire the heuristic has -- an ordinary bulk fault on the row's
+    shared-column neighbor looks identical to a genuine seam fault, but
+    the heuristic never checks that neighbor. Only used for
+    `fire_rule == "b_only"`; `"both"` already can't be faked by a
+    single fault and needs no such refinement.
+
+    Also marks each row in `grown_rows` "settled" through its last
+    examined round (`patch.data["byproduct_settled_{check_type}"][row]`),
+    regardless of `fire`, since this function has now taken full
+    responsibility for that row -- a later merge reaching back through
+    the same row's history (see [](api:_split_bookkeeping_apply_fn))
+    must not also explain the same defect via an ordinary correction.
     """
     anchor = num_merge_rounds + num_post_split_rounds + 1
     min_rounds = anchor if fire_rule == "both" else anchor + 1
     defect = {}
     glitch = {}
+    settled_at = {}
     for lbl, check_type, row in grown_rows:
         hist = patches[lbl].data.get(f"syndrome_history_{check_type}", []) or []
         assert len(hist) >= min_rounds, (
@@ -1449,6 +1604,10 @@ def _split_byproduct_repair_apply_fn(
         )
         if fire_rule == "both":
             defect[lbl] = hist[-1][row] ^ hist[-anchor][row]
+        elif defect_decode_mode == "matching":
+            defect[lbl] = _byproduct_repair_row_decode(
+                hist, check_type, row, anchor, num_post_split_rounds
+            )
         else:
             base = hist[-anchor][row]
             defect[lbl] = int(
@@ -1458,21 +1617,41 @@ def _split_byproduct_repair_apply_fn(
                 )
             )
             glitch[lbl] = hist[-anchor][row] ^ hist[-anchor - 1][row]
+        settled_at[(lbl, check_type, row)] = len(hist) - 1
     if fire_rule == "both":
         fire = defect[patch_a_label] & defect[patch_b_label]
     elif fire_rule == "b_only":
-        fire = (
-            defect[patch_b_label]
-            & (1 - defect[patch_a_label])
-            & (1 - glitch[patch_b_label])
-        )
+        if defect_decode_mode == "matching":
+            # The decode already resolves the anchor-glitch ambiguity
+            # via temporal edges, so no separate glitch check is needed.
+            fire = defect[patch_b_label] & (1 - defect[patch_a_label])
+        else:
+            fire = (
+                defect[patch_b_label]
+                & (1 - defect[patch_a_label])
+                & (1 - glitch[patch_b_label])
+            )
     else:
         raise ValueError(f"Unknown fire_rule '{fire_rule}'")
 
-    new_patches = patches
+    new_patches = patches.copy()
+    copied_labels: set = set()
+
+    def get_mutable_patch(lbl):
+        if lbl not in copied_labels:
+            new_patches[lbl] = patches[lbl].copy()
+            copied_labels.add(lbl)
+        return new_patches[lbl]
+
+    for (lbl, check_type, row), idx in settled_at.items():
+        patch = get_mutable_patch(lbl)
+        key = f"byproduct_settled_{check_type}"
+        settled = dict(patch.data.get(key, {}) or {})
+        settled[row] = idx
+        patch.data[key] = settled
+
     if fire:
-        new_patches = patches.copy()
-        patch = patches[byproduct["patch_label"]]
+        patch = get_mutable_patch(byproduct["patch_label"])
         new_patches[byproduct["patch_label"]] = patch.copy(
             pauli_frame=_multiply_pauli_into_frame(
                 patch.pauli_frame, byproduct["support"], byproduct["pauli"]
@@ -1981,9 +2160,6 @@ def build_surgery_cnot_corrections_instruction(
     )
 
 
-_SURGERY_CNOT_WARNED = False
-
-
 def build_surgery_cnot_sequence(
     ctrl_patch_label: str,
     tgt_patch_label: str,
@@ -2042,30 +2218,13 @@ def build_surgery_cnot_sequence(
     applies a random logical correction, which destroys e.g. Bell
     correlations).
 
-    .. warning::
-        KNOWN OPEN ISSUE: this path is NOT fully fault-tolerant even in
-        ft mode. Single Z-type hook faults during the M_ZZ merged-SE
-        rounds deposit multi-qubit Z chains on the ancilla patch that
-        miscorrect to an effective Z_L(anc), flipping the X_L(anc)
-        reading consumed by the XX merge (wrong m_xx -> wrong Z_L(ctrl)
-        correction, X-basis visible; Z basis is unaffected).
-        Additionally the ZZ repair's one-sided "b_only" fire rule can
-        false-fire on benign ancilla Z data errors. A proper fix needs an
-        X-sector decode of the ancilla spanning the ZZ window through the
-        XX merge to correct m_xx. The mzz Bell-prep path does not share
-        this hole.
+    Two FT holes formerly open here are now fixed: an ancilla data fault
+    during the M_ZZ merged-SE rounds could miscorrect `X_L(anc)`'s
+    contribution to `m_xx` (fixed in [](api:_split_bookkeeping_apply_fn)),
+    and the ZZ repair's `"b_only"` fire rule could false-fire on an
+    ordinary bulk fault (fixed via `defect_decode_mode="matching"`, see
+    [](api:_split_byproduct_repair_apply_fn)).
     """
-    global _SURGERY_CNOT_WARNED
-    if not _SURGERY_CNOT_WARNED:
-        _SURGERY_CNOT_WARNED = True
-        print(
-            "WARNING: the lattice-surgery CNOT is NOT fully fault-tolerant "
-            "(known open issue): single Z-type hook faults in the M_ZZ "
-            "merge window can flip X-basis logical outcomes even in ft "
-            "mode (Z-basis outcomes are unaffected). The mzz Bell-prep "
-            "path does not share this issue.",
-            file=sys.stderr,
-        )
     base_name = name or f"Lattice-Surgery CNOT ({mode})"
     zz = build_surgery_parity_instruction(
         "ZZ",
@@ -2125,6 +2284,7 @@ def build_surgery_cnot_sequence(
             num_merge_rounds=num_merge_rounds,
             num_post_split_rounds=num_post_split_rounds,
             fire_rule="b_only",
+            defect_decode_mode="matching",
             circuit_backend=circuit_backend,
             name=f"{base_name} M_ZZ byproduct repair",
         )
@@ -2211,6 +2371,7 @@ def build_split_byproduct_repair_instruction(
     num_merge_rounds: int = 3,
     num_post_split_rounds: int = 3,
     fire_rule: str = "both",
+    defect_decode_mode: Literal["heuristic", "matching"] = "heuristic",
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     name: str | None = None,
 ) -> Instruction:
@@ -2231,8 +2392,10 @@ def build_split_byproduct_repair_instruction(
     decode (mzz Bell prep; the surgery CNOT's XX merge - the ancilla's
     Z decode feeds m_anc into the X_L(tgt) correction), "b_only" when
     only patch A does (the surgery CNOT's ZZ merge, whose patch B is
-    the ancilla, terminated in the conjugate basis). See
-    [](api:_split_byproduct_repair_apply_fn).
+    the ancilla, terminated in the conjugate basis). `defect_decode_mode`
+    selects the fire-decision mechanism ("heuristic" default, "matching"
+    a real per-row decode fixing a "b_only" false-fire -- see
+    [](api:_split_byproduct_repair_apply_fn)).
 
     Without this step a single fault on the middle seam qubit (or a
     hook error reaching it) flips the decoded logical XOR: the raw
@@ -2264,6 +2427,7 @@ def build_split_byproduct_repair_instruction(
             "num_post_split_rounds": num_post_split_rounds,
             "repair_key": f"split_byproduct_repair_{kind.lower()}",
             "fire_rule": fire_rule,
+            "defect_decode_mode": defect_decode_mode,
         },
         map_qubits_fn=_split_byproduct_repair_map_qubits_fn,
         name=name or f"Lattice-Surgery {kind} byproduct repair",
