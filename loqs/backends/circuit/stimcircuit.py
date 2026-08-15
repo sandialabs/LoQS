@@ -738,6 +738,81 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         self._circuit = _Circuit(new_circ_str)
 
+    def transplant_idle_schedule_inplace(
+        self,
+        reference: BasePhysicalCircuit,
+        qubits: Sequence[QubitTypes],
+        idle_names: Sequence[str],
+    ) -> None:
+        # Convert the reference to this class, avoiding a redundant copy if
+        # it's already the right type (reference is only ever read below).
+        if not isinstance(reference, STIMPhysicalCircuit):
+            reference = STIMPhysicalCircuit(reference)
+        idle_names = set(idle_names)
+        qubits = set(qubits)
+
+        def layer_events(circ: "STIMPhysicalCircuit", lstr: str) -> dict[QubitTypes, tuple[str, str]]:
+            """qubit -> (kind, gate_name) for every qubit of interest with a
+            recognized instruction in this TICK-delimited layer string."""
+            events: dict[QubitTypes, tuple[str, str]] = {}
+            for line in lstr.split("\n"):
+                entries = line.split()
+                if len(entries) == 0 or entries[0] not in circ._stim_gates:
+                    continue
+                kind = "idle" if entries[0] in idle_names else "real"
+                for tok in entries[1:]:
+                    try:
+                        idx = int(tok)
+                    except ValueError:
+                        continue
+                    q = circ._qubit_labels[idx]
+                    if q in qubits:
+                        events[q] = (kind, entries[0])
+            return events
+
+        # Reference sequence: for each qubit, its ordered (kind, gate_name)
+        # across every layer it appears in.
+        true_seqs: dict[QubitTypes, list[tuple[str, str]]] = {q: [] for q in qubits}
+        for lstr in str(reference.circuit).split("TICK\n"):
+            for q, event in layer_events(reference, lstr).items():
+                true_seqs[q].append(event)
+
+        ptrs = {q: 0 for q in qubits}
+        new_circ_str = ""
+        for lstr in str(self.circuit).split("TICK\n"):
+            events = layer_events(self, lstr)
+
+            new_circ_str += lstr
+
+            for q in qubits:
+                true_seq = true_seqs[q]
+                ptr = ptrs[q]
+                event = events.get(q)
+                if event is not None and event[0] == "real":
+                    if ptr >= len(true_seq) or true_seq[ptr][0] != "real":
+                        raise ValueError(
+                            f"Qubit {q!r}: real operation in this layer does not match "
+                            f"the reference sequence at position {ptr}"
+                        )
+                    ptrs[q] = ptr + 1
+                    continue
+                if event is None and ptr < len(true_seq) and true_seq[ptr][0] == "idle":
+                    idx = self._qubit_labels.index(q)
+                    new_circ_str += f"\n{true_seq[ptr][1]} {idx}"
+                    ptrs[q] = ptr + 1
+
+            new_circ_str += "\nTICK\n"
+
+        self._circuit = _Circuit(new_circ_str)
+
+        for q in qubits:
+            if ptrs[q] != len(true_seqs[q]):
+                raise ValueError(
+                    f"Qubit {q!r}: only matched {ptrs[q]}/{len(true_seqs[q])} reference "
+                    "operations -- this circuit does not have enough layers/real "
+                    "operations to receive the full reference idle schedule"
+                )
+
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]
     ) -> None:

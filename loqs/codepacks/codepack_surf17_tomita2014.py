@@ -82,9 +82,169 @@ from loqs.core.syndromelabel import SyndromeLabel
 import loqs.tools.qectools as qt
 
 
+# Layouts ordered from most to least parallel syndrome extraction: surf17
+# runs all 8 checks at once (7 layers), surf13 runs them in 2 sequential
+# passes of 4 (14 layers), surf10 reuses one ancilla for all 8 checks in
+# sequence (56 layers). An idle_layout may only be borrowed from a layout
+# at least this parallel -- e.g. surf10 may borrow surf17's idle schedule,
+# but surf17 may not borrow surf10's (see create_qec_code's idle_layout
+# parameter).
+_LAYOUT_PARALLELISM = {"surf17": 0, "surf13": 1, "surf10": 2}
+_LAYOUT_NAMES = {"surf17": "Surface-17 Code", "surf13": "Surface-13 Code", "surf10": "Surface-10 Code"}
+
+# Default gate-duration/idle-name tables, shared by every codepack_surf17_*
+# module (codepack_surf17_multipatch.py and codepack_surf17_surgery.py both
+# import these rather than keeping their own copies).
+DEFAULT_GATE_DURATIONS: dict[str, int | float] = {
+    "Gi": 1, "Gi1Q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
+    "Gzpi2": 1, "Gzmpi2": 1, "Gh": 1,
+    "Gcnot": 2, "Gi2Q": 2,
+    "Iz": 3, "GiMCM": 3,
+}
+DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
+
+# Syndrome-extraction tiles in execution order (template data labels), and
+# which H-check row each execution tile measures. Slot order is
+# [NW, NE, SW, SE] matching the 7-layer templates' [a, b, c, d]. Shared by
+# codepack_surf17_surgery.py, which additionally substitutes one tile's
+# data slots for its grown-check mechanism.
+X_TILE_DATA = [
+    [None, None, "D1", "D2"],  # geometric SX1 (H row 1, top boundary)
+    ["D0", "D1", "D3", "D4"],  # SX0 (H row 0)
+    ["D4", "D5", "D7", "D8"],  # SX2 (H row 2)
+    ["D6", "D7", None, None],  # SX3 (H row 3, bottom boundary)
+]
+X_TILE_ROWS = [1, 0, 2, 3]  # H row measured by each execution tile
+Z_TILE_DATA = [
+    [None, "D0", None, "D3"],  # SZ0 (H row 0, left boundary)
+    ["D1", "D2", "D4", "D5"],  # SZ1
+    ["D3", "D4", "D6", "D7"],  # SZ2
+    ["D5", None, "D8", None],  # SZ3 (H row 3, right boundary)
+]
+Z_TILE_ROWS = [0, 1, 2, 3]
+
+# Auxiliary (ancilla) qubit per execution tile, and how the four tiles of
+# each check type compose into a full syndrome-extraction round, per
+# layout. Shared by codepack_surf17_surgery.py.
+LAYOUT_SE_SPECS = {
+    "surf17": {
+        "X_aux": ["A9", "A11", "A14", "A16"],
+        "Z_aux": ["A10", "A12", "A13", "A15"],
+        "mode": "parallel",  # X and Z tilings merged at offset 0
+    },
+    "surf13": {
+        "X_aux": ["A9", "A11", "A10", "A12"],
+        "Z_aux": ["A10", "A12", "A9", "A11"],
+        "mode": "blocks",  # X block appended by Z block
+    },
+    "surf10": {
+        "X_aux": ["A9"] * 4,
+        "Z_aux": ["A9"] * 4,
+        "mode": "serial",  # 8 serial single-tile extractions
+    },
+}
+
+
+def layout_qubits(layout: Literal["surf17", "surf13", "surf10"]) -> list[str]:
+    """The (data + ancilla) qubit labels for one of the three layouts."""
+    if layout == "surf10":
+        return [f"D{i}" for i in range(9)] + ["A9"]
+    elif layout == "surf13":
+        return [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
+    elif layout == "surf17":
+        return [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
+    else:
+        raise ValueError(f"Unknown layout: {layout}")
+
+
+def build_se_templates(circuit_backend: type[BasePhysicalCircuit]):
+    """The codepack's 7-layer X/Z syndrome-extraction templates, shared with
+    codepack_surf17_surgery.py."""
+    X_template = circuit_backend(
+        [
+            ("Gh", "aux"),
+            ("Gcnot", "aux", "b"),
+            ("Gcnot", "aux", "a"),
+            ("Gcnot", "aux", "d"),
+            ("Gcnot", "aux", "c"),
+            ("Gh", "aux"),
+            ("Iz", "aux"),
+        ],
+        qubit_labels=["a", "b", "c", "d", "aux"],
+    )
+    # CNOT order b,d,a,c (NOT b,a,d,c): a single Z fault on the ancilla
+    # after two CNOTs hooks Z onto the two remaining data qubits. With the
+    # remaining pair {a,c} = {NW,SW} the hook is VERTICAL, perpendicular to
+    # Z_L (which runs along rows), hence correctable. The b,a,d,c order
+    # leaves the horizontal pair {d,c}, a weight-2 Z along Z_L that breaks
+    # X-basis fault tolerance at d=3. Schedule validity in parallel mode is
+    # preserved: no data qubit is touched twice in a layer, and every
+    # adjacent X/Z tile pair visits its two shared qubits in the same
+    # relative order.
+    Z_template = circuit_backend(
+        [
+            [],
+            ("Gcnot", "b", "aux"),
+            ("Gcnot", "d", "aux"),
+            ("Gcnot", "a", "aux"),
+            ("Gcnot", "c", "aux"),
+            [],
+            ("Iz", "aux"),
+        ],
+        qubit_labels=["a", "b", "c", "d", "aux"],
+    )
+    return X_template, Z_template
+
+
+def _build_raw_syndrome_extraction_circuit(
+    layout: Literal["surf17", "surf13", "surf10"],
+    qubits: Sequence[str],
+    circuit_backend: type[BasePhysicalCircuit],
+    X_template: BasePhysicalCircuit,
+    Z_template: BasePhysicalCircuit,
+):
+    """Tile the shared X/Z 5-wire templates onto `qubits` according to one
+    layout's ancilla-sharing scheme, without any idle padding."""
+    if layout not in LAYOUT_SE_SPECS:
+        raise ValueError(f"Unknown layout: {layout}")
+    spec = LAYOUT_SE_SPECS[layout]
+    X_tiles = [data + [aux] for data, aux in zip(X_TILE_DATA, spec["X_aux"])]
+    Z_tiles = [data + [aux] for data, aux in zip(Z_TILE_DATA, spec["Z_aux"])]
+
+    mode = spec["mode"]
+    if mode == "parallel":
+        X_syndrome = circuit_backend.from_circuit_tiling(
+            X_template, qubits, X_tiles, merge_offsets=0
+        )
+        Z_syndrome = circuit_backend.from_circuit_tiling(
+            Z_template, qubits, Z_tiles, merge_offsets=0
+        )
+        return X_syndrome.merge(Z_syndrome, 0)
+    elif mode == "blocks":
+        X_syndrome = circuit_backend.from_circuit_tiling(
+            X_template, qubits, X_tiles, merge_offsets=0
+        )
+        Z_syndrome = circuit_backend.from_circuit_tiling(
+            Z_template, qubits, Z_tiles, merge_offsets=0
+        )
+        return X_syndrome.append(Z_syndrome)
+    else:  # serial
+        circuits = [
+            circuit_backend.from_circuit_tiling(X_template, qubits, [tile], merge_offsets=0)
+            for tile in X_tiles
+        ] + [
+            circuit_backend.from_circuit_tiling(Z_template, qubits, [tile], merge_offsets=0)
+            for tile in Z_tiles
+        ]
+        full_syndrome_circ = circuits[0]
+        for c in circuits[1:]:
+            full_syndrome_circ = full_syndrome_circ.append(c)
+        return full_syndrome_circ
+
+
 def create_qec_code(
     layout: Literal["surf17", "surf13", "surf10"] = "surf17",
-    include_idles: bool = False,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
@@ -98,9 +258,25 @@ def create_qec_code(
         Whether to implement "surf17" (default), "surf13" (4 auxiliary qubits),
         or "surf10" (1 auxiliary qubit).
 
-    include_idles : bool, optional
-        Whether to include (True) or not (False, default) idle gates
-        in physical circuits.
+    idle_layout : str | None, optional
+        Which layout's idle schedule to use for the Syndrome Extraction
+        circuit. `None` (default) omits idle gates entirely. `idle_layout
+        == layout` pads the circuit with its own idle schedule (only
+        supported for "surf17"/"surf13" -- "surf10" has no well-defined
+        idle schedule of its own, since serializing all 8 checks onto one
+        shared ancilla means most data qubits spend most layers outside
+        the 1-2 checks they participate in). A smaller/more-serialized
+        layout may instead borrow a larger/more-parallel layout's idle
+        schedule, e.g. `layout="surf10", idle_layout="surf17"`: each data
+        qubit's real gates are left untouched, and it receives exactly the
+        same idle operations (count and duration) that it would under
+        `idle_layout`, placed at the earliest layers available once its
+        own real gates free them up -- so surf10 can reproduce surf17's
+        physical idle-error budget despite its extra serialization,
+        instead of that serialization inflating idle time. Layouts may
+        only borrow from an equally or more parallel layout (surf10 may
+        use surf17 or surf13; surf13 may use surf17; surf17 may not
+        borrow from either of the others).
 
     gate_durations : dict[str, int | float] | None, optional
         Mapping from gate names to durations.
@@ -120,48 +296,41 @@ def create_qec_code(
     QECCode
         A QECCode implementing the surface code.
     """
-    if layout == "surf10":
-        qubits = [f"D{i}" for i in range(9)] + ["A9"]
-        name = "Surface-10 Code"
-    elif layout == "surf13":
-        qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
-        name = "Surface-13 Code"
-    elif layout == "surf17":
-        qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
-        name = "Surface-17 Code"
-    else:
+    if layout not in _LAYOUT_NAMES:
         raise ValueError(f"Unknown layout: {layout}")
+    qubits = layout_qubits(layout)
+    name = _LAYOUT_NAMES[layout]
+
+    if idle_layout is not None:
+        if idle_layout not in _LAYOUT_PARALLELISM:
+            raise ValueError(f"Unknown idle_layout: {idle_layout}")
+        if _LAYOUT_PARALLELISM[idle_layout] > _LAYOUT_PARALLELISM[layout]:
+            raise ValueError(
+                f"idle_layout={idle_layout!r} is more serialized than layout={layout!r}; "
+                "an idle schedule can only be borrowed from an equally or more parallel "
+                "layout (e.g. layout='surf10' may use idle_layout='surf17', not the reverse)."
+            )
+        if idle_layout == layout == "surf10":
+            raise ValueError(
+                "surf10 has no well-defined idle schedule of its own (its ancilla-sharing "
+                "serialization means most data qubits spend most layers outside the checks "
+                "they participate in); specify idle_layout='surf17' or 'surf13' instead."
+            )
 
     data_qubits = [f"D{i}" for i in range(9)]
     instructions: dict[str, Instruction] = {}
 
     if gate_durations is None:
-        gate_durations = {
-            k: 1
-            for k in [
-                "Gi",
-                "Gi1Q",
-                "Gxpi",
-                "Gypi",
-                "Gzpi",
-                "Gzpi2",
-                "Gzmpi2",
-                "Gh",
-            ]
-        }
-        gate_durations["Gcnot"] = 2
-        gate_durations["Gi2Q"] = 2
-        gate_durations["Iz"] = 3
-        gate_durations["GiMCM"] = 3
+        gate_durations = DEFAULT_GATE_DURATIONS
     if idle_gates is None:
-        idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
+        idle_gates = DEFAULT_IDLE_GATES
 
     # 1. State preparation
     # Z-basis preparation (|0>_L)
     raw_Z_prep_circ = circuit_backend(
         [[("Iz", q) for q in data_qubits]], qubit_labels=qubits
     )
-    if include_idles:
+    if idle_layout is not None:
         raw_Z_prep_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -175,7 +344,7 @@ def create_qec_code(
         [[("Iz", q) for q in data_qubits], [("Gh", q) for q in data_qubits]],
         qubit_labels=qubits,
     )
-    if include_idles:
+    if idle_layout is not None:
         raw_X_prep_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -189,7 +358,7 @@ def create_qec_code(
     logical_I_circ = circuit_backend(
         [[("Gi", q) for q in data_qubits]], qubit_labels=qubits
     )
-    if include_idles:
+    if idle_layout is not None:
         logical_I_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -202,7 +371,7 @@ def create_qec_code(
     logical_X_circ = circuit_backend(
         [[("Gxpi", q) for q in ["D2", "D4", "D6"]]], qubit_labels=qubits
     )
-    if include_idles:
+    if idle_layout is not None:
         logical_X_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -215,7 +384,7 @@ def create_qec_code(
     logical_Z_circ = circuit_backend(
         [[("Gzpi", q) for q in ["D0", "D4", "D8"]]], qubit_labels=qubits
     )
-    if include_idles:
+    if idle_layout is not None:
         logical_Z_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -233,7 +402,7 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
-    if include_idles:
+    if idle_layout is not None:
         logical_Y_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -246,7 +415,7 @@ def create_qec_code(
     logical_H_circ = circuit_backend(
         [[("Gh", q) for q in data_qubits]], qubit_labels=qubits
     )
-    if include_idles:
+    if idle_layout is not None:
         logical_H_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -309,122 +478,34 @@ def create_qec_code(
     )
 
     # 3. Syndrome Extraction Circuit
-    X_template = circuit_backend(
-        [
-            ("Gh", "aux"),
-            ("Gcnot", "aux", "b"),
-            ("Gcnot", "aux", "a"),
-            ("Gcnot", "aux", "d"),
-            ("Gcnot", "aux", "c"),
-            ("Gh", "aux"),
-            ("Iz", "aux"),
-        ],
-        qubit_labels=["a", "b", "c", "d", "aux"],
+    X_template, Z_template = build_se_templates(circuit_backend)
+
+    full_syndrome_circ = _build_raw_syndrome_extraction_circuit(
+        layout, qubits, circuit_backend, X_template, Z_template
     )
 
-    # CNOT order b,d,a,c (NOT b,a,d,c): a single Z fault on the ancilla
-    # after two CNOTs hooks Z onto the two remaining data qubits. With the
-    # remaining pair {a,c} = {NW,SW} the hook is VERTICAL, perpendicular to
-    # Z_L (which runs along rows), hence correctable. The b,a,d,c order
-    # leaves the horizontal pair {d,c}, a weight-2 Z along Z_L that breaks
-    # X-basis fault tolerance at d=3. Schedule validity in parallel mode is
-    # preserved: no data qubit is touched twice in a layer, and every
-    # adjacent X/Z tile pair visits its two shared qubits in the same
-    # relative order.
-    Z_template = circuit_backend(
-        [
-            [],
-            ("Gcnot", "b", "aux"),
-            ("Gcnot", "d", "aux"),
-            ("Gcnot", "a", "aux"),
-            ("Gcnot", "c", "aux"),
-            [],
-            ("Iz", "aux"),
-        ],
-        qubit_labels=["a", "b", "c", "d", "aux"],
-    )
-
-    if include_idles:
-        X_template.pad_single_qubit_idles_by_duration_inplace(
+    if idle_layout == layout:
+        # Self-padding: fill every genuinely blank (qubit, layer) slot once,
+        # from the real union of activity across every merged/appended tile
+        # (only valid for surf17/surf13 -- ruled out for surf10 above).
+        full_syndrome_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
-        Z_template.pad_single_qubit_idles_by_duration_inplace(
+    elif idle_layout is not None:
+        # Borrowing: build idle_layout's own self-padded reference circuit
+        # (using its own qubit/ancilla labels -- irrelevant here, since the
+        # transplant only inspects data qubits) and replay its per-data-qubit
+        # real/idle sequence onto this layout's raw circuit.
+        reference_qubits = layout_qubits(idle_layout)
+        reference_circ = _build_raw_syndrome_extraction_circuit(
+            idle_layout, reference_qubits, circuit_backend, X_template, Z_template
+        )
+        reference_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
-
-    if layout == "surf17":
-        # Surface-17
-        X_tiles = [
-            [None, None, "D1", "D2", "A9"],
-            ["D0", "D1", "D3", "D4", "A11"],
-            ["D4", "D5", "D7", "D8", "A14"],
-            ["D6", "D7", None, None, "A16"],
-        ]
-        Z_tiles = [
-            [None, "D0", None, "D3", "A10"],
-            ["D1", "D2", "D4", "D5", "A12"],
-            ["D3", "D4", "D6", "D7", "A13"],
-            ["D5", None, "D8", None, "A15"],
-        ]
-        X_syndrome = circuit_backend.from_circuit_tiling(
-            X_template, qubits, X_tiles, merge_offsets=0
+        full_syndrome_circ.transplant_idle_schedule_inplace(
+            reference_circ, data_qubits, list(idle_gates.values())
         )
-        Z_syndrome = circuit_backend.from_circuit_tiling(
-            Z_template, qubits, Z_tiles, merge_offsets=0
-        )
-        full_syndrome_circ = X_syndrome.merge(Z_syndrome, 0)
-    elif layout == "surf13":
-        # Surface-13
-        X_tiles_mapped = [
-            [None, None, "D1", "D2", "A9"],
-            ["D0", "D1", "D3", "D4", "A11"],
-            ["D4", "D5", "D7", "D8", "A10"],
-            ["D6", "D7", None, None, "A12"],
-        ]
-        Z_tiles_mapped = [
-            [None, "D0", None, "D3", "A10"],
-            ["D1", "D2", "D4", "D5", "A12"],
-            ["D3", "D4", "D6", "D7", "A9"],
-            ["D5", None, "D8", None, "A11"],
-        ]
-        X_syndrome = circuit_backend.from_circuit_tiling(
-            X_template, qubits, X_tiles_mapped, merge_offsets=0
-        )
-        Z_syndrome = circuit_backend.from_circuit_tiling(
-            Z_template, qubits, Z_tiles_mapped, merge_offsets=0
-        )
-        full_syndrome_circ = X_syndrome.append(Z_syndrome)
-    elif layout == "surf10":
-        # Surface-10
-        X_tiles_10 = [
-            [None, None, "D1", "D2", "A9"],
-            ["D0", "D1", "D3", "D4", "A9"],
-            ["D4", "D5", "D7", "D8", "A9"],
-            ["D6", "D7", None, None, "A9"],
-        ]
-        Z_tiles_10 = [
-            [None, "D0", None, "D3", "A9"],
-            ["D1", "D2", "D4", "D5", "A9"],
-            ["D3", "D4", "D6", "D7", "A9"],
-            ["D5", None, "D8", None, "A9"],
-        ]
-        circuits = []
-        for tile in X_tiles_10:
-            circuits.append(
-                circuit_backend.from_circuit_tiling(
-                    X_template, qubits, [tile], merge_offsets=0
-                )
-            )
-        for tile in Z_tiles_10:
-            circuits.append(
-                circuit_backend.from_circuit_tiling(
-                    Z_template, qubits, [tile], merge_offsets=0
-                )
-            )
-
-        full_syndrome_circ = circuits[0]
-        for c in circuits[1:]:
-            full_syndrome_circ = full_syndrome_circ.append(c)
 
     instructions["Syndrome Extraction"] = (
         builders.build_physical_circuit_instruction(
@@ -623,7 +704,7 @@ def create_qec_code(
         ],
         qubit_labels=qubits,
     )
-    if include_idles:
+    if idle_layout is not None:
         raw_Z_meas_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
         )
@@ -663,8 +744,12 @@ def create_qec_code(
         data_qubits: list[str],
         measurement_basis: Literal["Z", "X"],
         measurement_outcomes: MeasurementOutcomes,
-        reference_round_X: bool = False,
-        reference_round_Z: bool = False,
+        reference_round_mode_X: Literal[
+            "raw", "clean_diff", "guarded_diff"
+        ] = "raw",
+        reference_round_mode_Z: Literal[
+            "raw", "clean_diff", "guarded_diff"
+        ] = "raw",
     ) -> Frame:
         import pymatching
 
@@ -680,6 +765,16 @@ def create_qec_code(
         # (scoped to this patch, so multi-patch programs do not collide)
         hist_X = list(patch.data.get("syndrome_history_X", []))
         hist_Z = list(patch.data.get("syndrome_history_Z", []))
+
+        # Known classical offsets baked into the ROUND-0 recorded values by
+        # bookkeeping rewrites (e.g. the lattice-surgery split flips the
+        # grown-check row of every stored round; interior diffs cancel but
+        # the round-0 absolute layer keeps the flip). Subtracted from the
+        # t=0 detector layer only, so round 0 stays usable as a detector
+        # when the prep basis makes it deterministic. Tracked on the
+        # patch's own data, same as syndrome_history_X/Z above.
+        offset_X = list(patch.data.get("syndrome_round0_offset_X", []) or [])
+        offset_Z = list(patch.data.get("syndrome_round0_offset_Z", []) or [])
 
         R = len(hist_X)  # number of previous syndrome rounds
 
@@ -711,10 +806,16 @@ def create_qec_code(
             sz_history = hist_Z + [sz_final]
             num_rounds = R + 1
 
-            # With a reference round (e.g. prep basis does not stabilize the
-            # Z checks, so round 0 is random), round 0 only serves as the
-            # reference for later diffs and contributes no detector layer
-            num_layers = num_rounds - 1 if reference_round_Z else num_rounds
+            # In "raw" mode round 0 is a trusted, standalone detector layer.
+            # In "clean_diff"/"guarded_diff" mode (e.g. prep basis does not
+            # stabilize the Z checks, so round 0 is random), round 0 instead
+            # only serves as the reference for later diffs and contributes
+            # no detector layer of its own.
+            num_layers = (
+                num_rounds - 1
+                if reference_round_mode_Z != "raw"
+                else num_rounds
+            )
 
             # Construct 3D space-time matching graph matching_Z dynamically
             matching_Z = pymatching.Matching()
@@ -749,13 +850,31 @@ def create_qec_code(
                         weight=0.9,
                         merge_strategy="smallest-weight",
                     )
+            # In "guarded_diff" mode, round 0 itself may not be a reliable
+            # measurement (not just non-deterministic in expectation), so
+            # the first detector layer diffs against a baseline that could
+            # itself be wrong: a measurement flip in round 0 would leave a
+            # single defect there. Escape edges (measurement weight, no
+            # fault ids) let the matcher explain that without applying a
+            # spurious data correction. "clean_diff" mode skips this,
+            # trusting the diff as an ordinary detector layer.
+            if reference_round_mode_Z == "guarded_diff" and num_layers > 0:
+                for i in range(4):
+                    matching_Z.add_boundary_edge(
+                        i,
+                        weight=0.9,
+                        merge_strategy="smallest-weight",
+                    )
 
             # Compute difference syndrome
             diff_sz = []
-            first_t = 1 if reference_round_Z else 0
+            first_t = 1 if reference_round_mode_Z != "raw" else 0
             for t in range(first_t, num_rounds):
                 if t == 0:
-                    diff_sz.extend(sz_history[0])
+                    row = sz_history[0]
+                    if offset_Z:
+                        row = [a ^ b for a, b in zip(row, offset_Z)]
+                    diff_sz.extend(row)
                 else:
                     diff_sz.extend(
                         [
@@ -804,10 +923,16 @@ def create_qec_code(
             sx_history = hist_X + [sx_final]
             num_rounds = R + 1
 
-            # With a reference round (e.g. prep basis does not stabilize the
-            # X checks, so round 0 is random), round 0 only serves as the
-            # reference for later diffs and contributes no detector layer
-            num_layers = num_rounds - 1 if reference_round_X else num_rounds
+            # In "raw" mode round 0 is a trusted, standalone detector layer.
+            # In "clean_diff"/"guarded_diff" mode (e.g. prep basis does not
+            # stabilize the X checks, so round 0 is random), round 0 instead
+            # only serves as the reference for later diffs and contributes
+            # no detector layer of its own.
+            num_layers = (
+                num_rounds - 1
+                if reference_round_mode_X != "raw"
+                else num_rounds
+            )
 
             # Construct 3D space-time matching graph matching_X dynamically
             matching_X = pymatching.Matching()
@@ -842,13 +967,31 @@ def create_qec_code(
                         weight=0.9,
                         merge_strategy="smallest-weight",
                     )
+            # In "guarded_diff" mode, round 0 itself may not be a reliable
+            # measurement (not just non-deterministic in expectation), so
+            # the first detector layer diffs against a baseline that could
+            # itself be wrong: a measurement flip in round 0 would leave a
+            # single defect there. Escape edges (measurement weight, no
+            # fault ids) let the matcher explain that without applying a
+            # spurious data correction. "clean_diff" mode skips this,
+            # trusting the diff as an ordinary detector layer.
+            if reference_round_mode_X == "guarded_diff" and num_layers > 0:
+                for i in range(4):
+                    matching_X.add_boundary_edge(
+                        i,
+                        weight=0.9,
+                        merge_strategy="smallest-weight",
+                    )
 
             # Compute difference syndrome
             diff_sx = []
-            first_t = 1 if reference_round_X else 0
+            first_t = 1 if reference_round_mode_X != "raw" else 0
             for t in range(first_t, num_rounds):
                 if t == 0:
-                    diff_sx.extend(sx_history[0])
+                    row = sx_history[0]
+                    if offset_X:
+                        row = [a ^ b for a, b in zip(row, offset_X)]
+                    diff_sx.extend(row)
                 else:
                     diff_sx.extend(
                         [
@@ -920,8 +1063,8 @@ def create_qec_code(
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
             "measurement_basis": "Z",
-            "reference_round_X": False,
-            "reference_round_Z": False,
+            "reference_round_mode_X": "raw",
+            "reference_round_mode_Z": "raw",
         },
         map_qubits_fn=pymatching_global_meas_map_qubits_fn,
         param_priorities={"measurement_outcomes": ["history[-1]"]},
@@ -933,8 +1076,8 @@ def create_qec_code(
             # Declared here so stack-level kwargs thread through to the
             # global parity calculation (label kwargs only reach declared params)
             extra_data={
-                "reference_round_X": False,
-                "reference_round_Z": False,
+                "reference_round_mode_X": "raw",
+                "reference_round_mode_Z": "raw",
             },
             name="FT logical Z measurement with PyMatching",
         )
@@ -949,8 +1092,8 @@ def create_qec_code(
             "syndrome_labels_Z": syndrome_labels_Z,
             "data_qubits": data_qubits,
             "measurement_basis": "X",
-            "reference_round_X": False,
-            "reference_round_Z": False,
+            "reference_round_mode_X": "raw",
+            "reference_round_mode_Z": "raw",
         },
         map_qubits_fn=pymatching_global_meas_map_qubits_fn,
         param_priorities={"measurement_outcomes": ["history[-1]"]},
@@ -960,8 +1103,8 @@ def create_qec_code(
         builders.build_composite_instruction(
             [instructions["Raw X Data Measure"], X_global_meas],
             extra_data={
-                "reference_round_X": False,
-                "reference_round_Z": False,
+                "reference_round_mode_X": "raw",
+                "reference_round_mode_Z": "raw",
             },
             name="FT logical X measurement with PyMatching",
         )

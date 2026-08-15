@@ -243,17 +243,25 @@ class History(Sequence[Frame], Displayable):
         item : FrameLike
             The frame-castable object to append.
         """
-        item = Frame(item)
+        # Avoid an unnecessary deep copy when item is already a Frame: the
+        # `.update()` call just below (always taken, even with an empty
+        # `prop_data`) already makes an independent copy -- of `_data`
+        # (shallow: sufficient, since propagated values are never mutated
+        # in place, only ever replaced) and of `_expired_keys`/
+        # `_no_serialize_keys` (both fresh, independent lists) -- so a
+        # second, expensive `deepcopy` of `_data` here would be redundant.
+        if not isinstance(item, Frame):
+            item = Frame(item)
 
         # Propagate any keys that are not existing in new frame
+        prop_data = {}
         if len(self._history):
             last_frame = self._history[-1]
-            prop_data = {}
             for prop_key in self.propagating_keys:
                 if prop_key not in item and prop_key in last_frame:
                     prop_data[prop_key] = last_frame[prop_key]
 
-            item = item.update(prop_data)
+        item = item.update(prop_data)
 
         # Check for any expiring keys in previous frames
         for exp_key in self.expiring_keys:

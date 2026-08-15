@@ -620,7 +620,13 @@ def create_qec_code(
     instructions["FT Logical X Measure"] = (
         builders.build_composite_instruction(
             [
-                instructions["H"],
+                # "H Circuit" (bare gate), not "H" (which also swaps
+                # latest_syndrome). logical_meas_apply_fn already picks the
+                # correct fixed slice of latest_syndrome for this basis
+                # (see its own comment); swapping it here a second time is
+                # redundant and, whenever a QEC round has written a fresh
+                # syndrome since the last swap, wrong.
+                instructions["H Circuit"],
                 instructions["Raw Z Data Measure"],
                 X_logical_meas,
             ],

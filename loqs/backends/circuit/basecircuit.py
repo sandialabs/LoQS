@@ -521,6 +521,60 @@ class BasePhysicalCircuit(Displayable):
         """
         pass
 
+    @abstractmethod
+    def transplant_idle_schedule_inplace(
+        self,
+        reference: "BasePhysicalCircuit",
+        qubits: Sequence,
+        idle_names: Sequence[str],
+    ) -> None:
+        """Fill in idle operations for `qubits` by replaying each qubit's
+        ordered sequence of real/idle operations from `reference` onto
+        this circuit's own timeline.
+
+        For each qubit, walks this circuit's layers in order: a layer
+        where the qubit already has a real (non-idle) operation consumes
+        the next operation in `reference`'s sequence for that qubit
+        (which must also be real, or a ValueError is raised); an empty
+        layer greedily consumes the next operation in `reference`'s
+        sequence if it is an idle (inserting it here), or is left empty
+        if the next operation is real (blocking idle insertion until this
+        circuit's own next real operation for that qubit is reached).
+
+        This lets a circuit with additional serialization relative to
+        `reference` (e.g. more sequential layers because it reuses a
+        qubit that `reference` runs in parallel) receive exactly the same
+        total idle-operation budget per qubit as `reference`, rather than
+        idle time being inflated by the extra layers: layers where this
+        circuit isn't running any of `reference`'s operations for a given
+        qubit are simply left untouched.
+
+        Parameters
+        ----------
+        reference:
+            A circuit already containing a valid idle schedule (e.g.
+            built via `pad_single_qubit_idles_by_duration_inplace`) to
+            copy from. Must have at most one operation per (qubit, layer)
+            for each qubit in `qubits`.
+
+        qubits:
+            Which qubits to transplant the idle schedule for.
+
+        idle_names:
+            The operation names considered "idle" (as opposed to real) in
+            `reference` -- e.g. the values of an `idle_gates`
+            duration-to-name mapping.
+
+        Raises
+        ------
+        ValueError
+            If this circuit's own real operations for a qubit don't
+            appear in the same order as `reference`'s, or if `reference`
+            doesn't have enough operations to fill this circuit's real
+            operation count for some qubit.
+        """
+        pass
+
     def set_qubit_labels(self: T, qubit_labels: Sequence) -> T:
         """Set the qubit labels of an underlying circuit.
 

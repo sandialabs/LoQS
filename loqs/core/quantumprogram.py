@@ -337,23 +337,40 @@ class QuantumProgram(Displayable):
         if global_instructions is not None:
             for k, v in global_instructions.items():
                 combined_global_instructions[k] = v
-        if state_type is None:
+
+        # `combined_global_instructions` already carries forward `other`'s
+        # built "Init State"/"Init Patch <name>"/"Remove Patch" instructions
+        # unchanged. If the caller didn't explicitly ask for a different
+        # `state_type`/`patch_types`, pass None for these to `__init__` so
+        # it doesn't uselessly rebuild (and deep-copy) those instructions
+        # from scratch -- only actually rebuild them when the caller is
+        # requesting something new. `self.state_type`/`self.patch_types`
+        # are backfilled below in the pass-through case, since `__init__`
+        # sets those attributes directly from its own (here, None) params.
+        state_type_explicit = state_type is not None
+        patch_types_explicit = patch_types is not None
+        if not state_type_explicit:
             state_type = other.state_type
-        if patch_types is None:
+        if not patch_types_explicit:
             patch_types = other.patch_types
 
-        return QuantumProgram(
+        new_program = QuantumProgram(
             instruction_stack=instruction_stack,
             initial_history=other.initial_history,
             default_noise_model=default_noise_model,
             default_base_seed=default_base_seed,
             expiring_state="state" in other.initial_history.expiring_keys,
             global_instructions=combined_global_instructions,
-            state_type=state_type,
-            patch_types=patch_types,
+            state_type=state_type if state_type_explicit else None,
+            patch_types=patch_types if patch_types_explicit else None,
             override_global_instructions=True,
             name=name,
         )
+        if not state_type_explicit:
+            new_program.state_type = state_type
+        if not patch_types_explicit:
+            new_program.patch_types = patch_types
+        return new_program
 
     def run(
         self,
