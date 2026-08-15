@@ -9,9 +9,45 @@ on:
   workflow_dispatch: # Allow manual running from GitHub
 
 jobs:
+  check-pr-status:
+    # Only meaningful for push events on non-main branches -- this is what
+    # minimal-unit-tests below needs to decide whether to skip itself, since
+    # a push to a branch with an open, non-draft PR against main will also
+    # trigger full-unit-tests (via the pull_request event) for the same
+    # commit, making the minimal run redundant.
+    if: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      has-open-pr: ${{ steps.check.outputs.has-open-pr }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # If the lookup itself fails for any reason (API hiccup, rate
+          # limit, etc.), default to "no open PR" so minimal-unit-tests
+          # still runs -- failing toward more coverage, not less.
+          COUNT=$(gh pr list --repo "${{ github.repository }}" \
+                    --head "${{ github.ref_name }}" \
+                    --base main \
+                    --state open \
+                    --json isDraft \
+                    --jq '[.[] | select(.isDraft == false)] | length') || COUNT=0
+          echo "has-open-pr=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   minimal-unit-tests:
-    # Run only on feature branches
-    if: ${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+    needs: check-pr-status
+    # Run only on feature branches, and only if there isn't already an open,
+    # non-draft PR against main that will run the full matrix for this same
+    # commit via the pull_request event (see check-pr-status above).
+    if: >
+      ${{
+        github.event_name == 'push' &&
+        github.ref != 'refs/heads/main' &&
+        needs.check-pr-status.outputs.has-open-pr != 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
