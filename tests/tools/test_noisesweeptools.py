@@ -1,0 +1,596 @@
+"""Tester for loqs.tools.noisesweeptools"""
+
+import inspect
+import sys
+import warnings
+
+import numpy as np
+import pytest
+
+from loqs.core import Frame, Instruction, ProgramResults, QuantumProgram
+from loqs.backends.state import BaseQuantumState, NumpyStatevectorQuantumState
+from loqs.internal.serializable import Serializable
+from loqs.tools.noisesweeptools import (
+    NoiseSweepResult,
+    NoiseSweepRunner,
+    compare_noise_sweeps,
+    plot_noise_sweep,
+)
+
+
+# ---------------------------------------------------------------------------
+# A tiny, Frame-only synthetic "codepack" used to exercise NoiseSweepRunner
+# without needing a real physical-circuit backend (stim/quantumsim/pygsti).
+# `_flip_coin_apply` must stay a real, module-level `def` (not a lambda/closure)
+# since NoiseSweepRunner serializes any callable QuantumProgram-forwarding
+# parameter via source-code introspection.
+# ---------------------------------------------------------------------------
+
+
+def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
+    """"Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
+    rng = np.random.default_rng(seed)
+    return Frame({"failed": bool(rng.random() < fail_prob)})
+
+
+FLIP_COIN = Instruction(apply_fn=_flip_coin_apply, name="Flip Coin")
+
+
+def make_stack(fail_prob):
+    """Build a one-instruction stack whose failure probability is `fail_prob`."""
+    return [("Flip Coin", None, (), {"fail_prob": fail_prob})]
+
+
+def identity_noise_model(strength):
+    """A trivial "noise model" callable -- real module-level `def`, not a lambda, since
+    lambdas aren't properly supported by NoiseSweepRunner's source-based serialization
+    (`inspect.getsource` returns the whole call-site line for a lambda, not just its body)."""
+    return strength
+
+
+def name_for_strength(strength):
+    """Real module-level `def`, for the same reason as `identity_noise_model` above."""
+    return f"point-{strength}"
+
+
+def make_runner(strengths, **kwargs):
+    kwargs.setdefault("instruction_stack", make_stack)
+    kwargs.setdefault("global_instructions", {"Flip Coin": FLIP_COIN})
+    return NoiseSweepRunner(strengths, **kwargs)
+
+
+COLLECT_SHOT_DATA_ARGS = [("failed", -1)]
+EXPECTED_OUTCOMES = [False]
+
+
+class TestBuildProgram:
+    def test_seed_formula(self):
+        runner = make_runner([0.0, 0.1, 0.2], base_seed=5, seed_stride=100)
+        for index in range(3):
+            program = runner.build_program(index)
+            assert program.default_base_seed == 5 + index * 100
+
+    def test_resolves_fixed_and_callable_mix(self):
+        runner = make_runner(
+            [0.01, 0.02],
+            seed_stride=10,
+            name=name_for_strength,
+        )
+        program0 = runner.build_program(0)
+        program1 = runner.build_program(1)
+        assert program0.name == "point-0.01"
+        assert program1.name == "point-0.02"
+        # instruction_stack (also callable) should resolve per-point too
+        assert program0.instruction_stack.pop_instruction()[0].inst_kwargs[
+            "fail_prob"
+        ] == 0.01
+
+    def test_default_base_seed_rejected(self):
+        with pytest.raises(TypeError):
+            make_runner([0.1], default_base_seed=5)
+
+    def test_build_program_without_seed_stride_raises(self):
+        runner = make_runner([0.1])
+        with pytest.raises(RuntimeError):
+            runner.build_program(0)
+
+    def test_state_type_fixed_class_is_not_treated_as_callable(self):
+        runner = make_runner([0.1], seed_stride=1, state_type=NumpyStatevectorQuantumState)
+        assert runner._quantum_program_values["state_type"] is NumpyStatevectorQuantumState
+        assert "state_type" not in runner._quantum_program_serialized_callables
+        program = runner.build_program(0)
+        assert program.state_type is NumpyStatevectorQuantumState
+
+    def test_state_type_callable_is_treated_as_callable(self):
+        def pick_state_type(strength):
+            return NumpyStatevectorQuantumState
+
+        runner = make_runner([0.1], seed_stride=1, state_type=pick_state_type)
+        assert "state_type" in runner._quantum_program_serialized_callables
+        assert "state_type" not in runner._quantum_program_values
+        program = runner.build_program(0)
+        assert program.state_type is NumpyStatevectorQuantumState
+
+
+class TestSignatureParity:
+    def test_quantum_program_params_all_present(self):
+        program_params = set(
+            inspect.signature(QuantumProgram.__init__).parameters
+        ) - {"self", "default_base_seed"}
+        runner_params = set(
+            inspect.signature(NoiseSweepRunner.__init__).parameters
+        )
+        missing = program_params - runner_params
+        assert not missing, (
+            f"QuantumProgram.__init__ parameter(s) {missing} are not forwarded by "
+            "NoiseSweepRunner.__init__"
+        )
+
+
+class TestSerialization:
+    def test_round_trip_fixed_and_callable_mix(self, tmp_path):
+        runner = make_runner(
+            [0.01, 0.02, 0.05],
+            base_seed=3,
+            seed_stride=50,
+            default_noise_model=identity_noise_model,
+            name="fixed name",
+        )
+        path = tmp_path / "runner.json"
+        runner.write(path)
+        loaded = NoiseSweepRunner.read(path)
+
+        assert loaded.strengths == runner.strengths
+        assert loaded.base_seed == runner.base_seed
+        assert loaded.seed_stride == runner.seed_stride
+        assert loaded.name == "fixed name"
+        assert callable(loaded.default_noise_model)
+        assert loaded.default_noise_model(0.5) == 0.5
+
+        # Both instances should build equivalent programs
+        for index in range(3):
+            p_orig = runner.build_program(index)
+            p_loaded = loaded.build_program(index)
+            assert p_orig.default_base_seed == p_loaded.default_base_seed
+            assert p_orig.name == p_loaded.name
+
+    def test_values_and_callables_partition_exactly(self):
+        runner = make_runner(
+            [0.1],
+            seed_stride=1,
+            default_noise_model=identity_noise_model,
+            expiring_state=False,
+        )
+        value_keys = set(runner._quantum_program_values)
+        callable_keys = set(runner._quantum_program_serialized_callables)
+        assert value_keys.isdisjoint(callable_keys)
+        assert value_keys | callable_keys == {
+            "instruction_stack",
+            "initial_history",
+            "default_noise_model",
+            "expiring_state",
+            "global_instructions",
+            "state_type",
+            "patch_types",
+            "override_global_instructions",
+            "name",
+        }
+
+    def test_non_file_backed_callable_raises_without_override(self):
+        # Simulate a notebook/interactively-defined function: no real source file
+        # backing it, so inspect.getsource (and thus our serialization) fails.
+        # The exact subclass (OSError vs. its FileNotFoundError subclass) depends on
+        # inspect's exact internal path in a given context, so we check the common
+        # OSError base to be robust to that.
+        env = {}
+        exec("def interactive_fn(strength):\n    return strength\n", env)
+        interactive_fn = env["interactive_fn"]
+
+        with pytest.raises(OSError):
+            make_runner([0.1], seed_stride=1, default_noise_model=interactive_fn)
+
+    def test_non_file_backed_callable_with_override_succeeds(self):
+        env = {}
+        exec("def interactive_fn(strength):\n    return strength\n", env)
+        interactive_fn = env["interactive_fn"]
+
+        runner = make_runner(
+            [0.1],
+            seed_stride=1,
+            default_noise_model=interactive_fn,
+            serialized_callables={
+                "default_noise_model": "def interactive_fn(strength):\n    return strength\n"
+            },
+        )
+        assert (
+            runner._quantum_program_serialized_callables["default_noise_model"]
+            == "def interactive_fn(strength):\n    return strength\n"
+        )
+        assert runner.build_program(0).default_noise_model == 0.1
+
+
+class TestRun:
+    def test_seed_reproducibility(self, tmp_path):
+        runner1 = make_runner([0.0, 0.5], seed_stride=20, base_seed=7)
+        runner2 = make_runner([0.0, 0.5], seed_stride=20, base_seed=7)
+
+        result1 = runner1.run(10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False)
+        result2 = runner2.run(10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False)
+
+        assert result1.failure_rates == result2.failure_rates
+        assert result1.stderrs == result2.stderrs
+
+    def test_monotonic_failure_rate(self):
+        strengths = [0.0, 0.2, 0.5, 0.9]
+        runner = make_runner(strengths, seed_stride=500)
+        result = runner.run(
+            500, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
+        )
+        assert result.failure_rates[0] == 0.0
+        # Non-decreasing as strength increases (allow equal for adjacent points)
+        for a, b in zip(result.failure_rates, result.failure_rates[1:]):
+            assert b >= a
+
+    def test_seed_stride_resolves_to_num_shots(self):
+        runner = make_runner([0.0, 0.1])
+        runner.run(5, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False)
+        assert runner._resolved_seed_stride == 5
+
+    def test_explicit_seed_stride_too_small_raises(self):
+        runner = make_runner([0.0, 0.1], seed_stride=3)
+        with pytest.raises(ValueError):
+            runner.run(5, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False)
+
+    def test_keep_program_results_requires_dir(self):
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        with pytest.raises(ValueError):
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                keep_program_results=True,
+                verbose=False,
+            )
+
+    def test_keep_program_results_fixed_dir(self, tmp_path):
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        base = tmp_path / "results.json"
+        result = runner.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            keep_program_results=True,
+            program_results_dir=base,
+            verbose=False,
+        )
+        assert result.program_results_paths is not None
+        assert len(result.program_results_paths) == 2
+        for index, path in enumerate(result.program_results_paths):
+            assert path == str(tmp_path / f"results_sweep_{index}.json")
+            loaded = result.load_program_results(index)
+            assert isinstance(loaded, ProgramResults)
+
+    def test_keep_program_results_callable_dir_no_suffix(self, tmp_path):
+        def dir_for(strength):
+            return str(tmp_path / f"custom_{strength}.json")
+
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        result = runner.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            keep_program_results=True,
+            program_results_dir=dir_for,
+            verbose=False,
+        )
+        assert result.program_results_paths == [
+            str(tmp_path / "custom_0.0.json"),
+            str(tmp_path / "custom_0.1.json"),
+        ]
+
+    def test_run_kwargs_forwarded_and_resolved(self):
+        seen_names = []
+
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen_names.append(kwargs.get("max_frame_limit"))
+            return real_run(self, *args, **kwargs)
+
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        try:
+            QuantumProgram.run = spy_run
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=False,
+                max_frame_limit=lambda strength: 10 if strength == 0.0 else 20,
+            )
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen_names == [10, 20]
+
+
+class TestResume:
+    def test_skips_completed_points_and_matches_uninterrupted_run(self, tmp_path):
+        strengths = [0.0, 0.1, 0.2]
+
+        uninterrupted = make_runner(strengths, seed_stride=20, base_seed=1)
+        uninterrupted_result = uninterrupted.run(
+            10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
+        )
+
+        result_path = tmp_path / "resume.json"
+
+        built_indices = []
+        crash_triggered = []
+        runner = make_runner(strengths, seed_stride=20, base_seed=1)
+        real_build_program = NoiseSweepRunner.build_program
+
+        def spy_build_program(self, index):
+            built_indices.append(index)
+            if index == 2 and not crash_triggered:
+                crash_triggered.append(True)
+                raise RuntimeError("simulated crash")
+            return real_build_program(self, index)
+
+        NoiseSweepRunner.build_program = spy_build_program
+        try:
+            with pytest.raises(RuntimeError):
+                runner.run(
+                    10,
+                    COLLECT_SHOT_DATA_ARGS,
+                    EXPECTED_OUTCOMES,
+                    resume=True,
+                    result_path=result_path,
+                    verbose=False,
+                )
+        finally:
+            NoiseSweepRunner.build_program = real_build_program
+
+        assert built_indices == [0, 1, 2]
+
+        # Resume: points 0 and 1 must not be rebuilt; point 2 rebuilt exactly once
+        built_indices.clear()
+        NoiseSweepRunner.build_program = spy_build_program
+        try:
+            final_result = runner.run(
+                10,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                resume=True,
+                result_path=result_path,
+                verbose=False,
+            )
+        finally:
+            NoiseSweepRunner.build_program = real_build_program
+
+        assert built_indices == [2]
+        assert final_result.failure_rates == uninterrupted_result.failure_rates
+        assert final_result.stderrs == uninterrupted_result.stderrs
+        assert final_result.is_complete
+
+    def test_resume_without_result_path_raises(self):
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        with pytest.raises(ValueError):
+            runner.run(
+                5, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, resume=True, verbose=False
+            )
+
+    def test_resume_mismatched_strengths_raises(self, tmp_path):
+        result_path = tmp_path / "resume.json"
+        runner1 = make_runner([0.0, 0.1], seed_stride=5)
+        runner1.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            resume=True,
+            result_path=result_path,
+            verbose=False,
+        )
+
+        runner2 = make_runner([0.0, 0.1, 0.2], seed_stride=5)
+        with pytest.raises(ValueError):
+            runner2.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                resume=True,
+                result_path=result_path,
+                verbose=False,
+            )
+
+    def test_result_path_without_resume_still_writes_incrementally(self, tmp_path):
+        result_path = tmp_path / "progress.json"
+        runner = make_runner([0.0, 0.1, 0.2], seed_stride=5)
+        runner.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            result_path=result_path,
+            verbose=False,
+        )
+        loaded = NoiseSweepResult.read(result_path)
+        assert loaded.is_complete
+
+    def test_keep_program_results_and_resume_are_independent(self, tmp_path):
+        result_path = tmp_path / "resume.json"
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        result = runner.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            resume=True,
+            result_path=result_path,
+            keep_program_results=False,
+            verbose=False,
+        )
+        assert result.program_results_paths is None
+
+
+class TestNoiseSweepResult:
+    def test_write_read_round_trip_complete(self, tmp_path):
+        result = NoiseSweepResult(
+            strengths=[0.0, 0.1],
+            failure_rates=[0.0, 0.2],
+            stderrs=[0.0, 0.01],
+            num_shots=100,
+            metadata={"note": "test"},
+        )
+        path = tmp_path / "result.json"
+        result.write(path)
+        loaded = NoiseSweepResult.read(path)
+        assert loaded.strengths == result.strengths
+        assert loaded.failure_rates == result.failure_rates
+        assert loaded.stderrs == result.stderrs
+        assert loaded.num_shots == result.num_shots
+        assert loaded.metadata == result.metadata
+        assert loaded.is_complete
+
+    def test_write_read_round_trip_incomplete(self, tmp_path):
+        result = NoiseSweepResult(
+            strengths=[0.0, 0.1, 0.2],
+            failure_rates=[0.0],
+            stderrs=[0.0],
+            num_shots=100,
+        )
+        path = tmp_path / "result.json"
+        result.write(path)
+        loaded = NoiseSweepResult.read(path)
+        assert not loaded.is_complete
+        assert len(loaded.failure_rates) == 1
+
+    def test_load_program_results(self, tmp_path):
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        result = runner.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            keep_program_results=True,
+            program_results_dir=tmp_path / "pr.json",
+            verbose=False,
+        )
+        pr = result.load_program_results(0)
+        assert isinstance(pr, ProgramResults)
+        assert len(pr.shot_histories) == 5
+
+    def test_load_program_results_raises_without_paths(self):
+        result = NoiseSweepResult(
+            strengths=[0.0], failure_rates=[0.0], stderrs=[0.0], num_shots=5
+        )
+        with pytest.raises(ValueError):
+            result.load_program_results(0)
+
+    def test_mismatched_lengths_raise(self):
+        with pytest.raises(ValueError):
+            NoiseSweepResult(
+                strengths=[0.0, 0.1],
+                failure_rates=[0.0, 0.1],
+                stderrs=[0.0],
+                num_shots=5,
+            )
+        with pytest.raises(ValueError):
+            NoiseSweepResult(
+                strengths=[0.0],
+                failure_rates=[0.0, 0.1],
+                stderrs=[0.0, 0.1],
+                num_shots=5,
+            )
+
+
+class TestCompareNoiseSweeps:
+    def _make_result(self, strengths, num_completed, num_shots=10):
+        return NoiseSweepResult(
+            strengths=strengths,
+            failure_rates=[0.0] * num_completed,
+            stderrs=[0.0] * num_completed,
+            num_shots=num_shots,
+        )
+
+    def test_mismatched_strengths_always_raises(self):
+        results = {
+            "a": self._make_result([0.0, 0.1], 2),
+            "b": self._make_result([0.0, 0.2], 2),
+        }
+        with pytest.raises(ValueError):
+            compare_noise_sweeps(results)
+        with pytest.raises(ValueError):
+            compare_noise_sweeps(results, strict=True)
+
+    def test_mismatched_num_shots_always_raises(self):
+        results = {
+            "a": self._make_result([0.0, 0.1], 2, num_shots=10),
+            "b": self._make_result([0.0, 0.1], 2, num_shots=20),
+        }
+        with pytest.raises(ValueError):
+            compare_noise_sweeps(results)
+
+    def test_incomplete_warns_by_default(self):
+        results = {
+            "a": self._make_result([0.0, 0.1], 2),
+            "b": self._make_result([0.0, 0.1], 1),
+        }
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            returned = compare_noise_sweeps(results)
+        assert any(issubclass(w.category, UserWarning) for w in caught)
+        assert returned is results
+
+    def test_incomplete_raises_when_strict(self):
+        results = {
+            "a": self._make_result([0.0, 0.1], 2),
+            "b": self._make_result([0.0, 0.1], 1),
+        }
+        with pytest.raises(ValueError):
+            compare_noise_sweeps(results, strict=True)
+
+    def test_all_complete_no_warning_either_way(self):
+        results = {
+            "a": self._make_result([0.0, 0.1], 2),
+            "b": self._make_result([0.0, 0.1], 2),
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            compare_noise_sweeps(results)
+            compare_noise_sweeps(results, strict=True)
+
+
+class TestPlotNoiseSweep:
+    def test_smoke(self):
+        pytest.importorskip("matplotlib")
+        result = NoiseSweepResult(
+            strengths=[0.01, 0.05, 0.1],
+            failure_rates=[0.0, 0.02, 0.1],
+            stderrs=[0.0, 0.01, 0.02],
+            num_shots=100,
+        )
+        ax = plot_noise_sweep(result, reference_slope=2)
+        assert ax is not None
+
+    def test_multi_series_smoke(self):
+        pytest.importorskip("matplotlib")
+        result_a = NoiseSweepResult(
+            strengths=[0.01, 0.05],
+            failure_rates=[0.0, 0.02],
+            stderrs=[0.0, 0.01],
+            num_shots=100,
+        )
+        result_b = NoiseSweepResult(
+            strengths=[0.01, 0.05],
+            failure_rates=[0.01, 0.03],
+            stderrs=[0.005, 0.01],
+            num_shots=100,
+        )
+        ax = plot_noise_sweep({"a": result_a, "b": result_b})
+        assert ax is not None
+
+    def test_missing_matplotlib_raises_import_error(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "matplotlib", None)
+        monkeypatch.setitem(sys.modules, "matplotlib.pyplot", None)
+        result = NoiseSweepResult(
+            strengths=[0.1], failure_rates=[0.0], stderrs=[0.0], num_shots=10
+        )
+        with pytest.raises(ImportError):
+            plot_noise_sweep(result)
