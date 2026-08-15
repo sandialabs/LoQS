@@ -56,7 +56,7 @@ else:
 T = TypeVar("T", bound="STIMQuantumState")
 
 # Type aliases for static type checking
-STIMStateCastableTypes: TypeAlias = (
+STIMStateLike: TypeAlias = (
     "STIMQuantumState | _TableauSimulator | _Tableau | int | Sequence[int]"
 )
 """Types that this backend can cast to an underlying state object."""
@@ -110,7 +110,7 @@ class STIMQuantumState(BaseQuantumState):
 
     def __init__(
         self,
-        state: STIMStateCastableTypes,
+        state: STIMStateLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         seed: int | None = None,
     ) -> None:

@@ -49,15 +49,16 @@ class TestSTIMQuantumState:
         s5.state.cx(0,1)
         self._check(s5, s)
 
-        # Cast checks
-        s6 = STIMState.cast(s)
+        # Copy-construct from an existing instance with qubit_labels omitted
+        # (defaults to None), unlike s2 above which passes them explicitly.
+        s6 = STIMState(s)
         self._check(s6, s)
 
         s_int_labels = STIMState(s, qubit_labels=None) # No labels should default to int list
-        s7 = STIMState.cast(s.state)
+        s7 = STIMState(s.state)
         self._check(s7, s_int_labels)
 
-        s8 = STIMState.cast(s.state.current_inverse_tableau())
+        s8 = STIMState(s.state.current_inverse_tableau())
         self._check(s8, s_int_labels)
 
         # Copy check

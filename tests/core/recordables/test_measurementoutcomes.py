@@ -23,10 +23,13 @@ class TestMeasurementOutcomes:
         m2 = MeasurementOutcomes(m)
         self._check(m2, expected)
 
-        m3 = MeasurementOutcomes.cast(m)
-        assert m3 is m
+        # Constructing from an existing MeasurementOutcomes builds a new
+        # object, but aliases the underlying outcomes dict.
+        m3 = MeasurementOutcomes(m)
+        self._check(m3, expected)
+        assert m3.outcomes is m.outcomes
 
-        m4 = MeasurementOutcomes.cast(outcomes)
+        m4 = MeasurementOutcomes(outcomes)
         self._check(m4, expected)
 
         with pytest.raises(TypeError):

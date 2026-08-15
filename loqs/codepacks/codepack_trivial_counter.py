@@ -78,4 +78,4 @@ def create_ideal_model(qubits=None):
     """
     # For this trivial classical counter, we don't need any quantum operations
     # Return an empty DictNoiseModel
-    return DictNoiseModel(({}, {}))
+    return DictNoiseModel({}, {})

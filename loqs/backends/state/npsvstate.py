@@ -37,7 +37,7 @@ from loqs.types import NDArray
 T = TypeVar("T", bound="NumpyStatevectorQuantumState")
 
 # Type aliases for static type checking
-NumpyStatevectorCastableTypes: TypeAlias = (
+NumpyStatevectorLike: TypeAlias = (
     "NumpyStatevectorQuantumState | int | np.ndarray | Sequence[int]"
 )
 """Types that this backend can cast to an underlying state object."""
@@ -152,7 +152,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     def __init__(
         self,
-        state: NumpyStatevectorCastableTypes,
+        state: NumpyStatevectorLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
         seed: int | None = None,
         kraus_sampling: str | None = None,

@@ -26,7 +26,7 @@ OperationTypes: TypeAlias = LabelType | Sequence[LabelType]
 """Type alias for things allowed to be in circuit layer
 """
 
-ListCircuitCastableTypes: TypeAlias = (
+ListCircuitLike: TypeAlias = (
     BasePhysicalCircuit | Sequence[OperationTypes]
 )
 """Types we can cast to a built-in circuit.
@@ -45,7 +45,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
 
     def __init__(
         self,
-        circuit: ListCircuitCastableTypes,
+        circuit: ListCircuitLike,
         qubit_labels: Sequence[QubitTypes] | None = None,
     ) -> None:
         from loqs.backends import is_backend_available
@@ -62,21 +62,17 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         elif is_backend_available("pygsti_circuit") and isinstance(
             circuit, PyGSTiPhysicalCircuit
         ):
-            try:
-                circuit = PyGSTiPhysicalCircuit.cast(circuit)
+            # circuit is already a PyGSTiPhysicalCircuit (checked above).
+            layers = []
+            for layer in circuit.circuit.layertup:  # type: ignore
+                new_layer = []
+                for comp in layer.components:  # type: ignore
+                    new_layer.append((comp.name, comp.qubits))
+                layers.append(new_layer)
+            self._circuit = layers
 
-                layers = []
-                for layer in circuit.circuit.layertup:  # type: ignore
-                    new_layer = []
-                    for comp in layer.components:  # type: ignore
-                        new_layer.append((comp.name, comp.qubits))
-                    layers.append(new_layer)
-                self._circuit = layers
-
-                if qubit_labels is None:
-                    qubit_labels = circuit.circuit.line_labels  # type: ignore
-            except ImportError as e:
-                raise ValueError("Could not cast pyGSTi circuit") from e
+            if qubit_labels is None:
+                qubit_labels = circuit.circuit.line_labels  # type: ignore
         elif isinstance(circuit, Sequence):
             seen_qubits = set()
 
@@ -181,7 +177,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         return circuit_locations
 
     def insert_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit = ListPhysicalCircuit.cast(circuit)
+        other_circuit = ListPhysicalCircuit(circuit)
         self._circuit = (
             self._circuit[:idx] + other_circuit._circuit + self._circuit[idx:]
         )
@@ -209,7 +205,7 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         self._qubit_labels = [complete_mapping[q] for q in self.qubit_labels]
 
     def merge_inplace(self, circuit: BasePhysicalCircuit, idx: int) -> None:
-        other_circuit = ListPhysicalCircuit.cast(circuit)
+        other_circuit = ListPhysicalCircuit(circuit)
 
         # Ensure circuit is long enough for merge
         end = idx + other_circuit.depth
@@ -262,6 +258,50 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
             missing_qubits = set(self._qubit_labels) - seen_qubits
             for qubit in missing_qubits:
                 self._circuit[lidx].append((layer_idle, (qubit,)))
+
+    def transplant_idle_schedule_inplace(
+        self,
+        reference: BasePhysicalCircuit,
+        qubits: Sequence[QubitTypes],
+        idle_names: Sequence[str],
+    ) -> None:
+        # Convert the reference to this class, avoiding a redundant copy if
+        # it's already the right type (reference is only ever read below).
+        if not isinstance(reference, ListPhysicalCircuit):
+            reference = ListPhysicalCircuit(reference)
+        idle_names = set(idle_names)
+
+        for qubit in qubits:
+            true_seq: list[tuple[str, str]] = []
+            for layer in reference._circuit:
+                for name, qs in layer:
+                    if qubit in qs:
+                        kind = "idle" if name in idle_names else "real"
+                        true_seq.append((kind, name))
+
+            ptr = 0
+            for lidx in range(self.depth):
+                is_real = any(
+                    qubit in qs and name not in idle_names
+                    for name, qs in self._circuit[lidx]
+                )
+                if is_real:
+                    if ptr >= len(true_seq) or true_seq[ptr][0] != "real":
+                        raise ValueError(
+                            f"Qubit {qubit!r}: real operation at layer {lidx} does not "
+                            f"match the reference sequence at position {ptr}"
+                        )
+                    ptr += 1
+                    continue
+                if ptr < len(true_seq) and true_seq[ptr][0] == "idle":
+                    self._circuit[lidx].append((true_seq[ptr][1], (qubit,)))
+                    ptr += 1
+            if ptr != len(true_seq):
+                raise ValueError(
+                    f"Qubit {qubit!r}: only matched {ptr}/{len(true_seq)} reference "
+                    "operations -- this circuit does not have enough layers/real "
+                    "operations to receive the full reference idle schedule"
+                )
 
     def set_qubit_labels_inplace(
         self, qubit_labels: Sequence[QubitTypes]

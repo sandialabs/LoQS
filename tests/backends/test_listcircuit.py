@@ -47,28 +47,28 @@ class TestListPhysicalCircuit:
         pc2 = PhysCirc(pc)
         self._check(pc2, self.expected_circ, self.test_labels)
 
-        # We can also test our casting function since this IsCastable
-        pc = PhysCirc.cast(self.test_circ)
-        self._check(pc, self.expected_circ, self.test_labels)
-
-        pc2 = PhysCirc.cast(pc)
-        self._check(pc2, self.expected_circ, self.test_labels)
-
         # Test failure raises error
         with pytest.raises(ValueError):
-            PhysCirc.cast(None)
+            PhysCirc(None) # type: ignore
 
-    def test_init_from_pygsti_circuit_import_error_wrapped_as_valueerror(self):
+    def test_init_from_pygsti_circuit_does_not_reconstruct_it(self):
+        """An existing `PyGSTiPhysicalCircuit` is read directly, without
+        constructing or copying a second one."""
         pytest.importorskip("pygsti")
         from loqs.backends import PyGSTiPhysicalCircuit
 
         pgc = PyGSTiPhysicalCircuit([("Gxpi2", "Q0")], ["Q0"])
-        with mock.patch.object(
-            PyGSTiPhysicalCircuit, "cast", side_effect=ImportError("boom")
-        ):
-            with pytest.raises(ValueError, match="Could not cast pyGSTi circuit"):
-                PhysCirc(pgc)
-    
+        original_init = PyGSTiPhysicalCircuit.__init__
+        call_count = [0]
+
+        def counting_init(self, *args, **kwargs):
+            call_count[0] += 1
+            return original_init(self, *args, **kwargs)
+
+        with mock.patch.object(PyGSTiPhysicalCircuit, "__init__", counting_init):
+            PhysCirc(pgc)
+        assert call_count[0] == 0
+
     def test_append(self):
         circ1 = [[('Gxpi2', ('Q0',)), ('Gypi2', ('Q1',))]]
         expected_circ = circ1 + circ1
@@ -121,6 +121,54 @@ class TestListPhysicalCircuit:
 
         pc5.map_qubit_labels_inplace({"Q0": 0, "Q1": 1})
         self._check(pc5, self.expected_circ_intlbls, [0,1])
+
+    def test_transplant_idle_schedule(self):
+        # Reference: a "parallel" 3-layer round where Q0 and Q1 are both
+        # idle, then both real (a CNOT), then both idle again.
+        reference = PhysCirc(
+            [[('Gi', ('Q0',)), ('Gi', ('Q1',))], [('Gcnot', ('Q0', 'Q1'))],
+             [('Gi', ('Q0',)), ('Gi', ('Q1',))]],
+            qubit_labels=["Q0", "Q1"],
+        )
+
+        # Target: the same real gate, but serialized across more layers --
+        # blank before and after it, with the real gate itself moved later.
+        target = PhysCirc(
+            [[], [], [('Gcnot', ('Q0', 'Q1'))], [], []],
+            qubit_labels=["Q0", "Q1"],
+        )
+        target.transplant_idle_schedule_inplace(reference, ["Q0", "Q1"], ["Gi"])
+
+        expected = [
+            [('Gi', ('Q0',)), ('Gi', ('Q1',))], [],
+            [('Gcnot', ('Q0', 'Q1'))],
+            [('Gi', ('Q0',)), ('Gi', ('Q1',))], [],
+        ]
+        self._check(target, expected, ["Q0", "Q1"])
+
+    def test_transplant_idle_schedule_mismatch_raises(self):
+        # Reference has only one real gate for Q0; a target with two real
+        # gates for Q0 has no matching reference event for the second one.
+        reference = PhysCirc(
+            [[('Gi', ('Q0',))], [('Gxpi2', ('Q0',))], [('Gi', ('Q0',))]],
+            qubit_labels=["Q0"],
+        )
+        target = PhysCirc(
+            [[('Gxpi2', ('Q0',))], [('Gxpi2', ('Q0',))]], qubit_labels=["Q0"]
+        )
+        with pytest.raises(ValueError):
+            target.transplant_idle_schedule_inplace(reference, ["Q0"], ["Gi"])
+
+    def test_transplant_idle_schedule_insufficient_target_layers_raises(self):
+        # Reference has trailing idles after its real gate, but the target
+        # runs out of layers before it can place them all.
+        reference = PhysCirc(
+            [[('Gxpi2', ('Q0',))], [('Gi', ('Q0',))], [('Gi', ('Q0',))]],
+            qubit_labels=["Q0"],
+        )
+        target = PhysCirc([[('Gxpi2', ('Q0',))]], qubit_labels=["Q0"])
+        with pytest.raises(ValueError):
+            target.transplant_idle_schedule_inplace(reference, ["Q0"], ["Gi"])
 
     def test_str_and_repr(self):
         pc = PhysCirc([[("Gxpi2", ("Q0",))]], ["Q0"])
@@ -262,6 +310,25 @@ class TestListPhysicalCircuit:
             [[("Gx", ("Q0",))], [("Gx", ("Q1",))]],
             ["Q0", "Q1"],
         )
+
+    def test_from_circuit_tiling_does_not_reconstruct_already_correct_template_type(self):
+        """A `template_circuit` that's already the target class is used
+        directly, without constructing or copying a second instance of it."""
+        template = PhysCirc([[("Gx", ("A",))]], ["A"])
+        original_init = PhysCirc.__init__
+        seen_circuits = []
+
+        def recording_init(self, *args, **kwargs):
+            seen_circuits.append(args[0] if args else kwargs.get("circuit"))
+            return original_init(self, *args, **kwargs)
+
+        with mock.patch.object(PhysCirc, "__init__", recording_init):
+            PhysCirc.from_circuit_tiling(
+                template,
+                qubit_labels=["Q0", "Q1"],
+                tile_qubits=[["Q0"], ["Q1"]],
+            )
+        assert all(circ is not template for circ in seen_circuits)
 
     def test_get_possible_discrete_error_locations(self):
         pc = PhysCirc(

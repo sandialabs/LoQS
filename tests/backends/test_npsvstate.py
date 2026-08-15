@@ -42,18 +42,14 @@ class TestNumPyStatevectorQuantumState:
         s3 = SVState([0, 0, 0, 0, 0], qubit_labels)
         self._check(s3, s)
 
-        # Cast checks
-        s4 = SVState.cast(s)
-        self._check(s4, s)
-
         # (Flat) Numpy array check also
         all0_state = np.zeros(2**5)
         all0_state[0] = 1
-        s5 = SVState.cast((all0_state, qubit_labels))
+        s5 = SVState(all0_state, qubit_labels)
         self._check(s5, s)
 
         # This one won't have same labels
-        s6 = SVState.cast(5)
+        s6 = SVState(5)
         self._check(SVState(5), s6)
 
         # Copy check

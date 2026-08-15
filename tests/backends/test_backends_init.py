@@ -149,10 +149,8 @@ _X = np.array([[0, 1], [1, 0]], dtype=complex)
 class TestPropagateState:
     def _build_model_and_state(self, instreps):
         model = DictNoiseModel(
-            (
-                {"X": UnitaryGateRep(_X, ())},
-                {"M": ZBasisProjectionInstrumentRep(None, True, ())},
-            ),
+            {"X": UnitaryGateRep(_X, ())},
+            {"M": ZBasisProjectionInstrumentRep(None, True, ())},
             gatereps=[UnitaryGateRep],
             instreps=instreps,
         )
@@ -196,7 +194,7 @@ class TestPropagateState:
 
     def test_no_matching_gate_rep_raises(self):
         model = DictNoiseModel(
-            ({"X": QSimSuperopGateRep(np.eye(4), ())}, {}),
+            {"X": QSimSuperopGateRep(np.eye(4), ())}, {},
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisProjectionInstrumentRep],
         )
@@ -207,10 +205,7 @@ class TestPropagateState:
 
     def test_no_matching_instrument_rep_raises(self):
         model = DictNoiseModel(
-            (
-                {"X": UnitaryGateRep(np.eye(2), ())},
-                {"M": StimCircuitInstrumentRep("M 0", ())},
-            ),
+            {"X": UnitaryGateRep(np.eye(2), ())}, {"M": StimCircuitInstrumentRep("M 0", ())},
             gatereps=[UnitaryGateRep],
             instreps=[StimCircuitInstrumentRep],
         )

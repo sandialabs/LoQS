@@ -40,7 +40,7 @@ except ImportError as e:
 T = TypeVar("T", bound="QSimQuantumState")
 
 # Type aliases for static type checking
-QSimStateCastableTypes: TypeAlias = "QSimQuantumState | int | _SparseDM"
+QSimStateLike: TypeAlias = "QSimQuantumState | int | _SparseDM"
 """Types that this backend can cast to an underlying state object."""
 
 QubitTypes: TypeAlias = str | int
@@ -96,7 +96,7 @@ class QSimQuantumState(BaseQuantumState):
 
     def __init__(
         self,
-        state: QSimStateCastableTypes,
+        state: QSimStateLike,
         qubit_labels: Collection[QubitTypes] | None = None,
         seed: int | None = None,
     ) -> None:

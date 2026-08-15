@@ -21,7 +21,7 @@ from datetime import datetime
 from loqs.internal import Displayable, Serializable
 from loqs.core.history import (
     History,
-    HistoryCastableTypes,
+    HistoryLike,
     HistoryCollectDataIndexTypes,
 )
 from loqs.core import Frame
@@ -168,7 +168,7 @@ class ProgramResults(Displayable):
             # just continue without the cache - it's not critical for functionality
             pass
 
-    def add_shot(self, shot_index: int, history: HistoryCastableTypes) -> None:
+    def add_shot(self, shot_index: int, history: HistoryLike) -> None:
         """Add a shot history to the results.
 
         Parameters
@@ -178,7 +178,7 @@ class ProgramResults(Displayable):
         history:
             The History object for the shot.
         """
-        history = History.cast(history)
+        history = History(history)
         self.shot_histories[shot_index] = history
         self._unwritten_shots.add(shot_index)
 
