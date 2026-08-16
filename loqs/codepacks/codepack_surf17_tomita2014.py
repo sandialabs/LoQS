@@ -77,7 +77,7 @@ from loqs.core.instructions.instruction import KwargDict
 from loqs.core.recordables import QECCodePatch
 from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.syndromelabel import SyndromeLabel
 import loqs.tools.qectools as qt
 
@@ -427,7 +427,7 @@ def create_qec_code(
     # Software permutation for H (clockwise 90-degree rotation of the 3x3 data grid)
     # 0->2, 1->5, 2->8, 3->1, 4->4, 5->7, 6->0, 7->3, 8->6
     def H_permutation_apply_fn(
-        patches: PatchDict, patch_label: str
+        patches: PatchLayout, patch_label: str
     ) -> Frame:
         patch = patches[patch_label]
         old_frame = patch.pauli_frame
@@ -597,7 +597,7 @@ def create_qec_code(
     # collide without needing any key namespacing).
     def pymatching_deferred_decoder_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         syndrome_labels_X: list[SyndromeLabel],
         syndrome_labels_Z: list[SyndromeLabel],
         num_qec_rounds: int,
@@ -736,7 +736,7 @@ def create_qec_code(
     # Global Space-Time deferred decoding over R rounds of syndrome extraction + final data measurements
     def pymatching_global_meas_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         H_X: np.ndarray,
         H_Z: np.ndarray,
         syndrome_labels_X: list[SyndromeLabel],

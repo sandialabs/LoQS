@@ -31,8 +31,11 @@ Provided operations
   (`build_joint_parity_zz_instruction`, `build_joint_parity_xx_instruction`).
   A single bare ancilla measures Z_L(A) Z_L(B) (or X_L(A) X_L(B)) directly:
   the ancilla outcome, corrected by the patches' pending Pauli-frame bits on
-  the touched data qubits, is stored under the frame key `joint_parity_zz`
-  (`joint_parity_xx`). These are **not fault tolerant** (a single ancilla or
+  the touched data qubits, is stored under the frame key
+  `joint_parity_zz_{patch_a_label}_{patch_b_label}`
+  (`joint_parity_xx_{patch_a_label}_{patch_b_label}`), scoped by participant
+  labels so multiple simultaneous joint measurements between different
+  patch pairs cannot collide. These are **not fault tolerant** (a single ancilla or
   data fault can flip the parity or spread onto a patch) but are
   non-destructive: both parities commute with all stabilizers, so QEC
   continues and both can be measured in the same shot with one shared
@@ -66,7 +69,7 @@ from loqs.core import Instruction
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.recordables.pauliframe import PauliFrame
 
 PATCH_QUBIT_COUNTS = {
@@ -86,8 +89,8 @@ def _pauli_from_bits(x_bit: int, z_bit: int) -> str:
 def pairwise_cnot_pauli_frames(
     frame_ctrl: PauliFrame,
     frame_tgt: PauliFrame,
-    ctrl_qubits: Sequence[str],
-    tgt_qubits: Sequence[str],
+    ctrl_qubits: Sequence[str | int],
+    tgt_qubits: Sequence[str | int],
 ) -> tuple[PauliFrame, PauliFrame]:
     """Exact conjugation of two Pauli frames through pairwise physical CNOTs.
 
@@ -207,8 +210,6 @@ def build_transversal_cnot_circuit_instruction(
 def build_cnot_bookkeeping_instruction(
     ctrl_patch_label: str,
     tgt_patch_label: str,
-    ctrl_data_qubits: Sequence[str],
-    tgt_data_qubits: Sequence[str],
     name: str = "Transversal CNOT frame/history bookkeeping",
 ) -> Instruction:
     """Build the decoder-bookkeeping half of a transversal logical CNOT.
@@ -216,14 +217,17 @@ def build_cnot_bookkeeping_instruction(
     The apply function takes:
 
     - `patches`, usually from the previous frame
-    - the patch labels and data qubit lists, from `Instruction.data`
+    - the patch labels, from `Instruction.data`
 
     It (a) conjugates both patches' Pauli frames through the pairwise CNOTs
     (see [](api:pairwise_cnot_pauli_frames)) and (b) XORs the round-aligned
     syndrome histories, tracked on each patch's own `.data`
     (`hist_Z_tgt ^= hist_Z_ctrl` and `hist_X_ctrl ^= hist_X_tgt`), asserting
     that the two patches have accumulated the same number of
-    syndrome-extraction rounds.
+    syndrome-extraction rounds. Each patch's own data qubits (needed for
+    the pairwise conjugation) are read from [](api:QECCodePatch.data_qubits)
+    at apply time, rather than needing to be re-supplied here to match
+    whatever was passed to [](api:build_transversal_cnot_circuit_instruction).
 
     It returns a [](api:Frame) with the two patches' `.data` updated
     in-place inside `patches`.
@@ -236,12 +240,6 @@ def build_cnot_bookkeeping_instruction(
     tgt_patch_label:
         Patch label of the target patch.
 
-    ctrl_data_qubits:
-        The 9 data qubits of the control patch (template order D0..D8).
-
-    tgt_data_qubits:
-        The 9 data qubits of the target patch, aligned index-wise.
-
     name:
         Name for logging purposes.
 
@@ -252,11 +250,9 @@ def build_cnot_bookkeeping_instruction(
     """
 
     def apply_fn(
-        patches: PatchDict,
+        patches: PatchLayout,
         ctrl_patch_label: str,
         tgt_patch_label: str,
-        ctrl_data_qubits: list[str],
-        tgt_data_qubits: list[str],
     ) -> Frame:
         patch_c = patches[ctrl_patch_label]
         patch_t = patches[tgt_patch_label]
@@ -265,8 +261,8 @@ def build_cnot_bookkeeping_instruction(
         new_frame_c, new_frame_t = pairwise_cnot_pauli_frames(
             patch_c.pauli_frame,
             patch_t.pauli_frame,
-            ctrl_data_qubits,
-            tgt_data_qubits,
+            patch_c.data_qubits,
+            patch_t.data_qubits,
         )
         new_patch_c = patch_c.copy(pauli_frame=new_frame_c)
         new_patch_t = patch_t.copy(pauli_frame=new_frame_t)
@@ -312,24 +308,13 @@ def build_cnot_bookkeeping_instruction(
     data = {
         "ctrl_patch_label": ctrl_patch_label,
         "tgt_patch_label": tgt_patch_label,
-        "ctrl_data_qubits": list(ctrl_data_qubits),
-        "tgt_data_qubits": list(tgt_data_qubits),
     }
 
-    def map_qubits_fn(qubit_mapping, ctrl_data_qubits, tgt_data_qubits, **kwargs):
-        new_kwargs = kwargs.copy()
-        new_kwargs["ctrl_data_qubits"] = [
-            qubit_mapping.get(q, q) for q in ctrl_data_qubits
-        ]
-        new_kwargs["tgt_data_qubits"] = [
-            qubit_mapping.get(q, q) for q in tgt_data_qubits
-        ]
-        return new_kwargs
-
+    # No map_qubits_fn: nothing qubit-shaped remains in Instruction.data --
+    # data qubits are read from the live patches at apply time instead.
     return Instruction(
         apply_fn,
         data=data,
-        map_qubits_fn=map_qubits_fn,
         name=name,
     )
 
@@ -391,8 +376,6 @@ def build_transversal_cnot_instruction(
     bookkeeping_inst = build_cnot_bookkeeping_instruction(
         ctrl_patch_label,
         tgt_patch_label,
-        ctrl_data_qubits,
-        tgt_data_qubits,
         name=f"{name} (bookkeeping)",
     )
     return builders.build_composite_instruction(
@@ -425,12 +408,12 @@ def _build_joint_parity_instruction(
         # Z_L = Z0 Z4 Z8; X errors on these flip the copied Z parity
         support_idx = [0, 4, 8]
         frame_bit_type = "X"
-        frame_key = "joint_parity_zz"
+        frame_key = f"joint_parity_zz_{patch_a_label}_{patch_b_label}"
     else:
         # X_L = X2 X4 X6; Z errors on these flip the kicked-back X parity
         support_idx = [2, 4, 6]
         frame_bit_type = "Z"
-        frame_key = "joint_parity_xx"
+        frame_key = f"joint_parity_xx_{patch_a_label}_{patch_b_label}"
 
     supports_a = [data_qubits_a[i] for i in support_idx]
     supports_b = [data_qubits_b[i] for i in support_idx]
@@ -460,7 +443,7 @@ def _build_joint_parity_instruction(
     )
 
     def decode_apply_fn(
-        patches: PatchDict,
+        patches: PatchLayout,
         parity_outcomes: MeasurementOutcomes,
         patch_a_label: str,
         patch_b_label: str,
@@ -536,7 +519,7 @@ def build_joint_parity_zz_instruction(
     each patch) onto the ancilla, which is then measured (and reset) with
     `Imrz`. The decode step XORs the outcome with both patches' pending
     Pauli-frame X bits on the touched qubits and stores the result under the
-    frame key `joint_parity_zz`.
+    frame key `joint_parity_zz_{patch_a_label}_{patch_b_label}`.
 
     The measured operator commutes with all stabilizers of both patches, so
     the patches remain valid code states afterwards. Single faults on the
@@ -573,7 +556,8 @@ def build_joint_parity_zz_instruction(
     Returns
     -------
     Instruction
-        Composite instruction storing `joint_parity_zz` in its final frame.
+        Composite instruction storing
+        `joint_parity_zz_{patch_a_label}_{patch_b_label}` in its final frame.
     """
     return _build_joint_parity_instruction(
         "ZZ",
@@ -609,8 +593,9 @@ def build_joint_parity_xx_instruction(
     of each patch) back onto it, and `Gh` + `Imrz` read it out in the X basis.
     The decode step XORs the outcome with both patches' pending Pauli-frame
     Z bits on the touched qubits and stores the result under the frame key
-    `joint_parity_xx`. See [](api:build_joint_parity_zz_instruction) for the
-    non-FT caveat; parameters are identical.
+    `joint_parity_xx_{patch_a_label}_{patch_b_label}`. See
+    [](api:build_joint_parity_zz_instruction) for the non-FT caveat;
+    parameters are identical.
     """
     return _build_joint_parity_instruction(
         "XX",

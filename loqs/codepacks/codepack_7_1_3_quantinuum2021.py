@@ -43,7 +43,7 @@ from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables import QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.patchlayout import PatchLayout
 import loqs.tools.qectools as qt
 
 
@@ -238,7 +238,7 @@ def create_qec_code(
 
     # We need to update the logical Pauli frame and stabilizer syndrome slices if we have run Logical H circuit
     def H_frame_update_apply_fn(
-        patches: PatchDict,
+        patches: PatchLayout,
         patch_label: str,
     ):
         patch = patches[patch_label]
@@ -486,7 +486,7 @@ def create_qec_code(
     #    Could also look at weight of correction on edge qubits, odd weight = flip, even weight = don't flip.)
     def logical_meas_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         data_qubits: list[str],
         measurement_basis: str,
         measurement_outcomes: MeasurementOutcomes,
@@ -675,7 +675,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
     def QEC_flagged_feedforward_apply_fn(
         # For patch to get our logical Pauli frame and last syndromes
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         # To check flag outcomes
         measurement_outcomes: MeasurementOutcomes,
         # For flag/aux qubit labels in the measurement outcome
@@ -694,7 +694,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         ----------
         patch_label : str
             Label of the patch being processed.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing syndrome and frame information.
         measurement_outcomes : MeasurementOutcomes
             Raw measurement outcomes from the physical qubits.
@@ -816,7 +816,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
     def QEC_decoder_apply_fn(
         # For patch to get our logical Pauli frame and last syndromes
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         # To check X/Z outcomes
         X_outcomes: MeasurementOutcomes,
         Z_outcomes: MeasurementOutcomes,
@@ -833,7 +833,7 @@ def _create_adaptive_qec_instructions(instructions, qubits):
         ----------
         patch_label : str
             Label of the patch being decoded.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing syndrome and frame information.
         X_outcomes : MeasurementOutcomes
             Measurement outcomes for X-basis stabilizer checks.

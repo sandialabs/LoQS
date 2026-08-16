@@ -3,11 +3,12 @@
 import pytest
 
 from loqs.backends import NumpyStatevectorQuantumState as SVState
-from loqs.core import QuantumProgram
+from loqs.core import QECCode, QuantumProgram
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.instructions.instructionstack import InstructionStack
+from loqs.core.recordables import PatchLayout, PatchRelation
 
 
 def _leaf_apply_needing_model(model, patch_label=None):
@@ -169,3 +170,54 @@ class TestCompositeInstruction:
         )
         history = program.run().shot_histories[0]
         assert history[-1]["seen_model"] is default_model
+
+
+class TestPatchBuilderAndRemoverInstructions:
+
+    def _code(self):
+        return QECCode(instructions={}, template_qubits=["q0"], template_data_qubits=["q0"])
+
+    def test_builder_creates_first_patch_from_none(self):
+        inst = builders.build_patch_builder_instruction(self._code())
+        f = inst.apply(new_patch_label="L0", qubits=["Q0"], qec_code=self._code(), patches=None)
+        patches = f["patches"]
+        assert isinstance(patches, PatchLayout)
+        assert patches["L0"].qubits == ["Q0"]
+
+    def test_builder_rejects_overlapping_qubits(self):
+        code = self._code()
+        inst = builders.build_patch_builder_instruction(code)
+        patches = PatchLayout({"L0": code.create_patch(["Q0"])})
+        with pytest.raises(AssertionError):
+            inst.apply(new_patch_label="L1", qubits=["Q0"], qec_code=code, patches=patches)
+
+    def test_builder_rejects_duplicate_label(self):
+        code = self._code()
+        inst = builders.build_patch_builder_instruction(code)
+        patches = PatchLayout({"L0": code.create_patch(["Q0"])})
+        with pytest.raises(AssertionError):
+            inst.apply(new_patch_label="L0", qubits=["Q1"], qec_code=code, patches=patches)
+
+    def test_remover_removes_patch(self):
+        code = self._code()
+        inst = builders.build_patch_remover_instruction()
+        patches = PatchLayout({"L0": code.create_patch(["Q0"])})
+        f = inst.apply(del_patch_label="L0", patches=patches)
+        assert "L0" not in f["patches"]
+
+    def test_remover_rejects_missing_label(self):
+        inst = builders.build_patch_remover_instruction()
+        with pytest.raises(AssertionError):
+            inst.apply(del_patch_label="L0", patches=PatchLayout())
+
+    def test_remover_auto_drops_referencing_relations(self):
+        code = self._code()
+        patches = PatchLayout(
+            {"L0": code.create_patch(["Q0"]), "L1": code.create_patch(["Q1"])}
+        )
+        patches.set_relation(PatchRelation({"a": "L0", "b": "L1"}))
+        assert patches.get_relation("L0", "L1") is not None
+
+        inst = builders.build_patch_remover_instruction()
+        f = inst.apply(del_patch_label="L0", patches=patches)
+        assert f["patches"].relations == {}

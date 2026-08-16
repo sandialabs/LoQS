@@ -67,7 +67,7 @@ from loqs.core import Instruction, History
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.patchlayout import PatchLayout, PatchRelation
 from loqs.core.recordables.pauliframe import PauliFrame
 
 # Base single-patch check matrices (mirrors codepack_surf17_tomita2014;
@@ -745,7 +745,12 @@ def _surgery_metadata(
             f"_{patch_a_label}_{patch_b_label}"
         ),
         "parity_frame_key": (
-            "surgery_parity_zz" if kind == "ZZ" else "surgery_parity_xx"
+            f"surgery_parity_zz_{patch_a_label}_{patch_b_label}"
+            if kind == "ZZ"
+            else f"surgery_parity_xx_{patch_a_label}_{patch_b_label}"
+        ),
+        "repair_key": (
+            f"split_byproduct_repair_{kind.lower()}_{patch_a_label}_{patch_b_label}"
         ),
         "support_a": [
             resolve(e) for e in geometry["parity_support"] if e[0] == "A"
@@ -1050,7 +1055,7 @@ _PAULI_FROM_BITS = {(0, 0): "I", (1, 0): "X", (0, 1): "Z", (1, 1): "Y"}
 
 
 def _multiply_pauli_into_frame(
-    frame: PauliFrame, qubits: Sequence[str], pauli: str
+    frame: PauliFrame, qubits: Sequence[str | int], pauli: str
 ) -> PauliFrame:
     """Multiply a Pauli string (X or Z on the given qubits) into a frame."""
     new_frame = frame.copy()
@@ -1075,7 +1080,7 @@ def _majority(bits: Sequence[int]) -> int:
 
 
 def _merge_bookkeeping_apply_fn(
-    patches: PatchDict,
+    patches: PatchLayout,
     history: History,
     merge_outcomes,
     patch_a_label: str,
@@ -1087,6 +1092,9 @@ def _merge_bookkeeping_apply_fn(
     labels_seam: list,
     seam_history_key: str,
     num_merge_rounds: int,
+    grown_rows: list,
+    byproduct: dict,
+    repair_key: str,
 ) -> Frame:
     """Accumulate merged-SE outcomes into per-patch and seam histories.
 
@@ -1099,6 +1107,11 @@ def _merge_bookkeeping_apply_fn(
     consecutive surgeries do not mix). Unlike the per-patch histories, the
     seam checks have no single owning patch, so they remain on the global
     Frame for now.
+
+    Also registers a [](api:PatchRelation) between the two patches holding
+    `grown_rows`/`byproduct`/`repair_key`, so a later
+    [](api:_split_byproduct_repair_apply_fn) can read them back instead of
+    independently recomputing `_surgery_metadata`.
     """
     if isinstance(merge_outcomes, MeasurementOutcomes):
         merge_outcomes = [merge_outcomes]
@@ -1125,6 +1138,17 @@ def _merge_bookkeeping_apply_fn(
         new_patch.data["syndrome_history_Z"] = hist_Z
         new_patches[lbl] = new_patch
 
+    new_patches.set_relation(
+        PatchRelation(
+            {"a": patch_a_label, "b": patch_b_label},
+            data={
+                "grown_rows": grown_rows,
+                "byproduct": byproduct,
+                "repair_key": repair_key,
+            },
+        )
+    )
+
     out = {
         "patches": new_patches,
         seam_history_key: [
@@ -1142,6 +1166,7 @@ def _merge_bookkeeping_map_qubits_fn(
     labels_X_b,
     labels_Z_b,
     labels_seam,
+    byproduct,
     **kwargs,
 ):
     new_kwargs = kwargs.copy()
@@ -1155,11 +1180,16 @@ def _merge_bookkeeping_map_qubits_fn(
         new_kwargs[key] = [
             (qubit_mapping.get(q, q), i) for (q, i) in labels
         ]
+    new_byproduct = dict(byproduct)
+    new_byproduct["support"] = [
+        qubit_mapping.get(q, q) for q in byproduct["support"]
+    ]
+    new_kwargs["byproduct"] = new_byproduct
     return new_kwargs
 
 
 def _split_bookkeeping_apply_fn(
-    patches: PatchDict,
+    patches: PatchLayout,
     history: History,
     split_outcomes: MeasurementOutcomes,
     patch_a_label: str,
@@ -1517,15 +1547,12 @@ def _byproduct_repair_row_decode(
 
 
 def _split_byproduct_repair_apply_fn(
-    patches: PatchDict,
+    patches: PatchLayout,
     history: History,
     patch_a_label: str,
     patch_b_label: str,
-    grown_rows: list,
-    byproduct: dict,
     num_merge_rounds: int,
     num_post_split_rounds: int,
-    repair_key: str,
     fire_rule: str = "both",
     defect_decode_mode: Literal["heuristic", "matching"] = "heuristic",
 ) -> Frame:
@@ -1590,6 +1617,15 @@ def _split_byproduct_repair_apply_fn(
     the same row's history (see [](api:_split_bookkeeping_apply_fn))
     must not also explain the same defect via an ordinary correction.
     """
+    relation = patches.get_relation(patch_a_label, patch_b_label)
+    assert relation is not None, (
+        f"No PatchRelation registered for ({patch_a_label}, {patch_b_label}) "
+        "-- a matching build_merge_instruction must run first in the same shot"
+    )
+    grown_rows = relation.data["grown_rows"]
+    byproduct = relation.data["byproduct"]
+    repair_key = relation.data["repair_key"]
+
     anchor = num_merge_rounds + num_post_split_rounds + 1
     min_rounds = anchor if fire_rule == "both" else anchor + 1
     defect = {}
@@ -1660,16 +1696,6 @@ def _split_byproduct_repair_apply_fn(
     return Frame({repair_key: fire, "patches": new_patches})
 
 
-def _split_byproduct_repair_map_qubits_fn(qubit_mapping, byproduct, **kwargs):
-    new_kwargs = kwargs.copy()
-    new_byproduct = dict(byproduct)
-    new_byproduct["support"] = [
-        qubit_mapping.get(q, q) for q in byproduct["support"]
-    ]
-    new_kwargs["byproduct"] = new_byproduct
-    return new_kwargs
-
-
 # ---------------------------------------------------------------------------
 # Public instruction builders
 # ---------------------------------------------------------------------------
@@ -1697,6 +1723,12 @@ def _merge_instruction_parts(
             "labels_seam": meta["labels_seam"],
             "seam_history_key": meta["seam_history_key"],
             "num_merge_rounds": num_merge_rounds,
+            "grown_rows": [
+                (lbl, check_type, row)
+                for lbl, check_type, row, _ in meta["grown_flips"]
+            ],
+            "byproduct": meta["byproduct"],
+            "repair_key": meta["repair_key"],
         },
         map_qubits_fn=_merge_bookkeeping_map_qubits_fn,
         param_priorities={
@@ -1786,9 +1818,13 @@ def build_merge_instruction(
     Composite of seam preparation (|+> for ZZ, |0> for XX), the merged
     syndrome-extraction circuit repeated `num_merge_rounds` times, and a
     bookkeeping step that extends the per-patch namespaced syndrome
-    histories (with the grown boundary checks substituted in place) and
-    records the four new seam checks. Must be followed by the matching
-    [](api:build_split_instruction) in the same shot.
+    histories (with the grown boundary checks substituted in place),
+    records the four new seam checks, and registers a
+    [](api:PatchRelation) between the two patches (`grown_rows`/
+    `byproduct`/`repair_key`) for a later
+    [](api:build_split_byproduct_repair_instruction) to read. Must be
+    followed by the matching [](api:build_split_instruction) in the same
+    shot.
 
     Parameters
     ----------
@@ -1861,7 +1897,8 @@ def build_split_instruction(
 
     Composite of the seam measurement (X basis for ZZ, Z basis for XX) and a
     bookkeeping step that stores the joint parity under the frame key
-    `surgery_parity_zz` / `surgery_parity_xx`, applies the post-split
+    `surgery_parity_zz_{patch_a_label}_{patch_b_label}` /
+    `surgery_parity_xx_{patch_a_label}_{patch_b_label}`, applies the post-split
     boundary-check flips to the per-patch histories, and injects the
     conditional logical byproduct into one patch's Pauli frame. Parameters
     must match the preceding [](api:build_merge_instruction).
@@ -1926,7 +1963,8 @@ def build_surgery_parity_instruction(
     Measures `Z_L(A) Z_L(B)` (kind="ZZ") or `X_L(A) X_L(B)` (kind="XX")
     non-destructively via `num_merge_rounds` rounds of merged syndrome
     extraction; the result is stored under the frame key
-    `surgery_parity_zz` / `surgery_parity_xx`. See
+    `surgery_parity_zz_{patch_a_label}_{patch_b_label}` /
+    `surgery_parity_xx_{patch_a_label}_{patch_b_label}`. See
     [](api:build_merge_instruction) and [](api:build_split_instruction)
     for parameters and bookkeeping details.
     """
@@ -2063,21 +2101,20 @@ def get_surgery_stage_circuits(
 
 
 def _cnot_corrections_apply_fn(
-    patches: PatchDict,
+    patches: PatchLayout,
     zz_parity_history,
     xx_parity_history,
     anc_outcome,
     ctrl_patch_label: str,
     tgt_patch_label: str,
-    z_support_ctrl: list,
-    x_support_tgt: list,
 ) -> Frame:
     """Conditional Pauli-frame corrections closing the surgery CNOT.
 
     `Z_L(ctrl)^m_xx` and `X_L(tgt)^(m_zz ^ m_anc)`, with m_zz / m_xx the
     most recent surgery parities in the history and m_anc the ancilla
     patch's destructive logical Z outcome (the immediately preceding
-    instruction).
+    instruction). Support qubits are read from [](api:QECCodePatch.data_qubits)
+    at apply time rather than being supplied at build time.
     """
     m_zz = [m for m in zz_parity_history if m is not None][-1]
     m_xx = [m for m in xx_parity_history if m is not None][-1]
@@ -2089,6 +2126,7 @@ def _cnot_corrections_apply_fn(
     new_patches = patches.copy()
     if z_on_ctrl:
         patch = new_patches[ctrl_patch_label]
+        z_support_ctrl = [patch.data_qubits[i] for i in (0, 4, 8)]
         new_patches[ctrl_patch_label] = patch.copy(
             pauli_frame=_multiply_pauli_into_frame(
                 patch.pauli_frame, z_support_ctrl, "Z"
@@ -2096,6 +2134,7 @@ def _cnot_corrections_apply_fn(
         )
     if x_on_tgt:
         patch = new_patches[tgt_patch_label]
+        x_support_tgt = [patch.data_qubits[i] for i in (2, 4, 6)]
         new_patches[tgt_patch_label] = patch.copy(
             pauli_frame=_multiply_pauli_into_frame(
                 patch.pauli_frame, x_support_tgt, "X"
@@ -2104,7 +2143,10 @@ def _cnot_corrections_apply_fn(
     return Frame(
         {
             "patches": new_patches,
-            "surgery_cnot_corrections": (z_on_ctrl, x_on_tgt),
+            f"surgery_cnot_corrections_{ctrl_patch_label}_{tgt_patch_label}": (
+                z_on_ctrl,
+                x_on_tgt,
+            ),
         }
     )
 
@@ -2112,48 +2154,36 @@ def _cnot_corrections_apply_fn(
 def build_surgery_cnot_corrections_instruction(
     ctrl_patch_label: str,
     tgt_patch_label: str,
-    data_qubits_ctrl: Sequence,
-    data_qubits_tgt: Sequence,
+    anc_patch_label: str,
     name: str = "Surgery CNOT corrections",
 ) -> Instruction:
     """The conditional-correction step of the surgery CNOT.
 
     Must be placed immediately after the ancilla patch's destructive
     `FT Logical Z Measure` (its `logical_measurement` value is read from
-    `history[-1]`); the `surgery_parity_zz` / `surgery_parity_xx` values
-    are taken as the most recent occurrences anywhere in the history.
-    Applies `Z_L(ctrl)^m_xx` (frame Z on the Z_L support D0, D4, D8) and
-    `X_L(tgt)^(m_zz ^ m_anc)` (frame X on the X_L support D2, D4, D6), and
-    records the applied pair under `surgery_cnot_corrections`.
+    `history[-1]`); the `surgery_parity_zz_{ctrl_patch_label}_{anc_patch_label}`
+    / `surgery_parity_xx_{anc_patch_label}_{tgt_patch_label}` values are
+    taken as the most recent occurrences anywhere in the history (matching
+    the M_ZZ(ctrl, anc) / M_XX(anc, tgt) pairing in
+    [](api:build_surgery_cnot_sequence)). Applies `Z_L(ctrl)^m_xx` (frame Z
+    on the Z_L support D0, D4, D8) and `X_L(tgt)^(m_zz ^ m_anc)` (frame X
+    on the X_L support D2, D4, D6), and records the applied pair under
+    `surgery_cnot_corrections_{ctrl_patch_label}_{tgt_patch_label}`.
     """
-
-    def map_qubits_fn(qubit_mapping, z_support_ctrl, x_support_tgt, **kwargs):
-        new_kwargs = kwargs.copy()
-        new_kwargs["z_support_ctrl"] = [
-            qubit_mapping.get(q, q) for q in z_support_ctrl
-        ]
-        new_kwargs["x_support_tgt"] = [
-            qubit_mapping.get(q, q) for q in x_support_tgt
-        ]
-        return new_kwargs
-
     return Instruction(
         _cnot_corrections_apply_fn,
         data={
             "ctrl_patch_label": ctrl_patch_label,
             "tgt_patch_label": tgt_patch_label,
-            "z_support_ctrl": [data_qubits_ctrl[i] for i in (0, 4, 8)],
-            "x_support_tgt": [data_qubits_tgt[i] for i in (2, 4, 6)],
         },
-        map_qubits_fn=map_qubits_fn,
         param_priorities={
             "zz_parity_history": ["history[all]"],
             "xx_parity_history": ["history[all]"],
             "anc_outcome": ["history[-1]"],
         },
         param_aliases={
-            "zz_parity_history": "surgery_parity_zz",
-            "xx_parity_history": "surgery_parity_xx",
+            "zz_parity_history": f"surgery_parity_zz_{ctrl_patch_label}_{anc_patch_label}",
+            "xx_parity_history": f"surgery_parity_xx_{anc_patch_label}_{tgt_patch_label}",
             "anc_outcome": "logical_measurement",
         },
         name=name,
@@ -2261,8 +2291,7 @@ def build_surgery_cnot_sequence(
     corrections = build_surgery_cnot_corrections_instruction(
         ctrl_patch_label,
         tgt_patch_label,
-        qubits_ctrl,
-        qubits_tgt,
+        anc_patch_label,
         name=f"{base_name} corrections",
     )
     entries = [
@@ -2274,18 +2303,12 @@ def build_surgery_cnot_sequence(
     ]
     if mode == "ft":
         repair_zz = build_split_byproduct_repair_instruction(
-            "ZZ",
             ctrl_patch_label,
             anc_patch_label,
-            qubits_ctrl,
-            qubits_anc,
-            seam_qubits_zz,
-            layout,
             num_merge_rounds=num_merge_rounds,
             num_post_split_rounds=num_post_split_rounds,
             fire_rule="b_only",
             defect_decode_mode="matching",
-            circuit_backend=circuit_backend,
             name=f"{base_name} M_ZZ byproduct repair",
         )
         entries.append((repair_zz, None))
@@ -2296,16 +2319,10 @@ def build_surgery_cnot_sequence(
     ]
     if mode == "ft":
         repair_xx = build_split_byproduct_repair_instruction(
-            "XX",
             anc_patch_label,
             tgt_patch_label,
-            qubits_anc,
-            qubits_tgt,
-            seam_qubits_xx,
-            layout,
             num_merge_rounds=num_merge_rounds,
             num_post_split_rounds=num_post_split_rounds,
-            circuit_backend=circuit_backend,
             name=f"{base_name} M_XX byproduct repair",
         )
         entries += [
@@ -2329,10 +2346,10 @@ def build_surgery_cnot_sequence(
 
 
 def _mzz_bell_corrections_apply_fn(
-    patches: PatchDict,
+    patches: PatchLayout,
     zz_parity_history,
+    patch_a_label: str,
     tgt_patch_label: str,
-    x_support_tgt: list,
 ) -> Frame:
     """Conditional Pauli-frame correction closing the M_ZZ Bell prep.
 
@@ -2340,12 +2357,15 @@ def _mzz_bell_corrections_apply_fn(
     history: projecting |+>_L |+>_L onto the m_zz eigenspace of Z_L Z_L
     leaves (|00> + |11>)/sqrt(2) for m_zz = 0 and (|01> + |10>)/sqrt(2)
     for m_zz = 1, so a frame X_L on either patch restores the Bell state.
+    The support qubits are read from [](api:QECCodePatch.data_qubits) at
+    apply time rather than being supplied at build time.
     """
     m_zz = [m for m in zz_parity_history if m is not None][-1]
 
     new_patches = patches.copy()
     if m_zz:
         patch = new_patches[tgt_patch_label]
+        x_support_tgt = [patch.data_qubits[i] for i in (2, 4, 6)]
         new_patches[tgt_patch_label] = patch.copy(
             pauli_frame=_multiply_pauli_into_frame(
                 patch.pauli_frame, x_support_tgt, "X"
@@ -2354,37 +2374,36 @@ def _mzz_bell_corrections_apply_fn(
     return Frame(
         {
             "patches": new_patches,
-            "mzz_bell_correction": m_zz,
+            f"mzz_bell_correction_{patch_a_label}_{tgt_patch_label}": m_zz,
         }
     )
 
 
 def build_split_byproduct_repair_instruction(
-    kind: str,
     patch_a_label: str,
     patch_b_label: str,
-    qubits_a: Sequence,
-    qubits_b: Sequence,
-    seam_qubits: Sequence,
-    layout: str,
     num_merge_rounds: int = 3,
     num_post_split_rounds: int = 3,
     fire_rule: str = "both",
     defect_decode_mode: Literal["heuristic", "matching"] = "heuristic",
-    circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     name: str | None = None,
 ) -> Instruction:
     """Post-split repair of the surgery byproduct (seam-fault FT hole).
 
     Place AFTER at least one QEC block on both patches following the
-    merge/split of the same `kind` and geometry (the QEC block must add
+    merge/split of the same geometry (the QEC block must add
     `num_post_split_rounds` syndrome rounds per patch). Detects the
     grown-check defect signature of a single effective seam-conjugate
     error on the seam qubit whose byproduct flip is NOT compensated by
     the downstream termination decoders, and applies one extra
     byproduct logical Pauli frame, restoring single-fault tolerance of
     the logical correlation in the byproduct-sensitive basis. Records
-    the applied bit under `split_byproduct_repair_{kind.lower()}`.
+    the applied bit under the `repair_key` registered by the matching
+    [](api:build_merge_instruction) call's [](api:PatchRelation) (see
+    below) -- no `kind`/`qubits_a`/`qubits_b`/`seam_qubits`/`layout` here:
+    this instruction has no physical circuit of its own, and reads its
+    bookkeeping (`grown_rows`/`byproduct`/`repair_key`) from that relation
+    instead of independently recomputing `_surgery_metadata`.
 
     `fire_rule` selects the uncompensated signature for the context:
     "both" when both patches get a byproduct-sensitive termination
@@ -2402,68 +2421,43 @@ def build_split_byproduct_repair_instruction(
     independently boundary-match the resulting grown-check defects -
     three net flips (see [](api:_split_byproduct_repair_apply_fn)).
     """
-    meta = _surgery_metadata(
-        kind,
-        patch_a_label,
-        patch_b_label,
-        qubits_a,
-        qubits_b,
-        seam_qubits,
-        layout,
-        circuit_backend,
-    )
     return Instruction(
         _split_byproduct_repair_apply_fn,
         data={
-            "patch_a_label": meta["patch_a_label"],
-            "patch_b_label": meta["patch_b_label"],
-            "grown_rows": [
-                (lbl, check_type, row)
-                for lbl, check_type, row, _ in meta["grown_flips"]
-            ],
-            "byproduct": meta["byproduct"],
+            "patch_a_label": patch_a_label,
+            "patch_b_label": patch_b_label,
             "num_merge_rounds": num_merge_rounds,
             "num_post_split_rounds": num_post_split_rounds,
-            "repair_key": f"split_byproduct_repair_{kind.lower()}",
             "fire_rule": fire_rule,
             "defect_decode_mode": defect_decode_mode,
         },
-        map_qubits_fn=_split_byproduct_repair_map_qubits_fn,
-        name=name or f"Lattice-Surgery {kind} byproduct repair",
+        name=name or "Lattice-Surgery byproduct repair",
     )
 
 
 def build_mzz_bell_corrections_instruction(
+    patch_a_label: str,
     tgt_patch_label: str,
-    data_qubits_tgt: Sequence,
     name: str = "M_ZZ Bell prep corrections",
 ) -> Instruction:
     """The conditional-correction step of the M_ZZ Bell preparation.
 
     Applies `X_L(tgt)^m_zz` (frame X on the X_L support D2, D4, D6), with
-    m_zz the most recent `surgery_parity_zz` value anywhere in the history,
-    and records the applied bit under `mzz_bell_correction`.
+    m_zz the most recent `surgery_parity_zz_{patch_a_label}_{tgt_patch_label}`
+    value anywhere in the history, and records the applied bit under
+    `mzz_bell_correction_{patch_a_label}_{tgt_patch_label}`.
     """
-
-    def map_qubits_fn(qubit_mapping, x_support_tgt, **kwargs):
-        new_kwargs = kwargs.copy()
-        new_kwargs["x_support_tgt"] = [
-            qubit_mapping.get(q, q) for q in x_support_tgt
-        ]
-        return new_kwargs
-
     return Instruction(
         _mzz_bell_corrections_apply_fn,
         data={
+            "patch_a_label": patch_a_label,
             "tgt_patch_label": tgt_patch_label,
-            "x_support_tgt": [data_qubits_tgt[i] for i in (2, 4, 6)],
         },
-        map_qubits_fn=map_qubits_fn,
         param_priorities={
             "zz_parity_history": ["history[all]"],
         },
         param_aliases={
-            "zz_parity_history": "surgery_parity_zz",
+            "zz_parity_history": f"surgery_parity_zz_{patch_a_label}_{tgt_patch_label}",
         },
         name=name,
     )
@@ -2522,8 +2516,8 @@ def build_mzz_bell_prep_sequence(
         name=f"{base_name} M_ZZ",
     )
     corrections = build_mzz_bell_corrections_instruction(
+        patch_a_label,
         patch_b_label,
-        qubits_b,
         name=f"{base_name} corrections",
     )
     return [

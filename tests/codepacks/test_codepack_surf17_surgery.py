@@ -415,7 +415,7 @@ class TestSimplifiedSurgeryZZ:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_x_on_l0 else 0
-        parities = collect_parities(results, "surgery_parity_zz")
+        parities = collect_parities(results, "surgery_parity_zz_L0_L1")
         assert parities == [[expected]] * NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -454,7 +454,7 @@ class TestSimplifiedSurgeryZZ:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        pairs = collect_parities(results, "surgery_parity_zz")
+        pairs = collect_parities(results, "surgery_parity_zz_L0_L1")
         assert all(len(p) == 2 and p[0] == p[1] for p in pairs)
         ms = [p[0] for p in pairs]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # both branches appear
@@ -493,7 +493,7 @@ class TestSimplifiedSurgeryZZ:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # |++> gives a random m_ZZ
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -530,7 +530,7 @@ class TestSimplifiedSurgeryXX:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_z_on_l0 else 0
-        parities = collect_parities(results, "surgery_parity_xx")
+        parities = collect_parities(results, "surgery_parity_xx_L0_L1")
         assert parities == [[expected]] * NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -568,7 +568,7 @@ class TestSimplifiedSurgeryXX:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        pairs = collect_parities(results, "surgery_parity_xx")
+        pairs = collect_parities(results, "surgery_parity_xx_L0_L1")
         assert all(len(p) == 2 and p[0] == p[1] for p in pairs)
         ms = [p[0] for p in pairs]
         assert 0 < sum(ms) < NUM_STIM_SHOTS
@@ -602,7 +602,7 @@ class TestSimplifiedSurgeryXX:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_xx")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_xx_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # |00> gives a random m_XX
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -656,10 +656,10 @@ class TestSimplifiedSurgeryBell:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        assert collect_parities(results, "surgery_parity_zz") == (
+        assert collect_parities(results, "surgery_parity_zz_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
-        assert collect_parities(results, "surgery_parity_xx") == (
+        assert collect_parities(results, "surgery_parity_xx_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
 
@@ -693,7 +693,7 @@ class TestFTSurgery:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_x_on_l0 else 0
-        assert collect_parities(results, "surgery_parity_zz") == (
+        assert collect_parities(results, "surgery_parity_zz_L0_L1") == (
             [[expected]] * NUM_STIM_SHOTS
         )
         logicals = results.collect_shot_data(
@@ -727,7 +727,7 @@ class TestFTSurgery:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_z_on_l0 else 0
-        assert collect_parities(results, "surgery_parity_xx") == (
+        assert collect_parities(results, "surgery_parity_xx_L0_L1") == (
             [[expected]] * NUM_STIM_SHOTS
         )
         logicals = results.collect_shot_data(
@@ -770,10 +770,10 @@ class TestFTSurgery:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        assert collect_parities(results, "surgery_parity_zz") == (
+        assert collect_parities(results, "surgery_parity_zz_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
-        assert collect_parities(results, "surgery_parity_xx") == (
+        assert collect_parities(results, "surgery_parity_xx_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
 
@@ -817,7 +817,7 @@ class TestFTSurgery:
             (meas, "L1"),
         ]
         base_program = make_stim_program(layout, stack, all_q)
-        parity_key = f"surgery_parity_{kind.lower()}"
+        parity_key = f"surgery_parity_{kind.lower()}_L0_L1"
         sweep_targets = [
             (seq[0], 7),   # seam prep
             (seq[1], 8),   # SE round 1
@@ -892,7 +892,7 @@ class TestParityReadoutConsistencyA:
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         parities = [
             p[0]
-            for p in collect_parities(results, f"surgery_parity_{kind.lower()}")
+            for p in collect_parities(results, f"surgery_parity_{kind.lower()}_L0_L1")
         ]
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1075,7 +1075,7 @@ class TestSurgeryDenseSmoke:
             patch_types={"SURF": code},
         )
         results = program.run(num_shots=NUM_KRAUS_SHOTS, verbose=False)
-        parities = collect_parities(results, "surgery_parity_zz")
+        parities = collect_parities(results, "surgery_parity_zz_L0_L1")
         assert parities == [[0]] * NUM_KRAUS_SHOTS
 
 
@@ -1128,7 +1128,7 @@ class TestMzzBellPrep:
         stack = self.bell_prep_stack(layout, q0, q1, all_q, mode, "Z")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # both branches appear
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1143,7 +1143,7 @@ class TestMzzBellPrep:
         stack = self.bell_prep_stack(layout, q0, q1, all_q, mode, "X")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1158,9 +1158,9 @@ class TestMzzBellPrep:
         stack = self.bell_prep_stack(layout, q0, q1, all_q, mode, "Z")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         corrections = results.collect_shot_data(
-            "mzz_bell_correction", "all", strip_none_entries=True
+            "mzz_bell_correction_L0_L1", "all", strip_none_entries=True
         )
         assert [c[0] for c in corrections] == ms
 
@@ -1208,7 +1208,7 @@ class TestMzzFaultTolerance:
             "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode=mode
         )
         corrections = surgery.build_mzz_bell_corrections_instruction(
-            "L1", q1[:9]
+            "L0", "L1"
         )
         # Z round 0 is random after |+> prep -> guarded_diff. X round 0
         # is deterministic -> kept as a detector layer ("raw", the split
@@ -1241,7 +1241,7 @@ class TestMzzFaultTolerance:
         ]
         if mode == "ft":
             repair = surgery.build_split_byproduct_repair_instruction(
-                "ZZ", "L0", "L1", q0, q1, SEAMS, layout,
+                "L0", "L1",
                 num_post_split_rounds=3,
             )
             stack.append((repair, None))
@@ -1399,7 +1399,7 @@ class TestSurgeryCnotFaultTolerance:
             "XX", "ANC", "T", qa, qt, seams_h, layout, mode=mode
         )
         corrections = surgery.build_surgery_cnot_corrections_instruction(
-            "C", "T", qc, qt
+            "C", "T", "ANC"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
@@ -1420,7 +1420,7 @@ class TestSurgeryCnotFaultTolerance:
             stack.append(
                 (
                     surgery.build_split_byproduct_repair_instruction(
-                        "ZZ", "C", "ANC", qc, qa, seams_v, layout,
+                        "C", "ANC",
                         fire_rule="b_only",
                         defect_decode_mode="matching",
                     ),
@@ -1436,7 +1436,7 @@ class TestSurgeryCnotFaultTolerance:
                 ("QEC", "T"),
                 (
                     surgery.build_split_byproduct_repair_instruction(
-                        "XX", "ANC", "T", qa, qt, seams_h, layout
+                        "ANC", "T"
                     ),
                     None,
                 ),

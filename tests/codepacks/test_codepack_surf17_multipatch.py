@@ -413,9 +413,7 @@ class TestTransversalCnot:
         cnot_circ = multipatch.build_transversal_cnot_circuit_instruction(
             q0[:9], q1[:9]
         )
-        cnot_book = multipatch.build_cnot_bookkeeping_instruction(
-            "L0", "L1", q0[:9], q1[:9]
-        )
+        cnot_book = multipatch.build_cnot_bookkeeping_instruction("L0", "L1")
 
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
@@ -573,7 +571,7 @@ class TestJointParity:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         parities = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         expected = 1 if logical_x_on_l0 else 0
         assert parities == [[expected]] * NUM_STIM_SHOTS
@@ -589,10 +587,10 @@ class TestJointParity:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         zz = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         xx = results.collect_shot_data(
-            "joint_parity_xx", "all", strip_none_entries=True
+            "joint_parity_xx_L0_L1", "all", strip_none_entries=True
         )
         assert zz == [[0]] * NUM_STIM_SHOTS
         assert xx == [[0]] * NUM_STIM_SHOTS
@@ -608,7 +606,7 @@ class TestJointParity:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         zz = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         per_shot = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -712,10 +710,10 @@ class TestDenseBackendSmoke:
         )
         results = program.run(num_shots=NUM_KRAUS_SHOTS, verbose=False)
         zz = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         xx = results.collect_shot_data(
-            "joint_parity_xx", "all", strip_none_entries=True
+            "joint_parity_xx_L0_L1", "all", strip_none_entries=True
         )
         assert zz == [[0]] * NUM_KRAUS_SHOTS
         assert xx == [[0]] * NUM_KRAUS_SHOTS

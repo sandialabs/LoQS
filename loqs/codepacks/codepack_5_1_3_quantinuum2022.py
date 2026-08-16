@@ -49,7 +49,7 @@ from loqs.core.instructions.instructionlabel import (
 )
 from loqs.core.instructions.instructionstack import InstructionStack
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.syndromelabel import SyndromeLabel
 import loqs.tools.qectools as qt
 
@@ -296,7 +296,7 @@ def create_qec_code(
     def H_permutation_apply_fn(
         patch_label: str,
         mapping: Mapping[str | int, str | int],
-        patches: PatchDict,
+        patches: PatchLayout,
     ) -> Frame:
         assert (
             patch_label in patches
@@ -447,7 +447,7 @@ def create_qec_code(
     # We can define a new operation here which post processes the measurement outcomes of Raw Logical * Measure
     def nonft_logical_meas_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         measurement_outcomes: MeasurementOutcomes,
     ) -> Frame:
         """Apply function for non-fault-tolerant logical measurement.
@@ -464,7 +464,7 @@ def create_qec_code(
         ----------
         patch_label : str
             Label of the patch being measured.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing Pauli frame information for
             tracking Pauli corrections.
         measurement_outcomes : MeasurementOutcomes
@@ -774,7 +774,7 @@ def _create_adaptive_measure_instruction(
     # More details can also be found in Appendix B.2 of arxiv: 1705.02329
     def classical_decoder_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         measurement_outcomes: MeasurementOutcomes,
         flagged_check: str | None,
         flagged_check_order: list[int] | None,
@@ -794,7 +794,7 @@ def _create_adaptive_measure_instruction(
         ----------
         patch_label : str
             Label of the patch being decoded.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing Pauli frame information for
             tracking Pauli corrections.
         measurement_outcomes : MeasurementOutcomes
@@ -1038,7 +1038,7 @@ def _create_adaptive_measure_instruction_part_I(
 
     def partI_feedforward_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         stack: InstructionStack,
         measurement_outcomes: MeasurementOutcomes,
         qubits: list[str],
@@ -1060,7 +1060,7 @@ def _create_adaptive_measure_instruction_part_I(
         ----------
         patch_label : str
             Label of the patch being measured.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing Pauli frame information for
             tracking Pauli corrections.
         stack : InstructionStack
@@ -1228,7 +1228,7 @@ def _create_adaptive_measure_instruction_part_II(
 
     def partII_feedforward_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         stack: InstructionStack,
         measurement_outcomes: MeasurementOutcomes,
         qubits: list[str],
@@ -1249,7 +1249,7 @@ def _create_adaptive_measure_instruction_part_II(
         ----------
         patch_label : str
             Label of the patch being measured.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing Pauli frame information.
         stack : InstructionStack
             Current instruction stack for feedforward operations that will
@@ -1434,7 +1434,7 @@ def _create_adaptive_measure_instruction_part_III(
 
     def partIII_feedforward_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         stack: InstructionStack,
         measurement_outcomes: MeasurementOutcomes,
         qubits: list[str],
@@ -1460,7 +1460,7 @@ def _create_adaptive_measure_instruction_part_III(
         ----------
         patch_label : str
             Label of the patch being measured.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing Pauli frame information.
         stack : InstructionStack
             Current instruction stack for feedforward operations that will
@@ -1809,7 +1809,7 @@ def _create_unflagged_QEC_instruction(
     # TODO: Generalize the lookup decoder builder to deal with syndrome in patch
     def unflagged_decoder_apply_fn(
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
     ) -> Frame:
         if isinstance(syndrome_outcomes, MeasurementOutcomes):
