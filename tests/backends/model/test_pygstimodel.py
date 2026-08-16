@@ -389,13 +389,13 @@ class TestGetInstrumentRep:
             _build_explicit_model(), use_time_dependence=True
         )
         pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         checked = set(pgm._dense_embedding_checked_inst_keys)
         assert checked
 
         rep = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         assert isinstance(rep, ZBasisOutcomeOperationDictInstrumentRep)
         assert pgm._dense_embedding_checked_inst_keys == checked
@@ -810,7 +810,7 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(model)
 
         rep = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         assert set(rep.outcome_ops.keys()) == {"a", "b"}
         assert rep.outcome_qubits == ("Q0",)
