@@ -38,12 +38,39 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
     This is intended to be an immutable list of [](api:InstructionLabel)
     objects to execute. Stack manipulations return a modified copy.
 
+    Each entry is cast through [](api:InstructionLabel.from_raw), so a
+    stack can freely mix every supported raw shape: a bare global
+    instruction name, the succinct `(instruction, patch_label)` 2-tuple,
+    a full dict for anything needing more (extra kwargs, or multiple
+    patches via `"patch_labels"`).
+
     Examples
     --------
     >>> from loqs.core.instructions import InstructionStack
-    >>> stack = InstructionStack([("Init State", "L0")])
+    >>> stack = InstructionStack([
+    ...     "Init State",                                 # bare global instruction
+    ...     ("H", "L0"),                                   # tuple sugar, single patch
+    ...     {
+    ...         "instruction": "FT Logical X Measure Classical Decoder",
+    ...         "patch_label": "L0",
+    ...         "flagged_check": "XZIIZ",
+    ...         "flagged_check_order": [4, 0, 1],
+    ...     },                                              # dict, single patch + extra kwargs
+    ...     {
+    ...         "instruction": "CNOT Bookkeeping",
+    ...         "patch_labels": {"ctrl": "L0", "tgt": "L1"},
+    ...     },                                              # dict, multi-patch
+    ... ])
     >>> len(stack)
-    1
+    4
+    >>> stack[0]["instruction"]
+    'Init State'
+    >>> stack[1]["patch_label"]
+    'L0'
+    >>> stack[2]["flagged_check"]
+    'XZIIZ'
+    >>> stack[3]["patch_labels"]
+    {'ctrl': 'L0', 'tgt': 'L1'}
     """
 
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
@@ -79,16 +106,15 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
             return
 
         # If we are here, we are a sequence of some kind. A tuple is always
-        # one InstructionLabel's own flat positional args (matching
-        # InstructionLabelLike's tuple variants); anything else (e.g. a
-        # list) is a sequence of raw items to convert individually. This
-        # can't instead be decided by inspecting instructions[0]'s type, as
-        # done previously: a list of multiple bare Instruction/str labels
-        # (e.g. ["LabelA", "LabelB"]) would then be misread as one
-        # InstructionLabel's own args, silently dropping every entry past
-        # the first two.
+        # one InstructionLabel's own raw form (matching InstructionLabelLike's
+        # tuple sugar); anything else (e.g. a list) is a sequence of raw
+        # items to convert individually. This can't instead be decided by
+        # inspecting instructions[0]'s type, as done previously: a list of
+        # multiple bare Instruction/str labels (e.g. ["LabelA", "LabelB"])
+        # would then be misread as one InstructionLabel's own raw form,
+        # silently dropping every entry past the first two.
         if isinstance(instructions, tuple):
-            self._instructions = [InstructionLabel(*instructions)]  # type: ignore
+            self._instructions = [InstructionLabel.from_raw(instructions)]
             return
 
         for inst in instructions:

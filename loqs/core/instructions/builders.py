@@ -98,9 +98,12 @@ def build_composite_instruction(
 
     The apply function takes:
 
-    - `patch_label`, usually from the [](api:InstructionLabel.patch_label)
     - `stack`, usually from the QuantumProgram
     - `instructions`, usually from the [](api:Instruction.data)
+    - any other kwarg a nested instruction needs (e.g. `patch_label`,
+      `patch_labels`, `model`), pulled up from the nested instructions'
+      own declared parameters -- see the `param_priorities` construction
+      below
 
     It returns a [](api:Frame) where `instructions` have been inserted
     onto the front of InstructionStack stored at `"stack"`.
@@ -130,18 +133,17 @@ def build_composite_instruction(
     ...     name="Composite"
     ... )
     >>> stack = InstructionStack([])
-    >>> f = inst.apply(patch_label="L0", stack=stack, instructions=inst.data["instructions"])
+    >>> f = inst.apply(stack=stack, instructions=inst.data["instructions"])
     >>> f_stack = f["stack"]
     >>> len(f_stack)
     2
-    >>> f_stack[0].inst_label
+    >>> f_stack[0]["instruction"]
     'DummyGate1'
-    >>> f_stack[1].inst_label
+    >>> f_stack[1]["instruction"]
     'DummyGate2'
     """
 
     def apply_fn(
-        patch_label: str | None,
         stack: InstructionStack,
         instructions: Sequence[Instruction | InstructionLabel],
         **kwargs,
@@ -152,14 +154,15 @@ def build_composite_instruction(
 
         Parameters
         ----------
-        patch_label : str | None
-            Patch label for the instruction.
         stack : InstructionStack
             Current instruction stack.
         instructions : Sequence[Instruction | InstructionLabel]
             Instructions to insert into the stack.
         **kwargs
-            Additional keyword arguments for the instructions.
+            Additional keyword arguments for the instructions (e.g.
+            `patch_label`, `patch_labels`, `model`) -- forwarded to every
+            nested instruction uniformly, with no special-casing of any
+            particular key.
 
         Returns
         -------
@@ -168,25 +171,16 @@ def build_composite_instruction(
         """
         for i, inst_or_label in enumerate(instructions):
             if isinstance(inst_or_label, Instruction):
-                new_label = InstructionLabel(
-                    inst_or_label, patch_label, inst_kwargs=kwargs
-                )
+                new_label = InstructionLabel(inst_or_label, **kwargs)
             else:
                 inst_or_label = InstructionLabel.from_raw(inst_or_label)
-                new_kwargs = kwargs.copy()
-                new_kwargs.update(inst_or_label.inst_kwargs)
-                first_entry = (
-                    inst_or_label.instruction
-                    if inst_or_label.instruction is not None
-                    else inst_or_label.inst_label
-                )
-                assert first_entry is not None
-                new_label = InstructionLabel(
-                    first_entry,
-                    inst_or_label.patch_label,
-                    inst_or_label.inst_args,
-                    new_kwargs,
-                )
+                # Exclude "instruction" -- it's re-supplied positionally
+                # below, so keeping it here would duplicate the argument.
+                nested_kwargs = {
+                    k: v for k, v in inst_or_label.items() if k != "instruction"
+                }
+                merged = {**kwargs, **nested_kwargs}
+                new_label = InstructionLabel(inst_or_label["instruction"], **merged)
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
@@ -216,18 +210,18 @@ def build_composite_instruction(
     param_priorities = {k: DEFAULT_PRIORITIES for k in data.keys()}
 
     # Pull in the parameter priorities of any already-resolved underlying
-    # instructions, so a kwarg meant for a nested instruction (e.g. a
-    # per-call "model" override) is actually collected here and forwarded
-    # via apply_fn's **kwargs above, instead of being silently dropped
-    # before apply_fn even runs. Reserved keys are managed internally by
-    # this composite and are not overridden by a nested instruction.
-    reserved_keys = {"patch_label", "stack", "instructions", "patches"} | data.keys()
+    # instructions, so a kwarg meant for a nested instruction (e.g.
+    # "patch_label"/"patch_labels"/"model") is actually collected here and
+    # forwarded via apply_fn's **kwargs, instead of being silently dropped.
+    reserved_keys = {"stack", "instructions", "patches"} | data.keys()
     for inst_or_label in instructions:
-        sub_instruction = (
-            inst_or_label
-            if isinstance(inst_or_label, Instruction)
-            else InstructionLabel.from_raw(inst_or_label).instruction
-        )
+        if isinstance(inst_or_label, Instruction):
+            sub_instruction: Instruction | None = inst_or_label
+        else:
+            raw_instruction = InstructionLabel.from_raw(inst_or_label)["instruction"]
+            sub_instruction = (
+                raw_instruction if isinstance(raw_instruction, Instruction) else None
+            )
         if sub_instruction is None:
             continue  # A lazily-resolved string label; nothing to pull yet
         for key, priorities in sub_instruction.param_priorities.items():
@@ -628,18 +622,21 @@ def build_patch_builder_instruction(
     This is a sort of meta-instruction that can build `QECCodePatch`
     objects and then store them into the main `PatchDict`.
     The qubit labels for the new patch should typically be provided
-    in the `InstrumentLabel` as args or kwargs.
+    in the `InstructionLabel` as kwargs.
 
     The apply function takes:
 
-    - `patch_label`, usually taken from `InstructionLabel`
+    - `new_patch_label`, usually taken from `InstructionLabel`. Not called
+      `patch_label` since this instruction is always invoked globally
+      (routing `patch_label` is `None`) -- this names the new patch being
+      created, not the patch the instruction itself resolves against.
     - `qubits`, usually taken from `InstructionLabel`
     - `qec_code`, usually taken from `Instruction.data`
     - `patches`, usually taken from the previous frame,
       but can be taken from `Instruction.data` as a default fallback
 
     It returns a `Frame` with an updated `patches` containing the new
-    `QECCodePatch` under `patch_label`.
+    `QECCodePatch` under `new_patch_label`.
 
     The parameter priorities for `patches` are not default,
     because we want to prioritize a true `PatchDict` from
@@ -666,7 +663,7 @@ def build_patch_builder_instruction(
     >>> inst = build_patch_builder_instruction(qec_code=code, name="PatchBuilder")
     >>> inst.name
     'PatchBuilder'
-    >>> f = inst.apply(patch_label="L0", qubits=["Q0", "Q1"], qec_code=code, patches=None)
+    >>> f = inst.apply(new_patch_label="L0", qubits=["Q0", "Q1"], qec_code=code, patches=None)
     >>> patches = f["patches"]
     >>> "L0" in patches
     True
@@ -676,7 +673,7 @@ def build_patch_builder_instruction(
 
     # Standard apply_fn construction
     def apply_fn(
-        patch_label: str,
+        new_patch_label: str,
         qubits: Sequence[str],
         qec_code: QECCode,
         patches: PatchDict | None,
@@ -687,7 +684,7 @@ def build_patch_builder_instruction(
 
         Parameters
         ----------
-        patch_label : str
+        new_patch_label : str
             Label for the new patch.
         qubits : Sequence[str]
             List of qubit labels for the new patch.
@@ -709,17 +706,17 @@ def build_patch_builder_instruction(
         # Disjoint patch checks
         assert all(
             [q not in all_patch_qubits for q in qubits]
-        ), f"Patch builder failed, requesting overlapping patches for {patch_label}"
+        ), f"Patch builder failed, requesting overlapping patches for {new_patch_label}"
         assert (
-            patch_label not in patches
-        ), f"Patch builder failed, already have existing patch {patch_label}"
+            new_patch_label not in patches
+        ), f"Patch builder failed, already have existing patch {new_patch_label}"
 
         try:
             patch = qec_code.create_patch(qubits)
         except Exception as e:
             raise ValueError("Failed to create patch in patch builder") from e
 
-        patches[patch_label] = patch
+        patches[new_patch_label] = patch
 
         return Frame({"patches": patches})
 
@@ -745,15 +742,18 @@ def build_patch_remover_instruction(
 
     This is a sort of meta-instruction that can remove patches
     from the main `PatchDict`. The patch label should typically
-    be provided in the `InstrumentLabel` as args or kwargs.
+    be provided in the `InstructionLabel` as a kwarg.
 
     The apply function takes:
 
-    - `patch_label`, usually taken from `InstructionLabel`
+    - `del_patch_label`, usually taken from `InstructionLabel`. Not called
+      `patch_label` since this instruction is always invoked globally
+      (routing `patch_label` is `None`) -- this names the patch being
+      removed, not the patch the instruction itself resolves against.
     - `patches`, usually taken from the previous frame
 
     It returns a `Frame` with an updated `patches` without the
-    `QECCodePatch` under `patch_label`.
+    `QECCodePatch` under `del_patch_label`.
 
     Parameters
     ----------
@@ -775,13 +775,13 @@ def build_patch_remover_instruction(
     >>> code = QECCode({}, ["q0"], ["q0"])
     >>> patch = QECCodePatch(code, ["Q0"], "I")
     >>> patches = PatchDict({"L0": patch})
-    >>> f = inst.apply(patch_label="L0", patches=patches)
+    >>> f = inst.apply(del_patch_label="L0", patches=patches)
     >>> "L0" in f["patches"]
     False
     """
 
     def apply_fn(
-        patch_label: str,
+        del_patch_label: str,
         patches: PatchDict,
     ) -> Frame:
         """Apply patch remover instruction.
@@ -790,7 +790,7 @@ def build_patch_remover_instruction(
 
         Parameters
         ----------
-        patch_label : str
+        del_patch_label : str
             Label of the patch to remove.
         patches : PatchDict
             Dictionary of patches to remove from.
@@ -801,10 +801,10 @@ def build_patch_remover_instruction(
             Frame containing the updated patches dictionary.
         """
         assert (
-            patch_label in patches
-        ), f"Patch remover failed, could not find patch {patch_label}"
+            del_patch_label in patches
+        ), f"Patch remover failed, could not find patch {del_patch_label}"
 
-        del patches[patch_label]
+        del patches[del_patch_label]
 
         return Frame({"patches": patches})
 
@@ -1287,7 +1287,7 @@ def build_repeat_until_success_instruction(
 
         # Create a new RUS label with updated count
         rus_label = InstructionLabel(
-            rus_key, patch_label, None, {"repeat_count": repeat_count}
+            rus_key, patch_label=patch_label, repeat_count=repeat_count
         )
         new_labels.append(rus_label)
 

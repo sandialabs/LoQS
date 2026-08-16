@@ -152,8 +152,8 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
         instruction_stack.extend(prep_instructions)
     for r in range(num_rounds):
         for i in range(num_qubits - 1):
-            instruction_stack.append(InstructionLabel(f"zz_check_{i}", "global"))
-            instruction_stack.append(InstructionLabel(f"xx_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"zz_check_{i}", patch_label="global"))
+            instruction_stack.append(InstructionLabel(f"xx_check_{i}", patch_label="global"))
 
     qubit_labels = [f"d{i}" for i in range(num_qubits)] + [f"a{i}" for i in range(num_qubits - 1)]
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=2)
@@ -174,25 +174,25 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
 def run_and_report_program(program_creator, d=2):
     prep_states = {
         "|00>": [],
-        "|11>": [InstructionLabel("x_d0", "global"), InstructionLabel("x_d1", "global")],
-        "|++>": [InstructionLabel("h_d0", "global"), InstructionLabel("h_d1", "global")],
+        "|11>": [InstructionLabel("x_d0", patch_label="global"), InstructionLabel("x_d1", patch_label="global")],
+        "|++>": [InstructionLabel("h_d0", patch_label="global"), InstructionLabel("h_d1", patch_label="global")],
         "|-->": [
-            InstructionLabel("x_d0", "global"), InstructionLabel("h_d0", "global"),
-            InstructionLabel("x_d1", "global"), InstructionLabel("h_d1", "global")
+            InstructionLabel("x_d0", patch_label="global"), InstructionLabel("h_d0", patch_label="global"),
+            InstructionLabel("x_d1", patch_label="global"), InstructionLabel("h_d1", patch_label="global")
         ],
-        "|01>": [InstructionLabel("x_d1", "global")],
+        "|01>": [InstructionLabel("x_d1", patch_label="global")],
         "|+->": [
-            InstructionLabel("h_d0", "global"),
-            InstructionLabel("x_d1", "global"), InstructionLabel("h_d1", "global")
+            InstructionLabel("h_d0", patch_label="global"),
+            InstructionLabel("x_d1", patch_label="global"), InstructionLabel("h_d1", patch_label="global")
         ],
-        "|1+>": [InstructionLabel("x_d0", "global"), InstructionLabel("h_d1", "global")],
+        "|1+>": [InstructionLabel("x_d0", patch_label="global"), InstructionLabel("h_d1", patch_label="global")],
         "|Psi->": [
-            InstructionLabel("x_d0", "global"),
-            InstructionLabel("h_d0", "global"),
-            InstructionLabel("h_d1", "global"),
-            InstructionLabel("gcphase_d0_d1", "global"),
-            InstructionLabel("h_d1", "global"),
-            InstructionLabel("x_d1", "global")
+            InstructionLabel("x_d0", patch_label="global"),
+            InstructionLabel("h_d0", patch_label="global"),
+            InstructionLabel("h_d1", patch_label="global"),
+            InstructionLabel("gcphase_d0_d1", patch_label="global"),
+            InstructionLabel("h_d1", patch_label="global"),
+            InstructionLabel("x_d1", patch_label="global")
         ]
     }
 
@@ -313,8 +313,8 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
         instruction_stack.extend(prep_instructions)
     for r in range(num_rounds):
         for i in range(num_qubits - 1):
-            instruction_stack.append(InstructionLabel(f"zz_check_{i}", "global"))
-            instruction_stack.append(InstructionLabel(f"xx_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"zz_check_{i}", patch_label="global"))
+            instruction_stack.append(InstructionLabel(f"xx_check_{i}", patch_label="global"))
 
     qubit_labels = [f"d{i}" for i in range(num_qubits)] + [f"a{i}" for i in range(num_qubits - 1)]
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=3)
@@ -454,8 +454,8 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
         instruction_stack.extend(prep_instructions)
     for r in range(num_rounds):
         for i in range(num_qubits - 1):
-            instruction_stack.append(InstructionLabel(f"zz_check_{i}", "global"))
-            instruction_stack.append(InstructionLabel(f"xx_check_{i}", "global"))
+            instruction_stack.append(InstructionLabel(f"zz_check_{i}", patch_label="global"))
+            instruction_stack.append(InstructionLabel(f"xx_check_{i}", patch_label="global"))
 
     qubit_labels = [f"d{i}" for i in range(num_qubits)] + [f"a{i}" for i in range(num_qubits - 1)]
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=3)

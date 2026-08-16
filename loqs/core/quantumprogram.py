@@ -622,10 +622,10 @@ class QuantumProgram(Displayable):
 
             inst_label, stack = stack.pop_instruction()
 
-            # Collect data the label can give
-            patch_label = inst_label.patch_label
-            label_args = inst_label.inst_args
-            label_kwargs = inst_label.inst_kwargs
+            # The label itself is the "label" priority's kwarg source --
+            # every key it carries is a candidate value, keyed by name only.
+            patch_label = inst_label.get("patch_label")
+            label_kwargs = inst_label
 
             try:
                 last_frame: Frame = history[-1]
@@ -645,17 +645,13 @@ class QuantumProgram(Displayable):
 
             # Collect all arguments needed by apply_fn
             apply_kwargs = {}
-            for i, (key, priorities) in enumerate(
-                inst.param_priorities.items()
-            ):
+            for key, priorities in inst.param_priorities.items():
                 try:
                     apply_kwargs[key] = program._collect_kwarg(
-                        position=i,
                         key=inst.param_alias(
                             key
                         ),  # Unalias for expected frame key
                         priorities=priorities,
-                        label_args=label_args,
                         label_kwargs=label_kwargs,
                         instruction_data=inst.data,
                         program_data=program_data,
@@ -700,13 +696,15 @@ class QuantumProgram(Displayable):
 
         This function has the following logic:
 
-        1. If [](api:InstructionLabel.instruction) is not `None`, return it
-        2. If `inst_lbl.patch_label` is `None`, check for `inst_lbl.inst_name`
-           in [](api:global_instructions). Return it if there, error if not
+        1. If `inst_lbl["instruction"]` is already an [](api:Instruction),
+           return it
+        2. If `inst_lbl.get("patch_label")` is `None`, check for the
+           `"instruction"` name in [](api:global_instructions). Return it
+           if there, error if not
         3. Otherwise, we must be from a [](api:QECCodePatch). Look up the
            [](api:PatchDict) via `"patches"` in the provided frame, and
-           check for `inst_lbl.inst_name` in the patch. Return if there,
-           error if anything goes wrong along the way
+           check for the `"instruction"` name in the patch. Return if
+           there, error if anything goes wrong along the way
 
         Parameters
         ----------
@@ -727,16 +725,27 @@ class QuantumProgram(Displayable):
         assert isinstance(inst_lbl, InstructionLabel)
         ilbl = inst_lbl
 
-        if ilbl.instruction is not None:
-            return ilbl.instruction
+        inst_or_name = ilbl["instruction"]
+        if isinstance(inst_or_name, Instruction):
+            return inst_or_name
+        inst_name = inst_or_name
 
-        # If we are here, we need the inst_label to resolve
-        assert ilbl.inst_label is not None
+        patch_label = ilbl.get("patch_label")
+
+        # A Mapping means a multi-patch label ("patch_labels"): name-based
+        # resolution isn't meaningful there, only an already-built Instruction is.
+        if isinstance(patch_label, Mapping):
+            raise RuntimeError(
+                f"Cannot resolve a named instruction ({inst_name!r}) against "
+                f"multiple patch labels ({patch_label!r}) -- multi-patch "
+                "instructions must be given as an already-built Instruction, "
+                "not a name to look up."
+            )
 
         # First check global
-        if ilbl.patch_label is None:
+        if patch_label is None:
             try:
-                inst = copy.deepcopy(self.global_instructions[ilbl.inst_label])
+                inst = copy.deepcopy(self.global_instructions[inst_name])
             except KeyError:
                 raise RuntimeError(
                     f"Could not resolve global instruction from {ilbl}"
@@ -753,27 +762,25 @@ class QuantumProgram(Displayable):
             )
 
         try:
-            patch = patchdict.patches[ilbl.patch_label]
+            patch = patchdict.patches[patch_label]
         except KeyError:
             raise RuntimeError(
-                f"Patch {ilbl.patch_label} not available for resolving {ilbl}"
+                f"Patch {patch_label} not available for resolving {ilbl}"
             )
 
         try:
-            inst = patch[ilbl.inst_label]
+            inst = patch[inst_name]
         except KeyError:
             raise RuntimeError(
-                f"{ilbl.inst_label} not available in patch for resolving {ilbl}"
+                f"{inst_name} not available in patch for resolving {ilbl}"
             )
 
         return inst
 
     @staticmethod
     def _collect_kwarg(  # noqa: C901
-        position: int,
         key: str,
         priorities: Sequence[str],
-        label_args: tuple[object],
         label_kwargs: Mapping[str, object],
         instruction_data: Mapping[str, object],
         program_data: Mapping[str, object],
@@ -790,12 +797,10 @@ class QuantumProgram(Displayable):
         There are five locations this function can source information.
 
         - `"label"`: This means the information should come from the
-          [](api:InstrumentLabel). First, the [](api:InstrumentLabel.inst_args)
-          as passed in by `label_args` is checked. The `position`-th entry
-          is returned if available, or we continue if not. Next, the
-          [](api:InstrumentLabel.inst_kwargs) as passed in by `label_kwargs`
-          are checked. Return the entry corresponding to `key`,
-          or continue if not available.
+          [](api:InstructionLabel) itself, as passed in by `label_kwargs`.
+          Return the entry corresponding to `key` if available, or
+          continue if not. Every apply_fn parameter is looked up by name
+          only -- there is no positional slot to check first.
         - `"instruction"`: This means the information should come from the
           [](api:Instruction.data) as passed in by `instruction_data`.
           Return it if available, continue if not.
@@ -822,7 +827,7 @@ class QuantumProgram(Displayable):
 
         - "history": The current [](api:History) object being built by
             [](api:run).
-        - "patch_label": The [](api:InstrumentLabel.patch_label)
+        - "patch_label": The resolved [](api:InstructionLabel)'s `"patch_label"` entry
         - "stack": The current [](api:InstructionStack) object being
             read by [](api:run).
         - "seed": The shot of the seed, as [](api:default_base_seed)
@@ -836,9 +841,6 @@ class QuantumProgram(Displayable):
 
         Parameters
         ----------
-        position:
-            The position of the object in `label_args`
-
         key:
             The key of the object in `label_kwargs`, `instruction_data`,
             and `program_data`
@@ -849,11 +851,8 @@ class QuantumProgram(Displayable):
             This determines the order in which the different data sources
             are tried.
 
-        label_args:
-            The [](api:InstructionLabel.inst_args) to check
-
         label_kwargs:
-            The [](api:InstructionLabel.inst_kwargs) to check
+            The [](api:InstructionLabel) itself to check
 
         instruction_data:
             The [](api:Instruction.data) to check
@@ -875,12 +874,7 @@ class QuantumProgram(Displayable):
         """
         for priority in priorities:
             if priority == "label":
-                # Check label args and kwargs
-                # Args first
-                if position < len(label_args):
-                    return label_args[position]
-
-                # Now kwargs
+                # Check the label itself
                 if key in label_kwargs:
                     return label_kwargs[key]
             elif priority == "instruction":
@@ -888,6 +882,10 @@ class QuantumProgram(Displayable):
                 if key in instruction_data:
                     return instruction_data[key]
             elif priority == "patch_data":
+                # FUTURE WORK: only auto-sources from a single named patch.
+                # Per-named-patch sourcing for a "patch_labels" mapping
+                # (e.g. a "patch_data[ctrl]" priority) is not implemented yet.
+
                 # Extract patch_label from program_data
                 patch_label = program_data.get("patch_label", None)
                 if patch_label is None:
