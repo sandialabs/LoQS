@@ -215,12 +215,36 @@ def build_composite_instruction(
     # Make sure all extra data gets pulled in
     param_priorities = {k: DEFAULT_PRIORITIES for k in data.keys()}
 
+    # Pull in the parameter priorities of any already-resolved underlying
+    # instructions, so a kwarg meant for a nested instruction (e.g. a
+    # per-call "model" override) is actually collected here and forwarded
+    # via apply_fn's **kwargs above, instead of being silently dropped
+    # before apply_fn even runs. Reserved keys are managed internally by
+    # this composite and are not overridden by a nested instruction.
+    reserved_keys = {"patch_label", "stack", "instructions", "patches"} | data.keys()
+    for inst_or_label in instructions:
+        sub_instruction = (
+            inst_or_label
+            if isinstance(inst_or_label, Instruction)
+            else InstructionLabel.from_raw(inst_or_label).instruction
+        )
+        if sub_instruction is None:
+            continue  # A lazily-resolved string label; nothing to pull yet
+        for key, priorities in sub_instruction.param_priorities.items():
+            if key not in reserved_keys:
+                param_priorities[key] = priorities
+
     # We will need to store the instructions
     return Instruction(
         apply_fn=apply_fn,
         data=data,
         map_qubits_fn=map_qubits_fn,
         param_priorities=param_priorities,
+        # A pulled-up key (e.g. "model") may have no value anywhere at this
+        # level (no override, no program default, no baked-in default) --
+        # tolerate that instead of raising, so each nested instruction
+        # falls through to its own independent resolution chain unchanged.
+        param_error_behavior="continue",
         name=name,
         type="Composite",
     )

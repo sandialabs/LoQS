@@ -4,7 +4,15 @@ import pytest
 
 from loqs.backends import NumpyStatevectorQuantumState as SVState
 from loqs.core import QuantumProgram
+from loqs.core.frame import Frame
 from loqs.core.instructions import builders
+from loqs.core.instructions.instruction import Instruction
+from loqs.core.instructions.instructionstack import InstructionStack
+
+
+def _leaf_apply_needing_model(model, patch_label=None):
+    """A minimal apply_fn that just records whatever `model` it received."""
+    return Frame({"seen_model": model})
 
 
 class _Widget:
@@ -96,3 +104,70 @@ class TestObjectBuilderInstruction:
         state = program.run().shot_histories[0][-1]["state"]
         assert state.kraus_sampling == "choice"
         assert state.contraction == "einsum"
+
+
+class TestCompositeInstruction:
+    """Regression tests for issue #57: a composite instruction must
+    forward a per-call kwarg override (e.g. "model") to nested
+    instructions that need it, not silently drop it in favor of
+    whatever the program/instruction's own default resolution provides.
+    """
+
+    def _leaf(self):
+        return Instruction(apply_fn=_leaf_apply_needing_model, data={}, name="leaf")
+
+    def test_param_priorities_include_nested_instructions_keys(self):
+        composite = builders.build_composite_instruction(
+            [self._leaf()], name="composite"
+        )
+        assert "model" in composite.param_priorities
+
+    def test_label_kwarg_reaches_nested_instruction(self):
+        composite = builders.build_composite_instruction(
+            [self._leaf()], name="composite"
+        )
+        stack = InstructionStack([])
+        frame = composite.apply(
+            patch_label="L0",
+            stack=stack,
+            instructions=composite.data["instructions"],
+            model="OVERRIDE",
+        )
+        nested_label = frame["stack"][0]
+        assert nested_label.inst_kwargs == {"model": "OVERRIDE"}
+
+    def test_end_to_end_label_override_wins_over_program_default(self):
+        # A plain object stands in for a real noise model here: only its
+        # identity matters for this test, and passing a str would instead
+        # be (mis)interpreted by QuantumProgram as a file to read from.
+        default_model, override_model = object(), object()
+        composite = builders.build_composite_instruction(
+            [self._leaf()], name="H"
+        )
+        stack = [("H", None, (), {"model": override_model})]
+        program = QuantumProgram(
+            stack,
+            global_instructions={"H": composite},
+            default_noise_model=default_model,
+            name="composite override test",
+        )
+        history = program.run().shot_histories[0]
+        assert history[-1]["seen_model"] is override_model
+
+    def test_end_to_end_falls_back_to_program_default_without_override(self):
+        # Regression check for param_error_behavior="continue": pulling
+        # "model" up onto the composite must not break the no-override
+        # case, which should still fall through to the program default.
+        default_model = object()
+        composite = builders.build_composite_instruction(
+            [self._leaf()], name="H"
+        )
+        stack = [("H", None, (), {})]
+        program = QuantumProgram(
+            stack,
+            global_instructions={"H": composite},
+            default_noise_model=default_model,
+            name="composite default test",
+        )
+        history = program.run().shot_histories[0]
+        assert history[-1]["seen_model"] is default_model
