@@ -155,7 +155,7 @@ class History(Sequence[Frame], Displayable):
             Keys that should be added to an incoming [](api:Frame) if it
             does not already have it. Built-in default is `["state",
             "patches"]` (keeping the most up-to-date BaseQuantumState and
-            PatchDict available in the last frame; other common additions
+            PatchLayout available in the last frame; other common additions
             include syndrome bits for decoders that need the previous
             syndrome); see above.
 

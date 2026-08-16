@@ -32,6 +32,8 @@ from .recordables import (
     QECCodePatch,
     PauliFrame,
     PatchDict,
+    PatchLayout,
+    PatchRelation,
 )
 from .syndromelabel import SyndromeLabel
 

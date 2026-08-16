@@ -41,7 +41,7 @@ from loqs.core.instructions.instructionstack import (
     InstructionStackLike,
 )
 from loqs.core.qeccode import QECCode
-from loqs.core.recordables import PatchDict
+from loqs.core.recordables import PatchLayout
 from loqs.core.programresults import ProgramResults
 from loqs.internal import Displayable
 
@@ -702,7 +702,7 @@ class QuantumProgram(Displayable):
            `"instruction"` name in [](api:global_instructions). Return it
            if there, error if not
         3. Otherwise, we must be from a [](api:QECCodePatch). Look up the
-           [](api:PatchDict) via `"patches"` in the provided frame, and
+           [](api:PatchLayout) via `"patches"` in the provided frame, and
            check for the `"instruction"` name in the patch. Return if
            there, error if anything goes wrong along the way
 
@@ -712,7 +712,7 @@ class QuantumProgram(Displayable):
             The [](api:InstructionLabel) to resolve
 
         frame:
-            The last [](api:Frame), which should contain a [](api:PatchDict)
+            The last [](api:Frame), which should contain a [](api:PatchLayout)
             under `"patches"`, to allow patch-specific resolution
 
         Returns
@@ -755,14 +755,14 @@ class QuantumProgram(Displayable):
 
         # Otherwise, we must be a patch instruction
         try:
-            patchdict = PatchDict(frame["patches"])
+            layout = PatchLayout(frame["patches"])
         except KeyError:
             raise RuntimeError(
                 f"'patches' not available in last frame for resolving {ilbl}"
             )
 
         try:
-            patch = patchdict.patches[patch_label]
+            patch = layout.patches[patch_label]
         except KeyError:
             raise RuntimeError(
                 f"Patch {patch_label} not available for resolving {ilbl}"
@@ -804,10 +804,16 @@ class QuantumProgram(Displayable):
         - `"instruction"`: This means the information should come from the
           [](api:Instruction.data) as passed in by `instruction_data`.
           Return it if available, continue if not.
-        - `"patch_data"`: This means the information should come from a
-          :attr:`QECCodePatch.data`. This requires both "patches" to be a :class:`PatchDict`
-          in the last :class:`Frame` of the :class:`History` which has an entry corresponding to
-          "patch_label" from the ``program_data``.
+        - `"patch_data"` / `"patch_data[<name>]"`: This means the information
+          should come from a :attr:`QECCodePatch.data`. This requires "patches"
+          to be a :class:`PatchLayout` in the last :class:`Frame` of the
+          :class:`History`. Bare `"patch_data"` sources from the single patch
+          named by "patch_label" in ``program_data``; `"patch_data[<name>]"`
+          instead picks one named patch out of a multi-patch `"patch_labels"`
+          mapping (e.g. `"patch_data[ctrl]"`). Each form is a no-op (falls
+          through to the next priority) if "patch_label" doesn't have the
+          shape it expects -- a bare form against a `"patch_labels"` mapping,
+          or a bracketed form against a single `"patch_label"` string.
         - `"program"`: This means the information should come from the
           [](api:QuantumProgram) itself. If `key` matches any of these,
           it is returned, otherwise continue. This data comes in the form of
@@ -881,16 +887,29 @@ class QuantumProgram(Displayable):
                 # Check instruction data dict
                 if key in instruction_data:
                     return instruction_data[key]
-            elif priority == "patch_data":
-                # FUTURE WORK: only auto-sources from a single named patch.
-                # Per-named-patch sourcing for a "patch_labels" mapping
-                # (e.g. a "patch_data[ctrl]" priority) is not implemented yet.
-
-                # Extract patch_label from program_data
+            elif priority == "patch_data" or priority.startswith("patch_data["):
+                # Extract patch_label from program_data -- either a single
+                # patch label (str) or a "patch_labels"-style role mapping.
                 patch_label = program_data.get("patch_label", None)
                 if patch_label is None:
                     continue
-                assert isinstance(patch_label, str)
+
+                if priority == "patch_data":
+                    if not isinstance(patch_label, str):
+                        # Ambiguous against a multi-patch mapping -- which
+                        # named patch would "patch_data" mean? Skip rather
+                        # than guess; use "patch_data[<name>]" instead.
+                        continue
+                    resolved_patch_label = patch_label
+                else:
+                    role_name = priority.split("[")[1][:-1]
+                    if not isinstance(patch_label, Mapping):
+                        # No named roles to pick from against a bare
+                        # "patch_label" string.
+                        continue
+                    if role_name not in patch_label:
+                        continue
+                    resolved_patch_label = patch_label[role_name]
 
                 # Get patches from the last frame in history
                 if not history or len(history) == 0:
@@ -899,10 +918,13 @@ class QuantumProgram(Displayable):
                 patches = history[-1].get("patches", None)
                 if patches is None:
                     continue
-                assert isinstance(patches, PatchDict)
+                # Cast rather than assert: until every "Init Patch"-style
+                # instruction is updated (later stages), a frame may still
+                # carry a PatchDict rather than a PatchLayout.
+                patches = PatchLayout(patches)
 
                 # Get the specific patch by label
-                patch = patches.get(patch_label)
+                patch = patches.get(resolved_patch_label)
                 if patch is None:
                     continue
 
