@@ -36,7 +36,7 @@ Provided operations
   data fault can flip the parity or spread onto a patch) but are
   non-destructive: both parities commute with all stabilizers, so QEC
   continues and both can be measured in the same shot with one shared
-  ancilla (`Iz` is measure-and-reset in this codepack's models).
+  ancilla (`Imrz` is measure-and-reset in this codepack's models).
 
 - **Backend feasibility warning** (`warn_if_backend_infeasible`) for dense
   statevector-based backends at multi-patch qubit counts.
@@ -438,13 +438,13 @@ def _build_joint_parity_instruction(
     if basis == "ZZ":
         # Ancilla starts in |0>; each data qubit copies its Z value onto it
         layers = [[("Gcnot", d, ancilla)] for d in supports_a + supports_b]
-        layers.append([("Iz", ancilla)])
+        layers.append([("Imrz", ancilla)])
     else:
         # Ancilla in |+>; X_L X_L phase kicks back onto the ancilla
         layers = (
             [[("Gh", ancilla)]]
             + [[("Gcnot", ancilla, d)] for d in supports_a + supports_b]
-            + [[("Gh", ancilla)], [("Iz", ancilla)]]
+            + [[("Gh", ancilla)], [("Imrz", ancilla)]]
         )
     circuit = circuit_backend(
         layers,  # type: ignore[arg-type]
@@ -532,9 +532,9 @@ def build_joint_parity_zz_instruction(
     """Ancilla-mediated measurement of Z_L(A) Z_L(B) (non fault-tolerant).
 
     The ancilla is assumed to start in |0> (fresh from state init, or reset
-    by a previous `Iz`). Six `Gcnot`s copy the Z_L supports (D0, D4, D8 of
+    by a previous `Imrz`). Six `Gcnot`s copy the Z_L supports (D0, D4, D8 of
     each patch) onto the ancilla, which is then measured (and reset) with
-    `Iz`. The decode step XORs the outcome with both patches' pending
+    `Imrz`. The decode step XORs the outcome with both patches' pending
     Pauli-frame X bits on the touched qubits and stores the result under the
     frame key `joint_parity_zz`.
 
@@ -606,7 +606,7 @@ def build_joint_parity_xx_instruction(
 
     The ancilla is assumed to start in |0>; `Gh` takes it to |+>, six
     `Gcnot`s (ancilla as control) kick the X_L supports' phase (D2, D4, D6
-    of each patch) back onto it, and `Gh` + `Iz` read it out in the X basis.
+    of each patch) back onto it, and `Gh` + `Imrz` read it out in the X basis.
     The decode step XORs the outcome with both patches' pending Pauli-frame
     Z bits on the touched qubits and stores the result under the frame key
     `joint_parity_xx`. See [](api:build_joint_parity_zz_instruction) for the

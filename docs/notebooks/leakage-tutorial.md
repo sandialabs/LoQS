@@ -85,7 +85,7 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
         instructions[f"h_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"h_{ql}")
         instructions[f"x_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"x_{ql}")
         instructions[f"z_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"z_{ql}")
-        instructions[f"iz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"iz_{ql}")
+        instructions[f"imrz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Imrz", q)]), name=f"imrz_{ql}")
         if q in template_auxiliary_qubits:
             instructions[f"compute_zz_parity_{ql}"] = build_compute_parity_instruction("zz_parity", q)
             instructions[f"compute_xx_parity_{ql}"] = build_compute_parity_instruction("xx_parity", q)
@@ -105,7 +105,7 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
             (f"gcphase_{al}_{d0l}", "global"),
             (f"gcphase_{al}_{d1l}", "global"),
             (f"h_{al}", "global"),
-            (f"iz_{al}", "global"),
+            (f"imrz_{al}", "global"),
             (f"compute_zz_parity_{al}", "global"),
         ], name=f"zz_check_{i}")
 
@@ -118,7 +118,7 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
             (f"h_{al}", "global"),
             (f"h_{d0l}", "global"),
             (f"h_{d1l}", "global"),
-            (f"iz_{al}", "global"),
+            (f"imrz_{al}", "global"),
             (f"compute_xx_parity_{al}", "global"),
         ], name=f"xx_check_{i}")
 
@@ -137,7 +137,7 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
         "Z": [(z_matrix, None)],
     }
     inst_dict = {
-        "Iz": (0, True) # Reset to 0 after measurement
+        "Imrz": (0, True) # Reset to 0 after measurement
     }
 
     noise_model = DictNoiseModel(
@@ -232,7 +232,7 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
         instructions[f"h_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"h_{ql}")
         instructions[f"x_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"x_{ql}")
         instructions[f"z_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"z_{ql}")
-        instructions[f"iz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"iz_{ql}")
+        instructions[f"imrz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Imrz", q)]), name=f"imrz_{ql}")
         if q in template_auxiliary_qubits:
             instructions[f"compute_zz_parity_{ql}"] = build_compute_parity_instruction("zz_parity", q)
             instructions[f"compute_xx_parity_{ql}"] = build_compute_parity_instruction("xx_parity", q)
@@ -252,7 +252,7 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
             (f"gcphase_{al}_{d0l}", "global"),
             (f"gcphase_{al}_{d1l}", "global"),
             (f"h_{al}", "global"),
-            (f"iz_{al}", "global"),
+            (f"imrz_{al}", "global"),
             (f"compute_zz_parity_{al}", "global"),
         ], name=f"zz_check_{i}")
 
@@ -265,7 +265,7 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
             (f"h_{al}", "global"),
             (f"h_{d0l}", "global"),
             (f"h_{d1l}", "global"),
-            (f"iz_{al}", "global"),
+            (f"imrz_{al}", "global"),
             (f"compute_xx_parity_{al}", "global"),
         ], name=f"xx_check_{i}")
 
@@ -298,7 +298,7 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
         "Z": KrausGateRep([(z_matrix, None)], dims=[3]),
     }
     inst_dict = {
-        "Iz": (0, True) # Reset to 0 after measurement
+        "Imrz": (0, True) # Reset to 0 after measurement
     }
 
     noise_model = DictNoiseModel(
@@ -355,7 +355,7 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
         instructions[f"h_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("H", q)]), name=f"h_{ql}")
         instructions[f"x_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("X", q)]), name=f"x_{ql}")
         instructions[f"z_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Z", q)]), name=f"z_{ql}")
-        instructions[f"iz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Iz", q)]), name=f"iz_{ql}")
+        instructions[f"imrz_{ql}"] = build_physical_circuit_instruction(ListPhysicalCircuit([("Imrz", q)]), name=f"imrz_{ql}")
         if q in template_auxiliary_qubits:
             instructions[f"compute_zz_parity_{ql}"] = build_compute_parity_instruction("zz_parity", q)
             instructions[f"compute_xx_parity_{ql}"] = build_compute_parity_instruction("xx_parity", q)
@@ -375,7 +375,7 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
             (f"gcphase_{al}_{d0l}", "global"),
             (f"gcphase_{al}_{d1l}", "global"),
             (f"h_{al}", "global"),
-            (f"iz_{al}", "global"),
+            (f"imrz_{al}", "global"),
             (f"compute_zz_parity_{al}", "global"),
         ], name=f"zz_check_{i}")
 
@@ -388,7 +388,7 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
             (f"h_{al}", "global"),
             (f"h_{d0l}", "global"),
             (f"h_{d1l}", "global"),
-            (f"iz_{al}", "global"),
+            (f"imrz_{al}", "global"),
             (f"compute_xx_parity_{al}", "global"),
         ], name=f"xx_check_{i}")
 
@@ -439,7 +439,7 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
         "Z": KrausGateRep([(z_matrix, None)], dims=[3]),
     }
     inst_dict = {
-        "Iz": (0, True)
+        "Imrz": (0, True)
     }
 
     noise_model = DictNoiseModel(

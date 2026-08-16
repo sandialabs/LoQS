@@ -466,7 +466,7 @@ def _build_seam_block(
     """The four new seam checks, extracted with borrowed ancillas.
 
     Ancillas are borrowed from patch A (they are free after A's own block;
-    every `Iz` is measure-and-reset). When at least as many distinct
+    every `Imrz` is measure-and-reset). When at least as many distinct
     ancillas are available as there are new checks (surf17/surf13), all
     four checks are tiled into a single 7-layer block: their seam-qubit
     supports pairwise overlap, but always at a different relative layer
@@ -706,16 +706,16 @@ def _surgery_metadata(
     seam_list = list(seam_qubits)
     if geometry["seam_prep_basis"] == "X":
         prep_layers = [
-            [("Iz", s) for s in seam_list],
+            [("Imrz", s) for s in seam_list],
             [("Gh", s) for s in seam_list],
         ]
         split_layers = [
             [("Gh", s) for s in seam_list],
-            [("Iz", s) for s in seam_list],
+            [("Imrz", s) for s in seam_list],
         ]
     else:
-        prep_layers = [[("Iz", s) for s in seam_list]]
-        split_layers = [[("Iz", s) for s in seam_list]]
+        prep_layers = [[("Imrz", s) for s in seam_list]]
+        split_layers = [[("Imrz", s) for s in seam_list]]
     prep_circuit = circuit_backend(prep_layers, qubit_labels=seam_list)
     split_circuit = circuit_backend(split_layers, qubit_labels=seam_list)
 
