@@ -11,130 +11,97 @@ class TestInstructionLabel:
     def setup_class(cls):
         def apply_fn():
             pass
-        cls.ins = Instruction(apply_fn, name="test") # type: ignore
-        cls.args = [cls.ins]
-        cls.kwargs = {"ins": cls.ins}
+        cls.ins = Instruction(apply_fn, name="test")  # type: ignore
 
-    def _check(self, ilbl, ins, il, pl, a, k):
-        assert ilbl.instruction is None or ilbl.instruction.name == ins.name
-        assert ilbl.inst_label == il
-        assert ilbl.patch_label == pl
-        if len(a):
-            assert ilbl.inst_args[0].name == a[0].name
-        else:
-            assert ilbl.inst_args == a
-        if len(k):
-            assert ilbl.inst_kwargs['ins'].name == k['ins'].name
-        else:
-            assert ilbl.inst_kwargs == k
+    def test_init_rejects_bad_instruction_type(self):
+        with pytest.raises(TypeError, match="instruction must be an Instruction or str"):
+            InstructionLabel(3)  # type: ignore
 
-    def test_init(self):
+    def test_init_bare_label(self):
         ilbl = InstructionLabel("Label")
-        self._check(ilbl, None, "Label", None, (), {})
+        assert ilbl["instruction"] == "Label"
+        assert ilbl.get("patch_label") is None
+        assert ilbl.get("patch_labels") is None
 
-        ilbl2 = InstructionLabel.from_raw("Label")
-        self._check(ilbl2, None, "Label", None, (), {})
+    def test_init_with_patch_label(self):
+        ilbl = InstructionLabel("Label", patch_label="L0")
+        assert ilbl["instruction"] == "Label"
+        assert ilbl["patch_label"] == "L0"
 
-        ilbl3 = InstructionLabel.from_raw(("Label",))
-        self._check(ilbl3, None, "Label", None, (), {})
+    def test_init_with_instruction_object(self):
+        ilbl = InstructionLabel(self.ins, patch_label="L0")
+        assert ilbl["instruction"] is self.ins
+        assert ilbl["patch_label"] == "L0"
 
-        # With patch label
-        ilbl4 = InstructionLabel("Label", "L0")
-        self._check(ilbl4, None, "Label", "L0", (), {})
+    def test_init_with_arbitrary_kwargs(self):
+        # No hardcoded positional slot needed to reach extra kwargs -- any
+        # apply_fn parameter name is just an ordinary dict key.
+        ilbl = InstructionLabel(
+            "FT Logical X Measure Classical Decoder",
+            patch_label="L0",
+            flagged_check="XZIIZ",
+            flagged_check_order=[4, 0, 1],
+        )
+        assert ilbl["flagged_check"] == "XZIIZ"
+        assert ilbl["flagged_check_order"] == [4, 0, 1]
 
-        ilbl5 = InstructionLabel.from_raw(("Label", "L0"))
-        self._check(ilbl5, None, "Label", "L0", (), {})
+    def test_init_with_patch_labels_multipatch(self):
+        ilbl = InstructionLabel(
+            "CNOT Bookkeeping", patch_labels={"ctrl": "L0", "tgt": "L1"}
+        )
+        assert ilbl.get("patch_label") is None
+        assert ilbl["patch_labels"] == {"ctrl": "L0", "tgt": "L1"}
 
-        # With args and kwargs
-        ilbl6 = InstructionLabel("Label", "L0", self.args, self.kwargs)
-        self._check(ilbl6, None, "Label", "L0", self.args, self.kwargs)
+    def test_from_raw_bare_str_and_instruction(self):
+        assert InstructionLabel.from_raw("Label") == InstructionLabel("Label")
+        assert InstructionLabel.from_raw(self.ins) == InstructionLabel(self.ins)
 
-        ilbl7 = InstructionLabel.from_raw(("Label", "L0", self.args, self.kwargs))
-        self._check(ilbl7, None, "Label", "L0", self.args, self.kwargs)
+    def test_from_raw_one_tuple(self):
+        assert InstructionLabel.from_raw(("Label",)) == InstructionLabel("Label")
 
-        # With instruction instead of label
-        ilbl8 = InstructionLabel(self.ins, "L0", self.args, self.kwargs)
-        self._check(ilbl8, self.ins, None, "L0", self.args, self.kwargs)
+    def test_from_raw_two_tuple(self):
+        assert InstructionLabel.from_raw(("Label", "L0")) == InstructionLabel(
+            "Label", patch_label="L0"
+        )
 
-        ilbl9 = InstructionLabel.from_raw((self.ins, "L0", self.args, self.kwargs))
-        self._check(ilbl9, self.ins, None, "L0", self.args, self.kwargs)
+    def test_from_raw_dict(self):
+        d = {"instruction": "Label", "patch_label": "L0", "flagged_check": "XZIIZ"}
+        assert InstructionLabel.from_raw(d) == InstructionLabel(
+            "Label", patch_label="L0", flagged_check="XZIIZ"
+        )
 
-        # and the solo instruction casts
-        ilbl10 = InstructionLabel.from_raw(self.ins)
-        self._check(ilbl10, self.ins, None, None, (), {})
+    def test_from_raw_already_built_label_returns_same_object(self):
+        ilbl = InstructionLabel("Label", patch_label="L0")
+        assert InstructionLabel.from_raw(ilbl) is ilbl
 
-        ilbl11 = InstructionLabel.from_raw((self.ins,))
-        self._check(ilbl11, self.ins, None, None, (), {})
+    def test_from_raw_rejects_long_tuples(self):
+        # The old 3-/4-element positional format (inst_args/inst_kwargs in
+        # fixed tuple slots) is no longer supported -- must use the dict
+        # form, since correctly mapping a historical positional arg onto
+        # its real keyword requires knowing the target instruction's
+        # parameter order, which isn't available from a bare tuple alone.
+        with pytest.raises(TypeError, match="Tuples longer than 2 elements"):
+            InstructionLabel.from_raw(("Label", "L0", (), {"flagged_check": "XZIIZ"}))
 
-        # An already-built InstructionLabel is returned as a value-equal
-        # instance (not necessarily the same object).
-        ilbl12 = InstructionLabel.from_raw(ilbl6)
-        self._check(ilbl12, None, "Label", "L0", self.args, self.kwargs)
+    def test_from_raw_rejects_unrecognized_type(self):
+        with pytest.raises(TypeError, match="Cannot cast"):
+            InstructionLabel.from_raw(3)  # type: ignore
 
-    def test_serialization(self, make_temp_path):
-        # Test string version
-        ilbl = InstructionLabel("Label", "L0", self.args, self.kwargs)
+    def test_equality_is_structural(self):
+        # dict.__eq__ gives real, content-based equality for free -- no
+        # hand-written __eq__ needed, and no more relying on object
+        # identity (the previous class had no __eq__ at all).
+        a = InstructionLabel("Label", patch_label="L0")
+        b = InstructionLabel("Label", patch_label="L0")
+        c = InstructionLabel("Label", patch_label="L1")
+        assert a == b
+        assert a is not b
+        assert a != c
 
-        with make_temp_path(suffix='.json') as tmp_path:
-            ilbl.write(tmp_path)
-            ilbl2 = InstructionLabel.read(tmp_path)
-            self._check(ilbl2, None, "Label", "L0", self.args, self.kwargs)
-
-        ilbl3 = InstructionLabel(self.ins, "L0", self.args, self.kwargs)
-
-        with make_temp_path(suffix='.json') as tmp_path:
-            ilbl3.write(tmp_path)
-            ilbl4 = InstructionLabel.read(tmp_path)
-            self._check(ilbl4, self.ins, None, "L0", self.args, self.kwargs)
-
-    def test_instruction_label_serialization_comprehensive(self, make_temp_path):
-        """Comprehensive test of InstructionLabel serialization methods."""
-        # Test with instruction and all parameters
-        label = InstructionLabel(self.ins, "L1", self.args, self.kwargs)
-
-        # Test string serialization
-        with make_temp_path(suffix=".json") as tmp_path:
-            label.write(tmp_path)
-            loaded_label = InstructionLabel.read(tmp_path)
-            self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
-
-        with make_temp_path(suffix='.json') as tmp_path:
-            label.write(tmp_path)
-            loaded_label = InstructionLabel.read(tmp_path)
-            self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
-
-        with make_temp_path(suffix='.json.gz') as temp_path:
-            label.write(temp_path)
-            loaded_label = InstructionLabel.read(temp_path)
-            self._check(loaded_label, self.ins, None, "L1", self.args, self.kwargs)
-
-    def test_instruction_label_without_instruction(self, make_temp_path):
-        """Test InstructionLabel serialization without instruction."""
-        # Test label without instruction
-        label = InstructionLabel(self.ins, "L0")
-
-        with make_temp_path(suffix=".json") as tmp_path:
-            label.write(tmp_path)
-            loaded_label = InstructionLabel.read(tmp_path)
-            self._check(loaded_label, self.ins, None, "L0", (), {})
-
-    def test_instruction_label_equality_after_serialization(self, make_temp_path):
-        """Test that InstructionLabel equality is preserved after serialization."""
-        original = InstructionLabel(self.ins, "L2", self.args)
-
-        # Serialize and deserialize
-        with make_temp_path(suffix=".json") as tmp_path:
-            original.write(tmp_path)
-            deserialized = InstructionLabel.read(tmp_path)
-            assert isinstance(deserialized, InstructionLabel)
-
-        assert original.patch_label == deserialized.patch_label
-        assert original.instruction.name == deserialized.instruction.name # type: ignore
-        # Check lengths and types of args/kwargs (not exact equality due to different object instances)
-        assert len(original.inst_args) == len(deserialized.inst_args)
-        assert len(original.inst_kwargs) == len(deserialized.inst_kwargs)
-
-        # Different label should not be equal
-        different = InstructionLabel(self.ins, "L3", self.args)
-        assert original != different
-            
+    def test_dict_style_access(self):
+        # InstructionLabel really is just a dict -- ordinary dict
+        # operations (mutation, iteration, **-spreading) all just work.
+        ilbl = InstructionLabel("Label", patch_label="L0")
+        ilbl["error_injections"] = [(0, "Gxpi", 3)]
+        assert ilbl["error_injections"] == [(0, "Gxpi", 3)]
+        assert set(ilbl.keys()) == {"instruction", "patch_label", "error_injections"}
