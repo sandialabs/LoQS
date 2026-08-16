@@ -75,6 +75,35 @@ class TestPyGSTiPhysicalCircuit:
             ):
                 PhysCirc(lc)
 
+    def test_init_allows_nonconforming_qubit_labels(self):
+        # pyGSTi's own line-label restriction only allows labels starting
+        # with one of Q/T/L/A/D; seam-qubit ("S0") and multi-letter
+        # ("AUX0") labels used to raise here.
+        pc = PhysCirc([("Gcnot", "AUX0", "S0")])
+        expected = Circuit(
+            [("Gcnot", "AUX0", "S0")], line_labels=["AUX0", "S0"], check=False
+        )  # type: ignore
+        self._check(pc, expected)
+
+        # Round-trips through the usual mutating methods unmodified.
+        pc.map_qubit_labels_inplace({"S0": "S1"})
+        assert list(pc.qubit_labels) == ["AUX0", "S1"]
+        assert list(pc.copy().qubit_labels) == ["AUX0", "S1"]
+
+    def test_init_nonconforming_qubit_labels_via_list_circuit(self):
+        lc = ListPhysicalCircuit([[("Gxpi2", ("S0",))]], ["S0"])
+        pc = PhysCirc(lc)
+        expected = Circuit(
+            [("Gxpi2", "S0")], line_labels=["S0"], check=False
+        )  # type: ignore
+        self._check(pc, expected)
+
+    def test_init_nonconforming_qubit_labels_string_form_raises(self):
+        # String-form circuits are parsed by pyGSTi's restricted grammar
+        # regardless of the workaround used for structural inputs.
+        with pytest.raises(ValueError, match="Failed to cast to pyGSTi circuit"):
+            PhysCirc("Gi:S0@(S0)")
+
     def test_from_tiling(self):
         template = PhysCirc([("Gxpi2", "A")], ["A"])
         tiled = PhysCirc.from_circuit_tiling(

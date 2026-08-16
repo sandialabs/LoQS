@@ -81,14 +81,16 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 expanded_circuit = [
                     [(t[0], *t[1]) for t in layer] for layer in circuit.circuit
                 ]
-                self._circuit = _Circuit.cast(expanded_circuit)
+                self._circuit = self._cast_allowing_nonconforming_labels(
+                    expanded_circuit
+                )
             except Exception as e:
                 raise ValueError(
                     "Failed to cast list circuit to pyGSTi circuit"
                 ) from e
         else:
             try:
-                self._circuit = _Circuit.cast(circuit)
+                self._circuit = self._cast_allowing_nonconforming_labels(circuit)
             except Exception as e:
                 raise ValueError("Failed to cast to pyGSTi circuit") from e
 
@@ -97,6 +99,32 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         self._circuit = self._circuit.copy(editable=True)  # type: ignore
 
         super().__init__(circuit, qubit_labels)
+
+    @classmethod
+    def _cast_allowing_nonconforming_labels(cls, obj) -> _Circuit:
+        """Cast `obj` to a pyGSTi `Circuit`, tolerating qubit labels that
+        don't start with one of Q/T/L/A/D.
+
+        pyGSTi >=0.10 requires every line label to round-trip through its
+        own label parser, which only accepts labels starting with one of
+        those letters -- e.g. seam-qubit labels like `"S0"` are rejected.
+        Nothing else in this class re-validates line labels once a
+        `Circuit` exists (its `line_labels` setter and
+        `map_state_space_labels_inplace` both skip this check), so on a
+        `ValueError` from a structural (list/tuple) input, we retry once
+        with pyGSTi's own validation disabled. String-form circuits are
+        parsed by the same restricted grammar regardless of this flag, so
+        they're left to fail exactly as before.
+        """
+        try:
+            return _Circuit.cast(obj)
+        except ValueError:
+            if isinstance(obj, (str, _Circuit)):
+                raise
+            if "@" in obj:
+                k = obj.index("@")
+                return _Circuit(obj[:k], obj[k + 1 :], check=False)
+            return _Circuit(obj, check=False)
 
     name: ClassVar[str] = "pyGSTi"
 
