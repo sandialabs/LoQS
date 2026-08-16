@@ -81,9 +81,9 @@ class TestTwoPatchFoundations:
         all_q = q0 + q1
 
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -132,11 +132,11 @@ class TestTwoPatchFoundations:
         ref_kwarg = {f"reference_round_mode_{basis}": "clean_diff"}
 
         stack = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch SURF", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
             (prep, "L0"),
             ("QEC", "L0"),
-            (meas, "L0", (), ref_kwarg),
+            {"instruction": meas, "patch_label": "L0", **ref_kwarg},
         ]
 
         program = make_stim_program(layout, stack, qubits)
@@ -171,19 +171,18 @@ class TestTwoPatchFoundations:
         )
 
         stack = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch SURF", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
             ("Zero Prep", "L0"),
             ("Syndrome Extraction", "L0"),  # index 3 (round 1)
             ("Syndrome Extraction", "L0"),  # index 4 (round 2)
             ("Syndrome Extraction", "L0"),  # index 5 (round 3)
             ("Decoder", "L0"),
-            (
-                "FT Logical Z Measure",
-                "L0",
-                (),
-                {"reference_round_mode_Z": "clean_diff"},
-            ),
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "L0",
+                "reference_round_mode_Z": "clean_diff",
+            },
         ]
 
         base_program = QuantumProgram(
@@ -282,9 +281,9 @@ def two_patch_cnot_stack(layout, prep_ctrl, prep_tgt, meas, meas_kwargs,
         "L0", "L1", q0[:9], q1[:9]
     )
     stack = [
-        ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-        ("Init Patch SURF", None, ("L0", q0)),
-        ("Init Patch SURF", None, ("L1", q1)),
+        {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+        {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+        {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
         (prep_ctrl, "L0"),
         (prep_tgt, "L1"),
         *after_prep,
@@ -293,8 +292,8 @@ def two_patch_cnot_stack(layout, prep_ctrl, prep_tgt, meas, meas_kwargs,
         (cnot, None),
         ("QEC", "L0"),
         ("QEC", "L1"),
-        (meas, "L0", (), dict(meas_kwargs)),
-        (meas, "L1", (), dict(meas_kwargs)),
+        {"instruction": meas, "patch_label": "L0", **meas_kwargs},
+        {"instruction": meas, "patch_label": "L1", **meas_kwargs},
     ]
     return stack, all_q
 
@@ -419,9 +418,9 @@ class TestTransversalCnot:
         )
 
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             ("Syndrome Extraction", "L0"),  # 5 <- inject
@@ -517,9 +516,9 @@ def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
         "L0", "L1", q0[:9], q1[:9], ancilla
     )
     stack = [
-        ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-        ("Init Patch SURF", None, ("L0", q0)),
-        ("Init Patch SURF", None, ("L1", q1)),
+        {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+        {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+        {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
         ("Plus Prep", "L0"),
         ("Zero Prep", "L1"),
         ("QEC", "L0"),
@@ -532,18 +531,16 @@ def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
     ]
     if ft_measures:
         stack += [
-            (
-                "FT Logical Z Measure",
-                "L0",
-                (),
-                {"reference_round_mode_Z": "guarded_diff"},
-            ),
-            (
-                "FT Logical Z Measure",
-                "L1",
-                (),
-                {"reference_round_mode_Z": "guarded_diff"},
-            ),
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "L0",
+                "reference_round_mode_Z": "guarded_diff",
+            },
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "L1",
+                "reference_round_mode_Z": "guarded_diff",
+            },
         ]
     return stack, all_q
 
@@ -563,9 +560,9 @@ class TestJointParity:
             "L0", "L1", q0[:9], q1[:9], ancilla
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             *((("X", "L0"),) if logical_x_on_l0 else ()),

@@ -2313,12 +2313,11 @@ def build_surgery_cnot_sequence(
             (repair_xx, None),
         ]
     entries += [
-        (
-            "FT Logical Z Measure",
-            anc_patch_label,
-            (),
-            {"reference_round_mode_Z": "guarded_diff"},
-        ),
+        {
+            "instruction": "FT Logical Z Measure",
+            "patch_label": anc_patch_label,
+            "reference_round_mode_Z": "guarded_diff",
+        },
         (corrections, None),
     ]
     return entries

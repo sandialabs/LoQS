@@ -148,8 +148,8 @@ class TestSyndromeRowOrdering:
                 err_circ, name="probe error"
             )
             stack = [
-                ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-                ("Init Patch SURF", None, ("L0", qubits)),
+                {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+                {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
                 (prep, "L0"),
                 (err_inst, "L0"),
                 ("Syndrome Extraction", "L0"),
@@ -398,9 +398,9 @@ class TestSimplifiedSurgeryZZ:
             "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             *((("X", "L0"),) if logical_x_on_l0 else ()),
@@ -434,9 +434,9 @@ class TestSimplifiedSurgeryZZ:
             for _ in range(2)
         ]
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -446,12 +446,11 @@ class TestSimplifiedSurgeryZZ:
             ("QEC", "L0"),
             ("QEC", "L1"),
             ("FT Logical Z Measure", "L0"),
-            (
-                "FT Logical Z Measure",
-                "L1",
-                (),
-                {"reference_round_mode_Z": "guarded_diff"},  # |+> prep: Z round 0 is random
-            ),
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "L1",
+                "reference_round_mode_Z": "guarded_diff",  # |+> prep: Z round 0 is random
+            },
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -479,9 +478,9 @@ class TestSimplifiedSurgeryZZ:
             "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -489,8 +488,8 @@ class TestSimplifiedSurgeryZZ:
             (zz, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            ("FT Logical X Measure", "L0", (), {"reference_round_mode_X": "guarded_diff"}),
-            ("FT Logical X Measure", "L1", (), {"reference_round_mode_X": "guarded_diff"}),
+            {"instruction": "FT Logical X Measure", "patch_label": "L0", "reference_round_mode_X": "guarded_diff"},
+            {"instruction": "FT Logical X Measure", "patch_label": "L1", "reference_round_mode_X": "guarded_diff"},
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -514,9 +513,9 @@ class TestSimplifiedSurgeryXX:
             "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             *((("Z", "L0"),) if logical_z_on_l0 else ()),
@@ -549,9 +548,9 @@ class TestSimplifiedSurgeryXX:
             for _ in range(2)
         ]
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -561,12 +560,11 @@ class TestSimplifiedSurgeryXX:
             ("QEC", "L0"),
             ("QEC", "L1"),
             ("FT Logical X Measure", "L0"),
-            (
-                "FT Logical X Measure",
-                "L1",
-                (),
-                {"reference_round_mode_X": "guarded_diff"},  # |0> prep: X round 0 is random
-            ),
+            {
+                "instruction": "FT Logical X Measure",
+                "patch_label": "L1",
+                "reference_round_mode_X": "guarded_diff",  # |0> prep: X round 0 is random
+            },
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -589,9 +587,9 @@ class TestSimplifiedSurgeryXX:
             "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -599,8 +597,8 @@ class TestSimplifiedSurgeryXX:
             (xx, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            ("FT Logical Z Measure", "L0", (), {"reference_round_mode_Z": "guarded_diff"}),
-            ("FT Logical Z Measure", "L1", (), {"reference_round_mode_Z": "guarded_diff"}),
+            {"instruction": "FT Logical Z Measure", "patch_label": "L0", "reference_round_mode_Z": "guarded_diff"},
+            {"instruction": "FT Logical Z Measure", "patch_label": "L1", "reference_round_mode_Z": "guarded_diff"},
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -641,9 +639,9 @@ class TestSimplifiedSurgeryBell:
             "XX", "L0", "L1", q0, q1, seams_h, layout, mode="simple"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -678,9 +676,9 @@ class TestFTSurgery:
             "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="ft"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             *((("X", "L0"),) if logical_x_on_l0 else ()),
@@ -712,9 +710,9 @@ class TestFTSurgery:
             "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="ft"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             *((("Z", "L0"),) if logical_z_on_l0 else ()),
@@ -755,9 +753,9 @@ class TestFTSurgery:
             "XX", "L0", "L1", q0, q1, seams_h, layout, mode="ft"
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -799,9 +797,9 @@ class TestFTSurgery:
         prep = "Zero Prep" if kind == "ZZ" else "Plus Prep"
         meas = "FT Logical Z Measure" if kind == "ZZ" else "FT Logical X Measure"
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             (prep, "L0"),
             (prep, "L1"),
             ("QEC", "L0"),
@@ -877,9 +875,9 @@ class TestParityReadoutConsistencyA:
             meas = "FT Logical X Measure"
             flag = {"reference_round_mode_X": "guarded_diff"}
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             (prep0, "L0"),
             (prep1, "L1"),
             ("QEC", "L0"),
@@ -887,7 +885,7 @@ class TestParityReadoutConsistencyA:
             (inst, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            (meas, "L0", (), flag),
+            {"instruction": meas, "patch_label": "L0", **flag},
             (meas, "L1"),
         ]
         program = make_stim_program(layout, stack, all_q)
@@ -928,10 +926,10 @@ class TestSurgeryCnot:
             "C", "T", "Qanc", qc, qt, qa, seams_v, seams_h, "surf17", mode="ft"
         )
         prelude = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("C", qc)),
-            ("Init Patch SURF", None, ("T", qt)),
-            ("Init Patch SURF", None, ("Qanc", qa)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "C", "qubits": qc},
+            {"instruction": "Init Patch SURF", "new_patch_label": "T", "qubits": qt},
+            {"instruction": "Init Patch SURF", "new_patch_label": "Qanc", "qubits": qa},
         ]
         return prelude, seq, all_q
 
@@ -959,7 +957,7 @@ class TestSurgeryCnot:
             ("QEC", "T"),
             # T's XX merge grows a Z check -> reference_round_mode_Z="guarded_diff" on T.
             ("FT Logical Z Measure", "C"),
-            ("FT Logical Z Measure", "T", (), {"reference_round_mode_Z": "guarded_diff"}),
+            {"instruction": "FT Logical Z Measure", "patch_label": "T", "reference_round_mode_Z": "guarded_diff"},
         ]
         program = make_stim_program("surf17", stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -991,7 +989,7 @@ class TestSurgeryCnot:
             ("QEC", "C"),
             ("QEC", "T"),
             # C's ZZ merge grows an X check -> reference_round_mode_X="guarded_diff" on C.
-            ("FT Logical X Measure", "C", (), {"reference_round_mode_X": "guarded_diff"}),
+            {"instruction": "FT Logical X Measure", "patch_label": "C", "reference_round_mode_X": "guarded_diff"},
             ("FT Logical X Measure", "T"),
         ]
         program = make_stim_program("surf17", stack, all_q)
@@ -1020,8 +1018,8 @@ class TestSurgeryCnot:
             *seq,
             ("QEC", "C"),
             ("QEC", "T"),
-            (f"FT Logical {basis} Measure", "C", (), flag),
-            (f"FT Logical {basis} Measure", "T", (), flag),
+            {"instruction": f"FT Logical {basis} Measure", "patch_label": "C", **flag},
+            {"instruction": f"FT Logical {basis} Measure", "patch_label": "T", **flag},
         ]
         program = make_stim_program("surf17", stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -1055,9 +1053,9 @@ class TestSurgeryDenseSmoke:
             num_merge_rounds=2,
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -1098,9 +1096,9 @@ class TestMzzBellPrep:
             "L0", "L1", q0, q1, SEAMS, layout, mode=mode
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -1113,8 +1111,8 @@ class TestMzzBellPrep:
         # merge grows an X check on both patches (also "guarded_diff").
         flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
-            (f"FT Logical {basis} Measure", "L0", (), dict(flag)),
-            (f"FT Logical {basis} Measure", "L1", (), dict(flag)),
+            {"instruction": f"FT Logical {basis} Measure", "patch_label": "L0", **flag},
+            {"instruction": f"FT Logical {basis} Measure", "patch_label": "L1", **flag},
         ]
         return stack
 
@@ -1223,9 +1221,9 @@ class TestMzzFaultTolerance:
         }
         meas = f"FT Logical {basis} Measure"
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("L0", q0)),
-            ("Init Patch SURF", None, ("L1", q1)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -1248,8 +1246,8 @@ class TestMzzFaultTolerance:
             )
             stack.append((repair, None))
         stack += [
-            (meas, "L0", (), dict(flag)),
-            (meas, "L1", (), dict(flag)),
+            {"instruction": meas, "patch_label": "L0", **flag},
+            {"instruction": meas, "patch_label": "L1", **flag},
         ]
         return make_stim_program(layout, stack, all_q), seq
 
@@ -1404,10 +1402,10 @@ class TestSurgeryCnotFaultTolerance:
             "C", "T", qc, qt
         )
         stack = [
-            ("Init State", None, (len(all_q),), {"qubit_labels": all_q}),
-            ("Init Patch SURF", None, ("C", qc)),
-            ("Init Patch SURF", None, ("T", qt)),
-            ("Init Patch SURF", None, ("ANC", qa)),
+            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {"instruction": "Init Patch SURF", "new_patch_label": "C", "qubits": qc},
+            {"instruction": "Init Patch SURF", "new_patch_label": "T", "qubits": qt},
+            {"instruction": "Init Patch SURF", "new_patch_label": "ANC", "qubits": qa},
             ("Plus Prep", "C"),
             ("Zero Prep", "T"),
             ("QEC", "C"),
@@ -1445,12 +1443,12 @@ class TestSurgeryCnotFaultTolerance:
             ]
         flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
-            ("FT Logical Z Measure", "ANC", (), {"reference_round_mode_Z": "guarded_diff"}),
+            {"instruction": "FT Logical Z Measure", "patch_label": "ANC", "reference_round_mode_Z": "guarded_diff"},
             (corrections, None),
             ("QEC", "C"),
             ("QEC", "T"),
-            (f"FT Logical {basis} Measure", "C", (), dict(flag)),
-            (f"FT Logical {basis} Measure", "T", (), dict(flag)),
+            {"instruction": f"FT Logical {basis} Measure", "patch_label": "C", **flag},
+            {"instruction": f"FT Logical {basis} Measure", "patch_label": "T", **flag},
         ]
         targets = {"ZZ": (zzseq, zz_base), "XX": (xxseq, xx_base)}
         return make_stim_program(layout, stack, all_q), targets

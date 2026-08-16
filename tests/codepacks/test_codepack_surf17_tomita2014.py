@@ -47,8 +47,8 @@ class TestSurf17Codepack:
         meas_inst = "FT Logical Z Measure" if basis == "Z" else "FT Logical X Measure"
 
         stack = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch SURF", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
             (prep_inst, "L0"),
             (meas_inst, "L0"),
         ]
@@ -103,8 +103,8 @@ class TestSurf17Codepack:
         meas_inst = "FT Logical Z Measure" if meas_basis == "Z" else "FT Logical X Measure"
 
         stack = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch SURF", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
             (prep_inst, "L0"),
         ]
         for g in gates:
@@ -149,8 +149,8 @@ class TestSurf17Codepack:
         )
 
         stack = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch SURF", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
             ("Zero Prep" if basis == "Z" else "Plus Prep", "L0"),
             ("Syndrome Extraction", "L0"),  # index 3 (inject here)
             ("Syndrome Extraction", "L0"),  # index 4
@@ -206,8 +206,8 @@ class TestSurf17Codepack:
         )
 
         stack = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch SURF", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
             ("Zero Prep", "L0"),
             ("Raw Z Data Measure", "L0"),  # index 3
             ("FT Z logical parity calculation", "L0"),
