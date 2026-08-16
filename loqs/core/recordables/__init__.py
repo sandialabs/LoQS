@@ -17,8 +17,9 @@ to store also.
 This module serves as a place to store a lot of these objects.
 """
 
-# Order here important, PauliFrame before all, QECCodePatch before PatchDict
+# Order here important, PauliFrame before all, QECCodePatch before PatchDict/PatchLayout
 from .pauliframe import PauliFrame
 from .measurementoutcomes import MeasurementOutcomes
 from .qeccodepatch import QECCodePatch
 from .patchdict import PatchDict
+from .patchlayout import PatchLayout, PatchRelation
