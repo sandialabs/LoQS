@@ -50,7 +50,7 @@ class TestObjectBuilderInstruction:
         # fall back to their constructor defaults. This used to crash with
         # an IndexError from the history[-1] lookup on the empty initial
         # history (or a RuntimeError once history was non-empty)
-        program = self._build_program(_Widget, ("Init Thing", None, (3,)))
+        program = self._build_program(_Widget, {"instruction": "Init Thing", "size": 3})
         results = program.run()
         widget = results.shot_histories[0][-1]["thing"]
         assert widget.size == 3
@@ -59,7 +59,7 @@ class TestObjectBuilderInstruction:
 
     def test_label_kwargs_override_defaults(self):
         program = self._build_program(
-            _Widget, ("Init Thing", None, (3,), {"mode": "square"})
+            _Widget, {"instruction": "Init Thing", "size": 3, "mode": "square"}
         )
         results = program.run()
         widget = results.shot_histories[0][-1]["thing"]
@@ -70,7 +70,7 @@ class TestObjectBuilderInstruction:
         # A required constructor param that no source provides must still
         # fail loudly (via the object builder's construction error), not
         # silently produce a broken object
-        program = self._build_program(_Broken, ("Init Thing", None, (3,)))
+        program = self._build_program(_Broken, {"instruction": "Init Thing", "size": 3})
         with pytest.raises(ValueError, match="Failed to create object"):
             program.run()
 
@@ -78,7 +78,7 @@ class TestObjectBuilderInstruction:
         # SVState's kraus_sampling/contraction are ordinary
         # positional-or-keyword params with defaults: absent from the label
         # they must default, present in the label kwargs they must apply
-        stack = [("Init State", None, (1,), {"qubit_labels": ["Q0"]})]
+        stack = [{"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}]
         program = QuantumProgram(
             stack, state_type=SVState, name="init state defaults"
         )
@@ -87,16 +87,13 @@ class TestObjectBuilderInstruction:
         assert state.contraction == "matmul"
 
         stack = [
-            (
-                "Init State",
-                None,
-                (1,),
-                {
-                    "qubit_labels": ["Q0"],
-                    "kraus_sampling": "choice",
-                    "contraction": "einsum",
-                },
-            )
+            {
+                "instruction": "Init State",
+                "state": 1,
+                "qubit_labels": ["Q0"],
+                "kraus_sampling": "choice",
+                "contraction": "einsum",
+            }
         ]
         program = QuantumProgram(
             stack, state_type=SVState, name="init state overrides"
@@ -128,13 +125,14 @@ class TestCompositeInstruction:
         )
         stack = InstructionStack([])
         frame = composite.apply(
-            patch_label="L0",
             stack=stack,
             instructions=composite.data["instructions"],
+            patch_label="L0",
             model="OVERRIDE",
         )
         nested_label = frame["stack"][0]
-        assert nested_label.inst_kwargs == {"model": "OVERRIDE"}
+        assert nested_label["patch_label"] == "L0"
+        assert nested_label["model"] == "OVERRIDE"
 
     def test_end_to_end_label_override_wins_over_program_default(self):
         # A plain object stands in for a real noise model here: only its
@@ -144,7 +142,7 @@ class TestCompositeInstruction:
         composite = builders.build_composite_instruction(
             [self._leaf()], name="H"
         )
-        stack = [("H", None, (), {"model": override_model})]
+        stack = [{"instruction": "H", "model": override_model}]
         program = QuantumProgram(
             stack,
             global_instructions={"H": composite},
@@ -162,7 +160,7 @@ class TestCompositeInstruction:
         composite = builders.build_composite_instruction(
             [self._leaf()], name="H"
         )
-        stack = [("H", None, (), {})]
+        stack = ["H"]
         program = QuantumProgram(
             stack,
             global_instructions={"H": composite},
