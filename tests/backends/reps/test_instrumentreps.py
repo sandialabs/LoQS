@@ -103,6 +103,95 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
         with pytest.raises(RepConstructionError):
             ZBasisOutcomeOperationDictInstrumentRep({0: np.eye(2)}, True, ("Q0",))
 
+    def test_outcome_qubits_defaults_to_qubit_labels(self):
+        outcome_ops = {0: UnitaryGateRep(np.eye(2), ("Q0",))}
+        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
+        assert rep.outcome_qubits == ("Q0",)
+
+    def test_outcome_qubits_bare_scalar_normalized_to_tuple(self):
+        outcome_ops = {0: UnitaryGateRep(np.eye(4), ("Q0", "Q1"))}
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
+        )
+        assert rep.outcome_qubits == ("synd_Q0Q1",)
+
+    def test_joint_outcome_qubits_allows_arbitrary_keys(self):
+        """A single classical channel (`len(outcome_qubits) == 1`) admits
+        any hashable outcome_ops keys, e.g. a 2Q parity-check's 'even'/'odd'
+        labels, with no cardinality constraint."""
+        outcome_ops = {
+            "even": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+            "odd": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+        }
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
+        )
+        assert set(rep.outcome_ops.keys()) == {"even", "odd"}
+        assert rep.outcome_qubits == ("synd_Q0Q1",)
+
+    def test_pygstimodel_style_tuple_keys_collapsed_to_bare_scalars(self):
+        """PyGSTiNoiseModel always builds length-1 tuple keys (e.g.
+        `{(0,), (1,)}`); a single-channel rep should collapse these to bare
+        scalars so downstream backends see plain `{0, 1}` labels."""
+        outcome_ops = {
+            (0,): UnitaryGateRep(np.eye(2), ("Q0",)),
+            (1,): UnitaryGateRep(np.eye(2), ("Q0",)),
+        }
+        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
+        assert set(rep.outcome_ops.keys()) == {0, 1}
+
+    def test_decomposable_outcome_qubits_requires_matching_bit_sequences(self):
+        outcome_ops = {
+            (0, 0): UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+            (0, 1): UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+            (1, 0): UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+            (1, 1): UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+        }
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            outcome_ops, True, ("Q0", "Q1"), outcome_qubits=("Q0", "Q1")
+        )
+        assert rep.outcome_qubits == ("Q0", "Q1")
+        assert set(rep.outcome_ops.keys()) == set(outcome_ops.keys())
+
+    @pytest.mark.parametrize(
+        "bad_keys",
+        [
+            {"even": None, "odd": None},  # not sequences at all
+            {(0,): None, (1, 1): None},  # inconsistent lengths
+            {(0, 2): None, (1, 1): None},  # entry not in {0, 1}
+        ],
+    )
+    def test_decomposable_outcome_qubits_rejects_mismatched_keys(self, bad_keys):
+        outcome_ops = {k: UnitaryGateRep(np.eye(4), ("Q0", "Q1")) for k in bad_keys}
+        with pytest.raises(RepConstructionError):
+            ZBasisOutcomeOperationDictInstrumentRep(
+                outcome_ops, True, ("Q0", "Q1"), outcome_qubits=("Q0", "Q1")
+            )
+
+    def test_with_qubit_labels_retargets_defaulted_outcome_qubits(self):
+        """When `outcome_qubits` was defaulted (tracks `qubit_labels`),
+        retargeting the rep onto new qubits moves the classical label too
+        -- preserving the pre-existing 1-qubit behavior exactly."""
+        outcome_ops = {0: UnitaryGateRep(np.eye(2), ("Q0",)), 1: UnitaryGateRep(np.eye(2), ("Q0",))}
+        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
+        retargeted = rep.with_qubit_labels(("Q1",))
+        assert retargeted.qubit_labels == ("Q1",)
+        assert retargeted.outcome_qubits == ("Q1",)
+
+    def test_with_qubit_labels_preserves_explicit_outcome_qubits(self):
+        """An explicit, independent classical register label must not
+        move when the rep is retargeted onto different physical qubits."""
+        outcome_ops = {
+            "even": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+            "odd": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
+        }
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
+        )
+        retargeted = rep.with_qubit_labels(("Q2", "Q3"))
+        assert retargeted.qubit_labels == ("Q2", "Q3")
+        assert retargeted.outcome_qubits == ("synd_Q0Q1",)
+
 
 class TestStimCircuitInstrumentRep:
     def test_constructs_instance(self):

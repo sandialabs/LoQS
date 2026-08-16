@@ -175,13 +175,21 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
     E.g. `include_outcome=False` would look like a noisy reset.
     """
 
-    _SERIALIZE_ATTRS = ["outcome_ops", "include_outcome", "qubit_labels"]
+    outcome_qubits: tuple[str | int, ...]
+    """Classical register label(s) the outcome(s) are recorded under.
+
+    Decoupled from `qubit_labels` (the physical qubits `outcome_ops`
+    acts on); defaults to `qubit_labels` when not given explicitly.
+    """
+
+    _SERIALIZE_ATTRS = ["outcome_ops", "include_outcome", "qubit_labels", "outcome_qubits"]
 
     def __init__(
         self,
         outcome_ops: Mapping[Hashable, GateRep],
         include_outcome: bool,
         qubit_labels: str | int | Sequence[str | int] | None = (),
+        outcome_qubits: str | int | Sequence[str | int] | None = None,
     ) -> None:
         """Construct a [](api:ZBasisOutcomeOperationDictInstrumentRep).
 
@@ -198,11 +206,22 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
             Qubit label(s) this operation acts upon, or `None`/unattached
             if not yet known.
 
+        outcome_qubits:
+            Classical register label(s) the outcome(s) are filed under.
+            `None` (default) falls back to `qubit_labels`. When this has
+            exactly one label -- covering both an ordinary single-qubit
+            measurement and a joint instrument (e.g. a 2Q/4Q parity check)
+            whose single classical bit isn't owned by any one physical
+            qubit -- `outcome_ops` keys may be any `Hashable` with no
+            cardinality constraint. With more than one label, every
+            `outcome_ops` key must instead be a sequence of 0/1 bits, one
+            per label, for a per-qubit-resolved multi-bit instrument.
+
         Raises
         ------
         RepConstructionError
-            If `outcome_ops` isn't a `Mapping`, or any value isn't a
-            [](api:GateRep) instance.
+            If `outcome_ops` isn't a `Mapping` with `GateRep` values, or
+            if its keys don't match the shape `outcome_qubits` requires.
         """
         if not isinstance(outcome_ops, Mapping) or not all(
             isinstance(v, GateRep) for v in outcome_ops.values()
@@ -212,8 +231,60 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
                 "payload (expected a Mapping with GateRep values)"
             )
         super().__init__(qubit_labels)
+
+        if outcome_qubits is None:
+            outcome_qubits = self.qubit_labels
+        elif isinstance(outcome_qubits, (str, int)):
+            outcome_qubits = (outcome_qubits,)
+        else:
+            outcome_qubits = tuple(outcome_qubits)
+
+        # Collapse length-1 tuple keys (e.g. `(0,)`/`(1,)`, PyGSTiNoiseModel's
+        # shape) to bare scalars for a single classical channel.
+        keys = list(outcome_ops.keys())
+        if len(outcome_qubits) == 1 and all(
+            isinstance(k, tuple) and len(k) == 1 for k in keys
+        ):
+            outcome_ops = {k[0]: v for k, v in outcome_ops.items()}  # type: ignore[index]
+            keys = list(outcome_ops.keys())
+
+        if len(outcome_qubits) > 1 and not all(
+            isinstance(k, Sequence)
+            and not isinstance(k, str)
+            and len(k) == len(outcome_qubits)
+            and all(b in (0, 1) for b in k)
+            for k in keys
+        ):
+            raise RepConstructionError(
+                f"outcome_ops keys must each be a length-{len(outcome_qubits)} "
+                "sequence of 0/1 bits when outcome_qubits has more than one label"
+            )
+
         self.outcome_ops = outcome_ops
         self.include_outcome = include_outcome
+        self.outcome_qubits = outcome_qubits
+
+    def with_qubit_labels(
+        self, qubit_labels: str | int | Sequence[str | int]
+    ) -> "ZBasisOutcomeOperationDictInstrumentRep":
+        """Retarget onto new physical qubits.
+
+        If `outcome_qubits` currently equals `qubit_labels` -- true of
+        every default-constructed instance -- it's treated as tracking the
+        physical qubit(s) and moves along with them. Otherwise
+        `outcome_qubits` names an independent classical register and is
+        left unchanged.
+        """
+        new_rep = super().with_qubit_labels(qubit_labels)
+        assert isinstance(new_rep, ZBasisOutcomeOperationDictInstrumentRep)
+        if self.outcome_qubits == self.qubit_labels:
+            return type(self)(
+                new_rep.outcome_ops,
+                new_rep.include_outcome,
+                new_rep.qubit_labels,
+                new_rep.qubit_labels,
+            )
+        return new_rep
 
 
 class StimCircuitInstrumentRep(StimCircuitPayloadMixin, InstrumentRep):

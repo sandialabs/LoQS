@@ -346,53 +346,63 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
         assert np.isclose(np.linalg.norm(self.state), 1)
 
-    def _apply_kraus_lazy(self, rep, qubits) -> None:
-        """Apply a Kraus channel using lazy inverse-CDF sampling.
+    def _sample_lazy(self, items, qubits):
+        """Draw one branch via lazy inverse-CDF sampling.
 
-        A single uniform draw selects the operator: operator i owns the
-        interval [C_{i-1}, C_i) of cumulative probabilities, so it is chosen
-        with probability exactly p_i regardless of list order. Probabilities
-        given as None are computed from the state only until the sampled
-        operator is reached, so each Kraus operator is applied at most once
-        and (for low-noise channels with the dominant operator first) the
-        typical cost is a single matvec.
+        `items` is an iterable of `(key, dense_operator, prob)` triples,
+        with `prob=None` if the state-dependent probability isn't known
+        yet. A single uniform draw selects a branch: branch i owns the
+        interval `[C_{i-1}, C_i)` of cumulative probabilities, so it's
+        chosen with probability exactly `p_i` regardless of list order;
+        `None` probabilities are computed lazily, only until the sampled
+        branch is reached, so a dominant branch listed first costs a
+        single matvec. Returns `(key, unnormalized_state, prob)` for the
+        sampled branch -- the caller normalizes by `sqrt(prob)`.
         """
         assert self._rng is not None
+        items = list(items)
         r = self._rng.random()
 
         cum = 0.0
-        choice = None
-        chosen_prob = None
-        chosen_Kprod = None
+        chosen = None
         last_valid = None
-        for i, (K, prob) in enumerate(rep):
-            Kprod = None
+        for key, op, prob in items:
+            prod = None
             if prob is None:
                 # Compute state-dependent probability
-                Kprod = self._block_matvec(K, qubits, self.state)
-                prob = np.vdot(Kprod, Kprod).real
+                prod = self._block_matvec(op, qubits, self.state)
+                prob = np.vdot(prod, prod).real
             assert prob >= -1e-9
             prob = max(prob, 0.0)
             if prob > 0:
-                last_valid = (i, prob, Kprod)
+                last_valid = (key, prod, prob)
             cum += prob
             if r < cum:
-                choice, chosen_prob, chosen_Kprod = i, prob, Kprod
+                chosen = (key, prod, prob)
                 break
 
-        if choice is None:
+        if chosen is None:
             # r landed in the float-roundoff sliver between cum and 1;
-            # fall back to the last operator with nonzero probability
+            # fall back to the last branch with nonzero probability
             assert last_valid is not None and np.isclose(cum, 1.0)
-            choice, chosen_prob, chosen_Kprod = last_valid
+            chosen = last_valid
 
-        # Normalize final subvector
-        if chosen_Kprod is None:
+        key, prod, prob = chosen
+        if prod is None:
             # Probability was given, so the product was never computed
-            chosen_Kprod = self._block_matvec(
-                rep[choice][0], qubits, self.state
-            )
-        self._state = chosen_Kprod / np.sqrt(chosen_prob)
+            op = next(o for k, o, _ in items if k == key)
+            prod = self._block_matvec(op, qubits, self.state)
+        return key, prod, prob
+
+    def _apply_kraus_lazy(self, rep, qubits) -> None:
+        """Apply a Kraus channel using lazy inverse-CDF sampling.
+
+        Thin wrapper over `_sample_lazy`, keyed by each operator's index in
+        `rep` (see `_sample_lazy` for the sampling algorithm).
+        """
+        items = ((i, K, prob) for i, (K, prob) in enumerate(rep))
+        _, prod, prob = self._sample_lazy(items, qubits)
+        self._state = prod / np.sqrt(prob)
 
     def _apply_kraus_choice(self, rep, qubits) -> None:
         """Apply a Kraus channel using legacy eager rng.choice sampling.
@@ -568,38 +578,26 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         assert len(qubits) > 0
 
         outcomes: OutcomeDict = defaultdict(list)
-        include_outcomes = rep.include_outcome
+        outcome_qubits = rep.outcome_qubits
 
-        if len(qubits) > 1:
-            raise NotImplementedError(
-                "More than 1-qubit instruments not yet implemented"
-            )
-        instrument_dict = rep.outcome_ops
-        assert set(instrument_dict.keys()) == set((0, 1))
-
-        # Compute the probability of measuring 0
-        # (Same as Kraus logic in _apply_gate_rep)
-        prod = self._block_matvec(
-            _single_dense_operator(instrument_dict[0]), qubits, self.state
+        items = (
+            (k, _single_dense_operator(op), None)
+            for k, op in rep.outcome_ops.items()
         )
-        prob_0 = np.vdot(prod, prod)
+        key, prod, prob = self._sample_lazy(items, qubits)
+        self._state = prod / np.sqrt(prob)
 
-        # Use RNG to see if we measure 0 or 1
-        assert self._rng is not None
-        m = self._rng.random()
-        cbit = 0 if m < prob_0 else 1
-        if include_outcomes:
-            outcomes[qubits[0]].append(cbit)
-
-        # Apply the correct PTM based on the classical output we see
-        # and renormalize
-        if cbit == 0:
-            # We already computed this product
-            self._state = prod / np.sqrt(prob_0)
-        else:
-            self._state = self._block_matvec(
-                _single_dense_operator(instrument_dict[1]), qubits, self.state
-            ) / np.sqrt(1 - prob_0)
+        if rep.include_outcome:
+            if len(outcome_qubits) == 1:
+                # Bare-int keys record as-is; other labels record by
+                # ordinal position (e.g. 'even'/'odd' reads out as 0/1).
+                value = (
+                    key if isinstance(key, int) else list(rep.outcome_ops).index(key)
+                )
+                outcomes[outcome_qubits[0]].append(value)
+            else:
+                for oq, bit in zip(outcome_qubits, key):
+                    outcomes[oq].append(bit)
 
         return outcomes
 

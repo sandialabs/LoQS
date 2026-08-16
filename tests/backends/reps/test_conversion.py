@@ -552,7 +552,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
     def test_reverse_direction_also_fails_for_more_than_one_qubit(self):
         identity = UnitaryGateRep(np.eye(4), ("Q0", "Q1"))
         od = ZBasisOutcomeOperationDictInstrumentRep(
-            {0: identity, 1: identity}, True, ("Q0", "Q1")
+            {(0, 0): identity, (1, 1): identity}, True, ("Q0", "Q1")
         )
         with pytest.raises(RepConstructionError):
             _outcome_operation_dict_to_zbasis_projection(od)
@@ -563,6 +563,21 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
             True,
             ("Q0",),
         )
+        with pytest.raises(RepConstructionError):
+            _outcome_operation_dict_to_zbasis_projection(od)
+
+    def test_joint_outcome_qubits_does_not_bypass_one_qubit_restriction(self):
+        """A joint (`len(outcome_qubits) == 1`) instrument on more than one
+        physical qubit -- e.g. a 2Q parity check -- must still be rejected
+        by both conversion directions; `outcome_qubits` only affects
+        classical-label bookkeeping, not this conversion's qubit-count
+        scope."""
+        even = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ("Q0", "Q1"))
+        odd = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ("Q0", "Q1"))
+        od = ZBasisOutcomeOperationDictInstrumentRep(
+            {"even": even, "odd": odd}, True, ("Q0", "Q1"), outcome_qubits="synd"
+        )
+        assert od.outcome_qubits == ("synd",)
         with pytest.raises(RepConstructionError):
             _outcome_operation_dict_to_zbasis_projection(od)
 
