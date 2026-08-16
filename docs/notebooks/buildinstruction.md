@@ -120,7 +120,7 @@ measI_circ = PyGSTiPhysicalCircuit(
         ("Gcnot", "A0", "A1"),
         ("Gcphase", "A0", "D1"),
         ("Gh", "A0"),
-        [("Iz", "A0"), ("Iz", "A1")],
+        [("Imrz", "A0"), ("Imrz", "A1")],
     ],
     qubit_labels=template_qubits
 )
@@ -216,7 +216,7 @@ measII_circ = PyGSTiPhysicalCircuit(
         ("Gcnot", "A0", "A1"),
         ("Gcphase", "A0", "D2"),
         ("Gh", "A0"),
-        [("Iz", "A0"), ("Iz", "A1")],
+        [("Imrz", "A0"), ("Imrz", "A1")],
     ],
     qubit_labels=template_qubits,
 )
@@ -303,7 +303,7 @@ measIII_circ = PyGSTiPhysicalCircuit(
         ("Gcnot", "A0", "A1"),
         ("Gcphase", "A0", "D4"),
         ("Gh", "A0"),
-        [("Iz", "A0"), ("Iz", "A1")],
+        [("Imrz", "A0"), ("Imrz", "A1")],
     ],
     qubit_labels=template_qubits,
 )
@@ -352,11 +352,11 @@ state_unprep_circ = PyGSTiPhysicalCircuit(
             ("Gh", "D4"),
         ],
         [
-            ("Iz", "D0"),
-            ("Iz", "D1"),
-            ("Iz", "D2"),
-            ("Iz", "D3"),
-            ("Iz", "D4"),
+            ("Imrz", "D0"),
+            ("Imrz", "D1"),
+            ("Imrz", "D2"),
+            ("Imrz", "D3"),
+            ("Imrz", "D4"),
         ],
     ],
     qubit_labels=template_qubits,

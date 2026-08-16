@@ -99,7 +99,7 @@ DEFAULT_GATE_DURATIONS: dict[str, int | float] = {
     "Gi": 1, "Gi1Q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
     "Gzpi2": 1, "Gzmpi2": 1, "Gh": 1,
     "Gcnot": 2, "Gi2Q": 2,
-    "Iz": 3, "GiMCM": 3,
+    "Imrz": 3, "GiMCM": 3,
 }
 DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 
@@ -168,7 +168,7 @@ def build_se_templates(circuit_backend: type[BasePhysicalCircuit]):
             ("Gcnot", "aux", "d"),
             ("Gcnot", "aux", "c"),
             ("Gh", "aux"),
-            ("Iz", "aux"),
+            ("Imrz", "aux"),
         ],
         qubit_labels=["a", "b", "c", "d", "aux"],
     )
@@ -189,7 +189,7 @@ def build_se_templates(circuit_backend: type[BasePhysicalCircuit]):
             ("Gcnot", "a", "aux"),
             ("Gcnot", "c", "aux"),
             [],
-            ("Iz", "aux"),
+            ("Imrz", "aux"),
         ],
         qubit_labels=["a", "b", "c", "d", "aux"],
     )
@@ -328,7 +328,7 @@ def create_qec_code(
     # 1. State preparation
     # Z-basis preparation (|0>_L)
     raw_Z_prep_circ = circuit_backend(
-        [[("Iz", q) for q in data_qubits]], qubit_labels=qubits
+        [[("Imrz", q) for q in data_qubits]], qubit_labels=qubits
     )
     if idle_layout is not None:
         raw_Z_prep_circ.pad_single_qubit_idles_by_duration_inplace(
@@ -341,7 +341,7 @@ def create_qec_code(
 
     # X-basis preparation (|+>_L)
     raw_X_prep_circ = circuit_backend(
-        [[("Iz", q) for q in data_qubits], [("Gh", q) for q in data_qubits]],
+        [[("Imrz", q) for q in data_qubits], [("Gh", q) for q in data_qubits]],
         qubit_labels=qubits,
     )
     if idle_layout is not None:
@@ -695,12 +695,12 @@ def create_qec_code(
 
     # 5. Raw data qubit measurements
     raw_Z_meas_circ = circuit_backend(
-        [[("Iz", q) for q in data_qubits]], qubit_labels=qubits
+        [[("Imrz", q) for q in data_qubits]], qubit_labels=qubits
     )
     raw_X_meas_circ = circuit_backend(
         [
             [("Gh", q) for q in data_qubits],
-            [("Iz", q) for q in data_qubits],
+            [("Imrz", q) for q in data_qubits],
         ],
         qubit_labels=qubits,
     )
@@ -1211,7 +1211,7 @@ def create_ideal_model(
                     UnitaryGateRep(U, qs), gaterep, qs
                 )
 
-        inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
+        inst_dict = {("Imrz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
             gate_dict, inst_dict, gatereps=[gaterep], instreps=[instrep]

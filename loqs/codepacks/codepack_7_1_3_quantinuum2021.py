@@ -116,7 +116,7 @@ def create_qec_code(
         }
         gate_durations["Gcnot"] = 2
         gate_durations["Gi2Q"] = 2
-        gate_durations["Iz"] = 3
+        gate_durations["Imrz"] = 3
         gate_durations["GiMCM"] = 3
     if idle_gates is None:
         idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
@@ -161,7 +161,7 @@ def create_qec_code(
     # Qubit reset in case of failure
     reset = builders.build_physical_circuit_instruction(
         circuit_backend(
-            [[("Iz", q) for q in qubits[3:]]], qubit_labels=qubits
+            [[("Imrz", q) for q in qubits[3:]]], qubit_labels=qubits
         ),
         name="Reset to all 0 state",
     )
@@ -172,7 +172,7 @@ def create_qec_code(
             [("Gcnot", "D1", "A0")],
             [("Gcnot", "D3", "A0")],
             [("Gcnot", "D5", "A0")],
-            [("Iz", "A0")],
+            [("Imrz", "A0")],
         ],
         qubit_labels=qubits,
     )
@@ -308,7 +308,7 @@ def create_qec_code(
                 ("Gcnot", "D1", "A1"),
             ],
             [("Gh", "A0")],
-            [("Iz", "A0"), ("Iz", "A1"), ("Iz", "A2")],
+            [("Imrz", "A0"), ("Imrz", "A1"), ("Imrz", "A2")],
         ],
         qubit_labels=qubits,
     )
@@ -350,7 +350,7 @@ def create_qec_code(
                 ("Gcnot", "A1", "D1"),
             ],
             [("Gh", "A1"), ("Gh", "A2")],
-            [("Iz", "A0"), ("Iz", "A1"), ("Iz", "A2")],
+            [("Imrz", "A0"), ("Imrz", "A1"), ("Imrz", "A2")],
         ],
         qubit_labels=qubits,
     )
@@ -369,12 +369,12 @@ def create_qec_code(
     # Scheduling less clear, we provide individual and merged Z/X circuits
     # We do this by defining a template circuit and mapping to the various plaquettes
     Z_temp_circ = circuit_backend(
-        [[("Gcnot", q, "aux")] for q in "abcd"] + [[("Iz", "aux")]]
+        [[("Gcnot", q, "aux")] for q in "abcd"] + [[("Imrz", "aux")]]
     )
     X_temp_circ = circuit_backend(
         [[("Gh", "aux")]]
         + [[("Gcnot", "aux", q)] for q in "abcd"]
-        + [[("Gh", "aux")], [("Iz", "aux")]]
+        + [[("Gh", "aux")], [("Imrz", "aux")]]
     )
     mappings = {
         0: ["D0", "D1", "D2", "D3"],
@@ -448,12 +448,12 @@ def create_qec_code(
     ## MEASURE
     # Full data qubit measurements
     raw_Z_meas_circ = circuit_backend(
-        [[("Iz", q) for q in qubits[3:]]], qubit_labels=qubits
+        [[("Imrz", q) for q in qubits[3:]]], qubit_labels=qubits
     )
     raw_X_meas_circ = circuit_backend(
         [
             [("Gh", q) for q in qubits[3:]],
-            [("Iz", q) for q in qubits[3:]],
+            [("Imrz", q) for q in qubits[3:]],
         ],
         qubit_labels=qubits,
     )
@@ -1067,7 +1067,7 @@ def create_ideal_model(  # noqa: C901
 
         # Setting the value as (0, True) here means it will reset to 0 state
         # and it will record the outcomes
-        inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
+        inst_dict = {("Imrz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
             gate_dict, inst_dict, gatereps=[gaterep], instreps=[instrep]

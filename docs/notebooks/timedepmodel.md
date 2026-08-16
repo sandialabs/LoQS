@@ -193,7 +193,7 @@ model_td1.default_gate_durations = {
 }
 
 model_td1.default_instrument_durations = {
-    "Iz": 100
+    "Imrz": 100
 }
 ```
 

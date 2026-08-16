@@ -124,7 +124,7 @@ def create_qec_code(
         gate_durations["Gcnot"] = 2
         gate_durations["Gcphase"] = 2
         gate_durations["Gi2Q"] = 2
-        gate_durations["Iz"] = 3
+        gate_durations["Imrz"] = 3
         gate_durations["GiMCM"] = 3
     if idle_gates is None:
         idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
@@ -161,7 +161,7 @@ def create_qec_code(
     # Qubit reset in case of failure
     reset = builders.build_physical_circuit_instruction(
         circuit_backend(
-            [[("Iz", q) for q in qubits[2:]]], qubit_labels=qubits
+            [[("Imrz", q) for q in qubits[2:]]], qubit_labels=qubits
         ),
         name="Reset to all 0 state",
     )
@@ -177,7 +177,7 @@ def create_qec_code(
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D4"),
             ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
             # FT check 2
             ("Gh", "A0"),
             ("Gcphase", "A0", "D0"),
@@ -186,7 +186,7 @@ def create_qec_code(
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D2"),
             ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
             # FT check 3
             ("Gh", "A0"),
             ("Gcnot", "A0", "D3"),
@@ -195,7 +195,7 @@ def create_qec_code(
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D4"),
             ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -413,12 +413,12 @@ def create_qec_code(
     # In the prime basis, Zbar = ZIZIZ and Xbar = XIXIX
     # So we can do physical Z/X measurements and it makes sense to do so
     raw_Z_meas_circ = circuit_backend(
-        [[("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")]], qubit_labels=qubits
+        [[("Imrz", "D0"), ("Imrz", "D2"), ("Imrz", "D4")]], qubit_labels=qubits
     )
     raw_X_meas_circ = circuit_backend(
         [
             [("Gh", "D0"), ("Gh", "D2"), ("Gh", "D4")],
-            [("Iz", "D0"), ("Iz", "D2"), ("Iz", "D4")],
+            [("Imrz", "D0"), ("Imrz", "D2"), ("Imrz", "D4")],
         ],
         qubit_labels=qubits,
     )
@@ -529,11 +529,11 @@ def create_qec_code(
                 ("Gh", "D4"),
             ],
             [
-                ("Iz", "D0"),
-                ("Iz", "D1"),
-                ("Iz", "D2"),
-                ("Iz", "D3"),
-                ("Iz", "D4"),
+                ("Imrz", "D0"),
+                ("Imrz", "D1"),
+                ("Imrz", "D2"),
+                ("Imrz", "D3"),
+                ("Imrz", "D4"),
             ],
         ],
         qubit_labels=qubits,
@@ -707,7 +707,7 @@ def create_ideal_model(  # noqa: C901
 
         # Setting the value as (0, True) here means it will reset to 0 state
         # and it will record the outcomes
-        inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
+        inst_dict = {("Imrz", (q,)): (0, True) for q in qubits}
 
         return DictNoiseModel(
             gate_dict, inst_dict, gatereps=[gaterep], instreps=[instrep]
@@ -1021,7 +1021,7 @@ def _create_adaptive_measure_instruction_part_I(
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D1"),
             ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1215,7 +1215,7 @@ def _create_adaptive_measure_instruction_part_II(
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D2"),
             ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1422,7 +1422,7 @@ def _create_adaptive_measure_instruction_part_III(
             ("Gcnot", "A0", "A1"),
             ("Gcphase", "A0", "D4"),
             ("Gh", "A0"),
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1714,7 +1714,7 @@ def _create_unflagged_QEC_instruction(
             [("Gcphase", "A0", "D2")],
             [("Gcnot", "A0", "D3")],
             [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Imrz", "A0")],
         ],
         qubit_labels=qubits,
     )
@@ -1738,7 +1738,7 @@ def _create_unflagged_QEC_instruction(
             [("Gcphase", "A0", "D3")],
             [("Gcnot", "A0", "D4")],
             [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Imrz", "A0")],
         ],
         qubit_labels=qubits,
     )
@@ -1762,7 +1762,7 @@ def _create_unflagged_QEC_instruction(
             [("Gcphase", "A0", "D3")],
             [("Gcphase", "A0", "D4")],
             [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Imrz", "A0")],
         ],
         qubit_labels=qubits,
     )
@@ -1786,7 +1786,7 @@ def _create_unflagged_QEC_instruction(
             [("Gcnot", "A0", "D3")],
             [("Gcphase", "A0", "D4")],
             [("Gh", "A0")],
-            [("Iz", "A0")],
+            [("Imrz", "A0")],
         ],
         qubit_labels=qubits,
     )
@@ -1912,7 +1912,7 @@ def _create_flagged_QEC_instruction(
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D3")],
             [("Gh", "A0")],
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1938,7 +1938,7 @@ def _create_flagged_QEC_instruction(
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcnot", "A0", "D4")],
             [("Gh", "A0")],
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1964,7 +1964,7 @@ def _create_flagged_QEC_instruction(
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D4")],
             [("Gh", "A0")],
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )
@@ -1990,7 +1990,7 @@ def _create_flagged_QEC_instruction(
             [("Gcnot", "A0", "A1")],  # Flag
             [("Gcphase", "A0", "D4")],
             [("Gh", "A0")],
-            [("Iz", "A0"), ("Iz", "A1")],
+            [("Imrz", "A0"), ("Imrz", "A1")],
         ],
         qubit_labels=qubits,
     )

@@ -64,7 +64,7 @@ def _build_explicit_model():
     model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
     model.operations[Label("Gxpi", "Q0")] = FullArbitraryOp(np.eye(4), basis="pp")
     model.operations[Label("Gad", "Q0")] = FullArbitraryOp(_AMP_DAMP_SUPEROP, basis="pp")
-    model.instruments[Label("Iz", "Q0")] = Instrument(
+    model.instruments[Label("Imrz", "Q0")] = Instrument(
         {"0": _ZBASIS_P0, "1": _ZBASIS_P1}
     )
     return model
@@ -81,7 +81,7 @@ def _build_implicit_model():
     model.operation_blks["layers"][Label("Gad", "Q0")] = FullArbitraryOp(
         _AMP_DAMP_SUPEROP, basis="pp"
     )
-    model.instrument_blks["layers"][Label("Iz", "Q0")] = Instrument(
+    model.instrument_blks["layers"][Label("Imrz", "Q0")] = Instrument(
         {"0": _ZBASIS_P0, "1": _ZBASIS_P1}
     )
     return model
@@ -115,13 +115,13 @@ class TestConstruction:
     def test_from_explicit_op_model(self):
         pgm = PyGSTiNoiseModel(_build_explicit_model())
         assert ("Gxpi", ["Q0"]) in pgm.gate_keys
-        assert ("Iz", ["Q0"]) in pgm.instrument_keys
+        assert ("Imrz", ["Q0"]) in pgm.instrument_keys
         assert pgm.use_embedded_op is False
 
     def test_from_implicit_op_model(self):
         pgm = PyGSTiNoiseModel(_build_implicit_model())
         assert ("Gxpi", ["Q0"]) in pgm.gate_keys
-        assert ("Iz", ["Q0"]) in pgm.instrument_keys
+        assert ("Imrz", ["Q0"]) in pgm.instrument_keys
         assert pgm.use_embedded_op is True
 
     def test_default_qubit_aliases_are_identity(self):
@@ -334,7 +334,7 @@ class TestGetInstrumentRep:
 
     def test_zbasis_projection(self, pgm):
         rep = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisProjectionInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisProjectionInstrumentRep]
         )
         assert isinstance(rep, ZBasisProjectionInstrumentRep)
         assert rep.reset == 0  # zbasis_proj_resets=True by default
@@ -342,7 +342,7 @@ class TestGetInstrumentRep:
 
     def test_zbasis_outcome_operation_dict(self, pgm):
         rep = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         assert isinstance(rep, ZBasisOutcomeOperationDictInstrumentRep)
         assert rep.include_outcome is True
@@ -359,18 +359,18 @@ class TestGetInstrumentRep:
         with pytest.raises(
             RepConstructionError, match="Failed to create instrument rep for any of"
         ):
-            pgm._get_instrument_rep("Iz", ["Q0"], [StimCircuitInstrumentRep])
+            pgm._get_instrument_rep("Imrz", ["Q0"], [StimCircuitInstrumentRep])
 
     def test_caches_result_when_not_time_dependent(self, pgm):
         assert pgm._inst_rep_cache == {}
         rep = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisProjectionInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisProjectionInstrumentRep]
         )
         assert pgm._inst_rep_cache == {
-            (("Iz", "Q0"), ZBasisProjectionInstrumentRep): rep
+            (("Imrz", "Q0"), ZBasisProjectionInstrumentRep): rep
         }
         assert (
-            pgm._get_instrument_rep("Iz", ["Q0"], [ZBasisProjectionInstrumentRep])
+            pgm._get_instrument_rep("Imrz", ["Q0"], [ZBasisProjectionInstrumentRep])
             is rep
         )
 
@@ -378,7 +378,7 @@ class TestGetInstrumentRep:
         pgm = PyGSTiNoiseModel(
             _build_explicit_model(), use_time_dependence=True
         )
-        pgm._get_instrument_rep("Iz", ["Q0"], [ZBasisProjectionInstrumentRep])
+        pgm._get_instrument_rep("Imrz", ["Q0"], [ZBasisProjectionInstrumentRep])
         assert pgm._inst_rep_cache == {}
 
     def test_repeated_outcome_operation_dict_lookup_skips_rechecking(self):
@@ -459,14 +459,14 @@ class TestTimeDependence:
             _build_explicit_model(),
             use_time_dependence=True,
             default_gate_durations={Label("Gxpi", "Q0"): 5, "Gad": 7},
-            default_instrument_durations={Label("Iz", "Q0"): 3},
+            default_instrument_durations={Label("Imrz", "Q0"): 3},
         )
 
     @pytest.mark.parametrize(
         "method,label",
         [
             ("get_gate_duration", Label("Gxpi", "Q0")),
-            ("get_instrument_duration", Label("Iz", "Q0")),
+            ("get_instrument_duration", Label("Imrz", "Q0")),
         ],
     )
     def test_disabled_always_returns_zero(self, pgm, method, label):
@@ -477,7 +477,7 @@ class TestTimeDependence:
         assert pgm_time_dependent.get_gate_duration(label) == 1.5
 
     def test_instrument_duration_from_label_with_time(self, pgm_time_dependent):
-        label = Label("Iz", "Q0", time=2.5)
+        label = Label("Imrz", "Q0", time=2.5)
         assert pgm_time_dependent.get_instrument_duration(label) == 2.5
 
     @pytest.mark.parametrize(
@@ -503,7 +503,7 @@ class TestTimeDependence:
             _build_explicit_model(), use_time_dependence=True
         )
         with pytest.raises(ValueError, match="no default instrument durations"):
-            pgm.get_instrument_duration(Label("Iz", "Q0"))
+            pgm.get_instrument_duration(Label("Imrz", "Q0"))
 
     def test_gate_duration_exact_label_match(self, pgm_time_dependent):
         assert pgm_time_dependent.get_gate_duration(Label("Gxpi", "Q0")) == 5
@@ -515,7 +515,7 @@ class TestTimeDependence:
         assert pgm_time_dependent.get_gate_duration(Label("Gad", "Q0")) == 7
 
     def test_instrument_duration_exact_label_match(self, pgm_time_dependent):
-        assert pgm_time_dependent.get_instrument_duration(Label("Iz", "Q0")) == 3
+        assert pgm_time_dependent.get_instrument_duration(Label("Imrz", "Q0")) == 3
 
     def test_gate_duration_not_found_raises_key_error(self, pgm_time_dependent):
         with pytest.raises(KeyError, match="not available by label or name"):
@@ -537,12 +537,12 @@ class TestTimeDependence:
             _build_explicit_model(),
             use_time_dependence=True,
             default_gate_durations={"Gxpi": 5, "Gad": 2},
-            default_instrument_durations={"Iz": 3},
+            default_instrument_durations={"Imrz": 3},
         )
         assert pgm.current_time == 0.0
 
         circuit = PyGSTiPhysicalCircuit(
-            [("Gxpi", "Q0"), ("Gad", "Q0"), ("Iz", "Q0")], ["Q0"]
+            [("Gxpi", "Q0"), ("Gad", "Q0"), ("Imrz", "Q0")], ["Q0"]
         )
         pgm.get_reps(
             circuit,
@@ -551,7 +551,7 @@ class TestTimeDependence:
         )
 
         # Gxpi (5) and Gad (2) can't share a layer (both act on Q0), and
-        # Iz (3) is its own layer too -- so total elapsed time is 5+2+3=10.
+        # Imrz (3) is its own layer too -- so total elapsed time is 5+2+3=10.
         assert pgm.current_time == 10.0
 
     def test_get_reps_does_not_reconstruct_already_correct_circuit_type(self):
@@ -787,13 +787,13 @@ class TestGetRepsErrorPaths:
         collapses the length-1 tuple keys to bare ints, same as the
         string-keyed fixture."""
         model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
-        model.instruments[Label("Iz", "Q0")] = Instrument(
+        model.instruments[Label("Imrz", "Q0")] = Instrument(
             {(0,): np.eye(4, dtype=complex), (1,): np.eye(4, dtype=complex)}
         )
         pgm = PyGSTiNoiseModel(model)
 
         rep = pgm._get_instrument_rep(
-            "Iz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
         )
         assert set(rep.outcome_ops.keys()) == {0, 1}
 
@@ -804,7 +804,7 @@ class TestGetRepsErrorPaths:
         arbitrary hashable keys are only restricted once there's more than
         one physical qubit and no declared `instrument_outcome_qubits`."""
         model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
-        model.instruments[Label("Iz", "Q0")] = Instrument(
+        model.instruments[Label("Imrz", "Q0")] = Instrument(
             {"a": np.eye(4, dtype=complex), "b": np.eye(4, dtype=complex)}
         )
         pgm = PyGSTiNoiseModel(model)
@@ -928,9 +928,9 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(
             _build_explicit_model(),
             use_time_dependence=True,
-            default_instrument_durations={"Iz": 1},
+            default_instrument_durations={"Imrz": 1},
         )
-        circuit = PyGSTiPhysicalCircuit([("Iz", "Q0")], ["Q0"])
+        circuit = PyGSTiPhysicalCircuit([("Imrz", "Q0")], ["Q0"])
         reps = pgm.get_reps(
             circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep]
         )

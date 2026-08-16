@@ -585,7 +585,7 @@ class TestJointParity:
     def test_joint_parities_on_bell(self, layout):
         """A Bell pair has even ZZ AND even XX parity in the same shot.
 
-        Both parities are measured with the SAME ancilla (Iz resets it),
+        Both parities are measured with the SAME ancilla (Imrz resets it),
         proving the ZZ measurement leaves the state intact for XX.
         """
         stack, all_q = bell_joint_parity_stack(layout)

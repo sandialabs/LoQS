@@ -323,11 +323,11 @@ class TestIntegratedNoise:
                 name=f"Noisy I on {q}"
             )
             instructions[f"Mz{q[1]}"] = builders.build_physical_circuit_instruction(
-                ListPhysicalCircuit([[("Iz", (q,))]]),
+                ListPhysicalCircuit([[("Imrz", (q,))]]),
                 name=f"Mz on {q}"
             )
             instructions[f"Mx{q[1]}"] = builders.build_physical_circuit_instruction(
-                ListPhysicalCircuit([[("Gh", (q,))],[("Iz", (q,))]]),
+                ListPhysicalCircuit([[("Gh", (q,))],[("Imrz", (q,))]]),
                 name=f"Mx on {q}"
             )
 
@@ -349,6 +349,6 @@ class TestIntegratedNoise:
                 gate_dict[('Gh', (q,))] = "H 0"
                 gate_dict[('Gx', (q,))] = "X 0"
 
-        inst_dict = {("Iz", (q,)): (0, True) for q in qubits}
+        inst_dict = {("Imrz", (q,)): (0, True) for q in qubits}
 
         return gate_dict, inst_dict
