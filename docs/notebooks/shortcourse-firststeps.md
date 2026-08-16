@@ -118,8 +118,10 @@ init_frame = Frame({"state": init_state, "patches": init_patches})
 init_history = History(init_frame)
 
 # And finally, let's create our stack for a |0> state preservation with one round of QEC
-# The labels here are (key in steane_code.instructions, key in the Frame's patches)
-# There are two more possible arguments, but we will skip them for now
+# Each entry becomes an InstructionLabel, really just a dict:
+# {"instruction": <key in steane_code.instructions>, "patch_label": <key in the Frame's patches>, **other kwargs}
+# The (instruction, patch_label) tuple below is shorthand for that dict when
+# there are no other kwargs -- see the "Building a Complex Instruction" tutorial.
 stack = InstructionStack([
     ("FT Zero Prep", "L0"),
     ("Adaptive QEC", "L0"),

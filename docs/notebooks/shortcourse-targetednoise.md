@@ -173,8 +173,7 @@ program2.run(100).collect_shot_data("logical_measurement", -1, return_counter=Tr
 
 Instead of creating a new Instruction, we can just pass the model in to the Instruction's apply_fn at runtime.
 
-We can do this by using the (so far unused) extra arguments to an InstructionLabel. The general InstructionLabel looks like `(Instruction label, patch label, apply fn args, apply fn kwargs)`.
-Often it is safer to use the kwargs rather than the args, unless you know exactly what the apply_fn signature is.
+We can do this by using the (so far unused) extra keys of an InstructionLabel. An InstructionLabel is a dict with an `"instruction"` key plus any number of extra keyword arguments, e.g. `{"instruction": ..., "patch_label": ..., **apply_fn_kwargs}`; any extra keys are passed straight through to the Instruction's apply_fn as kwargs.
 
 So this approach would look like:
 
@@ -183,7 +182,7 @@ So this approach would look like:
 stack3 = InstructionStack([
     ("FT Zero Prep", "L0"),
     ("I", "L0"),
-    ("I", "L0", (), {"model": depol_Gi_model}), # Empty args, model as a kwarg
+    {"instruction": "I", "patch_label": "L0", "model": depol_Gi_model}, # model override as a kwarg, just for this one instruction
     ("Adaptive QEC", "L0"),
     ("FT Logical Z Measure", "L0")
 ])
@@ -239,7 +238,7 @@ Then we use the following stack:
 ```
 stack = InstructionStack([
     ("FT Zero Prep", "L0"),
-    ("X", "L0", (), {"model": overrot_Gx_model}),
+    {"instruction": "X", "patch_label": "L0", "model": overrot_Gx_model},
     ("Adaptive QEC", "L0"),
     ("FT Logical Z Measure", "L0")
 ])
@@ -328,7 +327,7 @@ So this error injection would be (4, "Gxpi", qubits.index("A0")).
 # Regular program but with X injected during first flagged checks
 stack6 = InstructionStack([
     ("FT Zero Prep", "L0"),
-    ("Flagged Parallel S1-S5-S6 Check", "L0", (), {"error_injections": [(4, "Gxpi", qubits.index("A0"))]}),
+    {"instruction": "Flagged Parallel S1-S5-S6 Check", "patch_label": "L0", "error_injections": [(4, "Gxpi", qubits.index("A0"))]},
     ("Flagged S1-S5-S6 Feed-Forward", "L0"),
     ("FT Logical Z Measure", "L0")
 ])

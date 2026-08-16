@@ -65,8 +65,8 @@ class TestIntegratedNoise:
         )
 
         stack_Zbasis = [
-            ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
-            ("Init Patch 1Q", None, ("L0", ["Q0"])),
+            {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]},
+            {"instruction": "Init Patch 1Q", "new_patch_label": "L0", "qubits": ["Q0"]},
             ("I0", "L0"),
             ("Mz0", "L0")
         ]
@@ -90,8 +90,8 @@ class TestIntegratedNoise:
 
         # Also test QuantumSim in the X basis
         stack_Xbasis = [
-            ("Init State", None, (1,), {"qubit_labels": ["Q0"]}),
-            ("Init Patch 1Q", None, ("L0", ["Q0"])),
+            {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]},
+            {"instruction": "Init Patch 1Q", "new_patch_label": "L0", "qubits": ["Q0"]},
             ("H0", "L0"),
             ("I0", "L0"),
             ("H0", "L0"),
@@ -186,8 +186,8 @@ class TestIntegratedNoise:
         )
 
         stack_Zbasis = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch 3Q", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch 3Q", "new_patch_label": "L0", "qubits": qubits},
             ("X0", "L0"), # Start qubit 0 in 1
             ("H2", "L0"), # Start qubit 2 in +
             ("X1", "L0"),
@@ -222,8 +222,8 @@ class TestIntegratedNoise:
 
         # We can test in prep X, meas Z basis also
         stack_Zprep_Xbasis = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch 3Q", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch 3Q", "new_patch_label": "L0", "qubits": qubits},
             ("X0", "L0"), # Start qubit 0 in 1
             ("H2", "L0"), # Start qubit 2 in +
             ("H1", "L0"),
@@ -239,8 +239,8 @@ class TestIntegratedNoise:
 
         # We can test in X basis also
         stack_Xbasis = [
-            ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-            ("Init Patch 3Q", None, ("L0", qubits)),
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch 3Q", "new_patch_label": "L0", "qubits": qubits},
             ("X0", "L0"), # Start qubit 0 in 1
             ("H2", "L0"), # Start qubit 2 in +
             ("H1", "L0"),

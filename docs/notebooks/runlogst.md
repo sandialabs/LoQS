@@ -52,8 +52,8 @@ program_kwargs = {
 ```{code-cell} ipython3
 physical_to_logical = {
     "rho0": [
-        ("Init State", None, (len(qubits),), {"qubit_labels": qubits}),
-        ("Init Patch 5Q", None, ("L0", qubits)),
+        {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+        {"instruction": "Init Patch 5Q", "new_patch_label": "L0", "qubits": qubits},
         ("Non-FT Minus Prep", "L0"), # in logical minus
         ('H', "L0"), # in logical 1
         ('X', "L0"), # in logical 0

@@ -63,7 +63,7 @@ def build_discrete_error_injection_program_for_combo(
     assert isinstance(instruction_label, InstructionLabel)
 
     new_label = deepcopy(instruction_label)
-    new_label.inst_kwargs["error_injections"] = list(error_injections)
+    new_label["error_injections"] = list(error_injections)
 
     new_stack = base_program.instruction_stack.delete_instruction(
         stack_idx_to_modify
@@ -316,7 +316,7 @@ def build_discrete_error_injection_programs(
         new_label = deepcopy(instruction_label)
 
         # Inject a weight-2 error
-        new_label.inst_kwargs["error_injections"] = [
+        new_label["error_injections"] = [
             (layer, eclabel1, qubit1),
             (layer, eclabel2, qubit2),
         ]
@@ -343,7 +343,7 @@ def build_discrete_error_injection_programs(
         new_label = deepcopy(instruction_label)
 
         # Inject a weight-1 error
-        new_label.inst_kwargs["error_injections"] = [(layer, eclabel, qubit)]
+        new_label["error_injections"] = [(layer, eclabel, qubit)]
 
         new_stack = base_program.instruction_stack.delete_instruction(
             stack_idx_to_modify

@@ -94,8 +94,12 @@ def partI_apply_fn(
         # We go to decoding circuit  (forward reference, must match key later)
         next_instruction = "Non-FT Minus Unprep"
 
-    # We need to make sure and feed the patch label forward
-    new_label = InstructionLabel(next_instruction, patch_label)
+    # We need to make sure and feed the patch label forward.
+    # InstructionLabel is really just a dict: {"instruction": ..., **kwargs},
+    # so "patch_label" is an ordinary keyword here, not a positional slot
+    # (only casting an InstructionStack from a bare tuple gets the
+    # (instruction, patch_label) 2-tuple shorthand instead).
+    new_label = InstructionLabel(next_instruction, patch_label=patch_label)
     new_stack = stack.insert_instruction(0, new_label)
 
     # Return new frame
@@ -194,7 +198,7 @@ def partII_apply_fn(
             next_instruction = "Non-FT Minus Unprep"
 
     # We need to make sure and feed the patch label forward
-    new_label = InstructionLabel(next_instruction, patch_label)
+    new_label = InstructionLabel(next_instruction, patch_label=patch_label)
     new_stack = stack.insert_instruction(0, new_label)
 
     # Return new frame
@@ -281,7 +285,7 @@ def partIII_apply_fn(
         next_instruction = "Adaptive Measure Termination"
 
     # We need to make sure and feed the patch label forward
-    new_label = InstructionLabel(next_instruction, patch_label)
+    new_label = InstructionLabel(next_instruction, patch_label=patch_label)
     new_stack = stack.insert_instruction(0, new_label)
 
     # Return new frame

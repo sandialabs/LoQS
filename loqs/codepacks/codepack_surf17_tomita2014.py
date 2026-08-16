@@ -39,8 +39,8 @@ Preservation of logical state |0>_L over 3 QEC cycles under single-fault injecti
 >>> qubits = [f'D{i}' for i in range(9)] + [f'A{i}' for i in range(9, 17)]
 >>> model = cp.create_ideal_model(qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 >>> stack = [
-...     ('Init State', None, (len(qubits),), {'qubit_labels': qubits}),
-...     ('Init Patch SURF', None, ('L0', qubits)),
+...     {'instruction': 'Init State', 'state': len(qubits), 'qubit_labels': qubits},
+...     {'instruction': 'Init Patch SURF', 'new_patch_label': 'L0', 'qubits': qubits},
 ...     ('Zero Prep', 'L0'),
 ...     ('QEC', 'L0'),
 ...     ('FT Logical Z Measure', 'L0')
