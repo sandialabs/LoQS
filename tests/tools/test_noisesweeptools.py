@@ -38,7 +38,7 @@ FLIP_COIN = Instruction(apply_fn=_flip_coin_apply, name="Flip Coin")
 
 def make_stack(fail_prob):
     """Build a one-instruction stack whose failure probability is `fail_prob`."""
-    return [("Flip Coin", None, (), {"fail_prob": fail_prob})]
+    return [{"instruction": "Flip Coin", "fail_prob": fail_prob}]
 
 
 def identity_noise_model(strength):
@@ -81,7 +81,7 @@ class TestBuildProgram:
         assert program0.name == "point-0.01"
         assert program1.name == "point-0.02"
         # instruction_stack (also callable) should resolve per-point too
-        assert program0.instruction_stack.pop_instruction()[0].inst_kwargs[
+        assert program0.instruction_stack.pop_instruction()[0][
             "fail_prob"
         ] == 0.01
 

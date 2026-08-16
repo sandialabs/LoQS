@@ -622,11 +622,8 @@ class QuantumProgram(Displayable):
 
             inst_label, stack = stack.pop_instruction()
 
-            # The label itself is used directly as the "label" priority's
-            # kwarg source -- every key it carries (including its own
-            # "instruction" key, which no real apply_fn parameter is ever
-            # named) is a candidate value, keyed by name only; there is no
-            # positional slot to check first.
+            # The label itself is the "label" priority's kwarg source --
+            # every key it carries is a candidate value, keyed by name only.
             patch_label = inst_label.get("patch_label")
             label_kwargs = inst_label
 
@@ -735,10 +732,8 @@ class QuantumProgram(Displayable):
 
         patch_label = ilbl.get("patch_label")
 
-        # A Mapping here means a multi-patch label ("patch_labels") -- name
-        # resolution against a single patch's own instruction set isn't
-        # meaningful for that case; multi-patch instructions must always be
-        # given as an already-built Instruction, not a name to look up.
+        # A Mapping means a multi-patch label ("patch_labels"): name-based
+        # resolution isn't meaningful there, only an already-built Instruction is.
         if isinstance(patch_label, Mapping):
             raise RuntimeError(
                 f"Cannot resolve a named instruction ({inst_name!r}) against "
@@ -887,14 +882,9 @@ class QuantumProgram(Displayable):
                 if key in instruction_data:
                     return instruction_data[key]
             elif priority == "patch_data":
-                # FUTURE WORK: this only ever auto-sources from a single
-                # named patch (via program_data["patch_label"]). A
-                # multi-patch label's "patch_labels" mapping has no
-                # equivalent per-named-patch auto-sourcing yet (e.g. a
-                # "patch_data[ctrl]"-style priority to pick one named
-                # patch out of "patch_labels") -- deferred pending the
-                # planned PatchLayout follow-up work, since that may
-                # reshape how patch data is accessed anyway.
+                # FUTURE WORK: only auto-sources from a single named patch.
+                # Per-named-patch sourcing for a "patch_labels" mapping
+                # (e.g. a "patch_data[ctrl]" priority) is not implemented yet.
 
                 # Extract patch_label from program_data
                 patch_label = program_data.get("patch_label", None)

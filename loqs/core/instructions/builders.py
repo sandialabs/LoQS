@@ -174,9 +174,8 @@ def build_composite_instruction(
                 new_label = InstructionLabel(inst_or_label, **kwargs)
             else:
                 inst_or_label = InstructionLabel.from_raw(inst_or_label)
-                # Exclude "instruction" from the spread -- it's re-supplied
-                # positionally below, and duplicating it as a kwarg would
-                # raise "got multiple values for argument 'instruction'".
+                # Exclude "instruction" -- it's re-supplied positionally
+                # below, so keeping it here would duplicate the argument.
                 nested_kwargs = {
                     k: v for k, v in inst_or_label.items() if k != "instruction"
                 }
@@ -211,14 +210,9 @@ def build_composite_instruction(
     param_priorities = {k: DEFAULT_PRIORITIES for k in data.keys()}
 
     # Pull in the parameter priorities of any already-resolved underlying
-    # instructions, so a kwarg meant for a nested instruction (e.g. a
-    # per-call "patch_label"/"patch_labels"/"model") is actually collected
-    # here and forwarded via apply_fn's **kwargs above, instead of being
-    # silently dropped before apply_fn even runs. This composite's apply_fn
-    # deliberately has no explicit parameters beyond "stack"/"instructions"
-    # (both already covered by `data.keys()` above) -- everything else,
-    # including "patch_label"/"patch_labels", must come from this pull-up,
-    # exactly like any other nested-instruction-specific kwarg.
+    # instructions, so a kwarg meant for a nested instruction (e.g.
+    # "patch_label"/"patch_labels"/"model") is actually collected here and
+    # forwarded via apply_fn's **kwargs, instead of being silently dropped.
     reserved_keys = {"stack", "instructions", "patches"} | data.keys()
     for inst_or_label in instructions:
         if isinstance(inst_or_label, Instruction):
@@ -632,11 +626,10 @@ def build_patch_builder_instruction(
 
     The apply function takes:
 
-    - `new_patch_label`, usually taken from `InstructionLabel`. Named
-      `new_patch_label` rather than `patch_label` because this instruction
-      is invoked as a *global* instruction (its own routing `patch_label`
-      is `None`) -- the label it takes here is the new patch being
-      created, not the patch this instruction itself is resolved against.
+    - `new_patch_label`, usually taken from `InstructionLabel`. Not called
+      `patch_label` since this instruction is always invoked globally
+      (routing `patch_label` is `None`) -- this names the new patch being
+      created, not the patch the instruction itself resolves against.
     - `qubits`, usually taken from `InstructionLabel`
     - `qec_code`, usually taken from `Instruction.data`
     - `patches`, usually taken from the previous frame,
@@ -753,11 +746,10 @@ def build_patch_remover_instruction(
 
     The apply function takes:
 
-    - `del_patch_label`, usually taken from `InstructionLabel`. Named
-      `del_patch_label` rather than `patch_label` because this instruction
-      is invoked as a *global* instruction (its own routing `patch_label`
-      is `None`) -- the label it takes here is the patch being removed,
-      not the patch this instruction itself is resolved against.
+    - `del_patch_label`, usually taken from `InstructionLabel`. Not called
+      `patch_label` since this instruction is always invoked globally
+      (routing `patch_label` is `None`) -- this names the patch being
+      removed, not the patch the instruction itself resolves against.
     - `patches`, usually taken from the previous frame
 
     It returns a `Frame` with an updated `patches` without the

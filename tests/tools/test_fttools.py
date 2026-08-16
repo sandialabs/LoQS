@@ -88,10 +88,7 @@ class TestPauliPropagation:
 
     def test_propagate_x_through_hadamard_becomes_z(self):
         _, _, circ = _build_circuit_program()
-        # X on Q0 propagated from layer 0 (H then CNOT) -> Z on control,
-        # untouched by the CNOT since CNOT doesn't touch a lone Z on
-        # control... but H maps X->Z, then CNOT(control=Q0) propagates Z
-        # unchanged on the control (Z_control commutes through CNOT).
+        # H maps X->Z; a lone Z on the CNOT control commutes through unchanged.
         signature = fttools.propagate_pauli_signature(circ, 0, {0: "X"})
         assert signature == ((0, "Z"),)
 

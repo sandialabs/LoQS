@@ -149,12 +149,9 @@ class InstructionLabel(dict):
         if isinstance(obj, (Instruction, str)):
             return cls(obj)
         if isinstance(obj, Sequence):
-            # Only the succinct (instruction, patch_label) 2-tuple is kept
-            # as positional sugar -- anything needing more (multiple
-            # patches, or any other kwarg) must use the dict form, since a
-            # historical inst_args position could only ever be mapped
-            # onto the right keyword by knowing the target instruction's
-            # real parameter order, which isn't available here.
+            # Only the (instruction, patch_label) 2-tuple is kept as sugar;
+            # a longer tuple can't be resolved to the right keywords
+            # without already knowing the target instruction's parameters.
             if len(obj) == 1:
                 return cls(obj[0])
             if len(obj) == 2:

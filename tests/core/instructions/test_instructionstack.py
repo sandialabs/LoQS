@@ -86,10 +86,8 @@ class TestInstructionStack:
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_serialization_round_trip(self, format, make_temp_path):
-        # Every decoded entry comes back as a real InstructionLabel (not a
-        # bare dict), because InstructionStack.__init__ re-normalizes every
-        # element through InstructionLabel.from_raw on construction --
-        # including the construction that happens during decode.
+        # Every decoded entry comes back as a real InstructionLabel, since
+        # InstructionStack.__init__ re-normalizes elements on construction.
         stack = InstructionStack([self.ilbl1, self.ilbl2, self.ilbl1])
 
         with make_temp_path(suffix=f".{format}") as tmp_path:

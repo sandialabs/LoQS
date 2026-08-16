@@ -75,11 +75,8 @@ class TestInstructionLabel:
         assert InstructionLabel.from_raw(ilbl) is ilbl
 
     def test_from_raw_rejects_long_tuples(self):
-        # The old 3-/4-element positional format (inst_args/inst_kwargs in
-        # fixed tuple slots) is no longer supported -- must use the dict
-        # form, since correctly mapping a historical positional arg onto
-        # its real keyword requires knowing the target instruction's
-        # parameter order, which isn't available from a bare tuple alone.
+        # The old fixed-position tuple format is no longer supported --
+        # use the dict form instead.
         with pytest.raises(TypeError, match="Tuples longer than 2 elements"):
             InstructionLabel.from_raw(("Label", "L0", (), {"flagged_check": "XZIIZ"}))
 
