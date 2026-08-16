@@ -693,17 +693,235 @@ class TestNumPyStatevectorQuantumState:
             assert len(outs) == 0
             assert np.allclose(np.abs(test.state), [0, 1])
 
-    def test_zbasis_outcome_operation_dict_multiqubit_raises(self):
-        """ZBASIS_OUTCOME_OPERATION_DICT explicitly does not support more
-        than one qubit."""
-        dummy_maps = {
-            0: UnitaryGateRep(np.eye(2), ["Q0"]),
-            1: UnitaryGateRep(np.eye(2), ["Q0"]),
+    def test_zbasis_outcome_operation_dict_decomposable_multiqubit(self):
+        """A decomposable multiqubit instrument (`len(outcome_qubits) ==
+        len(qubits) > 1`, one classical bit per physical qubit) must select
+        exactly the outcome matching the prepared computational basis
+        state and record each qubit's own bit."""
+
+        def basis_projector(bits):
+            idx = bits[0] * 2 + bits[1]
+            mat = np.zeros((4, 4))
+            mat[idx, idx] = 1.0
+            return UnitaryGateRep(mat, ["Q0", "Q1"])
+
+        outcome_ops = {
+            (0, 0): basis_projector((0, 0)),
+            (0, 1): basis_projector((0, 1)),
+            (1, 0): basis_projector((1, 0)),
+            (1, 1): basis_projector((1, 1)),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(dummy_maps, True, ["Q0", "Q1"])
-        test = SVState([0, 0], ["Q0", "Q1"])
-        with pytest.raises(NotImplementedError):
-            test.apply_reps_inplace([rep])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ["Q0", "Q1"])
+
+        for bits in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+            test = SVState(list(bits), ["Q0", "Q1"], seed=20260815)
+            outs = test.apply_reps_inplace([rep])
+            assert outs["Q0"] == [bits[0]]
+            assert outs["Q1"] == [bits[1]]
+
+    def test_zbasis_outcome_operation_dict_2q_parity_check(self):
+        """A genuine 2Q parity-check instrument (2 outcomes regardless of
+        qubit count, each a rank-2 projector onto an even/odd computational
+        subspace) must preserve superposition *within* the measured parity
+        sector -- unlike two independent single-qubit Z measurements, which
+        would collapse a Bell state entirely."""
+        even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ["Q0", "Q1"])
+        odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ["Q0", "Q1"])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {"even": even_proj, "odd": odd_proj},
+            True,
+            ["Q0", "Q1"],
+            outcome_qubits="synd_Q0Q1",
+        )
+
+        bell_state = np.array([1, 0, 0, 1]) / np.sqrt(2)
+        for trial in range(5):
+            test = SVState(bell_state.copy(), ["Q0", "Q1"], seed=20260815 + trial)
+            outs = test.apply_reps_inplace([rep])
+            # "even" is outcome_ops's first key -> recorded as ordinal 0
+            assert outs["synd_Q0Q1"] == [0]
+            assert np.allclose(test.state.flatten(), bell_state)
+
+    def test_zbasis_outcome_operation_dict_4q_parity_check(self):
+        """A 4Q parity-check instrument generalizes the same way: the
+        classical outcome reflects total computational-basis parity across
+        all 4 qubits, without collapsing a superposition confined to one
+        parity sector."""
+        qubits = ["Q0", "Q1", "Q2", "Q3"]
+        even_diag = np.array([1.0 if bin(i).count("1") % 2 == 0 else 0.0 for i in range(16)])
+        odd_diag = 1.0 - even_diag
+        even_proj = UnitaryGateRep(np.diag(even_diag), qubits)
+        odd_proj = UnitaryGateRep(np.diag(odd_diag), qubits)
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {"even": even_proj, "odd": odd_proj}, True, qubits, outcome_qubits="synd"
+        )
+
+        # |0000> and |1100> both have even parity (popcount 0 and 2).
+        state = np.zeros(16)
+        state[0b0000] = 1 / np.sqrt(2)
+        state[0b1100] = 1 / np.sqrt(2)
+        for trial in range(5):
+            test = SVState(state.copy(), qubits, seed=20260815 + trial)
+            outs = test.apply_reps_inplace([rep])
+            assert outs["synd"] == [0]
+            assert np.allclose(test.state.flatten(), state)
+
+    def test_zbasis_outcome_operation_dict_2q_parity_check_samples_both_outcomes(self):
+        """Unlike the other parity-check tests (which start entirely within
+        one parity sector, so the outcome is deterministic), this drives a
+        state with support in *both* sectors: both outcomes must occur
+        with the correct Born-rule frequency, and the post-measurement
+        state must exactly match the analytic renormalized projection for
+        whichever outcome was actually sampled."""
+        even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ["Q0", "Q1"])
+        odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ["Q0", "Q1"])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {"even": even_proj, "odd": odd_proj},
+            True,
+            ["Q0", "Q1"],
+            outcome_qubits="synd_Q0Q1",
+        )
+
+        # |00>, |01>, |10>, |11> amplitudes -- unequal so prob_even != 0.5
+        # and both sector-internal superpositions are non-trivial.
+        psi = np.sqrt([0.5, 0.2, 0.1, 0.2])
+        assert np.isclose(np.sum(psi**2), 1)
+        prob_even = psi[0] ** 2 + psi[3] ** 2
+        even_post = np.array([psi[0], 0, 0, psi[3]]) / np.sqrt(prob_even)
+        odd_post = np.array([0, psi[1], psi[2], 0]) / np.sqrt(1 - prob_even)
+
+        test = SVState(psi.copy(), ["Q0", "Q1"], seed=20260815)
+        n_trials = 20_000
+        counts = [0, 0]
+        for _ in range(n_trials):
+            test._state = psi.copy().reshape(2, 2)
+            outs = test.apply_reps_inplace([rep])
+            outcome = outs["synd_Q0Q1"][0]
+            counts[outcome] += 1
+            expected_post = even_post if outcome == 0 else odd_post
+            assert np.allclose(test.state.flatten(), expected_post)
+
+        assert counts[0] > 0 and counts[1] > 0  # both outcomes actually occurred
+        p_even = prob_even
+        sigma = np.sqrt(p_even * (1 - p_even) / n_trials)
+        assert abs(counts[0] / n_trials - p_even) < 5 * sigma
+
+    def test_zbasis_outcome_operation_dict_joint_channel_with_three_outcomes(self):
+        """A joint channel (`len(outcome_qubits) == 1`) has no cardinality
+        constraint -- a 3-outcome instrument (e.g. a leakage-aware parity
+        check) must sample and record all three outcomes correctly, by
+        ordinal position among `outcome_ops`."""
+        proj0 = UnitaryGateRep(np.diag([1.0, 0, 0]), ["Q0"], dims=[3])
+        proj1 = UnitaryGateRep(np.diag([0, 1.0, 0]), ["Q0"], dims=[3])
+        proj2 = UnitaryGateRep(np.diag([0, 0, 1.0]), ["Q0"], dims=[3])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {"ground": proj0, "excited": proj1, "leaked": proj2},
+            True,
+            ["Q0"],
+            outcome_qubits="synd",
+        )
+
+        for basis_idx, expected_ordinal in [(0, 0), (1, 1), (2, 2)]:
+            state = np.zeros(3)
+            state[basis_idx] = 1.0
+            test = SVState(state, ["Q0"], seed=20260815, d=3)
+            outs = test.apply_reps_inplace([rep])
+            assert outs["synd"] == [expected_ordinal]
+
+    def test_zbasis_outcome_operation_dict_lazy_skips_only_after_sampled_branch(self):
+        """For a 3-outcome joint channel where the *second* branch is
+        dominant, the first branch's matvec must still be computed (its
+        probability is needed to know the second branch wasn't yet
+        reached), but the third branch's must be skipped entirely."""
+        negligible = UnitaryGateRep(np.diag([1e-12, 1e-12]), ["Q0"])
+        dominant = UnitaryGateRep(np.eye(2) * np.sqrt(1 - 2e-12), ["Q0"])
+        never_applied = UnitaryGateRep(np.eye(2), ["Q0"])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {"a": negligible, "b": dominant, "c": never_applied},
+            True,
+            ["Q0"],
+            outcome_qubits="synd",
+        )
+        test = SVState([0], ["Q0"], seed=20260815)
+
+        call_count = 0
+        original_matvec = test._block_matvec
+
+        def counting_matvec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original_matvec(*args, **kwargs)
+
+        test._block_matvec = counting_matvec
+        outs = test.apply_reps_inplace([rep])
+        assert outs["synd"] == [1]  # "b" (dominant) is ordinal 1
+        assert call_count == 2  # "a" computed, "b" computed, "c" skipped
+
+    def test_zbasis_outcome_operation_dict_decomposable_multiqubit_no_outcomes(self):
+        """`include_outcome=False` for a decomposable multiqubit instrument
+        must suppress all outcome dict entries while still collapsing to
+        the correct basis state."""
+
+        def basis_projector(bits):
+            idx = bits[0] * 2 + bits[1]
+            mat = np.zeros((4, 4))
+            mat[idx, idx] = 1.0
+            return UnitaryGateRep(mat, ["Q0", "Q1"])
+
+        outcome_ops = {
+            (0, 0): basis_projector((0, 0)),
+            (0, 1): basis_projector((0, 1)),
+            (1, 0): basis_projector((1, 0)),
+            (1, 1): basis_projector((1, 1)),
+        }
+        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, False, ["Q0", "Q1"])
+
+        test = SVState([1, 0], ["Q0", "Q1"], seed=20260815)
+        outs = test.apply_reps_inplace([rep])
+        assert len(outs) == 0
+        assert np.allclose(np.abs(test.state.flatten()), [0, 0, 1, 0])
+
+    def test_zbasis_outcome_operation_dict_joint_multiqubit_no_outcomes(self):
+        """`include_outcome=False` for a joint (parity-check) multiqubit
+        instrument must suppress the outcome dict entry while still
+        collapsing to the correct (renormalized) parity sector."""
+        even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ["Q0", "Q1"])
+        odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ["Q0", "Q1"])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {"even": even_proj, "odd": odd_proj},
+            False,
+            ["Q0", "Q1"],
+            outcome_qubits="synd_Q0Q1",
+        )
+
+        bell_state = np.array([1, 0, 0, 1]) / np.sqrt(2)
+        test = SVState(bell_state.copy(), ["Q0", "Q1"], seed=20260815)
+        outs = test.apply_reps_inplace([rep])
+        assert len(outs) == 0
+        assert np.allclose(test.state.flatten(), bell_state)
+
+    def test_zbasis_outcome_operation_dict_lazy_stops_after_dominant_branch(self):
+        """When the first-listed outcome owns essentially all the
+        probability, later outcomes' operators must never be applied --
+        the same lazy-stopping benefit `KrausGateRep` already gets."""
+        dominant = UnitaryGateRep(np.eye(2), ["Q0"])
+        never_applied = UnitaryGateRep(np.eye(2), ["Q0"])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            {0: dominant, 1: never_applied}, True, ["Q0"]
+        )
+        test = SVState([0], ["Q0"], seed=20260815)
+
+        call_count = 0
+        original_matvec = test._block_matvec
+
+        def counting_matvec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original_matvec(*args, **kwargs)
+
+        test._block_matvec = counting_matvec
+        test.apply_reps_inplace([rep])
+        assert call_count == 1
 
     def test_zbasis_outcome_operation_dict_no_outcomes_and_final_state(self):
         """`include_outcomes=False` for ZBASIS_OUTCOME_OPERATION_DICT must

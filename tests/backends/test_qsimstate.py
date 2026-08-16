@@ -299,12 +299,17 @@ class TestQSimQuantumState:
 
     def test_zbasis_outcome_operation_dict_multiqubit_raises(self):
         """ZBASIS_OUTCOME_OPERATION_DICT explicitly does not support more
-        than one qubit."""
+        than one qubit in this backend. `outcome_qubits` is given here as a
+        single joint classical label (matching a genuine parity-check
+        instrument's shape) purely so construction itself succeeds --
+        `qsimstate.py`'s own 1-qubit restriction is what's under test."""
         dummy_maps = {
-            0: QSimSuperopGateRep(np.eye(4), ["Q0"]),
-            1: QSimSuperopGateRep(np.eye(4), ["Q0"]),
+            "even": QSimSuperopGateRep(np.eye(4), ["Q0"]),
+            "odd": QSimSuperopGateRep(np.eye(4), ["Q0"]),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(dummy_maps, True, ["Q0", "Q1"])
+        rep = ZBasisOutcomeOperationDictInstrumentRep(
+            dummy_maps, True, ["Q0", "Q1"], outcome_qubits="synd"
+        )
         test = QSimState(2, ["Q0", "Q1"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([rep])

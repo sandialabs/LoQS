@@ -4,7 +4,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.19.4
 kernelspec:
   display_name: Python 3
   language: python
@@ -19,6 +19,7 @@ In this tutorial, we will walk through modeling and simulating leakage in the **
 1. **Stage 1**: Constructing an ideal, noiseless repeated ZZ and XX parity-check program utilizing custom composite instructions.
 2. **Stage 2**: Extending the statevector backend to qutrits ($d=3$) and simulating a noiseless leakage representation.
 3. **Stage 3**: Integrating post-gate leakage noise on the qutrit CZ gate using Kraus channel composition tools.
+4. **Stage 4**: Directly discriminating leakage with a genuine multi-outcome instrument, instead of only inferring it indirectly from degraded parity fidelity.
 
 ---
 
@@ -475,3 +476,57 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
 print("Running Stage 3 (Qutrit Noisy Leakage Program):")
 run_and_report_program(create_noisy_leakage_program, d=3)
 ```
+
+---
+
+## Stage 4: Direct leakage readout via a multi-outcome instrument
+
+Stage 3 only revealed leakage indirectly, through degraded ZZ/XX parity fidelity. LoQS's instrument framework also supports a genuine multi-outcome readout: a single `ZBasisOutcomeOperationDictInstrumentRep` call that classically reports whether a qutrit is in $|0\rangle$, $|1\rangle$, or $|2\rangle$ directly -- `outcome_ops` isn't restricted to the usual 2 keys, so a 3-outcome ("ground"/"excited"/"leaked") instrument works exactly the same way a 2-outcome one does.
+
+We reuse Stage 3's single-qutrit leakage channel (`K0`/`K1`, `leak_prob = 0.05`), applied here on its own (no `CZ`) to a qutrit prepared in $|1\rangle$, then read out directly instead of inferring the leakage rate from parity statistics.
+
+```{code-cell} ipython3
+from loqs.backends.reps import UnitaryGateRep, ZBasisOutcomeOperationDictInstrumentRep
+
+leak_prob = 0.05
+K0 = np.diag([1.0, np.sqrt(1 - leak_prob), 1.0]).astype(complex)
+K1 = np.zeros((3, 3), dtype=complex)
+K1[2, 1] = np.sqrt(leak_prob)
+
+read_leakage_ops = {
+    "ground": UnitaryGateRep(np.diag([1.0, 0, 0]), dims=[3]),
+    "excited": UnitaryGateRep(np.diag([0, 1.0, 0]), dims=[3]),
+    "leaked": UnitaryGateRep(np.diag([0, 0, 1.0]), dims=[3]),
+}
+
+gate_dict = {"LeakageNoise": KrausGateRep([(K0, None), (K1, None)], dims=[3])}
+inst_dict = {
+    "ReadLeakage": ZBasisOutcomeOperationDictInstrumentRep(
+        read_leakage_ops, True, outcome_qubits="leak_status"
+    )
+}
+leakage_readout_model = DictNoiseModel(
+    gate_dict, inst_dict, gatereps=[KrausGateRep], instreps=[ZBasisOutcomeOperationDictInstrumentRep]
+)
+
+readout_circuit = ListPhysicalCircuit(
+    [[("LeakageNoise", ("Q0",))], [("ReadLeakage", ("Q0",))]], ["Q0"]
+)
+readout_labels = ["ground", "excited", "leaked"]
+n_trials = 2000
+counts = {label: 0 for label in readout_labels}
+
+state = NumpyStatevectorQuantumState([1], ["Q0"], d=3, seed=20260815)
+for _ in range(n_trials):
+    state._state = np.array([0, 1, 0], dtype=complex)
+    reps = leakage_readout_model.get_reps(
+        readout_circuit, [KrausGateRep], [ZBasisOutcomeOperationDictInstrumentRep]
+    )
+    outcomes = state.apply_reps_inplace(reps)
+    counts[readout_labels[outcomes["leak_status"][0]]] += 1
+
+for label, count in counts.items():
+    print(f"{label:>8}: {count / n_trials:.3f}")
+```
+
+Roughly `leak_prob` of the shots are directly flagged `"leaked"`, matching the noise model exactly -- this readout instrument discriminates leakage on its own, without needing to compare against a parity-fidelity baseline the way Stages 1-3 do.

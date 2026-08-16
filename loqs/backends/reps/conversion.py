@@ -497,9 +497,10 @@ def _zbasis_projection_to_outcome_operation_dict(
     else `b` itself (i.e. project onto the measured outcome, then map to
     the reset target if one was requested).
 
-    Only supported for exactly 1 qubit, matching the current limitation
-    of `npsvstate.py`/`qsimstate.py`'s own `ZBasisOutcomeOperationDictInstrumentRep`
-    handling (both raise `NotImplementedError` beyond 1 qubit).
+    Only supported for exactly 1 qubit -- a Z-basis-projection-with-reset
+    has no multiqubit joint/parity-check equivalent, so this conversion
+    stays narrowly scoped by design rather than mirroring whatever
+    qubit-count support the consuming backends happen to have.
     """
     if len(rep.qubit_labels) != 1:
         raise RepConstructionError(
