@@ -59,7 +59,7 @@ For example, consider we have the following QuantumProgram:
 
 ```{code-cell} ipython3
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
-from loqs.core import Frame, History, InstructionStack, PatchDict, QuantumProgram
+from loqs.core import Frame, History, InstructionStack, PatchLayout, QuantumProgram
 from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel
 
 # Let's define qubits for a single Quantinuum-style Steane patch: 7 data qubits, 3 aux qubits
@@ -70,7 +70,7 @@ ideal_model = codepack_Steane.create_ideal_model(qubits=qubits)
 steane_code = codepack_Steane.create_qec_code()
 
 init_state = NumpyStatevectorQuantumState(10, qubit_labels=qubits)
-init_patches = PatchDict({"L0": steane_code.create_patch(qubits=qubits)})
+init_patches = PatchLayout({"L0": steane_code.create_patch(qubits=qubits)})
 init_frame = Frame({"state": init_state, "patches": init_patches})
 init_history = History(init_frame)
 
@@ -128,8 +128,8 @@ for q in depol_Gi_model_pygsti.state_space.qubit_labels:
 depol_Gi_model = PyGSTiNoiseModel(depol_Gi_model_pygsti, qubits)
 
 # Minor hack for today: Force the model to use Kraus rep
-from loqs.backends import GateRep
-depol_Gi_model._output_gate_reps = [GateRep.KRAUS_OPERATORS]
+from loqs.backends import KrausGateRep
+depol_Gi_model._output_gate_reps = [KrausGateRep]
 ```
 
 With our adjusted model, we can now pipe this in to our Instruction.

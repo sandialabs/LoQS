@@ -24,7 +24,7 @@ We follow a very similar pattern from the previous notebook for setting up our p
 
 ```{code-cell} ipython3
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_Steane
-from loqs.core import Frame, History, InstructionStack, PatchDict, QuantumProgram
+from loqs.core import Frame, History, InstructionStack, PatchLayout, QuantumProgram
 from loqs.backends import NumpyStatevectorQuantumState, PyGSTiNoiseModel
 
 # Let's define qubits for a single Quantinuum-style Steane patch: 7 data qubits, 3 aux qubits
@@ -33,7 +33,7 @@ qubits = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
 steane_code = codepack_Steane.create_qec_code()
 
 init_state = NumpyStatevectorQuantumState(10, qubit_labels=qubits)
-init_patches = PatchDict({"L0": steane_code.create_patch(qubits=qubits)})
+init_patches = PatchLayout({"L0": steane_code.create_patch(qubits=qubits)})
 init_frame = Frame({"state": init_state, "patches": init_patches})
 init_history = History(init_frame)
 

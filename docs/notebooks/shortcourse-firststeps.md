@@ -102,14 +102,14 @@ Let's start simple: Let's do a state preservation experiment!
 In order to do this, we need to create an initial History and set up an InstructionStack.
 
 ```{code-cell} ipython3
-from loqs.core import Frame, History, InstructionStack, PatchDict
+from loqs.core import Frame, History, InstructionStack, PatchLayout
 from loqs.backends import NumpyStatevectorQuantumState, QSimQuantumState
 
 # Our starting frame just needs two things:
 # the physical quantum system, and
 init_state = NumpyStatevectorQuantumState(10, qubit_labels=qubits)
 # letting LoQS know we want this to be a Steane code patch
-init_patches = PatchDict({
+init_patches = PatchLayout({
     "L0": steane_code.create_patch(qubits=qubits)
 })
 
@@ -255,7 +255,7 @@ code_5Q = codepack_5Q.create_qec_code()
 
 We also need to make sure to tell LoQS to use a 5Q patch instead of a Steane patch:
 ```
-init_patches = PatchDict({
+init_patches = PatchLayout({
     "L0": code_5Q.create_patch(qubits=qubits)
 })
 ```

@@ -918,9 +918,9 @@ class QuantumProgram(Displayable):
                 patches = history[-1].get("patches", None)
                 if patches is None:
                     continue
-                # Cast rather than assert: until every "Init Patch"-style
-                # instruction is updated (later stages), a frame may still
-                # carry a PatchDict rather than a PatchLayout.
+                # Cast rather than assert: a frame decoded from an
+                # already-serialized old file may still carry a PatchDict
+                # rather than a PatchLayout.
                 patches = PatchLayout(patches)
 
                 # Get the specific patch by label
