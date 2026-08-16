@@ -1127,22 +1127,18 @@ def _create_adaptive_measure_instruction_part_I(
             # This is a flag failure, so pass that information in
             # We also need to pass a nonstandard order for this circuit
             # (we measure Z_4 first, then X_0 and Z_1)
-            kwargs = {
-                "flagged_check": "XZIIZ",
-                "flagged_check_order": [4, 0, 1],
-            }
             ilbls = [
                 ("Non-FT Minus Unprep", patch_label),
-                (
-                    "FT Logical X Measure Classical Decoder",
-                    patch_label,
-                    (),
-                    kwargs,
-                ),
+                {
+                    "instruction": "FT Logical X Measure Classical Decoder",
+                    "patch_label": patch_label,
+                    "flagged_check": "XZIIZ",
+                    "flagged_check_order": [4, 0, 1],
+                },
             ]
 
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel(*ilbl)
+            new_label = InstructionLabel.from_raw(ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         return Frame(
@@ -1333,20 +1329,19 @@ def _create_adaptive_measure_instruction_part_II(
         else:
             # We go to decoding circuit  (forward references, must match key later)
             # This is not a flag failure, so we pass None to these kwargs
-            kwargs = {"flagged_check": None, "flagged_check_order": None}
             ilbls = [
                 ("Non-FT Minus Unprep", patch_label),
-                (
-                    "FT Logical X Measure Classical Decoder",
-                    patch_label,
-                    (),
-                    kwargs,
-                ),
+                {
+                    "instruction": "FT Logical X Measure Classical Decoder",
+                    "patch_label": patch_label,
+                    "flagged_check": None,
+                    "flagged_check_order": None,
+                },
             ]
 
         # We need to make sure and feed the patch label forward
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel(*ilbl)
+            new_label = InstructionLabel.from_raw(ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
@@ -1534,15 +1529,14 @@ def _create_adaptive_measure_instruction_part_III(
         ):
             # We go to decoding circuit  (forward references, must match key later)
             # This is not a flag failure, so we pass None as these kwargs
-            kwargs = {"flagged_check": None, "flagged_check_order": None}
             ilbls = [
                 ("Non-FT Minus Unprep", patch_label),
-                (
-                    "FT Logical X Measure Classical Decoder",
-                    patch_label,
-                    (),
-                    kwargs,
-                ),
+                {
+                    "instruction": "FT Logical X Measure Classical Decoder",
+                    "patch_label": patch_label,
+                    "flagged_check": None,
+                    "flagged_check_order": None,
+                },
             ]
         else:
             # Terminate, but let's note which condition caused it
@@ -1563,7 +1557,7 @@ def _create_adaptive_measure_instruction_part_III(
 
         # We need to make sure and feed the patch label forward
         for i, ilbl in enumerate(ilbls):
-            new_label = InstructionLabel(*ilbl)
+            new_label = InstructionLabel.from_raw(ilbl)
             stack = stack.insert_instruction(i, new_label)
 
         # Return new frame
@@ -2133,7 +2127,7 @@ def _create_flagged_QEC_instruction(
         # (can be empty for case where no errors detected on last flagged check)
         # This part just looks like a composite instruction
         for i, instruction in enumerate(instructions):
-            new_label = InstructionLabel(instruction, patch_label)
+            new_label = InstructionLabel(instruction, patch_label=patch_label)
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
