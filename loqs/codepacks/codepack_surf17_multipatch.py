@@ -13,7 +13,9 @@ This module provides two-patch logical operations for patches built from
 [](api:codepack_surf17_tomita2014), which stores its deferred syndrome
 histories on each patch's own tracked data (`patch.data["syndrome_history_X"]`
 etc.) so multiple patches can decode independently in one program without
-needing any patch-label key namespacing.
+needing any patch-label key namespacing. Every builder below takes a
+[](api:PatchGeometry) bundling its patches' labels and qubit lists,
+instead of separate parameters per patch.
 
 Provided operations
 -------------------
@@ -65,7 +67,7 @@ from loqs.codepacks.codepack_surf17_tomita2014 import (
     DEFAULT_IDLE_GATES,
     layout_qubits,
 )
-from loqs.core import Instruction
+from loqs.core import Instruction, PatchGeometry
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
@@ -320,10 +322,7 @@ def build_cnot_bookkeeping_instruction(
 
 
 def build_transversal_cnot_instruction(
-    ctrl_patch_label: str,
-    tgt_patch_label: str,
-    ctrl_data_qubits: Sequence[str],
-    tgt_data_qubits: Sequence[str],
+    geometry: PatchGeometry,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     include_idles: bool = False,
     gate_durations: dict[str, int | float] | None = None,
@@ -338,17 +337,11 @@ def build_transversal_cnot_instruction(
 
     Parameters
     ----------
-    ctrl_patch_label:
-        Patch label of the control patch.
-
-    tgt_patch_label:
-        Patch label of the target patch.
-
-    ctrl_data_qubits:
-        The 9 data qubits of the control patch (template order D0..D8).
-
-    tgt_data_qubits:
-        The 9 data qubits of the target patch, aligned index-wise.
+    geometry:
+        A [](api:PatchGeometry) with roles `"ctrl"`/`"tgt"`, each assigned
+        a patch's full qubit list (template order D0..D8 + ancillas); no
+        seam is used by a transversal CNOT. Only the first 9 (data)
+        qubits of each role participate.
 
     circuit_backend:
         The circuit backend. Default is PyGSTiPhysicalCircuit.
@@ -365,8 +358,8 @@ def build_transversal_cnot_instruction(
         The composite transversal logical CNOT instruction.
     """
     circuit_inst = build_transversal_cnot_circuit_instruction(
-        ctrl_data_qubits,
-        tgt_data_qubits,
+        geometry.qubits("ctrl")[:9],
+        geometry.qubits("tgt")[:9],
         circuit_backend=circuit_backend,
         include_idles=include_idles,
         gate_durations=gate_durations,
@@ -374,8 +367,8 @@ def build_transversal_cnot_instruction(
         name=f"{name} (physical circuit)",
     )
     bookkeeping_inst = build_cnot_bookkeeping_instruction(
-        ctrl_patch_label,
-        tgt_patch_label,
+        geometry.label("ctrl"),
+        geometry.label("tgt"),
         name=f"{name} (bookkeeping)",
     )
     return builders.build_composite_instruction(
@@ -386,10 +379,7 @@ def build_transversal_cnot_instruction(
 
 def _build_joint_parity_instruction(
     basis: str,
-    patch_a_label: str,
-    patch_b_label: str,
-    data_qubits_a: Sequence[str],
-    data_qubits_b: Sequence[str],
+    geometry: PatchGeometry,
     ancilla: str,
     circuit_backend: type[BasePhysicalCircuit],
     name: str,
@@ -399,10 +389,10 @@ def _build_joint_parity_instruction(
 ) -> Instruction:
     """Shared builder for the joint ZZ / XX parity instructions."""
     assert basis in ("ZZ", "XX")
-    assert len(data_qubits_a) == 9 and len(data_qubits_b) == 9, (
-        "Pass the full 9-element data-qubit lists (template order D0..D8); "
-        "the logical-operator supports are sliced internally"
-    )
+    patch_a_label = geometry.label("a")
+    patch_b_label = geometry.label("b")
+    data_qubits_a = geometry.qubits("a")[:9]
+    data_qubits_b = geometry.qubits("b")[:9]
 
     if basis == "ZZ":
         # Z_L = Z0 Z4 Z8; X errors on these flip the copied Z parity
@@ -501,10 +491,7 @@ def _build_joint_parity_instruction(
 
 
 def build_joint_parity_zz_instruction(
-    patch_a_label: str,
-    patch_b_label: str,
-    data_qubits_a: Sequence[str],
-    data_qubits_b: Sequence[str],
+    geometry: PatchGeometry,
     ancilla: str,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     include_idles: bool = False,
@@ -519,7 +506,8 @@ def build_joint_parity_zz_instruction(
     each patch) onto the ancilla, which is then measured (and reset) with
     `Imrz`. The decode step XORs the outcome with both patches' pending
     Pauli-frame X bits on the touched qubits and stores the result under the
-    frame key `joint_parity_zz_{patch_a_label}_{patch_b_label}`.
+    frame key `joint_parity_zz_{patch_a_label}_{patch_b_label}` (the two
+    patch labels of `geometry`'s `"a"`/`"b"` roles).
 
     The measured operator commutes with all stabilizers of both patches, so
     the patches remain valid code states afterwards. Single faults on the
@@ -528,17 +516,11 @@ def build_joint_parity_zz_instruction(
 
     Parameters
     ----------
-    patch_a_label:
-        Patch label of the first patch.
-
-    patch_b_label:
-        Patch label of the second patch.
-
-    data_qubits_a:
-        The 9 data qubits of the first patch (template order D0..D8).
-
-    data_qubits_b:
-        The 9 data qubits of the second patch (template order D0..D8).
+    geometry:
+        A [](api:PatchGeometry) with roles `"a"`/`"b"`, each assigned a
+        patch's full qubit list (template order D0..D8 + ancillas); only
+        the first 9 (data) qubits of each role participate. No seam is
+        used by an ancilla-mediated joint parity measurement.
 
     ancilla:
         Label of the bare (non-patch) ancilla qubit.
@@ -561,10 +543,7 @@ def build_joint_parity_zz_instruction(
     """
     return _build_joint_parity_instruction(
         "ZZ",
-        patch_a_label,
-        patch_b_label,
-        data_qubits_a,
-        data_qubits_b,
+        geometry,
         ancilla,
         circuit_backend,
         name,
@@ -575,10 +554,7 @@ def build_joint_parity_zz_instruction(
 
 
 def build_joint_parity_xx_instruction(
-    patch_a_label: str,
-    patch_b_label: str,
-    data_qubits_a: Sequence[str],
-    data_qubits_b: Sequence[str],
+    geometry: PatchGeometry,
     ancilla: str,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
     include_idles: bool = False,
@@ -599,10 +575,7 @@ def build_joint_parity_xx_instruction(
     """
     return _build_joint_parity_instruction(
         "XX",
-        patch_a_label,
-        patch_b_label,
-        data_qubits_a,
-        data_qubits_b,
+        geometry,
         ancilla,
         circuit_backend,
         name,

@@ -15,7 +15,7 @@ kernelspec:
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/multipatch.ipynb)
 
-A single logical qubit is only half the story: real algorithms need logical qubits to *interact*. This tutorial walks through every two-qubit (2Q) operation LoQS's Surface-17/13/10 codepack provides, from simplest to most fault-tolerant, using two (or three) `"surf10"` patches throughout -- the smallest layout, chosen here purely to keep circuits small and simulation fast; every operation shown works identically on `"surf17"`/`"surf13"`.
+A single logical qubit is only half the story: real algorithms need logical qubits to *interact*. This tutorial walks through every two-qubit (2Q) operation LoQS's Surface-17/13/10 codepack provides, from simplest to most fault-tolerant, using two (or three) `"surf10"` patches throughout -- the smallest layout, chosen here purely to keep circuits small and simulation fast; every operation shown works identically on `"surf17"`/`"surf13"`. Every multi-patch instruction builder below takes a `PatchGeometry`, which bundles the patches' labels and qubit lists (and any seam qubits) into a single object -- built once per section and reused both for the builder call and for the `"Init Patch"` stack entries.
 
 1. **Transversal logical CNOT**: the cheapest 2Q gate, but only fault-tolerant if the two patches are already adjacent on real hardware.
 2. **Ancilla-mediated joint parity measurement**: a non-destructive `Z_L(A) Z_L(B)` (or `X_L(A) X_L(B)`) readout using one bare ancilla qubit -- cheap, but *not* fault-tolerant.
@@ -34,7 +34,7 @@ from loqs.backends.reps import StimCircuitGateRep
 from loqs.codepacks import codepack_surf17_tomita2014 as surf
 from loqs.codepacks import codepack_surf17_multipatch as multipatch
 from loqs.codepacks import codepack_surf17_surgery as surgery
-from loqs.core import QuantumProgram
+from loqs.core import PatchGeometry, QuantumProgram
 
 LAYOUT = "surf10"
 
@@ -60,12 +60,12 @@ all_qubits = q0 + q1
 code = surf.create_qec_code(layout=LAYOUT, num_qec_rounds=3)
 model = surf.create_ideal_model(all_qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 
-cnot = multipatch.build_transversal_cnot_instruction("L0", "L1", q0[:9], q1[:9])
+cnot_geometry = PatchGeometry(patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout=LAYOUT)
+cnot = multipatch.build_transversal_cnot_instruction(cnot_geometry)
 
 stack = [
     {"instruction": "Init State", "state": len(all_qubits), "qubit_labels": all_qubits},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+    *cnot_geometry.init_patch_entries("SURF"),
     ("Plus Prep", "L0"),
     ("Zero Prep", "L1"),
     ("QEC", "L0"),
@@ -108,12 +108,12 @@ ancilla = "Qanc"
 all_qubits = q0 + q1 + [ancilla]
 model = surf.create_ideal_model(all_qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 
-zz = multipatch.build_joint_parity_zz_instruction("L0", "L1", q0[:9], q1[:9], ancilla)
+parity_geometry = PatchGeometry(patches={"a": ("L0", q0), "b": ("L1", q1)}, layout=LAYOUT)
+zz = multipatch.build_joint_parity_zz_instruction(parity_geometry, ancilla)
 
 stack = [
     {"instruction": "Init State", "state": len(all_qubits), "qubit_labels": all_qubits},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+    *parity_geometry.init_patch_entries("SURF"),
     ("Zero Prep", "L0"),
     ("X", "L1"),  # flip L1 to |1>_L, so Z_L(L0) Z_L(L1) parity is odd
     ("QEC", "L0"),
@@ -151,14 +151,12 @@ SEAMS = ["Qs0", "Qs1", "Qs2"]  # a d=3 seam always has exactly 3 qubits
 all_qubits = q0 + q1 + SEAMS
 model = surf.create_ideal_model(all_qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 
-zz_surgery = surgery.build_surgery_parity_instruction(
-    "ZZ", "L0", "L1", q0, q1, SEAMS, LAYOUT, mode="ft"
-)
+surgery_geometry = PatchGeometry(patches={"a": ("L0", q0), "b": ("L1", q1)}, seam=SEAMS, layout=LAYOUT)
+zz_surgery = surgery.build_surgery_parity_instruction("ZZ", surgery_geometry, mode="ft")
 
 stack = [
     {"instruction": "Init State", "state": len(all_qubits), "qubit_labels": all_qubits},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+    *surgery_geometry.init_patch_entries("SURF"),
     ("Zero Prep", "L0"),
     ("X", "L1"),
     ("QEC", "L0"),
@@ -196,12 +194,11 @@ assert all(l0 ^ l1 == 1 for l0, l1 in logicals)
 The simplest genuinely fault-tolerant lattice-surgery protocol: measuring $Z_L(A) Z_L(B)$ on the product state $\ket{+}_L \ket{+}_L$ projects onto a Bell pair, up to a classically-known correction. `build_mzz_bell_prep_sequence` bundles the merge and the outcome-conditioned frame correction together as a ready-to-splice list of stack entries.
 
 ```{code-cell} ipython3
-bell_seq = surgery.build_mzz_bell_prep_sequence("L0", "L1", q0, q1, SEAMS, LAYOUT, mode="ft")
+bell_seq = surgery.build_mzz_bell_prep_sequence(surgery_geometry, mode="ft")
 
 stack = [
     {"instruction": "Init State", "state": len(all_qubits), "qubit_labels": all_qubits},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-    {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+    *surgery_geometry.init_patch_entries("SURF"),
     ("Plus Prep", "L0"),
     ("Plus Prep", "L1"),
     ("QEC", "L0"),
@@ -248,15 +245,16 @@ seams_xx = ["Qsh0", "Qsh1", "Qsh2"]
 all_qubits = qc + qt + qa + seams_zz + seams_xx
 model = surf.create_ideal_model(all_qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
 
-cnot_seq = surgery.build_surgery_cnot_sequence(
-    "C", "T", "ANC", qc, qt, qa, seams_zz, seams_xx, LAYOUT, mode="ft",
+surgery_cnot_geometry = PatchGeometry(
+    patches={"ctrl": ("C", qc), "tgt": ("T", qt), "anc": ("ANC", qa)},
+    seams={"zz": seams_zz, "xx": seams_xx},
+    layout=LAYOUT,
 )
+cnot_seq = surgery.build_surgery_cnot_sequence(surgery_cnot_geometry, mode="ft")
 
 stack = [
     {"instruction": "Init State", "state": len(all_qubits), "qubit_labels": all_qubits},
-    {"instruction": "Init Patch SURF", "new_patch_label": "C", "qubits": qc},
-    {"instruction": "Init Patch SURF", "new_patch_label": "T", "qubits": qt},
-    {"instruction": "Init Patch SURF", "new_patch_label": "ANC", "qubits": qa},
+    *surgery_cnot_geometry.init_patch_entries("SURF"),
     ("Plus Prep", "C"),
     ("Zero Prep", "T"),
     ("QEC", "C"),

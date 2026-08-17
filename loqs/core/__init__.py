@@ -21,6 +21,7 @@ from .instructions import (
     Instruction,
     InstructionLabel,
     InstructionStack,
+    PatchGeometry,
 )
 
 # Before QECCodePatch
