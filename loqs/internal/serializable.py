@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import contextvars
 import functools
 import gzip
 import importlib
@@ -187,6 +188,21 @@ SERIALIZATION_VERSION = 2
    `Castable`/`SeqCastable`/`MapCastable`/`DictModelCastableTypes` removals
    finally get real compatibility entries (issue #97); see
    IMPORT_LOCATION_CHANGES_BY_VERSION.
+"""
+
+MIGRATE_LEGACY_FNS: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "migrate_legacy_fns", default=False
+)
+"""Whether decoding may silently run known legacy-construction patterns
+found inside an old `Instruction`'s frozen `apply_fn`/`map_qubits_fn`
+source (e.g. a pre-1.2 `PatchDict()` call) via their construction-time
+compatibility shims, rather than raising a clear error. Set for the
+duration of a top-level `Serializable.read`/`.load` call (see the
+`migrate_legacy_fns` parameter there), read once in
+`Instruction._from_decoded_attrs`. Only governs re-execution of patterns
+found inside a decoded file's frozen source -- it cannot and does not gate
+a user's own plain, hand-typed legacy construction, which the shims handle
+unconditionally regardless of this flag.
 """
 
 
@@ -443,6 +459,7 @@ class Serializable:
         format: EncodeFormats = None,
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
+        migrate_legacy_fns: bool = False,
     ) -> Encodable:
         """
         Load an object of this type, or a subclass of this type, from an input stream.
@@ -460,6 +477,15 @@ class Serializable:
             - 'json': JSON text format
             - 'json.gz': Gzip-compressed JSON format
             - 'hdf5' or 'h5': HDF5 binary format
+
+        migrate_legacy_fns : bool, optional
+            If a decoded `Instruction`'s frozen source (from a file older
+            than the current `SERIALIZATION_VERSION`) contains a known
+            legacy-construction pattern (e.g. a pre-1.2 `PatchDict()`
+            call), decoding normally raises a clear error rather than
+            silently running it through a construction-time compatibility
+            shim. Pass `True` to allow it to run as-is instead. Default
+            is `False`.
 
         Returns
         -------
@@ -479,29 +505,33 @@ class Serializable:
         if use_caching:
             decode_cache = decode_cache if decode_cache is not None else {}
 
-        if format in ["json", "json.gz"]:
-            # Check if it's a file-like object that supports text I/O
-            assert isinstance(f, TextIOBase)
+        token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
+        try:
+            if format in ["json", "json.gz"]:
+                # Check if it's a file-like object that supports text I/O
+                assert isinstance(f, TextIOBase)
 
-            import json
+                import json
 
-            state = json.load(f)
-            assert isinstance(state, dict)
+                state = json.load(f)
+                assert isinstance(state, dict)
 
-            decoded = Serializable.decode(
-                state, "json", decode_cache=decode_cache
-            )
-        elif format in ["hdf5", "h5"]:
-            assert isinstance(f, h5py.File)
+                decoded = Serializable.decode(
+                    state, "json", decode_cache=decode_cache
+                )
+            elif format in ["hdf5", "h5"]:
+                assert isinstance(f, h5py.File)
 
-            root_group = f["root"]
-            assert isinstance(root_group, h5py.Group)
+                root_group = f["root"]
+                assert isinstance(root_group, h5py.Group)
 
-            decoded = Serializable.decode(
-                root_group, "hdf5", decode_cache=decode_cache
-            )
-        else:
-            raise ValueError(f"Invalid `format` value for load: {format}")
+                decoded = Serializable.decode(
+                    root_group, "hdf5", decode_cache=decode_cache
+                )
+            else:
+                raise ValueError(f"Invalid `format` value for load: {format}")
+        finally:
+            MIGRATE_LEGACY_FNS.reset(token)
 
         # At this point, at least outer object should not be a deferred reference
         assert not isinstance(decoded, DeferredRef)
@@ -515,6 +545,7 @@ class Serializable:
         format: EncodeFormats = None,
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
+        migrate_legacy_fns: bool = False,
     ) -> Encodable:
         """Read and deserialize an object from a file.
 
@@ -533,6 +564,8 @@ class Serializable:
             Whether to use object caching during deserialization. Default is True.
         decode_cache : DecodeCache, optional
             Existing decode cache to use for reference resolution.
+        migrate_legacy_fns : bool, optional
+            See [](api:Serializable.load). Default is `False`.
 
         Returns
         -------
@@ -568,7 +601,11 @@ class Serializable:
             raise ValueError("Cannot write format")
 
         loaded = cls.load(
-            f, format, use_caching=use_caching, decode_cache=decode_cache
+            f,
+            format,
+            use_caching=use_caching,
+            decode_cache=decode_cache,
+            migrate_legacy_fns=migrate_legacy_fns,
         )
 
         f.close()

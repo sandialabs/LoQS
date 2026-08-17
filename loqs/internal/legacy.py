@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 import warnings
@@ -70,3 +71,49 @@ def make_legacy_construction_shim(
         return build(*args, **kwargs)
 
     return type(name, (Displayable,), {"__new__": __new__})
+
+
+_LEGACY_CONSTRUCTION_PATTERNS: dict[str, re.Pattern] = {
+    # NOTE: a straight class-location rename (like PatchDict -> PatchLayout)
+    # is deliberately *not* listed here -- confirmed directly that
+    # Serializable._update_imports already rewrites both the import line
+    # and every other occurrence of the old name throughout the frozen
+    # source's body (its "third pass"), so old frozen source constructing
+    # PatchDict() is transparently and losslessly rewritten to construct
+    # PatchLayout() directly before it's ever re-executed; there is no
+    # runtime risk left to gate for that case, and no shim is ever
+    # actually reached. This mechanism only needs to cover cases where the
+    # class *name* is unchanged but its constructor's calling convention
+    # is not -- text-rewriting can't fix that, only a construction-time
+    # shim (checked at the moment the old call is actually made) can.
+    #
+    # Old-style positional InstructionLabel construction had at least one
+    # positional argument after the instruction itself (patch_label,
+    # inst_args, inst_kwargs); the modern form only ever takes keyword
+    # arguments past the first. A second bare positional argument (not
+    # starting with a keyword= name) is the telltale sign.
+    "InstructionLabel (old positional form)": re.compile(
+        r"InstructionLabel\([^()]*?,\s*(?!patch_labels?\s*=)[^()=,\s]"
+    ),
+}
+
+
+def detect_legacy_construction(source: str) -> list[str]:
+    """Cheap regex scan for known legacy-construction patterns in source text.
+
+    Returns the name of each pattern found (empty list if none). This is a
+    lighter, decode-time-only cousin of the full source-migration tool's
+    detection engine: pattern matching only, not a real parse, so it can
+    miss unusual formatting (aliased imports, etc.) -- it exists to catch
+    the common case cheaply during decode, not to be exhaustive; the
+    migration tool itself uses a real `ast`-based scan. Only lists
+    patterns with no other fix available (see the module-level comment on
+    `_LEGACY_CONSTRUCTION_PATTERNS`) -- a straight class rename needs no
+    entry here at all, since `_update_imports` already fixes those
+    transparently.
+    """
+    return [
+        name
+        for name, pattern in _LEGACY_CONSTRUCTION_PATTERNS.items()
+        if pattern.search(source)
+    ]
