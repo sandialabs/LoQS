@@ -101,7 +101,7 @@ from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
 from loqs.core.qeccode import QECCode, QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
-from loqs.core.recordables.patchdict import PatchDict
+from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.core.syndromelabel import SyndromeLabel
 from loqs.core.syndromelabel import SyndromeLabelLike
@@ -114,7 +114,7 @@ def apply_fn(
     error_injections: list[tuple[int, str, int]] | None,
     pauli_frame_update: str | list[str] | dict[str, str] | None,
     patch_label: str,
-    patches: PatchDict,
+    patches: PatchLayout,
 ) -> Frame:
 
     [physical circuit apply function]

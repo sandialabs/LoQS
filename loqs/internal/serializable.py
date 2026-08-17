@@ -166,6 +166,15 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
         ("loqs.utils.castable", "Castable"): None,
         ("loqs.utils.castable", "SeqCastable"): None,
         ("loqs.utils.castable", "MapCastable"): None,
+        # PatchDict -> PatchLayout (issue #103/#97): PatchLayout is a
+        # strict superset (adds `relations`, defaulting to {} when
+        # missing), so decode redirects straight to it with no shim class
+        # needed at all -- see loqs/core/recordables/__init__.py for the
+        # separate, construction-time-only compatibility shim.
+        ("loqs.core.recordables.patchdict", "PatchDict"): (
+            "loqs.core.recordables.patchlayout",
+            "PatchLayout",
+        ),
     },
 }  # (module, class) mapping from OLD to NEW locations for each version change
 
