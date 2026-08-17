@@ -23,7 +23,7 @@ from collections import Counter
 import loqs
 from loqs.backends import PyGSTiPhysicalCircuit, PyGSTiNoiseModel, QSimQuantumState
 from loqs.core import QuantumProgram, History
-from loqs.core.recordables import PatchDict
+from loqs.core.recordables import PatchLayout
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 ```
 
@@ -92,7 +92,7 @@ ideal_model = codepack_5_1_3.create_ideal_model(qubits)
 initial_history = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits), # Created by our first instruction above
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}), # Created by our second instruction above
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}), # Created by our second instruction above
         "model": ideal_model # Taking the place of default_noise_model above
     },
     expiring_keys=["state", "model"], # Usually this is just "state"
@@ -139,7 +139,7 @@ model_td1.use_time_dependence = True
 initial_history_td1 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}),
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}),
         "model": model_td1 # Note that we are putting our new model in!
     },
     expiring_keys=["state", "model"],
@@ -310,7 +310,7 @@ model_td2.current_time = 0
 initial_history_td2 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}),
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}),
         "model": model_td2 # Note that we are putting our new model in!
     },
     expiring_keys=["state", "model"],
@@ -450,7 +450,7 @@ model_td3.gate_dict[Label("Gi", D2_qubit)] = EmbeddedOp(model_td3.model.state_sp
 initial_history_td3 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}),
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}),
         "model": model_td3 # Note that we are putting our new model in!
     },
     expiring_keys=["state", "model"],
@@ -573,7 +573,7 @@ model_td4.model.from_vector([1072/2, 31])
 initial_history_td4 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}),
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}),
         "model": model_td4 # Note that we are putting our new model in!
     },
     expiring_keys=["state", "model"],
@@ -674,7 +674,7 @@ model_td5 = deepcopy(model_td3)
 initial_history_td5 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}),
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}),
         "model": model_td5 # Note that we are putting our new model in!
     },
     expiring_keys=["state", "model"],
@@ -760,7 +760,7 @@ model_td6 = deepcopy(model_td3)
 initial_history_td6 = History(
     {
         "state": QSimQuantumState(len(qubits), qubit_labels=qubits),
-        "patches": PatchDict({"L0": code_5q.create_patch(qubits)}),
+        "patches": PatchLayout({"L0": code_5q.create_patch(qubits)}),
         "model": model_td6 # Note that we are putting our new model in!
     },
     expiring_keys=["state", "model"],

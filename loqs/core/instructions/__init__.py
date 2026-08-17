@@ -10,8 +10,8 @@
 """[](api:Instruction)-related objects and functions.
 
 In addition to the [](api:Instruction) itself,
-this includes [](api:InstructionLabel) and
-[](api:InstructionStack) objects.
+this includes [](api:InstructionLabel),
+[](api:InstructionStack), and [](api:PatchGeometry) objects.
 
 This module also include the [](api:builders),
 which contain functions that generate common
@@ -21,3 +21,4 @@ which contain functions that generate common
 from .instruction import Instruction
 from .instructionlabel import InstructionLabel
 from .instructionstack import InstructionStack
+from .patchgeometry import PatchGeometry

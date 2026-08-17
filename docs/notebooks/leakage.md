@@ -37,7 +37,7 @@ from loqs.core.frame import Frame
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.instructions.builders import build_physical_circuit_instruction, build_composite_instruction
 from loqs.core.instructions.instructionlabel import InstructionLabel
-from loqs.core.recordables import MeasurementOutcomes, PatchDict
+from loqs.core.recordables import MeasurementOutcomes, PatchLayout
 from loqs.core.qeccode import QECCode
 from loqs.backends import ListPhysicalCircuit
 from loqs.backends.state.npsvstate import NumpyStatevectorQuantumState
@@ -159,7 +159,7 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=2)
 
     patch = code.create_patch(qubit_labels)
-    patches = PatchDict({"global": patch})
+    patches = PatchLayout({"global": patch})
     initial_history = [{"state": initial_state, "patches": patches}]
 
     return QuantumProgram(
@@ -320,7 +320,7 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=3)
 
     patch = code.create_patch(qubit_labels)
-    patches = PatchDict({"global": patch})
+    patches = PatchLayout({"global": patch})
     initial_history = [{"state": initial_state, "patches": patches}]
 
     return QuantumProgram(
@@ -461,7 +461,7 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
     initial_state = NumpyStatevectorQuantumState(len(qubit_labels), qubit_labels=qubit_labels, d=3)
 
     patch = code.create_patch(qubit_labels)
-    patches = PatchDict({"global": patch})
+    patches = PatchLayout({"global": patch})
     initial_history = [{"state": initial_state, "patches": patches}]
 
     return QuantumProgram(

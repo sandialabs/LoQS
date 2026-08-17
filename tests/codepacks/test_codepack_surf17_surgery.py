@@ -19,7 +19,7 @@ from loqs.backends import (
     UnitaryGateRep,
 )
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.core import QuantumProgram
+from loqs.core import PatchGeometry, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_surf17_surgery as surgery
 from loqs.codepacks import codepack_surf17_multipatch as multipatch
@@ -99,10 +99,15 @@ SEAMS = ["Qs0", "Qs1", "Qs2"]
 
 
 def two_patch_setup(layout):
-    """(q0, q1, all_qubits incl. seams) for a two-patch surgery program."""
+    """(PatchGeometry roles "a"/"b" = L0/L1, all_qubits incl. seams)."""
     q0 = layout_qubits(layout, "_0")
     q1 = layout_qubits(layout, "_1")
-    return q0, q1, q0 + q1 + SEAMS
+    geometry = PatchGeometry(
+        patches={"a": ("L0", q0), "b": ("L1", q1)},
+        seam=SEAMS,
+        layout=layout,
+    )
+    return geometry, q0 + q1 + SEAMS
 
 
 def collect_parities(results, key):
@@ -222,12 +227,12 @@ class TestMergedGeometry:
         ZZ: Z(A.D6,A.D7,A.D8) (x) Z(B.D0,B.D1,B.D2) = Z_L(A) Z_L(B)
         XX: X(A.D2,A.D5,A.D8) (x) X(B.D0,B.D3,B.D6) = X_L(A) X_L(B)
         """
-        geometry = surgery.SEAM_GEOMETRIES[kind]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         product = np.zeros(surgery.MERGED_NUM_DATA, dtype=int)
-        for check in geometry["new_checks"]:
+        for check in seam_geometry["new_checks"]:
             product ^= support_vector(check["support"])
         assert np.array_equal(
-            product, support_vector(geometry["parity_support"])
+            product, support_vector(seam_geometry["parity_support"])
         )
         # No seam qubits survive the telescoping
         assert np.all(product[9:12] == 0)
@@ -239,7 +244,7 @@ class TestMergedGeometry:
         Each 3-qubit half must differ from the codepack's canonical logical
         (Z0 Z4 Z8 or X2 X4 X6) by a product of that patch's own stabilizers.
         """
-        geometry = surgery.SEAM_GEOMETRIES[kind]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         H = surgery.BASE_H_Z if kind == "ZZ" else surgery.BASE_H_X
         canonical = np.zeros(9, dtype=int)
         for i in [0, 4, 8] if kind == "ZZ" else [2, 4, 6]:
@@ -247,7 +252,7 @@ class TestMergedGeometry:
 
         for patch in ["A", "B"]:
             half = np.zeros(9, dtype=int)
-            for p, i in geometry["parity_support"]:
+            for p, i in seam_geometry["parity_support"]:
                 if p == patch:
                     half[i] = 1
             diff = half ^ canonical
@@ -261,12 +266,12 @@ class TestMergedGeometry:
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_grown_checks_consistent(self, kind):
         """Grown check = old boundary check (+) its two seam qubits."""
-        geometry = surgery.SEAM_GEOMETRIES[kind]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         H_old = (
             surgery.BASE_H_X if kind == "ZZ" else surgery.BASE_H_Z
         )  # grown checks are X-type for ZZ merges, Z-type for XX
         for patch in ["A", "B"]:
-            grown = geometry["grown_checks"][patch]
+            grown = seam_geometry["grown_checks"][patch]
             old_row = H_old[grown["check_row"]]
             old_from_geometry = np.zeros(9, dtype=int)
             for p, i in grown["old_support"]:
@@ -283,10 +288,10 @@ class TestMergedGeometry:
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_merged_logicals(self, kind):
         """Merged Z_L/X_L commute with all checks and anticommute mutually."""
-        geometry = surgery.SEAM_GEOMETRIES[kind]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         H_X, H_Z, _, _ = surgery.build_merged_check_matrices(kind)
-        z_logical = support_vector(geometry["merged_Z_L"])
-        x_logical = support_vector(geometry["merged_X_L"])
+        z_logical = support_vector(seam_geometry["merged_Z_L"])
+        x_logical = support_vector(seam_geometry["merged_X_L"])
         # Z-type logical must commute with all X checks and vice versa
         assert np.all((H_X @ z_logical) % 2 == 0)
         assert np.all((H_Z @ x_logical) % 2 == 0)
@@ -296,8 +301,8 @@ class TestMergedGeometry:
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_patch_interior_checks_embedded(self, kind):
         """Non-grown patch checks appear verbatim at their patch offsets."""
-        geometry = surgery.SEAM_GEOMETRIES[kind]
-        grown_type = geometry["grown_check_type"]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
+        grown_type = seam_geometry["grown_check_type"]
         for check_type, H_base in (("X", surgery.BASE_H_X), ("Z", surgery.BASE_H_Z)):
             H_X, H_Z, labels_X, labels_Z = (
                 surgery.build_merged_check_matrices(kind)
@@ -306,7 +311,7 @@ class TestMergedGeometry:
             labels = labels_X if check_type == "X" else labels_Z
             for patch, offset in (("A", 0), ("B", 12)):
                 grown_row = (
-                    geometry["grown_checks"][patch]["check_row"]
+                    seam_geometry["grown_checks"][patch]["check_row"]
                     if check_type == grown_type
                     else None
                 )
@@ -333,9 +338,9 @@ class TestMergedGeometry:
         each contributing its seam pair. Over GF(2) the total must equal
         the recorded byproduct_seam_indices.
         """
-        geometry = surgery.SEAM_GEOMETRIES[kind]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         through_logical = (
-            geometry["merged_X_L"] if kind == "ZZ" else geometry["merged_Z_L"]
+            seam_geometry["merged_X_L"] if kind == "ZZ" else seam_geometry["merged_Z_L"]
         )
         seam_crossings = [e for e in through_logical if e[0] == "S"]
         assert seam_crossings == [("S", 0)]
@@ -345,12 +350,12 @@ class TestMergedGeometry:
         # SZ1 * SZ3 where SZ3 is A's grown check.
         grown_in_conversion = "B" if kind == "ZZ" else "A"
         pickup = set()
-        for _, si in geometry["grown_checks"][grown_in_conversion][
+        for _, si in seam_geometry["grown_checks"][grown_in_conversion][
             "seam_pair"
         ]:
             pickup ^= {si}
         expected = {0} ^ pickup
-        assert set(geometry["byproduct_seam_indices"]) == expected
+        assert set(seam_geometry["byproduct_seam_indices"]) == expected
 
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_telescope_reference_conversion(self, kind):
@@ -360,18 +365,18 @@ class TestMergedGeometry:
         the GF(2) sum of the declared telescope_reference_checks rows of the
         seam-check-type H matrix.
         """
-        geometry = surgery.SEAM_GEOMETRIES[kind]
+        seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         H = surgery.BASE_H_Z if kind == "ZZ" else surgery.BASE_H_X
         canonical = np.zeros(9, dtype=int)
         for i in [0, 4, 8] if kind == "ZZ" else [2, 4, 6]:
             canonical[i] = 1
         for patch in ["A", "B"]:
             half = np.zeros(9, dtype=int)
-            for p, i in geometry["parity_support"]:
+            for p, i in seam_geometry["parity_support"]:
                 if p == patch:
                     half[i] = 1
             ref_sum = np.zeros(9, dtype=int)
-            for row in geometry["telescope_reference_checks"][patch]:
+            for row in seam_geometry["telescope_reference_checks"][patch]:
                 ref_sum ^= H[row]
             assert np.array_equal(half ^ canonical, ref_sum), (
                 f"{kind} patch {patch}: telescope_reference_checks do not "
@@ -393,14 +398,13 @@ class TestSimplifiedSurgeryZZ:
         The post-surgery destructive FT Z measures also validate that the
         merge window leaves the per-patch Z decoding intact.
         """
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         zz = surgery.build_surgery_parity_instruction(
-            "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
+            "ZZ", geometry, mode="simple"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             *((("X", "L0"),) if logical_x_on_l0 else ()),
@@ -415,7 +419,7 @@ class TestSimplifiedSurgeryZZ:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_x_on_l0 else 0
-        parities = collect_parities(results, "surgery_parity_zz")
+        parities = collect_parities(results, "surgery_parity_zz_L0_L1")
         assert parities == [[expected]] * NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -426,17 +430,16 @@ class TestSimplifiedSurgeryZZ:
     def test_projective_and_consistent(self, layout):
         """|0+>: repeated M_ZZ agree per shot, ~50/50 across shots, and the
         destructive FT Z measure of the |+> patch equals the reported m."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         zz_insts = [
             surgery.build_surgery_parity_instruction(
-                "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
+                "ZZ", geometry, mode="simple"
             )
             for _ in range(2)
         ]
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -454,7 +457,7 @@ class TestSimplifiedSurgeryZZ:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        pairs = collect_parities(results, "surgery_parity_zz")
+        pairs = collect_parities(results, "surgery_parity_zz_L0_L1")
         assert all(len(p) == 2 and p[0] == p[1] for p in pairs)
         ms = [p[0] for p in pairs]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # both branches appear
@@ -473,14 +476,13 @@ class TestSimplifiedSurgeryZZ:
         Reference rounds are required in the grown-check (X) basis after a
         ZZ surgery (the rewrite lands in the round-0 layer).
         """
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         zz = surgery.build_surgery_parity_instruction(
-            "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
+            "ZZ", geometry, mode="simple"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -493,7 +495,7 @@ class TestSimplifiedSurgeryZZ:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # |++> gives a random m_ZZ
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -508,14 +510,13 @@ class TestSimplifiedSurgeryXX:
     @pytest.mark.parametrize("logical_z_on_l0", [False, True])
     def test_product_state_truth_table(self, layout, logical_z_on_l0):
         """|++> gives m_XX = 0; Z_L on one patch gives 1, every shot."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         xx = surgery.build_surgery_parity_instruction(
-            "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
+            "XX", geometry, mode="simple"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             *((("Z", "L0"),) if logical_z_on_l0 else ()),
@@ -530,7 +531,7 @@ class TestSimplifiedSurgeryXX:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_z_on_l0 else 0
-        parities = collect_parities(results, "surgery_parity_xx")
+        parities = collect_parities(results, "surgery_parity_xx_L0_L1")
         assert parities == [[expected]] * NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -540,17 +541,16 @@ class TestSimplifiedSurgeryXX:
     @pytest.mark.parametrize("layout", LAYOUTS)
     def test_projective_and_consistent(self, layout):
         """|+0>: repeated M_XX agree per shot; FT X of the |0> patch == m."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         xx_insts = [
             surgery.build_surgery_parity_instruction(
-                "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
+                "XX", geometry, mode="simple"
             )
             for _ in range(2)
         ]
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -568,7 +568,7 @@ class TestSimplifiedSurgeryXX:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        pairs = collect_parities(results, "surgery_parity_xx")
+        pairs = collect_parities(results, "surgery_parity_xx_L0_L1")
         assert all(len(p) == 2 and p[0] == p[1] for p in pairs)
         ms = [p[0] for p in pairs]
         assert 0 < sum(ms) < NUM_STIM_SHOTS
@@ -582,14 +582,13 @@ class TestSimplifiedSurgeryXX:
     def test_z_correlation_preserved(self, layout):
         """|00> -> M_XX -> FT Z measures XOR to 0 every shot (dual of the
         ZZ x-correlation test; reference rounds in the grown Z basis)."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         xx = surgery.build_surgery_parity_instruction(
-            "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="simple"
+            "XX", geometry, mode="simple"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -602,7 +601,7 @@ class TestSimplifiedSurgeryXX:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_xx")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_xx_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # |00> gives a random m_XX
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -629,19 +628,29 @@ class TestSimplifiedSurgeryBell:
         seams_v = ["Qsv0", "Qsv1", "Qsv2"]
         seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = q0 + q1 + seams_v + seams_h
-        cnot = multipatch.build_transversal_cnot_instruction(
-            "L0", "L1", q0[:9], q1[:9]
+        cnot_geometry = PatchGeometry(
+            patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout=layout
         )
+        zz_geometry = PatchGeometry(
+            patches={"a": ("L0", q0), "b": ("L1", q1)},
+            seam=seams_v,
+            layout=layout,
+        )
+        xx_geometry = PatchGeometry(
+            patches={"a": ("L0", q0), "b": ("L1", q1)},
+            seam=seams_h,
+            layout=layout,
+        )
+        cnot = multipatch.build_transversal_cnot_instruction(cnot_geometry)
         zz = surgery.build_surgery_parity_instruction(
-            "ZZ", "L0", "L1", q0, q1, seams_v, layout, mode="simple"
+            "ZZ", zz_geometry, mode="simple"
         )
         xx = surgery.build_surgery_parity_instruction(
-            "XX", "L0", "L1", q0, q1, seams_h, layout, mode="simple"
+            "XX", xx_geometry, mode="simple"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *cnot_geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -656,10 +665,10 @@ class TestSimplifiedSurgeryBell:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        assert collect_parities(results, "surgery_parity_zz") == (
+        assert collect_parities(results, "surgery_parity_zz_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
-        assert collect_parities(results, "surgery_parity_xx") == (
+        assert collect_parities(results, "surgery_parity_xx_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
 
@@ -671,14 +680,13 @@ class TestFTSurgery:
     @pytest.mark.parametrize("logical_x_on_l0", [False, True])
     def test_zz_truth_table_ft(self, layout, logical_x_on_l0):
         """FT-mode ZZ truth table: |00> -> 0, X_L(L0) -> 1, every shot."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         zz = surgery.build_surgery_parity_instruction(
-            "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode="ft"
+            "ZZ", geometry, mode="ft"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             *((("X", "L0"),) if logical_x_on_l0 else ()),
@@ -693,7 +701,7 @@ class TestFTSurgery:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_x_on_l0 else 0
-        assert collect_parities(results, "surgery_parity_zz") == (
+        assert collect_parities(results, "surgery_parity_zz_L0_L1") == (
             [[expected]] * NUM_STIM_SHOTS
         )
         logicals = results.collect_shot_data(
@@ -705,14 +713,13 @@ class TestFTSurgery:
     @pytest.mark.parametrize("logical_z_on_l0", [False, True])
     def test_xx_truth_table_ft(self, layout, logical_z_on_l0):
         """FT-mode XX truth table: |++> -> 0, Z_L(L0) -> 1, every shot."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         xx = surgery.build_surgery_parity_instruction(
-            "XX", "L0", "L1", q0, q1, SEAMS, layout, mode="ft"
+            "XX", geometry, mode="ft"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             *((("Z", "L0"),) if logical_z_on_l0 else ()),
@@ -727,7 +734,7 @@ class TestFTSurgery:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         expected = 1 if logical_z_on_l0 else 0
-        assert collect_parities(results, "surgery_parity_xx") == (
+        assert collect_parities(results, "surgery_parity_xx_L0_L1") == (
             [[expected]] * NUM_STIM_SHOTS
         )
         logicals = results.collect_shot_data(
@@ -743,19 +750,29 @@ class TestFTSurgery:
         seams_v = ["Qsv0", "Qsv1", "Qsv2"]
         seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = q0 + q1 + seams_v + seams_h
-        cnot = multipatch.build_transversal_cnot_instruction(
-            "L0", "L1", q0[:9], q1[:9]
+        cnot_geometry = PatchGeometry(
+            patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout=layout
         )
+        zz_geometry = PatchGeometry(
+            patches={"a": ("L0", q0), "b": ("L1", q1)},
+            seam=seams_v,
+            layout=layout,
+        )
+        xx_geometry = PatchGeometry(
+            patches={"a": ("L0", q0), "b": ("L1", q1)},
+            seam=seams_h,
+            layout=layout,
+        )
+        cnot = multipatch.build_transversal_cnot_instruction(cnot_geometry)
         zz = surgery.build_surgery_parity_instruction(
-            "ZZ", "L0", "L1", q0, q1, seams_v, layout, mode="ft"
+            "ZZ", zz_geometry, mode="ft"
         )
         xx = surgery.build_surgery_parity_instruction(
-            "XX", "L0", "L1", q0, q1, seams_h, layout, mode="ft"
+            "XX", xx_geometry, mode="ft"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *cnot_geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -770,10 +787,10 @@ class TestFTSurgery:
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        assert collect_parities(results, "surgery_parity_zz") == (
+        assert collect_parities(results, "surgery_parity_zz_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
-        assert collect_parities(results, "surgery_parity_xx") == (
+        assert collect_parities(results, "surgery_parity_xx_L0_L1") == (
             [[0]] * NUM_STIM_SHOTS
         )
 
@@ -790,16 +807,15 @@ class TestFTSurgery:
         X-error sector.
         """
         layout = "surf17"
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         seq = surgery.build_surgery_parity_instruction_sequence(
-            kind, "L0", "L1", q0, q1, SEAMS, layout, mode="ft"
+            kind, geometry, mode="ft"
         )
         prep = "Zero Prep" if kind == "ZZ" else "Plus Prep"
         meas = "FT Logical Z Measure" if kind == "ZZ" else "FT Logical X Measure"
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             (prep, "L0"),
             (prep, "L1"),
             ("QEC", "L0"),
@@ -817,7 +833,7 @@ class TestFTSurgery:
             (meas, "L1"),
         ]
         base_program = make_stim_program(layout, stack, all_q)
-        parity_key = f"surgery_parity_{kind.lower()}"
+        parity_key = f"surgery_parity_{kind.lower()}_L0_L1"
         sweep_targets = [
             (seq[0], 7),   # seam prep
             (seq[1], 8),   # SE round 1
@@ -862,9 +878,9 @@ class TestParityReadoutConsistencyA:
     def test_parity_matches_ft_readouts_random_patch_a(self, kind, mode):
         """A random-basis: readout_A ^ readout_B == m every shot, m random."""
         layout = "surf17"
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         inst = surgery.build_surgery_parity_instruction(
-            kind, "L0", "L1", q0, q1, SEAMS, layout, mode=mode
+            kind, geometry, mode=mode
         )
         if kind == "ZZ":
             prep0, prep1 = "Plus Prep", "Zero Prep"
@@ -876,8 +892,7 @@ class TestParityReadoutConsistencyA:
             flag = {"reference_round_mode_X": "guarded_diff"}
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             (prep0, "L0"),
             (prep1, "L1"),
             ("QEC", "L0"),
@@ -892,7 +907,7 @@ class TestParityReadoutConsistencyA:
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         parities = [
             p[0]
-            for p in collect_parities(results, f"surgery_parity_{kind.lower()}")
+            for p in collect_parities(results, f"surgery_parity_{kind.lower()}_L0_L1")
         ]
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -922,14 +937,15 @@ class TestSurgeryCnot:
         seams_v = ["Qsv0", "Qsv1", "Qsv2"]
         seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = qc + qt + qa + seams_v + seams_h
-        seq = surgery.build_surgery_cnot_sequence(
-            "C", "T", "Qanc", qc, qt, qa, seams_v, seams_h, "surf17", mode="ft"
+        geometry = PatchGeometry(
+            patches={"ctrl": ("C", qc), "tgt": ("T", qt), "anc": ("Qanc", qa)},
+            seams={"zz": seams_v, "xx": seams_h},
+            layout="surf17",
         )
+        seq = surgery.build_surgery_cnot_sequence(geometry, mode="ft")
         prelude = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "C", "qubits": qc},
-            {"instruction": "Init Patch SURF", "new_patch_label": "T", "qubits": qt},
-            {"instruction": "Init Patch SURF", "new_patch_label": "Qanc", "qubits": qa},
+            *geometry.init_patch_entries("SURF"),
         ]
         return prelude, seq, all_q
 
@@ -1038,24 +1054,18 @@ class TestSurgeryDenseSmoke:
     def test_zz_statevector_surf10(self):
         """2x surf10 + 3 seams (23 qubits): |00> -> m_ZZ = 0."""
         layout = "surf10"
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         # 2 merge rounds keep the 23-qubit statevector runtime tolerable;
         # noiseless round parities are constant so the vote is unaffected.
         zz = surgery.build_surgery_parity_instruction(
             "ZZ",
-            "L0",
-            "L1",
-            q0,
-            q1,
-            SEAMS,
-            layout,
+            geometry,
             mode="simple",
             num_merge_rounds=2,
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             ("QEC", "L0"),
@@ -1075,7 +1085,7 @@ class TestSurgeryDenseSmoke:
             patch_types={"SURF": code},
         )
         results = program.run(num_shots=NUM_KRAUS_SHOTS, verbose=False)
-        parities = collect_parities(results, "surgery_parity_zz")
+        parities = collect_parities(results, "surgery_parity_zz_L0_L1")
         assert parities == [[0]] * NUM_KRAUS_SHOTS
 
 
@@ -1090,15 +1100,14 @@ class TestMzzBellPrep:
     """
 
     @staticmethod
-    def bell_prep_stack(layout, q0, q1, all_q, mode, basis):
+    def bell_prep_stack(layout, geometry, all_q, mode, basis):
         """|+>|+> -> M_ZZ Bell prep -> QEC -> FT readout of both patches."""
         seq = surgery.build_mzz_bell_prep_sequence(
-            "L0", "L1", q0, q1, SEAMS, layout, mode=mode
+            geometry, mode=mode
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -1124,11 +1133,11 @@ class TestMzzBellPrep:
         Without the conditional X_L correction the XOR would equal m_zz,
         so this proves the correction fires on exactly the m_zz = 1 shots.
         """
-        q0, q1, all_q = two_patch_setup(layout)
-        stack = self.bell_prep_stack(layout, q0, q1, all_q, mode, "Z")
+        geometry, all_q = two_patch_setup(layout)
+        stack = self.bell_prep_stack(layout, geometry, all_q, mode, "Z")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # both branches appear
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1139,11 +1148,11 @@ class TestMzzBellPrep:
     @pytest.mark.parametrize("mode", ["simple", "ft"])
     def test_bell_xx_correlation(self, layout, mode):
         """FT X readouts XOR to 0 every shot (X_L frame is invisible in X)."""
-        q0, q1, all_q = two_patch_setup(layout)
-        stack = self.bell_prep_stack(layout, q0, q1, all_q, mode, "X")
+        geometry, all_q = two_patch_setup(layout)
+        stack = self.bell_prep_stack(layout, geometry, all_q, mode, "X")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         assert 0 < sum(ms) < NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1154,13 +1163,13 @@ class TestMzzBellPrep:
     @pytest.mark.parametrize("mode", ["simple", "ft"])
     def test_correction_matches_parity(self, layout, mode):
         """The recorded mzz_bell_correction equals that shot's m_zz."""
-        q0, q1, all_q = two_patch_setup(layout)
-        stack = self.bell_prep_stack(layout, q0, q1, all_q, mode, "Z")
+        geometry, all_q = two_patch_setup(layout)
+        stack = self.bell_prep_stack(layout, geometry, all_q, mode, "Z")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz")]
+        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
         corrections = results.collect_shot_data(
-            "mzz_bell_correction", "all", strip_none_entries=True
+            "mzz_bell_correction_L0_L1", "all", strip_none_entries=True
         )
         assert [c[0] for c in corrections] == ms
 
@@ -1203,12 +1212,12 @@ class TestMzzFaultTolerance:
         as individually injectable stack entries 7..13. In ft mode the
         post-split byproduct repair runs after the post-merge QEC (the
         middle-seam fix; simple mode stays unrepaired by design)."""
-        q0, q1, all_q = two_patch_setup(layout)
+        geometry, all_q = two_patch_setup(layout)
         seq = surgery.build_surgery_parity_instruction_sequence(
-            "ZZ", "L0", "L1", q0, q1, SEAMS, layout, mode=mode
+            "ZZ", geometry, mode=mode
         )
         corrections = surgery.build_mzz_bell_corrections_instruction(
-            "L1", q1[:9]
+            "L0", "L1"
         )
         # Z round 0 is random after |+> prep -> guarded_diff. X round 0
         # is deterministic -> kept as a detector layer ("raw", the split
@@ -1222,8 +1231,7 @@ class TestMzzFaultTolerance:
         meas = f"FT Logical {basis} Measure"
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -1241,7 +1249,7 @@ class TestMzzFaultTolerance:
         ]
         if mode == "ft":
             repair = surgery.build_split_byproduct_repair_instruction(
-                "ZZ", "L0", "L1", q0, q1, SEAMS, layout,
+                "L0", "L1",
                 num_post_split_rounds=3,
             )
             stack.append((repair, None))
@@ -1392,20 +1400,23 @@ class TestSurgeryCnotFaultTolerance:
         seams_v = ["Qsv0", "Qsv1", "Qsv2"]
         seams_h = ["Qsh0", "Qsh1", "Qsh2"]
         all_q = qc + qt + qa + seams_v + seams_h
+        geometry = PatchGeometry(
+            patches={"ctrl": ("C", qc), "tgt": ("T", qt), "anc": ("ANC", qa)},
+            seams={"zz": seams_v, "xx": seams_h},
+            layout=layout,
+        )
         zzseq = surgery.build_surgery_parity_instruction_sequence(
-            "ZZ", "C", "ANC", qc, qa, seams_v, layout, mode=mode
+            "ZZ", geometry.subset(["ctrl", "anc"], seam="zz"), mode=mode
         )
         xxseq = surgery.build_surgery_parity_instruction_sequence(
-            "XX", "ANC", "T", qa, qt, seams_h, layout, mode=mode
+            "XX", geometry.subset(["anc", "tgt"], seam="xx"), mode=mode
         )
         corrections = surgery.build_surgery_cnot_corrections_instruction(
-            "C", "T", qc, qt
+            "C", "T", "ANC"
         )
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "C", "qubits": qc},
-            {"instruction": "Init Patch SURF", "new_patch_label": "T", "qubits": qt},
-            {"instruction": "Init Patch SURF", "new_patch_label": "ANC", "qubits": qa},
+            *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "C"),
             ("Zero Prep", "T"),
             ("QEC", "C"),
@@ -1420,7 +1431,7 @@ class TestSurgeryCnotFaultTolerance:
             stack.append(
                 (
                     surgery.build_split_byproduct_repair_instruction(
-                        "ZZ", "C", "ANC", qc, qa, seams_v, layout,
+                        "C", "ANC",
                         fire_rule="b_only",
                         defect_decode_mode="matching",
                     ),
@@ -1436,7 +1447,7 @@ class TestSurgeryCnotFaultTolerance:
                 ("QEC", "T"),
                 (
                     surgery.build_split_byproduct_repair_instruction(
-                        "XX", "ANC", "T", qa, qt, seams_h, layout
+                        "ANC", "T"
                     ),
                     None,
                 ),

@@ -35,7 +35,21 @@ class TestQECCodeAndPatch:
             #'collected_params': {'state': 0, 'qubits': ins2.data["qubits"]}
         }
         assert result.log == "test result"
-    
+
+    def test_data_qubits(self):
+        code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
+        patch = code.create_patch(["D0", "A0"])
+        assert patch.data_qubits == ["D0"]
+
+    def test_data_qubits_multiple_out_of_order(self):
+        # template_data_qubits in a different order than template_qubits,
+        # to confirm data_qubits maps by position, not just takes a prefix.
+        code = QECCode(
+            {"ins": self.ins}, ["Q0", "Q1", "Q2"], ["Q1", "Q0"], "Test code"
+        )
+        patch = code.create_patch(["D0", "D1", "A0"])
+        assert patch.data_qubits == ["D1", "D0"]
+
     def test_serialization(self, make_temp_path):
         code = QECCode({"ins": self.ins}, ["Q0", "Q1"], ["Q0"], "Test code")
         patch = code.create_patch(["D0", "A0"])

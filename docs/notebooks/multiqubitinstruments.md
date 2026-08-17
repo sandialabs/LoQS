@@ -20,7 +20,7 @@ kernelspec:
 1. **Decomposable**: one classical label per physical qubit, reading multiple qubits' independent bits in a single instrument call.
 2. **Joint**: a *single* classical channel that isn't owned by any one physical qubit, with an arbitrary number of outcomes (not just 2) -- e.g. a parity check, or a leakage-discriminating readout.
 
-This notebook demonstrates both using a 3-qubit bit-flip repetition code's syndrome extraction as a running example, comparing them against the traditional ancilla-mediated approach. (For a worked example with more than 2 outcomes, see the [Leakage Modeling](leakage-tutorial.md) tutorial's leakage-discriminating readout.)
+This notebook demonstrates both using a 3-qubit bit-flip repetition code's syndrome extraction as a running example, comparing them against the traditional ancilla-mediated approach. (For a worked example with more than 2 outcomes, see the [Leakage Modeling](leakage.md) tutorial's leakage-discriminating readout.)
 
 +++
 
@@ -207,4 +207,4 @@ print("state preserved:", np.allclose(np.abs(state.state.flatten()), logical_plu
 
 ## What's next?
 
-This notebook built the instruments and circuits by hand to keep the comparison direct; see [Building a Complex Instruction](buildinstruction.md) for wrapping a syndrome-extraction round like this into a reusable `Instruction`, [Building a QEC Code](buildqeccode.md) for assembling those into a full `QECCode`, and [Leakage Modeling](leakage-tutorial.md) for a joint instrument with more than 2 outcomes.
+This notebook built the instruments and circuits by hand to keep the comparison direct; see [Building a Complex Instruction](buildinstruction.md) for wrapping a syndrome-extraction round like this into a reusable `Instruction`, [Building a QEC Code](buildqeccode.md) for assembling those into a full `QECCode`, and [Leakage Modeling](leakage.md) for a joint instrument with more than 2 outcomes.

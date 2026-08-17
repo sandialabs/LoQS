@@ -51,7 +51,7 @@ from loqs.core.instructions.instructionstack import (
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import (
     MeasurementOutcomes,
-    PatchDict,
+    PatchLayout,
     PauliFrame,
     QECCodePatch,
 )
@@ -271,7 +271,7 @@ def build_lookup_decoder_instruction(
       from the previous frames
     - `history`, usually from the `QuantumProgram`
 
-    It returns a `Frame` with a `PatchDict` that has an updated `PauliFrame`,
+    It returns a `Frame` with a `PatchLayout` that has an updated `PauliFrame`,
     the raw syndrome, and some other debugging information.
 
     There is a map qubits function, which maps the `syndrome_labels`.
@@ -309,7 +309,7 @@ def build_lookup_decoder_instruction(
     Examples
     --------
     >>> from loqs.core import History, QECCode
-    >>> from loqs.core.recordables import PatchDict, MeasurementOutcomes, QECCodePatch
+    >>> from loqs.core.recordables import PatchLayout, MeasurementOutcomes, QECCodePatch
     >>> from loqs.core.instructions.builders import build_lookup_decoder_instruction
     >>> inst = build_lookup_decoder_instruction(
     ...     lookup_table={"0": "I"},
@@ -321,7 +321,7 @@ def build_lookup_decoder_instruction(
     'LookupDecoder'
     >>> code = QECCode({}, ["Q0"], ["Q0"])
     >>> patch = QECCodePatch(code, ["Q0"], "I")
-    >>> patches = PatchDict({"L0": patch})
+    >>> patches = PatchLayout({"L0": patch})
     >>> outcomes = MeasurementOutcomes({"A0": [0]})
     >>> history = History()
     >>> f = inst.apply(
@@ -352,7 +352,7 @@ def build_lookup_decoder_instruction(
         syndrome_labels: list[SyndromeLabel],
         raw_syndrome_frame_key: str,
         diff_prev_syndrome: bool,
-        patches: PatchDict,
+        patches: PatchLayout,
         syndrome_outcomes: list[MeasurementOutcomes] | MeasurementOutcomes,
         history: History,
     ) -> Frame:
@@ -370,7 +370,7 @@ def build_lookup_decoder_instruction(
             Key for storing raw syndrome information in the output frame.
         diff_prev_syndrome : bool
             Whether to XOR with previous syndrome (True) or use current syndrome directly (False).
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing Pauli frames.
         syndrome_outcomes : list[MeasurementOutcomes] | MeasurementOutcomes
             Measurement outcomes from previous frames.
@@ -620,7 +620,7 @@ def build_patch_builder_instruction(
     """Build an instruction that can make patches from a `QECCode`.
 
     This is a sort of meta-instruction that can build `QECCodePatch`
-    objects and then store them into the main `PatchDict`.
+    objects and then store them into the main `PatchLayout`.
     The qubit labels for the new patch should typically be provided
     in the `InstructionLabel` as kwargs.
 
@@ -639,7 +639,7 @@ def build_patch_builder_instruction(
     `QECCodePatch` under `new_patch_label`.
 
     The parameter priorities for `patches` are not default,
-    because we want to prioritize a true `PatchDict` from
+    because we want to prioritize a true `PatchLayout` from
     the `History` over the default one provided in the
     `Instruction.data`.
 
@@ -676,7 +676,7 @@ def build_patch_builder_instruction(
         new_patch_label: str,
         qubits: Sequence[str],
         qec_code: QECCode,
-        patches: PatchDict | None,
+        patches: PatchLayout | None,
     ) -> Frame:
         """Apply patch builder instruction.
 
@@ -690,7 +690,7 @@ def build_patch_builder_instruction(
             List of qubit labels for the new patch.
         qec_code : QECCode
             Quantum error correction code to use for creating the patch.
-        patches : PatchDict | None
+        patches : PatchLayout | None
             Existing patches dictionary, or None to create a new one.
 
         Returns
@@ -699,7 +699,7 @@ def build_patch_builder_instruction(
             Frame containing the updated patches dictionary.
         """
         if patches is None:
-            patches = PatchDict()
+            patches = PatchLayout()
 
         all_patch_qubits = patches.all_qubit_labels
 
@@ -741,7 +741,7 @@ def build_patch_remover_instruction(
     """Build an instruction that can make delete patches.
 
     This is a sort of meta-instruction that can remove patches
-    from the main `PatchDict`. The patch label should typically
+    from the main `PatchLayout`. The patch label should typically
     be provided in the `InstructionLabel` as a kwarg.
 
     The apply function takes:
@@ -753,7 +753,9 @@ def build_patch_remover_instruction(
     - `patches`, usually taken from the previous frame
 
     It returns a `Frame` with an updated `patches` without the
-    `QECCodePatch` under `del_patch_label`.
+    `QECCodePatch` under `del_patch_label`, and without any
+    `PatchRelation` that named it (`PatchLayout.__delitem__` drops these
+    automatically -- nothing extra is needed here).
 
     Parameters
     ----------
@@ -767,22 +769,25 @@ def build_patch_remover_instruction(
     Examples
     --------
     >>> from loqs.core import QECCode
-    >>> from loqs.core.recordables import PatchDict, QECCodePatch
+    >>> from loqs.core.recordables import PatchLayout, PatchRelation, QECCodePatch
     >>> from loqs.core.instructions.builders import build_patch_remover_instruction
     >>> inst = build_patch_remover_instruction(name="Remove Patch")
     >>> inst.name
     'Remove Patch'
     >>> code = QECCode({}, ["q0"], ["q0"])
     >>> patch = QECCodePatch(code, ["Q0"], "I")
-    >>> patches = PatchDict({"L0": patch})
+    >>> patches = PatchLayout({"L0": patch, "L1": code.create_patch(["Q1"])})
+    >>> patches.set_relation(PatchRelation({"a": "L0", "b": "L1"}))
     >>> f = inst.apply(del_patch_label="L0", patches=patches)
     >>> "L0" in f["patches"]
     False
+    >>> f["patches"].relations
+    {}
     """
 
     def apply_fn(
         del_patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
     ) -> Frame:
         """Apply patch remover instruction.
 
@@ -792,7 +797,7 @@ def build_patch_remover_instruction(
         ----------
         del_patch_label : str
             Label of the patch to remove.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches to remove from.
 
         Returns
@@ -848,14 +853,14 @@ def build_patch_permute_instruction(
     Examples
     --------
     >>> from loqs.core import QECCode
-    >>> from loqs.core.recordables import PatchDict, QECCodePatch
+    >>> from loqs.core.recordables import PatchLayout, QECCodePatch
     >>> from loqs.core.instructions.builders import build_patch_permute_instruction
     >>> inst = build_patch_permute_instruction(mapping={"Q0": "Q1", "Q1": "Q0"}, name="Permuter")
     >>> inst.name
     'Permuter'
     >>> code = QECCode({}, ["q0", "q1"], ["q0"])
     >>> patch = QECCodePatch(code, ["Q0", "Q1"], "II")
-    >>> patches = PatchDict({"L0": patch})
+    >>> patches = PatchLayout({"L0": patch})
     >>> f = inst.apply(patch_label="L0", mapping={"Q0": "Q1", "Q1": "Q0"}, patches=patches)
     >>> f["patches"]["L0"].qubits
     ['Q1', 'Q0']
@@ -865,7 +870,7 @@ def build_patch_permute_instruction(
     def apply_fn(
         patch_label: str,
         mapping: Mapping[str | int, str | int],
-        patches: PatchDict,
+        patches: PatchLayout,
     ) -> Frame:
         """Apply patch permute instruction.
 
@@ -877,7 +882,7 @@ def build_patch_permute_instruction(
             Label of the patch to permute.
         mapping : Mapping[str | int, str | int]
             Mapping from old qubit labels to new qubit labels.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing the patch to permute.
 
         Returns
@@ -989,7 +994,7 @@ def build_physical_circuit_instruction(
     --------
     >>> from loqs.backends import ListPhysicalCircuit as PhysCirc, DictNoiseModel, NumpyStatevectorQuantumState
     >>> from loqs.backends.reps import UnitaryGateRep, ZBasisProjectionInstrumentRep
-    >>> from loqs.core.recordables import PatchDict
+    >>> from loqs.core.recordables import PatchLayout
     >>> from loqs.core.instructions.builders import build_physical_circuit_instruction
     >>> circ = PhysCirc(circuit=[], qubit_labels=[0, 1])
     >>> inst = build_physical_circuit_instruction(circuit=circ, name="PhysCirc")
@@ -997,7 +1002,7 @@ def build_physical_circuit_instruction(
     'PhysCirc'
     >>> model = DictNoiseModel({}, {}, gatereps=[UnitaryGateRep], instreps=[ZBasisProjectionInstrumentRep])
     >>> state = NumpyStatevectorQuantumState(2, qubit_labels=[0, 1])
-    >>> patches = PatchDict()
+    >>> patches = PatchLayout()
     >>> f = inst.apply(
     ...     model=model,
     ...     circuit=circ,
@@ -1021,7 +1026,7 @@ def build_physical_circuit_instruction(
         error_injections: list[tuple[int, str, int]] | None,
         pauli_frame_update: str | list[str] | dict[str, str] | None,
         patch_label: str,
-        patches: PatchDict,
+        patches: PatchLayout,
     ) -> Frame:
         """Apply physical circuit instruction.
 
@@ -1043,7 +1048,7 @@ def build_physical_circuit_instruction(
             Pauli frame update to apply after circuit execution.
         patch_label : str
             Label of the patch to update.
-        patches : PatchDict
+        patches : PatchLayout
             Dictionary of patches containing the patch to update.
 
         Returns

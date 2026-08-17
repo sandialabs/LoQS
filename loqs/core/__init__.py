@@ -21,6 +21,7 @@ from .instructions import (
     Instruction,
     InstructionLabel,
     InstructionStack,
+    PatchGeometry,
 )
 
 # Before QECCodePatch
@@ -32,6 +33,8 @@ from .recordables import (
     QECCodePatch,
     PauliFrame,
     PatchDict,
+    PatchLayout,
+    PatchRelation,
 )
 from .syndromelabel import SyndromeLabel
 

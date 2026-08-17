@@ -92,6 +92,29 @@ class QECCodePatch(Mapping[str, Instruction], Displayable):
         self.data = copy.deepcopy(data) if data is not None else {}
         """Extra patch-specific data to be tracked."""
 
+    @property
+    def data_qubits(self) -> list[str | int]:
+        """This patch's own data qubits (a subset of [](api:qubits)).
+
+        Derived from [](api:code)'s `template_data_qubits`, mapped onto
+        this patch's real qubits -- the same computation
+        [](api:QECCode.create_patch) already does inline to build a
+        patch's initial [](api:PauliFrame).
+
+        Examples
+        --------
+        >>> from loqs.core import QECCode
+        >>> from loqs.core.recordables import QECCodePatch
+        >>> code = QECCode(instructions={}, template_qubits=["q0", "q1"], template_data_qubits=["q0"])
+        >>> patch = QECCodePatch(code=code, qubits=["Q0", "Q1"], pauli_frame="I")
+        >>> patch.data_qubits
+        ['Q0']
+        """
+        return [
+            self.qubits[self.code.template_qubits.index(tdq)]
+            for tdq in self.code.template_data_qubits
+        ]
+
     def copy(self: U, pauli_frame: PauliFrameLike | None = None) -> U:
         """Create a copy of this QECCodePatch, deep-copying its tracked data.
 

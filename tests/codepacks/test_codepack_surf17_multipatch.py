@@ -18,7 +18,7 @@ from loqs.backends import (
     StimCircuitGateRep,
     UnitaryGateRep,
 )
-from loqs.core import QuantumProgram
+from loqs.core import PatchGeometry, QuantumProgram
 from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.codepacks import codepack_surf17_multipatch as multipatch
@@ -277,13 +277,13 @@ def two_patch_cnot_stack(layout, prep_ctrl, prep_tgt, meas, meas_kwargs,
     q0 = layout_qubits(layout, "_0")
     q1 = layout_qubits(layout, "_1")
     all_q = q0 + q1
-    cnot = multipatch.build_transversal_cnot_instruction(
-        "L0", "L1", q0[:9], q1[:9]
+    geometry = PatchGeometry(
+        patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout=layout
     )
+    cnot = multipatch.build_transversal_cnot_instruction(geometry)
     stack = [
         {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-        {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-        {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+        *geometry.init_patch_entries("SURF"),
         (prep_ctrl, "L0"),
         (prep_tgt, "L1"),
         *after_prep,
@@ -413,9 +413,7 @@ class TestTransversalCnot:
         cnot_circ = multipatch.build_transversal_cnot_circuit_instruction(
             q0[:9], q1[:9]
         )
-        cnot_book = multipatch.build_cnot_bookkeeping_instruction(
-            "L0", "L1", q0[:9], q1[:9]
-        )
+        cnot_book = multipatch.build_cnot_bookkeeping_instruction("L0", "L1")
 
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
@@ -506,19 +504,20 @@ def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
     q0 = layout_qubits(layout, "_0")
     q1 = layout_qubits(layout, "_1")
     all_q = q0 + q1 + [ancilla]
-    cnot = multipatch.build_transversal_cnot_instruction(
-        "L0", "L1", q0[:9], q1[:9]
+    # Two PatchGeometry objects over the same L0/L1 patches: CNOT uses the
+    # directional "ctrl"/"tgt" roles, joint parity the symmetric "a"/"b".
+    cnot_geometry = PatchGeometry(
+        patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout=layout
     )
-    zz = multipatch.build_joint_parity_zz_instruction(
-        "L0", "L1", q0[:9], q1[:9], ancilla
+    parity_geometry = PatchGeometry(
+        patches={"a": ("L0", q0), "b": ("L1", q1)}, layout=layout
     )
-    xx = multipatch.build_joint_parity_xx_instruction(
-        "L0", "L1", q0[:9], q1[:9], ancilla
-    )
+    cnot = multipatch.build_transversal_cnot_instruction(cnot_geometry)
+    zz = multipatch.build_joint_parity_zz_instruction(parity_geometry, ancilla)
+    xx = multipatch.build_joint_parity_xx_instruction(parity_geometry, ancilla)
     stack = [
         {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-        {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-        {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+        *cnot_geometry.init_patch_entries("SURF"),
         ("Plus Prep", "L0"),
         ("Zero Prep", "L1"),
         ("QEC", "L0"),
@@ -556,13 +555,13 @@ class TestJointParity:
         q1 = layout_qubits(layout, "_1")
         ancilla = "Qanc"
         all_q = q0 + q1 + [ancilla]
-        zz = multipatch.build_joint_parity_zz_instruction(
-            "L0", "L1", q0[:9], q1[:9], ancilla
+        geometry = PatchGeometry(
+            patches={"a": ("L0", q0), "b": ("L1", q1)}, layout=layout
         )
+        zz = multipatch.build_joint_parity_zz_instruction(geometry, ancilla)
         stack = [
             {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
             *((("X", "L0"),) if logical_x_on_l0 else ()),
@@ -573,7 +572,7 @@ class TestJointParity:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         parities = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         expected = 1 if logical_x_on_l0 else 0
         assert parities == [[expected]] * NUM_STIM_SHOTS
@@ -589,10 +588,10 @@ class TestJointParity:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         zz = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         xx = results.collect_shot_data(
-            "joint_parity_xx", "all", strip_none_entries=True
+            "joint_parity_xx_L0_L1", "all", strip_none_entries=True
         )
         assert zz == [[0]] * NUM_STIM_SHOTS
         assert xx == [[0]] * NUM_STIM_SHOTS
@@ -608,7 +607,7 @@ class TestJointParity:
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         zz = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         per_shot = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -712,10 +711,10 @@ class TestDenseBackendSmoke:
         )
         results = program.run(num_shots=NUM_KRAUS_SHOTS, verbose=False)
         zz = results.collect_shot_data(
-            "joint_parity_zz", "all", strip_none_entries=True
+            "joint_parity_zz_L0_L1", "all", strip_none_entries=True
         )
         xx = results.collect_shot_data(
-            "joint_parity_xx", "all", strip_none_entries=True
+            "joint_parity_xx_L0_L1", "all", strip_none_entries=True
         )
         assert zz == [[0]] * NUM_KRAUS_SHOTS
         assert xx == [[0]] * NUM_KRAUS_SHOTS
