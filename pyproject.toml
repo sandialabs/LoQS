@@ -40,6 +40,9 @@ classifiers = [
     "Typing :: Typed"
 ]
 
+[project.scripts]
+loqs-migrate = "loqs.tools.migrate.cli:main"
+
 [project.optional-dependencies]
 dask = [
     "bokeh!=3.0.*,>=2.4.2",
