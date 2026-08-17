@@ -26,7 +26,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -59,7 +59,7 @@ class TestRepsFixtureRoundTrip:
         "INSTRUMENTREP_ZBASIS_PROJECTION": ZBasisProjectionInstrumentRep,
         "INSTRUMENTREP_ZBASIS_PRE_POST_OPERATIONS": ZBasisPrePostInstrumentRep,
         "INSTRUMENTREP_ZBASIS_OUTCOME_OPERATION_DICT": (
-            ZBasisOutcomeOperationDictInstrumentRep
+            OutcomeOperationDictInstrumentRep
         ),
         "INSTRUMENTREP_STIM_CIRCUIT_STR": StimCircuitInstrumentRep,
     }
@@ -189,7 +189,7 @@ class TestLegacyGaterepValueUpgrade:
                 ZBasisPrePostInstrumentRep
             ),
             _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT: (
-                ZBasisOutcomeOperationDictInstrumentRep
+                OutcomeOperationDictInstrumentRep
             ),
             _LegacyInstrumentRepValue.STIM_CIRCUIT_STR: (
                 StimCircuitInstrumentRep

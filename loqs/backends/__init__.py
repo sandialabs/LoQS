@@ -118,7 +118,7 @@ from .reps import (  # noqa: E402
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
     is_rep_compatible,

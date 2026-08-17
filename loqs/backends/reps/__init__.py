@@ -63,7 +63,7 @@ from loqs.backends.reps.gatereps import (
 from loqs.backends.reps.instrumentreps import (
     InstrumentRep,
     StimCircuitInstrumentRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )

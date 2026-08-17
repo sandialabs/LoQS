@@ -20,7 +20,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -142,7 +142,7 @@ class TestQSimQuantumState:
             QSimSuperopGateRep,
             ZBasisProjectionInstrumentRep,
             ZBasisPrePostInstrumentRep,
-            ZBasisOutcomeOperationDictInstrumentRep,
+            OutcomeOperationDictInstrumentRep,
         }
 
     def test_unsupported_instrument_rep_raises(self):
@@ -226,7 +226,7 @@ class TestQSimQuantumState:
             0: QSimSuperopGateRep(effect0.T @ effect0, ["Q0"]),
             1: QSimSuperopGateRep(effect1.T @ effect1, ["Q0"])
         }
-        ideal_map_rep = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, True, ["Q0"])
+        ideal_map_rep = OutcomeOperationDictInstrumentRep(ideal_maps, True, ["Q0"])
 
         test5 = state0.copy()
         outs = test5.apply_reps_inplace([xpi2_rep, ideal_map_rep]*10)
@@ -238,7 +238,7 @@ class TestQSimQuantumState:
             0: QSimSuperopGateRep(effect0.T @ effect0, ["Q0"]),
             1: QSimSuperopGateRep(effect0.T @ effect1, ["Q0"])
         }
-        reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(reset_maps, True, ["Q0"])
+        reset_map_rep = OutcomeOperationDictInstrumentRep(reset_maps, True, ["Q0"])
 
         test6 = state0.copy()
         outs = test6.apply_reps_inplace([xpi2_rep, reset_map_rep]*10)
@@ -249,7 +249,7 @@ class TestQSimQuantumState:
             0: QSimSuperopGateRep(xpi2_ptm @ effect0.T @ effect0, ["Q0"]),
             1: QSimSuperopGateRep(xpi2_ptm @ effect0.T @ effect1, ["Q0"])
         }
-        noisy_reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(noisy_reset_maps, True, ["Q0"])
+        noisy_reset_map_rep = OutcomeOperationDictInstrumentRep(noisy_reset_maps, True, ["Q0"])
 
         test7 = state0.copy()
         outs = test7.apply_reps_inplace([xpi2_rep] + [noisy_reset_map_rep]*10)
@@ -307,7 +307,7 @@ class TestQSimQuantumState:
             "even": QSimSuperopGateRep(np.eye(4), ["Q0"]),
             "odd": QSimSuperopGateRep(np.eye(4), ["Q0"]),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             dummy_maps, True, ["Q0", "Q1"], outcome_qubits="synd"
         )
         test = QSimState(2, ["Q0", "Q1"])
@@ -327,7 +327,7 @@ class TestQSimQuantumState:
             0: QSimSuperopGateRep(effect0.T @ effect0, ["Q0"]),
             1: QSimSuperopGateRep(effect1.T @ effect1, ["Q0"]),
         }
-        ideal_map_rep_no_outcomes = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, False, ["Q0"])
+        ideal_map_rep_no_outcomes = OutcomeOperationDictInstrumentRep(ideal_maps, False, ["Q0"])
 
         state0 = QSimState(1, ["Q0"])
         state0.state.ensure_dense("Q0")

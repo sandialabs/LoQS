@@ -30,7 +30,7 @@ from loqs.backends.reps.gatereps import (
 )
 from loqs.backends.reps.instrumentreps import (
     StimCircuitInstrumentRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -484,10 +484,10 @@ def _zbasis_pre_post_to_zbasis_projection(
 
 def _zbasis_projection_to_outcome_operation_dict(
     rep: ZBasisProjectionInstrumentRep,
-) -> ZBasisOutcomeOperationDictInstrumentRep:
+) -> OutcomeOperationDictInstrumentRep:
     """Build an `outcome_ops` dict for a Z-basis projection with optional reset.
 
-    `ZBasisOutcomeOperationDictInstrumentRep.outcome_ops` values are
+    `OutcomeOperationDictInstrumentRep.outcome_ops` values are
     generalized measurement (Kraus-like) operators, not literally unitary
     despite being stored via [](api:UnitaryGateRep) containers -- this
     matches `npsvstate.py`'s `_apply_instrument_rep` convention, which
@@ -504,7 +504,7 @@ def _zbasis_projection_to_outcome_operation_dict(
     """
     if len(rep.qubit_labels) != 1:
         raise RepConstructionError(
-            "ZBasisOutcomeOperationDictInstrumentRep is only supported for "
+            "OutcomeOperationDictInstrumentRep is only supported for "
             f"exactly 1 qubit, got {len(rep.qubit_labels)}"
         )
 
@@ -515,7 +515,7 @@ def _zbasis_projection_to_outcome_operation_dict(
         return UnitaryGateRep(matrix, rep.qubit_labels)
 
     outcome_ops = {0: _outcome_operator(0), 1: _outcome_operator(1)}
-    return ZBasisOutcomeOperationDictInstrumentRep(
+    return OutcomeOperationDictInstrumentRep(
         outcome_ops, rep.include_outcome, rep.qubit_labels
     )
 
@@ -533,7 +533,7 @@ def _extract_permutation_entry(matrix: NDArray) -> tuple[int, int] | None:
 
 
 def _outcome_operation_dict_to_zbasis_projection(
-    rep: ZBasisOutcomeOperationDictInstrumentRep,
+    rep: OutcomeOperationDictInstrumentRep,
 ) -> ZBasisProjectionInstrumentRep:
     """The inverse of `_zbasis_projection_to_outcome_operation_dict`.
 
@@ -546,7 +546,7 @@ def _outcome_operation_dict_to_zbasis_projection(
     """
     if len(rep.qubit_labels) != 1:
         raise RepConstructionError(
-            "ZBasisOutcomeOperationDictInstrumentRep is only supported for "
+            "OutcomeOperationDictInstrumentRep is only supported for "
             f"exactly 1 qubit, got {len(rep.qubit_labels)}"
         )
     if set(rep.outcome_ops.keys()) != {0, 1}:
@@ -703,10 +703,10 @@ _CONVERTERS: dict[
     (ZBasisPrePostInstrumentRep, ZBasisProjectionInstrumentRep): (
         _zbasis_pre_post_to_zbasis_projection
     ),
-    (ZBasisProjectionInstrumentRep, ZBasisOutcomeOperationDictInstrumentRep): (
+    (ZBasisProjectionInstrumentRep, OutcomeOperationDictInstrumentRep): (
         _zbasis_projection_to_outcome_operation_dict
     ),
-    (ZBasisOutcomeOperationDictInstrumentRep, ZBasisProjectionInstrumentRep): (
+    (OutcomeOperationDictInstrumentRep, ZBasisProjectionInstrumentRep): (
         _outcome_operation_dict_to_zbasis_projection
     ),
     (ZBasisProjectionInstrumentRep, StimCircuitInstrumentRep): (
@@ -764,7 +764,7 @@ _ALL_CONCRETE_REPS: tuple[type[OperationRep], ...] = (
     KrausGateRep,
     ZBasisProjectionInstrumentRep,
     ZBasisPrePostInstrumentRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     StimCircuitInstrumentRep,
 )
 """Every concrete `GateRep`/`InstrumentRep` leaf class, used by `convert` to

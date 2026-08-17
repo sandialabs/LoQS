@@ -22,7 +22,7 @@ from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
     QSimSuperopGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
     is_rep_compatible,
@@ -91,7 +91,7 @@ class QSimQuantumState(BaseQuantumState):
             QSimSuperopGateRep,
             ZBasisProjectionInstrumentRep,
             ZBasisPrePostInstrumentRep,
-            ZBasisOutcomeOperationDictInstrumentRep,
+            OutcomeOperationDictInstrumentRep,
         ]
 
     def __init__(
@@ -251,7 +251,7 @@ class QSimQuantumState(BaseQuantumState):
         return outcomes
 
     @_apply_instrument_rep.register
-    def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
+    def _(self, rep: OutcomeOperationDictInstrumentRep) -> OutcomeDict:
         qubits = rep.qubit_labels
         assert len(qubits) > 0
 

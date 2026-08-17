@@ -14,7 +14,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -310,7 +310,7 @@ class TestSTIMQuantumState:
         test = STIMState([0], ["Q0"])
         with pytest.raises(NotImplementedError):
             test.apply_reps_inplace([
-                ZBasisOutcomeOperationDictInstrumentRep({}, True, ["Q0"])
+                OutcomeOperationDictInstrumentRep({}, True, ["Q0"])
             ])
 
     def test_apply_instruments(self):

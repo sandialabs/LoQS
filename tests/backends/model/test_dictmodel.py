@@ -20,7 +20,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -204,10 +204,10 @@ class TestInstrumentDispatch:
         model = DictNoiseModel(
             {}, {("M", ("Q0",)): {0: _SUPEROP_1Q, 1: _SUPEROP_1Q}},
             gatereps=[QSimSuperopGateRep],
-            instreps=[ZBasisOutcomeOperationDictInstrumentRep],
+            instreps=[OutcomeOperationDictInstrumentRep],
         )
         rep = model.inst_dict[("M", ("Q0",))]
-        assert isinstance(rep, ZBasisOutcomeOperationDictInstrumentRep)
+        assert isinstance(rep, OutcomeOperationDictInstrumentRep)
         assert rep.include_outcome is True
         assert set(rep.outcome_ops.keys()) == {0, 1}
         assert all(
@@ -217,7 +217,7 @@ class TestInstrumentDispatch:
 
     def test_outcome_operation_dict_without_instrep_declared_raises(self):
         with pytest.raises(
-            AssertionError, match="ZBasisOutcomeOperationDictInstrumentRep not passed"
+            AssertionError, match="OutcomeOperationDictInstrumentRep not passed"
         ):
             DictNoiseModel(
                 {}, {("M", ("Q0",)): {0: _UNITARY_1Q, 1: _UNITARY_1Q}},

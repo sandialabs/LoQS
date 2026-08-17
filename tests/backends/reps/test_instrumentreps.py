@@ -1,5 +1,7 @@
 """Tester for loqs.backends.reps.instrumentreps"""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -8,7 +10,7 @@ from loqs.backends.reps import (
     RepConstructionError,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -84,33 +86,33 @@ class TestZBasisPrePostInstrumentRep:
             ZBasisPrePostInstrumentRep(None, True, pre_op, post_op, ("Q0",))
 
 
-class TestZBasisOutcomeOperationDictInstrumentRep:
+class TestOutcomeOperationDictInstrumentRep:
     def test_constructs_instance(self):
         outcome_ops = {
             0: UnitaryGateRep(np.eye(2), ("Q0",)),
             1: UnitaryGateRep(np.eye(2) * 2, ("Q0",)),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, False, ("Q0",))
-        assert isinstance(rep, ZBasisOutcomeOperationDictInstrumentRep)
+        rep = OutcomeOperationDictInstrumentRep(outcome_ops, False, ("Q0",))
+        assert isinstance(rep, OutcomeOperationDictInstrumentRep)
         assert rep.include_outcome is False
         assert rep.outcome_ops == outcome_ops
 
     def test_rejects_non_mapping(self):
         with pytest.raises(RepConstructionError):
-            ZBasisOutcomeOperationDictInstrumentRep([0, 1], True, ("Q0",))
+            OutcomeOperationDictInstrumentRep([0, 1], True, ("Q0",))
 
     def test_rejects_non_gaterep_values(self):
         with pytest.raises(RepConstructionError):
-            ZBasisOutcomeOperationDictInstrumentRep({0: np.eye(2)}, True, ("Q0",))
+            OutcomeOperationDictInstrumentRep({0: np.eye(2)}, True, ("Q0",))
 
     def test_outcome_qubits_defaults_to_qubit_labels(self):
         outcome_ops = {0: UnitaryGateRep(np.eye(2), ("Q0",))}
-        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
+        rep = OutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
         assert rep.outcome_qubits == ("Q0",)
 
     def test_outcome_qubits_bare_scalar_normalized_to_tuple(self):
         outcome_ops = {0: UnitaryGateRep(np.eye(4), ("Q0", "Q1"))}
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
         )
         assert rep.outcome_qubits == ("synd_Q0Q1",)
@@ -123,7 +125,7 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
             "even": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
             "odd": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
         )
         assert set(rep.outcome_ops.keys()) == {"even", "odd"}
@@ -137,7 +139,7 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
             (0,): UnitaryGateRep(np.eye(2), ("Q0",)),
             (1,): UnitaryGateRep(np.eye(2), ("Q0",)),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
+        rep = OutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
         assert set(rep.outcome_ops.keys()) == {0, 1}
 
     def test_decomposable_outcome_qubits_requires_matching_bit_sequences(self):
@@ -147,7 +149,7 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
             (1, 0): UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
             (1, 1): UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             outcome_ops, True, ("Q0", "Q1"), outcome_qubits=("Q0", "Q1")
         )
         assert rep.outcome_qubits == ("Q0", "Q1")
@@ -164,7 +166,7 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
     def test_decomposable_outcome_qubits_rejects_mismatched_keys(self, bad_keys):
         outcome_ops = {k: UnitaryGateRep(np.eye(4), ("Q0", "Q1")) for k in bad_keys}
         with pytest.raises(RepConstructionError):
-            ZBasisOutcomeOperationDictInstrumentRep(
+            OutcomeOperationDictInstrumentRep(
                 outcome_ops, True, ("Q0", "Q1"), outcome_qubits=("Q0", "Q1")
             )
 
@@ -173,7 +175,7 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
         retargeting the rep onto new qubits moves the classical label too
         -- preserving the pre-existing 1-qubit behavior exactly."""
         outcome_ops = {0: UnitaryGateRep(np.eye(2), ("Q0",)), 1: UnitaryGateRep(np.eye(2), ("Q0",))}
-        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
+        rep = OutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
         retargeted = rep.with_qubit_labels(("Q1",))
         assert retargeted.qubit_labels == ("Q1",)
         assert retargeted.outcome_qubits == ("Q1",)
@@ -185,7 +187,7 @@ class TestZBasisOutcomeOperationDictInstrumentRep:
             "even": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
             "odd": UnitaryGateRep(np.eye(4), ("Q0", "Q1")),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             outcome_ops, True, ("Q0", "Q1"), outcome_qubits="synd_Q0Q1"
         )
         retargeted = rep.with_qubit_labels(("Q2", "Q3"))
@@ -202,3 +204,31 @@ class TestStimCircuitInstrumentRep:
     def test_rejects_non_str(self):
         with pytest.raises(RepConstructionError):
             StimCircuitInstrumentRep(42, ("Q0",))
+
+
+class TestZBasisOutcomeOperationDictInstrumentRepFullyRenamed:
+    """`ZBasisOutcomeOperationDictInstrumentRep` was renamed to
+    `OutcomeOperationDictInstrumentRep` (issue #97/#51) -- this class was
+    always general-purpose, just historically only used for Z-basis
+    measurements. Confirmed the old name never appeared in a shipped
+    release, so no compatibility entry is needed at all, only a full
+    repo-wide rename -- this guards against reintroducing the old name
+    anywhere in `loqs`/`tests`/`docs`."""
+
+    def test_old_name_does_not_appear_anywhere(self):
+        import re
+
+        this_file = Path(__file__).resolve()
+        repo_root = this_file.parents[3]
+        old_name = "ZBasis" + "OutcomeOperationDictInstrumentRep"
+        offenders = []
+        for directory in ("loqs", "tests", "docs"):
+            for path in (repo_root / directory).rglob("*"):
+                if path.suffix not in (".py", ".md"):
+                    continue
+                if "__pycache__" in path.parts or path == this_file:
+                    continue
+                text = path.read_text(errors="ignore")
+                if re.search(re.escape(old_name), text):
+                    offenders.append(str(path.relative_to(repo_root)))
+        assert offenders == []

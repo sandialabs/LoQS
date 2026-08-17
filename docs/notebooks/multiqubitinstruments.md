@@ -15,7 +15,7 @@ kernelspec:
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/multiqubitinstruments.ipynb)
 
-`ZBasisOutcomeOperationDictInstrumentRep` isn't limited to a single-qubit computational-basis measurement. It generalizes in two independent directions:
+`OutcomeOperationDictInstrumentRep` isn't limited to a single-qubit computational-basis measurement. It generalizes in two independent directions:
 
 1. **Decomposable**: one classical label per physical qubit, reading multiple qubits' independent bits in a single instrument call.
 2. **Joint**: a *single* classical channel that isn't owned by any one physical qubit, with an arbitrary number of outcomes (not just 2) -- e.g. a parity check, or a leakage-discriminating readout.
@@ -35,7 +35,7 @@ from loqs.backends import ListPhysicalCircuit, NumpyStatevectorQuantumState as S
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.reps import (
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
 
@@ -93,7 +93,7 @@ As expected: no syndrome fires with no error; an error on `D0` or `D2` only viol
 
 ## A joint instrument: direct parity-check readout
 
-A genuine parity-check instrument has exactly **2 outcomes regardless of qubit count**: it isn't a $2^n$-outcome computational-basis measurement, but a single classical bit reporting which rank-$2^{n-1}$ parity subspace the state projected onto. We build one directly as a `ZBasisOutcomeOperationDictInstrumentRep`, with `outcome_qubits` naming a classical register (`"synd_01"`/`"synd_12"`) that isn't tied to any physical qubit -- because here, there is no physical ancilla qubit to tie it to.
+A genuine parity-check instrument has exactly **2 outcomes regardless of qubit count**: it isn't a $2^n$-outcome computational-basis measurement, but a single classical bit reporting which rank-$2^{n-1}$ parity subspace the state projected onto. We build one directly as a `OutcomeOperationDictInstrumentRep`, with `outcome_qubits` naming a classical register (`"synd_01"`/`"synd_12"`) that isn't tied to any physical qubit -- because here, there is no physical ancilla qubit to tie it to.
 
 ```{code-cell} ipython3
 even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ())  # projects onto {|00>, |11>}
@@ -101,10 +101,10 @@ odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ())  # projects onto {|01>,
 
 gate_dict2 = {"X": UnitaryGateRep(X, ())}
 inst_dict2 = {
-    "ParityZZ_01": ZBasisOutcomeOperationDictInstrumentRep(
+    "ParityZZ_01": OutcomeOperationDictInstrumentRep(
         {"even": even_proj, "odd": odd_proj}, True, (), outcome_qubits="synd_01"
     ),
-    "ParityZZ_12": ZBasisOutcomeOperationDictInstrumentRep(
+    "ParityZZ_12": OutcomeOperationDictInstrumentRep(
         {"even": even_proj, "odd": odd_proj}, True, (), outcome_qubits="synd_12"
     ),
 }
@@ -112,7 +112,7 @@ model2 = DictNoiseModel(
     gate_dict2,
     inst_dict2,
     gatereps=[UnitaryGateRep],
-    instreps=[ZBasisOutcomeOperationDictInstrumentRep],
+    instreps=[OutcomeOperationDictInstrumentRep],
 )
 
 
@@ -124,7 +124,7 @@ def run_instrument_syndrome(error_qubit=None):
     layers += [[("ParityZZ_01", ("D0", "D1")), ("ParityZZ_12", ("D1", "D2"))]]
     circuit = ListPhysicalCircuit(layers, data_qubits)
     state = SVState(len(data_qubits), data_qubits)
-    reps = model2.get_reps(circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep])
+    reps = model2.get_reps(circuit, [UnitaryGateRep], [OutcomeOperationDictInstrumentRep])
     outcomes = state.apply_reps_inplace(reps)
     return outcomes["synd_01"][0], outcomes["synd_12"][0]
 
@@ -156,7 +156,7 @@ read_both_ops = {
     (1, 1): basis_projector((1, 1)),
 }
 inst_dict3 = {
-    "ReadBoth": ZBasisOutcomeOperationDictInstrumentRep(
+    "ReadBoth": OutcomeOperationDictInstrumentRep(
         read_both_ops, True, (), outcome_qubits=("D0", "D1")
     )
 }
@@ -164,13 +164,13 @@ model3 = DictNoiseModel(
     {"X": UnitaryGateRep(X, ())},
     inst_dict3,
     gatereps=[UnitaryGateRep],
-    instreps=[ZBasisOutcomeOperationDictInstrumentRep],
+    instreps=[OutcomeOperationDictInstrumentRep],
 )
 
 for bits in [(0, 0), (0, 1), (1, 0), (1, 1)]:
     circuit = ListPhysicalCircuit([[("ReadBoth", ("D0", "D1"))]], data_qubits)
     state = SVState(list(bits) + [0], data_qubits)
-    reps = model3.get_reps(circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep])
+    reps = model3.get_reps(circuit, [UnitaryGateRep], [OutcomeOperationDictInstrumentRep])
     outcomes = state.apply_reps_inplace(reps)
     print(f"prepared {bits} -> read D0={outcomes['D0'][0]}, D1={outcomes['D1'][0]}")
 ```
@@ -198,7 +198,7 @@ circuit = ListPhysicalCircuit(
     [[("ParityZZ_01", ("D0", "D1")), ("ParityZZ_12", ("D1", "D2"))]], data_qubits
 )
 state = SVState(logical_plus.copy(), data_qubits)
-reps = model2.get_reps(circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep])
+reps = model2.get_reps(circuit, [UnitaryGateRep], [OutcomeOperationDictInstrumentRep])
 outcomes = state.apply_reps_inplace(reps)
 
 print("syndrome:", outcomes["synd_01"][0], outcomes["synd_12"][0])

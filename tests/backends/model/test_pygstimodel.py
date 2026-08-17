@@ -28,7 +28,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
 
@@ -210,7 +210,7 @@ class TestConstruction:
         pgm = PyGSTiNoiseModel(_build_explicit_model())
         assert pgm.output_instrument_reps == [
             ZBasisProjectionInstrumentRep,
-            ZBasisOutcomeOperationDictInstrumentRep,
+            OutcomeOperationDictInstrumentRep,
         ]
 
 
@@ -342,9 +342,9 @@ class TestGetInstrumentRep:
 
     def test_zbasis_outcome_operation_dict(self, pgm):
         rep = pgm._get_instrument_rep(
-            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [OutcomeOperationDictInstrumentRep]
         )
-        assert isinstance(rep, ZBasisOutcomeOperationDictInstrumentRep)
+        assert isinstance(rep, OutcomeOperationDictInstrumentRep)
         assert rep.include_outcome is True
         # One classical channel matching the single physical qubit, so
         # keys collapse to bare ints rather than length-1 tuples.
@@ -389,15 +389,15 @@ class TestGetInstrumentRep:
             _build_explicit_model(), use_time_dependence=True
         )
         pgm._get_instrument_rep(
-            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [OutcomeOperationDictInstrumentRep]
         )
         checked = set(pgm._dense_embedding_checked_inst_keys)
         assert checked
 
         rep = pgm._get_instrument_rep(
-            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [OutcomeOperationDictInstrumentRep]
         )
-        assert isinstance(rep, ZBasisOutcomeOperationDictInstrumentRep)
+        assert isinstance(rep, OutcomeOperationDictInstrumentRep)
         assert pgm._dense_embedding_checked_inst_keys == checked
 
     def test_get_reps_joint_instrument_end_to_end_on_npsvstate(self):
@@ -426,7 +426,7 @@ class TestGetInstrumentRep:
 
         circuit = PyGSTiPhysicalCircuit([("Ipc", "Q0", "Q1")], ["Q0", "Q1"])
         reps = pgm.get_reps(
-            circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep]
+            circuit, [UnitaryGateRep], [OutcomeOperationDictInstrumentRep]
         )
         assert len(reps) == 1
         rep = reps[0]
@@ -774,7 +774,7 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(model)
 
         rep = pgm._get_instrument_rep(
-            "Izz", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Izz", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
         )
         assert rep.include_outcome is True
         assert set(rep.outcome_ops.keys()) == {(0, 0), (0, 1), (1, 0), (1, 1)}
@@ -793,7 +793,7 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(model)
 
         rep = pgm._get_instrument_rep(
-            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [OutcomeOperationDictInstrumentRep]
         )
         assert set(rep.outcome_ops.keys()) == {0, 1}
 
@@ -810,7 +810,7 @@ class TestGetRepsErrorPaths:
         pgm = PyGSTiNoiseModel(model)
 
         rep = pgm._get_instrument_rep(
-            "Imrz", ["Q0"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Imrz", ["Q0"], [OutcomeOperationDictInstrumentRep]
         )
         assert set(rep.outcome_ops.keys()) == {"a", "b"}
         assert rep.outcome_qubits == ("Q0",)
@@ -829,7 +829,7 @@ class TestGetRepsErrorPaths:
             RepConstructionError, match="Failed to create instrument rep for any of"
         ):
             pgm._get_instrument_rep(
-                "Ipc", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+                "Ipc", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
             )
 
     def test_instrument_rep_joint_outcome_bare_name_lookup(self):
@@ -843,7 +843,7 @@ class TestGetRepsErrorPaths:
             model, instrument_outcome_qubits={"Ipc": "synd_Q0Q1"}
         )
         rep = pgm._get_instrument_rep(
-            "Ipc", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Ipc", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
         )
         assert set(rep.outcome_ops.keys()) == {"even", "odd"}
         assert rep.outcome_qubits == ("synd_Q0Q1",)
@@ -864,7 +864,7 @@ class TestGetRepsErrorPaths:
             },
         )
         rep = pgm._get_instrument_rep(
-            "Ipc", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Ipc", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
         )
         assert rep.outcome_qubits == ("synd_Q0Q1",)
 
@@ -881,7 +881,7 @@ class TestGetRepsErrorPaths:
             instrument_outcome_qubits={("Ipc", ("A", "B")): "synd_AB"},
         )
         rep = pgm._get_instrument_rep(
-            "Ipc", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+            "Ipc", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
         )
         assert rep.outcome_qubits == ("synd_AB",)
 
@@ -899,7 +899,7 @@ class TestGetRepsErrorPaths:
             RepConstructionError, match="Failed to create instrument rep for any of"
         ):
             pgm._get_instrument_rep(
-                "Ibad", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+                "Ibad", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
             )
 
     def test_instrument_rep_inconsistent_channel_counts_raises(self):
@@ -914,7 +914,7 @@ class TestGetRepsErrorPaths:
             RepConstructionError, match="Failed to create instrument rep for any of"
         ):
             pgm._get_instrument_rep(
-                "Ibad", ["Q0", "Q1"], [ZBasisOutcomeOperationDictInstrumentRep]
+                "Ibad", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
             )
 
     def test_get_reps_time_dependence_with_outcome_operation_dict(self):
@@ -932,10 +932,10 @@ class TestGetRepsErrorPaths:
         )
         circuit = PyGSTiPhysicalCircuit([("Imrz", "Q0")], ["Q0"])
         reps = pgm.get_reps(
-            circuit, [UnitaryGateRep], [ZBasisOutcomeOperationDictInstrumentRep]
+            circuit, [UnitaryGateRep], [OutcomeOperationDictInstrumentRep]
         )
         assert len(reps) == 1
-        assert isinstance(reps[0], ZBasisOutcomeOperationDictInstrumentRep)
+        assert isinstance(reps[0], OutcomeOperationDictInstrumentRep)
 
 
 class TestSerialization:

@@ -26,7 +26,7 @@ from loqs.backends.reps.gatereps import (
 from loqs.backends.reps.instrumentreps import (
     InstrumentRep,
     StimCircuitInstrumentRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -81,7 +81,7 @@ _LEGACY_INSTRUMENTREP_CLASS: dict[_LegacyInstrumentRepValue, type[InstrumentRep]
     _LegacyInstrumentRepValue.ZBASIS_PROJECTION: ZBasisProjectionInstrumentRep,
     _LegacyInstrumentRepValue.ZBASIS_PRE_POST_OPERATIONS: ZBasisPrePostInstrumentRep,
     _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT: (
-        ZBasisOutcomeOperationDictInstrumentRep
+        OutcomeOperationDictInstrumentRep
     ),
     _LegacyInstrumentRepValue.STIM_CIRCUIT_STR: StimCircuitInstrumentRep,
 }
@@ -217,7 +217,7 @@ def _upgrade_legacy_instrumentrep(
         )
     elif legacy_value is _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT:
         outcome_ops, include_outcome = rep
-        return ZBasisOutcomeOperationDictInstrumentRep(
+        return OutcomeOperationDictInstrumentRep(
             outcome_ops=outcome_ops,
             include_outcome=include_outcome,
             qubit_labels=qubits,

@@ -12,7 +12,7 @@ from loqs.backends.reps import (
     StimCircuitInstrumentRep,
     StimCircuitPayloadMixin,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     is_rep_compatible,
 )
@@ -109,7 +109,7 @@ class TestWithQubits:
     def test_cascades_to_mapping_values(self):
         """Nested `OperationRep` values inside a `Mapping` field (e.g.
         `outcome_ops`) are retargeted too."""
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {0: UnitaryGateRep(np.eye(2)), 1: UnitaryGateRep(np.eye(2))}, True
         )
 
