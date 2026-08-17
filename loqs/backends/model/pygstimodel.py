@@ -811,11 +811,20 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         if attr == "model":
-            return self.model.to_nice_serialization()
+            # One opaque string via pyGSTi's own dumps(), instead of the raw
+            # to_nice_serialization() dict LoQS's generic machinery would
+            # otherwise wrap node-by-node -- much smaller in both formats.
+            return self.model.dumps()
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
-        model = Model.from_nice_serialization(attr_dict["model"])
+        # A decoded "model" attr is either the new bare string or the older
+        # nested dict -- distinguishable by type, so both decode correctly.
+        encoded_model = attr_dict["model"]
+        if isinstance(encoded_model, str):
+            model = Model.loads(encoded_model)
+        else:
+            model = Model.from_nice_serialization(encoded_model)
         qubit_aliases = attr_dict["qubit_aliases"]
         return cls(model, qubit_aliases)

@@ -113,6 +113,11 @@ class ProgramResults(Displayable):
         self._memory_cache = {}  # Cache for loaded shots
         self._cache_order = []  # Track order of cache usage for LRU eviction
 
+        self._checkpoint_encode_cache: dict = {}
+        """Persistent `Serializable.encode` cache shared across every `checkpoint()`
+        call for this object's lifetime, so an object reused across shots is written
+        once and cheaply referenced afterward, instead of re-expanded every time."""
+
         # If checkpointing is enabled and parent_program is a QuantumProgram object,
         # we need to write it to file and store the filename instead
         from loqs.core import QuantumProgram
@@ -525,8 +530,18 @@ class ProgramResults(Displayable):
                 next_index = len(group.keys())
 
                 for i in new_data:
-                    item_group = group.create_group(str(next_index))
-                    Serializable.encode(i, format="hdf5", h5_group=item_group)
+                    # track_order=True for consistent group storage; encode_cache
+                    # reuses this object's persistent cache so a shared object is a
+                    # cheap reference here, not re-expanded from scratch.
+                    item_group = group.create_group(
+                        str(next_index), track_order=True
+                    )
+                    Serializable.encode(
+                        i,
+                        format="hdf5",
+                        h5_group=item_group,
+                        encode_cache=self._checkpoint_encode_cache,
+                    )
                     next_index += 1
 
         _merge_iterable(
@@ -552,8 +567,14 @@ class ProgramResults(Displayable):
         # This will use the standard Serializable encoding
         temp_results = ProgramResults(shot_histories=shot_histories)
 
-        # Encode the ProgramResults object to HDF5
-        Serializable.encode(temp_results, format="hdf5", h5_group=h5_file)
+        # Reuses this object's own persistent encode_cache (no reset_encode_id),
+        # so a shared object stays cheaply referenced across checkpoint() calls.
+        Serializable.encode(
+            temp_results,
+            format="hdf5",
+            h5_group=h5_file,
+            encode_cache=self._checkpoint_encode_cache,
+        )
 
     def load_checkpoint(
         self,

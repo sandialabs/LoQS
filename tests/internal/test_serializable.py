@@ -193,8 +193,10 @@ class TestSerializableParameterized:
 
             # Verify structure
             assert state["encode_type"] == "Serializable"
+            # Non-string primitives are stored bare; strings stay wrapped
+            # (see JSONEncoder.encode_primitive for why).
             assert state["name"]["value"] == "nested_test" # type: ignore
-            assert state["value"]["value"] == 777 # type: ignore
+            assert state["value"] == 777 # type: ignore
 
             # Test deserialization
             loaded_obj = Serializable.decode(state, format="json")

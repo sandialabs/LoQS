@@ -342,39 +342,42 @@ class TestEncoderParameterized:
     def test_encode_primitive(self, encoder_format, make_temp_path):
             """Test encoding of primitive types."""
             if encoder_format == "json":
-                # Test JSON primitive encoding
+                # Test JSON primitive encoding -- bool/int/float/None are
+                # bare, no {"encode_type": "primitive", ...} wrapper (see
+                # JSONEncoder.encode_primitive). Strings stay wrapped: a bare
+                # string containing "def " is genuinely indistinguishable,
+                # by content alone, from decode_function's own legacy
+                # (SERIALIZATION_VERSION 0) bare-function-source heuristic --
+                # see encode_primitive's own docstring for the real fixture
+                # this was confirmed against.
                 # Test int
                 encoded_int = JSONEncoder.encode_primitive(42)
-                assert encoded_int["encode_type"] == "primitive"
-                assert encoded_int["value"] == 42
-                
+                assert encoded_int == 42
+
                 # Test float
                 encoded_float = JSONEncoder.encode_primitive(3.14)
-                assert encoded_float["encode_type"] == "primitive"
-                assert encoded_float["value"] == 3.14
-                
+                assert encoded_float == 3.14
+
                 # Test string
                 encoded_str = JSONEncoder.encode_primitive("hello")
                 assert encoded_str["encode_type"] == "primitive"
                 assert encoded_str["value"] == "hello"
-                
+
                 # Test boolean (must stay a bool, not be coerced to int --
                 # `bool` is a subclass of `int` in Python)
                 encoded_bool = JSONEncoder.encode_primitive(True)
-                assert encoded_bool["encode_type"] == "primitive"
-                assert encoded_bool["value"] == True
-                assert type(encoded_bool["value"]) is bool
-                
+                assert encoded_bool == True
+                assert type(encoded_bool) is bool
+
                 # Test None
                 encoded_none = JSONEncoder.encode_primitive(None)
-                assert encoded_none["encode_type"] == "primitive"
-                assert encoded_none["value"] is None
-                
+                assert encoded_none is None
+
                 # Test special characters
                 encoded_special = JSONEncoder.encode_primitive("Café & naïve")
                 assert encoded_special["encode_type"] == "primitive"
                 assert encoded_special["value"] == "Café & naïve"
-                
+
                 # Test emoji
                 encoded_emoji = JSONEncoder.encode_primitive("🎉🎊🎈")
                 assert encoded_emoji["encode_type"] == "primitive"

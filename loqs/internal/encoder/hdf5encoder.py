@@ -155,6 +155,18 @@ def _decode_hdf5_primitive_version_v1(encoded):
 _decode_hdf5_primitive_version.alias(2, same_as=1)
 
 
+def _create_group(h5_group, name):
+    """Create a subgroup with link-creation-order tracking enabled.
+
+    Switches HDF5 from its legacy symbol-table group format to its more
+    compact one, roughly halving per-group overhead for the small groups this
+    encoder creates constantly, and fixes a real decode-ordering bug: without
+    it, `h5py.Group.keys()` returns children alphabetically rather than in
+    the insertion order the cache/reference-resolution mechanism relies on.
+    """
+    return h5_group.create_group(name, track_order=True)
+
+
 class HDF5Encoder(BaseEncoder):
 
     ENCODE_ID: ClassVar[int] = 0
@@ -213,8 +225,8 @@ class HDF5Encoder(BaseEncoder):
         assert isinstance(to_encode, Serializable)
         assert isinstance(h5_group, h5py.Group)
 
-        obj_group = h5_group.create_group(
-            f"Serializable_{HDF5Encoder.ENCODE_ID}"
+        obj_group = _create_group(
+            h5_group, f"Serializable_{HDF5Encoder.ENCODE_ID}"
         )
         obj_group.attrs["encode_type"] = "Serializable"
         obj_group.attrs["module"] = to_encode.__class__.__module__
@@ -227,7 +239,7 @@ class HDF5Encoder(BaseEncoder):
                 serial_attr,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
-            attr_group = obj_group.create_group(serial_attr)
+            attr_group = _create_group(obj_group, serial_attr)
 
             Serializable.encode(
                 attr_value,
@@ -365,8 +377,8 @@ class HDF5Encoder(BaseEncoder):
         """
         assert isinstance(h5_group, h5py.Group)
 
-        obj_group = h5_group.create_group(
-            f"Serializable_{HDF5Encoder.ENCODE_ID}"
+        obj_group = _create_group(
+            h5_group, f"Serializable_{HDF5Encoder.ENCODE_ID}"
         )
         HDF5Encoder.ENCODE_ID += 1
         obj_group.attrs["encode_type"] = "Serializable"
@@ -482,7 +494,7 @@ class HDF5Encoder(BaseEncoder):
                 f"Type {type(to_encode)} not handled by encode_iterable"
             )
 
-        list_group = h5_group.create_group("iterable")
+        list_group = _create_group(h5_group, "iterable")
         list_group.attrs["iterable_type"] = name
         list_group.attrs["version"] = SERIALIZATION_VERSION
 
@@ -517,7 +529,7 @@ class HDF5Encoder(BaseEncoder):
             # Mixed native types or non-native types - fall back to groups
             list_group.attrs["storage_format"] = "groups"
             for i, e in enumerate(to_encode_list):
-                item_group = list_group.create_group(str(i))
+                item_group = _create_group(list_group, str(i))
                 Serializable.encode(
                     e,
                     format="hdf5",
@@ -692,11 +704,11 @@ class HDF5Encoder(BaseEncoder):
         assert isinstance(to_encode, dict)
         assert isinstance(h5_group, h5py.Group)
 
-        dict_group = h5_group.create_group("dict")
+        dict_group = _create_group(h5_group, "dict")
         dict_group.attrs["version"] = SERIALIZATION_VERSION
 
         # Store keys and values in order to preserve dict insertion order
-        key_group = dict_group.create_group("keys")
+        key_group = _create_group(dict_group, "keys")
         Serializable.encode(
             list(to_encode.keys()),
             format="hdf5",
@@ -705,7 +717,7 @@ class HDF5Encoder(BaseEncoder):
             h5_group=key_group,
         )
 
-        val_group = dict_group.create_group("values")
+        val_group = _create_group(dict_group, "values")
         Serializable.encode(
             list(to_encode.values()),
             format="hdf5",
@@ -804,7 +816,7 @@ class HDF5Encoder(BaseEncoder):
         assert isinstance(to_encode, EncodableArrays)
         assert isinstance(h5_group, h5py.Group)
 
-        matrix_group = h5_group.create_group("array")
+        matrix_group = _create_group(h5_group, "array")
         matrix_group.attrs["version"] = SERIALIZATION_VERSION
         matrix_group.attrs["shape"] = to_encode.shape
         matrix_group.attrs["dtype"] = str(to_encode.dtype)  # type: ignore
@@ -968,7 +980,7 @@ class HDF5Encoder(BaseEncoder):
         """Serialize a class/type."""
         assert isinstance(h5_group, h5py.Group)
 
-        class_group = h5_group.create_group("class")
+        class_group = _create_group(h5_group, "class")
         class_group.attrs["module"] = to_encode.__module__
         class_group.attrs["class"] = to_encode.__name__
         class_group.attrs["version"] = SERIALIZATION_VERSION
@@ -1026,7 +1038,7 @@ class HDF5Encoder(BaseEncoder):
 
         full_src = Serializable._get_function_str(to_encode)
 
-        function_group = h5_group.create_group("function")
+        function_group = _create_group(h5_group, "function")
         function_group.attrs["version"] = SERIALIZATION_VERSION
         function_group.create_dataset("source", data=full_src)
         return function_group

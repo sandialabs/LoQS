@@ -882,6 +882,16 @@ class JSONEncoder(BaseEncoder):
         """
         Encode a primitive value (JSON version).
 
+        Emits bare bools/ints/floats/None directly, since JSON's own type
+        system already distinguishes them and `decode_primitive`'s "not a
+        dict" case already treats a bare value as a primitive. Strings stay
+        wrapped: `decode_function`'s legacy heuristic (needed for real
+        `SERIALIZATION_VERSION` 0 files, which recorded function source as
+        unwrapped strings) can't tell a bare string containing "def " apart
+        from real function source stored deliberately as a plain string
+        attribute elsewhere in this codebase -- keeping strings wrapped
+        avoids that collision, since a dict never matches that heuristic.
+
         Parameters
         ----------
         to_encode : Any
@@ -890,21 +900,24 @@ class JSONEncoder(BaseEncoder):
         Returns
         -------
         Any
-            The primitive value directly (for JSON).
+            The primitive value directly (for JSON), except strings, which
+            keep the `{"encode_type": "primitive", ...}` wrapper.
         """
         if isinstance(to_encode, Bool):
             # Checked before `Int`, since `bool` is a subclass of `int`.
-            to_encode = bool(to_encode)
+            return bool(to_encode)
         elif isinstance(to_encode, Int):
-            to_encode = int(to_encode)
+            return int(to_encode)
+        elif isinstance(to_encode, str):
+            return {
+                "encode_type": "primitive",
+                "version": SERIALIZATION_VERSION,
+                "value": to_encode,
+            }
         elif isinstance(to_encode, Float):
-            to_encode = float(to_encode)
+            return float(to_encode)
 
-        return {
-            "encode_type": "primitive",
-            "version": SERIALIZATION_VERSION,
-            "value": to_encode,
-        }
+        return to_encode
 
     @staticmethod
     def decode_primitive(encoded):

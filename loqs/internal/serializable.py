@@ -747,14 +747,8 @@ class Serializable:
                 json_format_kwargs = {}
             json_format_kwargs = dict(json_format_kwargs)
 
-            # Sanity check format kwargs
-            if (
-                "indent" not in json_format_kwargs
-            ):  # default indent=4 JSON argument
-                json_format_kwargs = (
-                    json_format_kwargs.copy()
-                )  # don't update caller's dict!
-                json_format_kwargs["indent"] = 4
+            # Compact by default; pass json_format_kwargs={"indent": 4} to opt
+            # into human-readable pretty-printing instead.
 
             if "sort_keys" in json_format_kwargs:
                 # Sorting keys will potentially break caching on deserialization,
@@ -773,7 +767,9 @@ class Serializable:
         elif format in ["hdf5", "h5"]:
             assert isinstance(f, h5py.File)
 
-            root_group = f.create_group("root")
+            # track_order=True: see HDF5Encoder's own _create_group helper for why
+            # every HDF5 group this codebase creates tracks link creation order.
+            root_group = f.create_group("root", track_order=True)
             Serializable.encode(
                 self,
                 "hdf5",
