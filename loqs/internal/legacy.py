@@ -20,7 +20,9 @@ from typing import Any, Callable
 from loqs.internal import Displayable
 
 
-def install_legacy_module(dotted_name: str, exports: dict[str, object]) -> None:
+def install_legacy_module(
+    dotted_name: str, exports: dict[str, object]
+) -> None:
     """Make `dotted_name` importable, backed by no real file on disk.
 
     Registers a synthetic module in `sys.modules` and as an attribute of
@@ -75,10 +77,11 @@ _LEGACY_CONSTRUCTION_PATTERNS: dict[str, re.Pattern] = {
     # Only calling-convention changes need an entry -- a straight class
     # rename doesn't, since Serializable._update_imports already rewrites
     # every occurrence of the old name in frozen source. Detected via a
-    # second bare positional argument after the instruction itself, the
-    # telltale sign of the old positional InstructionLabel form.
+    # second bare positional argument (not a keyword= or **kwargs unpack)
+    # after the instruction itself, the telltale sign of the old
+    # positional InstructionLabel form.
     "InstructionLabel (old positional form)": re.compile(
-        r"InstructionLabel\([^()]*?,\s*(?!patch_labels?\s*=)[^()=,\s]"
+        r"InstructionLabel\([^()]*?,\s*(?!\w+\s*=(?!=)|\*\*)[^()=,\s]"
     ),
 }
 

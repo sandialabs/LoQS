@@ -1,11 +1,17 @@
-"""Tests for the generic legacy-shim machinery (install_legacy_module, make_legacy_construction_shim)."""
+"""Tests for loqs/internal/legacy.py: the generic legacy-shim machinery
+(install_legacy_module, make_legacy_construction_shim) and the
+InstructionLabel legacy-construction detector (detect_legacy_construction)."""
 
 import sys
 import warnings
 
 import pytest
 
-from loqs.internal.legacy import install_legacy_module, make_legacy_construction_shim
+from loqs.internal.legacy import (
+    detect_legacy_construction,
+    install_legacy_module,
+    make_legacy_construction_shim,
+)
 
 
 class TestInstallLegacyModule:
@@ -95,3 +101,40 @@ class TestMakeLegacyConstructionShim:
             warnings.simplefilter("ignore")
             Shim()
         assert calls == [1]
+
+
+class TestDetectLegacyConstruction:
+    def test_old_positional_form_is_detected(self):
+        src = 'InstructionLabel("Name", "L0", (), {})'
+        assert detect_legacy_construction(src) == [
+            "InstructionLabel (old positional form)"
+        ]
+
+    def test_modern_single_keyword_is_not_detected(self):
+        assert detect_legacy_construction(
+            'InstructionLabel("Name", patch_label="L0")'
+        ) == []
+
+    def test_modern_kwargs_unpack_is_not_detected(self):
+        assert (
+            detect_legacy_construction("InstructionLabel(instruction, **kwargs)")
+            == []
+        )
+
+    def test_modern_non_patch_label_keyword_second_is_not_detected(self):
+        """A real bug, found and fixed via issue #97's Sub-problem C work:
+        this pattern was previously false-flagged, since the regex only
+        exempted `patch_label(s)=` specifically as an acceptable second
+        argument, not any keyword argument."""
+        assert (
+            detect_legacy_construction(
+                'InstructionLabel("Name", increment_by=2, patch_label="L0")'
+            )
+            == []
+        )
+
+    def test_bare_instruction_only_is_not_detected(self):
+        assert detect_legacy_construction('InstructionLabel("Name")') == []
+
+    def test_no_instructionlabel_at_all_is_not_detected(self):
+        assert detect_legacy_construction("x = 1\n") == []
