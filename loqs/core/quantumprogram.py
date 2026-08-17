@@ -36,6 +36,8 @@ from loqs.core.history import (
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
+    _finish_pending_legacy_label,
+    _PendingLegacyInstructionLabel,
 )
 from loqs.core.instructions.instructionstack import (
     InstructionStackLike,
@@ -777,6 +779,59 @@ class QuantumProgram(Displayable):
 
         return inst
 
+    def _resolve_pending_legacy_label(
+        self, pending: _PendingLegacyInstructionLabel
+    ) -> InstructionLabel:
+        """Finish resolving a `_PendingLegacyInstructionLabel` (issue #97),
+        found while decoding an old file's `InstructionStack`.
+
+        Unlike `_resolve_instruction` (used during `.run()`), this can't
+        look a per-patch instruction up through a live `PatchLayout`: at
+        decode time, before any "Init Patch" instruction has actually
+        run, no live patches exist yet to look one up in -- decode has to
+        resolve every label up front, not incrementally alongside
+        execution. Instead, this resolves directly against `patch_types`'
+        own `QECCode` instruction templates (`code.instructions[name]`),
+        which is exactly what `QECCodePatch.__getitem__` itself reads
+        from before qubit-remapping the result -- and qubit-remapping
+        never changes an instruction's `param_priorities`/`param_alias`,
+        which is all a legacy positional-argument remap needs. Multi-patch
+        (`patch_labels`) resolution isn't a case that can occur here at
+        all: that feature postdates the old positional format this
+        placeholder came from.
+
+        If more than one patch type happens to register the same
+        instruction name, the first match is used -- real historical
+        files needing this decode path predate multi-patch-type programs
+        entirely (multi-patch support itself postdates the #104 refactor
+        this whole mechanism exists to decode around), so this is not
+        expected to be a real ambiguity in practice.
+        """
+        inst_name = pending.inst_label
+        patch_label = pending.patch_label
+
+        if patch_label is None:
+            try:
+                inst = copy.deepcopy(self.global_instructions[inst_name])
+            except KeyError:
+                raise RuntimeError(
+                    f"Could not resolve global legacy instruction label "
+                    f"{inst_name!r} while decoding an old InstructionStack."
+                )
+            return _finish_pending_legacy_label(pending, inst)
+
+        for code in self.patch_types.values():
+            if inst_name in code.instructions:
+                return _finish_pending_legacy_label(
+                    pending, code.instructions[inst_name]
+                )
+
+        raise RuntimeError(
+            f"Could not resolve per-patch legacy instruction label "
+            f"{inst_name!r} (patch {patch_label!r}) against any "
+            "registered patch type while decoding an old InstructionStack."
+        )
+
     @staticmethod
     def _collect_kwarg(  # noqa: C901
         key: str,
@@ -1019,5 +1074,21 @@ class QuantumProgram(Displayable):
                 global_instructions=attr_dict["global_instructions"],
                 name=attr_dict.get("name", "(Unnamed quantum program)"),
             )
+
+        # Issue #97: an old-format InstructionLabel decodes to a
+        # _PendingLegacyInstructionLabel placeholder when its instruction
+        # is a bare name rather than an already-resolved Instruction (see
+        # InstructionLabel._from_decoded_attrs) -- global_instructions/
+        # patch_types are only available as sibling attributes here, one
+        # level up from where that placeholder was created, so finishing
+        # it has to happen at this point, not inside the label's own decode.
+        obj.instruction_stack._instructions = [
+            (
+                obj._resolve_pending_legacy_label(item)
+                if isinstance(item, _PendingLegacyInstructionLabel)
+                else item
+            )
+            for item in obj.instruction_stack._instructions
+        ]
 
         return obj

@@ -18,6 +18,7 @@ from typing import ClassVar, TypeAlias, TypeVar
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
+    _PendingLegacyInstructionLabel,
 )
 from loqs.internal import Displayable
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
@@ -125,6 +126,39 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
 
     def __len__(self):
         return len(self._instructions)
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict) -> "InstructionStack":
+        """Build directly from already-decoded items, casting each one
+        through `InstructionLabel.from_raw` -- except a
+        `_PendingLegacyInstructionLabel` placeholder (issue #97), which is
+        passed through untouched instead.
+
+        A modern `InstructionLabel` decodes as a plain `dict` (it's a
+        `dict` subclass with no `encode_type: "Serializable"` of its own),
+        so it still needs this `from_raw` cast to become a real
+        `InstructionLabel` again -- this override can't skip that the way
+        it skips `__init__`'s own casting, or every ordinary (non-legacy)
+        `InstructionStack` decode would silently regress to holding plain
+        dicts. Only a `_PendingLegacyInstructionLabel` needs to bypass
+        `from_raw` (which would reject it outright, since it isn't one of
+        the shapes `from_raw` knows how to cast) -- it's left for
+        `QuantumProgram`'s own `_from_decoded_attrs` to resolve, once
+        sibling `global_instructions`/patch context is available. A bare
+        `InstructionStack` decoded outside a `QuantumProgram` (so nothing
+        ever resolves a pending placeholder) will raise clearly the first
+        time one is actually used, rather than silently carrying invalid
+        data -- there is no context here to resolve it against."""
+        obj = cls()
+        obj._instructions = [
+            (
+                item
+                if isinstance(item, _PendingLegacyInstructionLabel)
+                else InstructionLabel.from_raw(item)
+            )
+            for item in attr_dict["_instructions"]
+        ]
+        return obj
 
     def __str__(self):
         if len(self):

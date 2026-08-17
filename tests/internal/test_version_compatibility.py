@@ -20,12 +20,16 @@ class TestVersionCompatibility:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="issue #97: these fixtures' frozen apply_fn/map_qubits_fn "
-        "source imports InstructionLabelCastableTypes/"
-        "InstructionStackCastableTypes, renamed to *Like for issue #96; "
-        "restoring this needs a real SERIALIZATION_VERSION bump with "
-        "IMPORT_LOCATION_CHANGES_BY_VERSION entries for every renamed "
-        "*CastableTypes name, not just SyndromeLabelCastableTypes",
+        reason="issue #97: the InstructionLabelCastableTypes/"
+        "InstructionStackCastableTypes rename (2.2) and the old-format "
+        "InstructionLabel decode-time remap (2.11) are both now fixed -- "
+        "confirmed directly: both fixtures decode and start running with "
+        "migrate_legacy_fns=True. A third, separate, out-of-scope issue "
+        "remains: .run() fails with \"Failed to look up ('Gh', ('D0',))\" "
+        "in DictNoiseModel.get_reps, a noise-model gate-dict completeness "
+        "gap between these old fixtures' frozen data and current circuit "
+        "generation -- unrelated to serialization/import compatibility, "
+        "not part of issue #97's scope.",
     )
     @pytest.mark.parametrize("version_file",[
         "QuantumProgram_v0.json.gz",
@@ -37,7 +41,7 @@ class TestVersionCompatibility:
         Test files are taken from test_quantumprogram files."""
 
         path = Path(__file__).parent
-        loaded_program = QuantumProgram.read(path / version_file)
+        loaded_program = QuantumProgram.read(path / version_file, migrate_legacy_fns=True)
 
         assert isinstance(loaded_program, QuantumProgram)
         #assert len(loaded_program.shot_histories) == 1
@@ -386,5 +390,259 @@ class TestMigrateLegacyFnsGate:
             self._attr_dict(source, version=0, name="Init Patch 5Q")
         )
         assert isinstance(inst, Instruction)
+
+
+class TestInstructionLabelDecodeRemap:
+    """Narrow, unit-level tests for the old-format InstructionLabel decode
+    remap (issue #97/#104, Part 2.11) -- isolated from any real fixture or
+    the full QuantumProgram.read pipeline, using hand-built attr_dicts
+    shaped exactly like the real, confirmed old shape (5 keys:
+    instruction/inst_label/patch_label/inst_args/inst_kwargs)."""
+
+    @staticmethod
+    def _make_instruction(param_priorities):
+        from loqs.core.instructions.instruction import Instruction
+
+        def apply_fn(**kwargs):
+            from loqs.core.frame import Frame
+
+            return Frame(kwargs)
+
+        return Instruction(
+            apply_fn,
+            param_priorities=param_priorities,
+            name="test instruction",
+        )
+
+    def test_already_resolved_instruction_remaps_standalone(self):
+        """When `instruction` is already resolved, the full remap happens
+        right there, with no sibling context needed at all."""
+        from loqs.core.instructions.instructionlabel import InstructionLabel
+
+        inst = self._make_instruction({"a": ["label"], "b": ["label"]})
+        attr_dict = {
+            "instruction": inst,
+            "inst_label": None,
+            "patch_label": "L0",
+            "inst_args": [1, 2],
+            "inst_kwargs": {"c": 3},
+        }
+        label = InstructionLabel._from_decoded_attrs(attr_dict)
+        assert isinstance(label, InstructionLabel)
+        assert label["instruction"] is inst
+        assert label["patch_label"] == "L0"
+        assert label["a"] == 1
+        assert label["b"] == 2
+        assert label["c"] == 3
+
+    def test_positional_arg_wins_over_same_key_kwarg(self):
+        """Matches the confirmed pre-#104 `_collect_kwarg` precedence: a
+        positional value overrides a same-key `inst_kwargs` entry, not
+        the other way around."""
+        from loqs.core.instructions.instructionlabel import InstructionLabel
+
+        inst = self._make_instruction({"a": ["label"]})
+        attr_dict = {
+            "instruction": inst,
+            "patch_label": None,
+            "inst_args": ["from_position"],
+            "inst_kwargs": {"a": "from_kwarg"},
+        }
+        label = InstructionLabel._from_decoded_attrs(attr_dict)
+        assert label["a"] == "from_position"
+
+    def test_bare_string_instruction_produces_pending_placeholder(self):
+        from loqs.core.instructions.instructionlabel import (
+            InstructionLabel,
+            _PendingLegacyInstructionLabel,
+        )
+
+        attr_dict = {
+            "instruction": None,
+            "inst_label": "Some Global Instruction",
+            "patch_label": None,
+            "inst_args": [],
+            "inst_kwargs": {},
+        }
+        result = InstructionLabel._from_decoded_attrs(attr_dict)
+        assert isinstance(result, _PendingLegacyInstructionLabel)
+        assert result.inst_label == "Some Global Instruction"
+
+    def test_pending_placeholder_raises_clearly_if_used_unresolved(self):
+        from loqs.core.instructions.instructionlabel import (
+            _PendingLegacyInstructionLabel,
+        )
+
+        pending = _PendingLegacyInstructionLabel(
+            inst_label="X", patch_label=None, inst_args=(), inst_kwargs={}
+        )
+        with pytest.raises(RuntimeError, match="was never resolved during decode"):
+            pending["instruction"]
+        with pytest.raises(RuntimeError, match="was never resolved during decode"):
+            pending.get("instruction")
+
+    def test_instructionstack_from_decoded_attrs_bypasses_from_raw(self):
+        """`InstructionStack._from_decoded_attrs` must set `_instructions`
+        directly rather than going through `InstructionLabel.from_raw`
+        (which would reject a pending placeholder outright)."""
+        from loqs.core.instructions.instructionlabel import (
+            InstructionLabel,
+            _PendingLegacyInstructionLabel,
+        )
+        from loqs.core.instructions.instructionstack import InstructionStack
+
+        pending = _PendingLegacyInstructionLabel(
+            inst_label="X", patch_label=None, inst_args=(), inst_kwargs={}
+        )
+        real_label = InstructionLabel("Y")
+        stack = InstructionStack._from_decoded_attrs(
+            {"_instructions": [pending, real_label]}
+        )
+        assert isinstance(stack, InstructionStack)
+        assert stack._instructions == [pending, real_label]
+
+    def test_quantumprogram_resolves_pending_global_label(self):
+        """End-to-end (but fixture-free) test of `QuantumProgram`'s own
+        `_from_decoded_attrs` resolving a pending global label, using its
+        sibling `global_instructions` attribute."""
+        from loqs.core.instructions.instructionlabel import (
+            InstructionLabel,
+            _PendingLegacyInstructionLabel,
+        )
+        from loqs.core.instructions.instructionstack import InstructionStack
+        from loqs.core.history import History
+
+        inst = self._make_instruction({"a": ["label"]})
+        pending = _PendingLegacyInstructionLabel(
+            inst_label="MyGlobalInst",
+            patch_label=None,
+            inst_args=[42],
+            inst_kwargs={},
+        )
+        stack = InstructionStack._from_decoded_attrs({"_instructions": [pending]})
+
+        attr_dict = {
+            "instruction_stack": stack,
+            "initial_history": History(),
+            "default_base_seed": None,
+            "default_noise_model": None,
+            "state_type": None,
+            "patch_types": {},
+            "global_instructions": {"MyGlobalInst": inst},
+            "name": "test program",
+        }
+        program = QuantumProgram._from_decoded_attrs(attr_dict)
+        resolved_label = program.instruction_stack[0]
+        assert isinstance(resolved_label, InstructionLabel)
+        # Global resolution deep-copies (matching _resolve_instruction's
+        # own existing behavior), so compare identity of the resolved
+        # instruction's name, not the object itself.
+        assert resolved_label["instruction"].name == inst.name
+        assert resolved_label["a"] == 42
+
+    def test_quantumprogram_resolves_pending_per_patch_label(self):
+        """Same as above, but for a per-patch label -- resolved against
+        `patch_types`' own instruction templates directly (no live
+        PatchLayout needed, since none exists yet at decode time)."""
+        from loqs.core.instructions.instructionlabel import InstructionLabel
+        from loqs.core.instructions.instructionlabel import (
+            _PendingLegacyInstructionLabel,
+        )
+        from loqs.core.instructions.instructionstack import InstructionStack
+        from loqs.core.history import History
+        from loqs.core.qeccode import QECCode
+
+        inst = self._make_instruction({"a": ["label"]})
+        code = QECCode({"MyPatchInst": inst}, ["Q0"], ["Q0"])
+        pending = _PendingLegacyInstructionLabel(
+            inst_label="MyPatchInst",
+            patch_label="L0",
+            inst_args=[7],
+            inst_kwargs={},
+        )
+        stack = InstructionStack._from_decoded_attrs({"_instructions": [pending]})
+
+        attr_dict = {
+            "instruction_stack": stack,
+            "initial_history": History(),
+            "default_base_seed": None,
+            "default_noise_model": None,
+            "state_type": None,
+            "patch_types": {"MyCode": code},
+            "global_instructions": {},
+            "name": "test program",
+        }
+        program = QuantumProgram._from_decoded_attrs(attr_dict)
+        resolved_label = program.instruction_stack[0]
+        assert isinstance(resolved_label, InstructionLabel)
+        assert resolved_label["patch_label"] == "L0"
+        assert resolved_label["a"] == 7
+
+    def test_quantumprogram_raises_clearly_for_unresolvable_global_label(self):
+        from loqs.core.instructions.instructionlabel import (
+            _PendingLegacyInstructionLabel,
+        )
+        from loqs.core.instructions.instructionstack import InstructionStack
+        from loqs.core.history import History
+
+        pending = _PendingLegacyInstructionLabel(
+            inst_label="DoesNotExist",
+            patch_label=None,
+            inst_args=(),
+            inst_kwargs={},
+        )
+        stack = InstructionStack._from_decoded_attrs({"_instructions": [pending]})
+        attr_dict = {
+            "instruction_stack": stack,
+            "initial_history": History(),
+            "default_base_seed": None,
+            "default_noise_model": None,
+            "state_type": None,
+            "patch_types": {},
+            "global_instructions": {},
+            "name": "test program",
+        }
+        with pytest.raises(RuntimeError, match="Could not resolve global legacy"):
+            QuantumProgram._from_decoded_attrs(attr_dict)
+
+
+class TestInstructionLabelDirectLegacyConstruction:
+    """Old-style positional `InstructionLabel(instruction, patch_label,
+    inst_args, inst_kwargs)` construction, called directly (not via
+    decode) -- the "simpler" sub-case from Part 2.11, mirroring
+    `PatchDict`'s warn-and-redirect treatment but without needing a
+    separate shim class, since old and new `InstructionLabel` are the
+    same class."""
+
+    @staticmethod
+    def _make_instruction(param_priorities):
+        from loqs.core.instructions.instruction import Instruction
+
+        def apply_fn(**kwargs):
+            from loqs.core.frame import Frame
+
+            return Frame(kwargs)
+
+        return Instruction(
+            apply_fn,
+            param_priorities=param_priorities,
+            name="test instruction",
+        )
+
+    def test_resolved_instruction_warns_and_remaps(self):
+        from loqs.core.instructions.instructionlabel import InstructionLabel
+
+        inst = self._make_instruction({"a": ["label"]})
+        with pytest.warns(DeprecationWarning, match="Old-style positional"):
+            label = InstructionLabel(inst, "L0", (5,), {"b": 6})
+        assert label["patch_label"] == "L0"
+        assert label["a"] == 5
+        assert label["b"] == 6
+
+    def test_unresolved_string_raises_clearly(self):
+        from loqs.core.instructions.instructionlabel import InstructionLabel
+
+        with pytest.raises(TypeError, match="can't be remapped"):
+            InstructionLabel("SomeInstructionName", "L0", (), {})
 
 
