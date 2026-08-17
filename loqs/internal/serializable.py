@@ -105,9 +105,22 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.recordables.pauliframe",
             "PauliFrameLike",
         ),
+        # PatchDictCastableTypes -> PatchLayoutLike, not PatchDictLike: this
+        # entry moves the *type alias* to the same real module PatchDict
+        # itself (below) redirects to -- loqs.core.recordables.patchdict no
+        # longer has a real implementation to rename within, only a
+        # construction-only legacy shim exporting `PatchDict` alone (see
+        # loqs/core/recordables/__init__.py), which doesn't define a
+        # `PatchDictLike` attribute at all. Found via a real regression
+        # test (every RENAMES target should be a live, importable
+        # attribute), not from a bug report -- exercising this specific
+        # entry requires an old frozen function that itself imports
+        # PatchDictCastableTypes by name (a type alias, not a class most
+        # code would reference directly), so unlikely to have been hit in
+        # practice yet.
         ("loqs.core.recordables.patchdict", "PatchDictCastableTypes"): (
-            "loqs.core.recordables.patchdict",
-            "PatchDictLike",
+            "loqs.core.recordables.patchlayout",
+            "PatchLayoutLike",
         ),
         (
             "loqs.core.recordables.measurementoutcomes",
