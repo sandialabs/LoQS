@@ -41,10 +41,14 @@ only possible when:
 
 - the instruction is named by a string literal that resolves against the
   caller-supplied instruction registry (see
-  [](api:loqs.tools.migrate.config)) -- an already-resolved `Instruction`
-  object (a bare name/attribute reference) already works fine as-is today,
-  with only a `DeprecationWarning` (see `InstructionLabel.__init__`), so
-  this is flagged as a low-priority style note rather than an error; and
+  [](api:loqs.tools.migrate.config)). A non-literal first argument (a
+  variable, a function call, ...) is always flagged instead, since its
+  runtime value can't be known statically -- it may already work fine
+  as-is today with only a `DeprecationWarning` if it evaluates to an
+  already-resolved `Instruction` object (see `InstructionLabel.__init__`),
+  or it may raise a `TypeError` instead if it evaluates to a bare
+  instruction-name string, a real shape confirmed in
+  `QuantumProgram_v1.json.gz`'s own frozen source; and
 - `inst_args`/`inst_kwargs` are themselves literal tuple/list/dict
   expressions (their *elements'* values may be arbitrary expressions,
   spliced through unevaluated -- only their own shape needs to be static).
@@ -97,8 +101,12 @@ def _literal_sequence(
 ) -> list[cst.BaseExpression] | None:
     """A literal tuple/list's element expressions, or `None` if `node`
     isn't one (or contains a `*`-unpacked element, whose contribution to
-    the sequence can't be known statically)."""
-    if node is None:
+    the sequence can't be known statically). A literal `None` counts as
+    empty too -- a real pattern found in `QuantumProgram_v1.json.gz`'s
+    frozen source (`InstructionLabel(rus_key, patch_label, None, {...})`),
+    matching `_remap_legacy_positional_args`'s own `tuple(inst_args or ())`
+    runtime handling."""
+    if node is None or _is_none(node):
         return []
     if not isinstance(node, (cst.Tuple, cst.List)):
         return None
@@ -116,8 +124,9 @@ def _literal_str_keyed_dict(
     """A literal dict's `{str_literal_key: value_expr}` entries, or `None`
     if `node` isn't a dict literal with exclusively string-literal keys
     (a `**`-unpacked entry or a non-literal key means the real key set
-    can't be known statically)."""
-    if node is None:
+    can't be known statically). A literal `None` counts as empty too (see
+    `_literal_sequence`)."""
+    if node is None or _is_none(node):
         return {}
     if not isinstance(node, cst.Dict):
         return None
@@ -199,13 +208,29 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         only flagged (caller should leave the original node unchanged)."""
         instr_name = _string_value(instruction_expr)
         if instr_name is None:
+            # The first argument is some other expression (a variable, a
+            # function call, ...) rather than a string literal -- its
+            # runtime value can't be known statically, so which of two
+            # very different real behaviors applies can't be either: if
+            # it evaluates to an already-resolved Instruction object,
+            # this already works today via a DeprecationWarning
+            # (InstructionLabel.__init__'s own legacy-positional-args
+            # handling); if it evaluates to a bare instruction-name
+            # string instead, that same code path raises a TypeError
+            # instead (confirmed against a real case:
+            # QuantumProgram_v1.json.gz's "Repeat-until-success FT Minus
+            # Prep" instruction freezes `InstructionLabel(rus_key,
+            # patch_label, None, {...})`, where `rus_key` is itself a
+            # string-valued parameter, not a resolved Instruction).
             self._flag(
                 original_node,
-                "Old-style positional InstructionLabel construction with "
-                "an already-resolved Instruction (not a string name) -- "
-                "this already works today via a DeprecationWarning, but "
-                "wasn't auto-modernized; rewrite to keyword form by hand "
-                "if desired.",
+                "First argument isn't a string literal, so it can't be "
+                "resolved statically -- if it evaluates to an already-"
+                "resolved Instruction object, this already works today "
+                "via a DeprecationWarning; if it evaluates to a bare "
+                "instruction-name string instead, direct construction "
+                "raises a TypeError. Not rewritten either way; migrate "
+                "to keyword form by hand.",
             )
             return None
         instruction = self._instructions.get(instr_name)

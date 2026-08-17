@@ -369,6 +369,130 @@ class TestMigrateLegacyFnsGate:
         assert isinstance(inst, Instruction)
 
 
+class TestUpdateLegacyConstructions:
+    """Regression tests for `Serializable._update_legacy_constructions`
+    (issue #97's Sub-problem C): rewriting a resolvable old-format
+    `InstructionLabel(...)` construction inside a frozen function's
+    source at decode time, so a pattern the rewrite fixes never needs
+    `migrate_legacy_fns=True` at all. A sibling pass to `_update_imports`
+    (see `loqs/tools/migrate/renames.py`'s own docstring for why renames
+    and this aren't the same mechanism), sharing its detect/resolve/
+    rewrite engine with the standalone `loqs.tools.migrate` library
+    rather than duplicating it.
+    """
+
+    libcst = pytest.importorskip("libcst")
+
+    @staticmethod
+    def _increment_registry():
+        from loqs.codepacks.codepack_trivial_counter import create_qec_code
+
+        return create_qec_code().instructions
+
+    def test_noop_at_current_version(self):
+        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
+        assert (
+            serializable_module.Serializable._update_legacy_constructions(
+                src, serializable_module.SERIALIZATION_VERSION
+            )
+            == src
+        )
+
+    def test_noop_without_a_registry(self):
+        """No LEGACY_INSTRUCTION_REGISTRY set (the default): every
+        candidate is unresolvable, so nothing is rewritten -- same
+        behavior as before this method existed."""
+        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
+        assert (
+            serializable_module.Serializable._update_legacy_constructions(
+                src, 0
+            )
+            == src
+        )
+
+    def test_rewrites_when_a_registry_resolves_the_instruction(self):
+        token = serializable_module.LEGACY_INSTRUCTION_REGISTRY.set(
+            self._increment_registry()
+        )
+        try:
+            rewritten = (
+                serializable_module.Serializable._update_legacy_constructions(
+                    'InstructionLabel("Increment", "L0", (), '
+                    '{"increment_by": 2})\n',
+                    0,
+                )
+            )
+        finally:
+            serializable_module.LEGACY_INSTRUCTION_REGISTRY.reset(token)
+        assert (
+            rewritten
+            == 'InstructionLabel("Increment", increment_by=2, patch_label="L0")\n'
+        )
+
+    def test_gate_bypassed_when_registry_resolves_the_pattern(self):
+        """The real integration point: Instruction._from_decoded_attrs's
+        migrate_legacy_fns gate never even triggers here, since the
+        rewrite already fixed the only pattern it would have detected --
+        no need to pass migrate_legacy_fns=True at all."""
+        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
+        attrs = {
+            "_serialized_apply_fn": (
+                f"def apply_fn(patch_label):\n    return {src.strip()}\n"
+            ),
+            "_serialized_map_qubits_fn": (
+                "def map_qubits_fn(qubit_map):\n    return {}\n"
+            ),
+            "version": 0,
+            "type": "Test",
+            "data": {},
+            "param_error_behavior": "warn",
+            "name": "test",
+            "_param_priorities": {},
+            "_param_aliases": {},
+        }
+
+        with pytest.raises(RuntimeError, match="InstructionLabel"):
+            Instruction._from_decoded_attrs(attrs)
+
+        token = serializable_module.LEGACY_INSTRUCTION_REGISTRY.set(
+            self._increment_registry()
+        )
+        try:
+            inst = Instruction._from_decoded_attrs(attrs)
+        finally:
+            serializable_module.LEGACY_INSTRUCTION_REGISTRY.reset(token)
+        assert isinstance(inst, Instruction)
+
+    def test_load_wires_instruction_registry_through_the_contextvar(
+        self, monkeypatch
+    ):
+        """`Serializable.load`'s new `instruction_registry` parameter sets
+        `LEGACY_INSTRUCTION_REGISTRY` for the duration of the call and
+        resets it afterward, mirroring `migrate_legacy_fns`'s own
+        established wiring -- checked directly via a spy on `.decode`
+        rather than a full JSON/HDF5 round trip, which exercises this one
+        specific piece of wiring in isolation."""
+        registry = self._increment_registry()
+        seen = {}
+
+        def fake_decode(state, format, decode_cache=None):
+            seen["registry"] = (
+                serializable_module.LEGACY_INSTRUCTION_REGISTRY.get()
+            )
+            return None
+
+        monkeypatch.setattr(Serializable, "decode", staticmethod(fake_decode))
+        monkeypatch.setattr("json.load", lambda f: {})
+
+        import io
+
+        Serializable.load(
+            io.StringIO("{}"), format="json", instruction_registry=registry
+        )
+        assert seen["registry"] is registry
+        assert serializable_module.LEGACY_INSTRUCTION_REGISTRY.get() is None
+
+
 class TestInstructionLabelDecodeRemap:
     """Narrow, unit-level tests for the old-format InstructionLabel decode
     remap (v1.2) -- isolated from any real fixture or the full

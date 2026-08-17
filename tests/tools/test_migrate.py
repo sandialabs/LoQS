@@ -102,6 +102,16 @@ class TestMigrateInstructionLabels:
         result = migrate_instruction_labels(src, instructions)
         assert result.source == 'tup = InstructionLabel("Init Counter", initial_value=7)\n'
 
+    def test_none_literal_inst_args_and_kwargs_treated_as_empty(self, instructions):
+        """A real shape found in QuantumProgram_v1.json.gz's frozen
+        source: `InstructionLabel(name, patch_label, None, {...})` uses a
+        literal `None` for inst_args, not an empty tuple `()` --
+        `_remap_legacy_positional_args`'s own runtime handling
+        (`tuple(inst_args or ())`) treats both the same way."""
+        src = 'InstructionLabel("Increment", "L0", None, None)\n'
+        result = migrate_instruction_labels(src, instructions)
+        assert result.source == 'InstructionLabel("Increment", patch_label="L0")\n'
+
     def test_three_tuple_with_string_second_element_is_not_a_candidate(
         self, instructions
     ):
@@ -124,15 +134,16 @@ class TestMigrateInstructionLabels:
     def test_resolved_instruction_object_is_flagged_not_rewritten(
         self, instructions
     ):
-        """Already works today via a DeprecationWarning (see
-        InstructionLabel.__init__), so this is a style note, not an
-        error -- still not silently rewritten, since the tool has no way
-        to know the object's type in general."""
+        """May already work today via a DeprecationWarning if it
+        evaluates to a resolved Instruction (see
+        InstructionLabel.__init__) -- still not silently rewritten either
+        way, since the tool can't know a variable's runtime value."""
         src = 'InstructionLabel(some_instruction, "L0", (), {})\n'
         result = migrate_instruction_labels(src, instructions)
         assert not result.changed
         assert len(result.manual_review) == 1
         assert "DeprecationWarning" in result.manual_review[0].message
+        assert "TypeError" in result.manual_review[0].message
 
     def test_unknown_instruction_name_is_flagged(self, instructions):
         src = 'InstructionLabel("Nonexistent", "L0", (), {})\n'

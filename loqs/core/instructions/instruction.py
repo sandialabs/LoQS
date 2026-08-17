@@ -455,11 +455,30 @@ class Instruction(Displayable):
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
         version = attr_dict["version"]
 
-        # Gate re-executing an old, now-incompatible calling convention
-        # behind an explicit opt-in rather than doing it silently. Only
-        # scan an actual string -- a version-0 file's source may already
-        # be a live callable by this point (decode_function's own
-        # version-0 heuristic), leaving nothing to scan.
+        # Attempt a confident rewrite first (e.g. a resolvable old-format
+        # InstructionLabel(...) call, via
+        # Serializable._update_legacy_constructions), so an
+        # already-fixable pattern never trips the gate below at all.
+        if version < SERIALIZATION_VERSION:
+            if isinstance(serialized_apply_fn, str):
+                serialized_apply_fn = (
+                    Serializable._update_legacy_constructions(
+                        serialized_apply_fn, version
+                    )
+                )
+            if isinstance(serialized_map_qubits_fn, str):
+                serialized_map_qubits_fn = (
+                    Serializable._update_legacy_constructions(
+                        serialized_map_qubits_fn, version
+                    )
+                )
+
+        # Gate re-executing any remaining old, now-incompatible calling
+        # convention behind an explicit opt-in rather than doing it
+        # silently. Only scan an actual string -- a version-0 file's
+        # source may already be a live callable by this point
+        # (decode_function's own version-0 heuristic), leaving nothing
+        # to scan.
         if version < SERIALIZATION_VERSION and not MIGRATE_LEGACY_FNS.get():
             found = []
             if isinstance(serialized_apply_fn, str):
@@ -472,8 +491,10 @@ class Instruction(Displayable):
                     f"(serialized at version {version}) appears to construct "
                     f"{', '.join(found)}, a deprecated legacy pattern. Pass "
                     "migrate_legacy_fns=True to QuantumProgram.read/"
-                    "Serializable.load to run it as-is, or migrate the "
-                    "source with loqs-migrate first."
+                    "Serializable.load to run it as-is, an "
+                    "instruction_registry to resolve it automatically if "
+                    "possible, or migrate the source with loqs-migrate "
+                    "first."
                 )
 
         apply_fn = Serializable._eval_function_str(

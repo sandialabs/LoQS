@@ -226,6 +226,22 @@ Set for the duration of a `Serializable.read`/`.load` call, read once in
 `Instruction._from_decoded_attrs`.
 """
 
+LEGACY_INSTRUCTION_REGISTRY: contextvars.ContextVar[
+    Mapping[str, Any] | None
+] = contextvars.ContextVar("legacy_instruction_registry", default=None)
+"""An optional `{name: Instruction}` registry (typically a `QECCode`'s own
+`instructions` dict), used by `_update_legacy_constructions` to resolve
+and rewrite an old-format `InstructionLabel(...)` construction found
+inside a decoded file's frozen source -- the same detect/resolve/rewrite
+engine `loqs.tools.migrate` itself uses, applied at decode time instead of
+to a standalone `.py` file. Set for the duration of a top-level
+`Serializable.read`/`.load` call via the `instruction_registry` parameter
+there. When a rewrite succeeds, the pattern no longer trips
+`MIGRATE_LEGACY_FNS`'s gate at all -- supplying a registry can make
+`migrate_legacy_fns=True` unnecessary for a file whose only obstacle was
+this exact pattern.
+"""
+
 
 @dataclass
 class DeferredRef:
@@ -481,6 +497,7 @@ class Serializable:
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
         migrate_legacy_fns: bool = False,
+        instruction_registry: Mapping[str, Any] | None = None,
     ) -> Encodable:
         """
         Load an object of this type, or a subclass of this type, from an input stream.
@@ -508,6 +525,14 @@ class Serializable:
             construction-time compatibility shim. Pass `True` to allow it
             to run as-is instead. Default is `False`.
 
+        instruction_registry : Mapping[str, Instruction], optional
+            A `{name: Instruction}` registry (typically a `QECCode`'s own
+            `instructions` dict) used to resolve and rewrite a legacy
+            `InstructionLabel(...)` construction found in a decoded
+            file's frozen source automatically, rather than needing
+            `migrate_legacy_fns=True` at all for that specific pattern.
+            See [](api:LEGACY_INSTRUCTION_REGISTRY).
+
         Returns
         -------
         Serializable
@@ -526,7 +551,8 @@ class Serializable:
         if use_caching:
             decode_cache = decode_cache if decode_cache is not None else {}
 
-        token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
+        migrate_token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
+        registry_token = LEGACY_INSTRUCTION_REGISTRY.set(instruction_registry)
         try:
             if format in ["json", "json.gz"]:
                 # Check if it's a file-like object that supports text I/O
@@ -552,7 +578,8 @@ class Serializable:
             else:
                 raise ValueError(f"Invalid `format` value for load: {format}")
         finally:
-            MIGRATE_LEGACY_FNS.reset(token)
+            MIGRATE_LEGACY_FNS.reset(migrate_token)
+            LEGACY_INSTRUCTION_REGISTRY.reset(registry_token)
 
         # At this point, at least outer object should not be a deferred reference
         assert not isinstance(decoded, DeferredRef)
@@ -567,6 +594,7 @@ class Serializable:
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
         migrate_legacy_fns: bool = False,
+        instruction_registry: Mapping[str, Any] | None = None,
     ) -> Encodable:
         """Read and deserialize an object from a file.
 
@@ -587,6 +615,8 @@ class Serializable:
             Existing decode cache to use for reference resolution.
         migrate_legacy_fns : bool, optional
             See [](api:Serializable.load). Default is `False`.
+        instruction_registry : Mapping[str, Instruction], optional
+            See [](api:Serializable.load). Default is `None`.
 
         Returns
         -------
@@ -627,6 +657,7 @@ class Serializable:
             use_caching=use_caching,
             decode_cache=decode_cache,
             migrate_legacy_fns=migrate_legacy_fns,
+            instruction_registry=instruction_registry,
         )
 
         f.close()
@@ -1131,6 +1162,10 @@ class Serializable:
 
         # Before executing source, update imports for backwards compatibility
         updated_src = Serializable._update_imports(src, version)
+        # Rewrite any resolvable old-format InstructionLabel construction
+        updated_src = Serializable._update_legacy_constructions(
+            updated_src, version
+        )
         # And other known fixes
         updated_src = Serializable._function_compatibility(
             updated_src, version
@@ -1510,6 +1545,42 @@ class Serializable:
         final_result = "\n".join(final_lines)
 
         return final_result
+
+    @staticmethod
+    def _update_legacy_constructions(function_str: str, version: int) -> str:
+        """Rewrite any resolvable old-format `InstructionLabel(...)`
+        construction in a frozen function's source, using the same
+        detect/resolve/rewrite engine `loqs.tools.migrate` uses on
+        standalone files (`loqs.tools.migrate.labels`) -- a sibling pass
+        to `_update_imports`, not a generalization of it (see the
+        `feat-97` plan's Part 3.5.3): renames are a pure text-level
+        substitution problem, this is a real (if narrow) source rewrite.
+
+        A no-op unless `version < SERIALIZATION_VERSION` and both an
+        `InstructionLabel` old-format candidate and a
+        `LEGACY_INSTRUCTION_REGISTRY` (see that `ContextVar`'s own
+        docstring) are present; also a no-op, rather than an error, if
+        `loqs.tools.migrate`'s optional `libcst` dependency isn't
+        installed -- this is a best-effort improvement layered on top of
+        the `MIGRATE_LEGACY_FNS` gate (`Instruction._from_decoded_attrs`),
+        never a requirement for decoding to work at all.
+        """
+        if version >= SERIALIZATION_VERSION:
+            return function_str
+        try:
+            from loqs.tools.migrate.labels import migrate_instruction_labels
+        except ImportError:
+            return function_str
+        registry = LEGACY_INSTRUCTION_REGISTRY.get() or {}
+        try:
+            result = migrate_instruction_labels(function_str, registry)
+        except Exception:
+            # A frozen function's source isn't guaranteed to be a single,
+            # standalone-parseable module (e.g. indentation relative to
+            # its original enclosing scope) -- fall through unchanged
+            # rather than let a best-effort rewrite break decoding.
+            return function_str
+        return result.source
 
     @staticmethod
     def _replace_placeholders(obj, decode_cache):
