@@ -6,6 +6,7 @@ import pytest
 
 quantumsim = pytest.importorskip("quantumsim")
 
+import loqs.internal.serializable as serializable_module
 from loqs.backends.state.qsimstate import QSimQuantumState
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal.serializable import IMPORT_LOCATION_CHANGES_BY_VERSION, Serializable
@@ -164,5 +165,46 @@ def apply_fn(
 
         updated_str2 = Serializable._update_imports(test_str, loc_change=renamed_loc_change)
         assert updated_str2 == expected_str2
+
+    def test_get_cumulative_changes_multi_hop_composition(self, monkeypatch):
+        """A rename chained across 3 versions (A -> B -> C -> D) must
+        compose into a single A -> D mapping. Regression test for a real
+        infinite loop in `_get_cumulative_changes` (`version` was never
+        incremented in its old `while` loop) -- the existing suite had no
+        test exercising more than one hop, which is exactly how that bug
+        went unnoticed."""
+        fake_table = {
+            1: {("mod0", "A"): ("mod1", "B")},
+            2: {("mod1", "B"): ("mod2", "C")},
+            3: {("mod2", "C"): ("mod3", "D")},
+        }
+        monkeypatch.setattr(
+            serializable_module, "IMPORT_LOCATION_CHANGES_BY_VERSION", fake_table
+        )
+        monkeypatch.setattr(serializable_module, "SERIALIZATION_VERSION", 4)
+
+        assert Serializable._get_cumulative_changes(0) == {
+            ("mod0", "A"): ("mod3", "D")
+        }
+
+    def test_get_cumulative_changes_handles_missing_table_entry(self, monkeypatch):
+        """A version with no import-location changes at all simply has no
+        entry in `IMPORT_LOCATION_CHANGES_BY_VERSION` (not an empty one) --
+        `_get_cumulative_changes` must not raise `KeyError` when composing
+        across such a gap, whether at the very first hop or a later one."""
+        fake_table = {
+            # No entry for version 1 at all.
+            2: {("mod0", "A"): ("mod2", "B")},
+            # No entry for version 3 at all.
+            4: {("mod2", "B"): ("mod4", "C")},
+        }
+        monkeypatch.setattr(
+            serializable_module, "IMPORT_LOCATION_CHANGES_BY_VERSION", fake_table
+        )
+        monkeypatch.setattr(serializable_module, "SERIALIZATION_VERSION", 5)
+
+        assert Serializable._get_cumulative_changes(0) == {
+            ("mod0", "A"): ("mod4", "C")
+        }
 
 

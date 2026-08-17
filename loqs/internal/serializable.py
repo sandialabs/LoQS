@@ -1419,16 +1419,20 @@ class Serializable:
     def _get_cumulative_changes(initial_version):
         assert initial_version < SERIALIZATION_VERSION
 
-        # Get cumulative changes in import locations
-        complete_location_changes = IMPORT_LOCATION_CHANGES_BY_VERSION[
-            initial_version + 1
-        ].copy()
+        # Get cumulative changes in import locations. `.get(..., {})` rather
+        # than `[...]`: a version with no import-location changes at all
+        # (e.g. a version bump for encoding-shape reasons only) simply has
+        # no entry here, not an empty one -- that must not be a KeyError.
+        complete_location_changes = IMPORT_LOCATION_CHANGES_BY_VERSION.get(
+            initial_version + 1, {}
+        ).copy()
 
-        version = initial_version + 1
-        while version < SERIALIZATION_VERSION:
-            for new_k, new_v in IMPORT_LOCATION_CHANGES_BY_VERSION[
-                version
-            ].items():
+        # Walk every later version and fold its changes into the running
+        # map, composing multi-hop renames (A -> B, B -> C becomes A -> C).
+        for version in range(initial_version + 2, SERIALIZATION_VERSION + 1):
+            for new_k, new_v in IMPORT_LOCATION_CHANGES_BY_VERSION.get(
+                version, {}
+            ).items():
                 updated_map = False
 
                 # If new_k corresponds to a value in the current location changes,
