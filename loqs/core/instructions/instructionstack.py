@@ -129,26 +129,19 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
 
     @classmethod
     def _from_decoded_attrs(cls, attr_dict) -> "InstructionStack":
-        """Build directly from already-decoded items, casting each one
-        through `InstructionLabel.from_raw` -- except a
-        `_PendingLegacyInstructionLabel` placeholder (issue #97), which is
-        passed through untouched instead.
-
-        A modern `InstructionLabel` decodes as a plain `dict` (it's a
-        `dict` subclass with no `encode_type: "Serializable"` of its own),
-        so it still needs this `from_raw` cast to become a real
-        `InstructionLabel` again -- this override can't skip that the way
-        it skips `__init__`'s own casting, or every ordinary (non-legacy)
-        `InstructionStack` decode would silently regress to holding plain
-        dicts. Only a `_PendingLegacyInstructionLabel` needs to bypass
-        `from_raw` (which would reject it outright, since it isn't one of
-        the shapes `from_raw` knows how to cast) -- it's left for
-        `QuantumProgram`'s own `_from_decoded_attrs` to resolve, once
-        sibling `global_instructions`/patch context is available. A bare
-        `InstructionStack` decoded outside a `QuantumProgram` (so nothing
-        ever resolves a pending placeholder) will raise clearly the first
-        time one is actually used, rather than silently carrying invalid
-        data -- there is no context here to resolve it against."""
+        """Build from already-decoded items, casting each through
+        `InstructionLabel.from_raw` -- except a
+        `_PendingLegacyInstructionLabel` placeholder (issue #97), passed
+        through untouched since `from_raw` would otherwise reject it. The
+        cast itself still has to happen here (a modern `InstructionLabel`
+        decodes as a plain `dict`, with no `encode_type: "Serializable"`
+        of its own): skipping it unconditionally would regress every
+        ordinary, non-legacy decode into holding plain dicts. Any pending
+        placeholder is left for `QuantumProgram._from_decoded_attrs` to
+        resolve once sibling `global_instructions`/patch context is
+        available; a bare `InstructionStack` decoded with no enclosing
+        `QuantumProgram` raises clearly the first time such a placeholder
+        is actually used instead."""
         obj = cls()
         obj._instructions = [
             (

@@ -455,20 +455,14 @@ class Instruction(Displayable):
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
         version = attr_dict["version"]
 
-        # A file older than the current SERIALIZATION_VERSION may freeze
-        # source using a now-incompatible *calling convention* that a
-        # class-location rename can't fix by itself (e.g. old-style
-        # positional InstructionLabel(...) construction) -- a
-        # construction-time shim would run it transparently, but only do
-        # so if explicitly allowed, since silently re-executing old,
-        # unreviewed code on every future decode should require an
-        # explicit opt-in, not happen by default. Only scan actual source
-        # text: for a SERIALIZATION_VERSION 0 file, the generic decode
-        # pipeline may have already evaluated a frozen function string
-        # into a live callable before this point is ever reached (a
-        # pre-existing quirk of decode_function's own version-0 shape
-        # detection ambiguously matching any bare string containing
-        # "def ") -- there's no text left to scan in that case.
+        # A file older than SERIALIZATION_VERSION may freeze source using
+        # a now-incompatible calling convention (see legacy.py's
+        # detect_legacy_construction) -- gated behind an explicit opt-in
+        # rather than silently re-executing old, unreviewed code by
+        # default. Only scan an actual string: a version-0 file's source
+        # may already have been evaluated into a live callable by this
+        # point (decode_function's own version-0 heuristic), leaving no
+        # text to scan.
         if version < SERIALIZATION_VERSION and not MIGRATE_LEGACY_FNS.get():
             found = []
             if isinstance(serialized_apply_fn, str):

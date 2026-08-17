@@ -782,31 +782,20 @@ class QuantumProgram(Displayable):
     def _resolve_pending_legacy_label(
         self, pending: _PendingLegacyInstructionLabel
     ) -> InstructionLabel:
-        """Finish resolving a `_PendingLegacyInstructionLabel` (issue #97),
-        found while decoding an old file's `InstructionStack`.
+        """Finish resolving a `_PendingLegacyInstructionLabel` (issue #97).
 
-        Unlike `_resolve_instruction` (used during `.run()`), this can't
-        look a per-patch instruction up through a live `PatchLayout`: at
-        decode time, before any "Init Patch" instruction has actually
-        run, no live patches exist yet to look one up in -- decode has to
-        resolve every label up front, not incrementally alongside
-        execution. Instead, this resolves directly against `patch_types`'
-        own `QECCode` instruction templates (`code.instructions[name]`),
-        which is exactly what `QECCodePatch.__getitem__` itself reads
-        from before qubit-remapping the result -- and qubit-remapping
-        never changes an instruction's `param_priorities`/`param_alias`,
-        which is all a legacy positional-argument remap needs. Multi-patch
-        (`patch_labels`) resolution isn't a case that can occur here at
-        all: that feature postdates the old positional format this
-        placeholder came from.
-
-        If more than one patch type happens to register the same
-        instruction name, the first match is used -- real historical
-        files needing this decode path predate multi-patch-type programs
-        entirely (multi-patch support itself postdates the #104 refactor
-        this whole mechanism exists to decode around), so this is not
-        expected to be a real ambiguity in practice.
-        """
+        Unlike `_resolve_instruction` (used during `.run()`), a per-patch
+        lookup here can't go through a live `PatchLayout` -- no patches
+        exist yet at decode time, before any "Init Patch" instruction has
+        run -- so it resolves directly against `patch_types`' own
+        `QECCode.instructions` templates instead, exactly what
+        `QECCodePatch.__getitem__` itself reads before its own
+        qubit-remapping step (which never changes `param_priorities`/
+        `param_alias`, all a legacy positional remap needs). If more than
+        one patch type registers the same name, the first match is used;
+        multi-patch (`patch_labels`) resolution can't occur here at all,
+        since that postdates the old positional format this placeholder
+        came from."""
         inst_name = pending.inst_label
         patch_label = pending.patch_label
 

@@ -223,26 +223,19 @@ class InstructionLabel(dict):
     def _from_decoded_attrs(
         cls, attr_dict: Mapping
     ) -> "InstructionLabel | _PendingLegacyInstructionLabel":
-        """Decode-only compatibility for the pre-#104 tuple-attrs shape.
-
-        Old files recorded `InstructionLabel` as a genuine `Serializable`
-        object with 5 attrs (`instruction`, `inst_label`, `patch_label`,
-        `inst_args`, `inst_kwargs`) rather than today's plain dict shape --
-        confirmed directly against real fixture bytes, not assumed. Modern
-        `InstructionLabel` is a plain `dict` subclass, never encoded with
-        `encode_type: "Serializable"`, so this classmethod is only ever
-        reached for genuinely old data (safe to add even though the class
-        no longer inherits `Serializable` -- decode dispatches to it by
-        duck-typing alone).
-
-        When `instruction` is already a resolved [](api:Instruction), the
-        full remap can happen right here, standalone. When it's `None`
-        (a bare `inst_label` string instead), resolving it needs sibling
-        `global_instructions`/patch context this nested object's own
-        decode never sees -- a [](api:_PendingLegacyInstructionLabel)
-        placeholder is returned instead, finished later by
-        [](api:QuantumProgram._from_decoded_attrs).
-        """
+        """Decode-only compatibility for the pre-#104 5-attr `Serializable`
+        shape (`instruction`/`inst_label`/`patch_label`/`inst_args`/
+        `inst_kwargs`). Modern `InstructionLabel` is a plain `dict`
+        subclass and never encodes this way, so this classmethod is only
+        ever reached for genuinely old data -- safe to add even though the
+        class no longer inherits `Serializable`, since decode dispatches
+        by duck-typing alone. If `instruction` is already a resolved
+        [](api:Instruction), the remap happens right here; if it's a bare
+        `inst_label` string instead, resolving it needs sibling
+        `global_instructions`/patch context this nested decode can't see,
+        so a [](api:_PendingLegacyInstructionLabel) placeholder is
+        returned instead, finished later by
+        [](api:QuantumProgram._from_decoded_attrs)."""
         instruction = attr_dict.get("instruction")
         inst_label = attr_dict.get("inst_label")
         patch_label = attr_dict.get("patch_label")

@@ -206,16 +206,15 @@ SERIALIZATION_VERSION = 2
 MIGRATE_LEGACY_FNS: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "migrate_legacy_fns", default=False
 )
-"""Whether decoding may silently run known legacy-construction patterns
+"""Whether decoding may silently run a known legacy-construction pattern
 found inside an old `Instruction`'s frozen `apply_fn`/`map_qubits_fn`
-source (e.g. a pre-1.2 `PatchDict()` call) via their construction-time
-compatibility shims, rather than raising a clear error. Set for the
-duration of a top-level `Serializable.read`/`.load` call (see the
-`migrate_legacy_fns` parameter there), read once in
-`Instruction._from_decoded_attrs`. Only governs re-execution of patterns
-found inside a decoded file's frozen source -- it cannot and does not gate
-a user's own plain, hand-typed legacy construction, which the shims handle
-unconditionally regardless of this flag.
+source (e.g. an old-style positional `InstructionLabel(...)` call) rather
+than raising a clear error. Set for the duration of a top-level
+`Serializable.read`/`.load` call (see the `migrate_legacy_fns` parameter
+there), read once in `Instruction._from_decoded_attrs`. Only governs
+re-execution of patterns found inside a decoded file's frozen source --
+it cannot and does not gate a user's own plain, hand-typed legacy
+construction.
 """
 
 
@@ -494,11 +493,11 @@ class Serializable:
         migrate_legacy_fns : bool, optional
             If a decoded `Instruction`'s frozen source (from a file older
             than the current `SERIALIZATION_VERSION`) contains a known
-            legacy-construction pattern (e.g. a pre-1.2 `PatchDict()`
-            call), decoding normally raises a clear error rather than
-            silently running it through a construction-time compatibility
-            shim. Pass `True` to allow it to run as-is instead. Default
-            is `False`.
+            legacy-construction pattern (e.g. an old-style positional
+            `InstructionLabel(...)` call), decoding normally raises a
+            clear error rather than silently running it through a
+            construction-time compatibility shim. Pass `True` to allow it
+            to run as-is instead. Default is `False`.
 
         Returns
         -------

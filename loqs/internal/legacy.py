@@ -74,24 +74,17 @@ def make_legacy_construction_shim(
 
 
 _LEGACY_CONSTRUCTION_PATTERNS: dict[str, re.Pattern] = {
-    # NOTE: a straight class-location rename (like PatchDict -> PatchLayout)
-    # is deliberately *not* listed here -- confirmed directly that
-    # Serializable._update_imports already rewrites both the import line
-    # and every other occurrence of the old name throughout the frozen
-    # source's body (its "third pass"), so old frozen source constructing
-    # PatchDict() is transparently and losslessly rewritten to construct
-    # PatchLayout() directly before it's ever re-executed; there is no
-    # runtime risk left to gate for that case, and no shim is ever
-    # actually reached. This mechanism only needs to cover cases where the
-    # class *name* is unchanged but its constructor's calling convention
-    # is not -- text-rewriting can't fix that, only a construction-time
-    # shim (checked at the moment the old call is actually made) can.
+    # A straight class-location rename (e.g. PatchDict -> PatchLayout) is
+    # deliberately not listed here: Serializable._update_imports already
+    # rewrites every occurrence of the old name throughout frozen source,
+    # not just the import line, so there's no runtime risk left to gate.
+    # Only a calling-convention change with the *same* class name needs
+    # an entry, since no rename can fix that.
     #
-    # Old-style positional InstructionLabel construction had at least one
-    # positional argument after the instruction itself (patch_label,
-    # inst_args, inst_kwargs); the modern form only ever takes keyword
-    # arguments past the first. A second bare positional argument (not
-    # starting with a keyword= name) is the telltale sign.
+    # A second bare positional argument after the instruction itself
+    # (not a keyword=) is the telltale sign of the old positional form;
+    # the modern constructor only ever takes keyword arguments past the
+    # first.
     "InstructionLabel (old positional form)": re.compile(
         r"InstructionLabel\([^()]*?,\s*(?!patch_labels?\s*=)[^()=,\s]"
     ),
