@@ -110,10 +110,11 @@ class GateRep(OperationRep):
         # Seeing `class: "GateRep"` in a file unambiguously identifies a
         # legacy-format value, so we return a legacy tag instead of trying
         # to instantiate the ABC. See
-        # `loqs.backends.reps.legacy.RepTuple._from_decoded_attrs`, which
-        # consumes this tag (alongside the paired `rep`/`qubits`) to build
-        # the correct concrete class. Deferred import avoids a circular
-        # dependency, since `legacy.py` itself imports from this module.
+        # `OperationRep._from_decoded_attrs` (`loqs.backends.reps.base`),
+        # which consumes this tag (alongside the paired `rep`/`qubits`) to
+        # build the correct concrete class. Deferred import avoids a
+        # circular dependency, since `legacy.py` itself imports from this
+        # module.
         if cls is GateRep:
             from loqs.backends.reps.legacy import _LegacyGateRepValue
 

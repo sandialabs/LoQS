@@ -23,16 +23,19 @@ represent (e.g. if a bug fix to current behavior should be reflected in
 them) -- otherwise these files should remain untouched so they keep
 representing a known, previously-committed serialized format.
 
-Historical note (LoQS#72): this script uses the pre-refactor `RepTuple`/
-`GateRep`/`InstrumentRep` enum-based API, which no longer exists as a
-constructible API after LoQS#72's class-hierarchy refactor (`RepTuple`'s
-constructor now unconditionally raises, and `GateRep`/`InstrumentRep` are
-no longer `Enum`s). This script can therefore no longer be executed
-against current code; it is kept only as a historical record of exactly
-how `reps_v1.json`/`reps_v1.h5` (the frozen fixtures it originally
-produced) were generated. Those fixtures are still very much live --
-they are the byte-for-byte regression oracle for the legacy decode-only
-shim in `loqs.backends.reps.legacy` (see `tests/backends/reps/test_legacy.py`).
+Historical note (LoQS#72, then issue #97): this script uses the
+pre-refactor `RepTuple`/`GateRep`/`InstrumentRep` enum-based API. `RepTuple`
+no longer existed as a constructible class after LoQS#72's class-hierarchy
+refactor (`GateRep`/`InstrumentRep` stopped being `Enum`s at the same
+time), and issue #97 later removed `RepTuple` entirely -- this script can
+therefore no longer even be *imported* against current code, let alone
+executed (excluded from pytest's collection in `pytest.ini` for exactly
+this reason). It is kept only as a historical record of exactly how
+`reps_v1.json`/`reps_v1.h5` (the frozen fixtures it originally produced)
+were generated. Those fixtures are still very much live -- they are the
+byte-for-byte regression oracle for the legacy decode redirect in
+`loqs.backends.reps.base.OperationRep._from_decoded_attrs` (see
+`tests/backends/reps/test_legacy.py`).
 """
 
 from __future__ import annotations

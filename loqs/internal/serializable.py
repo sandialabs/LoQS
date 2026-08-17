@@ -176,6 +176,19 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.recordables.patchlayout",
             "PatchLayout",
         ),
+        # RepTuple/STIMDictNoiseModel: complete removal per issue #97 --
+        # both classes are deleted outright, with no construction shim at
+        # all (both already hard-failed on direct construction). Decode
+        # redirects straight to the modern class, whose own
+        # _from_decoded_attrs now absorbs the old shape-handling logic.
+        ("loqs.backends.reps", "RepTuple"): (
+            "loqs.backends.reps.base",
+            "OperationRep",
+        ),
+        ("loqs.backends.model.stimdictmodel", "STIMDictNoiseModel"): (
+            "loqs.backends.model.dictmodel",
+            "DictNoiseModel",
+        ),
     },
 }  # (module, class) mapping from OLD to NEW locations for each version change
 

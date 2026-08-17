@@ -11,7 +11,6 @@ import pytest
 
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model.dictmodel import DictNoiseModel, add_command_aliases
-from loqs.backends.model.stimdictmodel import STIMDictNoiseModel
 from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
@@ -679,14 +678,11 @@ class TestAddCommandAliases:
 
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
-class TestSTIMDictNoiseModelDecodeOnlyShim:
-    """`STIMDictNoiseModel` is eliminated as a usable class -- see
-    `loqs.backends.model.stimdictmodel`'s module docstring. This tests its
-    decode-only compatibility shim directly."""
-
-    def test_construction_raises_type_error(self):
-        with pytest.raises(TypeError, match="STIMDictNoiseModel is deprecated"):
-            STIMDictNoiseModel(({}, {}))
+class TestSTIMDictNoiseModelDecodeRedirect:
+    """`STIMDictNoiseModel` no longer exists at all (issue #97) -- decoding
+    an old `class: "STIMDictNoiseModel"`-tagged file redirects straight to
+    `DictNoiseModel` via `IMPORT_LOCATION_CHANGES_BY_VERSION`, with no
+    shim class involved anywhere. This tests that redirect directly."""
 
     @pytest.fixture(params=["json", "hdf5"])
     def decoded(self, request):
@@ -698,11 +694,12 @@ class TestSTIMDictNoiseModelDecodeOnlyShim:
                 return Serializable.decode(f["root"], format="hdf5")
 
     def test_decodes_to_plain_dictnoisemodel(self, decoded):
-        """Old `class: "STIMDictNoiseModel"`-tagged files decode to a
-        plain `DictNoiseModel`, not an instance of the (now-nonexistent
-        as a usable class) `STIMDictNoiseModel`."""
+        """Old `class: "STIMDictNoiseModel"`-tagged files decode straight
+        to a plain `DictNoiseModel` -- there's no shim class left to check
+        the result *isn't* an instance of, since `STIMDictNoiseModel` no
+        longer exists at all."""
         assert isinstance(decoded, DictNoiseModel)
-        assert not isinstance(decoded, STIMDictNoiseModel)
+        assert type(decoded) is DictNoiseModel
         # "CX" is present alongside "CNOT" because add_command_aliases ran
         # at construction time in the pre-refactor code that produced this
         # fixture -- confirms aliasing is captured in the frozen bytes.

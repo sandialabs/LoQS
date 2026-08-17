@@ -115,7 +115,6 @@ from .reps import (  # noqa: E402
     ProbabilisticStimGateRep,
     QSimSuperopGateRep,
     RepConstructionError,
-    RepTuple,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,

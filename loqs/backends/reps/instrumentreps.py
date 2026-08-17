@@ -28,7 +28,7 @@ class InstrumentRep(OperationRep):
     def _from_decoded_attrs(cls, attr_dict):
         # See `GateRep._from_decoded_attrs` for why this special-cases
         # `cls is InstrumentRep` and defers to
-        # `loqs.backends.reps.legacy.RepTuple._from_decoded_attrs`.
+        # `OperationRep._from_decoded_attrs` (`loqs.backends.reps.base`).
         if cls is InstrumentRep:
             from loqs.backends.reps.legacy import _LegacyInstrumentRepValue
 

@@ -26,9 +26,11 @@ a shortest-path search over a registry of pairwise numeric/structural
 converters between concrete classes (e.g. [](api:UnitaryGateRep) to
 [](api:PTMGateRep) to [](api:KrausGateRep)).
 
-[](api:RepTuple) is retained only so that `.json`/`.h5` files serialized
-before this class hierarchy existed continue to load correctly; it cannot
-be constructed by new code (see its docstring).
+The pre-refactor `RepTuple(rep, qubits, reptype)` triple has been removed
+entirely (issue #97): old `.json`/`.h5` files that still reference it
+decode straight to the appropriate concrete `GateRep`/`InstrumentRep`
+subclass via `OperationRep._from_decoded_attrs`, with no `RepTuple` class
+involved anywhere, and it can no longer be constructed at all.
 
 [](api:StimCircuitPayloadMixin) factors out the storage/construction logic
 shared by [](api:StimCircuitGateRep) and [](api:StimCircuitInstrumentRep),
@@ -66,4 +68,3 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisProjectionInstrumentRep,
 )
 from loqs.backends.reps.conversion import STANDARD_GATE_UNITARIES, convert
-from loqs.backends.reps.legacy import RepTuple

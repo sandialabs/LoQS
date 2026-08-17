@@ -13,6 +13,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Mapping
 
+from loqs.backends.reps.base import OperationRep
 from loqs.backends.reps.gatereps import (
     GateRep,
     KrausGateRep,
@@ -29,7 +30,6 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
-from loqs.internal import Displayable
 from loqs.internal.serializable import MisformedDecodableError
 
 
@@ -88,6 +88,29 @@ _LEGACY_INSTRUMENTREP_CLASS: dict[_LegacyInstrumentRepValue, type[InstrumentRep]
 """Maps each legacy `InstrumentRep` enum-member tag to its modern concrete class."""
 
 
+def _upgrade_legacy_tag(
+    value: object,
+    primary_enum: type[Enum],
+    primary_class_map: Mapping[Enum, type[OperationRep]],
+    secondary_enum: type[Enum],
+    secondary_class_map: Mapping[Enum, type[OperationRep]],
+) -> object:
+    """Shared dispatch for `upgrade_legacy_gaterep_tag`/`upgrade_legacy_instrumentrep_tag`.
+
+    Both functions do the exact same three-way dispatch (their own enum
+    family, the other enum family, or a bare `int` assumed to belong to
+    their own family) -- only which family is "primary" differs, so that's
+    the only thing parameterized here.
+    """
+    if isinstance(value, primary_enum):
+        return primary_class_map[value]
+    elif isinstance(value, secondary_enum):
+        return secondary_class_map[value]
+    elif isinstance(value, int):
+        return primary_class_map[primary_enum(value)]
+    return value
+
+
 def upgrade_legacy_gaterep_tag(value: object) -> object:
     """Translate a decoded `_gatereps`-style tag to its modern form.
 
@@ -116,13 +139,13 @@ def upgrade_legacy_gaterep_tag(value: object) -> object:
     Any other value (e.g. an already-resolved class) is passed through
     unchanged.
     """
-    if isinstance(value, _LegacyGateRepValue):
-        return _LEGACY_GATEREP_CLASS[value]
-    elif isinstance(value, _LegacyInstrumentRepValue):
-        return _LEGACY_INSTRUMENTREP_CLASS[value]
-    elif isinstance(value, int):
-        return _LEGACY_GATEREP_CLASS[_LegacyGateRepValue(value)]
-    return value
+    return _upgrade_legacy_tag(
+        value,
+        _LegacyGateRepValue,
+        _LEGACY_GATEREP_CLASS,
+        _LegacyInstrumentRepValue,
+        _LEGACY_INSTRUMENTREP_CLASS,
+    )
 
 
 def upgrade_legacy_instrumentrep_tag(value: object) -> object:
@@ -133,13 +156,13 @@ def upgrade_legacy_instrumentrep_tag(value: object) -> object:
     `InstrumentRep` value instead of a `GateRep` one, since this is only
     ever called on `_instreps` entries.
     """
-    if isinstance(value, _LegacyInstrumentRepValue):
-        return _LEGACY_INSTRUMENTREP_CLASS[value]
-    elif isinstance(value, _LegacyGateRepValue):
-        return _LEGACY_GATEREP_CLASS[value]
-    elif isinstance(value, int):
-        return _LEGACY_INSTRUMENTREP_CLASS[_LegacyInstrumentRepValue(value)]
-    return value
+    return _upgrade_legacy_tag(
+        value,
+        _LegacyInstrumentRepValue,
+        _LEGACY_INSTRUMENTREP_CLASS,
+        _LegacyGateRepValue,
+        _LEGACY_GATEREP_CLASS,
+    )
 
 
 def _upgrade_legacy_gaterep(
@@ -204,43 +227,3 @@ def _upgrade_legacy_instrumentrep(
     raise MisformedDecodableError(
         f"Unrecognized legacy InstrumentRep value {legacy_value!r}"
     )
-
-
-class RepTuple(Displayable):
-    """Decode-only compatibility shim for the pre-refactor `(rep, qubits, reptype)` triple.
-
-    `RepTuple` can no longer be constructed: its whole purpose, prior to the
-    class-hierarchy refactor (see `loqs.backends.reps`), was to bundle an
-    untyped `rep` payload with a `qubits` tuple and a `GateRep`/
-    `InstrumentRep` enum tag describing how to interpret `rep`. New code
-    should construct the appropriate `GateRep`/`InstrumentRep` subclass
-    directly instead.
-
-    Old `.json`/`.h5` files that reference `loqs.backends.reps.RepTuple`
-    still decode correctly: `_from_decoded_attrs` below intercepts the
-    decode and returns an instance of the appropriate new concrete
-    `GateRep`/`InstrumentRep` subclass instead of a `RepTuple`, so no
-    `RepTuple` instance is ever actually produced, even when decoding an
-    old file.
-    """
-
-    _SERIALIZE_ATTRS = ["rep", "qubits", "reptype"]
-
-    def __init__(self, *args, **kwargs) -> None:
-        raise TypeError(
-            "RepTuple is deprecated; construct a GateRep/InstrumentRep "
-            "subclass directly."
-        )
-
-    @classmethod
-    def _from_decoded_attrs(cls, attr_dict: Mapping[str, Any]) -> GateRep | InstrumentRep:
-        rep = attr_dict["rep"]
-        qubits = attr_dict["qubits"]
-        reptype = attr_dict["reptype"]
-        if isinstance(reptype, _LegacyGateRepValue):
-            return _upgrade_legacy_gaterep(reptype, rep, qubits)
-        elif isinstance(reptype, _LegacyInstrumentRepValue):
-            return _upgrade_legacy_instrumentrep(reptype, rep, qubits)
-        raise MisformedDecodableError(
-            f"Unrecognized legacy RepTuple reptype {reptype!r}"
-        )
