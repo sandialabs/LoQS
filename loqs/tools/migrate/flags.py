@@ -10,18 +10,28 @@
 """Detect-only patterns: old APIs whose replacement changes meaning, not
 just name, so guessing a rewrite would be dishonest rather than helpful.
 
-Each pattern here is a plain regex scan, deliberately not auto-rewritten:
-
-- `.cast(...)`: removed entirely (issue #96/#107); its replacement depends
-  on which class the call was on (`InstructionStack.cast(x)` ->
-  `InstructionStack(x)`, `InstructionLabel.cast(x)` ->
-  `InstructionLabel.from_raw(x)`), which isn't generally inferable from
-  the call site alone (an arbitrary receiver expression's static type
-  isn't known).
-- `include_idles=`/`reference_round_Z=`/`reference_round_X=`: replaced by
-  `idle_layout=`/`reference_round_mode_Z=`/`reference_round_mode_X=`
-  (issue #108), but these are semantic changes, not pure renames (a
-  boolean doesn't map onto the new parameter's meaning automatically).
+- `<OldCastableClass>.cast(...)`: removed entirely (issue #96/#107); its
+  replacement depends on which class the call was on
+  (`InstructionStack.cast(x)` -> `InstructionStack(x)`,
+  `InstructionLabel.cast(x)` -> `InstructionLabel.from_raw(x)`), which
+  isn't generally inferable from the call site alone. Scoped to the
+  specific 14 classes that used to have a real `.cast()` (derived from
+  [](api:RENAMES)'s own `*CastableTypes` entries, not a bare `.cast(`
+  scan): real testing against this codebase's own `loqs/backends/`
+  found a bare scan collides constantly with unrelated third-party
+  `.cast()` methods with the exact same name (`pygsti.circuits.Circuit.cast`,
+  `pygsti.evotypes.Evotype.cast`), which are not LoQS's removed API at all.
+- `include_idles=`/`reference_round_Z=`/`reference_round_X=` passed to a
+  `create_qec_code(...)`-style call: replaced by `idle_layout=`/
+  `reference_round_mode_Z=`/`reference_round_mode_X=` (issue #108), but
+  these are semantic changes, not pure renames (a boolean doesn't map
+  onto the new parameter's meaning automatically). Scoped to calls whose
+  function name ends in `create_qec_code` specifically, not a bare
+  `include_idles=` scan: real testing found several *other*, unrelated,
+  still-current `include_idles: bool` parameters on lower-level circuit-
+  building helpers throughout `loqs/codepacks/codepack_surf17_multipatch.py`/
+  `codepack_surf17_surgery.py` that were never part of issue #108's rename
+  at all.
 - A bare `"Iz"` string literal: likely an old instrument-name reference to
   what's now `"Imrz"` (issue #101), but this is a plain string, not an
   identifier reference, so a blind rewrite risks matching unrelated text
@@ -32,31 +42,98 @@ from __future__ import annotations
 
 import re
 
+import libcst as cst
+
+from loqs.tools.migrate.renames import RENAMES
 from loqs.tools.migrate.report import ManualReviewItem
 
-_DETECT_ONLY_PATTERNS: dict[str, re.Pattern] = {
-    ".cast(...) call (removed -- issue #96/#107)": re.compile(r"\.cast\("),
-    "include_idles= kwarg (replaced by idle_layout= -- issue #108)": re.compile(
-        r"\binclude_idles\s*="
-    ),
-    "reference_round_Z/X= kwarg (replaced by reference_round_mode_Z/X= -- issue #108)": re.compile(
-        r"\breference_round_[ZX]\s*="
-    ),
+_CASTABLE_CLASS_NAMES = sorted(
+    {
+        old_name[: -len("CastableTypes")]
+        for (_, old_name) in RENAMES
+        if old_name.endswith("CastableTypes")
+    }
+)
+
+_LINE_PATTERNS: dict[str, re.Pattern] = {
+    f"{cls}.cast(...) call (removed -- issue #96/#107)": re.compile(
+        rf"\b{re.escape(cls)}\.cast\("
+    )
+    for cls in _CASTABLE_CLASS_NAMES
+} | {
     '"Iz" string literal (likely the old instrument name, renamed to "Imrz" -- issue #101)': re.compile(
         r"""(['"])Iz\1"""
     ),
 }
 
+_QEC_CODE_KWARGS = {
+    "include_idles": "idle_layout",
+    "reference_round_Z": "reference_round_mode_Z",
+    "reference_round_X": "reference_round_mode_X",
+}
 
-def detect_flagged_patterns(source: str) -> list[ManualReviewItem]:
-    """Scan `source` for every pattern in [](api:_DETECT_ONLY_PATTERNS),
-    returning one [](api:ManualReviewItem) per match (not per pattern --
-    a pattern appearing 3 times produces 3 items, each with its own line
-    number)."""
+
+def _detect_line_patterns(source: str) -> list[ManualReviewItem]:
     items = []
     lines = source.splitlines()
-    for name, pattern in _DETECT_ONLY_PATTERNS.items():
+    for name, pattern in _LINE_PATTERNS.items():
         for lineno, line in enumerate(lines, start=1):
             if pattern.search(line):
                 items.append(ManualReviewItem(line=lineno, message=name))
     return items
+
+
+def _func_name(node: cst.BaseExpression) -> str | None:
+    if isinstance(node, cst.Name):
+        return node.value
+    if isinstance(node, cst.Attribute):
+        return node.attr.value
+    return None
+
+
+class _QECCodeKwargFinder(cst.CSTVisitor):
+    METADATA_DEPENDENCIES = (cst.metadata.PositionProvider,)
+
+    def __init__(self) -> None:
+        self.items: list[ManualReviewItem] = []
+
+    def visit_Call(self, node: cst.Call) -> None:
+        if _func_name(node.func) != "create_qec_code":
+            return
+        for arg in node.args:
+            if arg.keyword is None:
+                continue
+            new_name = _QEC_CODE_KWARGS.get(arg.keyword.value)
+            if new_name is None:
+                continue
+            line = self.get_metadata(
+                cst.metadata.PositionProvider, node
+            ).start.line
+            self.items.append(
+                ManualReviewItem(
+                    line=line,
+                    message=(
+                        f"{arg.keyword.value}= kwarg to create_qec_code() "
+                        f"(replaced by {new_name}= -- issue #108)"
+                    ),
+                )
+            )
+
+
+def _detect_qec_code_kwargs(source: str) -> list[ManualReviewItem]:
+    try:
+        module = cst.parse_module(source)
+    except cst.ParserSyntaxError:
+        return []  # not a standalone-parseable file; nothing to check here
+    wrapper = cst.metadata.MetadataWrapper(module)
+    finder = _QECCodeKwargFinder()
+    wrapper.visit(finder)
+    return finder.items
+
+
+def detect_flagged_patterns(source: str) -> list[ManualReviewItem]:
+    """Scan `source` for every pattern described in this module's
+    docstring, returning one [](api:ManualReviewItem) per match (not per
+    pattern -- a pattern appearing 3 times produces 3 items, each with
+    its own line number)."""
+    return _detect_line_patterns(source) + _detect_qec_code_kwargs(source)

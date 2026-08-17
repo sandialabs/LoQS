@@ -157,12 +157,18 @@ def _build_call(
     func: cst.BaseExpression,
     instruction_expr: cst.BaseExpression,
     keyword_args: Mapping[str, cst.BaseExpression],
+    extra_args: Sequence[cst.Arg] = (),
 ) -> cst.Call:
     args = [cst.Arg(value=instruction_expr)]
     for key, value in keyword_args.items():
         args.append(
             cst.Arg(keyword=cst.Name(key), value=value, equal=_NO_SPACE_EQUAL)
         )
+    # Any `**kwargs`-style unpack from the original call is carried
+    # through verbatim, last, matching its original precedence.
+    args.extend(
+        a.with_changes(comma=cst.MaybeSentinel.DEFAULT) for a in extra_args
+    )
     return cst.Call(func=func, args=args)
 
 
@@ -187,6 +193,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         inst_args_expr: cst.BaseExpression | None,
         inst_kwargs_expr: cst.BaseExpression | None,
         extra_keywords: Mapping[str, cst.BaseExpression],
+        extra_args: Sequence[cst.Arg] = (),
     ) -> cst.BaseExpression | None:
         """Returns the rewritten node, or `None` if this candidate was
         only flagged (caller should leave the original node unchanged)."""
@@ -226,7 +233,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             remapped["patch_label"] = patch_label_expr
         remapped.update(extra_keywords)
         self.changed = True
-        return _build_call(func, instruction_expr, remapped)
+        return _build_call(func, instruction_expr, remapped, extra_args)
 
     def leave_Call(
         self, original_node: cst.Call, updated_node: cst.Call
@@ -234,7 +241,10 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         if _func_name(updated_node.func) != "InstructionLabel":
             return updated_node
 
-        if any(a.star for a in updated_node.args):
+        if any(a.star == "*" for a in updated_node.args):
+            # A genuine `InstructionLabel(*expr)` positional splat --
+            # unlike `**kwargs` below, its contribution to positional-arg
+            # count can't be known without evaluating `expr`.
             self._flag(
                 original_node,
                 "InstructionLabel(*expr) splat call -- can't statically "
@@ -242,12 +252,23 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             )
             return updated_node
 
-        positional = [a.value for a in updated_node.args if a.keyword is None]
+        positional = [
+            a.value
+            for a in updated_node.args
+            if a.keyword is None and a.star == ""
+        ]
         keyword_args = {
             a.keyword.value: a.value
             for a in updated_node.args
             if a.keyword is not None
         }
+        # A `**kwargs`-style unpack (e.g. InstructionLabel(instruction,
+        # **kwargs)) is already the modern calling convention -- its
+        # Arg has keyword=None like a positional one, but doesn't affect
+        # positional-arg counting or need remapping; carried through
+        # verbatim on any rewrite instead of merged into named keys,
+        # since its contents can't be known statically either.
+        double_starred = [a for a in updated_node.args if a.star == "**"]
         if len(positional) < 2:
             return updated_node  # already modern (0-1 positional arg)
 
@@ -264,6 +285,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             inst_args_expr,
             inst_kwargs_expr,
             keyword_args,
+            double_starred,
         )
         return rewritten if rewritten is not None else updated_node
 

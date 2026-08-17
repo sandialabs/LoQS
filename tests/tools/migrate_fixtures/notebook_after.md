@@ -26,3 +26,11 @@ Some prose in between two cells.
 ```{code-cell} ipython3
 x = 1 + 1
 ```
+
+A cell with a leading MyST field line, not itself Python code:
+
+```{code-cell} ipython3
+:tags: [scroll-output]
+
+patches2 = PatchDict()
+```

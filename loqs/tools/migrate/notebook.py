@@ -18,6 +18,23 @@ Python: an `` ```{code-cell} ipython3 `` fence opens a code cell, a bare
 representation (the paired `.ipynb` is gitignored and regenerated locally
 via `jupytext --to ipynb`), so it's also the only one this tool needs to
 touch directly.
+
+A code cell may open with one or more `:key: value` MyST field lines
+(e.g. `:tags: [scroll-output]`) before its actual code -- confirmed
+directly against `docs/notebooks/workflow.md`, which has one and isn't
+parseable as bare Python otherwise. These lines are passed through
+unchanged, alongside the fence itself, never handed to `migrate_source`.
+
+Known limitation: each cell is migrated independently, with no import
+context carried over from earlier cells -- unlike a real notebook kernel,
+where state (including imports) persists across cells. A renamed class
+used bare in a later cell, relying on an import done in an earlier one,
+is neither rewritten nor flagged, since [](api:rewrite_renames)'s
+`QualifiedNameProvider`-based resolution can't see that import from
+inside this cell alone. Not currently a problem for
+`docs/notebooks/*.md` (already fully migrated -- see Part 3.1 of the
+`feat-97` plan's own direct grep confirming this), but worth knowing
+about for a user's own notebook.
 """
 
 from __future__ import annotations
@@ -31,6 +48,7 @@ from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
 
 _CELL_OPEN = re.compile(r"^```\{code-cell\}.*$")
 _FENCE_CLOSE = re.compile(r"^```\s*$")
+_CELL_FIELD_LINE = re.compile(r"^:[\w-]+:.*$")
 
 
 def migrate_notebook_source(
@@ -59,10 +77,20 @@ def migrate_notebook_source(
         # Found a code-cell fence: collect its body up to the closing fence.
         output.append(line)
         cell_start = i + 1
-        j = cell_start
+
+        # Pass any leading `:key: value` MyST field lines through untouched
+        # -- they aren't code, and migrate_source can't parse them as such.
+        code_start = cell_start
+        while code_start < len(lines) and _CELL_FIELD_LINE.match(
+            lines[code_start].rstrip("\n")
+        ):
+            output.append(lines[code_start])
+            code_start += 1
+
+        j = code_start
         while j < len(lines) and not _FENCE_CLOSE.match(lines[j].rstrip("\n")):
             j += 1
-        cell_lines = lines[cell_start:j]
+        cell_lines = lines[code_start:j]
         cell_source = "".join(cell_lines)
 
         result = migrate_source(cell_source, instructions=instructions)
@@ -71,7 +99,7 @@ def migrate_notebook_source(
         for item in result.manual_review:
             manual_review.append(
                 ManualReviewItem(
-                    line=item.line + cell_start,
+                    line=item.line + code_start,
                     message=item.message,
                 )
             )

@@ -152,6 +152,33 @@ class TestMigrateInstructionLabels:
         assert not result.changed
         assert "splat call" in result.manual_review[0].message
 
+    def test_double_star_kwargs_unpack_is_already_modern(self, instructions):
+        """A real false positive found by testing against this repo's own
+        `builders.py`/`instructionlabel.py`: `InstructionLabel(instruction,
+        **kwargs)` was misclassified as an unresolvable positional splat --
+        `**kwargs` doesn't affect positional-arg counting at all."""
+        src = "InstructionLabel(instruction, **kwargs)\n"
+        result = migrate_instruction_labels(src, instructions)
+        assert not result.changed
+        assert result.manual_review == []
+
+    def test_legacy_positional_with_trailing_double_star_is_rewritten(
+        self, instructions
+    ):
+        """A legacy positional call combined with a `**kwargs` unpack is
+        still rewritten -- the unpack is carried through verbatim, last,
+        since its contents can't be known statically."""
+        src = (
+            'InstructionLabel("Increment", "L0", (), {"increment_by": 2}, '
+            "**extra)\n"
+        )
+        result = migrate_instruction_labels(src, instructions)
+        assert (
+            result.source
+            == 'InstructionLabel("Increment", increment_by=2, patch_label="L0", **extra)\n'
+        )
+        assert result.manual_review == []
+
     def test_no_registry_flags_every_string_named_candidate(self):
         src = 'InstructionLabel("Increment", "L0", (), {})\n'
         result = migrate_instruction_labels(src, instructions={})
@@ -177,11 +204,29 @@ class TestDetectFlaggedPatterns:
     def test_matches_golden_fixture(self):
         src = FIXTURES.joinpath("flags_before.py").read_text()
         items = detect_flagged_patterns(src)
-        assert {item.line for item in items} == {3, 4, 4, 5}
-        assert len(items) == 4  # both include_idles= and reference_round_Z= on line 4
+        assert [item.line for item in items] == [3, 5, 4, 4]
 
     def test_no_false_positive_on_ordinary_dict_access(self):
         assert detect_flagged_patterns('x = d["key"]\n') == []
+
+    def test_no_false_positive_on_unrelated_third_party_cast(self):
+        """A real false positive found by testing against this repo's own
+        pyGSTi-integration code: `pygsti`'s own `Circuit.cast`/`Evotype.cast`
+        classmethods share the removed LoQS API's exact method name."""
+        src = "return _Circuit.cast(obj)\n"
+        assert detect_flagged_patterns(src) == []
+
+    def test_no_false_positive_on_unrelated_receiver_cast(self):
+        src = "stack = some_stack.cast(InstructionStack)\n"
+        assert detect_flagged_patterns(src) == []
+
+    def test_no_false_positive_on_unrelated_include_idles_kwarg(self):
+        """A real false positive found by testing against this repo's own
+        surf17 codepack helpers: several still-current, unrelated
+        `include_idles: bool` parameters exist on lower-level circuit-
+        building functions, never renamed by issue #108."""
+        src = "circuit_inst = build_circuit_instruction(include_idles=True)\n"
+        assert detect_flagged_patterns(src) == []
 
 
 class TestMigrateSource:
@@ -218,6 +263,27 @@ class TestMigrateNotebookSource:
             'mention of `PatchDict` or `InstructionLabel("Name", "L0", (), {})`'
             in result.source
         )
+
+    def test_field_line_is_passed_through_and_not_treated_as_code(
+        self, instructions
+    ):
+        """`docs/notebooks/workflow.md` has a real `:tags: [...]` field
+        line; this used to raise a ParserSyntaxError instead of migrating
+        the cell."""
+        before = FIXTURES.joinpath("notebook_before.md").read_text()
+        result = migrate_notebook_source(before, instructions=instructions)
+        assert ":tags: [scroll-output]" in result.source
+
+    def test_cross_cell_import_context_is_a_known_limitation(self, instructions):
+        """Each cell is migrated independently, with no memory of an
+        earlier cell's imports (unlike a real notebook kernel) -- so a
+        bare `PatchDict()` relying on an import done in an earlier cell
+        is neither rewritten nor flagged here. Not a problem for the real
+        `docs/notebooks/*.md` today (already fully migrated), but locked
+        in as documented, understood behavior rather than a silent gap."""
+        before = FIXTURES.joinpath("notebook_before.md").read_text()
+        result = migrate_notebook_source(before, instructions=instructions)
+        assert "patches2 = PatchDict()" in result.source
 
 
 class TestMigrationConfig:
