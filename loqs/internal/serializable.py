@@ -65,34 +65,119 @@ class DecodableVersionError(Exception):
 
 
 IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
-    int, dict[tuple[str, str], tuple[str, str]]
+    int, dict[tuple[str, str], tuple[str, str] | None]
 ] = {
+    # A value of None means the name was deleted outright at that version,
+    # not relocated -- decoding should fail clearly rather than attempt an
+    # unpack. A version with no changes at all simply has no entry here
+    # (see _get_cumulative_changes, which treats a missing entry as empty).
     1: {
         ("loqs.core.syndrome", "SyndromeLabel"): (
             "loqs.core.syndromelabel",
             "SyndromeLabel",
         ),
-        # NOTE: new-location name renamed from SyndromeLabelCastableTypes to
-        # SyndromeLabelLike well after version 1 was cut -- really a
-        # version-2-worthy change folded into version 1's entry rather than
-        # given its own SERIALIZATION_VERSION bump (other renamed
-        # *CastableTypes -> *Like names have no compat entry at all yet).
+        # Module move only -- the name itself wasn't renamed to
+        # SyndromeLabelLike until version 2 (see that entry below).
         ("loqs.core.syndrome", "SyndromeLabelCastableTypes"): (
             "loqs.core.syndromelabel",
-            "SyndromeLabelLike",
+            "SyndromeLabelCastableTypes",
         ),
         ("loqs.core.syndrome", "PauliFrame"): (
             "loqs.core.recordables.pauliframe",
             "PauliFrame",
         ),
-    }
+    },
+    2: {
+        # `*CastableTypes` -> `*Like` renames (issue #96): every one keeps
+        # the same module, only the class name changes.
+        ("loqs.core.instructions.instructionlabel", "InstructionLabelCastableTypes"): (
+            "loqs.core.instructions.instructionlabel",
+            "InstructionLabelLike",
+        ),
+        ("loqs.core.instructions.instructionstack", "InstructionStackCastableTypes"): (
+            "loqs.core.instructions.instructionstack",
+            "InstructionStackLike",
+        ),
+        ("loqs.core.syndromelabel", "SyndromeLabelCastableTypes"): (
+            "loqs.core.syndromelabel",
+            "SyndromeLabelLike",
+        ),
+        ("loqs.core.recordables.pauliframe", "PauliFrameCastableTypes"): (
+            "loqs.core.recordables.pauliframe",
+            "PauliFrameLike",
+        ),
+        ("loqs.core.recordables.patchdict", "PatchDictCastableTypes"): (
+            "loqs.core.recordables.patchdict",
+            "PatchDictLike",
+        ),
+        (
+            "loqs.core.recordables.measurementoutcomes",
+            "MeasurementOutcomesCastableTypes",
+        ): (
+            "loqs.core.recordables.measurementoutcomes",
+            "MeasurementOutcomesLike",
+        ),
+        ("loqs.core.frame", "FrameCastableTypes"): (
+            "loqs.core.frame",
+            "FrameLike",
+        ),
+        ("loqs.core.history", "HistoryCastableTypes"): (
+            "loqs.core.history",
+            "HistoryLike",
+        ),
+        ("loqs.backends.model.pygstimodel", "PyGSTiModelCastableTypes"): (
+            "loqs.backends.model.pygstimodel",
+            "PyGSTiModelLike",
+        ),
+        ("loqs.backends.state.npsvstate", "NumpyStatevectorCastableTypes"): (
+            "loqs.backends.state.npsvstate",
+            "NumpyStatevectorLike",
+        ),
+        ("loqs.backends.state.qsimstate", "QSimStateCastableTypes"): (
+            "loqs.backends.state.qsimstate",
+            "QSimStateLike",
+        ),
+        ("loqs.backends.state.stimstate", "STIMStateCastableTypes"): (
+            "loqs.backends.state.stimstate",
+            "STIMStateLike",
+        ),
+        ("loqs.backends.circuit.pygsticircuit", "PyGSTiCircuitCastableTypes"): (
+            "loqs.backends.circuit.pygsticircuit",
+            "PyGSTiCircuitLike",
+        ),
+        ("loqs.backends.circuit.listcircuit", "ListCircuitCastableTypes"): (
+            "loqs.backends.circuit.listcircuit",
+            "ListCircuitLike",
+        ),
+        ("loqs.backends.circuit.stimcircuit", "STIMCircuitCastableTypes"): (
+            "loqs.backends.circuit.stimcircuit",
+            "STIMCircuitLike",
+        ),
+        # Deleted outright, not renamed: DictNoiseModel.__init__'s signature
+        # change (issue #96) dropped the castable model_or_dicts parameter
+        # entirely rather than replacing it with a same-shaped *Like type.
+        ("loqs.backends.model.dictmodel", "DictModelCastableTypes"): None,
+        # Castable/SeqCastable/MapCastable mixins themselves, deleted
+        # outright (issue #96). Both historical module paths are listed
+        # since the module moved once (utils -> internal) before removal.
+        ("loqs.internal.castable", "Castable"): None,
+        ("loqs.internal.castable", "SeqCastable"): None,
+        ("loqs.internal.castable", "MapCastable"): None,
+        ("loqs.utils.castable", "Castable"): None,
+        ("loqs.utils.castable", "SeqCastable"): None,
+        ("loqs.utils.castable", "MapCastable"): None,
+    },
 }  # (module, class) mapping from OLD to NEW locations for each version change
 
-SERIALIZATION_VERSION = 1
+SERIALIZATION_VERSION = 2
 """Serialization versions.
 
 0: First version. JSON encoding only, per-shot checkpointing only.
 1: HDF5 encoding now available. Backwards compatible to version 0.
+2: `*CastableTypes` -> `*Like` renames (issue #96) and the
+   `Castable`/`SeqCastable`/`MapCastable`/`DictModelCastableTypes` removals
+   finally get real compatibility entries (issue #97); see
+   IMPORT_LOCATION_CHANGES_BY_VERSION.
 """
 
 
@@ -1089,7 +1174,13 @@ class Serializable:
         )
 
         if (module_name, class_name) in location_changes:
-            module_name, class_name = location_changes[module_name, class_name]
+            new_location = location_changes[module_name, class_name]
+            if new_location is None:
+                raise ImportError(
+                    f"{module_name}.{class_name} was removed in a later"
+                    " serialization version and cannot be decoded."
+                )
+            module_name, class_name = new_location
         try:
             m = importlib.import_module(module_name)
             c = getattr(
@@ -1307,7 +1398,13 @@ class Serializable:
                     # Check if this import needs to be updated
                     key = (module, original_name)
                     if key in loc_change:
-                        new_module, new_name = loc_change[key]
+                        new_location = loc_change[key]
+                        if new_location is None:
+                            # Name was deleted outright (not relocated) in
+                            # a later version -- drop its import line
+                            # entirely rather than attempt to unpack None.
+                            continue
+                        new_module, new_name = new_location
                         if alias:
                             result_lines.append(
                                 f"from {new_module} import {new_name} as {alias}"

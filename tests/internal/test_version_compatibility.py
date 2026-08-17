@@ -126,7 +126,10 @@ def apply_fn(
         updated_str = Serializable._update_imports(test_str, 0)
         assert updated_str == expected_str
 
-        # Also try one where a module name changes
+        # Also try one where a module name changes. Uses version 1's table
+        # directly (not the full multi-hop composition), so
+        # SyndromeLabelCastableTypes only moves module here -- its later
+        # rename to SyndromeLabelLike is version 2's entry, not version 1's.
         renamed_loc_change = IMPORT_LOCATION_CHANGES_BY_VERSION[1].copy()
         renamed_loc_change[("loqs.core.syndrome", "PauliFrame")] = ("loqs.core.recordables.pauliframe", "PauliFrameRenamed")
 
@@ -144,7 +147,7 @@ from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
 from loqs.core.recordables.pauliframe import PauliFrameRenamed
 from loqs.core.syndromelabel import SyndromeLabel
-from loqs.core.syndromelabel import SyndromeLabelLike
+from loqs.core.syndromelabel import SyndromeLabelCastableTypes
 from loqs.backends import STIMQuantumState, STIMPhysicalCircuit, PyGSTiNoiseModel
 def apply_fn(
     model: BaseNoiseModel,
@@ -165,6 +168,42 @@ def apply_fn(
 
         updated_str2 = Serializable._update_imports(test_str, loc_change=renamed_loc_change)
         assert updated_str2 == expected_str2
+
+    def test_instruction_label_and_stack_castable_types_rename(self):
+        """`InstructionLabelCastableTypes`/`InstructionStackCastableTypes`
+        (issue #96) need real version-2 compat entries -- these names are
+        referenced inside the frozen `apply_fn`/`map_qubits_fn` source of
+        real serialized `QuantumProgram` fixtures (`InstructionStack`
+        elements), and previously had no compat entry at all, breaking
+        decode with `ImportError`. Isolates the import-rewrite mechanism
+        directly, independent of the decode-time label remap (a separate
+        gap tracked elsewhere)."""
+        test_str = """
+from loqs.core.instructions.instructionlabel import (
+    InstructionLabel,
+    InstructionLabelCastableTypes,
+)
+from loqs.core.instructions.instructionstack import (
+    InstructionStack,
+    InstructionStackCastableTypes,
+)
+def apply_fn(
+    instructions: InstructionStackCastableTypes,
+) -> None:
+    pass
+"""
+        expected_str = """
+from loqs.core.instructions.instructionlabel import InstructionLabel
+from loqs.core.instructions.instructionlabel import InstructionLabelLike
+from loqs.core.instructions.instructionstack import InstructionStack
+from loqs.core.instructions.instructionstack import InstructionStackLike
+def apply_fn(
+    instructions: InstructionStackLike,
+) -> None:
+    pass
+"""
+        updated_str = Serializable._update_imports(test_str, 1)
+        assert updated_str == expected_str
 
     def test_get_cumulative_changes_multi_hop_composition(self, monkeypatch):
         """A rename chained across 3 versions (A -> B -> C -> D) must
