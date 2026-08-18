@@ -77,9 +77,8 @@ def apply_fn(
     patch_label: str,
     patches: PatchDict,
 ) -> Frame:
-
-    [physical circuit apply function]
-    [talks about PauliFrame]
+    # physical circuit apply function
+    frame = PauliFrame(pauli_frame_update)
 
     return Frame(data)
 """
@@ -89,16 +88,24 @@ import inspect as ins
 import numpy as np
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
+from loqs.backends.model import (
+    BaseNoiseModel,
+    TimeDependentBaseNoiseModel,
+)
 from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
 from loqs.core.qeccode import QECCode, QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchlayout import PatchLayout
-from loqs.core.recordables.pauliframe import PauliFrame
-from loqs.core.syndromelabel import SyndromeLabel
-from loqs.core.syndromelabel import SyndromeLabelLike
-from loqs.backends import STIMQuantumState, STIMPhysicalCircuit, PyGSTiNoiseModel
+from loqs.core.recordables.pauliframe import (
+    PauliFrame,
+    
+)
+from loqs.backends import (
+    STIMQuantumState,
+    STIMPhysicalCircuit,
+    PyGSTiNoiseModel,
+)
 def apply_fn(
     model: BaseNoiseModel,
     circuit: BasePhysicalCircuit,
@@ -109,20 +116,24 @@ def apply_fn(
     patch_label: str,
     patches: PatchLayout,
 ) -> Frame:
-
-    [physical circuit apply function]
-    [talks about PauliFrame]
+    # physical circuit apply function
+    frame = PauliFrame(pauli_frame_update)
 
     return Frame(data)
 """
 
+        # SyndromeLabel/SyndromeLabelCastableTypes are unreferenced in the
+        # function body above, so libcst's RenameCommand drops their now-dead
+        # import along with renaming them -- a real, documented behavior of
+        # the underlying rename mechanism, not something loqs controls.
         updated_str = Serializable._update_imports(test_str, 0)
         assert updated_str == expected_str
 
         # Also try one where a module name changes. Uses version 1's table
         # directly (not the full multi-hop composition), so
-        # SyndromeLabelCastableTypes only moves module here -- its later
-        # rename to SyndromeLabelLike is version 2's entry, not version 1's.
+        # SyndromeLabel/SyndromeLabelCastableTypes aren't in this table at
+        # all (their rename is a version 0 entry) -- only PauliFrame, via
+        # this test's own override, moves here.
         renamed_loc_change = IMPORT_LOCATION_CHANGES_BY_VERSION[1].copy()
         renamed_loc_change[("loqs.core.syndrome", "PauliFrame")] = ("loqs.core.recordables.pauliframe", "PauliFrameRenamed")
 
@@ -132,16 +143,23 @@ import inspect as ins
 import numpy as np
 from loqs.backends import propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
+from loqs.backends.model import (
+    BaseNoiseModel,
+    TimeDependentBaseNoiseModel,
+)
 from loqs.backends.state import BaseQuantumState
 from loqs.core.frame import Frame
 from loqs.core.qeccode import QECCode, QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchdict import PatchDict
-from loqs.core.recordables.pauliframe import PauliFrameRenamed
-from loqs.core.syndromelabel import SyndromeLabel
-from loqs.core.syndromelabel import SyndromeLabelCastableTypes
-from loqs.backends import STIMQuantumState, STIMPhysicalCircuit, PyGSTiNoiseModel
+from loqs.core.recordables.pauliframe import (
+    PauliFrameRenamed
+)
+from loqs.backends import (
+    STIMQuantumState,
+    STIMPhysicalCircuit,
+    PyGSTiNoiseModel,
+)
 def apply_fn(
     model: BaseNoiseModel,
     circuit: BasePhysicalCircuit,
@@ -152,9 +170,8 @@ def apply_fn(
     patch_label: str,
     patches: PatchDict,
 ) -> Frame:
-
-    [physical circuit apply function]
-    [talks about PauliFrameRenamed]
+    # physical circuit apply function
+    frame = PauliFrameRenamed(pauli_frame_update)
 
     return Frame(data)
 """
@@ -183,10 +200,12 @@ def apply_fn(
     pass
 """
         expected_str = """
-from loqs.core.instructions.instructionlabel import InstructionLabel
-from loqs.core.instructions.instructionlabel import InstructionLabelLike
-from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.instructions.instructionstack import InstructionStackLike
+from loqs.core.instructions.instructionlabel import (
+    InstructionLabel,
+    InstructionLabelLike)
+from loqs.core.instructions.instructionstack import (
+    InstructionStack,
+    InstructionStackLike)
 def apply_fn(
     instructions: InstructionStackLike,
 ) -> None:
@@ -379,8 +398,6 @@ class TestUpdateLegacyConstructions:
     duplicating it.
     """
 
-    libcst = pytest.importorskip("libcst")
-
     @staticmethod
     def _increment_registry():
         from loqs.codepacks.codepack_trivial_counter import create_qec_code
@@ -393,27 +410,28 @@ class TestUpdateLegacyConstructions:
             serializable_module.Serializable._update_legacy_constructions(
                 src, serializable_module.SERIALIZATION_VERSION
             )
-            == src
+            == (src, [])
         )
 
     def test_noop_without_a_registry(self):
         """No LEGACY_INSTRUCTION_REGISTRY set (the default): every
-        candidate is unresolvable, so nothing is rewritten -- same
-        behavior as before this method existed."""
+        candidate is unresolvable, so nothing is rewritten and it's
+        flagged for manual review instead."""
         src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
-        assert (
+        rewritten, manual_review = (
             serializable_module.Serializable._update_legacy_constructions(
                 src, 0
             )
-            == src
         )
+        assert rewritten == src
+        assert manual_review != []
 
     def test_rewrites_when_a_registry_resolves_the_instruction(self):
         token = serializable_module.LEGACY_INSTRUCTION_REGISTRY.set(
             self._increment_registry()
         )
         try:
-            rewritten = (
+            rewritten, manual_review = (
                 serializable_module.Serializable._update_legacy_constructions(
                     'InstructionLabel("Increment", "L0", (), '
                     '{"increment_by": 2})\n',
@@ -426,6 +444,7 @@ class TestUpdateLegacyConstructions:
             rewritten
             == 'InstructionLabel("Increment", increment_by=2, patch_label="L0")\n'
         )
+        assert manual_review == []
 
     def test_gate_bypassed_when_registry_resolves_the_pattern(self):
         """The real integration point: Instruction._from_decoded_attrs's

@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import re
 import sys
 import types
 import warnings
@@ -71,33 +70,3 @@ def make_legacy_construction_shim(
         return build(*args, **kwargs)
 
     return type(name, (Displayable,), {"__new__": __new__})
-
-
-_LEGACY_CONSTRUCTION_PATTERNS: dict[str, re.Pattern] = {
-    # Only calling-convention changes need an entry -- a straight class
-    # rename doesn't, since Serializable._update_imports already rewrites
-    # every occurrence of the old name in frozen source. Detected via a
-    # second bare positional argument (not a keyword= or **kwargs unpack)
-    # after the instruction itself, the telltale sign of the old
-    # positional InstructionLabel form.
-    "InstructionLabel (old positional form)": re.compile(
-        r"InstructionLabel\([^()]*?,\s*(?!\w+\s*=(?!=)|\*\*)[^()=,\s]"
-    ),
-}
-
-
-def detect_legacy_construction(source: str) -> list[str]:
-    """Cheap regex scan for known legacy-construction patterns in source text.
-
-    Returns the name of each pattern found (empty if none). Pattern
-    matching only, not a real parse -- trades exhaustiveness for a fast
-    decode-time check (a real `ast`-based scan lives in the separate
-    migration tool). Only covers patterns with no other fix available; a
-    straight class rename needs no entry, since `_update_imports` already
-    fixes those.
-    """
-    return [
-        name
-        for name, pattern in _LEGACY_CONSTRUCTION_PATTERNS.items()
-        if pattern.search(source)
-    ]

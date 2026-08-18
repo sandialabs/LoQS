@@ -4,8 +4,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("libcst")
-
 from loqs.codepacks.codepack_trivial_counter import create_qec_code
 from loqs.tools.migrate import migrate_source
 from loqs.tools.migrate.config import MigrationConfig, load_instruction_registry

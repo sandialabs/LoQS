@@ -10,6 +10,7 @@
 """Tools for LoQS."""
 
 from . import fttools
+from . import migrate
 from . import qectools
 from . import qsimtools
 
@@ -18,10 +19,4 @@ try:
     from . import pygstitools
 except ImportError:
     # pygsti not available, but that's okay for basic functionality
-    pass
-
-# migrate depends on the optional `libcst` (the `loqs[migrate]` extra)
-try:
-    from . import migrate
-except ImportError:
     pass

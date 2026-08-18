@@ -1,5 +1,7 @@
 """Tester for loqs.core.instructions.instruction"""
 
+import warnings
+
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
@@ -179,4 +181,114 @@ class TestInstruction:
         mapped_ins = loaded_ins.map_qubits({"A": "X", "B": "Y"})
         mapped_result = mapped_ins.apply(state=5, qubits=["X", "Y"])
         assert "X_Y" in mapped_result._data["result"]
-            
+
+
+class TestInstructionLazySerialization:
+    """Regression tests for deferring _serialized_apply_fn/
+    _serialized_map_qubits_fn computation to first actual use rather than
+    doing it eagerly at construction."""
+
+    @staticmethod
+    def _apply_fn(state, qubits):
+        return Frame({"state": state, "qubits": qubits})
+
+    def _count_get_function_str_calls(self, monkeypatch):
+        import loqs.internal.serializable as serializable_module
+
+        calls = []
+        original = serializable_module.Serializable._get_function_str
+
+        def _counting(func):
+            calls.append(func)
+            return original(func)
+
+        monkeypatch.setattr(
+            serializable_module.Serializable,
+            "_get_function_str",
+            staticmethod(_counting),
+        )
+        return calls
+
+    def test_construction_does_not_compute_serialized_source(
+        self, monkeypatch
+    ):
+        calls = self._count_get_function_str_calls(monkeypatch)
+        Instruction(self._apply_fn, {}, name="test")
+        assert calls == []
+
+    def test_first_access_computes_and_caches(self, monkeypatch):
+        calls = self._count_get_function_str_calls(monkeypatch)
+        ins = Instruction(self._apply_fn, {}, name="test")
+
+        first = ins._serialized_apply_fn
+        assert calls == [self._apply_fn]
+        second = ins._serialized_apply_fn
+        assert calls == [self._apply_fn]  # not called again
+        assert first is second
+
+    def test_copy_does_not_force_computation(self, monkeypatch):
+        calls = self._count_get_function_str_calls(monkeypatch)
+        ins = Instruction(self._apply_fn, {}, name="test")
+        copied = ins.copy()
+        assert calls == []
+        # The copy still computes correctly and matches the original
+        # when actually needed.
+        assert copied._serialized_apply_fn == ins._serialized_apply_fn
+        assert calls == [self._apply_fn, self._apply_fn]
+
+    def test_map_qubits_does_not_force_computation(self, monkeypatch):
+        calls = self._count_get_function_str_calls(monkeypatch)
+        ins = Instruction(
+            self._apply_fn, {"qubits": ["Q0"]}, name="test"
+        )
+        ins.map_qubits({"Q0": "D0"})
+        assert calls == []
+
+    def test_explicit_serialized_apply_fn_skips_computation(
+        self, monkeypatch
+    ):
+        calls = self._count_get_function_str_calls(monkeypatch)
+        ins = Instruction(
+            self._apply_fn,
+            {},
+            name="test",
+            serialized_apply_fn="def apply_fn():\n    pass\n",
+        )
+        assert ins._serialized_apply_fn == "def apply_fn():\n    pass\n"
+        assert calls == []
+
+    def test_no_warning_for_a_normal_module_level_function(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Instruction(self._apply_fn, {}, name="test")
+        assert len(caught) == 0
+
+    def test_warns_when_source_will_not_be_reconstructible(self):
+        env = {}
+        exec(
+            "def apply_fn(state, qubits):\n"
+            "    return {'state': state, 'qubits': qubits}\n",
+            env,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Instruction(env["apply_fn"], {}, name="test")
+        messages = [str(w.message) for w in caught]
+        assert any("apply_fn" in m for m in messages)
+
+    def test_no_warning_when_serialized_apply_fn_given_explicitly(self):
+        env = {}
+        exec(
+            "def apply_fn(state, qubits):\n"
+            "    return {'state': state, 'qubits': qubits}\n",
+            env,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Instruction(
+                env["apply_fn"],
+                {},
+                name="test",
+                serialized_apply_fn="def apply_fn():\n    pass\n",
+            )
+        assert len(caught) == 0

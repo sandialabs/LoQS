@@ -16,11 +16,11 @@ additional entries that never needed a decode-time compatibility entry at
 all (e.g. a class renamed before its old name ever shipped), but are still
 worth fixing in a user's own source files.
 
-This is deliberately **not** implemented on top of
-[](api:Serializable._update_imports) itself, even though that function
-already does this exact rewrite for frozen function source: it's a plain
-line-based text scan, and two real problems with reusing it at the
-whole-file level were found empirically, not theorized:
+[](api:Serializable._update_imports) is a thin wrapper around this same
+function, so frozen function source and whole user source files share one
+rewrite mechanism. An earlier version of `_update_imports` was a plain
+line-based text scan instead, replaced after two real problems were found
+empirically, not theorized:
 
 1. Its multi-line-import-continuation detection
    (`line.startswith("from") and line.endswith("(")`) false-triggers on
@@ -42,16 +42,33 @@ usage of a renamed class apart from the same text appearing in a
 docstring, comment, or unrelated identifier, and updates both the import
 statement and every usage site together.
 
-One real behavior worth knowing about before trusting this pass blindly:
-`RenameCommand` always adds the new import at module scope, even when the
-old one was function-local (e.g. a lazy import used to avoid a circular
-import, a real pattern in this codebase) -- confirmed directly against
-`tests/core/recordables/test_patchdict.py`. This is still valid Python,
-but changes where the import happens; review the diff before committing
-rather than applying it unseen, same as any other automated rewrite.
+A few real `RenameCommand` behaviors worth knowing about before trusting
+this pass blindly, all confirmed directly rather than assumed:
+
+1. It always adds the new import at module scope, even when the old one
+   was function-local (e.g. a lazy import used to avoid a circular
+   import, a real pattern in this codebase) -- confirmed against
+   `tests/core/recordables/test_patchdict.py`. Still valid Python, but
+   changes where the import happens.
+2. It drops a renamed import entirely if the renamed name ends up with no
+   remaining real code reference (i.e. it was only ever mentioned in a
+   comment/docstring, or never used at all) -- it does not distinguish
+   "genuinely unused" from "moved but the rest of this rename batch
+   already removed its only usage".
+3. Chaining several `RenameCommand` passes over the same module (one per
+   renamed name, done here since each has its own old/new location) can
+   leave a stray blank line and trailing comma behind in a multi-name
+   `from ... import (...)` block when an earlier pass's partial cleanup
+   isn't reformatted by a later pass. Still valid Python, just untidy.
+
+None of these are incorrect Python, but review the diff before committing
+rather than applying a whole-file rewrite unseen, same as any other
+automated rewrite.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 import libcst as cst
 from libcst.codemod import CodemodContext
@@ -130,25 +147,35 @@ class _DeletedNameFinder(cst.CSTVisitor):
             self.lines.append(self._line(node))
 
 
-def rewrite_renames(source: str) -> MigrationResult:
+def rewrite_renames(
+    source: str,
+    renames: Mapping[tuple[str, str], tuple[str, str] | None] | None = None,
+) -> MigrationResult:
     """Rewrite every real code reference (import or usage) to a renamed
-    `(module, name)` in [](api:RENAMES) throughout `source`, and flag
-    every real code reference to a name deleted outright (a `None` entry)
-    for manual review instead.
+    `(module, name)` in `renames` throughout `source`, and flag every
+    real code reference to a name deleted outright (a `None` entry) for
+    manual review instead.
 
     Parameters
     ----------
     source:
         The full text of a `.py` file (or an extracted code cell -- see
         [](api:loqs.tools.migrate.notebook)).
+    renames:
+        The `(old_module, old_name) -> (new_module, new_name) | None`
+        table to rewrite against. Defaults to [](api:RENAMES); overriding
+        it is mainly useful for testing against a synthetic table.
     """
+    if renames is None:
+        renames = RENAMES
+
     # A cheap textual pre-filter before paying for a real CST transform
     # per rename: with ~25 table entries, running every one of them
     # through libcst against every file in a large tree is far too slow
     # to be practical, and the overwhelming majority of files reference
     # none of them at all. A name that doesn't appear as text anywhere in
     # the file certainly isn't referenced in its code either.
-    applicable_renames = {k: v for k, v in RENAMES.items() if k[1] in source}
+    applicable_renames = {k: v for k, v in renames.items() if k[1] in source}
     if not applicable_renames:
         return MigrationResult(source=source, changed=False, manual_review=[])
 

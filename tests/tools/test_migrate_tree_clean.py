@@ -12,10 +12,6 @@ and asserts nothing else turns up.
 
 from pathlib import Path
 
-import pytest
-
-pytest.importorskip("libcst")
-
 from loqs.tools.migrate import migrate_source
 from loqs.tools.migrate.notebook import migrate_notebook_source
 

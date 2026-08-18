@@ -7,7 +7,8 @@ dependencies = [
     "scipy",
     "tk",
     "tqdm>=4",
-    "h5py"
+    "h5py",
+    "libcst>=1"
 ]
 authors = [
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
@@ -77,7 +78,6 @@ quantumsim = ["quantumsim==0.2.0"]
 pygsti = ["pygsti>=0.9.12"]
 pymatching = ["pymatching>=2"]
 stim = ["stim>=1.6"]
-migrate = ["libcst>=1"]
 test = [
     "loqs[dev]",
     "mock>=5",
@@ -91,7 +91,7 @@ visualization = [
     "qiskit[visualization]",
 ]
 backends = ["loqs[quantumsim,pygsti,stim,pymatching]"]
-nobackends = ["loqs[dask,dev,docs,migrate,test,visualization]"]
+nobackends = ["loqs[dask,dev,docs,test,visualization]"]
 all = ["loqs[backends,nobackends]"]
 
 [build-system]

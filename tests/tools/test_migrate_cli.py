@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("libcst")
-
 from loqs.tools.migrate.cli import build_parser, main
 
 LEGACY_SOURCE = (
