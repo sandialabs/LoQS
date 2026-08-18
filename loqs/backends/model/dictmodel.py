@@ -34,7 +34,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     StimCircuitPayloadMixin,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
@@ -139,7 +139,7 @@ class DictNoiseModel(BaseNoiseModel):
 
         instrep_cast_include_outcomes:
             If [](api:ZBasisPrePostInstrumentRep) or
-            [](api:ZBasisOutcomeOperationDictInstrumentRep) values are
+            [](api:OutcomeOperationDictInstrumentRep) values are
             being cast up from raw values, this will be used as the
             `include_outcome` field, indicating whether outcomes should be
             kept (`True`, default) or not (`False`).
@@ -196,14 +196,14 @@ class DictNoiseModel(BaseNoiseModel):
                     qubits,
                 )
             if isinstance(ir, Mapping):
-                assert ZBasisOutcomeOperationDictInstrumentRep in instreps, (
+                assert OutcomeOperationDictInstrumentRep in instreps, (
                     "Detected dict for a outcome-operation instrument, but "
-                    + "ZBasisOutcomeOperationDictInstrumentRep not passed as a valid instrument rep"
+                    + "OutcomeOperationDictInstrumentRep not passed as a valid instrument rep"
                 )
                 outcome_ops = {
                     k: convert_to_gaterep(v, qubits) for k, v in ir.items()
                 }
-                return ZBasisOutcomeOperationDictInstrumentRep(
+                return OutcomeOperationDictInstrumentRep(
                     outcome_ops, instrep_cast_include_outcomes, qubits
                 )
             return convert_rep(ir, StimCircuitInstrumentRep, qubits)

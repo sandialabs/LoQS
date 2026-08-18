@@ -481,12 +481,12 @@ run_and_report_program(create_noisy_leakage_program, d=3)
 
 ## Stage 4: Direct leakage readout via a multi-outcome instrument
 
-Stage 3 only revealed leakage indirectly, through degraded ZZ/XX parity fidelity. LoQS's instrument framework also supports a genuine multi-outcome readout: a single `ZBasisOutcomeOperationDictInstrumentRep` call that classically reports whether a qutrit is in $|0\rangle$, $|1\rangle$, or $|2\rangle$ directly -- `outcome_ops` isn't restricted to the usual 2 keys, so a 3-outcome ("ground"/"excited"/"leaked") instrument works exactly the same way a 2-outcome one does.
+Stage 3 only revealed leakage indirectly, through degraded ZZ/XX parity fidelity. LoQS's instrument framework also supports a genuine multi-outcome readout: a single `OutcomeOperationDictInstrumentRep` call that classically reports whether a qutrit is in $|0\rangle$, $|1\rangle$, or $|2\rangle$ directly -- `outcome_ops` isn't restricted to the usual 2 keys, so a 3-outcome ("ground"/"excited"/"leaked") instrument works exactly the same way a 2-outcome one does.
 
 We reuse Stage 3's single-qutrit leakage channel (`K0`/`K1`, `leak_prob = 0.05`), applied here on its own (no `CZ`) to a qutrit prepared in $|1\rangle$, then read out directly instead of inferring the leakage rate from parity statistics.
 
 ```{code-cell} ipython3
-from loqs.backends.reps import UnitaryGateRep, ZBasisOutcomeOperationDictInstrumentRep
+from loqs.backends.reps import UnitaryGateRep, OutcomeOperationDictInstrumentRep
 
 leak_prob = 0.05
 K0 = np.diag([1.0, np.sqrt(1 - leak_prob), 1.0]).astype(complex)
@@ -501,12 +501,12 @@ read_leakage_ops = {
 
 gate_dict = {"LeakageNoise": KrausGateRep([(K0, None), (K1, None)], dims=[3])}
 inst_dict = {
-    "ReadLeakage": ZBasisOutcomeOperationDictInstrumentRep(
+    "ReadLeakage": OutcomeOperationDictInstrumentRep(
         read_leakage_ops, True, outcome_qubits="leak_status"
     )
 }
 leakage_readout_model = DictNoiseModel(
-    gate_dict, inst_dict, gatereps=[KrausGateRep], instreps=[ZBasisOutcomeOperationDictInstrumentRep]
+    gate_dict, inst_dict, gatereps=[KrausGateRep], instreps=[OutcomeOperationDictInstrumentRep]
 )
 
 readout_circuit = ListPhysicalCircuit(
@@ -520,7 +520,7 @@ state = NumpyStatevectorQuantumState([1], ["Q0"], d=3, seed=20260815)
 for _ in range(n_trials):
     state._state = np.array([0, 1, 0], dtype=complex)
     reps = leakage_readout_model.get_reps(
-        readout_circuit, [KrausGateRep], [ZBasisOutcomeOperationDictInstrumentRep]
+        readout_circuit, [KrausGateRep], [OutcomeOperationDictInstrumentRep]
     )
     outcomes = state.apply_reps_inplace(reps)
     counts[readout_labels[outcomes["leak_status"][0]]] += 1

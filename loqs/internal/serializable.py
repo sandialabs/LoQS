@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import contextvars
 import functools
 import gzip
 import importlib
@@ -65,34 +66,151 @@ class DecodableVersionError(Exception):
 
 
 IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
-    int, dict[tuple[str, str], tuple[str, str]]
+    int, dict[tuple[str, str], tuple[str, str] | None]
 ] = {
+    # None means the name was deleted outright, not relocated -- decoding
+    # then fails clearly. A version with no changes has no entry at all.
     1: {
         ("loqs.core.syndrome", "SyndromeLabel"): (
             "loqs.core.syndromelabel",
             "SyndromeLabel",
         ),
-        # NOTE: new-location name renamed from SyndromeLabelCastableTypes to
-        # SyndromeLabelLike well after version 1 was cut -- really a
-        # version-2-worthy change folded into version 1's entry rather than
-        # given its own SERIALIZATION_VERSION bump (other renamed
-        # *CastableTypes -> *Like names have no compat entry at all yet).
+        # Module move only -- the name itself wasn't renamed to
+        # SyndromeLabelLike until version 2 (see that entry below).
         ("loqs.core.syndrome", "SyndromeLabelCastableTypes"): (
             "loqs.core.syndromelabel",
-            "SyndromeLabelLike",
+            "SyndromeLabelCastableTypes",
         ),
         ("loqs.core.syndrome", "PauliFrame"): (
             "loqs.core.recordables.pauliframe",
             "PauliFrame",
         ),
-    }
+    },
+    2: {
+        # `*CastableTypes` -> `*Like` renames: every one keeps the same
+        # module, only the class name changes.
+        ("loqs.core.instructions.instructionlabel", "InstructionLabelCastableTypes"): (
+            "loqs.core.instructions.instructionlabel",
+            "InstructionLabelLike",
+        ),
+        ("loqs.core.instructions.instructionstack", "InstructionStackCastableTypes"): (
+            "loqs.core.instructions.instructionstack",
+            "InstructionStackLike",
+        ),
+        ("loqs.core.syndromelabel", "SyndromeLabelCastableTypes"): (
+            "loqs.core.syndromelabel",
+            "SyndromeLabelLike",
+        ),
+        ("loqs.core.recordables.pauliframe", "PauliFrameCastableTypes"): (
+            "loqs.core.recordables.pauliframe",
+            "PauliFrameLike",
+        ),
+        ("loqs.core.recordables.patchdict", "PatchDictCastableTypes"): (
+            "loqs.core.recordables.patchdict",
+            "PatchDictLike",
+        ),
+        (
+            "loqs.core.recordables.measurementoutcomes",
+            "MeasurementOutcomesCastableTypes",
+        ): (
+            "loqs.core.recordables.measurementoutcomes",
+            "MeasurementOutcomesLike",
+        ),
+        ("loqs.core.frame", "FrameCastableTypes"): (
+            "loqs.core.frame",
+            "FrameLike",
+        ),
+        ("loqs.core.history", "HistoryCastableTypes"): (
+            "loqs.core.history",
+            "HistoryLike",
+        ),
+        ("loqs.backends.model.pygstimodel", "PyGSTiModelCastableTypes"): (
+            "loqs.backends.model.pygstimodel",
+            "PyGSTiModelLike",
+        ),
+        ("loqs.backends.state.npsvstate", "NumpyStatevectorCastableTypes"): (
+            "loqs.backends.state.npsvstate",
+            "NumpyStatevectorLike",
+        ),
+        ("loqs.backends.state.qsimstate", "QSimStateCastableTypes"): (
+            "loqs.backends.state.qsimstate",
+            "QSimStateLike",
+        ),
+        ("loqs.backends.state.stimstate", "STIMStateCastableTypes"): (
+            "loqs.backends.state.stimstate",
+            "STIMStateLike",
+        ),
+        ("loqs.backends.circuit.pygsticircuit", "PyGSTiCircuitCastableTypes"): (
+            "loqs.backends.circuit.pygsticircuit",
+            "PyGSTiCircuitLike",
+        ),
+        ("loqs.backends.circuit.listcircuit", "ListCircuitCastableTypes"): (
+            "loqs.backends.circuit.listcircuit",
+            "ListCircuitLike",
+        ),
+        ("loqs.backends.circuit.stimcircuit", "STIMCircuitCastableTypes"): (
+            "loqs.backends.circuit.stimcircuit",
+            "STIMCircuitLike",
+        ),
+        # Deleted outright, not renamed: DictNoiseModel.__init__ dropped
+        # this castable parameter rather than replacing it with a
+        # same-shaped *Like type.
+        ("loqs.backends.model.dictmodel", "DictModelCastableTypes"): None,
+        # Castable/SeqCastable/MapCastable mixins, deleted outright; both
+        # historical module paths (utils -> internal) are listed.
+        ("loqs.internal.castable", "Castable"): None,
+        ("loqs.internal.castable", "SeqCastable"): None,
+        ("loqs.internal.castable", "MapCastable"): None,
+        ("loqs.utils.castable", "Castable"): None,
+        ("loqs.utils.castable", "SeqCastable"): None,
+        ("loqs.utils.castable", "MapCastable"): None,
+        # PatchDict -> PatchLayout: a strict superset (adds `relations`,
+        # defaulting to {}), so decode redirects with no shim class needed
+        # (see recordables/__init__.py for the construction-time shim).
+        ("loqs.core.recordables.patchdict", "PatchDict"): (
+            "loqs.core.recordables.patchlayout",
+            "PatchLayout",
+        ),
+        # RepTuple/STIMDictNoiseModel: deleted outright, with no
+        # construction shim (both already hard-failed on direct
+        # construction). Decode redirects to the modern class instead.
+        ("loqs.backends.reps", "RepTuple"): (
+            "loqs.backends.reps.base",
+            "OperationRep",
+        ),
+        ("loqs.backends.model.stimdictmodel", "STIMDictNoiseModel"): (
+            "loqs.backends.model.dictmodel",
+            "DictNoiseModel",
+        ),
+    },
 }  # (module, class) mapping from OLD to NEW locations for each version change
 
-SERIALIZATION_VERSION = 1
+SERIALIZATION_VERSION = 2
 """Serialization versions.
 
 0: First version. JSON encoding only, per-shot checkpointing only.
 1: HDF5 encoding now available. Backwards compatible to version 0.
+2: `*CastableTypes` -> `*Like` renames and several class removals/
+   relocations; see IMPORT_LOCATION_CHANGES_BY_VERSION.
+"""
+
+# Module-level ContextVars below stand in for a "global-ish" flag set once
+# at a top-level call and read deep inside the generic recursive decode
+# dispatch, without threading a parameter through every layer in between.
+#
+# TODO: `ignore_no_serialize_flags` (encode-side; threaded explicitly
+# through BaseEncoder/JSONEncoder/HDF5Encoder and every `_get_encoding_attr`
+# override) looks like a good candidate for the same treatment -- every
+# call site just relays it unchanged. Watch for `Serializable._serial_hash`,
+# which deliberately wants `False` regardless of any ambient encode.
+
+MIGRATE_LEGACY_FNS: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "migrate_legacy_fns", default=False
+)
+"""Whether decoding may run a known legacy-construction pattern found in
+an old `Instruction`'s frozen source, rather than raising a clear error.
+Set for the duration of a `Serializable.read`/`.load` call, read once in
+`Instruction._from_decoded_attrs`.
 """
 
 
@@ -349,6 +467,7 @@ class Serializable:
         format: EncodeFormats = None,
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
+        migrate_legacy_fns: bool = False,
     ) -> Encodable:
         """
         Load an object of this type, or a subclass of this type, from an input stream.
@@ -366,6 +485,15 @@ class Serializable:
             - 'json': JSON text format
             - 'json.gz': Gzip-compressed JSON format
             - 'hdf5' or 'h5': HDF5 binary format
+
+        migrate_legacy_fns : bool, optional
+            If a decoded `Instruction`'s frozen source (from a file older
+            than the current `SERIALIZATION_VERSION`) contains a known
+            legacy-construction pattern (e.g. an old-style positional
+            `InstructionLabel(...)` call), decoding normally raises a
+            clear error rather than silently running it through a
+            construction-time compatibility shim. Pass `True` to allow it
+            to run as-is instead. Default is `False`.
 
         Returns
         -------
@@ -385,29 +513,33 @@ class Serializable:
         if use_caching:
             decode_cache = decode_cache if decode_cache is not None else {}
 
-        if format in ["json", "json.gz"]:
-            # Check if it's a file-like object that supports text I/O
-            assert isinstance(f, TextIOBase)
+        token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
+        try:
+            if format in ["json", "json.gz"]:
+                # Check if it's a file-like object that supports text I/O
+                assert isinstance(f, TextIOBase)
 
-            import json
+                import json
 
-            state = json.load(f)
-            assert isinstance(state, dict)
+                state = json.load(f)
+                assert isinstance(state, dict)
 
-            decoded = Serializable.decode(
-                state, "json", decode_cache=decode_cache
-            )
-        elif format in ["hdf5", "h5"]:
-            assert isinstance(f, h5py.File)
+                decoded = Serializable.decode(
+                    state, "json", decode_cache=decode_cache
+                )
+            elif format in ["hdf5", "h5"]:
+                assert isinstance(f, h5py.File)
 
-            root_group = f["root"]
-            assert isinstance(root_group, h5py.Group)
+                root_group = f["root"]
+                assert isinstance(root_group, h5py.Group)
 
-            decoded = Serializable.decode(
-                root_group, "hdf5", decode_cache=decode_cache
-            )
-        else:
-            raise ValueError(f"Invalid `format` value for load: {format}")
+                decoded = Serializable.decode(
+                    root_group, "hdf5", decode_cache=decode_cache
+                )
+            else:
+                raise ValueError(f"Invalid `format` value for load: {format}")
+        finally:
+            MIGRATE_LEGACY_FNS.reset(token)
 
         # At this point, at least outer object should not be a deferred reference
         assert not isinstance(decoded, DeferredRef)
@@ -421,6 +553,7 @@ class Serializable:
         format: EncodeFormats = None,
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
+        migrate_legacy_fns: bool = False,
     ) -> Encodable:
         """Read and deserialize an object from a file.
 
@@ -439,6 +572,8 @@ class Serializable:
             Whether to use object caching during deserialization. Default is True.
         decode_cache : DecodeCache, optional
             Existing decode cache to use for reference resolution.
+        migrate_legacy_fns : bool, optional
+            See [](api:Serializable.load). Default is `False`.
 
         Returns
         -------
@@ -474,7 +609,11 @@ class Serializable:
             raise ValueError("Cannot write format")
 
         loaded = cls.load(
-            f, format, use_caching=use_caching, decode_cache=decode_cache
+            f,
+            format,
+            use_caching=use_caching,
+            decode_cache=decode_cache,
+            migrate_legacy_fns=migrate_legacy_fns,
         )
 
         f.close()
@@ -1089,7 +1228,13 @@ class Serializable:
         )
 
         if (module_name, class_name) in location_changes:
-            module_name, class_name = location_changes[module_name, class_name]
+            new_location = location_changes[module_name, class_name]
+            if new_location is None:
+                raise ImportError(
+                    f"{module_name}.{class_name} was removed in a later"
+                    " serialization version and cannot be decoded."
+                )
+            module_name, class_name = new_location
         try:
             m = importlib.import_module(module_name)
             c = getattr(
@@ -1307,7 +1452,11 @@ class Serializable:
                     # Check if this import needs to be updated
                     key = (module, original_name)
                     if key in loc_change:
-                        new_module, new_name = loc_change[key]
+                        new_location = loc_change[key]
+                        if new_location is None:
+                            # Deleted outright -- drop the import line.
+                            continue
+                        new_module, new_name = new_location
                         if alias:
                             result_lines.append(
                                 f"from {new_module} import {new_name} as {alias}"
@@ -1419,16 +1568,18 @@ class Serializable:
     def _get_cumulative_changes(initial_version):
         assert initial_version < SERIALIZATION_VERSION
 
-        # Get cumulative changes in import locations
-        complete_location_changes = IMPORT_LOCATION_CHANGES_BY_VERSION[
-            initial_version + 1
-        ].copy()
+        # `.get(..., {})`: a version with no import-location changes has no
+        # entry at all here, not an empty one -- must not raise KeyError.
+        complete_location_changes = IMPORT_LOCATION_CHANGES_BY_VERSION.get(
+            initial_version + 1, {}
+        ).copy()
 
-        version = initial_version + 1
-        while version < SERIALIZATION_VERSION:
-            for new_k, new_v in IMPORT_LOCATION_CHANGES_BY_VERSION[
-                version
-            ].items():
+        # Compose multi-hop renames across every later version (A -> B,
+        # B -> C becomes A -> C).
+        for version in range(initial_version + 2, SERIALIZATION_VERSION + 1):
+            for new_k, new_v in IMPORT_LOCATION_CHANGES_BY_VERSION.get(
+                version, {}
+            ).items():
                 updated_map = False
 
                 # If new_k corresponds to a value in the current location changes,

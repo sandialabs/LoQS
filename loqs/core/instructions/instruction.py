@@ -26,7 +26,12 @@ import warnings
 
 from loqs.core import Frame
 from loqs.internal import Displayable
-from loqs.internal.serializable import Serializable
+from loqs.internal.legacy import detect_legacy_construction
+from loqs.internal.serializable import (
+    MIGRATE_LEGACY_FNS,
+    SERIALIZATION_VERSION,
+    Serializable,
+)
 
 T = TypeVar("T", bound="Instruction")
 P = ParamSpec("P")
@@ -448,11 +453,34 @@ class Instruction(Displayable):
         # Deserialize functions
         serialized_apply_fn = attr_dict["_serialized_apply_fn"]
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
+        version = attr_dict["version"]
+
+        # Gate re-executing an old, now-incompatible calling convention
+        # behind an explicit opt-in rather than doing it silently. Only
+        # scan an actual string -- a version-0 file's source may already
+        # be a live callable by this point (decode_function's own
+        # version-0 heuristic), leaving nothing to scan.
+        if version < SERIALIZATION_VERSION and not MIGRATE_LEGACY_FNS.get():
+            found = []
+            if isinstance(serialized_apply_fn, str):
+                found += detect_legacy_construction(serialized_apply_fn)
+            if isinstance(serialized_map_qubits_fn, str):
+                found += detect_legacy_construction(serialized_map_qubits_fn)
+            if found:
+                raise RuntimeError(
+                    f"Instruction {attr_dict.get('name')!r}'s frozen source "
+                    f"(serialized at version {version}) appears to construct "
+                    f"{', '.join(found)}, a deprecated legacy pattern. Pass "
+                    "migrate_legacy_fns=True to QuantumProgram.read/"
+                    "Serializable.load to run it as-is, or migrate the "
+                    "source with loqs-migrate first."
+                )
+
         apply_fn = Serializable._eval_function_str(
-            serialized_apply_fn, attr_dict["version"]
+            serialized_apply_fn, version
         )
         map_qubits_fn = Serializable._eval_function_str(
-            serialized_map_qubits_fn, attr_dict["version"]
+            serialized_map_qubits_fn, version
         )
 
         # Create instruction

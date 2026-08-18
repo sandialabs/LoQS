@@ -13,7 +13,6 @@ import numpy as np
 import scipy.sparse as sps
 
 from loqs.internal.serializable import (
-    DecodableVersionError,
     DeferredRef,
     EncodablePrimitives,
     IncorrectDecodableTypeError,
@@ -22,6 +21,235 @@ from loqs.internal.serializable import (
 from loqs.types import Bool, Float, Int
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
+from loqs.internal.versioning import VersionedDecoder
+
+# Per-shape version dispatch (see VersionedDecoder) -- one registry per
+# encode_type. Version 2 introduces no new JSON shape (only class-location
+# renames, handled inside Serializable), so every registry aliases 2 to 1.
+
+# ---- json_serializable ----
+_decode_json_serializable_shape = VersionedDecoder("json_serializable")
+
+
+@_decode_json_serializable_shape.register(0)
+def _decode_json_serializable_shape_v0(encoded):
+    # No encode_type at all -- check for module/class but no as_type
+    # (which would mean this is actually an encoded class, not object).
+    assert "module" in encoded
+    assert "class" in encoded
+    assert not encoded.get("as_type", False)
+
+
+@_decode_json_serializable_shape.register(1)
+def _decode_json_serializable_shape_v1(encoded):
+    assert encoded.get("encode_type", "") == "Serializable"
+
+
+_decode_json_serializable_shape.alias(2, same_as=1)
+
+
+# ---- json_cached_obj ----
+_decode_json_cached_obj_shape = VersionedDecoder("json_cached_obj")
+
+
+@_decode_json_cached_obj_shape.register(0)
+def _decode_json_cached_obj_shape_v0(encoded):
+    assert "module" in encoded
+    assert "class" in encoded
+    assert not encoded.get("as_type", False)
+    assert encoded.get("type", "") == "cached_object_reference"
+
+
+@_decode_json_cached_obj_shape.register(1)
+def _decode_json_cached_obj_shape_v1(encoded):
+    assert encoded.get("encode_type", "") == "Serializable"
+    if "cache_type" not in encoded:
+        raise IncorrectDecodableTypeError("Not a cached object")
+    assert encoded["cache_type"] in ["reference", "copy"]
+
+
+_decode_json_cached_obj_shape.alias(2, same_as=1)
+
+
+# ---- json_iterable ----
+_decode_json_iterable = VersionedDecoder("json_iterable")
+
+
+@_decode_json_iterable.register(0)
+def _decode_json_iterable_v0(encoded):
+    # Version 0: bare list, no casting information.
+    return encoded, "list"
+
+
+@_decode_json_iterable.register(1)
+def _decode_json_iterable_v1(encoded):
+    assert encoded.get("encode_type", "") == "iterable"
+    with BaseEncoder.assert_decode(fatal=True):
+        iter_type = encoded.get("iterable_type", "")
+        assert iter_type in ["list", "tuple", "set"]
+        assert isinstance(encoded.get("items", None), list)
+        items_to_decode = encoded["items"]
+    return items_to_decode, iter_type
+
+
+_decode_json_iterable.alias(2, same_as=1)
+
+
+# ---- json_dict ----
+_decode_json_dict = VersionedDecoder("json_dict")
+
+
+@_decode_json_dict.register(0)
+def _decode_json_dict_v0(encoded):
+    # Also the catch-all for version 0 (never tagged): rule out
+    # Serializable-obj/array shapes, which also decode as plain dicts.
+    assert "module" not in encoded
+    assert "class" not in encoded
+    assert encoded.get("type", "") != "matrix"
+    return encoded
+
+
+# encoded.get("version", -1) returns -1 for any dict with no "version" key
+# at all -- version 0's own sentinel, not a distinct version.
+_decode_json_dict.alias(-1, same_as=0)
+
+
+@_decode_json_dict.register(1)
+def _decode_json_dict_v1(encoded):
+    assert encoded.get("encode_type", "") == "dict"
+    with BaseEncoder.assert_decode(fatal=True):
+        assert isinstance(encoded.get("items", None), dict)
+        items_to_decode = encoded["items"]
+        assert isinstance(items_to_decode, dict)
+    return items_to_decode
+
+
+_decode_json_dict.alias(2, same_as=1)
+
+
+# ---- json_array ----
+_decode_json_array = VersionedDecoder("json_array")
+
+
+@_decode_json_array.register(0)
+def _decode_json_array_v0(encoded):
+    def _deserialize_mx_v0(mx):
+        if isinstance(mx, dict):  # then a sparse mx
+            assert mx["sparse_matrix_type"] == "csr"
+            data = _deserialize_mx_v0(mx["data"])
+            indices = _deserialize_mx_v0(mx["indices"])
+            indptr = _deserialize_mx_v0(mx["indptr"])
+            decoded = sps.csr_matrix(
+                (data, indices, indptr), shape=mx["shape"]
+            )
+        else:
+            basemx = np.array(mx)
+            if (
+                basemx.dtype.kind == "U"
+            ):  # character type array => complex numbers as strings
+                decoded = np.array([complex(x) for x in basemx.flat])
+                decoded = decoded.reshape(basemx.shape)
+            else:
+                decoded = basemx
+        return decoded
+
+    return _deserialize_mx_v0(encoded["data"])
+
+
+@_decode_json_array.register(1)
+def _decode_json_array_v1(encoded):
+    assert encoded.get("encode_type", "") == "array"
+    with BaseEncoder.assert_decode(fatal=True):
+        assert "data" in encoded
+        assert "shape" in encoded
+        assert "dtype" in encoded
+
+    def _deserialize_matrix(mx, dtype, shape=None) -> np.ndarray:
+        decoded = np.array(mx)
+        if decoded.dtype.kind == "U":
+            # character type array => complex numbers as strings
+            decoded = np.array([complex(x) for x in decoded.flat])
+        if shape is not None:
+            decoded = decoded.reshape(shape)
+        return decoded.astype(dtype)
+
+    shape = encoded["shape"]
+    dtype = np.dtype(getattr(np, encoded["dtype"]))  # type: ignore
+
+    if isinstance(encoded, dict) and "sparse_matrix_type" in encoded:
+        if encoded["sparse_matrix_type"] == "csr":
+            data = _deserialize_matrix(encoded["data"], dtype)
+            indices = _deserialize_matrix(encoded["indices"], dtype)
+            indptr = _deserialize_matrix(encoded["indptr"], dtype)
+            decoded = sps.csr_matrix((data, indices, indptr), shape=shape)
+        else:
+            raise MisformedDecodableError("Invalid sparse_matrix_type")
+    else:
+        decoded = _deserialize_matrix(encoded["data"], dtype, shape)
+
+    return decoded
+
+
+_decode_json_array.alias(2, same_as=1)
+
+
+# ---- json_class ----
+_decode_json_class_shape = VersionedDecoder("json_class")
+
+
+@_decode_json_class_shape.register(0)
+def _decode_json_class_shape_v0(encoded):
+    assert "module" in encoded
+    assert "class" in encoded
+    assert encoded.get("as_type", False)
+
+
+@_decode_json_class_shape.register(1)
+def _decode_json_class_shape_v1(encoded):
+    assert encoded.get("encode_type", "") == "class"
+
+
+_decode_json_class_shape.alias(2, same_as=1)
+
+
+# ---- json_function ----
+_decode_json_function_source = VersionedDecoder("json_function")
+
+
+@_decode_json_function_source.register(0)
+def _decode_json_function_source_v0(encoded):
+    # Version 0: the raw string itself is the source, no wrapper dict.
+    return encoded
+
+
+@_decode_json_function_source.register(1)
+def _decode_json_function_source_v1(encoded):
+    assert encoded.get("encode_type", "") == "function"
+    with BaseEncoder.assert_decode(fatal=True):
+        assert "source" in encoded
+        source = encoded.get("source", None)
+    return source
+
+
+_decode_json_function_source.alias(2, same_as=1)
+
+
+# ---- json_primitive ----
+_decode_json_primitive = VersionedDecoder("json_primitive")
+
+
+@_decode_json_primitive.register(1)
+def _decode_json_primitive_v1(encoded):
+    assert encoded.get("encode_type", None) == "primitive"
+    with BaseEncoder.assert_decode(fatal=True):
+        assert "version" in encoded
+        assert "value" in encoded
+        value = encoded["value"]
+        assert isinstance(value, EncodablePrimitives)
+    return value
+
+
+_decode_json_primitive.alias(2, same_as=1)
 
 
 class JSONEncoder(BaseEncoder):
@@ -91,22 +319,13 @@ class JSONEncoder(BaseEncoder):
         ImportError
             If the class cannot be imported from the specified module.
         """
-        # Check if right type
+        # Check if right type for this version
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
             # Version 0 compatibility, array dict doesn't have version in it
             assert not encoded.get("type", "") == "matrix"
             version = encoded.get("version", -1)
-            if version == 0:
-                # Do not have encode_type, check for module/class but no as_type
-                assert "module" in encoded
-                assert "class" in encoded
-                assert not encoded.get("as_type", False)
-            elif version == 1:
-                # Can check for encode_type
-                assert encoded.get("encode_type", "") == "Serializable"
-            else:
-                raise DecodableVersionError()
+            _decode_json_serializable_shape(version, encoded)
 
         # Check if properly formed
         with JSONEncoder.assert_decode(fatal=True):
@@ -276,27 +495,12 @@ class JSONEncoder(BaseEncoder):
         RuntimeError
             If object references cannot be resolved due to missing source objects.
         """
-        # Check if right type
+        # Check if right type for this version
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
             assert "version" in encoded
             version = encoded["version"]
-            if version == 0:
-                # Do not have encode_type, check for module/class but no as_type
-                assert "module" in encoded
-                assert "class" in encoded
-                assert not encoded.get("as_type", False)
-                assert encoded.get("type", "") == "cached_object_reference"
-            elif version == 1:
-                # Can check for encode_type
-                assert encoded.get("encode_type", "") == "Serializable"
-                # Only proceed if this actually has cache_type attribute
-                if "cache_type" not in encoded:
-                    raise IncorrectDecodableTypeError("Not a cached object")
-                cache_type = encoded["cache_type"]
-                assert cache_type in ["reference", "copy"]
-            else:
-                raise DecodableVersionError()
+            _decode_json_cached_obj_shape(version, encoded)
 
         # Check if properly formed
         with JSONEncoder.assert_decode(fatal=True):
@@ -385,7 +589,7 @@ class JSONEncoder(BaseEncoder):
 
     @staticmethod
     def decode_iterable(encoded, decode_cache=None):
-        # Check if right type
+        # Check if right type, and extract this version's (items, iter_type)
         with JSONEncoder.assert_decode(fatal=False):
             if isinstance(encoded, (list, tuple)):
                 # We must assume that we are reading version 0 iterable
@@ -393,22 +597,7 @@ class JSONEncoder(BaseEncoder):
             else:
                 assert isinstance(encoded, dict)
                 version = encoded.get("version", -1)
-                if version == 1:
-                    assert encoded.get("encode_type", "") == "iterable"
-                else:
-                    raise DecodableVersionError()
-
-        # Check if properly formed
-        if version == 1:
-            with JSONEncoder.assert_decode(fatal=True):
-                iter_type = encoded.get("iterable_type", "")
-                assert iter_type in ["list", "tuple", "set"]
-                assert isinstance(encoded.get("items", None), list)
-                items_to_decode = encoded["items"]
-        else:
-            # Version 0, bare list and no casting information
-            items_to_decode = encoded
-            iter_type = "list"
+            items_to_decode, iter_type = _decode_json_iterable(version, encoded)
 
         # Decode all items
         items = []
@@ -470,34 +659,11 @@ class JSONEncoder(BaseEncoder):
 
     @staticmethod
     def decode_dict(encoded, decode_cache=None):
-        # Check if right type
+        # Check if right type, and extract this version's items dict
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
-
             version = encoded.get("version", -1)
-            if version in [-1, 0]:
-                # Don't be Serializable or class
-                assert "module" not in encoded
-                assert "class" not in encoded
-                # Don't be array
-                assert encoded.get("type", "") != "matrix"
-
-                # Else, version 0 assumes we are all good to proceed
-                # Unfortuantely version 0 also did not version dicts,
-                # so version 0 will act as our catch-all for dicts
-            elif version == 1:
-                assert encoded.get("encode_type", "") == "dict"
-            else:
-                DecodableVersionError()
-
-        # Check if properly formed
-        if version == 1:
-            with JSONEncoder.assert_decode(fatal=True):
-                assert isinstance(encoded.get("items", None), dict)
-                items_to_decode = encoded["items"]
-                assert isinstance(items_to_decode, dict)
-        else:
-            items_to_decode = encoded
+            items_to_decode = _decode_json_dict(version, encoded)
 
         decoded_dict = {}
         for k, v in items_to_decode.items():
@@ -596,7 +762,7 @@ class JSONEncoder(BaseEncoder):
         Any
             The decoded matrix.
         """
-        # Check if right type
+        # Check if right type, then decode via this version's decoder
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
             # module and class being in here means its a Serializable
@@ -606,66 +772,7 @@ class JSONEncoder(BaseEncoder):
             if version == -1 and encoded.get("type", "") == "matrix":
                 # Version 0 assumes any dict with type: matrix is an array type
                 version = 0
-            elif version == 1:
-                assert encoded.get("encode_type", "") == "array"
-            else:
-                raise DecodableVersionError()
-
-        # Arrays are one of the things that changed most version 0->1
-        if version == 0:
-
-            def _deserialize_mx_v0(mx):
-                if isinstance(mx, dict):  # then a sparse mx
-                    assert mx["sparse_matrix_type"] == "csr"
-                    data = _deserialize_mx_v0(mx["data"])
-                    indices = _deserialize_mx_v0(mx["indices"])
-                    indptr = _deserialize_mx_v0(mx["indptr"])
-                    decoded = sps.csr_matrix(
-                        (data, indices, indptr), shape=mx["shape"]
-                    )
-                else:
-                    basemx = np.array(mx)
-                    if (
-                        basemx.dtype.kind == "U"
-                    ):  # character type array => complex numbers as strings
-                        decoded = np.array([complex(x) for x in basemx.flat])
-                        decoded = decoded.reshape(basemx.shape)
-                    else:
-                        decoded = basemx
-                return decoded
-
-            return _deserialize_mx_v0(encoded["data"])
-
-        # Otherwise, continue with v1 code
-        with JSONEncoder.assert_decode(fatal=True):
-            assert "data" in encoded
-            assert "shape" in encoded
-            assert "dtype" in encoded
-
-        def _deserialize_matrix(mx, dtype, shape=None) -> np.ndarray:
-            decoded = np.array(mx)
-            if decoded.dtype.kind == "U":
-                # character type array => complex numbers as strings
-                decoded = np.array([complex(x) for x in decoded.flat])
-            if shape is not None:
-                decoded = decoded.reshape(shape)
-            return decoded.astype(dtype)
-
-        shape = encoded["shape"]
-        dtype = np.dtype(getattr(np, encoded["dtype"]))  # type: ignore
-
-        if isinstance(encoded, dict) and "sparse_matrix_type" in encoded:
-            if encoded["sparse_matrix_type"] == "csr":
-                data = _deserialize_matrix(encoded["data"], dtype)
-                indices = _deserialize_matrix(encoded["indices"], dtype)
-                indptr = _deserialize_matrix(encoded["indptr"], dtype)
-                decoded = sps.csr_matrix((data, indices, indptr), shape=shape)
-            else:
-                raise MisformedDecodableError("Invalid sparse_matrix_type")
-        else:
-            decoded = _deserialize_matrix(encoded["data"], dtype, shape)
-
-        return decoded
+            return _decode_json_array(version, encoded)
 
     @staticmethod
     def encode_class(to_encode):
@@ -705,20 +812,13 @@ class JSONEncoder(BaseEncoder):
         type
             The decoded class.
         """
-        # Check if right type
+        # Check if right type for this version
         with JSONEncoder.assert_decode(fatal=False):
             assert isinstance(encoded, dict)
             version = encoded.get("version", -1)
-            if version == 0:
-                assert "module" in encoded
-                assert "class" in encoded
-                assert encoded.get("as_type", False)
-            elif version == 1:
-                assert encoded.get("encode_type", "") == "class"
-            else:
-                raise DecodableVersionError()
+            _decode_json_class_shape(version, encoded)
 
-        # Check if properly formed
+        # Check if properly formed (common to every version so far)
         with JSONEncoder.assert_decode(fatal=True):
             assert "module" in encoded
             assert "class" in encoded
@@ -764,7 +864,7 @@ class JSONEncoder(BaseEncoder):
         callable
             The decoded function.
         """
-        # Check if right type
+        # Check if right type, and extract this version's source string
         with JSONEncoder.assert_decode(fatal=False):
             # Version 0 assumes any string with def is a function
             if isinstance(encoded, str) and "def " in encoded:
@@ -772,18 +872,7 @@ class JSONEncoder(BaseEncoder):
             else:
                 assert isinstance(encoded, dict)
                 version = encoded.get("version", -1)
-                if version == 1:
-                    assert encoded.get("encode_type", "") == "function"
-                else:
-                    raise DecodableVersionError()
-
-        # Check if properly formed
-        if version == 0:
-            source = encoded
-        else:
-            with JSONEncoder.assert_decode(fatal=True):
-                assert "source" in encoded
-                source = encoded.get("source", None)  # type: ignore
+            source = _decode_json_function_source(version, encoded)
 
         assert isinstance(source, str)
         return Serializable._eval_function_str(source, version)
@@ -841,16 +930,4 @@ class JSONEncoder(BaseEncoder):
 
             assert isinstance(encoded, dict)
             version = encoded.get("version", -1)
-            if version == 1:
-                assert encoded.get("encode_type", None) == "primitive"
-            else:
-                raise DecodableVersionError()
-
-        # Check if properly formed
-        with JSONEncoder.assert_decode(fatal=True):
-            assert "version" in encoded
-            assert "value" in encoded
-            value = encoded["value"]
-            assert isinstance(value, EncodablePrimitives)
-
-        return value
+            return _decode_json_primitive(version, encoded)

@@ -19,14 +19,14 @@ from loqs.backends.reps import (
     GateRep,
     InstrumentRep,
     KrausGateRep,
+    OperationRep,
     PTMGateRep,
     ProbabilisticStimGateRep,
     QSimSuperopGateRep,
-    RepTuple,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -39,22 +39,15 @@ from loqs.internal.serializable import Serializable
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
-class TestRepTupleConstructionRaises:
-    def test_direct_construction_raises_type_error(self):
-        with pytest.raises(TypeError, match="RepTuple is deprecated"):
-            RepTuple("X 0", ("Q0",), None)
-
-    def test_construction_raises_regardless_of_arguments(self):
-        with pytest.raises(TypeError, match="RepTuple is deprecated"):
-            RepTuple()
-
-
 class TestRepsFixtureRoundTrip:
     """Round-trip `tests/backends/fixtures/reps_v1.{json,h5}` (generated
     pre-refactor by `generate_reps_fixtures.py`) to confirm every old
     `GateRep`/`InstrumentRep` member -- including the two nested-`RepTuple`
-    cases -- decodes directly to the correct new concrete class, never to
-    a `RepTuple` instance."""
+    cases -- decodes directly to the correct new concrete class. `RepTuple`
+    itself has been removed entirely (v1.2); decode now redirects
+    straight to `OperationRep._from_decoded_attrs` via
+    `IMPORT_LOCATION_CHANGES_BY_VERSION`, with no `RepTuple` class involved
+    anywhere."""
 
     EXPECTED_CLASSES = {
         "GATEREP_UNITARY": UnitaryGateRep,
@@ -66,7 +59,7 @@ class TestRepsFixtureRoundTrip:
         "INSTRUMENTREP_ZBASIS_PROJECTION": ZBasisProjectionInstrumentRep,
         "INSTRUMENTREP_ZBASIS_PRE_POST_OPERATIONS": ZBasisPrePostInstrumentRep,
         "INSTRUMENTREP_ZBASIS_OUTCOME_OPERATION_DICT": (
-            ZBasisOutcomeOperationDictInstrumentRep
+            OutcomeOperationDictInstrumentRep
         ),
         "INSTRUMENTREP_STIM_CIRCUIT_STR": StimCircuitInstrumentRep,
     }
@@ -88,7 +81,6 @@ class TestRepsFixtureRoundTrip:
                 f"{name} decoded to {type(rep).__name__}, expected "
                 f"{expected_cls.__name__}"
             )
-            assert not isinstance(rep, RepTuple)
             assert rep.qubit_labels == ("Q0",)
 
     def test_flat_gate_rep_payloads_round_trip(self, decoded):
@@ -137,11 +129,13 @@ class TestRepsFixtureRoundTrip:
 
     def test_module_and_class_metadata(self):
         """The (module, class) metadata this fixture records is exactly the
-        mechanism the legacy-decode shim depends on -- pin it down
+        mechanism the legacy-decode redirect depends on -- pin it down
         explicitly rather than only testing round-trip behavior
-        end-to-end. `reps/__init__.py` re-exporting `RepTuple`/`GateRep`
-        at the top level of `loqs.backends.reps` is what keeps this
-        resolvable even though `reps.py` became a subpackage."""
+        end-to-end. The fixture's own frozen bytes always recorded
+        `("loqs.backends.reps", "RepTuple")`, matching
+        `IMPORT_LOCATION_CHANGES_BY_VERSION`'s redirect-table key exactly,
+        which is what keeps this resolvable now that `RepTuple` no longer
+        exists as a real class at all."""
         with open(FIXTURES_DIR / "reps_v1.json") as f:
             raw = json.load(f)
         entry = raw["items"]["GATEREP_UNITARY"]
@@ -195,7 +189,7 @@ class TestLegacyGaterepValueUpgrade:
                 ZBasisPrePostInstrumentRep
             ),
             _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT: (
-                ZBasisOutcomeOperationDictInstrumentRep
+                OutcomeOperationDictInstrumentRep
             ),
             _LegacyInstrumentRepValue.STIM_CIRCUIT_STR: (
                 StimCircuitInstrumentRep
@@ -310,10 +304,10 @@ class TestLegacyValueDecoding:
 
 
 class TestMisformedLegacyDecode:
-    def test_reptuple_from_decoded_attrs_rejects_unrecognized_reptype(self):
+    def test_operationrep_from_decoded_attrs_rejects_unrecognized_reptype(self):
         from loqs.internal.serializable import MisformedDecodableError
 
         with pytest.raises(MisformedDecodableError):
-            RepTuple._from_decoded_attrs(
+            OperationRep._from_decoded_attrs(
                 {"rep": None, "qubits": (), "reptype": "not a legacy tag"}
             )

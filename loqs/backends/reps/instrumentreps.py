@@ -28,7 +28,7 @@ class InstrumentRep(OperationRep):
     def _from_decoded_attrs(cls, attr_dict):
         # See `GateRep._from_decoded_attrs` for why this special-cases
         # `cls is InstrumentRep` and defers to
-        # `loqs.backends.reps.legacy.RepTuple._from_decoded_attrs`.
+        # `OperationRep._from_decoded_attrs` (`loqs.backends.reps.base`).
         if cls is InstrumentRep:
             from loqs.backends.reps.legacy import _LegacyInstrumentRepValue
 
@@ -159,7 +159,7 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
         self.post_op = post_op
 
 
-class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
+class OutcomeOperationDictInstrumentRep(InstrumentRep):
     """Dict with MCM outcome labels and CP map operation keys.
 
     For when a mid-circuit measurement can be modeled by a `pyGSTi`-like
@@ -191,7 +191,7 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
         qubit_labels: str | int | Sequence[str | int] | None = (),
         outcome_qubits: str | int | Sequence[str | int] | None = None,
     ) -> None:
-        """Construct a [](api:ZBasisOutcomeOperationDictInstrumentRep).
+        """Construct a [](api:OutcomeOperationDictInstrumentRep).
 
         Parameters
         ----------
@@ -266,7 +266,7 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
 
     def with_qubit_labels(
         self, qubit_labels: str | int | Sequence[str | int]
-    ) -> "ZBasisOutcomeOperationDictInstrumentRep":
+    ) -> "OutcomeOperationDictInstrumentRep":
         """Retarget onto new physical qubits.
 
         If `outcome_qubits` currently equals `qubit_labels` -- true of
@@ -276,7 +276,7 @@ class ZBasisOutcomeOperationDictInstrumentRep(InstrumentRep):
         left unchanged.
         """
         new_rep = super().with_qubit_labels(qubit_labels)
-        assert isinstance(new_rep, ZBasisOutcomeOperationDictInstrumentRep)
+        assert isinstance(new_rep, OutcomeOperationDictInstrumentRep)
         if self.outcome_qubits == self.qubit_labels:
             return type(self)(
                 new_rep.outcome_ops,

@@ -12,7 +12,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TypeAlias
+from typing import Final, TypeAlias
+import warnings
 
 from loqs.core.instructions.instruction import Instruction
 
@@ -20,6 +21,33 @@ InstructionLabelLike: TypeAlias = (
     "Instruction | str | tuple[Instruction | str] | tuple[Instruction | str, str] | Mapping | InstructionLabel"
 )
 """Objects that can be cast to a [](api:InstructionLabel)."""
+
+LEGACY_PENDING_INST_ARGS: Final[str] = "_legacy_inst_args"
+"""Reserved [](api:InstructionLabel) key for not-yet-remapped pre-1.2
+positional `inst_args`, when `instruction` is a bare string name.
+Remapping needs the resolved `Instruction`'s `param_priorities`,
+unavailable until `QuantumProgram._resolve_instruction` resolves it. An
+ordinary dict key (not a separate attribute) so it survives a plain
+decode-then-re-encode round trip.
+"""
+
+
+def _remap_legacy_positional_args(
+    instruction: Instruction, inst_args: tuple, inst_kwargs: dict
+) -> dict:
+    """Map pre-1.2 positional `inst_args` onto their real keyword names.
+
+    Positional index *i* is the *i*-th key of
+    `instruction.param_priorities` (insertion order), stored under its
+    aliased name (`param_alias(key)`) -- the historical `_collect_kwarg`
+    convention. A positional value wins over a same-key `inst_kwargs`
+    entry, as `_collect_kwarg` did too.
+    """
+    merged = dict(inst_kwargs)
+    for i, key in enumerate(instruction.param_priorities.keys()):
+        if i < len(inst_args):
+            merged[instruction.param_alias(key)] = inst_args[i]
+    return merged
 
 
 class InstructionLabel(dict):
@@ -93,13 +121,24 @@ class InstructionLabel(dict):
     TypeError: Tuples longer than 2 elements are no longer supported -- use the dict form instead, e.g. {"instruction": ..., "patch_label": ..., <other kwargs>}.
     """
 
-    def __init__(self, instruction: Instruction | str, **kwargs: object) -> None:
+    def __init__(
+        self,
+        instruction: Instruction | str,
+        *legacy_positional_args: object,
+        **kwargs: object,
+    ) -> None:
         """
         Parameters
         ----------
         instruction:
             Either an [](api:Instruction) or a `str` name to resolve
             later, stored under the reserved `"instruction"` key.
+
+        *legacy_positional_args:
+            Deprecated. Pre-1.2 code called this `(patch_label, inst_args,
+            inst_kwargs)` positionally; passing any warns and remaps them
+            onto keyword names, requiring `instruction` already be a
+            resolved [](api:Instruction). Use keyword arguments instead.
 
         **kwargs:
             Any other data this label carries, forwarded as kwarg
@@ -111,10 +150,68 @@ class InstructionLabel(dict):
             raise TypeError(
                 f"instruction must be an Instruction or str, got {type(instruction)!r}"
             )
+        if legacy_positional_args:
+            if not isinstance(instruction, Instruction):
+                raise TypeError(
+                    "Old-style positional InstructionLabel(name, patch_label, "
+                    "inst_args, inst_kwargs) construction found a bare "
+                    "instruction name, which can't be remapped without already "
+                    "knowing the target Instruction's parameters -- pass an "
+                    "already-resolved Instruction object instead, or migrate to "
+                    "the modern keyword form."
+                )
+            warnings.warn(
+                "Old-style positional InstructionLabel(instruction, patch_label, "
+                "inst_args, inst_kwargs) construction is deprecated; use keyword "
+                "arguments instead. Remapping positional arguments on your behalf.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            padded = list(legacy_positional_args) + [None, (), {}]
+            patch_label, inst_args, inst_kwargs = padded[0], padded[1], padded[2]
+            remapped = _remap_legacy_positional_args(
+                instruction, tuple(inst_args or ()), dict(inst_kwargs or {})
+            )
+            if patch_label is not None:
+                remapped["patch_label"] = patch_label
+            remapped.update(kwargs)
+            super().__init__(instruction=instruction, **remapped)
+            return
         super().__init__(instruction=instruction, **kwargs)
 
     def __repr__(self) -> str:
         return f"InstructionLabel({dict.__repr__(self)})"
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict: Mapping) -> "InstructionLabel":
+        """Decode-only compatibility for the pre-1.2 5-attr `Serializable`
+        shape (`instruction`/`inst_label`/`patch_label`/`inst_args`/
+        `inst_kwargs`). If `instruction` is already resolved, the
+        positional-arg remap happens here. A bare `inst_label` string
+        needs no special handling -- only non-empty `inst_args` does,
+        stashed under [](api:LEGACY_PENDING_INST_ARGS) for
+        `QuantumProgram._resolve_instruction` to remap once resolved."""
+        instruction = attr_dict.get("instruction")
+        inst_label = attr_dict.get("inst_label")
+        patch_label = attr_dict.get("patch_label")
+        inst_args = tuple(attr_dict.get("inst_args") or ())
+        inst_kwargs = dict(attr_dict.get("inst_kwargs") or {})
+
+        if instruction is not None:
+            remapped = _remap_legacy_positional_args(
+                instruction, inst_args, inst_kwargs
+            )
+            if patch_label is not None:
+                remapped["patch_label"] = patch_label
+            return cls(instruction, **remapped)
+
+        assert isinstance(inst_label, str)
+        kwargs = dict(inst_kwargs)
+        if patch_label is not None:
+            kwargs["patch_label"] = patch_label
+        if inst_args:
+            kwargs[LEGACY_PENDING_INST_ARGS] = inst_args
+        return cls(inst_label, **kwargs)
 
     @classmethod
     def from_raw(cls, obj: object) -> InstructionLabel:

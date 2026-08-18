@@ -36,6 +36,8 @@ from loqs.core.history import (
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
+    LEGACY_PENDING_INST_ARGS,
+    _remap_legacy_positional_args,
 )
 from loqs.core.instructions.instructionstack import (
     InstructionStackLike,
@@ -622,16 +624,17 @@ class QuantumProgram(Displayable):
 
             inst_label, stack = stack.pop_instruction()
 
-            # The label itself is the "label" priority's kwarg source --
-            # every key it carries is a candidate value, keyed by name only.
             patch_label = inst_label.get("patch_label")
-            label_kwargs = inst_label
 
             try:
                 last_frame: Frame = history[-1]
             except IndexError:
                 last_frame = Frame()
             inst = program._resolve_instruction(inst_label, last_frame)
+
+            # The label itself is the "label" priority's kwarg source --
+            # every key it carries is a candidate value, keyed by name only.
+            label_kwargs = QuantumProgram._label_kwargs(inst_label, inst)
 
             # Collect data that the QuantumProgram can give
             program_data = {
@@ -778,6 +781,24 @@ class QuantumProgram(Displayable):
         return inst
 
     @staticmethod
+    def _label_kwargs(
+        inst_label: InstructionLabel, inst: Instruction
+    ) -> Mapping[str, object]:
+        """The kwarg-lookup source for `inst_label`, remapping any pending
+        pre-1.2 positional args (see `LEGACY_PENDING_INST_ARGS`) now that
+        `inst`'s `param_priorities` are available. Returns `inst_label`
+        itself, unmodified, when there's nothing to remap.
+        """
+        if LEGACY_PENDING_INST_ARGS not in inst_label:
+            return inst_label
+        return {
+            **inst_label,
+            **_remap_legacy_positional_args(
+                inst, inst_label[LEGACY_PENDING_INST_ARGS], {}
+            ),
+        }
+
+    @staticmethod
     def _collect_kwarg(  # noqa: C901
         key: str,
         priorities: Sequence[str],
@@ -918,10 +939,6 @@ class QuantumProgram(Displayable):
                 patches = history[-1].get("patches", None)
                 if patches is None:
                     continue
-                # Cast rather than assert: a frame decoded from an
-                # already-serialized old file may still carry a PatchDict
-                # rather than a PatchLayout.
-                patches = PatchLayout(patches)
 
                 # Get the specific patch by label
                 patch = patches.get(resolved_patch_label)

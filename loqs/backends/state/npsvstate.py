@@ -24,7 +24,7 @@ from loqs.backends.reps import (
     KrausGateRep,
     OperationRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
@@ -86,7 +86,7 @@ def _single_dense_operator(rep: GateRep) -> NDArray:
     regardless of its concrete `GateRep` representation. Passes
     `unitarity_check_abstol=None` to skip `convert`'s literal-unitarity
     check, since `rep` may be a projector-like operator (e.g. a
-    `ZBasisOutcomeOperationDictInstrumentRep` outcome operator) rather
+    `OutcomeOperationDictInstrumentRep` outcome operator) rather
     than an actually-unitary one; the "exactly one dense term" structural
     check still applies.
 
@@ -147,7 +147,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             KrausGateRep,
             ZBasisProjectionInstrumentRep,
             ZBasisPrePostInstrumentRep,
-            ZBasisOutcomeOperationDictInstrumentRep,
+            OutcomeOperationDictInstrumentRep,
         ]
 
     def __init__(
@@ -573,7 +573,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         return outcomes
 
     @_apply_instrument_rep.register
-    def _(self, rep: ZBasisOutcomeOperationDictInstrumentRep) -> OutcomeDict:
+    def _(self, rep: OutcomeOperationDictInstrumentRep) -> OutcomeDict:
         qubits = rep.qubit_labels
         assert len(qubits) > 0
 

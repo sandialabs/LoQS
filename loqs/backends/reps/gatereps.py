@@ -107,13 +107,10 @@ class GateRep(OperationRep):
         # under the legacy `RepTuple` enum-based format (only concrete leaf
         # classes are instantiable, so current code never produces a
         # serialized object whose recorded class is this abstract base).
-        # Seeing `class: "GateRep"` in a file unambiguously identifies a
-        # legacy-format value, so we return a legacy tag instead of trying
-        # to instantiate the ABC. See
-        # `loqs.backends.reps.legacy.RepTuple._from_decoded_attrs`, which
-        # consumes this tag (alongside the paired `rep`/`qubits`) to build
-        # the correct concrete class. Deferred import avoids a circular
-        # dependency, since `legacy.py` itself imports from this module.
+        # `class: "GateRep"` in a file unambiguously means a legacy-format
+        # value -- return a legacy tag instead of instantiating the ABC
+        # (see `OperationRep._from_decoded_attrs` in base.py). Deferred
+        # import avoids a circular dependency with legacy.py.
         if cls is GateRep:
             from loqs.backends.reps.legacy import _LegacyGateRepValue
 

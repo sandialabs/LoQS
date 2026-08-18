@@ -12,7 +12,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -503,7 +503,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
     def test_round_trip(self, reset):
         zp = ZBasisProjectionInstrumentRep(reset, True, ("Q0",))
         od = _zbasis_projection_to_outcome_operation_dict(zp)
-        assert isinstance(od, ZBasisOutcomeOperationDictInstrumentRep)
+        assert isinstance(od, OutcomeOperationDictInstrumentRep)
         assert set(od.outcome_ops.keys()) == {0, 1}
         back = _outcome_operation_dict_to_zbasis_projection(od)
         assert back.reset == reset
@@ -533,7 +533,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
 
     def test_fails_for_wrong_outcome_keys(self):
         identity = UnitaryGateRep(np.eye(2), ("Q0",))
-        od = ZBasisOutcomeOperationDictInstrumentRep(
+        od = OutcomeOperationDictInstrumentRep(
             {0: identity, 2: identity}, True, ("Q0",)
         )
         with pytest.raises(RepConstructionError):
@@ -541,7 +541,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
 
     def test_fails_for_non_projector_outcome_operator(self):
         X = STANDARD_GATE_UNITARIES["X"]
-        od = ZBasisOutcomeOperationDictInstrumentRep(
+        od = OutcomeOperationDictInstrumentRep(
             {0: UnitaryGateRep(np.eye(2), ("Q0",)), 1: UnitaryGateRep(X, ("Q0",))},
             True,
             ("Q0",),
@@ -551,14 +551,14 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
 
     def test_reverse_direction_also_fails_for_more_than_one_qubit(self):
         identity = UnitaryGateRep(np.eye(4), ("Q0", "Q1"))
-        od = ZBasisOutcomeOperationDictInstrumentRep(
+        od = OutcomeOperationDictInstrumentRep(
             {(0, 0): identity, (1, 1): identity}, True, ("Q0", "Q1")
         )
         with pytest.raises(RepConstructionError):
             _outcome_operation_dict_to_zbasis_projection(od)
 
     def test_fails_for_non_unitarygaterep_outcome_operator(self):
-        od = ZBasisOutcomeOperationDictInstrumentRep(
+        od = OutcomeOperationDictInstrumentRep(
             {0: PTMGateRep(np.eye(4), ("Q0",)), 1: UnitaryGateRep(np.eye(2), ("Q0",))},
             True,
             ("Q0",),
@@ -574,7 +574,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
         scope."""
         even = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ("Q0", "Q1"))
         odd = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ("Q0", "Q1"))
-        od = ZBasisOutcomeOperationDictInstrumentRep(
+        od = OutcomeOperationDictInstrumentRep(
             {"even": even, "odd": odd}, True, ("Q0", "Q1"), outcome_qubits="synd"
         )
         assert od.outcome_qubits == ("synd",)
@@ -589,7 +589,7 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
         outcomes map to the *same* target -- never a swap)."""
         swapped_0 = np.array([[0, 0], [1, 0]], dtype=complex)  # |1><0|
         swapped_1 = np.array([[0, 1], [0, 0]], dtype=complex)  # |0><1|
-        od = ZBasisOutcomeOperationDictInstrumentRep(
+        od = OutcomeOperationDictInstrumentRep(
             {
                 0: UnitaryGateRep(swapped_0, ("Q0",)),
                 1: UnitaryGateRep(swapped_1, ("Q0",)),
@@ -950,7 +950,7 @@ class TestConvert:
 
     def test_raw_payload_cannot_construct_composite_instrument_reps(self):
         """ZBasisProjectionInstrumentRep/ZBasisPrePostInstrumentRep/
-        ZBasisOutcomeOperationDictInstrumentRep all require multiple
+        OutcomeOperationDictInstrumentRep all require multiple
         distinct constructor arguments (not a single raw value), so
         `convert` can never construct them from a raw payload -- only
         `DictNoiseModel` (which knows how to unpack these specific raw

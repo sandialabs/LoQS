@@ -397,7 +397,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
     """STIM 1Q, 2Q, and measurement gates.
 
     These are the STIM instructions that will be treated
-    as possible keys into a [](api:STIMDictNoiseModel).
+    as possible keys into a [](api:DictNoiseModel).
     """
 
     stim_command_aliases: ClassVar[dict[str, str]] = {"CNOT": "CX"}

@@ -26,7 +26,7 @@ from loqs.backends.reps import (
     QSimSuperopGateRep,
     RepConstructionError,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
 )
@@ -433,7 +433,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     _output_instrument_reps = [
         ZBasisProjectionInstrumentRep,
-        ZBasisOutcomeOperationDictInstrumentRep,
+        OutcomeOperationDictInstrumentRep,
     ]
 
     @property
@@ -709,7 +709,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             if instrep is ZBasisProjectionInstrumentRep:
                 reset = 0 if self.zbasis_proj_resets else None
                 return ZBasisProjectionInstrumentRep(reset, True, qubits)
-            elif instrep is ZBasisOutcomeOperationDictInstrumentRep:
+            elif instrep is OutcomeOperationDictInstrumentRep:
                 # TODO: What to do with key error?
                 # Look up using unaliased qubits
                 op = self.inst_dict[inst_key]
@@ -784,7 +784,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                         f"channels, matching neither 1 nor len(qubits)={len(qubits)}"
                     )
 
-                return ZBasisOutcomeOperationDictInstrumentRep(
+                return OutcomeOperationDictInstrumentRep(
                     outcome_ops, True, qubits, outcome_qubits
                 )
             else:

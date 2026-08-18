@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from loqs.internal import Displayable
+from loqs.internal.serializable import MisformedDecodableError
 
 
 class RepConstructionError(Exception):
@@ -74,6 +75,33 @@ class OperationRep(ABC, Displayable):
             f"{attr}={getattr(self, attr)!r}" for attr in self._SERIALIZE_ATTRS
         )
         return f"{type(self).__name__}({attrs})"
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict: Mapping[str, Any]) -> "OperationRep":
+        # OperationRep is only ever the *recorded* class for a value
+        # serialized under the old RepTuple(rep, qubits, reptype) format --
+        # decode redirects RepTuple straight here, so this absorbs its old
+        # dispatch logic. Deferred import avoids a circular dependency with
+        # legacy.py.
+        if cls is OperationRep:
+            from loqs.backends.reps.legacy import (
+                _LegacyGateRepValue,
+                _LegacyInstrumentRepValue,
+                _upgrade_legacy_gaterep,
+                _upgrade_legacy_instrumentrep,
+            )
+
+            rep = attr_dict["rep"]
+            qubits = attr_dict["qubits"]
+            reptype = attr_dict["reptype"]
+            if isinstance(reptype, _LegacyGateRepValue):
+                return _upgrade_legacy_gaterep(reptype, rep, qubits)
+            elif isinstance(reptype, _LegacyInstrumentRepValue):
+                return _upgrade_legacy_instrumentrep(reptype, rep, qubits)
+            raise MisformedDecodableError(
+                f"Unrecognized legacy RepTuple reptype {reptype!r}"
+            )
+        return super()._from_decoded_attrs(attr_dict)
 
     def with_qubit_labels(
         self, qubit_labels: str | int | Sequence[str | int]

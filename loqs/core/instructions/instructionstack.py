@@ -16,9 +16,7 @@ import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core.instructions import Instruction, InstructionLabel
-from loqs.core.instructions.instructionlabel import (
-    InstructionLabelLike,
-)
+from loqs.core.instructions.instructionlabel import InstructionLabelLike
 from loqs.internal import Displayable
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.encoder.jsonencoder import JSONEncoder
@@ -125,6 +123,18 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
 
     def __len__(self):
         return len(self._instructions)
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict) -> "InstructionStack":
+        """Build from decoded items, casting each through
+        `InstructionLabel.from_raw` -- still needed since a modern
+        `InstructionLabel` decodes as a plain `dict`, with no
+        `encode_type` of its own."""
+        obj = cls()
+        obj._instructions = [
+            InstructionLabel.from_raw(item) for item in attr_dict["_instructions"]
+        ]
+        return obj
 
     def __str__(self):
         if len(self):

@@ -17,9 +17,22 @@ to store also.
 This module serves as a place to store a lot of these objects.
 """
 
-# Order here important, PauliFrame before all, QECCodePatch before PatchDict/PatchLayout
+# Order here important, PauliFrame before all, QECCodePatch before PatchLayout
 from .pauliframe import PauliFrame
 from .measurementoutcomes import MeasurementOutcomes
 from .qeccodepatch import QECCodePatch
-from .patchdict import PatchDict
 from .patchlayout import PatchLayout, PatchRelation
+
+from loqs.internal.legacy import install_legacy_module, make_legacy_construction_shim
+
+# PatchDict was renamed to PatchLayout (v1.2); an already-serialized
+# PatchDict redirects straight to PatchLayout on decode. This shim keeps
+# live code still calling PatchDict(...) working (with a deprecation
+# warning) instead of hard-failing.
+PatchDict = make_legacy_construction_shim(
+    "PatchDict",
+    build=PatchLayout,
+    message="PatchDict is deprecated; use PatchLayout instead. "
+    "Constructing a PatchLayout on your behalf for now.",
+)
+install_legacy_module("loqs.core.recordables.patchdict", {"PatchDict": PatchDict})

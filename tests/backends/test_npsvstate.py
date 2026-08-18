@@ -16,7 +16,7 @@ from loqs.backends.reps import (
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     UnitaryGateRep,
-    ZBasisOutcomeOperationDictInstrumentRep,
+    OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
 )
@@ -183,7 +183,7 @@ class TestNumPyStatevectorQuantumState:
             KrausGateRep,
             ZBasisProjectionInstrumentRep,
             ZBasisPrePostInstrumentRep,
-            ZBasisOutcomeOperationDictInstrumentRep,
+            OutcomeOperationDictInstrumentRep,
         }
 
     def test_base_str(self):
@@ -604,7 +604,7 @@ class TestNumPyStatevectorQuantumState:
             0: UnitaryGateRep(effect0.T @ effect0, ["Q0"]),
             1: UnitaryGateRep(effect1.T @ effect1, ["Q0"])
         }
-        ideal_map_rep = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, True, ["Q0"])
+        ideal_map_rep = OutcomeOperationDictInstrumentRep(ideal_maps, True, ["Q0"])
 
         test5 = state0.copy()
         outs = test5.apply_reps_inplace([H_rep, ideal_map_rep]*10)
@@ -616,7 +616,7 @@ class TestNumPyStatevectorQuantumState:
             0: UnitaryGateRep(effect0.T @ effect0, ["Q0"]),
             1: UnitaryGateRep(effect0.T @ effect1, ["Q0"])
         }
-        reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(reset_maps, True, ["Q0"])
+        reset_map_rep = OutcomeOperationDictInstrumentRep(reset_maps, True, ["Q0"])
 
         test6 = state0.copy()
         outs = test6.apply_reps_inplace([H_rep, reset_map_rep]*10)
@@ -627,7 +627,7 @@ class TestNumPyStatevectorQuantumState:
             0: UnitaryGateRep(U_H @ effect0.T @ effect0, ["Q0"]),
             1: UnitaryGateRep(U_H @ effect0.T @ effect1, ["Q0"])
         }
-        noisy_reset_map_rep = ZBasisOutcomeOperationDictInstrumentRep(noisy_reset_maps, True, ["Q0"])
+        noisy_reset_map_rep = OutcomeOperationDictInstrumentRep(noisy_reset_maps, True, ["Q0"])
 
         test7 = state0.copy()
         outs = test7.apply_reps_inplace([H_rep] + [noisy_reset_map_rep]*10)
@@ -711,7 +711,7 @@ class TestNumPyStatevectorQuantumState:
             (1, 0): basis_projector((1, 0)),
             (1, 1): basis_projector((1, 1)),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, True, ["Q0", "Q1"])
+        rep = OutcomeOperationDictInstrumentRep(outcome_ops, True, ["Q0", "Q1"])
 
         for bits in [(0, 0), (0, 1), (1, 0), (1, 1)]:
             test = SVState(list(bits), ["Q0", "Q1"], seed=20260815)
@@ -727,7 +727,7 @@ class TestNumPyStatevectorQuantumState:
         would collapse a Bell state entirely."""
         even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ["Q0", "Q1"])
         odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ["Q0", "Q1"])
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {"even": even_proj, "odd": odd_proj},
             True,
             ["Q0", "Q1"],
@@ -752,7 +752,7 @@ class TestNumPyStatevectorQuantumState:
         odd_diag = 1.0 - even_diag
         even_proj = UnitaryGateRep(np.diag(even_diag), qubits)
         odd_proj = UnitaryGateRep(np.diag(odd_diag), qubits)
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {"even": even_proj, "odd": odd_proj}, True, qubits, outcome_qubits="synd"
         )
 
@@ -775,7 +775,7 @@ class TestNumPyStatevectorQuantumState:
         whichever outcome was actually sampled."""
         even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ["Q0", "Q1"])
         odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ["Q0", "Q1"])
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {"even": even_proj, "odd": odd_proj},
             True,
             ["Q0", "Q1"],
@@ -814,7 +814,7 @@ class TestNumPyStatevectorQuantumState:
         proj0 = UnitaryGateRep(np.diag([1.0, 0, 0]), ["Q0"], dims=[3])
         proj1 = UnitaryGateRep(np.diag([0, 1.0, 0]), ["Q0"], dims=[3])
         proj2 = UnitaryGateRep(np.diag([0, 0, 1.0]), ["Q0"], dims=[3])
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {"ground": proj0, "excited": proj1, "leaked": proj2},
             True,
             ["Q0"],
@@ -836,7 +836,7 @@ class TestNumPyStatevectorQuantumState:
         negligible = UnitaryGateRep(np.diag([1e-12, 1e-12]), ["Q0"])
         dominant = UnitaryGateRep(np.eye(2) * np.sqrt(1 - 2e-12), ["Q0"])
         never_applied = UnitaryGateRep(np.eye(2), ["Q0"])
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {"a": negligible, "b": dominant, "c": never_applied},
             True,
             ["Q0"],
@@ -874,7 +874,7 @@ class TestNumPyStatevectorQuantumState:
             (1, 0): basis_projector((1, 0)),
             (1, 1): basis_projector((1, 1)),
         }
-        rep = ZBasisOutcomeOperationDictInstrumentRep(outcome_ops, False, ["Q0", "Q1"])
+        rep = OutcomeOperationDictInstrumentRep(outcome_ops, False, ["Q0", "Q1"])
 
         test = SVState([1, 0], ["Q0", "Q1"], seed=20260815)
         outs = test.apply_reps_inplace([rep])
@@ -887,7 +887,7 @@ class TestNumPyStatevectorQuantumState:
         collapsing to the correct (renormalized) parity sector."""
         even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ["Q0", "Q1"])
         odd_proj = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ["Q0", "Q1"])
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {"even": even_proj, "odd": odd_proj},
             False,
             ["Q0", "Q1"],
@@ -906,7 +906,7 @@ class TestNumPyStatevectorQuantumState:
         the same lazy-stopping benefit `KrausGateRep` already gets."""
         dominant = UnitaryGateRep(np.eye(2), ["Q0"])
         never_applied = UnitaryGateRep(np.eye(2), ["Q0"])
-        rep = ZBasisOutcomeOperationDictInstrumentRep(
+        rep = OutcomeOperationDictInstrumentRep(
             {0: dominant, 1: never_applied}, True, ["Q0"]
         )
         test = SVState([0], ["Q0"], seed=20260815)
@@ -937,7 +937,7 @@ class TestNumPyStatevectorQuantumState:
             0: UnitaryGateRep(effect0.T @ effect0, ["Q0"]),
             1: UnitaryGateRep(effect1.T @ effect1, ["Q0"]),
         }
-        ideal_map_rep_no_outcomes = ZBasisOutcomeOperationDictInstrumentRep(ideal_maps, False, ["Q0"])
+        ideal_map_rep_no_outcomes = OutcomeOperationDictInstrumentRep(ideal_maps, False, ["Q0"])
 
         for trial in range(10):
             test = SVState([0], ["Q0"], seed=20260711 + trial)
