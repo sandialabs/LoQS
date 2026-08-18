@@ -88,17 +88,40 @@ class TestMigrateInstructionLabels:
         assert result.manual_review == []
 
     def test_resolvable_bare_tuple(self, instructions):
+        """A bare tuple rewrites to a bare dict, not an InstructionLabel(...)
+        call -- unlike an explicit call being rewritten, building a call
+        here would introduce a new InstructionLabel reference the file
+        may never have needed to import."""
         src = 'tup = ("Increment", "L0", (), {"increment_by": 2})\n'
         result = migrate_instruction_labels(src, instructions)
         assert (
             result.source
-            == 'tup = InstructionLabel("Increment", increment_by=2, patch_label="L0")\n'
+            == 'tup = {"instruction": "Increment", "increment_by": 2, "patch_label": "L0"}\n'
         )
 
     def test_three_tuple_with_none_patch_label(self, instructions):
         src = 'tup = ("Init Counter", None, (7,))\n'
         result = migrate_instruction_labels(src, instructions)
-        assert result.source == 'tup = InstructionLabel("Init Counter", initial_value=7)\n'
+        assert (
+            result.source
+            == 'tup = {"instruction": "Init Counter", "initial_value": 7}\n'
+        )
+
+    def test_bare_tuple_in_a_list_rewrites_to_a_dict(self, instructions):
+        """A bare tuple embedded in a larger structure (e.g. a stack's
+        own list of raw entries, alongside an already-modern bare
+        string) rewrites the same way a standalone one does: to a bare
+        dict, not an InstructionLabel(...) call, so the file never needs
+        a new InstructionLabel import it may not have had before."""
+        src = (
+            'stack = ["Init State", '
+            '("Increment", "L0", (), {"increment_by": 2})]\n'
+        )
+        result = migrate_instruction_labels(src, instructions)
+        assert result.source == (
+            'stack = ["Init State", '
+            '{"instruction": "Increment", "increment_by": 2, "patch_label": "L0"}]\n'
+        )
 
     def test_none_literal_inst_args_and_kwargs_treated_as_empty(self, instructions):
         """A real shape found in QuantumProgram_v1.json.gz's frozen

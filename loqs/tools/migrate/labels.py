@@ -13,12 +13,19 @@ modern keyword form.
 Two source shapes are recognized, both matching pre-1.2's `(instruction,
 patch_label, inst_args, inst_kwargs)` convention: a direct
 `InstructionLabel(...)` call with more than one positional argument, or a
-bare 3-/4-tuple literal. A 3-tuple with a *string* 2nd element is
-deliberately **not** treated as a candidate, even though it matches this
-shape for a per-patch instruction, since it collides constantly with an
-unrelated, far more common pattern -- a raw pyGSTi circuit-layer
-gate-label tuple, e.g. `("Gcphase", "A0", "D4")`, has the exact same
-3-string-element shape and is expected to dominate real source files.
+bare 3-/4-tuple literal. A direct call is rewritten to a modern call
+(`InstructionLabel("Increment", increment_by=2, patch_label="L0")`); a
+bare tuple is rewritten to a bare
+`{"instruction": ..., **kwargs}` dict instead, matching
+`InstructionLabel`'s own modern raw-dict shape, since building a call
+there would introduce a new `InstructionLabel` reference into a file
+that may never have needed to import it before. A 3-tuple with a
+*string* 2nd element is deliberately **not** treated as a candidate,
+even though it matches this shape for a per-patch instruction, since it
+collides constantly with an unrelated, far more common pattern -- a raw
+pyGSTi circuit-layer gate-label tuple, e.g. `("Gcphase", "A0", "D4")`,
+has the exact same 3-string-element shape and is expected to dominate
+real source files.
 
 Rewriting either shape requires knowing the target [](api:Instruction)'s
 `param_priorities`/`param_alias` -- the same algorithm
@@ -159,6 +166,26 @@ def _build_call(
     return cst.Call(func=func, args=args)
 
 
+def _build_dict(
+    instruction_expr: cst.BaseExpression,
+    keyword_args: Mapping[str, cst.BaseExpression],
+) -> cst.Dict:
+    """A bare `{"instruction": ..., **kwargs}` dict, matching
+    `InstructionLabel`'s own modern raw-dict shape -- used instead of an
+    explicit `InstructionLabel(...)` call so a rewritten bare tuple never
+    needs a new `InstructionLabel` import added to the file."""
+    elements = [
+        cst.DictElement(
+            key=cst.SimpleString('"instruction"'), value=instruction_expr
+        )
+    ]
+    for key, value in keyword_args.items():
+        elements.append(
+            cst.DictElement(key=cst.SimpleString(f'"{key}"'), value=value)
+        )
+    return cst.Dict(elements=elements)
+
+
 class _InstructionLabelRewriter(cst.CSTTransformer):
     METADATA_DEPENDENCIES = (PositionProvider,)
 
@@ -174,7 +201,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
     def _resolve_and_rewrite(
         self,
         original_node: cst.CSTNode,
-        func: cst.BaseExpression,
+        func: cst.BaseExpression | None,
         instruction_expr: cst.BaseExpression,
         patch_label_expr: cst.BaseExpression | None,
         inst_args_expr: cst.BaseExpression | None,
@@ -183,7 +210,15 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         extra_args: Sequence[cst.Arg] = (),
     ) -> cst.BaseExpression | None:
         """Returns the rewritten node, or `None` if this candidate was
-        only flagged (caller should leave the original node unchanged)."""
+        only flagged (caller should leave the original node unchanged).
+
+        Builds an `InstructionLabel(...)` call when `func` is given (an
+        explicit call is being rewritten -- `func` is that call's own
+        original callee, preserved verbatim), or a bare
+        `{"instruction": ...}` dict when `func` is `None` (a bare tuple
+        is being rewritten instead, where building a call would
+        introduce a new `InstructionLabel` reference the file may not
+        already import)."""
         instr_name = _string_value(instruction_expr)
         if instr_name is None:
             # Non-literal first arg: its runtime value can't be known
@@ -226,6 +261,8 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             remapped["patch_label"] = patch_label_expr
         remapped.update(extra_keywords)
         self.changed = True
+        if func is None:
+            return _build_dict(instruction_expr, remapped)
         return _build_call(func, instruction_expr, remapped, extra_args)
 
     def leave_Call(
@@ -303,7 +340,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
 
         rewritten = self._resolve_and_rewrite(
             original_node,
-            cst.Name("InstructionLabel"),
+            None,
             instruction_expr,
             patch_label_expr,
             inst_args_expr,
