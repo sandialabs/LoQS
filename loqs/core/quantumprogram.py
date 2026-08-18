@@ -36,8 +36,8 @@ from loqs.core.history import (
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
-    _finish_pending_legacy_label,
-    _PendingLegacyInstructionLabel,
+    LEGACY_PENDING_INST_ARGS,
+    _remap_legacy_positional_args,
 )
 from loqs.core.instructions.instructionstack import (
     InstructionStackLike,
@@ -624,16 +624,17 @@ class QuantumProgram(Displayable):
 
             inst_label, stack = stack.pop_instruction()
 
-            # The label itself is the "label" priority's kwarg source --
-            # every key it carries is a candidate value, keyed by name only.
             patch_label = inst_label.get("patch_label")
-            label_kwargs = inst_label
 
             try:
                 last_frame: Frame = history[-1]
             except IndexError:
                 last_frame = Frame()
             inst = program._resolve_instruction(inst_label, last_frame)
+
+            # The label itself is the "label" priority's kwarg source --
+            # every key it carries is a candidate value, keyed by name only.
+            label_kwargs = QuantumProgram._label_kwargs(inst_label, inst)
 
             # Collect data that the QuantumProgram can give
             program_data = {
@@ -779,47 +780,23 @@ class QuantumProgram(Displayable):
 
         return inst
 
-    def _resolve_pending_legacy_label(
-        self, pending: _PendingLegacyInstructionLabel
-    ) -> InstructionLabel:
-        """Finish resolving a `_PendingLegacyInstructionLabel` (issue #97).
-
-        Unlike `_resolve_instruction` (used during `.run()`), a per-patch
-        lookup here can't go through a live `PatchLayout` -- no patches
-        exist yet at decode time, before any "Init Patch" instruction has
-        run -- so it resolves directly against `patch_types`' own
-        `QECCode.instructions` templates instead, exactly what
-        `QECCodePatch.__getitem__` itself reads before its own
-        qubit-remapping step (which never changes `param_priorities`/
-        `param_alias`, all a legacy positional remap needs). If more than
-        one patch type registers the same name, the first match is used;
-        multi-patch (`patch_labels`) resolution can't occur here at all,
-        since that postdates the old positional format this placeholder
-        came from."""
-        inst_name = pending.inst_label
-        patch_label = pending.patch_label
-
-        if patch_label is None:
-            try:
-                inst = copy.deepcopy(self.global_instructions[inst_name])
-            except KeyError:
-                raise RuntimeError(
-                    f"Could not resolve global legacy instruction label "
-                    f"{inst_name!r} while decoding an old InstructionStack."
-                )
-            return _finish_pending_legacy_label(pending, inst)
-
-        for code in self.patch_types.values():
-            if inst_name in code.instructions:
-                return _finish_pending_legacy_label(
-                    pending, code.instructions[inst_name]
-                )
-
-        raise RuntimeError(
-            f"Could not resolve per-patch legacy instruction label "
-            f"{inst_name!r} (patch {patch_label!r}) against any "
-            "registered patch type while decoding an old InstructionStack."
-        )
+    @staticmethod
+    def _label_kwargs(
+        inst_label: InstructionLabel, inst: Instruction
+    ) -> Mapping[str, object]:
+        """The kwarg-lookup source for `inst_label`, remapping any pending
+        pre-1.2 positional args (see `LEGACY_PENDING_INST_ARGS`) now that
+        `inst`'s `param_priorities` are available. Returns `inst_label`
+        itself, unmodified, when there's nothing to remap.
+        """
+        if LEGACY_PENDING_INST_ARGS not in inst_label:
+            return inst_label
+        return {
+            **inst_label,
+            **_remap_legacy_positional_args(
+                inst, inst_label[LEGACY_PENDING_INST_ARGS], {}
+            ),
+        }
 
     @staticmethod
     def _collect_kwarg(  # noqa: C901
@@ -1063,21 +1040,5 @@ class QuantumProgram(Displayable):
                 global_instructions=attr_dict["global_instructions"],
                 name=attr_dict.get("name", "(Unnamed quantum program)"),
             )
-
-        # Issue #97: an old-format InstructionLabel decodes to a
-        # _PendingLegacyInstructionLabel placeholder when its instruction
-        # is a bare name rather than an already-resolved Instruction (see
-        # InstructionLabel._from_decoded_attrs) -- global_instructions/
-        # patch_types are only available as sibling attributes here, one
-        # level up from where that placeholder was created, so finishing
-        # it has to happen at this point, not inside the label's own decode.
-        obj.instruction_stack._instructions = [
-            (
-                obj._resolve_pending_legacy_label(item)
-                if isinstance(item, _PendingLegacyInstructionLabel)
-                else item
-            )
-            for item in obj.instruction_stack._instructions
-        ]
 
         return obj

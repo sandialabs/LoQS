@@ -679,7 +679,7 @@ class TestAddCommandAliases:
 
 @pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
 class TestSTIMDictNoiseModelDecodeRedirect:
-    """`STIMDictNoiseModel` no longer exists at all (issue #97) -- decoding
+    """`STIMDictNoiseModel` no longer exists at all (v1.2) -- decoding
     an old `class: "STIMDictNoiseModel"`-tagged file redirects straight to
     `DictNoiseModel` via `IMPORT_LOCATION_CHANGES_BY_VERSION`, with no
     shim class involved anywhere. This tests that redirect directly."""

@@ -25,11 +25,10 @@ from .patchlayout import PatchLayout, PatchRelation
 
 from loqs.internal.legacy import install_legacy_module, make_legacy_construction_shim
 
-# PatchDict was renamed to PatchLayout (issue #103/#97). Decoding an
-# already-serialized PatchDict redirects straight to PatchLayout via
-# IMPORT_LOCATION_CHANGES_BY_VERSION (see loqs/internal/serializable.py) --
-# this shim exists only so live source code still calling PatchDict(...)
-# directly keeps working, with a deprecation warning, instead of hard-failing.
+# PatchDict was renamed to PatchLayout (v1.2); an already-serialized
+# PatchDict redirects straight to PatchLayout on decode. This shim keeps
+# live code still calling PatchDict(...) working (with a deprecation
+# warning) instead of hard-failing.
 PatchDict = make_legacy_construction_shim(
     "PatchDict",
     build=PatchLayout,

@@ -67,20 +67,15 @@ class TestVersionedDecoder:
 
 
 class TestAllVersionedDecodersCoverage:
-    """Every real VersionedDecoder in the codebase (json/hdf5 encoders) must
-    have a decoder registered for every version from whichever version its
-    shape first existed through the current SERIALIZATION_VERSION, with no
-    gaps -- this is the mechanically-enforced replacement for a manual
-    grep-based checklist when SERIALIZATION_VERSION is bumped. Not every
-    registry needs to cover *every* version from 0 (HDF5's shapes, for
-    example, only ever existed from version 1 onward -- HDF5 support was
-    introduced alongside version 1 itself), only every version from its
-    own earliest registered one."""
+    """Every real VersionedDecoder must have a decoder registered for every
+    version from its own shape's earliest version through the current
+    SERIALIZATION_VERSION, with no gaps -- a mechanical replacement for a
+    manual grep-based checklist. Not every registry starts at version 0
+    (HDF5's shapes only exist from version 1 onward)."""
 
     def test_all_versioned_decoders_cover_every_version(self):
-        # Import the encoder modules so their module-level registries exist
-        # -- pytest collection alone doesn't guarantee this if this test
-        # file happens to run before either encoder module is imported.
+        # Import the encoder modules so their registries exist -- pytest
+        # collection alone doesn't guarantee this ordering.
         import loqs.internal.encoder.hdf5encoder  # noqa: F401
         import loqs.internal.encoder.jsonencoder  # noqa: F401
 

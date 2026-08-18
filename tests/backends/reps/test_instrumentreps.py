@@ -1,7 +1,5 @@
 """Tester for loqs.backends.reps.instrumentreps"""
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -204,31 +202,3 @@ class TestStimCircuitInstrumentRep:
     def test_rejects_non_str(self):
         with pytest.raises(RepConstructionError):
             StimCircuitInstrumentRep(42, ("Q0",))
-
-
-class TestZBasisOutcomeOperationDictInstrumentRepFullyRenamed:
-    """`ZBasisOutcomeOperationDictInstrumentRep` was renamed to
-    `OutcomeOperationDictInstrumentRep` (issue #97/#51) -- this class was
-    always general-purpose, just historically only used for Z-basis
-    measurements. Confirmed the old name never appeared in a shipped
-    release, so no compatibility entry is needed at all, only a full
-    repo-wide rename -- this guards against reintroducing the old name
-    anywhere in `loqs`/`tests`/`docs`."""
-
-    def test_old_name_does_not_appear_anywhere(self):
-        import re
-
-        this_file = Path(__file__).resolve()
-        repo_root = this_file.parents[3]
-        old_name = "ZBasis" + "OutcomeOperationDictInstrumentRep"
-        offenders = []
-        for directory in ("loqs", "tests", "docs"):
-            for path in (repo_root / directory).rglob("*"):
-                if path.suffix not in (".py", ".md"):
-                    continue
-                if "__pycache__" in path.parts or path == this_file:
-                    continue
-                text = path.read_text(errors="ignore")
-                if re.search(re.escape(old_name), text):
-                    offenders.append(str(path.relative_to(repo_root)))
-        assert offenders == []

@@ -44,7 +44,7 @@ class TestRepsFixtureRoundTrip:
     pre-refactor by `generate_reps_fixtures.py`) to confirm every old
     `GateRep`/`InstrumentRep` member -- including the two nested-`RepTuple`
     cases -- decodes directly to the correct new concrete class. `RepTuple`
-    itself has been removed entirely (issue #97); decode now redirects
+    itself has been removed entirely (v1.2); decode now redirects
     straight to `OperationRep._from_decoded_attrs` via
     `IMPORT_LOCATION_CHANGES_BY_VERSION`, with no `RepTuple` class involved
     anywhere."""

@@ -1,6 +1,6 @@
 """Tests for PatchDict's decode/construction compatibility shim.
 
-PatchDict was renamed to PatchLayout (issue #103/#97); the real
+PatchDict was renamed to PatchLayout (v1.2); the real
 MutableMapping-based implementation no longer exists. These tests cover
 what remains: constructing PatchDict directly still works (with a
 warning, redirected to PatchLayout), the historical import path stays
@@ -54,12 +54,11 @@ class TestPatchDictImportPath:
 
 class TestPatchDictDecodeRedirect:
     def test_old_patchdict_tagged_data_decodes_to_patchlayout(self):
-        """A hand-built attr_dict shaped like the old (pre-#103)
-        `PatchDict`'s on-disk format -- no real historical fixture
-        happens to contain a directly-serialized `PatchDict` object (only
-        `PatchDict()` *construction calls* inside frozen `apply_fn`
-        source, a separate compatibility concern), so this is
-        constructed directly rather than read from a file."""
+        """A hand-built attr_dict shaped like the old, pre-1.2 `PatchDict`
+        on-disk format -- no real fixture happens to contain a directly
+        serialized `PatchDict` (only `PatchDict()` construction calls
+        inside frozen source, a separate concern), so this is built by
+        hand instead of read from a file."""
         from loqs.internal.serializable import Serializable
 
         encoded = {

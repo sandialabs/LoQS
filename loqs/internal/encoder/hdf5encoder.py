@@ -29,96 +29,127 @@ from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
 from loqs.internal.versioning import VersionedDecoder
 
-# Per-shape version bound checks (see VersionedDecoder). HDF5 has no
-# version-0 concept at all (introduced alongside HDF5 support itself at
-# version 1), and no HDF5 shape has ever varied between versions 1 and 2
-# -- each registry below is a trivial "is this version supported" check,
-# but still gives future version bumps an obvious, additive place to add
-# a real per-version structural difference if one is ever needed.
+# Per-shape version dispatch (see VersionedDecoder), each validating its
+# own version's expected structure. No HDF5 shape has varied between
+# versions 1 and 2 yet, so every registry below aliases 2 to 1.
 
+# ---- hdf5_serializable ----
 _decode_hdf5_serializable_version = VersionedDecoder("hdf5_serializable")
 
 
 @_decode_hdf5_serializable_version.register(1)
 def _decode_hdf5_serializable_version_v1(encoded):
-    pass
+    assert "module" in encoded.attrs
+    assert "class" in encoded.attrs
 
 
 _decode_hdf5_serializable_version.alias(2, same_as=1)
 
 
+# ---- hdf5_cached_obj ----
 _decode_hdf5_cached_obj_version = VersionedDecoder("hdf5_cached_obj")
 
 
 @_decode_hdf5_cached_obj_version.register(1)
 def _decode_hdf5_cached_obj_version_v1(encoded):
-    pass
+    cache_type = encoded.attrs["cache_type"]
+    if cache_type == "reference":
+        assert "cache_id" in encoded.attrs
+    elif cache_type == "copy":
+        assert "reference_cache_id" in encoded.attrs
+        assert "source_cache_id" in encoded.attrs
 
 
 _decode_hdf5_cached_obj_version.alias(2, same_as=1)
 
 
+# ---- hdf5_iterable ----
 _decode_hdf5_iterable_version = VersionedDecoder("hdf5_iterable")
 
 
 @_decode_hdf5_iterable_version.register(1)
-def _decode_hdf5_iterable_version_v1(encoded):
-    pass
+def _decode_hdf5_iterable_version_v1(list_group):
+    assert isinstance(list_group, h5py.Group)
+    assert list_group.attrs.get("iterable_type", "") in ["list", "tuple", "set"]
 
 
 _decode_hdf5_iterable_version.alias(2, same_as=1)
 
 
+# ---- hdf5_dict ----
 _decode_hdf5_dict_version = VersionedDecoder("hdf5_dict")
 
 
 @_decode_hdf5_dict_version.register(1)
-def _decode_hdf5_dict_version_v1(encoded):
-    pass
+def _decode_hdf5_dict_version_v1(dict_group):
+    assert isinstance(dict_group, h5py.Group)
+    assert "keys" in dict_group
+    assert "values" in dict_group
 
 
 _decode_hdf5_dict_version.alias(2, same_as=1)
 
 
+# ---- hdf5_array ----
 _decode_hdf5_array_version = VersionedDecoder("hdf5_array")
 
 
 @_decode_hdf5_array_version.register(1)
-def _decode_hdf5_array_version_v1(encoded):
-    pass
+def _decode_hdf5_array_version_v1(array_group):
+    assert isinstance(array_group, h5py.Group)
+    assert "shape" in array_group.attrs
+    assert "dtype" in array_group.attrs
+    array_type = array_group.attrs.get("array_type", None)
+    assert array_type in ["sparse_csr", "dense_complex", "dense_real"]
 
 
 _decode_hdf5_array_version.alias(2, same_as=1)
 
 
+# ---- hdf5_class ----
 _decode_hdf5_class_version = VersionedDecoder("hdf5_class")
 
 
 @_decode_hdf5_class_version.register(1)
-def _decode_hdf5_class_version_v1(encoded):
-    pass
+def _decode_hdf5_class_version_v1(class_group):
+    assert isinstance(class_group, h5py.Group)
+    assert "module" in class_group.attrs
+    assert "class" in class_group.attrs
 
 
 _decode_hdf5_class_version.alias(2, same_as=1)
 
 
+# ---- hdf5_function ----
 _decode_hdf5_function_version = VersionedDecoder("hdf5_function")
 
 
 @_decode_hdf5_function_version.register(1)
-def _decode_hdf5_function_version_v1(encoded):
-    pass
+def _decode_hdf5_function_version_v1(function_group):
+    """Validate and extract the raw source string from `function_group`."""
+    assert isinstance(function_group, h5py.Group)
+    assert "source" in function_group
+    source_dataset = function_group["source"]
+    assert isinstance(source_dataset, h5py.Dataset)
+    source = source_dataset[()]
+    if isinstance(source, bytes):
+        source = source.decode("utf-8")
+    else:
+        source = str(source)
+    assert isinstance(source, str)
+    return source
 
 
 _decode_hdf5_function_version.alias(2, same_as=1)
 
 
+# ---- hdf5_primitive ----
 _decode_hdf5_primitive_version = VersionedDecoder("hdf5_primitive")
 
 
 @_decode_hdf5_primitive_version.register(1)
 def _decode_hdf5_primitive_version_v1(encoded):
-    pass
+    assert "value" in encoded.attrs
 
 
 _decode_hdf5_primitive_version.alias(2, same_as=1)
@@ -249,8 +280,6 @@ class HDF5Encoder(BaseEncoder):
 
         # Check if properly formed
         with HDF5Encoder.assert_decode(fatal=True):
-            assert "module" in encoded.attrs
-            assert "class" in encoded.attrs
             version = encoded.attrs.get("version", -1)
             _decode_hdf5_serializable_version(version, encoded)
 
@@ -404,14 +433,6 @@ class HDF5Encoder(BaseEncoder):
         with HDF5Encoder.assert_decode(fatal=True):
             version = encoded.attrs.get("version", -1)
             _decode_hdf5_cached_obj_version(version, encoded)
-
-            cache_type = encoded.attrs["cache_type"]
-
-            if cache_type == "reference":
-                assert "cache_id" in encoded.attrs
-            elif cache_type == "copy":
-                assert "reference_cache_id" in encoded.attrs
-                assert "source_cache_id" in encoded.attrs
 
         try:
             if cache_type == "reference":
@@ -586,12 +607,6 @@ class HDF5Encoder(BaseEncoder):
 
         # Check if properly formed
         with HDF5Encoder.assert_decode(fatal=True):
-            assert isinstance(list_group, h5py.Group)
-            assert list_group.attrs.get("iterable_type", "") in [
-                "list",
-                "tuple",
-                "set",
-            ]
             version = list_group.attrs.get("version", -1)
             _decode_hdf5_iterable_version(version, list_group)
 
@@ -738,9 +753,6 @@ class HDF5Encoder(BaseEncoder):
 
         # Check if properly formed
         with HDF5Encoder.assert_decode(fatal=True):
-            assert isinstance(dict_group, h5py.Group)
-            assert "keys" in dict_group
-            assert "values" in dict_group
             version = dict_group.attrs.get("version", -1)
             _decode_hdf5_dict_version(version, dict_group)
 
@@ -910,13 +922,8 @@ class HDF5Encoder(BaseEncoder):
 
         # Check if properly formed
         with HDF5Encoder.assert_decode(fatal=True):
-            assert isinstance(array_group, h5py.Group)
-            assert "shape" in array_group.attrs
-            assert "dtype" in array_group.attrs
             version = array_group.attrs.get("version", -1)
             _decode_hdf5_array_version(version, array_group)
-            array_type = array_group.attrs.get("array_type", None)
-            assert array_type in ["sparse_csr", "dense_complex", "dense_real"]
 
         array_type = array_group.attrs.get("array_type", None)
         if array_type == "sparse_csr":
@@ -1001,9 +1008,6 @@ class HDF5Encoder(BaseEncoder):
         class_group = encoded["class"]
 
         with HDF5Encoder.assert_decode(fatal=True):
-            assert isinstance(class_group, h5py.Group)
-            assert "module" in class_group.attrs
-            assert "class" in class_group.attrs
             version = class_group.attrs.get("version", -1)
             _decode_hdf5_class_version(version, class_group)
 
@@ -1061,18 +1065,8 @@ class HDF5Encoder(BaseEncoder):
         function_group = encoded["function"]
 
         with HDF5Encoder.assert_decode(fatal=True):
-            assert isinstance(function_group, h5py.Group)
             version = function_group.attrs.get("version", -1)
-            _decode_hdf5_function_version(version, function_group)
-            assert "source" in function_group
-            source_dataset = function_group["source"]
-            assert isinstance(source_dataset, h5py.Dataset)
-            source = source_dataset[()]
-            if isinstance(source, bytes):
-                source = source.decode("utf-8")
-            else:
-                source = str(source)
-            assert isinstance(source, str)
+            source = _decode_hdf5_function_version(version, function_group)
 
         return Serializable._eval_function_str(source, version)
 
@@ -1150,7 +1144,6 @@ class HDF5Encoder(BaseEncoder):
             assert encoded.attrs.get("encode_type", "") == "primitive"
 
         with HDF5Encoder.assert_decode(fatal=True):
-            assert "value" in encoded.attrs
             version = encoded.attrs.get("version", -1)
             _decode_hdf5_primitive_version(version, encoded)
 

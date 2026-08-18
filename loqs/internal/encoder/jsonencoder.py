@@ -24,11 +24,10 @@ from loqs.internal.encoder import BaseEncoder
 from loqs.internal.versioning import VersionedDecoder
 
 # Per-shape version dispatch (see VersionedDecoder) -- one registry per
-# encode_type, each holding one fully self-contained decoder per version
-# that shape has ever had. Version 2 introduces no new JSON shape at all
-# (only class-location renames, handled entirely inside Serializable), so
-# every registry below just aliases 2 to 1.
+# encode_type. Version 2 introduces no new JSON shape (only class-location
+# renames, handled inside Serializable), so every registry aliases 2 to 1.
 
+# ---- json_serializable ----
 _decode_json_serializable_shape = VersionedDecoder("json_serializable")
 
 
@@ -49,6 +48,7 @@ def _decode_json_serializable_shape_v1(encoded):
 _decode_json_serializable_shape.alias(2, same_as=1)
 
 
+# ---- json_cached_obj ----
 _decode_json_cached_obj_shape = VersionedDecoder("json_cached_obj")
 
 
@@ -71,6 +71,7 @@ def _decode_json_cached_obj_shape_v1(encoded):
 _decode_json_cached_obj_shape.alias(2, same_as=1)
 
 
+# ---- json_iterable ----
 _decode_json_iterable = VersionedDecoder("json_iterable")
 
 
@@ -94,14 +95,14 @@ def _decode_json_iterable_v1(encoded):
 _decode_json_iterable.alias(2, same_as=1)
 
 
+# ---- json_dict ----
 _decode_json_dict = VersionedDecoder("json_dict")
 
 
 @_decode_json_dict.register(0)
 def _decode_json_dict_v0(encoded):
-    # Version 0 never tagged dicts with their own version at all, so this
-    # doubles as the catch-all: rule out Serializable-obj/array shapes,
-    # which also decode as plain dicts if not caught here first.
+    # Also the catch-all for version 0 (never tagged): rule out
+    # Serializable-obj/array shapes, which also decode as plain dicts.
     assert "module" not in encoded
     assert "class" not in encoded
     assert encoded.get("type", "") != "matrix"
@@ -126,6 +127,7 @@ def _decode_json_dict_v1(encoded):
 _decode_json_dict.alias(2, same_as=1)
 
 
+# ---- json_array ----
 _decode_json_array = VersionedDecoder("json_array")
 
 
@@ -191,6 +193,7 @@ def _decode_json_array_v1(encoded):
 _decode_json_array.alias(2, same_as=1)
 
 
+# ---- json_class ----
 _decode_json_class_shape = VersionedDecoder("json_class")
 
 
@@ -209,6 +212,7 @@ def _decode_json_class_shape_v1(encoded):
 _decode_json_class_shape.alias(2, same_as=1)
 
 
+# ---- json_function ----
 _decode_json_function_source = VersionedDecoder("json_function")
 
 
@@ -230,6 +234,7 @@ def _decode_json_function_source_v1(encoded):
 _decode_json_function_source.alias(2, same_as=1)
 
 
+# ---- json_primitive ----
 _decode_json_primitive = VersionedDecoder("json_primitive")
 
 

@@ -93,7 +93,7 @@ As expected: no syndrome fires with no error; an error on `D0` or `D2` only viol
 
 ## A joint instrument: direct parity-check readout
 
-A genuine parity-check instrument has exactly **2 outcomes regardless of qubit count**: it isn't a $2^n$-outcome computational-basis measurement, but a single classical bit reporting which rank-$2^{n-1}$ parity subspace the state projected onto. We build one directly as a `OutcomeOperationDictInstrumentRep`, with `outcome_qubits` naming a classical register (`"synd_01"`/`"synd_12"`) that isn't tied to any physical qubit -- because here, there is no physical ancilla qubit to tie it to.
+A genuine parity-check instrument has exactly **2 outcomes regardless of qubit count**: it isn't a $2^n$-outcome computational-basis measurement, but a single classical bit reporting which rank-$2^{n-1}$ parity subspace the state projected onto. We build one directly as an `OutcomeOperationDictInstrumentRep`, with `outcome_qubits` naming a classical register (`"synd_01"`/`"synd_12"`) that isn't tied to any physical qubit -- because here, there is no physical ancilla qubit to tie it to.
 
 ```{code-cell} ipython3
 even_proj = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ())  # projects onto {|00>, |11>}

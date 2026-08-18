@@ -12,8 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Final, TypeAlias
 import warnings
 
 from loqs.core.instructions.instruction import Instruction
@@ -23,64 +22,32 @@ InstructionLabelLike: TypeAlias = (
 )
 """Objects that can be cast to a [](api:InstructionLabel)."""
 
+LEGACY_PENDING_INST_ARGS: Final[str] = "_legacy_inst_args"
+"""Reserved [](api:InstructionLabel) key for not-yet-remapped pre-1.2
+positional `inst_args`, when `instruction` is a bare string name.
+Remapping needs the resolved `Instruction`'s `param_priorities`,
+unavailable until `QuantumProgram._resolve_instruction` resolves it. An
+ordinary dict key (not a separate attribute) so it survives a plain
+decode-then-re-encode round trip.
+"""
+
 
 def _remap_legacy_positional_args(
     instruction: Instruction, inst_args: tuple, inst_kwargs: dict
 ) -> dict:
-    """Map pre-#104 positional `inst_args` onto their real keyword names.
+    """Map pre-1.2 positional `inst_args` onto their real keyword names.
 
-    The historical convention (confirmed directly from the deleted
-    pre-#104 `QuantumProgram._run_shot`/`_collect_kwarg`, not guessed):
-    positional index *i* corresponds to the *i*-th key of
-    `instruction.param_priorities` (dict insertion order), stored under
-    that key's *aliased* name (`instruction.param_alias(key)`) -- the same
-    name `inst_kwargs` already used. A positional value takes precedence
-    over a same-key `inst_kwargs` entry, matching the old `_collect_kwarg`,
-    which checked the positional slot before falling back to a keyword.
+    Positional index *i* is the *i*-th key of
+    `instruction.param_priorities` (insertion order), stored under its
+    aliased name (`param_alias(key)`) -- the historical `_collect_kwarg`
+    convention. A positional value wins over a same-key `inst_kwargs`
+    entry, as `_collect_kwarg` did too.
     """
     merged = dict(inst_kwargs)
     for i, key in enumerate(instruction.param_priorities.keys()):
         if i < len(inst_args):
             merged[instruction.param_alias(key)] = inst_args[i]
     return merged
-
-
-@dataclass
-class _PendingLegacyInstructionLabel:
-    """A not-yet-resolvable pre-#104 `InstructionLabel`, found while
-    decoding an old file.
-
-    Produced by `InstructionLabel._from_decoded_attrs` when the label's
-    `instruction` is a bare string name rather than an already-resolved
-    `Instruction` -- resolving a name requires sibling `global_instructions`/
-    a current patch layout that a nested object's own decode never sees
-    (mirrors `Serializable`'s existing `DeferredRef` pattern for the same
-    kind of "needs context from further up the decode" problem). Finished
-    by `QuantumProgram`'s own `_from_decoded_attrs`, which does have that
-    context once all of its own sibling attributes are decoded.
-    """
-
-    inst_label: str
-    patch_label: str | None
-    inst_args: tuple
-    inst_kwargs: dict
-
-    def _unresolved_error(self) -> RuntimeError:
-        return RuntimeError(
-            f"This old-format InstructionLabel (referencing "
-            f"{self.inst_label!r}) was never resolved during decode -- a "
-            "bare InstructionStack has no global_instructions/patch "
-            "context to resolve an old string-named label against. "
-            "Decode it as part of its original QuantumProgram instead, "
-            "which finishes resolving any such label once its sibling "
-            "attributes are available."
-        )
-
-    def __getitem__(self, key: object) -> object:
-        raise self._unresolved_error()
-
-    def get(self, key: object, default: object = None) -> object:
-        raise self._unresolved_error()
 
 
 class InstructionLabel(dict):
@@ -168,14 +135,10 @@ class InstructionLabel(dict):
             later, stored under the reserved `"instruction"` key.
 
         *legacy_positional_args:
-            Deprecated. Pre-#104 code called this
-            `(patch_label, inst_args, inst_kwargs)` positionally; passing
-            any of these warns and remaps them onto their real keyword
-            names (see [](api:InstructionLabel._from_decoded_attrs)),
-            requiring `instruction` to already be a resolved
-            [](api:Instruction) (a bare name can't be remapped without
-            knowing its parameters). New code should use keyword
-            arguments directly instead.
+            Deprecated. Pre-1.2 code called this `(patch_label, inst_args,
+            inst_kwargs)` positionally; passing any warns and remaps them
+            onto keyword names, requiring `instruction` already be a
+            resolved [](api:Instruction). Use keyword arguments instead.
 
         **kwargs:
             Any other data this label carries, forwarded as kwarg
@@ -220,22 +183,14 @@ class InstructionLabel(dict):
         return f"InstructionLabel({dict.__repr__(self)})"
 
     @classmethod
-    def _from_decoded_attrs(
-        cls, attr_dict: Mapping
-    ) -> "InstructionLabel | _PendingLegacyInstructionLabel":
-        """Decode-only compatibility for the pre-#104 5-attr `Serializable`
+    def _from_decoded_attrs(cls, attr_dict: Mapping) -> "InstructionLabel":
+        """Decode-only compatibility for the pre-1.2 5-attr `Serializable`
         shape (`instruction`/`inst_label`/`patch_label`/`inst_args`/
-        `inst_kwargs`). Modern `InstructionLabel` is a plain `dict`
-        subclass and never encodes this way, so this classmethod is only
-        ever reached for genuinely old data -- safe to add even though the
-        class no longer inherits `Serializable`, since decode dispatches
-        by duck-typing alone. If `instruction` is already a resolved
-        [](api:Instruction), the remap happens right here; if it's a bare
-        `inst_label` string instead, resolving it needs sibling
-        `global_instructions`/patch context this nested decode can't see,
-        so a [](api:_PendingLegacyInstructionLabel) placeholder is
-        returned instead, finished later by
-        [](api:QuantumProgram._from_decoded_attrs)."""
+        `inst_kwargs`). If `instruction` is already resolved, the
+        positional-arg remap happens here. A bare `inst_label` string
+        needs no special handling -- only non-empty `inst_args` does,
+        stashed under [](api:LEGACY_PENDING_INST_ARGS) for
+        `QuantumProgram._resolve_instruction` to remap once resolved."""
         instruction = attr_dict.get("instruction")
         inst_label = attr_dict.get("inst_label")
         patch_label = attr_dict.get("patch_label")
@@ -251,12 +206,12 @@ class InstructionLabel(dict):
             return cls(instruction, **remapped)
 
         assert isinstance(inst_label, str)
-        return _PendingLegacyInstructionLabel(
-            inst_label=inst_label,
-            patch_label=patch_label,
-            inst_args=inst_args,
-            inst_kwargs=inst_kwargs,
-        )
+        kwargs = dict(inst_kwargs)
+        if patch_label is not None:
+            kwargs["patch_label"] = patch_label
+        if inst_args:
+            kwargs[LEGACY_PENDING_INST_ARGS] = inst_args
+        return cls(inst_label, **kwargs)
 
     @classmethod
     def from_raw(cls, obj: object) -> InstructionLabel:
@@ -304,17 +259,3 @@ class InstructionLabel(dict):
                 '"patch_label": ..., <other kwargs>}.'
             )
         raise TypeError(f"Cannot cast {obj!r} to an InstructionLabel")
-
-
-def _finish_pending_legacy_label(
-    pending: _PendingLegacyInstructionLabel, instruction: Instruction
-) -> InstructionLabel:
-    """Complete a [](api:_PendingLegacyInstructionLabel) once its target
-    [](api:Instruction) has been resolved (see
-    `QuantumProgram._from_decoded_attrs`)."""
-    remapped = _remap_legacy_positional_args(
-        instruction, pending.inst_args, pending.inst_kwargs
-    )
-    if pending.patch_label is not None:
-        remapped["patch_label"] = pending.patch_label
-    return InstructionLabel(instruction, **remapped)

@@ -25,11 +25,9 @@ def install_legacy_module(dotted_name: str, exports: dict[str, object]) -> None:
 
     Registers a synthetic module in `sys.modules` and as an attribute of
     its parent package, so both `import <dotted_name>` and
-    `from <dotted_name> import <name>` succeed exactly as if a real module
-    existed at that historical location. Relies on parent packages always
-    being imported before Python attempts to resolve a dotted child module,
-    so calling this once inside the parent's own `__init__.py` is enough to
-    guarantee it runs before any import of the historical path is attempted.
+    `from <dotted_name> import <name>` succeed as if a real module existed
+    there. Call once from the parent package's own `__init__.py`, so it
+    runs before anything tries to import the historical path.
     """
     assert dotted_name not in sys.modules, f"{dotted_name} already exists"
     module = types.ModuleType(dotted_name)
@@ -74,17 +72,11 @@ def make_legacy_construction_shim(
 
 
 _LEGACY_CONSTRUCTION_PATTERNS: dict[str, re.Pattern] = {
-    # A straight class-location rename (e.g. PatchDict -> PatchLayout) is
-    # deliberately not listed here: Serializable._update_imports already
-    # rewrites every occurrence of the old name throughout frozen source,
-    # not just the import line, so there's no runtime risk left to gate.
-    # Only a calling-convention change with the *same* class name needs
-    # an entry, since no rename can fix that.
-    #
-    # A second bare positional argument after the instruction itself
-    # (not a keyword=) is the telltale sign of the old positional form;
-    # the modern constructor only ever takes keyword arguments past the
-    # first.
+    # Only calling-convention changes need an entry -- a straight class
+    # rename doesn't, since Serializable._update_imports already rewrites
+    # every occurrence of the old name in frozen source. Detected via a
+    # second bare positional argument after the instruction itself, the
+    # telltale sign of the old positional InstructionLabel form.
     "InstructionLabel (old positional form)": re.compile(
         r"InstructionLabel\([^()]*?,\s*(?!patch_labels?\s*=)[^()=,\s]"
     ),
@@ -94,16 +86,12 @@ _LEGACY_CONSTRUCTION_PATTERNS: dict[str, re.Pattern] = {
 def detect_legacy_construction(source: str) -> list[str]:
     """Cheap regex scan for known legacy-construction patterns in source text.
 
-    Returns the name of each pattern found (empty list if none). This is a
-    lighter, decode-time-only cousin of the full source-migration tool's
-    detection engine: pattern matching only, not a real parse, so it can
-    miss unusual formatting (aliased imports, etc.) -- it exists to catch
-    the common case cheaply during decode, not to be exhaustive; the
-    migration tool itself uses a real `ast`-based scan. Only lists
-    patterns with no other fix available (see the module-level comment on
-    `_LEGACY_CONSTRUCTION_PATTERNS`) -- a straight class rename needs no
-    entry here at all, since `_update_imports` already fixes those
-    transparently.
+    Returns the name of each pattern found (empty if none). Pattern
+    matching only, not a real parse -- trades exhaustiveness for a fast
+    decode-time check (a real `ast`-based scan lives in the separate
+    migration tool). Only covers patterns with no other fix available; a
+    straight class rename needs no entry, since `_update_imports` already
+    fixes those.
     """
     return [
         name

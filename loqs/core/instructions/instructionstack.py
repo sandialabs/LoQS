@@ -16,10 +16,7 @@ import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core.instructions import Instruction, InstructionLabel
-from loqs.core.instructions.instructionlabel import (
-    InstructionLabelLike,
-    _PendingLegacyInstructionLabel,
-)
+from loqs.core.instructions.instructionlabel import InstructionLabelLike
 from loqs.internal import Displayable
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.encoder.jsonencoder import JSONEncoder
@@ -129,27 +126,13 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
 
     @classmethod
     def _from_decoded_attrs(cls, attr_dict) -> "InstructionStack":
-        """Build from already-decoded items, casting each through
-        `InstructionLabel.from_raw` -- except a
-        `_PendingLegacyInstructionLabel` placeholder (issue #97), passed
-        through untouched since `from_raw` would otherwise reject it. The
-        cast itself still has to happen here (a modern `InstructionLabel`
-        decodes as a plain `dict`, with no `encode_type: "Serializable"`
-        of its own): skipping it unconditionally would regress every
-        ordinary, non-legacy decode into holding plain dicts. Any pending
-        placeholder is left for `QuantumProgram._from_decoded_attrs` to
-        resolve once sibling `global_instructions`/patch context is
-        available; a bare `InstructionStack` decoded with no enclosing
-        `QuantumProgram` raises clearly the first time such a placeholder
-        is actually used instead."""
+        """Build from decoded items, casting each through
+        `InstructionLabel.from_raw` -- still needed since a modern
+        `InstructionLabel` decodes as a plain `dict`, with no
+        `encode_type` of its own."""
         obj = cls()
         obj._instructions = [
-            (
-                item
-                if isinstance(item, _PendingLegacyInstructionLabel)
-                else InstructionLabel.from_raw(item)
-            )
-            for item in attr_dict["_instructions"]
+            InstructionLabel.from_raw(item) for item in attr_dict["_instructions"]
         ]
         return obj
 

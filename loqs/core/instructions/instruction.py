@@ -455,14 +455,11 @@ class Instruction(Displayable):
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
         version = attr_dict["version"]
 
-        # A file older than SERIALIZATION_VERSION may freeze source using
-        # a now-incompatible calling convention (see legacy.py's
-        # detect_legacy_construction) -- gated behind an explicit opt-in
-        # rather than silently re-executing old, unreviewed code by
-        # default. Only scan an actual string: a version-0 file's source
-        # may already have been evaluated into a live callable by this
-        # point (decode_function's own version-0 heuristic), leaving no
-        # text to scan.
+        # Gate re-executing an old, now-incompatible calling convention
+        # behind an explicit opt-in rather than doing it silently. Only
+        # scan an actual string -- a version-0 file's source may already
+        # be a live callable by this point (decode_function's own
+        # version-0 heuristic), leaving nothing to scan.
         if version < SERIALIZATION_VERSION and not MIGRATE_LEGACY_FNS.get():
             found = []
             if isinstance(serialized_apply_fn, str):

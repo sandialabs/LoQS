@@ -17,19 +17,19 @@ both JSON and HDF5, as they are actually serialized by the current code.
 
 Run with: `python tests/backends/model/fixtures/generate_model_fixtures.py`
 
-Historical note (LoQS#72, then issue #97): this script uses the
-pre-refactor `RepTuple`/`GateRep`/`InstrumentRep` enum-based API and
-constructs a real `STIMDictNoiseModel`. Both were already unconstructible
-after LoQS#72's class-hierarchy refactor, and issue #97 later removed
-both classes entirely -- this script can therefore no longer even be
-*imported* against current code, let alone executed (excluded from
-pytest's collection in `pytest.ini` for exactly this reason). It is kept
-only as a historical record of exactly how
+Historical note: this script uses the pre-v1.2 `RepTuple`/`GateRep`/
+`InstrumentRep` enum-based API and constructs a real `STIMDictNoiseModel`,
+neither of which even *import* against current code (both removed
+entirely in v1.2; excluded from pytest's collection in `pytest.ini` for
+the same reason). It is kept only as a historical record of exactly how
 `dictmodel_v1.{json,h5}`/`stimdictmodel_v1.{json,h5}` (the frozen fixtures
-it originally produced) were generated. Those fixtures are still very
-much live -- `stimdictmodel_v1.{json,h5}` is the byte-for-byte regression
-oracle for `STIMDictNoiseModel`'s decode redirect to `DictNoiseModel` (see
-`tests/backends/model/test_dictmodel.py`).
+it originally produced) were generated -- `stimdictmodel_v1.{json,h5}` is
+still live, as the byte-for-byte regression oracle for
+`STIMDictNoiseModel`'s decode redirect to `DictNoiseModel` (see
+`tests/backends/model/test_dictmodel.py`). As with the rep fixtures
+script, an alternative would be updating this script to the current API
+and regenerating a fresh fixture alongside the old one, rather than
+keeping it frozen.
 """
 
 from __future__ import annotations

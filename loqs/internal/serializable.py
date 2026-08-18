@@ -68,10 +68,8 @@ class DecodableVersionError(Exception):
 IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
     int, dict[tuple[str, str], tuple[str, str] | None]
 ] = {
-    # A value of None means the name was deleted outright at that version,
-    # not relocated -- decoding should fail clearly rather than attempt an
-    # unpack. A version with no changes at all simply has no entry here
-    # (see _get_cumulative_changes, which treats a missing entry as empty).
+    # None means the name was deleted outright, not relocated -- decoding
+    # then fails clearly. A version with no changes has no entry at all.
     1: {
         ("loqs.core.syndrome", "SyndromeLabel"): (
             "loqs.core.syndromelabel",
@@ -89,8 +87,8 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
         ),
     },
     2: {
-        # `*CastableTypes` -> `*Like` renames (issue #96): every one keeps
-        # the same module, only the class name changes.
+        # `*CastableTypes` -> `*Like` renames: every one keeps the same
+        # module, only the class name changes.
         ("loqs.core.instructions.instructionlabel", "InstructionLabelCastableTypes"): (
             "loqs.core.instructions.instructionlabel",
             "InstructionLabelLike",
@@ -154,33 +152,28 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.backends.circuit.stimcircuit",
             "STIMCircuitLike",
         ),
-        # Deleted outright, not renamed: DictNoiseModel.__init__'s signature
-        # change (issue #96) dropped the castable model_or_dicts parameter
-        # entirely rather than replacing it with a same-shaped *Like type.
+        # Deleted outright, not renamed: DictNoiseModel.__init__ dropped
+        # this castable parameter rather than replacing it with a
+        # same-shaped *Like type.
         ("loqs.backends.model.dictmodel", "DictModelCastableTypes"): None,
-        # Castable/SeqCastable/MapCastable mixins themselves, deleted
-        # outright (issue #96). Both historical module paths are listed
-        # since the module moved once (utils -> internal) before removal.
+        # Castable/SeqCastable/MapCastable mixins, deleted outright; both
+        # historical module paths (utils -> internal) are listed.
         ("loqs.internal.castable", "Castable"): None,
         ("loqs.internal.castable", "SeqCastable"): None,
         ("loqs.internal.castable", "MapCastable"): None,
         ("loqs.utils.castable", "Castable"): None,
         ("loqs.utils.castable", "SeqCastable"): None,
         ("loqs.utils.castable", "MapCastable"): None,
-        # PatchDict -> PatchLayout (issue #103/#97): PatchLayout is a
-        # strict superset (adds `relations`, defaulting to {} when
-        # missing), so decode redirects straight to it with no shim class
-        # needed at all -- see loqs/core/recordables/__init__.py for the
-        # separate, construction-time-only compatibility shim.
+        # PatchDict -> PatchLayout: a strict superset (adds `relations`,
+        # defaulting to {}), so decode redirects with no shim class needed
+        # (see recordables/__init__.py for the construction-time shim).
         ("loqs.core.recordables.patchdict", "PatchDict"): (
             "loqs.core.recordables.patchlayout",
             "PatchLayout",
         ),
-        # RepTuple/STIMDictNoiseModel: complete removal per issue #97 --
-        # both classes are deleted outright, with no construction shim at
-        # all (both already hard-failed on direct construction). Decode
-        # redirects straight to the modern class, whose own
-        # _from_decoded_attrs now absorbs the old shape-handling logic.
+        # RepTuple/STIMDictNoiseModel: deleted outright, with no
+        # construction shim (both already hard-failed on direct
+        # construction). Decode redirects to the modern class instead.
         ("loqs.backends.reps", "RepTuple"): (
             "loqs.backends.reps.base",
             "OperationRep",
@@ -197,24 +190,27 @@ SERIALIZATION_VERSION = 2
 
 0: First version. JSON encoding only, per-shot checkpointing only.
 1: HDF5 encoding now available. Backwards compatible to version 0.
-2: `*CastableTypes` -> `*Like` renames (issue #96) and the
-   `Castable`/`SeqCastable`/`MapCastable`/`DictModelCastableTypes` removals
-   finally get real compatibility entries (issue #97); see
-   IMPORT_LOCATION_CHANGES_BY_VERSION.
+2: `*CastableTypes` -> `*Like` renames and several class removals/
+   relocations; see IMPORT_LOCATION_CHANGES_BY_VERSION.
 """
+
+# Module-level ContextVars below stand in for a "global-ish" flag set once
+# at a top-level call and read deep inside the generic recursive decode
+# dispatch, without threading a parameter through every layer in between.
+#
+# TODO: `ignore_no_serialize_flags` (encode-side; threaded explicitly
+# through BaseEncoder/JSONEncoder/HDF5Encoder and every `_get_encoding_attr`
+# override) looks like a good candidate for the same treatment -- every
+# call site just relays it unchanged. Watch for `Serializable._serial_hash`,
+# which deliberately wants `False` regardless of any ambient encode.
 
 MIGRATE_LEGACY_FNS: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "migrate_legacy_fns", default=False
 )
-"""Whether decoding may silently run a known legacy-construction pattern
-found inside an old `Instruction`'s frozen `apply_fn`/`map_qubits_fn`
-source (e.g. an old-style positional `InstructionLabel(...)` call) rather
-than raising a clear error. Set for the duration of a top-level
-`Serializable.read`/`.load` call (see the `migrate_legacy_fns` parameter
-there), read once in `Instruction._from_decoded_attrs`. Only governs
-re-execution of patterns found inside a decoded file's frozen source --
-it cannot and does not gate a user's own plain, hand-typed legacy
-construction.
+"""Whether decoding may run a known legacy-construction pattern found in
+an old `Instruction`'s frozen source, rather than raising a clear error.
+Set for the duration of a `Serializable.read`/`.load` call, read once in
+`Instruction._from_decoded_attrs`.
 """
 
 
@@ -1458,9 +1454,7 @@ class Serializable:
                     if key in loc_change:
                         new_location = loc_change[key]
                         if new_location is None:
-                            # Name was deleted outright (not relocated) in
-                            # a later version -- drop its import line
-                            # entirely rather than attempt to unpack None.
+                            # Deleted outright -- drop the import line.
                             continue
                         new_module, new_name = new_location
                         if alias:
@@ -1574,16 +1568,14 @@ class Serializable:
     def _get_cumulative_changes(initial_version):
         assert initial_version < SERIALIZATION_VERSION
 
-        # Get cumulative changes in import locations. `.get(..., {})` rather
-        # than `[...]`: a version with no import-location changes at all
-        # (e.g. a version bump for encoding-shape reasons only) simply has
-        # no entry here, not an empty one -- that must not be a KeyError.
+        # `.get(..., {})`: a version with no import-location changes has no
+        # entry at all here, not an empty one -- must not raise KeyError.
         complete_location_changes = IMPORT_LOCATION_CHANGES_BY_VERSION.get(
             initial_version + 1, {}
         ).copy()
 
-        # Walk every later version and fold its changes into the running
-        # map, composing multi-hop renames (A -> B, B -> C becomes A -> C).
+        # Compose multi-hop renames across every later version (A -> B,
+        # B -> C becomes A -> C).
         for version in range(initial_version + 2, SERIALIZATION_VERSION + 1):
             for new_k, new_v in IMPORT_LOCATION_CHANGES_BY_VERSION.get(
                 version, {}

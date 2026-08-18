@@ -78,16 +78,11 @@ class OperationRep(ABC, Displayable):
 
     @classmethod
     def _from_decoded_attrs(cls, attr_dict: Mapping[str, Any]) -> "OperationRep":
-        # `OperationRep` is only ever the *recorded* class for a value
-        # serialized under the pre-refactor RepTuple(rep, qubits, reptype)
-        # format (only concrete leaf classes are instantiable, so current
-        # code never produces a serialized object whose recorded class is
-        # this abstract base) -- issue #97's complete removal of RepTuple
-        # redirects its old (module, class) straight here via
-        # IMPORT_LOCATION_CHANGES_BY_VERSION, so this absorbs exactly the
-        # dispatch RepTuple._from_decoded_attrs used to do. Deferred
-        # import avoids a circular dependency, since legacy.py itself
-        # imports from this module (via gatereps.py/instrumentreps.py).
+        # OperationRep is only ever the *recorded* class for a value
+        # serialized under the old RepTuple(rep, qubits, reptype) format --
+        # decode redirects RepTuple straight here, so this absorbs its old
+        # dispatch logic. Deferred import avoids a circular dependency with
+        # legacy.py.
         if cls is OperationRep:
             from loqs.backends.reps.legacy import (
                 _LegacyGateRepValue,
