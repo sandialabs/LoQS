@@ -21,7 +21,7 @@ Three independent passes, run in order, together making up [](api:migrate_source
 
 1. [](api:loqs.tools.migrate.renames): straight `(module, name)` renames,
    always confidently rewritable.
-2. [](api:loqs.tools.migrate.labels): pre-#104 positional `InstructionLabel`
+2. [](api:loqs.tools.migrate.labels): pre-1.2 positional `InstructionLabel`
    construction, rewritten when the target instruction can be resolved
    (see [](api:loqs.tools.migrate.config)), flagged for manual review
    otherwise.

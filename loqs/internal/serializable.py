@@ -105,19 +105,13 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.recordables.pauliframe",
             "PauliFrameLike",
         ),
-        # PatchDictCastableTypes -> PatchLayoutLike, not PatchDictLike: this
-        # entry moves the *type alias* to the same real module PatchDict
-        # itself (below) redirects to -- loqs.core.recordables.patchdict no
-        # longer has a real implementation to rename within, only a
-        # construction-only legacy shim exporting `PatchDict` alone (see
-        # loqs/core/recordables/__init__.py), which doesn't define a
-        # `PatchDictLike` attribute at all. Found via a real regression
-        # test (every RENAMES target should be a live, importable
-        # attribute), not from a bug report -- exercising this specific
-        # entry requires an old frozen function that itself imports
-        # PatchDictCastableTypes by name (a type alias, not a class most
-        # code would reference directly), so unlikely to have been hit in
-        # practice yet.
+        # PatchDictCastableTypes -> PatchLayoutLike, not PatchDictLike:
+        # loqs.core.recordables.patchdict no longer has a real
+        # implementation to rename within, only a construction-only
+        # legacy shim exporting `PatchDict` (see
+        # loqs/core/recordables/__init__.py), with no `PatchDictLike`
+        # attribute at all. Found via a regression test (every RENAMES
+        # target should be a live, importable attribute).
         ("loqs.core.recordables.patchdict", "PatchDictCastableTypes"): (
             "loqs.core.recordables.patchlayout",
             "PatchLayoutLike",
@@ -231,15 +225,12 @@ LEGACY_INSTRUCTION_REGISTRY: contextvars.ContextVar[
 ] = contextvars.ContextVar("legacy_instruction_registry", default=None)
 """An optional `{name: Instruction}` registry (typically a `QECCode`'s own
 `instructions` dict), used by `_update_legacy_constructions` to resolve
-and rewrite an old-format `InstructionLabel(...)` construction found
-inside a decoded file's frozen source -- the same detect/resolve/rewrite
-engine `loqs.tools.migrate` itself uses, applied at decode time instead of
-to a standalone `.py` file. Set for the duration of a top-level
-`Serializable.read`/`.load` call via the `instruction_registry` parameter
-there. When a rewrite succeeds, the pattern no longer trips
-`MIGRATE_LEGACY_FNS`'s gate at all -- supplying a registry can make
-`migrate_legacy_fns=True` unnecessary for a file whose only obstacle was
-this exact pattern.
+and rewrite an old-format `InstructionLabel(...)` construction found in a
+decoded file's frozen source, sharing `loqs.tools.migrate`'s own
+detect/resolve/rewrite engine. Set for the duration of a
+`Serializable.read`/`.load` call via its `instruction_registry` parameter
+-- a successful rewrite means `MIGRATE_LEGACY_FNS`'s gate never trips for
+that pattern at all.
 """
 
 
@@ -1549,21 +1540,18 @@ class Serializable:
     @staticmethod
     def _update_legacy_constructions(function_str: str, version: int) -> str:
         """Rewrite any resolvable old-format `InstructionLabel(...)`
-        construction in a frozen function's source, using the same
-        detect/resolve/rewrite engine `loqs.tools.migrate` uses on
-        standalone files (`loqs.tools.migrate.labels`) -- a sibling pass
-        to `_update_imports`, not a generalization of it (see the
-        `feat-97` plan's Part 3.5.3): renames are a pure text-level
-        substitution problem, this is a real (if narrow) source rewrite.
+        construction in a frozen function's source, sharing
+        `loqs.tools.migrate.labels`'s own detect/resolve/rewrite engine --
+        a sibling pass to `_update_imports`, not a generalization of it,
+        since renames are a pure text substitution while this is a real
+        (if narrow) source rewrite.
 
-        A no-op unless `version < SERIALIZATION_VERSION` and both an
-        `InstructionLabel` old-format candidate and a
-        `LEGACY_INSTRUCTION_REGISTRY` (see that `ContextVar`'s own
-        docstring) are present; also a no-op, rather than an error, if
-        `loqs.tools.migrate`'s optional `libcst` dependency isn't
-        installed -- this is a best-effort improvement layered on top of
-        the `MIGRATE_LEGACY_FNS` gate (`Instruction._from_decoded_attrs`),
-        never a requirement for decoding to work at all.
+        Returns `function_str` unchanged once `version >=
+        SERIALIZATION_VERSION`, if `loqs.tools.migrate`'s optional
+        `libcst` dependency isn't installed, or if no
+        `LEGACY_INSTRUCTION_REGISTRY` resolves anything to rewrite -- a
+        best-effort improvement layered on top of the `MIGRATE_LEGACY_FNS`
+        gate, never a requirement for decoding to work at all.
         """
         if version >= SERIALIZATION_VERSION:
             return function_str

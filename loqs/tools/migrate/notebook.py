@@ -31,10 +31,9 @@ where state (including imports) persists across cells. A renamed class
 used bare in a later cell, relying on an import done in an earlier one,
 is neither rewritten nor flagged, since [](api:rewrite_renames)'s
 `QualifiedNameProvider`-based resolution can't see that import from
-inside this cell alone. Not currently a problem for
-`docs/notebooks/*.md` (already fully migrated -- see Part 3.1 of the
-`feat-97` plan's own direct grep confirming this), but worth knowing
-about for a user's own notebook.
+inside this cell alone. Not currently a problem for `docs/notebooks/*.md` itself (confirmed
+clean by direct inspection), but worth knowing about for a user's own
+notebook.
 """
 
 from __future__ import annotations

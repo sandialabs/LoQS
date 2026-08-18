@@ -54,7 +54,7 @@ def _iter_target_files(path: Path) -> list[Path]:
 
 
 def _migrate_file(path: Path, config: MigrationConfig) -> MigrationResult:
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     instructions = config.instructions_for(path)
     if path.suffix == ".md":
         return migrate_notebook_source(source, instructions=instructions)
@@ -86,7 +86,7 @@ def _run(paths: list[Path], config: MigrationConfig, *, write: bool) -> int:
             action = "would rewrite" if not write else "rewrote"
             print(f"{file}: {action}")
             if write:
-                file.write_text(result.source)
+                file.write_text(result.source, encoding="utf-8")
 
         for item in result.manual_review:
             any_manual_review = True

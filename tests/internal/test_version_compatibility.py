@@ -370,15 +370,13 @@ class TestMigrateLegacyFnsGate:
 
 
 class TestUpdateLegacyConstructions:
-    """Regression tests for `Serializable._update_legacy_constructions`
-    (issue #97's Sub-problem C): rewriting a resolvable old-format
-    `InstructionLabel(...)` construction inside a frozen function's
-    source at decode time, so a pattern the rewrite fixes never needs
-    `migrate_legacy_fns=True` at all. A sibling pass to `_update_imports`
-    (see `loqs/tools/migrate/renames.py`'s own docstring for why renames
-    and this aren't the same mechanism), sharing its detect/resolve/
-    rewrite engine with the standalone `loqs.tools.migrate` library
-    rather than duplicating it.
+    """Regression tests for `Serializable._update_legacy_constructions`:
+    rewriting a resolvable old-format `InstructionLabel(...)` construction
+    inside a frozen function's source at decode time, so a pattern the
+    rewrite fixes never needs `migrate_legacy_fns=True` at all. A sibling
+    pass to `_update_imports`, sharing its detect/resolve/rewrite engine
+    with the standalone `loqs.tools.migrate` library rather than
+    duplicating it.
     """
 
     libcst = pytest.importorskip("libcst")

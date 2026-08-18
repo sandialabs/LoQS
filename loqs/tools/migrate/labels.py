@@ -7,54 +7,34 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Rewrite pre-#104 positional `InstructionLabel` construction to the
+"""Rewrite pre-1.2 positional `InstructionLabel` construction to the
 modern keyword form.
 
-Two source shapes are recognized, both matching pre-#104's
-`(instruction, patch_label, inst_args, inst_kwargs)` convention:
-
-1. A direct `InstructionLabel(instruction, patch_label, inst_args,
-   inst_kwargs)` call with more than one positional argument.
-2. A bare tuple literal of length 3 or 4, matching the same heuristic used
-   for [](api:loqs.internal.legacy.detect_legacy_construction)'s decode-time
-   cousin: a 4-tuple whose 3rd element is itself an empty tuple (the
-   `inst_args` placeholder), or a 3-tuple whose 2nd element is `None` (a
-   global, unpatched instruction with non-empty `inst_args`). A 3-tuple
-   with a *string* 2nd element is deliberately **not** treated as a
-   candidate, even though it matches pre-#104's shape for a per-patch
-   instruction: real testing against `docs/notebooks/buildinstruction.md`
-   found this collides constantly with an unrelated, far more common
-   pattern -- a raw pyGSTi circuit-layer gate-label tuple, e.g.
-   `("Gcphase", "A0", "D4")`, has the exact same 3-string-element shape.
-   Since that collision is expected to dominate real source files (pyGSTi
-   circuit layers appear throughout the codebase, this specific legacy
-   shape does not), this case is left undetected rather than flooding
-   every report with false positives.
+Two source shapes are recognized, both matching pre-1.2's `(instruction,
+patch_label, inst_args, inst_kwargs)` convention: a direct
+`InstructionLabel(...)` call with more than one positional argument, or a
+bare 3-/4-tuple literal matching the same heuristic as
+[](api:loqs.internal.legacy.detect_legacy_construction)'s decode-time
+cousin. A 3-tuple with a *string* 2nd element is deliberately **not**
+treated as a candidate, even though it matches this shape for a per-patch
+instruction: real testing found this collides constantly with an
+unrelated, far more common pattern -- a raw pyGSTi circuit-layer
+gate-label tuple, e.g. `("Gcphase", "A0", "D4")`, has the exact same
+3-string-element shape and is expected to dominate real source files.
 
 Rewriting either shape requires knowing the target [](api:Instruction)'s
-`param_priorities`/`param_alias` (to map a positional slot onto its real
-keyword name) -- the same algorithm [](api:InstructionLabel._from_decoded_attrs)
-already uses at decode time, reimplemented here to work on unevaluated CST
-expression nodes instead of runtime values, so an argument's *source text*
-can be carried over verbatim without needing its runtime value. This is
-only possible when:
-
-- the instruction is named by a string literal that resolves against the
-  caller-supplied instruction registry (see
-  [](api:loqs.tools.migrate.config)). A non-literal first argument (a
-  variable, a function call, ...) is always flagged instead, since its
-  runtime value can't be known statically -- it may already work fine
-  as-is today with only a `DeprecationWarning` if it evaluates to an
-  already-resolved `Instruction` object (see `InstructionLabel.__init__`),
-  or it may raise a `TypeError` instead if it evaluates to a bare
-  instruction-name string, a real shape confirmed in
-  `QuantumProgram_v1.json.gz`'s own frozen source; and
-- `inst_args`/`inst_kwargs` are themselves literal tuple/list/dict
-  expressions (their *elements'* values may be arbitrary expressions,
-  spliced through unevaluated -- only their own shape needs to be static).
-
-Anything else is flagged for manual review rather than guessed, per this
-tool's overall design goal (see the `feat-97` plan's Sub-problem B).
+`param_priorities`/`param_alias` -- the same algorithm
+[](api:InstructionLabel._from_decoded_attrs) already uses at decode time,
+reimplemented here over unevaluated CST expression nodes, so an
+argument's *source text* carries over verbatim without needing its
+runtime value. Only possible when the instruction is named by a string
+literal resolving against a caller-supplied registry (see
+[](api:loqs.tools.migrate.config)) -- a non-literal first argument is
+always flagged instead, since its runtime value can't be known statically
+-- and `inst_args`/`inst_kwargs` are themselves literal tuple/list/dict
+expressions (their *elements'* values may be arbitrary expressions,
+spliced through unevaluated). Anything else is flagged for manual review
+rather than guessed.
 """
 
 from __future__ import annotations
@@ -208,20 +188,12 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         only flagged (caller should leave the original node unchanged)."""
         instr_name = _string_value(instruction_expr)
         if instr_name is None:
-            # The first argument is some other expression (a variable, a
-            # function call, ...) rather than a string literal -- its
-            # runtime value can't be known statically, so which of two
-            # very different real behaviors applies can't be either: if
-            # it evaluates to an already-resolved Instruction object,
-            # this already works today via a DeprecationWarning
-            # (InstructionLabel.__init__'s own legacy-positional-args
-            # handling); if it evaluates to a bare instruction-name
-            # string instead, that same code path raises a TypeError
-            # instead (confirmed against a real case:
-            # QuantumProgram_v1.json.gz's "Repeat-until-success FT Minus
-            # Prep" instruction freezes `InstructionLabel(rus_key,
-            # patch_label, None, {...})`, where `rus_key` is itself a
-            # string-valued parameter, not a resolved Instruction).
+            # Non-literal first arg: its runtime value can't be known
+            # statically, so which of two very different real behaviors
+            # applies can't be either (already-resolved Instruction ->
+            # DeprecationWarning; bare name string -> TypeError) --
+            # confirmed against a real case, QuantumProgram_v1.json.gz's
+            # own "Repeat-until-success FT Minus Prep" instruction.
             self._flag(
                 original_node,
                 "First argument isn't a string literal, so it can't be "
@@ -287,12 +259,11 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             for a in updated_node.args
             if a.keyword is not None
         }
-        # A `**kwargs`-style unpack (e.g. InstructionLabel(instruction,
-        # **kwargs)) is already the modern calling convention -- its
-        # Arg has keyword=None like a positional one, but doesn't affect
-        # positional-arg counting or need remapping; carried through
-        # verbatim on any rewrite instead of merged into named keys,
-        # since its contents can't be known statically either.
+        # A `**kwargs`-style unpack already uses the modern convention --
+        # its Arg has keyword=None like a positional one, but doesn't
+        # count as positional or need remapping; carried through verbatim
+        # rather than merged into named keys, since its contents aren't
+        # known statically.
         double_starred = [a for a in updated_node.args if a.star == "**"]
         if len(positional) < 2:
             return updated_node  # already modern (0-1 positional arg)
@@ -349,7 +320,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
 def migrate_instruction_labels(
     source: str, instructions: Mapping[str, Instruction]
 ) -> MigrationResult:
-    """Detect and rewrite pre-#104 positional `InstructionLabel`
+    """Detect and rewrite pre-1.2 positional `InstructionLabel`
     construction throughout `source` (see the module docstring for exactly
     which shapes are recognized and when a confident rewrite is possible).
 

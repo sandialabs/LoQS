@@ -1,13 +1,13 @@
 """Regression test: `loqs.tools.migrate` finds nothing left to migrate
 anywhere in this repo's own `loqs`/`tests`/`docs/notebooks` tree.
 
-This is a real regression check, not exploratory cleanup work -- the
-`feat-97` plan's own direct grep already confirmed this surface is fully
-clean before this tool existed (`PatchDict`, old-format `InstructionLabel`
-construction, `.cast()`, `include_idles=`, `"Iz"`, etc. -- see its Part
-3.1). A handful of files are expected, permanent exceptions, each
-deliberately referencing an old API on purpose rather than by oversight;
-this test excludes exactly those and asserts nothing else turns up.
+This is a real regression check, not exploratory cleanup work -- a direct
+grep already confirmed this surface (`PatchDict`, old-format
+`InstructionLabel` construction, `.cast()`, `include_idles=`, `"Iz"`,
+etc.) was fully clean before this tool existed. A handful of files are
+expected, permanent exceptions, each deliberately referencing an old API
+on purpose rather than by oversight; this test excludes exactly those
+and asserts nothing else turns up.
 """
 
 from pathlib import Path
@@ -45,7 +45,7 @@ _EXPECTED_EXCEPTIONS = {
     "tests/core/recordables/test_patchdict.py",
     # Historical, non-executable fixture-generator scripts (already
     # excluded from pytest's own collection in pytest.ini for the same
-    # reason): kept only as a record of a pre-#97 API, not maintained.
+    # reason): kept only as a record of a pre-1.2 API, not maintained.
     "tests/backends/fixtures/generate_reps_fixtures.py",
     "tests/backends/model/fixtures/generate_model_fixtures.py",
 }
@@ -72,7 +72,7 @@ class TestRepoTreeIsClean:
     def test_no_file_needs_migration(self):
         offenders = []
         for path in _target_files():
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             if path.suffix == ".md":
                 result = migrate_notebook_source(source)
             else:

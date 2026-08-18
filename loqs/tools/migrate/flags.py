@@ -10,7 +10,7 @@
 """Detect-only patterns: old APIs whose replacement changes meaning, not
 just name, so guessing a rewrite would be dishonest rather than helpful.
 
-- `<OldCastableClass>.cast(...)`: removed entirely (issue #96/#107); its
+- `<OldCastableClass>.cast(...)`: removed entirely in v1.2; its
   replacement depends on which class the call was on
   (`InstructionStack.cast(x)` -> `InstructionStack(x)`,
   `InstructionLabel.cast(x)` -> `InstructionLabel.from_raw(x)`), which
@@ -22,20 +22,19 @@ just name, so guessing a rewrite would be dishonest rather than helpful.
   `.cast()` methods with the exact same name (`pygsti.circuits.Circuit.cast`,
   `pygsti.evotypes.Evotype.cast`), which are not LoQS's removed API at all.
 - `include_idles=`/`reference_round_Z=`/`reference_round_X=` passed to a
-  `create_qec_code(...)`-style call: replaced by `idle_layout=`/
-  `reference_round_mode_Z=`/`reference_round_mode_X=` (issue #108), but
-  these are semantic changes, not pure renames (a boolean doesn't map
-  onto the new parameter's meaning automatically). Scoped to calls whose
-  function name ends in `create_qec_code` specifically, not a bare
-  `include_idles=` scan: real testing found several *other*, unrelated,
-  still-current `include_idles: bool` parameters on lower-level circuit-
-  building helpers throughout `loqs/codepacks/codepack_surf17_multipatch.py`/
-  `codepack_surf17_surgery.py` that were never part of issue #108's rename
-  at all.
+  `create_qec_code(...)`-style call: replaced in v1.2 by `idle_layout=`/
+  `reference_round_mode_Z=`/`reference_round_mode_X=`, but these are
+  semantic changes, not pure renames (a boolean doesn't map onto the new
+  parameter's meaning automatically). Scoped to calls whose function name
+  ends in `create_qec_code` specifically, not a bare `include_idles=`
+  scan: real testing found several *other*, unrelated, still-current
+  `include_idles: bool` parameters on lower-level circuit-building
+  helpers throughout `loqs/codepacks/codepack_surf17_multipatch.py`/
+  `codepack_surf17_surgery.py` that this rename never touched at all.
 - A bare `"Iz"` string literal: likely an old instrument-name reference to
-  what's now `"Imrz"` (issue #101), but this is a plain string, not an
-  identifier reference, so a blind rewrite risks matching unrelated text
-  that just happens to contain the same two characters.
+  what's now `"Imrz"` (renamed in v1.2), but this is a plain string, not
+  an identifier reference, so a blind rewrite risks matching unrelated
+  text that just happens to contain the same two characters.
 """
 
 from __future__ import annotations
@@ -56,12 +55,12 @@ _CASTABLE_CLASS_NAMES = sorted(
 )
 
 _LINE_PATTERNS: dict[str, re.Pattern] = {
-    f"{cls}.cast(...) call (removed -- issue #96/#107)": re.compile(
+    f"{cls}.cast(...) call (removed in v1.2)": re.compile(
         rf"\b{re.escape(cls)}\.cast\("
     )
     for cls in _CASTABLE_CLASS_NAMES
 } | {
-    '"Iz" string literal (likely the old instrument name, renamed to "Imrz" -- issue #101)': re.compile(
+    '"Iz" string literal (likely the old instrument name, renamed to "Imrz" in v1.2)': re.compile(
         r"""(['"])Iz\1"""
     ),
 }
@@ -114,7 +113,7 @@ class _QECCodeKwargFinder(cst.CSTVisitor):
                     line=line,
                     message=(
                         f"{arg.keyword.value}= kwarg to create_qec_code() "
-                        f"(replaced by {new_name}= -- issue #108)"
+                        f"(replaced by {new_name}= in v1.2)"
                     ),
                 )
             )

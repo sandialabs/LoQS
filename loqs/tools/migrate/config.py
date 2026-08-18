@@ -88,7 +88,7 @@ class MigrationConfig:
         }
         ```
         """
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return cls(json.load(f))
 
     def instructions_for(

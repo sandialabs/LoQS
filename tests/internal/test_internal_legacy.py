@@ -122,10 +122,10 @@ class TestDetectLegacyConstruction:
         )
 
     def test_modern_non_patch_label_keyword_second_is_not_detected(self):
-        """A real bug, found and fixed via issue #97's Sub-problem C work:
-        this pattern was previously false-flagged, since the regex only
-        exempted `patch_label(s)=` specifically as an acceptable second
-        argument, not any keyword argument."""
+        """A real bug, found and fixed while building the migration
+        tooling: this pattern was previously false-flagged, since the
+        regex only exempted `patch_label(s)=` specifically as an
+        acceptable second argument, not any keyword argument."""
         assert (
             detect_legacy_construction(
                 'InstructionLabel("Name", increment_by=2, patch_label="L0")'

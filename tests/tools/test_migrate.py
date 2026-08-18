@@ -39,7 +39,7 @@ class TestRewriteRenames:
         rewritten -- doing so would silently invert its meaning (see
         renames.py's module docstring for the real example this
         regression-tests)."""
-        src = FIXTURES.joinpath("renames_before.py").read_text()
+        src = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
         result = rewrite_renames(src)
         assert "used to construct a `PatchDict` directly" in result.source
 
@@ -65,15 +65,15 @@ class TestRewriteRenames:
         assert result.manual_review == []
 
     def test_deleted_name_flagged_not_guessed(self):
-        src = FIXTURES.joinpath("deleted_name_before.py").read_text()
+        src = FIXTURES.joinpath("deleted_name_before.py").read_text(encoding="utf-8")
         result = rewrite_renames(src)
         assert result.source == src  # never rewritten, only flagged
         lines = {item.line for item in result.manual_review}
         assert lines == {2, 5}  # the import line and the usage line
 
     def test_matches_golden_fixture(self):
-        before = FIXTURES.joinpath("renames_before.py").read_text()
-        after = FIXTURES.joinpath("renames_after.py").read_text()
+        before = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("renames_after.py").read_text(encoding="utf-8")
         result = rewrite_renames(before)
         assert result.source == after
 
@@ -204,8 +204,8 @@ class TestMigrateInstructionLabels:
         assert not twice.changed
 
     def test_matches_golden_fixture(self, instructions):
-        before = FIXTURES.joinpath("labels_before.py").read_text()
-        after = FIXTURES.joinpath("labels_after.py").read_text()
+        before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
         result = migrate_instruction_labels(before, instructions)
         assert result.source == after
         assert len(result.manual_review) == 4
@@ -213,7 +213,7 @@ class TestMigrateInstructionLabels:
 
 class TestDetectFlaggedPatterns:
     def test_matches_golden_fixture(self):
-        src = FIXTURES.joinpath("flags_before.py").read_text()
+        src = FIXTURES.joinpath("flags_before.py").read_text(encoding="utf-8")
         items = detect_flagged_patterns(src)
         assert [item.line for item in items] == [3, 5, 4, 4]
 
@@ -235,26 +235,26 @@ class TestDetectFlaggedPatterns:
         """A real false positive found by testing against this repo's own
         surf17 codepack helpers: several still-current, unrelated
         `include_idles: bool` parameters exist on lower-level circuit-
-        building functions, never renamed by issue #108."""
+        building functions, never touched by this v1.2 rename."""
         src = "circuit_inst = build_circuit_instruction(include_idles=True)\n"
         assert detect_flagged_patterns(src) == []
 
 
 class TestMigrateSource:
     def test_matches_golden_fixture_labels(self, instructions):
-        before = FIXTURES.joinpath("labels_before.py").read_text()
-        after = FIXTURES.joinpath("labels_after.py").read_text()
+        before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
         result = migrate_source(before, instructions=instructions)
         assert result.source == after
 
     def test_matches_golden_fixture_renames(self):
-        before = FIXTURES.joinpath("renames_before.py").read_text()
-        after = FIXTURES.joinpath("renames_after.py").read_text()
+        before = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("renames_after.py").read_text(encoding="utf-8")
         result = migrate_source(before)
         assert result.source == after
 
     def test_idempotent_on_already_migrated_source(self, instructions):
-        after = FIXTURES.joinpath("labels_after.py").read_text()
+        after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
         result = migrate_source(after, instructions=instructions)
         assert result.source == after
         assert not result.changed
@@ -262,13 +262,13 @@ class TestMigrateSource:
 
 class TestMigrateNotebookSource:
     def test_matches_golden_fixture(self, instructions):
-        before = FIXTURES.joinpath("notebook_before.md").read_text()
-        after = FIXTURES.joinpath("notebook_after.md").read_text()
+        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("notebook_after.md").read_text(encoding="utf-8")
         result = migrate_notebook_source(before, instructions=instructions)
         assert result.source == after
 
     def test_note_fence_is_never_touched(self, instructions):
-        before = FIXTURES.joinpath("notebook_before.md").read_text()
+        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
         result = migrate_notebook_source(before, instructions=instructions)
         assert (
             'mention of `PatchDict` or `InstructionLabel("Name", "L0", (), {})`'
@@ -281,7 +281,7 @@ class TestMigrateNotebookSource:
         """`docs/notebooks/workflow.md` has a real `:tags: [...]` field
         line; this used to raise a ParserSyntaxError instead of migrating
         the cell."""
-        before = FIXTURES.joinpath("notebook_before.md").read_text()
+        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
         result = migrate_notebook_source(before, instructions=instructions)
         assert ":tags: [scroll-output]" in result.source
 
@@ -292,7 +292,7 @@ class TestMigrateNotebookSource:
         is neither rewritten nor flagged here. Not a problem for the real
         `docs/notebooks/*.md` today (already fully migrated), but locked
         in as documented, understood behavior rather than a silent gap."""
-        before = FIXTURES.joinpath("notebook_before.md").read_text()
+        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
         result = migrate_notebook_source(before, instructions=instructions)
         assert "patches2 = PatchDict()" in result.source
 
@@ -335,7 +335,8 @@ class TestMigrationConfig:
         config_path = tmp_path / "config.json"
         config_path.write_text(
             '{"some/file.py": '
-            '"loqs.codepacks.codepack_trivial_counter:create_qec_code"}'
+            '"loqs.codepacks.codepack_trivial_counter:create_qec_code"}',
+            encoding="utf-8",
         )
         config = MigrationConfig.from_json(config_path)
         assert set(config.instructions_for("some/file.py")) == {

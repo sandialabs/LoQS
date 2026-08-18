@@ -66,17 +66,16 @@ from libcst.metadata import (
 from loqs.internal.serializable import Serializable
 from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
 
-_OLD_INSTRUMENT_REP_NAME = "ZBasis" + "OutcomeOperationDictInstrumentRep"
-"""Built by concatenation, not a literal, so this old name -- which this
-module must reference to know what to rename *from* -- doesn't trip
-`test_old_name_does_not_appear_anywhere`'s repo-wide grep (issue #51),
-matching that same test's own precedent for referencing itself."""
+_OLD_INSTRUMENT_REP_NAME = "ZBasisOutcomeOperationDictInstrumentRep"
+"""The pre-1.2 name being renamed away from -- named as its own constant
+so this occurrence reads as intentional, not a stray leftover reference.
+"""
 
 RENAMES: dict[tuple[str, str], tuple[str, str] | None] = {
     **Serializable._get_cumulative_changes(0),
-    # ZBasis...InstrumentRep -> OutcomeOperationDictInstrumentRep (issue
-    # #51): no decode-time entry exists for this one, since the old name
-    # never appeared in a shipped release -- but a user working off an
+    # ZBasis...InstrumentRep -> OutcomeOperationDictInstrumentRep: no
+    # decode-time entry exists for this one, since the old name never
+    # appeared in a shipped release -- but a user working off an
     # unreleased checkout could still have it in their own source.
     (
         "loqs.backends.reps.instrumentreps",

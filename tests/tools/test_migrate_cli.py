@@ -22,7 +22,7 @@ LEGACY_SOURCE = (
 @pytest.fixture
 def legacy_file(tmp_path):
     path = tmp_path / "sample.py"
-    path.write_text(LEGACY_SOURCE)
+    path.write_text(LEGACY_SOURCE, encoding="utf-8")
     return path
 
 
@@ -49,27 +49,27 @@ class TestMainAsLibraryCall:
     exit-code/side-effect assertions."""
 
     def test_check_never_writes_and_reports_nonzero(self, legacy_file):
-        before = legacy_file.read_text()
+        before = legacy_file.read_text(encoding="utf-8")
         code = main(["check", str(legacy_file)])
         assert code == 1  # the unresolvable InstructionLabel candidate
-        assert legacy_file.read_text() == before
+        assert legacy_file.read_text(encoding="utf-8") == before
 
     def test_source_dry_run_never_writes(self, legacy_file):
-        before = legacy_file.read_text()
+        before = legacy_file.read_text(encoding="utf-8")
         code = main(["source", "--dry-run", str(legacy_file)])
         assert code == 1
-        assert legacy_file.read_text() == before
+        assert legacy_file.read_text(encoding="utf-8") == before
 
     def test_source_writes_confident_rewrites(self, legacy_file):
         code = main(["source", str(legacy_file)])
         assert code == 1  # the InstructionLabel candidate still unresolved
-        rewritten = legacy_file.read_text()
+        rewritten = legacy_file.read_text(encoding="utf-8")
         assert "PatchLayout" in rewritten
         assert "PatchDict" not in rewritten
 
     def test_clean_file_exits_zero(self, tmp_path):
         path = tmp_path / "clean.py"
-        path.write_text("x = 1\n")
+        path.write_text("x = 1\n", encoding="utf-8")
         assert main(["check", str(path)]) == 0
         assert main(["source", str(path)]) == 0
 
@@ -82,30 +82,31 @@ class TestMainAsLibraryCall:
                         "loqs.codepacks.codepack_trivial_counter:create_qec_code"
                     )
                 }
-            )
+            ),
+            encoding="utf-8",
         )
         code = main(
             ["source", "--config", str(config_path), str(legacy_file)]
         )
         assert code == 0  # nothing left to flag once Increment resolves
-        rewritten = legacy_file.read_text()
+        rewritten = legacy_file.read_text(encoding="utf-8")
         assert "increment_by=2" in rewritten
 
     def test_directory_is_walked_for_py_and_md_files(self, tmp_path):
-        (tmp_path / "a.py").write_text(LEGACY_SOURCE)
-        (tmp_path / "b.txt").write_text(LEGACY_SOURCE)  # ignored, wrong suffix
+        (tmp_path / "a.py").write_text(LEGACY_SOURCE, encoding="utf-8")
+        (tmp_path / "b.txt").write_text(LEGACY_SOURCE, encoding="utf-8")  # ignored, wrong suffix
         code = main(["check", str(tmp_path)])
         assert code == 1
 
     def test_no_matching_files_is_an_error(self, tmp_path):
-        (tmp_path / "b.txt").write_text("not python\n")
+        (tmp_path / "b.txt").write_text("not python\n", encoding="utf-8")
         assert main(["check", str(tmp_path)]) == 2
 
     def test_file_level_error_does_not_abort_the_whole_run(self, tmp_path):
         good = tmp_path / "good.py"
-        good.write_text("x = 1\n")
+        good.write_text("x = 1\n", encoding="utf-8")
         bad = tmp_path / "bad.py"
-        bad.write_text("this is not ( valid python\n")
+        bad.write_text("this is not ( valid python\n", encoding="utf-8")
         code = main(["check", str(tmp_path)])
         assert code == 2
 
