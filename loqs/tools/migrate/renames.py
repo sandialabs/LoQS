@@ -18,37 +18,19 @@ worth fixing in a user's own source files.
 
 [](api:Serializable._update_imports) is a thin wrapper around this same
 function, so frozen function source and whole user source files share one
-rewrite mechanism. An earlier version of `_update_imports` was a plain
-line-based text scan instead, replaced after two real problems were found
-empirically, not theorized:
-
-1. Its multi-line-import-continuation detection
-   (`line.startswith("from") and line.endswith("(")`) false-triggers on
-   any unrelated line shaped like one -- confirmed directly, it corrupts
-   `codepack_5_1_3_quantinuum2022.py`, which has a local variable named
-   `from_prime_basis_circ` with a method call spanning multiple lines.
-2. Its "replace this name throughout the rest of the file" pass is a
-   blind text substitution, with no regard for whether a match is inside
-   a string or comment -- confirmed directly against
-   `tests/backends/fixtures/generate_reps_fixtures.py`, whose docstring
-   *narrates* the `RepTuple` -> `OperationRep` history in prose; a blind
-   substitution corrupts that prose into a false statement (e.g. "issue
-   #97 later removed `OperationRep` entirely" -- backwards).
-
-Both failure modes are avoided here by using `libcst`'s
-`RenameCommand` (`libcst.codemod.commands.rename`), which resolves real
-code references via `QualifiedNameProvider` -- so it can tell an actual
-usage of a renamed class apart from the same text appearing in a
-docstring, comment, or unrelated identifier, and updates both the import
-statement and every usage site together.
+rewrite mechanism, built on `libcst`'s `RenameCommand`
+(`libcst.codemod.commands.rename`). `RenameCommand` resolves real code
+references via `QualifiedNameProvider`, so it can tell an actual usage of
+a renamed class apart from the same text appearing in a docstring,
+comment, or unrelated identifier, and updates both the import statement
+and every usage site together.
 
 A few real `RenameCommand` behaviors worth knowing about before trusting
-this pass blindly, all confirmed directly rather than assumed:
+this pass blindly:
 
 1. It always adds the new import at module scope, even when the old one
    was function-local (e.g. a lazy import used to avoid a circular
-   import, a real pattern in this codebase) -- confirmed against
-   `tests/core/recordables/test_patchdict.py`. Still valid Python, but
+   import, a real pattern in this codebase). Still valid Python, but
    changes where the import happens.
 2. It drops a renamed import entirely if the renamed name ends up with no
    remaining real code reference (i.e. it was only ever mentioned in a
@@ -169,12 +151,10 @@ def rewrite_renames(
     if renames is None:
         renames = RENAMES
 
-    # A cheap textual pre-filter before paying for a real CST transform
-    # per rename: with ~25 table entries, running every one of them
-    # through libcst against every file in a large tree is far too slow
-    # to be practical, and the overwhelming majority of files reference
-    # none of them at all. A name that doesn't appear as text anywhere in
-    # the file certainly isn't referenced in its code either.
+    # A cheap textual pre-filter before a real CST transform per rename:
+    # with ~25 table entries, running each one through libcst against
+    # every file in a large tree is too slow, and a name absent from the
+    # file's text can't be referenced in its code either.
     applicable_renames = {k: v for k, v in renames.items() if k[1] in source}
     if not applicable_renames:
         return MigrationResult(source=source, changed=False, manual_review=[])

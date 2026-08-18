@@ -106,12 +106,8 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "PauliFrameLike",
         ),
         # PatchDictCastableTypes -> PatchLayoutLike, not PatchDictLike:
-        # loqs.core.recordables.patchdict no longer has a real
-        # implementation to rename within, only a construction-only
-        # legacy shim exporting `PatchDict` (see
-        # loqs/core/recordables/__init__.py), with no `PatchDictLike`
-        # attribute at all. Found via a regression test (every RENAMES
-        # target should be a live, importable attribute).
+        # loqs.core.recordables.patchdict's legacy shim exports
+        # `PatchDict` only, with no `PatchDictLike` attribute at all.
         ("loqs.core.recordables.patchdict", "PatchDictCastableTypes"): (
             "loqs.core.recordables.patchlayout",
             "PatchLayoutLike",
@@ -265,33 +261,20 @@ def _import_usage_index_for_file(srcfile: str, mtime: float):
     """For every module-level import statement in a file, precompute a
     clean, standalone rendering of it plus a sorted list of every line
     elsewhere in the file that references a name it binds. Cached per
-    `(srcfile, mtime)`, so an edited-and-reloaded file is never served
-    stale.
-
-    Used by `Serializable._imports_needed_by` to answer "does this line
-    range use anything from this import?" via a cheap sorted-list lookup,
-    rather than re-walking the whole file's syntax tree from scratch for
-    every function checked -- `_imports_needed_by` may be called many
-    times for different functions defined in the same file (e.g. once per
-    `Instruction` constructed while building a codepack with dozens of
-    instructions), and doing that walk once per file rather than once per
-    function was measured to matter: a naive once-per-function walk over
-    a real ~2000-line codepack module took ~0.2s each, dominating real
-    codepack construction time.
+    `(srcfile, mtime)` so a file with many functions (e.g. a codepack
+    with dozens of instructions) only needs its syntax tree walked once,
+    not once per function checked; an edited-and-reloaded file is never
+    served stale.
 
     Each import is rendered fresh from its own CST node rather than
-    sliced from the original file text, since a conditionally-guarded
-    import (e.g. inside `if TYPE_CHECKING:` or a `try/except
-    ImportError:` fallback -- a real pattern in this codebase) is still a
-    real module-scope binding by Python's own scoping rules, but its
-    original indented text isn't valid syntax once lifted out of its
-    enclosing `if`/`try` block on its own. Lifting it out like this does
-    lose the original guard itself, though -- a name only reachable via a
-    `try/except ImportError:` fallback is reproduced here as a plain,
-    unconditional import, which could raise where the original didn't if
-    the optional dependency it guards against turns out to be missing.
-    This is a pre-existing limitation shared with the line-based scan
-    this replaced, not a new one.
+    sliced from the original file text: a conditionally-guarded import
+    (e.g. inside `if TYPE_CHECKING:` or a `try/except ImportError:`
+    fallback) is a real module-scope binding by Python's own scoping
+    rules, but its indented text isn't valid syntax once lifted out of
+    its enclosing block on its own. This does lose the guard itself --
+    a name only reachable via a `try/except ImportError:` fallback is
+    reproduced as a plain, unconditional import, which could raise in an
+    environment missing that optional dependency.
     """
     import libcst as cst
     from libcst.metadata import ImportAssignment, MetadataWrapper, PositionProvider, ScopeProvider
@@ -1212,7 +1195,7 @@ class Serializable:
         found but couldn't confidently resolve -- callers decide what, if
         anything, to do with those (e.g. `Instruction._from_decoded_attrs`'s
         `MIGRATE_LEGACY_FNS` gate; `_eval_function_str`'s other callers
-        simply ignore them, matching their pre-existing behavior).
+        ignore them).
         """
         updated_src = Serializable._update_imports(src, version)
         updated_src, manual_review = (
@@ -1344,11 +1327,10 @@ class Serializable:
         try:
             imports = Serializable._imports_needed_by(func, srcfile)
         except Exception:
-            # Import extraction is a best-effort improvement on top of the
-            # bare function body -- fall back silently rather than let a
-            # source snippet that isn't really a standalone def (e.g. a
-            # lambda, whose inspect.getsource is often just its enclosing
-            # call-site statement) break serialization outright.
+            # Best-effort improvement on top of the bare function body --
+            # fall back silently rather than let a source snippet that
+            # isn't really a standalone def (e.g. a lambda) break
+            # serialization outright.
             return src
 
         return imports + src

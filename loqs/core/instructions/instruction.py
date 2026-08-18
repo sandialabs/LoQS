@@ -308,15 +308,10 @@ class Instruction(Displayable):
         self.map_qubits_fn = map_qubits_fn
 
         # Deferred to first actual use (see the _serialized_apply_fn/
-        # _serialized_map_qubits_fn properties below) rather than computed
-        # eagerly here -- apply_fn/map_qubits_fn are never reassigned after
-        # construction, so this is always safe to defer, and most
-        # instructions constructed during a simulation are never actually
-        # serialized at all. Still checked (cheaply) right now, though: if
-        # source access is already failing, it's much more useful to warn
-        # immediately, while the live callable and a chance to work around
-        # it are both still at hand, than to find out much later at
-        # encode time.
+        # _serialized_map_qubits_fn properties below), since
+        # apply_fn/map_qubits_fn are never reassigned after construction.
+        # Still checked cheaply now, to warn immediately if source access
+        # already looks likely to fail.
         self._serialized_apply_fn_cache = serialized_apply_fn
         if serialized_apply_fn is None:
             self._warn_if_source_unavailable(apply_fn, "apply_fn")
@@ -485,9 +480,7 @@ class Instruction(Displayable):
             param_aliases=self._param_aliases,
             # The raw (possibly not-yet-computed) cache, not the
             # property, so copying an instruction that's never been
-            # serialized (e.g. via map_qubits, a hot path when mapping
-            # template instructions onto a real patch) doesn't force
-            # that computation just because it was copied.
+            # serialized doesn't force that computation.
             serialized_apply_fn=self._serialized_apply_fn_cache,
             serialized_map_qubits_fn=self._serialized_map_qubits_fn_cache,
             name=self.name,
@@ -527,14 +520,11 @@ class Instruction(Displayable):
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
         version = attr_dict["version"]
 
-        # Prepare source once (imports, then a confident rewrite of any
-        # resolvable old-format InstructionLabel(...) call) and gate
-        # execution on whatever's left unresolved, rather than a separate
-        # detect-then-rewrite-then-detect-again pass over the same
-        # source. Only a string needs preparing -- a version-0 file's
+        # Prepare source once (imports, then any resolvable old-format
+        # InstructionLabel(...) rewrite) and gate on whatever's left
+        # unresolved. Only a string needs preparing -- a version-0
         # source may already be a live callable by this point
-        # (decode_function's own version-0 heuristic), leaving nothing
-        # to prepare.
+        # (decode_function's own heuristic).
         unresolved = []
         if version < SERIALIZATION_VERSION:
             if isinstance(serialized_apply_fn, str):

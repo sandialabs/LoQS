@@ -13,11 +13,9 @@ modern keyword form.
 Two source shapes are recognized, both matching pre-1.2's `(instruction,
 patch_label, inst_args, inst_kwargs)` convention: a direct
 `InstructionLabel(...)` call with more than one positional argument, or a
-bare 3-/4-tuple literal matching the same heuristic as
-[](api:loqs.internal.legacy.detect_legacy_construction)'s decode-time
-cousin. A 3-tuple with a *string* 2nd element is deliberately **not**
-treated as a candidate, even though it matches this shape for a per-patch
-instruction: real testing found this collides constantly with an
+bare 3-/4-tuple literal. A 3-tuple with a *string* 2nd element is
+deliberately **not** treated as a candidate, even though it matches this
+shape for a per-patch instruction, since it collides constantly with an
 unrelated, far more common pattern -- a raw pyGSTi circuit-layer
 gate-label tuple, e.g. `("Gcphase", "A0", "D4")`, has the exact same
 3-string-element shape and is expected to dominate real source files.
@@ -81,11 +79,11 @@ def _literal_sequence(
 ) -> list[cst.BaseExpression] | None:
     """A literal tuple/list's element expressions, or `None` if `node`
     isn't one (or contains a `*`-unpacked element, whose contribution to
-    the sequence can't be known statically). A literal `None` counts as
-    empty too -- a real pattern found in `QuantumProgram_v1.json.gz`'s
-    frozen source (`InstructionLabel(rus_key, patch_label, None, {...})`),
-    matching `_remap_legacy_positional_args`'s own `tuple(inst_args or ())`
-    runtime handling."""
+    the sequence can't be known statically). A literal `None` also counts
+    as empty, matching `_remap_legacy_positional_args`'s own
+    `tuple(inst_args or ())` runtime handling -- needed since
+    `QuantumProgram_v1.json.gz`'s frozen source contains exactly this
+    shape (`InstructionLabel(rus_key, patch_label, None, {...})`)."""
     if node is None or _is_none(node):
         return []
     if not isinstance(node, (cst.Tuple, cst.List)):
@@ -191,9 +189,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             # Non-literal first arg: its runtime value can't be known
             # statically, so which of two very different real behaviors
             # applies can't be either (already-resolved Instruction ->
-            # DeprecationWarning; bare name string -> TypeError) --
-            # confirmed against a real case, QuantumProgram_v1.json.gz's
-            # own "Repeat-until-success FT Minus Prep" instruction.
+            # DeprecationWarning; bare name string -> TypeError).
             self._flag(
                 original_node,
                 "First argument isn't a string literal, so it can't be "

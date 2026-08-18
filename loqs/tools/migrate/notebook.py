@@ -20,10 +20,10 @@ via `jupytext --to ipynb`), so it's also the only one this tool needs to
 touch directly.
 
 A code cell may open with one or more `:key: value` MyST field lines
-(e.g. `:tags: [scroll-output]`) before its actual code -- confirmed
-directly against `docs/notebooks/workflow.md`, which has one and isn't
-parseable as bare Python otherwise. These lines are passed through
-unchanged, alongside the fence itself, never handed to `migrate_source`.
+(e.g. `:tags: [scroll-output]`) before its actual code, as
+`docs/notebooks/workflow.md` does -- these aren't parseable as bare
+Python on their own. These lines are passed through unchanged, alongside
+the fence itself, never handed to `migrate_source`.
 
 Known limitation: each cell is migrated independently, with no import
 context carried over from earlier cells -- unlike a real notebook kernel,
@@ -31,9 +31,8 @@ where state (including imports) persists across cells. A renamed class
 used bare in a later cell, relying on an import done in an earlier one,
 is neither rewritten nor flagged, since [](api:rewrite_renames)'s
 `QualifiedNameProvider`-based resolution can't see that import from
-inside this cell alone. Not currently a problem for `docs/notebooks/*.md` itself (confirmed
-clean by direct inspection), but worth knowing about for a user's own
-notebook.
+inside this cell alone. Not currently a problem for `docs/notebooks/*.md`
+itself, but worth knowing about for a user's own notebook.
 """
 
 from __future__ import annotations
