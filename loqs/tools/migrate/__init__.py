@@ -22,9 +22,7 @@ Three independent passes, run in order, together making up [](api:migrate_source
 1. [](api:loqs.tools.migrate.renames): straight `(module, name)` renames,
    always confidently rewritable.
 2. [](api:loqs.tools.migrate.labels): pre-1.2 positional `InstructionLabel`
-   construction, rewritten when the target instruction can be resolved
-   (see [](api:loqs.tools.migrate.config)), flagged for manual review
-   otherwise.
+   construction, rewritten to modern keyword form.
 3. [](api:loqs.tools.migrate.flags): patterns whose replacement is a
    semantic change, not a pure rename (`.cast()`, `include_idles=`, an
    `"Iz"` string) -- always flagged, never auto-rewritten.
@@ -32,9 +30,6 @@ Three independent passes, run in order, together making up [](api:migrate_source
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
-from loqs.core.instructions.instruction import Instruction
 from loqs.tools.migrate.flags import detect_flagged_patterns
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.renames import rewrite_renames
@@ -47,9 +42,7 @@ __all__ = [
 ]
 
 
-def migrate_source(
-    source: str, *, instructions: Mapping[str, Instruction] | None = None
-) -> MigrationResult:
+def migrate_source(source: str) -> MigrationResult:
     """Run every migration pass over `source`, returning the combined result.
 
     Parameters
@@ -57,11 +50,6 @@ def migrate_source(
     source:
         The full text of a `.py` file (or an extracted MyST code cell --
         see [](api:loqs.tools.migrate.notebook)).
-    instructions:
-        A `{name: Instruction}` registry for resolving old-format
-        `InstructionLabel` construction (see
-        [](api:loqs.tools.migrate.config)); if not supplied, every such
-        candidate is flagged for manual review instead of rewritten.
 
     Returns
     -------
@@ -71,8 +59,6 @@ def migrate_source(
     (possibly wrongly) rewritten.
     """
     result = rewrite_renames(source)
-    result = result.merge(
-        migrate_instruction_labels(result.source, instructions or {})
-    )
+    result = result.merge(migrate_instruction_labels(result.source))
     result.manual_review.extend(detect_flagged_patterns(result.source))
     return result

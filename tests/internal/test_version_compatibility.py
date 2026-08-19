@@ -284,11 +284,12 @@ class TestMigrateLegacyFnsGate:
 
     A straight class-location rename (e.g. PatchDict -> PatchLayout) needs
     no gate, since `_update_imports` already rewrites frozen source to the
-    new name directly. The gate only matters for a calling-convention
-    change with the *same* class name -- confirmed against
-    `QuantumProgram_v1.json.gz`'s "Repeat-until-success FT Minus Prep"
-    instruction, which genuinely freezes an old-style positional
-    `InstructionLabel(...)` call.
+    new name directly. A calling-convention change with the same class
+    name (e.g. an old positional `InstructionLabel(...)` call) is also
+    confidently rewritten by `_update_legacy_constructions` in the common
+    case, including `QuantumProgram_v1.json.gz`'s "Repeat-until-success FT
+    Minus Prep" instruction -- the gate only fires for the narrow
+    remainder it can't statically resolve (e.g. a starred/splat call).
     """
 
     @pytest.fixture
@@ -321,25 +322,33 @@ class TestMigrateLegacyFnsGate:
             "_param_aliases": {},
         }
 
-    def test_default_raises_clear_error(
+    def test_real_fixture_decodes_without_the_gate(
         self, real_old_style_instructionlabel_source
     ):
-        with pytest.raises(RuntimeError, match="InstructionLabel"):
-            Instruction._from_decoded_attrs(
-                self._attr_dict(real_old_style_instructionlabel_source)
-            )
+        """The RUS instruction's old-style positional `InstructionLabel(
+        ...)` call is confidently rewritten by
+        `_update_legacy_constructions`, so it decodes cleanly with no
+        need for `migrate_legacy_fns=True` at all."""
+        inst = Instruction._from_decoded_attrs(
+            self._attr_dict(real_old_style_instructionlabel_source)
+        )
+        assert isinstance(inst, Instruction)
 
-    def test_migrate_legacy_fns_true_allows_decode(
-        self, real_old_style_instructionlabel_source
-    ):
+    def test_unrewritable_pattern_still_triggers_the_gate(self):
+        """A pattern the rewrite can't confidently resolve (here, a
+        starred/splat call) still hits the gate as before."""
+        src = "InstructionLabel(*label_tuple)\n"
+        attrs = self._attr_dict(
+            f"def apply_fn(patch_label, label_tuple):\n    return {src.strip()}\n"
+        )
+        with pytest.raises(RuntimeError, match="InstructionLabel"):
+            Instruction._from_decoded_attrs(attrs)
+
         token = serializable_module.MIGRATE_LEGACY_FNS.set(True)
         try:
-            inst = Instruction._from_decoded_attrs(
-                self._attr_dict(real_old_style_instructionlabel_source)
-            )
+            inst = Instruction._from_decoded_attrs(attrs)
         finally:
             serializable_module.MIGRATE_LEGACY_FNS.reset(token)
-
         assert isinstance(inst, Instruction)
 
     def test_no_legacy_pattern_detected_is_unaffected(self):
@@ -398,12 +407,6 @@ class TestUpdateLegacyConstructions:
     duplicating it.
     """
 
-    @staticmethod
-    def _increment_registry():
-        from loqs.codepacks.codepack_trivial_counter import create_qec_code
-
-        return create_qec_code().instructions
-
     def test_noop_at_current_version(self):
         src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
         assert (
@@ -413,43 +416,24 @@ class TestUpdateLegacyConstructions:
             == (src, [])
         )
 
-    def test_noop_without_a_registry(self):
-        """No LEGACY_INSTRUCTION_REGISTRY set (the default): every
-        candidate is unresolvable, so nothing is rewritten and it's
-        flagged for manual review instead."""
-        src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
+    def test_rewrites_a_resolvable_construction(self):
         rewritten, manual_review = (
             serializable_module.Serializable._update_legacy_constructions(
-                src, 0
+                'InstructionLabel("Increment", "L0", (), '
+                '{"increment_by": 2})\n',
+                0,
             )
         )
-        assert rewritten == src
-        assert manual_review != []
-
-    def test_rewrites_when_a_registry_resolves_the_instruction(self):
-        token = serializable_module.LEGACY_INSTRUCTION_REGISTRY.set(
-            self._increment_registry()
-        )
-        try:
-            rewritten, manual_review = (
-                serializable_module.Serializable._update_legacy_constructions(
-                    'InstructionLabel("Increment", "L0", (), '
-                    '{"increment_by": 2})\n',
-                    0,
-                )
-            )
-        finally:
-            serializable_module.LEGACY_INSTRUCTION_REGISTRY.reset(token)
         assert (
             rewritten
             == 'InstructionLabel("Increment", increment_by=2, patch_label="L0")\n'
         )
         assert manual_review == []
 
-    def test_gate_bypassed_when_registry_resolves_the_pattern(self):
+    def test_gate_bypassed_once_the_pattern_is_rewritten(self):
         """The real integration point: Instruction._from_decoded_attrs's
         migrate_legacy_fns gate never even triggers here, since the
-        rewrite already fixed the only pattern it would have detected --
+        rewrite already fixes the only pattern it would have detected --
         no need to pass migrate_legacy_fns=True at all."""
         src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
         attrs = {
@@ -468,46 +452,31 @@ class TestUpdateLegacyConstructions:
             "_param_aliases": {},
         }
 
-        with pytest.raises(RuntimeError, match="InstructionLabel"):
-            Instruction._from_decoded_attrs(attrs)
-
-        token = serializable_module.LEGACY_INSTRUCTION_REGISTRY.set(
-            self._increment_registry()
-        )
-        try:
-            inst = Instruction._from_decoded_attrs(attrs)
-        finally:
-            serializable_module.LEGACY_INSTRUCTION_REGISTRY.reset(token)
+        inst = Instruction._from_decoded_attrs(attrs)
         assert isinstance(inst, Instruction)
 
-    def test_load_wires_instruction_registry_through_the_contextvar(
-        self, monkeypatch
-    ):
-        """`Serializable.load`'s new `instruction_registry` parameter sets
-        `LEGACY_INSTRUCTION_REGISTRY` for the duration of the call and
-        resets it afterward, mirroring `migrate_legacy_fns`'s own
-        established wiring -- checked directly via a spy on `.decode`
-        rather than a full JSON/HDF5 round trip, which exercises this one
-        specific piece of wiring in isolation."""
-        registry = self._increment_registry()
-        seen = {}
+    def test_gate_still_triggers_for_an_unrewritable_pattern(self):
+        """A pattern the rewrite can't confidently resolve (here, a
+        splat call) still hits the migrate_legacy_fns gate as before."""
+        src = "InstructionLabel(*label_tuple)\n"
+        attrs = {
+            "_serialized_apply_fn": (
+                f"def apply_fn(patch_label, label_tuple):\n    return {src.strip()}\n"
+            ),
+            "_serialized_map_qubits_fn": (
+                "def map_qubits_fn(qubit_map):\n    return {}\n"
+            ),
+            "version": 0,
+            "type": "Test",
+            "data": {},
+            "param_error_behavior": "warn",
+            "name": "test",
+            "_param_priorities": {},
+            "_param_aliases": {},
+        }
 
-        def fake_decode(state, format, decode_cache=None):
-            seen["registry"] = (
-                serializable_module.LEGACY_INSTRUCTION_REGISTRY.get()
-            )
-            return None
-
-        monkeypatch.setattr(Serializable, "decode", staticmethod(fake_decode))
-        monkeypatch.setattr("json.load", lambda f: {})
-
-        import io
-
-        Serializable.load(
-            io.StringIO("{}"), format="json", instruction_registry=registry
-        )
-        assert seen["registry"] is registry
-        assert serializable_module.LEGACY_INSTRUCTION_REGISTRY.get() is None
+        with pytest.raises(RuntimeError, match="InstructionLabel"):
+            Instruction._from_decoded_attrs(attrs)
 
 
 class TestInstructionLabelDecodeRemap:

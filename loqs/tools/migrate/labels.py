@@ -15,31 +15,30 @@ patch_label, inst_args, inst_kwargs)` convention: a direct
 `InstructionLabel(...)` call with more than one positional argument, or a
 bare 3-/4-tuple literal. A direct call is rewritten to a modern call
 (`InstructionLabel("Increment", increment_by=2, patch_label="L0")`); a
-bare tuple is rewritten to a bare
-`{"instruction": ..., **kwargs}` dict instead, matching
-`InstructionLabel`'s own modern raw-dict shape, since building a call
-there would introduce a new `InstructionLabel` reference into a file
-that may never have needed to import it before. A 3-tuple with a
-*string* 2nd element is deliberately **not** treated as a candidate,
-even though it matches this shape for a per-patch instruction, since it
-collides constantly with an unrelated, far more common pattern -- a raw
-pyGSTi circuit-layer gate-label tuple, e.g. `("Gcphase", "A0", "D4")`,
-has the exact same 3-string-element shape and is expected to dominate
-real source files.
+bare tuple is rewritten to a bare `{"instruction": ..., **kwargs}` dict
+instead, matching `InstructionLabel`'s own modern raw-dict shape, since
+building a call there would introduce a new `InstructionLabel` reference
+into a file that may never have needed to import it before. A 3-tuple
+with a *string* 2nd element is deliberately **not** treated as a
+candidate, even though it matches this shape for a per-patch instruction,
+since it collides constantly with an unrelated, far more common pattern
+-- a raw pyGSTi circuit-layer gate-label tuple, e.g. `("Gcphase", "A0",
+"D4")`, has the exact same 3-string-element shape and is expected to
+dominate real source files.
 
-Rewriting either shape requires knowing the target [](api:Instruction)'s
-`param_priorities`/`param_alias` -- the same algorithm
-[](api:InstructionLabel._from_decoded_attrs) already uses at decode time,
-reimplemented here over unevaluated CST expression nodes, so an
-argument's *source text* carries over verbatim without needing its
-runtime value. Only possible when the instruction is named by a string
-literal resolving against a caller-supplied registry (see
-[](api:loqs.tools.migrate.config)) -- a non-literal first argument is
-always flagged instead, since its runtime value can't be known statically
--- and `inst_args`/`inst_kwargs` are themselves literal tuple/list/dict
-expressions (their *elements'* values may be arbitrary expressions,
-spliced through unevaluated). Anything else is flagged for manual review
-rather than guessed.
+`instruction` and `patch_label` are carried through verbatim regardless
+of their own shape -- modern keyword-form `InstructionLabel` accepts
+either a bare name string or an already-resolved `Instruction` object
+identically, so neither needs to be known statically. `inst_args`
+similarly never needs to be inspected: if it isn't provably empty, it's
+carried through verbatim under the reserved
+[](api:LEGACY_PENDING_INST_ARGS) key, the same mechanism
+[](api:QuantumProgram._label_kwargs) already uses to remap a pending
+positional-args stash once the real instruction is available at run
+time -- no static lookup needed either way. Only `inst_kwargs` must be a
+literal dict with string-literal keys, since its individual entries are
+spliced in as real keyword arguments; anything else is flagged for
+manual review rather than guessed.
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ from collections.abc import Mapping, Sequence
 import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
 
-from loqs.core.instructions.instruction import Instruction
+from loqs.core.instructions.instructionlabel import LEGACY_PENDING_INST_ARGS
 from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
 
 
@@ -126,21 +125,6 @@ def _literal_str_keyed_dict(
     return result
 
 
-def _remap_positional(
-    instruction: Instruction,
-    inst_args: Sequence[cst.BaseExpression],
-    inst_kwargs: Mapping[str, cst.BaseExpression],
-) -> dict[str, cst.BaseExpression]:
-    """CST-node analog of `InstructionLabel._remap_legacy_positional_args`:
-    same positional-index -> aliased-keyword mapping, but over unevaluated
-    expression nodes rather than runtime values."""
-    merged = dict(inst_kwargs)
-    for i, key in enumerate(instruction.param_priorities.keys()):
-        if i < len(inst_args):
-            merged[instruction.param_alias(key)] = inst_args[i]
-    return merged
-
-
 _NO_SPACE_EQUAL = cst.AssignEqual(
     whitespace_before=cst.SimpleWhitespace(""),
     whitespace_after=cst.SimpleWhitespace(""),
@@ -189,8 +173,7 @@ def _build_dict(
 class _InstructionLabelRewriter(cst.CSTTransformer):
     METADATA_DEPENDENCIES = (PositionProvider,)
 
-    def __init__(self, instructions: Mapping[str, Instruction]) -> None:
-        self._instructions = instructions
+    def __init__(self) -> None:
         self.changed = False
         self.manual_review: list[ManualReviewItem] = []
 
@@ -219,47 +202,24 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         is being rewritten instead, where building a call would
         introduce a new `InstructionLabel` reference the file may not
         already import)."""
-        instr_name = _string_value(instruction_expr)
-        if instr_name is None:
-            # Non-literal first arg: its runtime value can't be known
-            # statically, so which of two very different real behaviors
-            # applies can't be either (already-resolved Instruction ->
-            # DeprecationWarning; bare name string -> TypeError).
-            self._flag(
-                original_node,
-                "First argument isn't a string literal, so it can't be "
-                "resolved statically -- if it evaluates to an already-"
-                "resolved Instruction object, this already works today "
-                "via a DeprecationWarning; if it evaluates to a bare "
-                "instruction-name string instead, direct construction "
-                "raises a TypeError. Not rewritten either way; migrate "
-                "to keyword form by hand.",
-            )
-            return None
-        instruction = self._instructions.get(instr_name)
-        if instruction is None:
-            self._flag(
-                original_node,
-                f"Could not resolve instruction {instr_name!r} against the "
-                "configured instruction registry for this file -- add or "
-                "correct the migration config, or migrate by hand.",
-            )
-            return None
-        literal_args = _literal_sequence(inst_args_expr)
         literal_kwargs = _literal_str_keyed_dict(inst_kwargs_expr)
-        if literal_args is None or literal_kwargs is None:
+        if literal_kwargs is None:
             self._flag(
                 original_node,
-                "inst_args/inst_kwargs aren't literal tuple/list/dict "
-                "expressions -- can't statically remap positions to "
-                "keyword names; migrate by hand.",
+                "inst_kwargs isn't a literal dict with string-literal "
+                "keys -- can't confidently splice its entries as keyword "
+                "arguments; migrate by hand.",
             )
             return None
 
-        remapped = _remap_positional(instruction, literal_args, literal_kwargs)
+        remapped = dict(literal_kwargs)
         if patch_label_expr is not None and not _is_none(patch_label_expr):
             remapped["patch_label"] = patch_label_expr
         remapped.update(extra_keywords)
+        # inst_args is carried through verbatim rather than statically
+        # remapped to keyword names -- see the module docstring.
+        if _literal_sequence(inst_args_expr) != []:
+            remapped[LEGACY_PENDING_INST_ARGS] = inst_args_expr
         self.changed = True
         if func is None:
             return _build_dict(instruction_expr, remapped)
@@ -350,9 +310,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         return rewritten if rewritten is not None else updated_node
 
 
-def migrate_instruction_labels(
-    source: str, instructions: Mapping[str, Instruction]
-) -> MigrationResult:
+def migrate_instruction_labels(source: str) -> MigrationResult:
     """Detect and rewrite pre-1.2 positional `InstructionLabel`
     construction throughout `source` (see the module docstring for exactly
     which shapes are recognized and when a confident rewrite is possible).
@@ -361,15 +319,10 @@ def migrate_instruction_labels(
     ----------
     source:
         The full text of a `.py` file (or an extracted code cell).
-    instructions:
-        A `{name: Instruction}` registry (typically a `QECCode.instructions`
-        dict, or several merged together) used to resolve a string-named
-        instruction's `param_priorities`/`param_alias`, per
-        [](api:loqs.tools.migrate.config).
     """
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
-    transformer = _InstructionLabelRewriter(instructions)
+    transformer = _InstructionLabelRewriter()
     new_module = wrapper.visit(transformer)
     new_source = new_module.code
     return MigrationResult(

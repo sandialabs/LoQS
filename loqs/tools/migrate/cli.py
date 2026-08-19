@@ -13,7 +13,7 @@ resolve/rewrite logic lives there, reusable without going through a
 subprocess at all.
 
 ```
-loqs-migrate source <path> [--config <mapping-file>] [--dry-run]
+loqs-migrate source <path> [--dry-run]
 loqs-migrate check <path>       # detect-only, no rewrite; for CI/pre-flight
 ```
 
@@ -39,7 +39,6 @@ import sys
 from pathlib import Path
 
 from loqs.tools.migrate import MigrationResult, migrate_source
-from loqs.tools.migrate.config import MigrationConfig
 from loqs.tools.migrate.notebook import migrate_notebook_source
 
 
@@ -53,15 +52,14 @@ def _iter_target_files(path: Path) -> list[Path]:
     )
 
 
-def _migrate_file(path: Path, config: MigrationConfig) -> MigrationResult:
+def _migrate_file(path: Path) -> MigrationResult:
     source = path.read_text(encoding="utf-8")
-    instructions = config.instructions_for(path)
     if path.suffix == ".md":
-        return migrate_notebook_source(source, instructions=instructions)
-    return migrate_source(source, instructions=instructions)
+        return migrate_notebook_source(source)
+    return migrate_source(source)
 
 
-def _run(paths: list[Path], config: MigrationConfig, *, write: bool) -> int:
+def _run(paths: list[Path], *, write: bool) -> int:
     """Shared implementation for both subcommands. Returns a process exit
     code: 0 if nothing needed attention, 1 if anything was flagged for
     manual review (whether or not anything else was also rewritten), 2 on
@@ -76,7 +74,7 @@ def _run(paths: list[Path], config: MigrationConfig, *, write: bool) -> int:
 
     for file in files:
         try:
-            result = _migrate_file(file, config)
+            result = _migrate_file(file)
         except Exception as exc:  # noqa: BLE001 -- report and keep going
             print(f"{file}: error: {exc}", file=sys.stderr)
             any_error = True
@@ -100,21 +98,11 @@ def _run(paths: list[Path], config: MigrationConfig, *, write: bool) -> int:
 
 
 def _cmd_source(args: argparse.Namespace) -> int:
-    config = (
-        MigrationConfig.from_json(args.config)
-        if args.config
-        else MigrationConfig()
-    )
-    return _run(args.paths, config, write=not args.dry_run)
+    return _run(args.paths, write=not args.dry_run)
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    config = (
-        MigrationConfig.from_json(args.config)
-        if args.config
-        else MigrationConfig()
-    )
-    return _run(args.paths, config, write=False)
+    return _run(args.paths, write=False)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,16 +120,6 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         type=Path,
         help="File(s) or directory/directories to scan.",
-    )
-    common.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help=(
-            "Path to a JSON file mapping source file paths to "
-            "'module:function' instruction-registry references (see "
-            "loqs.tools.migrate.config.MigrationConfig.from_json)."
-        ),
     )
 
     source_parser = subparsers.add_parser(

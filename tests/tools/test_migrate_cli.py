@@ -1,6 +1,5 @@
 """Tester for loqs.tools.migrate.cli"""
 
-import json
 import shutil
 import subprocess
 import sys
@@ -10,10 +9,20 @@ import pytest
 
 from loqs.tools.migrate.cli import build_parser, main
 
+# Fully resolvable: both the rename and the InstructionLabel call rewrite
+# confidently, leaving nothing for manual review.
 LEGACY_SOURCE = (
     "from loqs.core.recordables.patchdict import PatchDict\n\n"
     'patches = PatchDict({"L0": None})\n'
     'label = InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
+)
+
+# The rename still rewrites confidently, but the non-literal inst_kwargs
+# can't be spliced as keywords and is left flagged for manual review.
+FLAGGED_SOURCE = (
+    "from loqs.core.recordables.patchdict import PatchDict\n\n"
+    'patches = PatchDict({"L0": None})\n'
+    'label = InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
 )
 
 
@@ -21,6 +30,13 @@ LEGACY_SOURCE = (
 def legacy_file(tmp_path):
     path = tmp_path / "sample.py"
     path.write_text(LEGACY_SOURCE, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def flagged_file(tmp_path):
+    path = tmp_path / "sample.py"
+    path.write_text(FLAGGED_SOURCE, encoding="utf-8")
     return path
 
 
@@ -33,7 +49,6 @@ class TestBuildParser:
         args = build_parser().parse_args(["source", str(tmp_path)])
         assert args.command == "source"
         assert args.paths == [tmp_path]
-        assert args.config is None
         assert args.dry_run is False
 
     def test_check_has_no_dry_run_flag(self, tmp_path):
@@ -46,24 +61,33 @@ class TestMainAsLibraryCall:
     """Exercises `main()` directly (in-process), for fast, precise
     exit-code/side-effect assertions."""
 
-    def test_check_never_writes_and_reports_nonzero(self, legacy_file):
-        before = legacy_file.read_text(encoding="utf-8")
-        code = main(["check", str(legacy_file)])
-        assert code == 1  # the unresolvable InstructionLabel candidate
-        assert legacy_file.read_text(encoding="utf-8") == before
+    def test_check_never_writes_and_reports_nonzero(self, flagged_file):
+        before = flagged_file.read_text(encoding="utf-8")
+        code = main(["check", str(flagged_file)])
+        assert code == 1  # the non-literal inst_kwargs candidate
+        assert flagged_file.read_text(encoding="utf-8") == before
 
-    def test_source_dry_run_never_writes(self, legacy_file):
-        before = legacy_file.read_text(encoding="utf-8")
-        code = main(["source", "--dry-run", str(legacy_file)])
+    def test_source_dry_run_never_writes(self, flagged_file):
+        before = flagged_file.read_text(encoding="utf-8")
+        code = main(["source", "--dry-run", str(flagged_file)])
         assert code == 1
-        assert legacy_file.read_text(encoding="utf-8") == before
+        assert flagged_file.read_text(encoding="utf-8") == before
 
-    def test_source_writes_confident_rewrites(self, legacy_file):
-        code = main(["source", str(legacy_file)])
-        assert code == 1  # the InstructionLabel candidate still unresolved
-        rewritten = legacy_file.read_text(encoding="utf-8")
+    def test_source_writes_confident_rewrites(self, flagged_file):
+        code = main(["source", str(flagged_file)])
+        assert code == 1  # the non-literal inst_kwargs candidate still flagged
+        rewritten = flagged_file.read_text(encoding="utf-8")
         assert "PatchLayout" in rewritten
         assert "PatchDict" not in rewritten
+        assert "extra_kwargs" in rewritten  # left untouched, not silently dropped
+
+    def test_source_fully_resolves_when_nothing_needs_manual_review(
+        self, legacy_file
+    ):
+        code = main(["source", str(legacy_file)])
+        assert code == 0
+        rewritten = legacy_file.read_text(encoding="utf-8")
+        assert "increment_by=2" in rewritten
 
     def test_clean_file_exits_zero(self, tmp_path):
         path = tmp_path / "clean.py"
@@ -71,28 +95,9 @@ class TestMainAsLibraryCall:
         assert main(["check", str(path)]) == 0
         assert main(["source", str(path)]) == 0
 
-    def test_config_resolves_instruction_registry(self, legacy_file, tmp_path):
-        config_path = tmp_path / "config.json"
-        config_path.write_text(
-            json.dumps(
-                {
-                    str(legacy_file): (
-                        "loqs.codepacks.codepack_trivial_counter:create_qec_code"
-                    )
-                }
-            ),
-            encoding="utf-8",
-        )
-        code = main(
-            ["source", "--config", str(config_path), str(legacy_file)]
-        )
-        assert code == 0  # nothing left to flag once Increment resolves
-        rewritten = legacy_file.read_text(encoding="utf-8")
-        assert "increment_by=2" in rewritten
-
     def test_directory_is_walked_for_py_and_md_files(self, tmp_path):
-        (tmp_path / "a.py").write_text(LEGACY_SOURCE, encoding="utf-8")
-        (tmp_path / "b.txt").write_text(LEGACY_SOURCE, encoding="utf-8")  # ignored, wrong suffix
+        (tmp_path / "a.py").write_text(FLAGGED_SOURCE, encoding="utf-8")
+        (tmp_path / "b.txt").write_text(FLAGGED_SOURCE, encoding="utf-8")  # ignored, wrong suffix
         code = main(["check", str(tmp_path)])
         assert code == 1
 
@@ -114,23 +119,23 @@ class TestConsoleScriptSubprocess:
     console script installed by `pyproject.toml`'s `[project.scripts]`
     entry, confirming the packaging (not just the library call) works."""
 
-    def test_installed_console_script_runs(self, legacy_file):
+    def test_installed_console_script_runs(self, flagged_file):
         executable = shutil.which("loqs-migrate")
         if executable is None:
             pytest.skip("loqs-migrate console script not installed")
         result = subprocess.run(
-            [executable, "check", str(legacy_file)],
+            [executable, "check", str(flagged_file)],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 1
-        assert "InstructionLabel" in result.stdout or "Could not resolve" in (
+        assert "InstructionLabel" in result.stdout or "literal dict" in (
             result.stdout
         )
 
-    def test_module_invocation_matches_console_script(self, legacy_file):
+    def test_module_invocation_matches_console_script(self, flagged_file):
         result = subprocess.run(
-            [sys.executable, "-m", "loqs.tools.migrate.cli", "check", str(legacy_file)],
+            [sys.executable, "-m", "loqs.tools.migrate.cli", "check", str(flagged_file)],
             capture_output=True,
             text=True,
         )

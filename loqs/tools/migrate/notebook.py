@@ -37,10 +37,8 @@ itself, but worth knowing about for a user's own notebook.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
 
-from loqs.core.instructions.instruction import Instruction
 from loqs.tools.migrate import migrate_source
 from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
 
@@ -49,9 +47,7 @@ _FENCE_CLOSE = re.compile(r"^```\s*$")
 _CELL_FIELD_LINE = re.compile(r"^:[\w-]+:.*$")
 
 
-def migrate_notebook_source(
-    source: str, *, instructions: Mapping[str, Instruction] | None = None
-) -> MigrationResult:
+def migrate_notebook_source(source: str) -> MigrationResult:
     """Run [](api:migrate_source) over every code cell in a MyST Markdown
     document, leaving everything else untouched.
 
@@ -91,7 +87,7 @@ def migrate_notebook_source(
         cell_lines = lines[code_start:j]
         cell_source = "".join(cell_lines)
 
-        result = migrate_source(cell_source, instructions=instructions)
+        result = migrate_source(cell_source)
         if result.changed:
             changed = True
         for item in result.manual_review:

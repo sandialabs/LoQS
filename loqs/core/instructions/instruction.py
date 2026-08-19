@@ -552,10 +552,8 @@ class Instruction(Displayable):
                 f"(serialized at version {version}) appears to construct "
                 f"an unresolvable legacy InstructionLabel(...): {details}. "
                 "Pass migrate_legacy_fns=True to QuantumProgram.read/"
-                "Serializable.load to run it as-is, an "
-                "instruction_registry to resolve it automatically if "
-                "possible, or migrate the source with loqs-migrate "
-                "first."
+                "Serializable.load to run it as-is, or migrate the "
+                "source with loqs-migrate first."
             )
 
         apply_fn = Serializable._exec_function_str(

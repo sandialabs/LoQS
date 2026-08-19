@@ -2,22 +2,13 @@
 
 from pathlib import Path
 
-import pytest
-
-from loqs.codepacks.codepack_trivial_counter import create_qec_code
 from loqs.tools.migrate import migrate_source
-from loqs.tools.migrate.config import MigrationConfig, load_instruction_registry
 from loqs.tools.migrate.flags import detect_flagged_patterns
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.notebook import migrate_notebook_source
 from loqs.tools.migrate.renames import RENAMES, rewrite_renames
 
 FIXTURES = Path(__file__).parent / "migrate_fixtures"
-
-
-@pytest.fixture
-def instructions():
-    return create_qec_code().instructions
 
 
 class TestRewriteRenames:
@@ -77,9 +68,9 @@ class TestRewriteRenames:
 
 
 class TestMigrateInstructionLabels:
-    def test_resolvable_kwargs_form(self, instructions):
+    def test_resolvable_kwargs_form(self):
         src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert result.changed
         assert (
             result.source
@@ -87,27 +78,27 @@ class TestMigrateInstructionLabels:
         )
         assert result.manual_review == []
 
-    def test_resolvable_bare_tuple(self, instructions):
+    def test_resolvable_bare_tuple(self):
         """A bare tuple rewrites to a bare dict, not an InstructionLabel(...)
         call -- unlike an explicit call being rewritten, building a call
         here would introduce a new InstructionLabel reference the file
         may never have needed to import."""
         src = 'tup = ("Increment", "L0", (), {"increment_by": 2})\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert (
             result.source
             == 'tup = {"instruction": "Increment", "increment_by": 2, "patch_label": "L0"}\n'
         )
 
-    def test_three_tuple_with_none_patch_label(self, instructions):
+    def test_three_tuple_with_none_patch_label(self):
         src = 'tup = ("Init Counter", None, (7,))\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert (
             result.source
-            == 'tup = {"instruction": "Init Counter", "initial_value": 7}\n'
+            == 'tup = {"instruction": "Init Counter", "_legacy_inst_args": (7,)}\n'
         )
 
-    def test_bare_tuple_in_a_list_rewrites_to_a_dict(self, instructions):
+    def test_bare_tuple_in_a_list_rewrites_to_a_dict(self):
         """A bare tuple embedded in a larger structure (e.g. a stack's
         own list of raw entries, alongside an already-modern bare
         string) rewrites the same way a standalone one does: to a bare
@@ -117,86 +108,82 @@ class TestMigrateInstructionLabels:
             'stack = ["Init State", '
             '("Increment", "L0", (), {"increment_by": 2})]\n'
         )
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert result.source == (
             'stack = ["Init State", '
             '{"instruction": "Increment", "increment_by": 2, "patch_label": "L0"}]\n'
         )
 
-    def test_none_literal_inst_args_and_kwargs_treated_as_empty(self, instructions):
+    def test_none_literal_inst_args_and_kwargs_treated_as_empty(self):
         """A real shape found in QuantumProgram_v1.json.gz's frozen
         source: `InstructionLabel(name, patch_label, None, {...})` uses a
         literal `None` for inst_args, not an empty tuple `()` --
         `_remap_legacy_positional_args`'s own runtime handling
         (`tuple(inst_args or ())`) treats both the same way."""
         src = 'InstructionLabel("Increment", "L0", None, None)\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert result.source == 'InstructionLabel("Increment", patch_label="L0")\n'
 
-    def test_three_tuple_with_string_second_element_is_not_a_candidate(
-        self, instructions
-    ):
+    def test_three_tuple_with_string_second_element_is_not_a_candidate(self):
         """A pyGSTi-style circuit-layer gate-label tuple, e.g.
         `("Gcphase", "A0", "D4")`, must not be treated as a candidate --
         confirmed via real testing against docs/notebooks/buildinstruction.md
         that this shape is far more common than the legacy label shape it
         could be confused with (see labels.py's module docstring)."""
         src = 'layer = ("Gcphase", "A0", "D4")\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert result.source == src
         assert result.manual_review == []
 
-    def test_already_modern_call_is_untouched(self, instructions):
+    def test_already_modern_call_is_untouched(self):
         src = 'InstructionLabel("Increment", patch_label="L0", counter=5)\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert not result.changed
         assert result.manual_review == []
 
-    def test_resolved_instruction_object_is_flagged_not_rewritten(
-        self, instructions
-    ):
-        """May already work today via a DeprecationWarning if it
-        evaluates to a resolved Instruction (see
-        InstructionLabel.__init__) -- still not silently rewritten either
-        way, since the tool can't know a variable's runtime value."""
+    def test_non_literal_instruction_and_name_are_rewritten(self):
+        """Neither the instruction expression nor the instruction name
+        needs to be a literal string, or resolvable against any known
+        registry, to be rewritten -- `InstructionLabel`'s own
+        `LEGACY_PENDING_INST_ARGS` stash is resolved lazily at runtime
+        once the real instruction is available, so this tool never needs
+        to know what instructions exist."""
         src = 'InstructionLabel(some_instruction, "L0", (), {})\n'
-        result = migrate_instruction_labels(src, instructions)
-        assert not result.changed
-        assert len(result.manual_review) == 1
-        assert "DeprecationWarning" in result.manual_review[0].message
-        assert "TypeError" in result.manual_review[0].message
+        result = migrate_instruction_labels(src)
+        assert result.source == 'InstructionLabel(some_instruction, patch_label="L0")\n'
+        assert result.manual_review == []
 
-    def test_unknown_instruction_name_is_flagged(self, instructions):
-        src = 'InstructionLabel("Nonexistent", "L0", (), {})\n'
-        result = migrate_instruction_labels(src, instructions)
-        assert not result.changed
-        assert "Could not resolve instruction" in result.manual_review[0].message
+        src = 'InstructionLabel("Nonexistent Instruction", "L0", (), {})\n'
+        result = migrate_instruction_labels(src)
+        assert (
+            result.source
+            == 'InstructionLabel("Nonexistent Instruction", patch_label="L0")\n'
+        )
+        assert result.manual_review == []
 
-    def test_non_literal_kwargs_is_flagged(self, instructions):
+    def test_non_literal_kwargs_is_flagged(self):
         src = 'InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert not result.changed
-        assert "literal tuple/list/dict" in result.manual_review[0].message
+        assert "literal dict" in result.manual_review[0].message
 
-    def test_splat_call_is_flagged(self, instructions):
+    def test_splat_call_is_flagged(self):
         src = "InstructionLabel(*label_tuple)\n"
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert not result.changed
         assert "splat call" in result.manual_review[0].message
 
-    def test_double_star_kwargs_unpack_is_already_modern(self, instructions):
+    def test_double_star_kwargs_unpack_is_already_modern(self):
         """A real false positive found by testing against this repo's own
         `builders.py`/`instructionlabel.py`: `InstructionLabel(instruction,
         **kwargs)` was misclassified as an unresolvable positional splat --
         `**kwargs` doesn't affect positional-arg counting at all."""
         src = "InstructionLabel(instruction, **kwargs)\n"
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert not result.changed
         assert result.manual_review == []
 
-    def test_legacy_positional_with_trailing_double_star_is_rewritten(
-        self, instructions
-    ):
+    def test_legacy_positional_with_trailing_double_star_is_rewritten(self):
         """A legacy positional call combined with a `**kwargs` unpack is
         still rewritten -- the unpack is carried through verbatim, last,
         since its contents can't be known statically."""
@@ -204,32 +191,26 @@ class TestMigrateInstructionLabels:
             'InstructionLabel("Increment", "L0", (), {"increment_by": 2}, '
             "**extra)\n"
         )
-        result = migrate_instruction_labels(src, instructions)
+        result = migrate_instruction_labels(src)
         assert (
             result.source
             == 'InstructionLabel("Increment", increment_by=2, patch_label="L0", **extra)\n'
         )
         assert result.manual_review == []
 
-    def test_no_registry_flags_every_string_named_candidate(self):
-        src = 'InstructionLabel("Increment", "L0", (), {})\n'
-        result = migrate_instruction_labels(src, instructions={})
-        assert not result.changed
-        assert "Could not resolve instruction" in result.manual_review[0].message
-
-    def test_idempotent(self, instructions):
+    def test_idempotent(self):
         src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
-        once = migrate_instruction_labels(src, instructions)
-        twice = migrate_instruction_labels(once.source, instructions)
+        once = migrate_instruction_labels(src)
+        twice = migrate_instruction_labels(once.source)
         assert twice.source == once.source
         assert not twice.changed
 
-    def test_matches_golden_fixture(self, instructions):
+    def test_matches_golden_fixture(self):
         before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
         after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
-        result = migrate_instruction_labels(before, instructions)
+        result = migrate_instruction_labels(before)
         assert result.source == after
-        assert len(result.manual_review) == 4
+        assert len(result.manual_review) == 2
 
 
 class TestDetectFlaggedPatterns:
@@ -262,10 +243,10 @@ class TestDetectFlaggedPatterns:
 
 
 class TestMigrateSource:
-    def test_matches_golden_fixture_labels(self, instructions):
+    def test_matches_golden_fixture_labels(self):
         before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
         after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
-        result = migrate_source(before, instructions=instructions)
+        result = migrate_source(before)
         assert result.source == after
 
     def test_matches_golden_fixture_renames(self):
@@ -274,39 +255,37 @@ class TestMigrateSource:
         result = migrate_source(before)
         assert result.source == after
 
-    def test_idempotent_on_already_migrated_source(self, instructions):
+    def test_idempotent_on_already_migrated_source(self):
         after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
-        result = migrate_source(after, instructions=instructions)
+        result = migrate_source(after)
         assert result.source == after
         assert not result.changed
 
 
 class TestMigrateNotebookSource:
-    def test_matches_golden_fixture(self, instructions):
+    def test_matches_golden_fixture(self):
         before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
         after = FIXTURES.joinpath("notebook_after.md").read_text(encoding="utf-8")
-        result = migrate_notebook_source(before, instructions=instructions)
+        result = migrate_notebook_source(before)
         assert result.source == after
 
-    def test_note_fence_is_never_touched(self, instructions):
+    def test_note_fence_is_never_touched(self):
         before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
-        result = migrate_notebook_source(before, instructions=instructions)
+        result = migrate_notebook_source(before)
         assert (
             'mention of `PatchDict` or `InstructionLabel("Name", "L0", (), {})`'
             in result.source
         )
 
-    def test_field_line_is_passed_through_and_not_treated_as_code(
-        self, instructions
-    ):
+    def test_field_line_is_passed_through_and_not_treated_as_code(self):
         """`docs/notebooks/workflow.md` has a real `:tags: [...]` field
         line; this used to raise a ParserSyntaxError instead of migrating
         the cell."""
         before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
-        result = migrate_notebook_source(before, instructions=instructions)
+        result = migrate_notebook_source(before)
         assert ":tags: [scroll-output]" in result.source
 
-    def test_cross_cell_import_context_is_a_known_limitation(self, instructions):
+    def test_cross_cell_import_context_is_a_known_limitation(self):
         """Each cell is migrated independently, with no memory of an
         earlier cell's imports (unlike a real notebook kernel) -- so a
         bare `PatchDict()` relying on an import done in an earlier cell
@@ -314,56 +293,8 @@ class TestMigrateNotebookSource:
         `docs/notebooks/*.md` today (already fully migrated), but locked
         in as documented, understood behavior rather than a silent gap."""
         before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
-        result = migrate_notebook_source(before, instructions=instructions)
+        result = migrate_notebook_source(before)
         assert "patches2 = PatchDict()" in result.source
-
-
-class TestMigrationConfig:
-    def test_load_instruction_registry(self):
-        registry = load_instruction_registry(
-            "loqs.codepacks.codepack_trivial_counter:create_qec_code"
-        )
-        assert set(registry) == {"Increment", "Init Counter"}
-
-    def test_instructions_for_uses_configured_registry(self):
-        config = MigrationConfig(
-            {
-                "some/file.py": "loqs.codepacks.codepack_trivial_counter:create_qec_code",
-            }
-        )
-        assert set(config.instructions_for("some/file.py")) == {
-            "Increment",
-            "Init Counter",
-        }
-
-    def test_instructions_for_unconfigured_file_is_empty(self):
-        config = MigrationConfig({})
-        assert config.instructions_for("unknown.py") == {}
-
-    def test_caches_registry_across_files(self):
-        config = MigrationConfig(
-            {
-                "a.py": "loqs.codepacks.codepack_trivial_counter:create_qec_code",
-                "b.py": "loqs.codepacks.codepack_trivial_counter:create_qec_code",
-            }
-        )
-        first = config.instructions_for("a.py")
-        second = config.instructions_for("b.py")
-        # Same cached dict object reused, not rebuilt, for the second file.
-        assert first is second
-
-    def test_from_json(self, tmp_path):
-        config_path = tmp_path / "config.json"
-        config_path.write_text(
-            '{"some/file.py": '
-            '"loqs.codepacks.codepack_trivial_counter:create_qec_code"}',
-            encoding="utf-8",
-        )
-        config = MigrationConfig.from_json(config_path)
-        assert set(config.instructions_for("some/file.py")) == {
-            "Increment",
-            "Init Counter",
-        }
 
 
 class TestRenamesTableCoverage:

@@ -216,19 +216,6 @@ Set for the duration of a `Serializable.read`/`.load` call, read once in
 `Instruction._from_decoded_attrs`.
 """
 
-LEGACY_INSTRUCTION_REGISTRY: contextvars.ContextVar[
-    Mapping[str, Any] | None
-] = contextvars.ContextVar("legacy_instruction_registry", default=None)
-"""An optional `{name: Instruction}` registry (typically a `QECCode`'s own
-`instructions` dict), used by `_update_legacy_constructions` to resolve
-and rewrite an old-format `InstructionLabel(...)` construction found in a
-decoded file's frozen source, sharing `loqs.tools.migrate`'s own
-detect/resolve/rewrite engine. Set for the duration of a
-`Serializable.read`/`.load` call via its `instruction_registry` parameter
--- a successful rewrite means `MIGRATE_LEGACY_FNS`'s gate never trips for
-that pattern at all.
-"""
-
 
 @dataclass
 class DeferredRef:
@@ -551,7 +538,6 @@ class Serializable:
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
         migrate_legacy_fns: bool = False,
-        instruction_registry: Mapping[str, Any] | None = None,
     ) -> Encodable:
         """
         Load an object of this type, or a subclass of this type, from an input stream.
@@ -579,14 +565,6 @@ class Serializable:
             construction-time compatibility shim. Pass `True` to allow it
             to run as-is instead. Default is `False`.
 
-        instruction_registry : Mapping[str, Instruction], optional
-            A `{name: Instruction}` registry (typically a `QECCode`'s own
-            `instructions` dict) used to resolve and rewrite a legacy
-            `InstructionLabel(...)` construction found in a decoded
-            file's frozen source automatically, rather than needing
-            `migrate_legacy_fns=True` at all for that specific pattern.
-            See [](api:LEGACY_INSTRUCTION_REGISTRY).
-
         Returns
         -------
         Serializable
@@ -606,7 +584,6 @@ class Serializable:
             decode_cache = decode_cache if decode_cache is not None else {}
 
         migrate_token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
-        registry_token = LEGACY_INSTRUCTION_REGISTRY.set(instruction_registry)
         try:
             if format in ["json", "json.gz"]:
                 # Check if it's a file-like object that supports text I/O
@@ -633,7 +610,6 @@ class Serializable:
                 raise ValueError(f"Invalid `format` value for load: {format}")
         finally:
             MIGRATE_LEGACY_FNS.reset(migrate_token)
-            LEGACY_INSTRUCTION_REGISTRY.reset(registry_token)
 
         # At this point, at least outer object should not be a deferred reference
         assert not isinstance(decoded, DeferredRef)
@@ -648,7 +624,6 @@ class Serializable:
         use_caching: bool = True,
         decode_cache: DecodeCache = None,
         migrate_legacy_fns: bool = False,
-        instruction_registry: Mapping[str, Any] | None = None,
     ) -> Encodable:
         """Read and deserialize an object from a file.
 
@@ -669,8 +644,6 @@ class Serializable:
             Existing decode cache to use for reference resolution.
         migrate_legacy_fns : bool, optional
             See [](api:Serializable.load). Default is `False`.
-        instruction_registry : Mapping[str, Instruction], optional
-            See [](api:Serializable.load). Default is `None`.
 
         Returns
         -------
@@ -711,7 +684,6 @@ class Serializable:
             use_caching=use_caching,
             decode_cache=decode_cache,
             migrate_legacy_fns=migrate_legacy_fns,
-            instruction_registry=instruction_registry,
         )
 
         f.close()
@@ -1535,7 +1507,6 @@ class Serializable:
 
         Returns `(function_str, [])` unchanged once `version >=
         SERIALIZATION_VERSION`. Otherwise returns the rewritten source
-        (unchanged if nothing in `LEGACY_INSTRUCTION_REGISTRY` resolves)
         alongside a list of `ManualReviewItem`s for anything found but not
         confidently rewritten -- the caller decides what, if anything, to
         do with those (e.g. `Instruction._from_decoded_attrs`'s
@@ -1547,9 +1518,8 @@ class Serializable:
         # (e.g. via Instruction), so this can't be a top-level import.
         from loqs.tools.migrate.labels import migrate_instruction_labels
 
-        registry = LEGACY_INSTRUCTION_REGISTRY.get() or {}
         try:
-            result = migrate_instruction_labels(function_str, registry)
+            result = migrate_instruction_labels(function_str)
         except Exception:
             # A frozen function's source isn't guaranteed to be a single,
             # standalone-parseable module (e.g. indentation relative to
