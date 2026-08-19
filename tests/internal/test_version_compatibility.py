@@ -478,6 +478,67 @@ class TestUpdateLegacyConstructions:
         with pytest.raises(RuntimeError, match="InstructionLabel"):
             Instruction._from_decoded_attrs(attrs)
 
+    def test_falls_through_unchanged_on_an_unparseable_source(self):
+        """A frozen function's source isn't guaranteed to be a single,
+        standalone-parseable module (e.g. indented relative to its
+        original enclosing scope, as constructed here) -- the rewrite
+        must fall through to the source unchanged rather than raise and
+        break decoding entirely."""
+        src = (
+            "    def apply_fn(patch_label):\n"
+            '        return InstructionLabel("Increment", "L0", (), {})\n'
+        )
+        assert (
+            serializable_module.Serializable._update_legacy_constructions(
+                src, 0
+            )
+            == (src, [])
+        )
+
+
+class TestImportClass:
+    """Regression tests for `Serializable._import_class`, resolving a
+    decoded `(module, class)` pair against the rename/removal table,
+    then actually importing it."""
+
+    def test_resolves_a_renamed_class(self):
+        cls = Serializable._import_class(
+            "loqs.core.syndrome", "SyndromeLabel", 0
+        )
+        from loqs.core.syndromelabel import SyndromeLabel
+
+        assert cls is SyndromeLabel
+
+    def test_removed_class_raises_a_clear_import_error(self):
+        """A `(module, class)` mapped to `None` (deleted outright, not
+        relocated) raises immediately, rather than trying and failing to
+        import a location that was never a real replacement."""
+        with pytest.raises(ImportError, match="removed in a later"):
+            Serializable._import_class(
+                "loqs.internal.castable", "Castable", 0
+            )
+
+    def test_unresolvable_module_raises_a_clear_import_error(self):
+        """A module that doesn't exist at all (not a typo in the rename
+        table -- e.g. a class whose location was never renamed and
+        simply isn't importable) raises `ImportError`, not the raw
+        `ModuleNotFoundError`, so callers only ever need to catch one
+        exception type."""
+        with pytest.raises(ImportError, match="Class or module not found"):
+            Serializable._import_class(
+                "loqs.nonexistent_module", "NonexistentClass",
+                serializable_module.SERIALIZATION_VERSION,
+            )
+
+    def test_unresolvable_class_raises_a_clear_import_error(self):
+        """A real, importable module missing the specific class raises
+        `ImportError`, not the raw `AttributeError`."""
+        with pytest.raises(ImportError, match="Class or module not found"):
+            Serializable._import_class(
+                "loqs.core.syndromelabel", "NonexistentClass",
+                serializable_module.SERIALIZATION_VERSION,
+            )
+
 
 class TestInstructionLabelDecodeRemap:
     """Narrow, unit-level tests for the old-format InstructionLabel decode
