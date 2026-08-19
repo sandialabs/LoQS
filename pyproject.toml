@@ -7,7 +7,8 @@ dependencies = [
     "scipy",
     "tk",
     "tqdm>=4",
-    "h5py"
+    "h5py",
+    "libcst>=1"
 ]
 authors = [
     {name = "Stefan Seritan", email = "sserita@sandia.gov"},
@@ -39,6 +40,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
     "Typing :: Typed"
 ]
+
+[project.scripts]
+loqs-migrate = "loqs.tools.migrate.cli:main"
 
 [project.optional-dependencies]
 dask = [
@@ -79,6 +83,7 @@ test = [
     "mock>=5",
     "pytest>=8",
     "pytest-cov>=5",
+    "pytest-xdist>=3",
     "tox>=4"
 ]
 visualization = [

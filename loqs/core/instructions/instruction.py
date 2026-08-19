@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 import inspect as ins
 import textwrap
@@ -26,7 +26,6 @@ import warnings
 
 from loqs.core import Frame
 from loqs.internal import Displayable
-from loqs.internal.legacy import detect_legacy_construction
 from loqs.internal.serializable import (
     MIGRATE_LEGACY_FNS,
     SERIALIZATION_VERSION,
@@ -133,12 +132,14 @@ class Instruction(Displayable):
        INSTRUCTION-CONTAINING `LoQS` OBJECTS THAT YOU DO NOT TRUST.
        The good news is that because the function is stored in plain text,
        you can verify whether it is doing anything malicious.
-    2. The serialized versions are computed at construction time
-       and require access to the source code. They are then saved
-       so that they persist through deserialization - otherwise,
-       you could not re-serialize after deserialization because
-       you would not have access to the source code of the executed
-       function.
+    2. The serialized versions are computed lazily, the first time
+       they're actually needed (e.g. at encode time), and cached from
+       then on. This requires access to the source code at that point,
+       not necessarily at construction time -- see Caveat 4 for the
+       biggest practical risk this poses. Once computed, the cached
+       version persists through deserialization, so re-serializing
+       after deserialization still works even without access to the
+       original source code.
     3. As a side effect of the string versions of the functions
        being used for serialization, these are also the objects
        used when hashing and (potentially importantly) when doing
@@ -148,12 +149,16 @@ class Instruction(Displayable):
        in any way. Similarly, two [](api:Instruction) objects that
        have very different functions would test as equal if one had
        serialized versions that were set to match with the other.
-    4. Importantly for Jupyter users, Caveat 2 means that you may run
-       into issues when your apply function is only defined in a
-       notebook cell. There are two solutions to this: you can provide
-       the plain text versions during object construction, or you
-       can keep your function definitions in a separate script.
-        The latter is preferred, but both should work.
+    4. Importantly for Jupyter users: a notebook cell's function is only
+       inspectable while its defining kernel session is alive (via
+       IPython's own linecache patch, not a real file on disk), so if
+       this Instruction isn't serialized until sometime after a kernel
+       restart, Caveat 2's lazy computation fails then instead. The
+       constructor warns immediately if this looks likely. The safest
+       fix is to keep function definitions in a separate script;
+       alternatively, pass an already-serialized version explicitly
+       (via [](api:Serializable.serialize_function)) at construction
+       time, while the live function is still available.
 
     Examples
     --------
@@ -206,6 +211,41 @@ class Instruction(Displayable):
 
     type: str
     """Type for logging"""
+
+    @staticmethod
+    def _warn_if_source_unavailable(func: Callable, param_name: str) -> None:
+        """Warn immediately if `func`'s source looks unlikely to still be
+        there when actually needed later (serialization is deferred to
+        first real use, e.g. encode time, rather than done eagerly here).
+
+        Covers both a callable `inspect.getsource` flatly can't handle
+        right now, and the classic Jupyter notebook case: a cell's
+        function is inspectable *now* only via IPython's linecache patch
+        for a backing file that doesn't really exist on disk, and stops
+        working after a kernel restart.
+        """
+        import inspect
+        import os
+
+        try:
+            inspect.getsource(func)
+            srcfile = inspect.getsourcefile(func)
+            unavailable = srcfile is not None and not os.path.exists(
+                srcfile
+            )
+        except (OSError, TypeError):
+            unavailable = True
+
+        if unavailable:
+            warnings.warn(
+                f"Source for '{param_name}' may not be available later "
+                "(e.g. a Jupyter cell, lambda, or exec'd function). Pass "
+                f"serialized_{param_name}="
+                f"Serializable.serialize_function({param_name}) now to "
+                "avoid a failure at encode time. Ignore if you do not "
+                "plan to serialize/encode this Instruction.",
+                stacklevel=3,
+            )
 
     def __init__(
         self,
@@ -267,16 +307,18 @@ class Instruction(Displayable):
 
         self.map_qubits_fn = map_qubits_fn
 
-        # Let's serialize the functions now, when we know we have access to source code
-        self._serialized_apply_fn = serialized_apply_fn
+        # Deferred to first actual use (see the _serialized_apply_fn/
+        # _serialized_map_qubits_fn properties below), since
+        # apply_fn/map_qubits_fn are never reassigned after construction.
+        # Still checked cheaply now, to warn immediately if source access
+        # already looks likely to fail.
+        self._serialized_apply_fn_cache = serialized_apply_fn
         if serialized_apply_fn is None:
-            self._serialized_apply_fn = Serializable._get_function_str(
-                apply_fn
-            )
-        self._serialized_map_qubits_fn = serialized_map_qubits_fn
+            self._warn_if_source_unavailable(apply_fn, "apply_fn")
+        self._serialized_map_qubits_fn_cache = serialized_map_qubits_fn
         if serialized_map_qubits_fn is None:
-            self._serialized_map_qubits_fn = Serializable._get_function_str(
-                map_qubits_fn
+            self._warn_if_source_unavailable(
+                map_qubits_fn, "map_qubits_fn"
             )
 
         if data is None:
@@ -317,6 +359,26 @@ class Instruction(Displayable):
         self.name = name
 
         self.type = type
+
+    @property
+    def _serialized_apply_fn(self) -> str | ApplyCallable:
+        """Serialized `apply_fn`, computed via
+        `Serializable._get_function_str` on first access and cached from
+        then on -- see the deferred-computation note in `__init__`."""
+        if self._serialized_apply_fn_cache is None:
+            self._serialized_apply_fn_cache = (
+                Serializable._get_function_str(self.apply_fn)
+            )
+        return self._serialized_apply_fn_cache
+
+    @property
+    def _serialized_map_qubits_fn(self) -> str | MapQubitsCallable:
+        """Serialized `map_qubits_fn` -- see `_serialized_apply_fn`."""
+        if self._serialized_map_qubits_fn_cache is None:
+            self._serialized_map_qubits_fn_cache = (
+                Serializable._get_function_str(self.map_qubits_fn)
+            )
+        return self._serialized_map_qubits_fn_cache
 
     def __str__(self) -> str:
         s = f"Instruction {self.name}\n"
@@ -416,8 +478,11 @@ class Instruction(Displayable):
             param_priorities=self._param_priorities,
             param_error_behavior=self.param_error_behavior,  # type: ignore
             param_aliases=self._param_aliases,
-            serialized_apply_fn=self._serialized_apply_fn,
-            serialized_map_qubits_fn=self._serialized_map_qubits_fn,
+            # The raw (possibly not-yet-computed) cache, not the
+            # property, so copying an instruction that's never been
+            # serialized doesn't force that computation.
+            serialized_apply_fn=self._serialized_apply_fn_cache,
+            serialized_map_qubits_fn=self._serialized_map_qubits_fn_cache,
             name=self.name,
             type=self.type,
         )
@@ -455,32 +520,47 @@ class Instruction(Displayable):
         serialized_map_qubits_fn = attr_dict["_serialized_map_qubits_fn"]
         version = attr_dict["version"]
 
-        # Gate re-executing an old, now-incompatible calling convention
-        # behind an explicit opt-in rather than doing it silently. Only
-        # scan an actual string -- a version-0 file's source may already
-        # be a live callable by this point (decode_function's own
-        # version-0 heuristic), leaving nothing to scan.
-        if version < SERIALIZATION_VERSION and not MIGRATE_LEGACY_FNS.get():
-            found = []
+        # Prepare source once (imports, then any resolvable old-format
+        # InstructionLabel(...) rewrite) and gate on whatever's left
+        # unresolved. Only a string needs preparing -- a version-0
+        # source may already be a live callable by this point
+        # (decode_function's own heuristic).
+        unresolved = []
+        if version < SERIALIZATION_VERSION:
             if isinstance(serialized_apply_fn, str):
-                found += detect_legacy_construction(serialized_apply_fn)
-            if isinstance(serialized_map_qubits_fn, str):
-                found += detect_legacy_construction(serialized_map_qubits_fn)
-            if found:
-                raise RuntimeError(
-                    f"Instruction {attr_dict.get('name')!r}'s frozen source "
-                    f"(serialized at version {version}) appears to construct "
-                    f"{', '.join(found)}, a deprecated legacy pattern. Pass "
-                    "migrate_legacy_fns=True to QuantumProgram.read/"
-                    "Serializable.load to run it as-is, or migrate the "
-                    "source with loqs-migrate first."
+                serialized_apply_fn, review = (
+                    Serializable._prepare_function_source(
+                        serialized_apply_fn, version
+                    )
                 )
+                unresolved += review
+            if isinstance(serialized_map_qubits_fn, str):
+                serialized_map_qubits_fn, review = (
+                    Serializable._prepare_function_source(
+                        serialized_map_qubits_fn, version
+                    )
+                )
+                unresolved += review
 
-        apply_fn = Serializable._eval_function_str(
-            serialized_apply_fn, version
+        # Gate re-executing any remaining old, now-incompatible calling
+        # convention behind an explicit opt-in rather than doing it
+        # silently.
+        if unresolved and not MIGRATE_LEGACY_FNS.get():
+            details = "; ".join(str(item) for item in unresolved)
+            raise RuntimeError(
+                f"Instruction {attr_dict.get('name')!r}'s frozen source "
+                f"(serialized at version {version}) appears to construct "
+                f"an unresolvable legacy InstructionLabel(...): {details}. "
+                "Pass migrate_legacy_fns=True to QuantumProgram.read/"
+                "Serializable.load to run it as-is, or migrate the "
+                "source with loqs-migrate first."
+            )
+
+        apply_fn = Serializable._exec_function_str(
+            serialized_apply_fn, attr_dict["_serialized_apply_fn"]
         )
-        map_qubits_fn = Serializable._eval_function_str(
-            serialized_map_qubits_fn, version
+        map_qubits_fn = Serializable._exec_function_str(
+            serialized_map_qubits_fn, attr_dict["_serialized_map_qubits_fn"]
         )
 
         # Create instruction

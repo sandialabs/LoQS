@@ -1,11 +1,15 @@
-"""Tests for the generic legacy-shim machinery (install_legacy_module, make_legacy_construction_shim)."""
+"""Tests for loqs/internal/legacy.py's generic legacy-shim machinery:
+install_legacy_module and make_legacy_construction_shim."""
 
 import sys
 import warnings
 
 import pytest
 
-from loqs.internal.legacy import install_legacy_module, make_legacy_construction_shim
+from loqs.internal.legacy import (
+    install_legacy_module,
+    make_legacy_construction_shim,
+)
 
 
 class TestInstallLegacyModule:

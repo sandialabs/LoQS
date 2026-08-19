@@ -105,9 +105,12 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.recordables.pauliframe",
             "PauliFrameLike",
         ),
+        # PatchDictCastableTypes -> PatchLayoutLike, not PatchDictLike:
+        # loqs.core.recordables.patchdict's legacy shim exports
+        # `PatchDict` only, with no `PatchDictLike` attribute at all.
         ("loqs.core.recordables.patchdict", "PatchDictCastableTypes"): (
-            "loqs.core.recordables.patchdict",
-            "PatchDictLike",
+            "loqs.core.recordables.patchlayout",
+            "PatchLayoutLike",
         ),
         (
             "loqs.core.recordables.measurementoutcomes",
@@ -238,6 +241,73 @@ DecodeCache: TypeAlias = dict[int, "Serializable | DeferredRef"] | None
 
 # Generic type variable to stand-in for derived class below
 T = TypeVar("T", bound="Serializable")
+
+
+@functools.lru_cache(maxsize=32)
+def _import_usage_index_for_file(srcfile: str, mtime: float):
+    """For every module-level import statement in a file, precompute a
+    clean, standalone rendering of it plus a sorted list of every line
+    elsewhere in the file that references a name it binds. Cached per
+    `(srcfile, mtime)` so a file with many functions (e.g. a codepack
+    with dozens of instructions) only needs its syntax tree walked once,
+    not once per function checked; an edited-and-reloaded file is never
+    served stale.
+
+    Each import is rendered fresh from its own CST node rather than
+    sliced from the original file text: a conditionally-guarded import
+    (e.g. inside `if TYPE_CHECKING:` or a `try/except ImportError:`
+    fallback) is a real module-scope binding by Python's own scoping
+    rules, but its indented text isn't valid syntax once lifted out of
+    its enclosing block on its own. This does lose the guard itself --
+    a name only reachable via a `try/except ImportError:` fallback is
+    reproduced as a plain, unconditional import, which could raise in an
+    environment missing that optional dependency.
+    """
+    import libcst as cst
+    from libcst.metadata import ImportAssignment, MetadataWrapper, PositionProvider, ScopeProvider
+
+    with open(srcfile, "r") as f:
+        file_src = f.read()
+    wrapper = MetadataWrapper(cst.parse_module(file_src))
+
+    # import node identity -> (its own start line, clean rendered source)
+    import_info: dict[int, tuple[int, str]] = {}
+    # import node identity -> sorted line numbers where it's referenced
+    usage_lines: dict[int, list[int]] = {}
+
+    class _Indexer(cst.CSTVisitor):
+        METADATA_DEPENDENCIES = (PositionProvider, ScopeProvider)
+
+        def visit_Name(self, node: cst.Name) -> None:
+            try:
+                scope = self.get_metadata(ScopeProvider, node)
+                assignments = scope[node.value]
+            except KeyError:
+                # No scope metadata at all (e.g. a keyword argument's own
+                # name, not a real reference) or no resolution found
+                # anywhere (e.g. a builtin with nothing bound).
+                return
+            for assignment in assignments:
+                if not isinstance(assignment, ImportAssignment):
+                    continue
+                import_node = assignment.node
+                key = id(import_node)
+                if key not in import_info:
+                    import_pos = self.get_metadata(
+                        PositionProvider, import_node
+                    )
+                    rendered = cst.Module(
+                        body=[cst.SimpleStatementLine(body=[import_node])]
+                    ).code
+                    import_info[key] = (import_pos.start.line, rendered)
+                pos = self.get_metadata(PositionProvider, node)
+                usage_lines.setdefault(key, []).append(pos.start.line)
+
+    wrapper.visit(_Indexer())
+    for lines in usage_lines.values():
+        lines.sort()
+
+    return import_info, usage_lines
 
 
 class Serializable:
@@ -513,7 +583,7 @@ class Serializable:
         if use_caching:
             decode_cache = decode_cache if decode_cache is not None else {}
 
-        token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
+        migrate_token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
         try:
             if format in ["json", "json.gz"]:
                 # Check if it's a file-like object that supports text I/O
@@ -539,7 +609,7 @@ class Serializable:
             else:
                 raise ValueError(f"Invalid `format` value for load: {format}")
         finally:
-            MIGRATE_LEGACY_FNS.reset(token)
+            MIGRATE_LEGACY_FNS.reset(migrate_token)
 
         # At this point, at least outer object should not be a deferred reference
         assert not isinstance(decoded, DeferredRef)
@@ -1084,6 +1154,65 @@ class Serializable:
         raise IncorrectDecodableTypeError("Unknown type to decode")
 
     @staticmethod
+    def _prepare_function_source(
+        src: str, version: int
+    ) -> tuple[str, list]:
+        """Run every source-level backwards-compatibility rewrite on a
+        frozen function's source, in order: import location/rename
+        updates, old-format `InstructionLabel(...)` construction
+        rewriting, then any other one-off fixes.
+
+        Returns the rewritten source alongside a list of
+        `ManualReviewItem`s for anything the `InstructionLabel` rewrite
+        found but couldn't confidently resolve -- callers decide what, if
+        anything, to do with those (e.g. `Instruction._from_decoded_attrs`'s
+        `MIGRATE_LEGACY_FNS` gate; `_eval_function_str`'s other callers
+        ignore them).
+        """
+        updated_src = Serializable._update_imports(src, version)
+        updated_src, manual_review = (
+            Serializable._update_legacy_constructions(updated_src, version)
+        )
+        updated_src = Serializable._function_compatibility(
+            updated_src, version
+        )
+        return updated_src, manual_review
+
+    @staticmethod
+    def _exec_function_str(
+        updated_src: str, original_src: str | None = None
+    ) -> Callable:
+        """Exec already-prepared function source (see
+        `_prepare_function_source`) and pull the defined function back out
+        by name.
+
+        `original_src` locates the function's own name, via its last
+        `def ...(` line -- kept separate from `updated_src` since a
+        rewrite pass could in principle touch everything but that line;
+        defaults to `updated_src` itself. Also accepts an already-callable
+        `updated_src` unchanged, for callers that skip preparation
+        entirely when their input was never a string to begin with.
+        """
+        if callable(updated_src):
+            return updated_src
+        if original_src is None:
+            original_src = updated_src
+
+        # Evaluate function
+        env: dict[str, Any] = {}
+        exec(updated_src, env)
+
+        # We need to find the function name
+        # Search for last def, then first paren after it
+        # Trim "def " and that should be the function name
+        fn_defs = re.findall(r"^def .*\(", original_src, re.MULTILINE)
+        last_fn_def = fn_defs[-1]
+        key = last_fn_def[4:-1]
+
+        # Pull the function out of the executed environment
+        return env[key]
+
+    @staticmethod
     def _eval_function_str(
         src: str, version: int = SERIALIZATION_VERSION
     ) -> Callable:
@@ -1116,26 +1245,20 @@ class Serializable:
         if callable(src):
             return src
 
-        # Before executing source, update imports for backwards compatibility
-        updated_src = Serializable._update_imports(src, version)
-        # And other known fixes
-        updated_src = Serializable._function_compatibility(
-            updated_src, version
-        )
+        updated_src, _ = Serializable._prepare_function_source(src, version)
+        return Serializable._exec_function_str(updated_src, src)
 
-        # Evaluate function
-        env: dict[str, Any] = {}
-        exec(updated_src, env)
-
-        # We need to find the function name
-        # Search for last def, then first paren after it
-        # Trim "def " and that should be the function name
-        fn_defs = re.findall(r"^def .*\(", src, re.MULTILINE)
-        last_fn_def = fn_defs[-1]
-        key = last_fn_def[4:-1]
-
-        # Pull the function out of the executed environment
-        return env[key]
+    @staticmethod
+    def serialize_function(func: Callable) -> str:
+        """Public entry point for pre-computing a function's serialized
+        source, for a caller who needs to supply it explicitly (e.g. as
+        `Instruction`'s `serialized_apply_fn=`/`serialized_map_qubits_fn=`)
+        rather than relying on it being computed automatically later --
+        most importantly, for a function whose source might not stay
+        inspectable until then, such as one defined directly in a Jupyter
+        notebook cell (see `Instruction`'s own docstring for why that
+        matters)."""
+        return Serializable._get_function_str(func)
 
     @staticmethod
     def _get_function_str(func):
@@ -1173,50 +1296,57 @@ class Serializable:
             # We'll fail to get imports, just return source
             return src
 
-        # Get all import lines
-        with open(srcfile, "r") as f:
-            import_lines = []
-            multiline = ""
-            for line in f.readlines():
-                stripped = line.strip()
-                if any(
-                    stripped.startswith(p)
-                    for p in ["#", ">>>", '"""', "'''", "*"]
-                ):
-                    continue
-                if len(multiline):
-                    multiline += line
-                    if ")" in line:
-                        import_lines.append(textwrap.dedent(multiline))
-                        multiline = ""
-                elif "import " in line:
-                    if "(" in line and ")" not in line:
-                        multiline = line
-                    else:
-                        import_lines.append(textwrap.dedent(line))
+        try:
+            imports = Serializable._imports_needed_by(func, srcfile)
+        except Exception:
+            # Best-effort improvement on top of the bare function body --
+            # fall back silently rather than let a source snippet that
+            # isn't really a standalone def (e.g. a lambda) break
+            # serialization outright.
+            return src
 
-        # Get all things that are imported
-        needed_import_lines = []
-        for line in import_lines:
-            if " as " in line:
-                entry_str = line.split(" as ")[1]
-            else:
-                entry_str = line.split("import ")[1]
-            # Remove parentheses from multiline imports
-            entries = [
-                e.replace("(", "").replace(")", "")
-                for e in entry_str.split(",")
-            ]
-
-            # Get rid of newline and whitespace for better searching
-            entries = [e.strip() for e in entries if len(e.strip())]
-
-            # If the imported thing is in our source code, we need this import
-            if any([e in src for e in entries]):
-                needed_import_lines.append(line)
-
-        imports = "".join(needed_import_lines)
         return imports + src
+
+    @staticmethod
+    def _imports_needed_by(func, srcfile: str) -> str:
+        """Every module-level import statement in `srcfile` that `func`'s
+        own source actually references, found via libcst's real scope and
+        reference resolution rather than text matching.
+
+        Resolving real references (instead of checking whether an
+        imported name's text merely occurs somewhere in the function's
+        source) avoids two concrete failure modes of a text-based check:
+        a false positive when the name only appears inside a comment,
+        docstring, or unrelated identifier, and a false negative when a
+        genuine usage is missed because the import spans multiple lines
+        in a shape the text scan doesn't expect. `func`'s own line range
+        (from `inspect`) is checked against `srcfile`'s precomputed
+        per-import usage index (see `_import_usage_index_for_file`)
+        without needing to separately locate `func`'s specific node by
+        type or name -- which would need special-casing for a lambda, a
+        decorated function, or any other shape `inspect` can report a
+        line range for.
+        """
+        import bisect
+        import inspect
+        import os
+
+        lines, start_line = inspect.getsourcelines(func)
+        end_line = start_line + len(lines) - 1
+
+        import_info, usage_lines = _import_usage_index_for_file(
+            srcfile, os.stat(srcfile).st_mtime
+        )
+
+        needed = []
+        for key, (import_line, rendered) in import_info.items():
+            lines_used = usage_lines[key]
+            i = bisect.bisect_left(lines_used, start_line)
+            if i < len(lines_used) and lines_used[i] <= end_line:
+                needed.append((import_line, rendered))
+        needed.sort()
+
+        return "".join(rendered for _, rendered in needed)
 
     @staticmethod
     def _import_class(module_name, class_name, version) -> Type:
@@ -1330,9 +1460,7 @@ class Serializable:
         return result
 
     @staticmethod
-    def _update_imports(  # noqa: C901
-        function_str, initial_version=None, loc_change=None
-    ):
+    def _update_imports(function_str, initial_version=None, loc_change=None):
         """
         Update Python import statements based on a dictionary of location changes.
 
@@ -1344,8 +1472,7 @@ class Serializable:
         Returns:
             String with updated import statements, each on its own line
         """
-        lines = function_str.split("\n")
-        result_lines = []
+        from loqs.tools.migrate.renames import rewrite_renames
 
         # Either provide initial version or the location change dict
         if loc_change is None:
@@ -1362,141 +1489,44 @@ class Serializable:
                 ), f"Cannot handle serialization versions higher than {SERIALIZATION_VERSION}"
                 loc_change = {}
 
-        # First pass: join multi-line imports
-        processed_lines = []
-        current_import = None
+        if not loc_change:
+            return function_str
 
-        for line in lines:
-            stripped_line = line.strip()
+        return rewrite_renames(function_str, renames=loc_change).source
 
-            # Keep empty lines and comments as-is
-            if not stripped_line or stripped_line.startswith("#"):
-                processed_lines.append(line)
-                continue
+    @staticmethod
+    def _update_legacy_constructions(
+        function_str: str, version: int
+    ) -> tuple[str, list]:
+        """Rewrite any resolvable old-format `InstructionLabel(...)`
+        construction in a frozen function's source, sharing
+        `loqs.tools.migrate.labels`'s own detect/resolve/rewrite engine --
+        a sibling pass to `_update_imports`, not a generalization of it,
+        since renames are a pure text substitution while this is a real
+        (if narrow) source rewrite.
 
-            # Check if this is the start of a multi-line import
-            if stripped_line.startswith("from") and stripped_line.endswith(
-                "("
-            ):
-                current_import = stripped_line
-                continue
+        Returns `(function_str, [])` unchanged once `version >=
+        SERIALIZATION_VERSION`. Otherwise returns the rewritten source
+        alongside a list of `ManualReviewItem`s for anything found but not
+        confidently rewritten -- the caller decides what, if anything, to
+        do with those (e.g. `Instruction._from_decoded_attrs`'s
+        `MIGRATE_LEGACY_FNS` gate).
+        """
+        if version >= SERIALIZATION_VERSION:
+            return function_str, []
+        # Deferred: loqs.tools ultimately imports Serializable itself
+        # (e.g. via Instruction), so this can't be a top-level import.
+        from loqs.tools.migrate.labels import migrate_instruction_labels
 
-            # Check if this is a continuation of a multi-line import
-            if current_import is not None:
-                current_import += " " + stripped_line
-                if stripped_line.endswith(")"):
-                    # Remove parentheses and extra white space, collapsing this into single line
-                    current_import = current_import.replace("(", "").replace(
-                        ")", ""
-                    )
-                    current_import = " ".join(current_import.split())
-                    if current_import.endswith(","):
-                        current_import = current_import[:-1]
-                    processed_lines.append(current_import)
-                    current_import = None
-                continue
-
-            # Single line
-            processed_lines.append(line)
-
-        # Second pass: process imports
-        # TODO: This will probably fail if a higher-level module is used in import
-        # For example, from mod1 import cls1 instead of from mod1.mod2 import cls1,
-        # if the key in loc_changes is (mod1.mod2, cls)
-        # Should be able to check substrings in that case, but hasn't been necessary yet
-        # TODO: If any of the backends move out of loqs.backends, we may need special code here
-        updated_imported_names = {}
-        for line in processed_lines:
-            stripped_line = line.strip()
-
-            # Keep empty lines and comments as-is
-            if not stripped_line or stripped_line.startswith("#"):
-                result_lines.append(line)
-                continue
-
-            # Check if this is an import statement
-            match = re.match(r"from\s+([\w.]+)\s+import\s+(.+)", stripped_line)
-            if not match:
-                # Not an import line, keep as-is
-                result_lines.append(line)
-                continue
-
-            module = match.group(1)
-            imports_str = match.group(2)
-
-            # Split imports by comma and handle each one
-            import_items = [item.strip() for item in imports_str.split(",")]
-
-            # Check if any of the imports in this line need to be updated
-            needs_update = any(
-                (module, item.split(" as ")[0].strip()) in loc_change
-                for item in import_items
-            )
-
-            if needs_update:
-                # Process each import individually
-                for item in import_items:
-                    item = item.strip()
-                    if not item:
-                        continue
-
-                    # Check if this is an aliased import (cls as alias)
-                    alias_match = re.match(r"(\w+)\s+as\s+(\w+)", item)
-                    if alias_match:
-                        original_name = alias_match.group(1)
-                        alias = alias_match.group(2)
-                    else:
-                        original_name = item
-                        alias = None
-
-                    # Check if this import needs to be updated
-                    key = (module, original_name)
-                    if key in loc_change:
-                        new_location = loc_change[key]
-                        if new_location is None:
-                            # Deleted outright -- drop the import line.
-                            continue
-                        new_module, new_name = new_location
-                        if alias:
-                            result_lines.append(
-                                f"from {new_module} import {new_name} as {alias}"
-                            )
-                        else:
-                            result_lines.append(
-                                f"from {new_module} import {new_name}"
-                            )
-                            # We may need to replace this name throughout the rest of the program
-                            if new_name != original_name:
-                                updated_imported_names[original_name] = (
-                                    new_name
-                                )
-                    else:
-                        # Keep the original import
-                        if alias:
-                            result_lines.append(
-                                f"from {module} import {original_name} as {alias}"
-                            )
-                        else:
-                            result_lines.append(
-                                f"from {module} import {original_name}"
-                            )
-            else:
-                # No updates needed, keep the original line
-                result_lines.append(line)
-
-        # Third pass: replace renamed modules throughout code
-        final_lines = []
-        for line in result_lines:
-            updated_line = line
-            for orig_name, new_name in updated_imported_names.items():
-                # Don't remap an already mapped name
-                if new_name not in line:
-                    updated_line = updated_line.replace(orig_name, new_name)
-            final_lines.append(updated_line)
-
-        final_result = "\n".join(final_lines)
-
-        return final_result
+        try:
+            result = migrate_instruction_labels(function_str)
+        except Exception:
+            # A frozen function's source isn't guaranteed to be a single,
+            # standalone-parseable module (e.g. indentation relative to
+            # its original enclosing scope) -- fall through unchanged
+            # rather than let a best-effort rewrite break decoding.
+            return function_str, []
+        return result.source, result.manual_review
 
     @staticmethod
     def _replace_placeholders(obj, decode_cache):

@@ -10,6 +10,7 @@
 """Tools for LoQS."""
 
 from . import fttools
+from . import migrate
 from . import qectools
 from . import qsimtools
 

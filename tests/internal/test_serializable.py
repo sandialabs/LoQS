@@ -727,3 +727,220 @@ class TestSerializableNestedData:
 
         # obj4 is obj3
         assert decoded["obj4"] is decoded["obj3"]
+
+
+def _load_module_from_source(tmp_path, filename, source):
+    """Write `source` to a real file under `tmp_path` and import it as a
+    fresh module, so `inspect.getsource`/`getsourcefile` behave exactly
+    as they would for a real, on-disk module (unlike a function defined
+    directly in a test method, whose "source file" is this test file
+    itself, cluttered with unrelated imports)."""
+    import importlib.util
+    import sys
+
+    path = tmp_path / filename
+    path.write_text(source)
+    module_name = f"_test_get_function_str_{path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestGetFunctionStr:
+    """Regression tests for Serializable._get_function_str's libcst-based
+    import extraction, which replaced an earlier line-based text scan."""
+
+    def test_basic_single_and_multiline_imports(self, tmp_path):
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_basic.py",
+            "from collections import OrderedDict\n"
+            "from collections.abc import (\n"
+            "    Mapping,\n"
+            "    Sequence,\n"
+            ")\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    OrderedDict()\n"
+            "    return isinstance(x, Mapping)\n",
+        )
+        result = Serializable._get_function_str(module.apply_fn)
+        assert "from collections import OrderedDict" in result
+        # Sequence isn't itself referenced, but the whole statement it
+        # shares with Mapping (which is) is still pulled in as a unit --
+        # matching the granularity of the import-location rewriting
+        # elsewhere in this codebase, not a per-name split.
+        assert "Mapping" in result
+        assert "Sequence" in result
+
+    def test_comment_and_docstring_mentions_are_not_false_positives(
+        self, tmp_path
+    ):
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_falsepos.py",
+            "import unittest\n"
+            "\n"
+            "def apply_fn(x):\n"
+            '    """Talks about unittest but never uses it."""\n'
+            "    # unittest appears here too\n"
+            "    return x\n",
+        )
+        result = Serializable._get_function_str(module.apply_fn)
+        assert "import unittest" not in result
+
+    def test_conditionally_guarded_import_is_still_found_and_valid(
+        self, tmp_path
+    ):
+        """A name only reachable via `if TYPE_CHECKING:`/`try/except
+        ImportError:` is still a real module-scope binding by Python's
+        own scoping rules, but its original indented text isn't valid
+        syntax once lifted out of its enclosing block on its own --
+        regression test for a real bug found while building this."""
+        import ast
+
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_guarded.py",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from collections import OrderedDict\n"
+            "else:\n"
+            "    try:\n"
+            "        from collections import OrderedDict\n"
+            "    except ImportError:\n"
+            "        OrderedDict = dict\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    return OrderedDict(x)\n",
+        )
+        result = Serializable._get_function_str(module.apply_fn)
+        ast.parse(result)  # must be valid, standalone Python on its own
+        assert "OrderedDict" in result
+
+    def test_multiple_references_to_same_import_are_not_duplicated(
+        self, tmp_path
+    ):
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_dedup.py",
+            "import os\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    return os.path.join(str(os.getcwd()), x)\n",
+        )
+        result = Serializable._get_function_str(module.apply_fn)
+        assert result.count("import os") == 1
+
+    def test_nested_function_finds_module_level_imports(self, tmp_path):
+        """A function defined deep inside a class method (matching real
+        usage, e.g. a closure in a test) should still resolve
+        module-level imports correctly regardless of its own
+        indentation."""
+        import ast
+
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_nested.py",
+            "from collections import OrderedDict\n"
+            "\n"
+            "class Builder:\n"
+            "    def make(self):\n"
+            "        def apply_fn(x):\n"
+            "            return OrderedDict(x)\n"
+            "        return apply_fn\n",
+        )
+        apply_fn = module.Builder().make()
+        result = Serializable._get_function_str(apply_fn)
+        ast.parse(result)
+        assert "from collections import OrderedDict" in result
+
+    def test_public_serialize_function_matches_private_helper(
+        self, tmp_path
+    ):
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_public.py",
+            "from collections import OrderedDict\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    return OrderedDict(x)\n",
+        )
+        assert Serializable.serialize_function(
+            module.apply_fn
+        ) == Serializable._get_function_str(module.apply_fn)
+
+    def test_import_extraction_failure_falls_back_to_bare_source(
+        self, tmp_path, monkeypatch
+    ):
+        """If everything up through inspect.getsource succeeds but import
+        extraction itself fails for any reason, the bare function
+        definition is returned instead of raising -- per the Notes in
+        _get_function_str's own docstring."""
+        module = _load_module_from_source(
+            tmp_path,
+            "mod_extractfail.py",
+            "from collections import OrderedDict\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    return OrderedDict(x)\n",
+        )
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("simulated import-extraction failure")
+
+        monkeypatch.setattr(
+            Serializable, "_imports_needed_by", staticmethod(_raise)
+        )
+        result = Serializable._get_function_str(module.apply_fn)
+        assert "def apply_fn" in result
+        assert "import" not in result
+
+    def test_cache_invalidated_when_file_changes(self, tmp_path):
+        """_import_usage_index_for_file caches per (path, mtime) -- a
+        file edited after its first use must not serve stale imports."""
+        import importlib.util
+        import os
+        import sys
+
+        path = tmp_path / "mod_cache.py"
+        path.write_text(
+            "from collections import OrderedDict\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    return OrderedDict(x)\n"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "_test_cache_mod_v1", path
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["_test_cache_mod_v1"] = module
+        spec.loader.exec_module(module)
+
+        result1 = Serializable._get_function_str(module.apply_fn)
+        assert "OrderedDict" in result1
+
+        # Rewrite with a different import, forcing a distinct mtime
+        # regardless of the filesystem's timestamp resolution.
+        mtime = os.stat(path).st_mtime
+        path.write_text(
+            "from collections import defaultdict\n"
+            "\n"
+            "def apply_fn(x):\n"
+            "    return defaultdict(x)\n"
+        )
+        os.utime(path, (mtime + 5, mtime + 5))
+
+        spec2 = importlib.util.spec_from_file_location(
+            "_test_cache_mod_v2", path
+        )
+        module2 = importlib.util.module_from_spec(spec2)
+        sys.modules["_test_cache_mod_v2"] = module2
+        spec2.loader.exec_module(module2)
+
+        result2 = Serializable._get_function_str(module2.apply_fn)
+        assert "defaultdict" in result2
+        assert "OrderedDict" not in result2

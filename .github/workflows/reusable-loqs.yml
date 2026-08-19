@@ -94,7 +94,7 @@ jobs:
     
     - name: Unit tests (with coverage)
       run: |
-        python -m pytest --cov=loqs --cov-branch --cov-report term-missing --cov-report xml:coverage.xml tests
+        python -m pytest -n auto --cov=loqs --cov-branch --cov-report term-missing --cov-report xml:coverage.xml tests
     
     # Pass/fail on this check is decided by Coveralls, not this workflow.
     # The repo's Coveralls settings (coveralls.io -> repo -> Settings ->
@@ -106,6 +106,15 @@ jobs:
       with:
         format: cobertura
         file: coverage.xml
+
+    # Kept as a downloadable artifact (separate from the Coveralls upload
+    # above) so the raw report can be inspected directly
+    - name: Upload coverage.xml artifact (only one matrix element)
+      uses: actions/upload-artifact@v4
+      if: ${{ inputs.os == 'ubuntu-latest' && inputs.python-version == '3.11' && inputs.loqs-optional == 'all' }}
+      with:
+        name: coverage-xml
+        path: coverage.xml
 
 
 
