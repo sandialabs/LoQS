@@ -7,7 +7,12 @@ import pytest
 import h5py
 
 from loqs.internal.encoder.jsonencoder import JSONEncoder
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.encoder.hdf5encoder import (
+    HDF5Encoder,
+    _COLLAPSED_BLOB_NAME,
+    _GZIP_MIN_BYTES,
+    _encode_collapsed_children,
+)
 from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
 from loqs.types import NDArray, SPSArray
 
@@ -890,3 +895,121 @@ class TestHDFIterableOptimizations:
                 decoded = HDF5Encoder.decode_iterable(root_group) # type: ignore
                 assert isinstance(decoded, list)
                 assert decoded == large_list
+
+
+class MockSerializableWithArray(Serializable):
+    """A Serializable class with one array-free attr and one array attr, for testing HDF5's array-free-subtree collapse."""
+
+    _CACHE_ON_SERIALIZE = True
+    _SERIALIZE_ATTRS = ["name", "data"]
+
+    def __init__(self, name="test", data=None):
+        self.name = name
+        self.data = data if data is not None else np.array([1, 2, 3])
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, MockSerializableWithArray)
+            and self.name == other.name
+            and np.array_equal(self.data, other.data)
+        )
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict):
+        return cls(name=attr_dict["name"], data=attr_dict["data"])
+
+
+class TestHDF5Collapse:
+    """Regression tests for HDF5's array-free-subtree collapse: a
+    Serializable's attrs, a dict's values, or an iterable's elements with
+    no array anywhere below them are batched into one shared blob dataset
+    instead of getting their own HDF5 group each."""
+
+    def test_fully_array_free_object_collapses_into_one_blob(self, make_temp_path):
+        obj = MockSerializable(name="collapsed", value=99)
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                HDF5Encoder.encode_uncached_obj(obj, h5_group=root_group)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                obj_group = root_group[list(root_group.keys())[0]]
+                # Both attrs are array-free, so they're batched into one
+                # shared blob dataset rather than getting their own group.
+                assert list(obj_group.keys()) == [_COLLAPSED_BLOB_NAME]
+                assert isinstance(obj_group[_COLLAPSED_BLOB_NAME], h5py.Dataset)
+
+                decoded = HDF5Encoder.decode_uncached_obj(obj_group) # type: ignore
+                assert decoded == obj
+
+    def test_object_with_array_attr_partitions_correctly(self, make_temp_path):
+        obj = MockSerializableWithArray(name="mixed", data=np.array([1.0, 2.0, 3.0]))
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                HDF5Encoder.encode_uncached_obj(obj, h5_group=root_group)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                obj_group = root_group[list(root_group.keys())[0]]
+                # "data" (a real array) keeps its own real group; "name"
+                # (array-free) is batched into the shared blob alongside it.
+                assert set(obj_group.keys()) == {"data", _COLLAPSED_BLOB_NAME}
+                assert isinstance(obj_group["data"], h5py.Group)
+                assert isinstance(obj_group[_COLLAPSED_BLOB_NAME], h5py.Dataset)
+
+                decoded = HDF5Encoder.decode_uncached_obj(obj_group) # type: ignore
+                assert decoded == obj
+
+    def test_cached_reference_to_array_containing_object_still_collapses(self, make_temp_path):
+        """A second, content-identical occurrence of an array-containing
+        cache-enabled object is a cheap reference/copy stub regardless of
+        its own content, so it's still eligible to be batched into a
+        surrounding collapse blob alongside genuinely array-free siblings."""
+        shared = MockSerializableWithArray(name="shared", data=np.array([1.0, 2.0]))
+        same_content_copy = MockSerializableWithArray(name="shared", data=np.array([1.0, 2.0]))
+        elements = [shared, same_content_copy, "an array-free sibling"]
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                encode_cache = {}
+                HDF5Encoder.encode_iterable(elements, h5_group=root_group, encode_cache=encode_cache)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                list_group = root_group["iterable"]
+                # Only the first, genuine "source" element needs a real
+                # group; the cache-hit copy and the plain string both fold
+                # into the shared blob.
+                assert set(list_group.keys()) == {"0", _COLLAPSED_BLOB_NAME}
+
+                decode_cache = {}
+                decoded = HDF5Encoder.decode_iterable(root_group, decode_cache=decode_cache) # type: ignore
+                assert decoded == elements
+
+    def test_collapsed_blob_respects_gzip_threshold(self, make_temp_path):
+        """A collapsed blob's raw JSON text is only gzip-compressed once it
+        reaches `_GZIP_MIN_BYTES` -- below that, compression reliably costs
+        more than it saves."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                small_group = h5_file.create_group("small")
+                _encode_collapsed_children(
+                    small_group, {"x": "a"}, encode_cache=None, ignore_no_serialize_flags=False
+                )
+
+                large_group = h5_file.create_group("large")
+                _encode_collapsed_children(
+                    large_group,
+                    {"x": "a" * _GZIP_MIN_BYTES},
+                    encode_cache=None,
+                    ignore_no_serialize_flags=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                assert h5_file["small"][_COLLAPSED_BLOB_NAME].compression is None
+                assert h5_file["large"][_COLLAPSED_BLOB_NAME].compression == "gzip"
