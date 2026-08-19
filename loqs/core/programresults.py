@@ -52,6 +52,15 @@ class ProgramResults(Displayable):
         "parent_program",
     ]
 
+    # `_merge_into_existing_checkpoint`/`_merge_iterable` navigate directly
+    # into this attr's raw HDF5 structure (dict -> keys/values -> iterable,
+    # one group per shot) to append new shots cheaply, bypassing the normal
+    # recursive decode entirely -- HDF5's array-free-subtree collapse would
+    # silently break that navigation whenever a batch of shots happens to
+    # have no array anywhere in it (e.g. an all-classical program with no
+    # quantum state), so this attr is exempted from collapse.
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset({"shot_histories"})
+
     def __init__(
         self,
         shot_histories: dict[int, History] | None = None,

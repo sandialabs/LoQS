@@ -67,7 +67,10 @@ class TestEncoderParameterized:
                     assert encoded_group.attrs["encode_type"] == "Serializable"
                     assert encoded_group.attrs["module"] == "test_encoders"
                     assert encoded_group.attrs["class"] == "MockSerializable"
-                    assert "version" in encoded_group.attrs
+                    # Unlike JSON, an HDF5 object's own group carries no
+                    # "version" attribute -- only the file's root group
+                    # does (see HDF5Encoder's `_HDF5_DECODE_VERSION`).
+                    assert "version" not in encoded_group.attrs
     
     def test_decode_uncached_obj(self, encoder_format, make_temp_path):
         """Test decoding of uncached Serializable objects."""

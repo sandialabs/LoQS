@@ -7,6 +7,8 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
+import contextvars
+import json
 from typing import ClassVar
 
 import h5py
@@ -155,6 +157,43 @@ def _decode_hdf5_primitive_version_v1(encoded):
 _decode_hdf5_primitive_version.alias(2, same_as=1)
 
 
+_HDF5_DECODE_VERSION: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "hdf5_decode_version", default=None
+)
+"""The serialization version of the file currently being decoded.
+
+Every node's shape has been identical across every `SERIALIZATION_VERSION`
+so far, so repeating the same version number as an HDF5 attribute at every
+one of the thousands of nodes a typical file contains is pure overhead,
+non-trivial against files with thousands of small objects. `decode_root_group`
+reads the version once, from the file's own
+root group, and sets this for the duration of decoding that file, instead
+of threading an extra parameter through the whole recursive decode dispatch
+chain (the same pattern `Serializable`'s own `MIGRATE_LEGACY_FNS` uses).
+"""
+
+
+def _get_version(encoded) -> int:
+    """Resolve the serialization version to validate `encoded` against.
+
+    A node's own local "version" attribute, if present, is trusted first --
+    it's real ground truth for a file written before this per-node
+    stamping was consolidated onto just the file's root. Otherwise, falls
+    back to the ambient value `decode_root_group` set once for the whole
+    file being decoded, or, failing that (e.g. a `Serializable`-encoded
+    HDF5 group built directly rather than via `Serializable.dump`, so no
+    root group ever set the ambient value either), to the current
+    `SERIALIZATION_VERSION` -- the only sane assumption left once neither
+    of the real version markers is available.
+    """
+    if "version" in encoded.attrs:
+        return encoded.attrs["version"]
+    version = _HDF5_DECODE_VERSION.get()
+    if version is not None:
+        return version
+    return SERIALIZATION_VERSION
+
+
 def _create_group(h5_group, name):
     """Create a subgroup with link-creation-order tracking enabled.
 
@@ -165,6 +204,238 @@ def _create_group(h5_group, name):
     the insertion order the cache/reference-resolution mechanism relies on.
     """
     return h5_group.create_group(name, track_order=True)
+
+
+# ---- Array-free-subtree collapse: a `Serializable`'s attrs, a dict's
+# values, or an iterable's elements that have no array anywhere below them
+# get batched into one compact JSON blob dataset instead of one HDF5 group
+# per node. ----
+
+_COLLAPSED_BLOB_NAME = "$collapsed"
+"""Reserved sibling name for a collapsed blob, chosen to never collide with a
+real `_SERIALIZE_ATTRS` name (a valid Python identifier) or a stringified
+iterable index (a bare integer)."""
+
+_GZIP_MIN_BYTES = 128
+"""Below this raw blob size, gzip's own container/filter overhead costs more
+than it saves: compression is reliably worse under ~90 bytes, a noisy
+break-even band up to ~130, and reliably better above that. 128 sits safely
+inside the "reliably better" zone with a small margin."""
+
+_decode_hdf5_collapsed_version = VersionedDecoder("hdf5_collapsed")
+"""Versions the collapsed blob's own on-disk *wrapper* shape (currently
+always a gzip-or-not JSON byte dataset), independent of `SERIALIZATION_VERSION`
+itself -- collapsing is a per-subtree, content-dependent encode-time choice,
+not a version-gated shape, so this registry exists purely so a future
+change to the wrapper shape has somewhere to register a new version without
+retrofitting one later. The blob's own *contents* need no separate registry
+-- they're just JSON, decoded via `JSONEncoder`'s own existing
+version-aware decode path."""
+
+
+@_decode_hdf5_collapsed_version.register(SERIALIZATION_VERSION)
+def _decode_hdf5_collapsed_version_current(encoded):
+    assert isinstance(encoded, h5py.Dataset)
+
+
+def _contains_no_array(value, encode_cache, ignore_no_serialize_flags, _visited=None):
+    """Whether encoding `value` right now would touch no real array anywhere in its own expansion.
+
+    A value that would resolve to an already-registered cache
+    "reference"/"copy" counts as array-free regardless of its own content --
+    it's already a cheap stub either way, mirroring `_encode_Serializable`'s
+    own cache-hit check. This check is read-only: it never registers
+    anything in `encode_cache` itself, since the real encode call that
+    follows a "yes, collapse this" answer does that.
+
+    `_visited` guards against infinite recursion on a genuine circular
+    reference (an object reachable from its own attrs); a value already
+    being examined further up the same call chain is conservatively treated
+    as "may contain an array" rather than walked again -- this only ever
+    costs a slightly less compact encoding for that one node, never
+    correctness, since falling back to an ordinary HDF5 group is always safe.
+    """
+    if _visited is None:
+        _visited = frozenset()
+
+    if isinstance(value, EncodableArrays):
+        return False
+
+    if isinstance(value, Serializable):
+        obj_id = id(value)
+        if obj_id in _visited:
+            return False
+        if (
+            encode_cache is not None
+            and value._CACHE_ON_SERIALIZE
+            and Serializable._serial_hash(value) in encode_cache
+        ):
+            return True
+        _visited = _visited | {obj_id}
+        return all(
+            _contains_no_array(
+                value._get_encoding_attr(
+                    attr, ignore_no_serialize_flags=ignore_no_serialize_flags
+                ),
+                encode_cache,
+                ignore_no_serialize_flags,
+                _visited,
+            )
+            for attr in value._SERIALIZE_ATTRS
+        )
+
+    if isinstance(value, dict):
+        return all(
+            _contains_no_array(v, encode_cache, ignore_no_serialize_flags, _visited)
+            for v in (*value.keys(), *value.values())
+        )
+
+    if isinstance(value, (list, tuple, set)):
+        return all(
+            _contains_no_array(v, encode_cache, ignore_no_serialize_flags, _visited)
+            for v in value
+        )
+
+    return True
+
+
+def _encode_collapsed_children(
+    h5_group, children, encode_cache, ignore_no_serialize_flags
+):
+    """Write `children` (name -> already-collapse-eligible value) as one combined JSON blob dataset."""
+    from loqs.internal.encoder import JSONEncoder
+
+    blob = {}
+    for name, value in children.items():
+        # Borrow HDF5's own ENCODE_ID counter for this JSON sub-encode, then
+        # hand the advanced counter back -- JSONEncoder and HDF5Encoder
+        # otherwise track separate counters, which could hand out a cache ID
+        # that collides with an unrelated object elsewhere in this same file.
+        JSONEncoder.ENCODE_ID = HDF5Encoder.ENCODE_ID
+        blob[name] = Serializable.encode(
+            value,
+            format="json",
+            encode_cache=encode_cache,
+            ignore_no_serialize_flags=ignore_no_serialize_flags,
+        )
+        HDF5Encoder.ENCODE_ID = JSONEncoder.ENCODE_ID
+
+    blob_bytes = json.dumps(blob, separators=(",", ":")).encode("utf-8")
+    compression = "gzip" if len(blob_bytes) >= _GZIP_MIN_BYTES else None
+    blob_dataset = h5_group.create_dataset(
+        _COLLAPSED_BLOB_NAME,
+        data=np.frombuffer(blob_bytes, dtype=np.uint8),
+        compression=compression,
+    )
+    blob_dataset.attrs["encode_type"] = "collapsed"
+
+
+def _decode_collapsed_children(blob_dataset, decode_cache):
+    """Decode a combined blob dataset back into its `{name: decoded_value}` children."""
+    with HDF5Encoder.assert_decode(fatal=False):
+        assert isinstance(blob_dataset, h5py.Dataset)
+        assert blob_dataset.attrs.get("encode_type", "") == "collapsed"
+
+    version = _get_version(blob_dataset)
+    with HDF5Encoder.assert_decode(fatal=True):
+        _decode_hdf5_collapsed_version(version, blob_dataset)
+
+    raw = blob_dataset[()].tobytes().decode("utf-8")
+    blob = json.loads(raw)
+    return {
+        name: Serializable.decode(value, format="json", decode_cache=decode_cache)
+        for name, value in blob.items()
+    }
+
+
+_FORCE_REAL_GROUP: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "hdf5_force_real_group", default=False
+)
+"""Set for the duration of encoding one specific child's value, forcing
+*that* child's own direct children to skip collapse consideration too --
+propagates a `Serializable._NO_COLLAPSE_ATTRS` exemption exactly one level
+deeper (e.g. from `ProgramResults.shot_histories` into the dict's own
+keys/values element lists), then is consumed (reset to the default) by the
+very next `_partition_and_encode_children` call, so collapse resumes
+normally any deeper than that."""
+
+
+def _partition_and_encode_children(
+    h5_group,
+    children,
+    encode_cache,
+    ignore_no_serialize_flags,
+    no_collapse_names=frozenset(),
+):
+    """Partition `children` (name -> value) between real HDF5 groups and one shared collapsed blob, writing both directly into `h5_group`.
+
+    `children` covers both a `Serializable`'s own `_SERIALIZE_ATTRS` (named
+    by attribute) and an iterable's elements (named by stringified index,
+    including the element list backing a dict's keys/values). Any child
+    with no array anywhere below it -- or that would just be a cheap cache
+    reference/copy of an already-encoded source regardless of its own
+    content -- is batched into one combined JSON blob dataset instead of
+    its own HDF5 group. A child containing a real, not-yet-cached array, or
+    named in `no_collapse_names` (see `Serializable._NO_COLLAPSE_ATTRS`),
+    gets an ordinary named group, with this same partition applied one
+    level further down inside it via the normal recursive
+    `Serializable.encode` dispatch.
+    """
+    force_all = _FORCE_REAL_GROUP.get()
+    reset_token = _FORCE_REAL_GROUP.set(False)
+    try:
+        collapsible = {}
+        for name, value in children.items():
+            must_be_real_group = force_all or name in no_collapse_names
+            if not must_be_real_group and _contains_no_array(
+                value, encode_cache, ignore_no_serialize_flags
+            ):
+                collapsible[name] = value
+                continue
+
+            child_group = _create_group(h5_group, name)
+            propagate_token = (
+                _FORCE_REAL_GROUP.set(True)
+                if name in no_collapse_names
+                else None
+            )
+            try:
+                Serializable.encode(
+                    value,
+                    format="hdf5",
+                    encode_cache=encode_cache,
+                    ignore_no_serialize_flags=ignore_no_serialize_flags,
+                    h5_group=child_group,
+                )
+            finally:
+                if propagate_token is not None:
+                    _FORCE_REAL_GROUP.reset(propagate_token)
+
+        if collapsible:
+            _encode_collapsed_children(
+                h5_group, collapsible, encode_cache, ignore_no_serialize_flags
+            )
+    finally:
+        _FORCE_REAL_GROUP.reset(reset_token)
+
+
+def _decode_partitioned_children(h5_group, decode_cache):
+    """Yield `(name, decoded_value)` for every child of `h5_group`, expanding the collapsed blob (if present) into its own individual entries.
+
+    Backward compatible by construction: a file predating this feature
+    simply has no `_COLLAPSED_BLOB_NAME` child, so every child is decoded
+    exactly as it always was.
+    """
+    for key in h5_group.keys():
+        child = h5_group[key]
+        if key == _COLLAPSED_BLOB_NAME:
+            yield from _decode_collapsed_children(child, decode_cache).items()
+        else:
+            with HDF5Encoder.assert_decode(fatal=True):
+                assert isinstance(child, h5py.Group)
+            yield key, Serializable.decode(
+                child, format="hdf5", decode_cache=decode_cache
+            )
 
 
 class HDF5Encoder(BaseEncoder):
@@ -178,11 +449,21 @@ class HDF5Encoder(BaseEncoder):
     ) -> Encodable:
         """Decode the root HDF5 group containing a serialized object.
 
+        This same "unwrap a single anonymous subgroup" shape is also what
+        every individual `_SERIALIZE_ATTRS` wrapper group looks like
+        (`Serializable.encode` never puts its own attributes directly on
+        the `h5_group` it's handed), so this method is actually invoked
+        recursively throughout a file's whole tree, not only once at the
+        true file root -- only the true root ever carries a "version"
+        attribute, which is how it's told apart below.
+
         Parameters
         ----------
         encoded : Encoded
-            The root HDF5 group containing the serialized object.
-            Should contain exactly one subgroup with no attributes.
+            An HDF5 group containing a serialized object, or a wrapper
+            around one. Should contain exactly one subgroup, with no
+            attributes of its own except possibly a single "version"
+            attribute (present only on the file's true root group).
         decode_cache : DecodeCache, optional
             Cache used to track decoded objects and resolve references during
             deserialization.
@@ -200,7 +481,7 @@ class HDF5Encoder(BaseEncoder):
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(encoded, h5py.Group)
             assert len(encoded.keys()) == 1
-            assert not encoded.attrs
+            assert set(encoded.attrs.keys()) <= {"version"}
 
         # Get the first (and only) subgroup
         subgroup_name = list(encoded.keys())[0]
@@ -208,12 +489,20 @@ class HDF5Encoder(BaseEncoder):
         with HDF5Encoder.assert_decode(fatal=False):
             assert isinstance(subgroup, h5py.Group)
 
-        # Try to decode the subgroup
-        # It could either error out or give IncorrectDecodableTypeError
-        # Both are acceptable
-        return Serializable.decode(
-            subgroup, format="hdf5", decode_cache=decode_cache
+        version = encoded.attrs.get("version", None)
+        token = (
+            _HDF5_DECODE_VERSION.set(version) if version is not None else None
         )
+        try:
+            # Try to decode the subgroup
+            # It could either error out or give IncorrectDecodableTypeError
+            # Both are acceptable
+            return Serializable.decode(
+                subgroup, format="hdf5", decode_cache=decode_cache
+            )
+        finally:
+            if token is not None:
+                _HDF5_DECODE_VERSION.reset(token)
 
     @staticmethod
     def encode_uncached_obj(
@@ -231,23 +520,25 @@ class HDF5Encoder(BaseEncoder):
         obj_group.attrs["encode_type"] = "Serializable"
         obj_group.attrs["module"] = to_encode.__class__.__module__
         obj_group.attrs["class"] = to_encode.__class__.__name__
-        obj_group.attrs["version"] = SERIALIZATION_VERSION
 
-        # Use _SERIALIZE_ATTRS pattern for encoding
-        for serial_attr in to_encode._SERIALIZE_ATTRS:
-            attr_value = to_encode._get_encoding_attr(
+        # Use _SERIALIZE_ATTRS pattern for encoding. Attrs with no array
+        # anywhere below them are batched into one shared collapsed blob
+        # instead of getting their own HDF5 group each -- see
+        # _partition_and_encode_children.
+        attrs = {
+            serial_attr: to_encode._get_encoding_attr(
                 serial_attr,
                 ignore_no_serialize_flags=ignore_no_serialize_flags,
             )
-            attr_group = _create_group(obj_group, serial_attr)
-
-            Serializable.encode(
-                attr_value,
-                format="hdf5",
-                encode_cache=encode_cache,
-                ignore_no_serialize_flags=ignore_no_serialize_flags,
-                h5_group=attr_group,
-            )
+            for serial_attr in to_encode._SERIALIZE_ATTRS
+        }
+        _partition_and_encode_children(
+            obj_group,
+            attrs,
+            encode_cache,
+            ignore_no_serialize_flags,
+            no_collapse_names=to_encode._NO_COLLAPSE_ATTRS,
+        )
 
         HDF5Encoder.ENCODE_ID += 1
 
@@ -291,8 +582,8 @@ class HDF5Encoder(BaseEncoder):
             assert encoded.attrs.get("encode_type", "") == "Serializable"
 
         # Check if properly formed
+        version = _get_version(encoded)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = encoded.attrs.get("version", -1)
             _decode_hdf5_serializable_version(version, encoded)
 
         # Get the class
@@ -312,15 +603,10 @@ class HDF5Encoder(BaseEncoder):
             except (KeyError, TypeError):
                 pass  # Not a source object, no need for early caching
 
-        # Create the attribute dictionary for deserialization
-        attr_dict = {}
-        for key in encoded.keys():
-            obj_group = encoded[key]
-            assert isinstance(obj_group, h5py.Group)
-
-            attr_dict[key] = Serializable.decode(
-                obj_group, format="hdf5", decode_cache=decode_cache
-            )
+        # Create the attribute dictionary for deserialization. Expands the
+        # collapsed blob (if present) back into its own individual named
+        # entries alongside any attrs that kept their own real HDF5 group.
+        attr_dict = dict(_decode_partitioned_children(encoded, decode_cache))
 
         # If our class is an Instruction, we also need to pass in version
         # so that imports can be updated properly on apply_fn/map_qubits_fn creation
@@ -382,7 +668,6 @@ class HDF5Encoder(BaseEncoder):
         )
         HDF5Encoder.ENCODE_ID += 1
         obj_group.attrs["encode_type"] = "Serializable"
-        obj_group.attrs["version"] = SERIALIZATION_VERSION
         obj_group.attrs["cache_type"] = cache_type
 
         if cache_type == "reference":
@@ -442,8 +727,8 @@ class HDF5Encoder(BaseEncoder):
             assert decode_cache is not None
 
         # Check if properly formed
+        version = _get_version(encoded)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = encoded.attrs.get("version", -1)
             _decode_hdf5_cached_obj_version(version, encoded)
 
         try:
@@ -496,7 +781,6 @@ class HDF5Encoder(BaseEncoder):
 
         list_group = _create_group(h5_group, "iterable")
         list_group.attrs["iterable_type"] = name
-        list_group.attrs["version"] = SERIALIZATION_VERSION
 
         # Short circuit empty list
         if len(to_encode) == 0:
@@ -526,17 +810,16 @@ class HDF5Encoder(BaseEncoder):
                 list_group, to_encode_list, False
             )
         else:
-            # Mixed native types or non-native types - fall back to groups
+            # Mixed native types or non-native types - fall back to groups.
+            # Elements with no array anywhere below them are batched into
+            # one shared collapsed blob instead of their own HDF5 group
+            # each -- see _partition_and_encode_children (this also covers
+            # a dict's own keys/values lists, which route through here).
             list_group.attrs["storage_format"] = "groups"
-            for i, e in enumerate(to_encode_list):
-                item_group = _create_group(list_group, str(i))
-                Serializable.encode(
-                    e,
-                    format="hdf5",
-                    encode_cache=encode_cache,
-                    ignore_no_serialize_flags=ignore_no_serialize_flags,
-                    h5_group=item_group,
-                )
+            items = {str(i): e for i, e in enumerate(to_encode_list)}
+            _partition_and_encode_children(
+                list_group, items, encode_cache, ignore_no_serialize_flags
+            )
 
         return list_group
 
@@ -618,8 +901,8 @@ class HDF5Encoder(BaseEncoder):
         list_group = encoded["iterable"]
 
         # Check if properly formed
+        version = _get_version(list_group)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = list_group.attrs.get("version", -1)
             _decode_hdf5_iterable_version(version, list_group)
 
         # Determine storage format (default to "groups" for backwards compatibility)
@@ -668,21 +951,21 @@ class HDF5Encoder(BaseEncoder):
                 # Fallback: convert to list
                 value = list(data.flat)
         else:
-            # Original format using individual groups
-            value = []
-            for i in range(len(list_group.keys())):
-                with HDF5Encoder.assert_decode(fatal=True):
-                    assert str(i) in list_group
-
-                item_group = list_group[str(i)]
-                with HDF5Encoder.assert_decode(fatal=True):
-                    assert isinstance(item_group, h5py.Group)
-
-                value.append(
-                    Serializable.decode(
-                        item_group, format="hdf5", decode_cache=decode_cache
-                    )
-                )
+            # Original format using individual groups, plus (possibly) one
+            # shared collapsed blob covering some subset of the elements --
+            # expand it back into its own individually-indexed entries
+            # before reassembling the list in the right order (collapsing
+            # can leave fewer top-level HDF5 keys than actual elements).
+            decoded_by_index = dict(
+                _decode_partitioned_children(list_group, decode_cache)
+            )
+            with HDF5Encoder.assert_decode(fatal=True):
+                assert set(decoded_by_index.keys()) == {
+                    str(i) for i in range(len(decoded_by_index))
+                }
+            value = [
+                decoded_by_index[str(i)] for i in range(len(decoded_by_index))
+            ]
 
         # Cast if needed
         if "iterable_type" in list_group.attrs:
@@ -705,7 +988,6 @@ class HDF5Encoder(BaseEncoder):
         assert isinstance(h5_group, h5py.Group)
 
         dict_group = _create_group(h5_group, "dict")
-        dict_group.attrs["version"] = SERIALIZATION_VERSION
 
         # Store keys and values in order to preserve dict insertion order
         key_group = _create_group(dict_group, "keys")
@@ -764,8 +1046,8 @@ class HDF5Encoder(BaseEncoder):
         dict_group = encoded["dict"]
 
         # Check if properly formed
+        version = _get_version(dict_group)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = dict_group.attrs.get("version", -1)
             _decode_hdf5_dict_version(version, dict_group)
 
         key_group = dict_group["keys"]
@@ -817,7 +1099,6 @@ class HDF5Encoder(BaseEncoder):
         assert isinstance(h5_group, h5py.Group)
 
         matrix_group = _create_group(h5_group, "array")
-        matrix_group.attrs["version"] = SERIALIZATION_VERSION
         matrix_group.attrs["shape"] = to_encode.shape
         matrix_group.attrs["dtype"] = str(to_encode.dtype)  # type: ignore
 
@@ -933,8 +1214,8 @@ class HDF5Encoder(BaseEncoder):
         array_group = encoded["array"]
 
         # Check if properly formed
+        version = _get_version(array_group)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = array_group.attrs.get("version", -1)
             _decode_hdf5_array_version(version, array_group)
 
         array_type = array_group.attrs.get("array_type", None)
@@ -983,7 +1264,6 @@ class HDF5Encoder(BaseEncoder):
         class_group = _create_group(h5_group, "class")
         class_group.attrs["module"] = to_encode.__module__
         class_group.attrs["class"] = to_encode.__name__
-        class_group.attrs["version"] = SERIALIZATION_VERSION
         return class_group
 
     @staticmethod
@@ -1019,15 +1299,15 @@ class HDF5Encoder(BaseEncoder):
 
         class_group = encoded["class"]
 
+        version = _get_version(class_group)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = class_group.attrs.get("version", -1)
             _decode_hdf5_class_version(version, class_group)
 
         # Get the class
         return Serializable._import_class(
             class_group.attrs["module"],
             class_group.attrs["class"],
-            class_group.attrs["version"],
+            version,
         )
 
     @staticmethod
@@ -1039,7 +1319,6 @@ class HDF5Encoder(BaseEncoder):
         full_src = Serializable._get_function_str(to_encode)
 
         function_group = _create_group(h5_group, "function")
-        function_group.attrs["version"] = SERIALIZATION_VERSION
         function_group.create_dataset("source", data=full_src)
         return function_group
 
@@ -1076,8 +1355,8 @@ class HDF5Encoder(BaseEncoder):
 
         function_group = encoded["function"]
 
+        version = _get_version(function_group)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = function_group.attrs.get("version", -1)
             source = _decode_hdf5_function_version(version, function_group)
 
         return Serializable._eval_function_str(source, version)
@@ -1105,7 +1384,6 @@ class HDF5Encoder(BaseEncoder):
         assert isinstance(h5_group, h5py.Group)
 
         h5_group.attrs["encode_type"] = "primitive"
-        h5_group.attrs["version"] = SERIALIZATION_VERSION
 
         if isinstance(to_encode, bool):
             # Checked before `int`, since `bool` is a subclass of `int`.
@@ -1155,8 +1433,8 @@ class HDF5Encoder(BaseEncoder):
             assert isinstance(encoded, h5py.Group)
             assert encoded.attrs.get("encode_type", "") == "primitive"
 
+        version = _get_version(encoded)
         with HDF5Encoder.assert_decode(fatal=True):
-            version = encoded.attrs.get("version", -1)
             _decode_hdf5_primitive_version(version, encoded)
 
         if encoded.attrs.get("is_none", False):

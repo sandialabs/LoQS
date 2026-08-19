@@ -156,19 +156,21 @@ class TestSerializableParameterized:
         else:  # hdf5
             with make_temp_path(suffix='.h5') as temp_file:
                 with h5py.File(temp_file, 'w') as h5_file:
-                    root_group = h5_file.create_group('root')
-                    Serializable.encode(obj, format="hdf5", h5_group=root_group, reset_encode_id=True)
-                
+                    obj.dump(h5_file, format="hdf5")
+
                 with h5py.File(temp_file, 'r') as h5_file:
                     root_group = h5_file['root']
-                    # Find the encoded object group
                     assert isinstance(root_group, h5py.Group)
-                    obj_group_name = list(root_group.keys())[0]
-                    encoded_group = root_group[obj_group_name]
-                    
-                    # Verify version is included
-                    assert "version" in encoded_group.attrs
-                    assert encoded_group.attrs["version"] == SERIALIZATION_VERSION
+
+                    # Version is stamped once on the file's root group,
+                    # not repeated at every node (see HDF5Encoder's
+                    # `_HDF5_DECODE_VERSION`).
+                    assert "version" in root_group.attrs
+                    assert root_group.attrs["version"] == SERIALIZATION_VERSION
+
+                # Test that objects can be deserialized with current version
+                loaded_obj = MockSerializable.read(temp_file)
+                assert obj == loaded_obj
 
     def test_serialization_with_nested_data(self, format_param, make_temp_path):
         """Test serialization with complex nested data structures."""

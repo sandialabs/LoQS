@@ -450,6 +450,22 @@ class Serializable:
     implement [](api:Serializable._get_encoding_attr).
     """
 
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset()
+    """`_SERIALIZE_ATTRS` names that must always keep their own real HDF5
+    group (and, one level further in, their own individually-addressable
+    per-element groups if their value is a dict/list), never folded into
+    HDF5's array-free-subtree collapse blob even when their content happens
+    to have no array anywhere in it.
+
+    Exists for attrs some other code depends on being able to navigate to
+    and incrementally append into via raw HDF5 structure, bypassing the
+    normal recursive decode entirely for speed -- collapsing would silently
+    break that navigation whenever the attr's content happens to be
+    array-free (e.g. `ProgramResults.shot_histories` for an all-classical
+    program with no quantum state at all). Content nested more than one
+    level below a listed attr is unaffected and still collapses normally.
+    """
+
     _SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
     """Attribute map to use in [](api:Serializable._from_decoded_attrs).
 
@@ -770,6 +786,10 @@ class Serializable:
             # track_order=True: see HDF5Encoder's own _create_group helper for why
             # every HDF5 group this codebase creates tracks link creation order.
             root_group = f.create_group("root", track_order=True)
+            # The only "version" attribute written anywhere in the file --
+            # see HDF5Encoder's `_HDF5_DECODE_VERSION` for why every other
+            # node no longer repeats it.
+            root_group.attrs["version"] = SERIALIZATION_VERSION
             Serializable.encode(
                 self,
                 "hdf5",
