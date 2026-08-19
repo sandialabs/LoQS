@@ -300,24 +300,30 @@ class TestMigrateNotebookSource:
 class TestRenamesTableCoverage:
     def test_every_rename_target_is_importable(self):
         """A regression check for the table itself: every non-`None`
-        destination in RENAMES should be a real, currently-importable
-        `(module, name)` -- catching a typo before it silently produces
-        broken rewrites. A target module that fails to import only
-        because an optional third-party backend dependency (e.g.
-        `pygsti`) isn't installed is skipped rather than failed, since
-        that's a real environment gap, not a broken rename entry."""
+        destination in RENAMES should be a real, importable `(module,
+        name)` -- catching a typo before it silently produces broken
+        rewrites. A target module whose *file* genuinely exists but
+        fails to actually execute because an optional third-party
+        backend dependency (e.g. `pygsti`, `quantumsim`) isn't installed
+        is skipped rather than failed, since that's a real environment
+        gap, not a broken rename entry -- some backend modules raise a
+        plain `ImportError` with a custom message here rather than
+        letting the underlying `ModuleNotFoundError` propagate, so the
+        check can't rely on inspecting the exception's own module name."""
         import importlib
+        import importlib.util
 
         for old_key, new_loc in RENAMES.items():
             if new_loc is None:
                 continue
             new_module, new_name = new_loc
+            assert importlib.util.find_spec(new_module) is not None, (
+                f"{old_key} -> {new_loc}: {new_module!r} has no importable spec"
+            )
             try:
                 mod = importlib.import_module(new_module)
-            except ModuleNotFoundError as exc:
-                if exc.name != new_module:
-                    continue  # a transitive optional dependency, not this module
-                raise
+            except ImportError:
+                continue  # an optional third-party backend dependency isn't installed
             assert hasattr(mod, new_name), (
                 f"{old_key} -> {new_loc}: {new_name!r} not found in "
                 f"{new_module!r}"
