@@ -9,6 +9,7 @@
 
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+import copy
 from typing import Callable, ClassVar
 import h5py
 
@@ -24,6 +25,30 @@ from loqs.internal.serializable import (
     IncorrectDecodableTypeError,
     MisformedDecodableError,
 )
+
+
+def copy_cached_reference(reference_obj):
+    """Copy an already-decoded object for a "copy"-type cached reference,
+    used by both encoders' `decode_cached_obj`.
+
+    For classes confirmed to treat their own nested content as immutable
+    once constructed -- [](api:History) and
+    [](api:InstructionStack), each already implementing a cheap
+    "wrap an existing instance" constructor for exactly this reason --
+    this uses that constructor instead of a full recursive
+    `copy.deepcopy()`, which would otherwise redundantly re-copy content
+    already safe to share (e.g. `Frame`s, whose own `_data` is only ever
+    replaced via `.update()`, never mutated in place). Every other type
+    still gets a full `deepcopy()`, since that safety hasn't been
+    confirmed for them (e.g. a quantum state's own array data is
+    genuinely mutated in place during propagation).
+    """
+    from loqs.core.history import History
+    from loqs.core.instructions.instructionstack import InstructionStack
+
+    if isinstance(reference_obj, (History, InstructionStack)):
+        return type(reference_obj)(reference_obj)
+    return copy.deepcopy(reference_obj)
 
 
 class BaseEncoder(ABC):

@@ -9,7 +9,6 @@
 
 from typing import ClassVar
 
-import copy
 import h5py
 import numpy as np
 import scipy.sparse as sps
@@ -27,6 +26,7 @@ from loqs.internal.serializable import (
 from loqs.types import NDArray, SPSArray
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
+from loqs.internal.encoder.baseencoder import copy_cached_reference
 from loqs.internal.versioning import VersionedDecoder
 
 # Per-shape version dispatch (see VersionedDecoder), each validating its
@@ -462,7 +462,7 @@ class HDF5Encoder(BaseEncoder):
                 copied_obj = DeferredRef(reference_cache_id)
             else:
                 reference_obj = decode_cache[reference_cache_id]
-                copied_obj = copy.deepcopy(reference_obj)
+                copied_obj = copy_cached_reference(reference_obj)
 
             # Add the copy to cache
             decode_cache[source_cache_id] = copied_obj

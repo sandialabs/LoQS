@@ -730,6 +730,79 @@ class TestSerializableNestedData:
         # obj4 is obj3
         assert decoded["obj4"] is decoded["obj3"]
 
+    def test_history_copy_reconstruction_does_not_alias_frame_list(
+        self, format_param, make_temp_path
+    ):
+        """A regression test for the "copy" cache-type reconstruction
+        using History's own cheap wrap-constructor (sharing Frame
+        identity) instead of a full `copy.deepcopy()`. Two independently-
+        decoded Histories built from identical content deliberately share
+        their underlying Frame objects by identity -- confirmed here as
+        the expected, intentional behavior -- but must never share the
+        same underlying frame list itself, or mutating one (`.append()`
+        genuinely mutates `History` in place) would silently corrupt the
+        other."""
+        from loqs.core.history import History
+
+        shared_frame = Frame({"x": 1})
+        history_a = History([shared_frame])
+        history_b = History([shared_frame])  # same content, different identity
+
+        container = Frame({"history_a": history_a, "history_b": history_b})
+
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            container.write(temp_file)
+            decoded = Frame.read(temp_file)
+
+        decoded_a = decoded["history_a"]
+        decoded_b = decoded["history_b"]
+
+        assert decoded_a is not decoded_b
+        assert len(decoded_a) == len(decoded_b) == 1
+        # The whole point of the optimization: the underlying Frame is
+        # shared by identity, not deep-copied.
+        assert decoded_a[0] is decoded_b[0]
+
+        # But the outer History containers must stay independent.
+        decoded_a.append(Frame({"y": 2}))
+        assert len(decoded_a) == 2
+        assert len(decoded_b) == 1
+
+    def test_instructionstack_copy_reconstruction_does_not_alias_list(
+        self, format_param, make_temp_path
+    ):
+        """The same regression test as above, for `InstructionStack`'s
+        own cheap wrap-constructor. `InstructionStack` itself never
+        mutates in place (every "mutation" method returns a new stack),
+        so the sharper risk here is simpler: two independently-decoded
+        stacks built from identical content must never resolve to the
+        *same* object."""
+        from loqs.core.instructions.instructionstack import InstructionStack
+
+        stack_a = InstructionStack([("Increment", "L0")])
+        stack_b = InstructionStack([("Increment", "L0")])
+
+        container = Frame({"stack_a": stack_a, "stack_b": stack_b})
+
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            container.write(temp_file)
+            decoded = Frame.read(temp_file)
+
+        decoded_a = decoded["stack_a"]
+        decoded_b = decoded["stack_b"]
+
+        assert decoded_a is not decoded_b
+        assert len(decoded_a) == len(decoded_b) == 1
+        # Sharing the underlying InstructionLabel by identity is fine --
+        # InstructionStack's own mutation methods never modify one in
+        # place, always returning a new stack.
+        assert decoded_a[0] is decoded_b[0]
+
+        appended = decoded_a.append_instruction(("Increment", "L1"))
+        assert len(appended) == 2
+        assert len(decoded_a) == 1
+        assert len(decoded_b) == 1
+
 
 def _load_module_from_source(tmp_path, filename, source):
     """Write `source` to a real file under `tmp_path` and import it as a

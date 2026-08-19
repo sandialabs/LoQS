@@ -198,8 +198,10 @@ class History(Sequence[Frame], Displayable):
         if isinstance(history, History):
             self._history = history._history.copy()
         elif isinstance(history, Sequence):
+            # append() itself already avoids re-wrapping (and thus
+            # redundantly deep-copying) an item that's already a Frame --
+            # pre-wrapping here would defeat that.
             for frame in history:
-                frame = Frame(frame)
                 self.append(frame)
         elif history is None:
             # Stick with empty list

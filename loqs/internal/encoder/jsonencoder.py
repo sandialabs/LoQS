@@ -7,7 +7,6 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-import copy
 import h5py
 import numpy as np
 import scipy.sparse as sps
@@ -21,6 +20,7 @@ from loqs.internal.serializable import (
 from loqs.types import Bool, Float, Int
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
+from loqs.internal.encoder.baseencoder import copy_cached_reference
 from loqs.internal.versioning import VersionedDecoder
 
 # Per-shape version dispatch (see VersionedDecoder) -- one registry per
@@ -540,7 +540,7 @@ class JSONEncoder(BaseEncoder):
                         # Create a new placeholder for the copy
                         copied_obj = DeferredRef(reference_obj.cache_id)
                     else:
-                        copied_obj = copy.deepcopy(reference_obj)
+                        copied_obj = copy_cached_reference(reference_obj)
 
                 # Add the copy to cache
                 decode_cache[source_cache_id] = copied_obj
