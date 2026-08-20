@@ -1,0 +1,187 @@
+{
+  "encode_type": "Serializable",
+  "module": "loqs.backends.model.dictmodel",
+  "class": "DictNoiseModel",
+  "version": 2,
+  "gate_dict": {
+    "encode_type": "dict",
+    "version": 2,
+    "items": {
+      "('X', ('Q0',))": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "QSimSuperopGateRep",
+        "version": 2,
+        "superop": {
+          "data": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "shape": [
+            4,
+            4
+          ],
+          "dtype": "float64",
+          "encode_type": "array",
+          "version": 2
+        },
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            }
+          ]
+        }
+      },
+      "('KRAUS', ('Q0',))": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "KrausGateRep",
+        "version": 2,
+        "kraus_operators": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "iterable",
+              "version": 2,
+              "iterable_type": "tuple",
+              "items": [
+                {
+                  "data": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.9486832980505138
+                  ],
+                  "shape": [
+                    2,
+                    2
+                  ],
+                  "dtype": "float64",
+                  "encode_type": "array",
+                  "version": 2
+                },
+                null
+              ]
+            },
+            {
+              "encode_type": "iterable",
+              "version": 2,
+              "iterable_type": "tuple",
+              "items": [
+                {
+                  "data": [
+                    0.0,
+                    0.31622776601683794,
+                    0.0,
+                    0.0
+                  ],
+                  "shape": [
+                    2,
+                    2
+                  ],
+                  "dtype": "float64",
+                  "encode_type": "array",
+                  "version": 2
+                },
+                null
+              ]
+            }
+          ]
+        },
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            }
+          ]
+        },
+        "dims": null
+      }
+    }
+  },
+  "inst_dict": {
+    "encode_type": "dict",
+    "version": 2,
+    "items": {
+      "('M', ('Q0',))": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.instrumentreps",
+        "class": "ZBasisProjectionInstrumentRep",
+        "version": 2,
+        "reset": null,
+        "include_outcome": true,
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "_gatereps": {
+    "encode_type": "iterable",
+    "version": 2,
+    "iterable_type": "list",
+    "items": [
+      {
+        "encode_type": "class",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "QSimSuperopGateRep",
+        "version": 2
+      },
+      {
+        "encode_type": "class",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "KrausGateRep",
+        "version": 2
+      }
+    ]
+  },
+  "_instreps": {
+    "encode_type": "iterable",
+    "version": 2,
+    "iterable_type": "list",
+    "items": [
+      {
+        "encode_type": "class",
+        "module": "loqs.backends.reps.instrumentreps",
+        "class": "ZBasisProjectionInstrumentRep",
+        "version": 2
+      }
+    ]
+  }
+}

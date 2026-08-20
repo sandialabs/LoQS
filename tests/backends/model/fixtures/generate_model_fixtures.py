@@ -26,10 +26,13 @@ the same reason). It is kept only as a historical record of exactly how
 it originally produced) were generated -- `stimdictmodel_v1.{json,h5}` is
 still live, as the byte-for-byte regression oracle for
 `STIMDictNoiseModel`'s decode redirect to `DictNoiseModel` (see
-`tests/backends/model/test_dictmodel.py`). As with the rep fixtures
-script, an alternative would be updating this script to the current API
-and regenerating a fresh fixture alongside the old one, rather than
-keeping it frozen.
+`tests/backends/model/test_dictmodel.py`). To actually run this script,
+check out commit `01b00cc` ("Minor wording fix for #59"), the last
+commit on `main` before the pre-v1.2 API was removed. See
+`generate_model_fixtures_v2.py` for the equivalent script against the
+*current* API, producing `dictmodel_v2.{json,h5}`/
+`dictmodel_stim_v2.{json,h5}` as the analogous reference for whenever the
+next serialization version bump happens.
 """
 
 from __future__ import annotations

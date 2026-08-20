@@ -30,6 +30,7 @@ from loqs.backends.reps import (
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
 )
+from loqs.internal.legacy import legacy_name_hint
 from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
@@ -503,7 +504,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         if duration is None:
             raise KeyError(
-                f"{gate_label} not available by label or name in default gate durations!"
+                f"{gate_label} not available by label or name in default gate "
+                f"durations!{legacy_name_hint(getattr(gate_label, 'name', gate_label))}"
             )
 
         return duration
@@ -560,7 +562,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         if duration is None:
             raise KeyError(
-                f"{inst_label} not available by label or name in default instrument durations!"
+                f"{inst_label} not available by label or name in default "
+                f"instrument durations!{legacy_name_hint(getattr(inst_label, 'name', inst_label))}"
             )
 
         return duration

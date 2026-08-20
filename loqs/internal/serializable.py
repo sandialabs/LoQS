@@ -174,13 +174,25 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.recordables.patchlayout",
             "PatchLayout",
         ),
-        # RepTuple/STIMDictNoiseModel: deleted outright, with no
-        # construction shim (both already hard-failed on direct
-        # construction). Decode redirects to the modern class instead.
+        # RepTuple: deleted outright, with no construction shim -- its old
+        # (rep, qubits, reptype) constructor doesn't map onto any single
+        # modern class (reptype dispatches across ~10 differently-shaped
+        # concrete GateRep/InstrumentRep classes), and the far more common
+        # failure mode (an old GateRep/InstrumentRep enum member passed as
+        # reptype) already breaks on that attribute access before a
+        # RepTuple shim could ever run anyway. Decode redirects to the
+        # modern class instead.
         ("loqs.backends.reps", "RepTuple"): (
             "loqs.backends.reps.base",
             "OperationRep",
         ),
+        # STIMDictNoiseModel: deleted outright, but does have a live
+        # construction shim (loqs.backends.model.__init__) translating its
+        # old (gate_dict, inst_dict) positional-tuple call shape onto
+        # DictNoiseModel's own two separate positional arguments -- unlike
+        # RepTuple above, loqs-migrate still can't blindly rewrite this
+        # call (the shapes genuinely differ), but a live call keeps
+        # working via the shim regardless.
         ("loqs.backends.model.stimdictmodel", "STIMDictNoiseModel"): (
             "loqs.backends.model.dictmodel",
             "DictNoiseModel",

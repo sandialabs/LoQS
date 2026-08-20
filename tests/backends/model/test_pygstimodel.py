@@ -527,6 +527,18 @@ class TestTimeDependence:
         with pytest.raises(KeyError, match="not available by label or name"):
             pgm_time_dependent.get_instrument_duration(Label("Iunknown", "Q0"))
 
+    def test_gate_duration_not_found_with_renamed_iz_name_hints_loqs_migrate(
+        self, pgm_time_dependent
+    ):
+        with pytest.raises(KeyError, match="Imrz.*v1\\.2"):
+            pgm_time_dependent.get_gate_duration(Label("Iz", "Q0"))
+
+    def test_instrument_duration_not_found_with_renamed_iz_name_hints_loqs_migrate(
+        self, pgm_time_dependent
+    ):
+        with pytest.raises(KeyError, match="Imrz.*v1\\.2"):
+            pgm_time_dependent.get_instrument_duration(Label("Iz", "Q0"))
+
     def test_get_reps_advances_current_time(self):
         """End-to-end: `get_reps` on a real (multi-layer) pyGSTi circuit
         with `use_time_dependence=True` must advance `current_time` by

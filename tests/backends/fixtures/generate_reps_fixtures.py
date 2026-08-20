@@ -31,10 +31,14 @@ as a historical record of exactly how `reps_v1.json`/`reps_v1.h5` (the
 frozen fixtures it originally produced) were generated -- those fixtures
 are still live, as the byte-for-byte regression oracle for the legacy
 decode redirect in `loqs.backends.reps.base.OperationRep._from_decoded_attrs`
-(see `tests/backends/reps/test_legacy.py`). An alternative to keeping the
-script itself frozen would be updating it to the current API and
-regenerating a fresh fixture alongside the old one; not done here, since
-the old fixture's whole value is being byte-for-byte pre-v1.2 output.
+(see `tests/backends/reps/test_legacy.py`). To actually run this script
+(e.g. to regenerate the fixtures from scratch, or just to confirm it
+still produces the same bytes), check out commit `01b00cc` ("Minor
+wording fix for #59"), the last commit on `main` before the pre-v1.2 API
+was removed. See `generate_reps_fixtures_v2.py` for the equivalent
+script against the *current* API, producing `reps_v2.json`/`reps_v2.h5`
+as the analogous reference for whenever the next serialization version
+bump happens.
 """
 
 from __future__ import annotations

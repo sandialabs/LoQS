@@ -44,6 +44,17 @@ _EXPECTED_EXCEPTIONS = {
     # reason): kept only as a record of a pre-1.2 API, not maintained.
     "tests/backends/fixtures/generate_reps_fixtures.py",
     "tests/backends/model/fixtures/generate_model_fixtures.py",
+    # The "Iz" -> "Imrz" legacy-name hint mechanism itself
+    # (loqs.internal.legacy.legacy_name_hint) and tests exercising it
+    # directly, all of which need the literal old name "Iz" as real data,
+    # not leftover legacy code.
+    "loqs/internal/legacy.py",
+    "tests/internal/test_internal_legacy.py",
+    "tests/backends/model/test_pygstimodel.py",
+    "tests/core/test_quantumprogram.py",
+    # Tests exercising STIMDictNoiseModel's legacy construction shim
+    # directly, which requires deliberately constructing it by name.
+    "tests/backends/model/test_dictmodel.py",
 }
 
 

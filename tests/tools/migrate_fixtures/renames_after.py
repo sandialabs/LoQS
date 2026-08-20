@@ -1,6 +1,6 @@
 """Historical note: this file used to construct a `PatchDict` directly."""
 from loqs.core.recordables.patchlayout import PatchLayout
-from loqs.backends.reps.base import OperationRep
+from loqs.backends.reps import RepTuple
 
 patches = PatchLayout({"L0": None})
-rep = OperationRep(1, 2, 3)
+rep = RepTuple(1, 2, 3)

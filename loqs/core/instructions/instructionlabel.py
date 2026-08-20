@@ -118,7 +118,7 @@ class InstructionLabel(dict):
     >>> InstructionLabel.from_raw(("H", "L0", (), {"flagged_check": "XZIIZ"}))
     Traceback (most recent call last):
         ...
-    TypeError: Tuples longer than 2 elements are no longer supported -- use the dict form instead, e.g. {"instruction": ..., "patch_label": ..., <other kwargs>}.
+    TypeError: Tuples longer than 2 elements are no longer supported -- use the dict form instead, e.g. {"instruction": ..., "patch_label": ..., <other kwargs>}. If this tuple is a literal in your own source code, `loqs-migrate source <path>` will rewrite it for you.
     """
 
     def __init__(
@@ -158,7 +158,8 @@ class InstructionLabel(dict):
                     "instruction name, which can't be remapped without already "
                     "knowing the target Instruction's parameters -- pass an "
                     "already-resolved Instruction object instead, or migrate to "
-                    "the modern keyword form."
+                    "the modern keyword form. If this call is in your own source "
+                    "code, `loqs-migrate source <path>` will rewrite it for you."
                 )
             warnings.warn(
                 "Old-style positional InstructionLabel(instruction, patch_label, "
@@ -256,6 +257,8 @@ class InstructionLabel(dict):
             raise TypeError(
                 "Tuples longer than 2 elements are no longer supported -- "
                 'use the dict form instead, e.g. {"instruction": ..., '
-                '"patch_label": ..., <other kwargs>}.'
+                '"patch_label": ..., <other kwargs>}. If this tuple is a '
+                "literal in your own source code, `loqs-migrate source "
+                "<path>` will rewrite it for you."
             )
         raise TypeError(f"Cannot cast {obj!r} to an InstructionLabel")

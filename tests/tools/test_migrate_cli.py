@@ -50,6 +50,7 @@ class TestBuildParser:
         assert args.command == "source"
         assert args.paths == [tmp_path]
         assert args.dry_run is False
+        assert args.no_backup is False
 
     def test_check_has_no_dry_run_flag(self, tmp_path):
         args = build_parser().parse_args(["check", str(tmp_path)])
@@ -112,6 +113,53 @@ class TestMainAsLibraryCall:
         bad.write_text("this is not ( valid python\n", encoding="utf-8")
         code = main(["check", str(tmp_path)])
         assert code == 2
+
+
+class TestBackup:
+    """`source` backs up a file it actually rewrites to `<name>.bak` by
+    default, unless `--no-backup`/`--dry-run` is given."""
+
+    def test_backs_up_before_rewriting(self, flagged_file):
+        before = flagged_file.read_text(encoding="utf-8")
+        backup_file = flagged_file.with_name(flagged_file.name + ".bak")
+
+        code = main(["source", str(flagged_file)])
+
+        assert code == 1  # the non-literal inst_kwargs candidate still flagged
+        assert backup_file.exists()
+        assert backup_file.read_text(encoding="utf-8") == before
+        assert flagged_file.read_text(encoding="utf-8") != before
+
+    def test_no_backup_flag_skips_backup(self, flagged_file):
+        backup_file = flagged_file.with_name(flagged_file.name + ".bak")
+        main(["source", "--no-backup", str(flagged_file)])
+        assert not backup_file.exists()
+
+    def test_dry_run_never_creates_a_backup(self, flagged_file):
+        backup_file = flagged_file.with_name(flagged_file.name + ".bak")
+        main(["source", "--dry-run", str(flagged_file)])
+        assert not backup_file.exists()
+
+    def test_no_backup_for_a_file_that_needs_no_changes(self, tmp_path):
+        path = tmp_path / "clean.py"
+        path.write_text("x = 1\n", encoding="utf-8")
+        backup_file = path.with_name(path.name + ".bak")
+        main(["source", str(path)])
+        assert not backup_file.exists()
+
+    def test_check_never_creates_a_backup(self, flagged_file):
+        backup_file = flagged_file.with_name(flagged_file.name + ".bak")
+        main(["check", str(flagged_file)])
+        assert not backup_file.exists()
+
+    def test_existing_backup_is_overwritten(self, legacy_file):
+        backup_file = legacy_file.with_name(legacy_file.name + ".bak")
+        backup_file.write_text("stale content from a previous run\n", encoding="utf-8")
+        original = legacy_file.read_text(encoding="utf-8")
+
+        main(["source", str(legacy_file)])
+
+        assert backup_file.read_text(encoding="utf-8") == original
 
 
 class TestConsoleScriptSubprocess:
