@@ -13,7 +13,7 @@ resolve/rewrite logic lives there, reusable without going through a
 subprocess at all.
 
 ```
-loqs-migrate source <path> [--dry-run]
+loqs-migrate source <path> [--dry-run] [--no-backup]
 loqs-migrate check <path>       # detect-only, no rewrite; for CI/pre-flight
 ```
 
@@ -25,6 +25,12 @@ is deliberately no `loqs-migrate data <file>` subcommand: migrating an
 already-serialized file is free via [](api:Serializable)'s own decode
 compatibility and an ordinary `program.write(path)` round-trip, needing
 no bespoke tool.
+
+`source` backs up every file it actually rewrites to a sibling `<name>.bak`
+before writing, unless `--no-backup` is given; `--dry-run` never writes
+anything, so no backup is made either. An existing `.bak` from a previous
+run is silently overwritten, since it's meant as a one-shot undo for the
+rewrite about to happen, not a growing history.
 
 FUTURE WORK: wiring `loqs-migrate check` into LoQS's own CI as a gate
 against new legacy patterns creeping back in would be low-cost and high-
@@ -59,7 +65,11 @@ def _migrate_file(path: Path) -> MigrationResult:
     return migrate_source(source)
 
 
-def _run(paths: list[Path], *, write: bool) -> int:
+def _backup_path(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
+
+
+def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
     """Shared implementation for both subcommands. Returns a process exit
     code: 0 if nothing needed attention, 1 if anything was flagged for
     manual review (whether or not anything else was also rewritten), 2 on
@@ -84,7 +94,16 @@ def _run(paths: list[Path], *, write: bool) -> int:
             action = "would rewrite" if not write else "rewrote"
             print(f"{file}: {action}")
             if write:
-                file.write_text(result.source, encoding="utf-8")
+                try:
+                    if backup:
+                        backup_file = _backup_path(file)
+                        backup_file.write_bytes(file.read_bytes())
+                        print(f"{file}: backed up to {backup_file}")
+                    file.write_text(result.source, encoding="utf-8")
+                except OSError as exc:
+                    print(f"{file}: error: {exc}", file=sys.stderr)
+                    any_error = True
+                    continue
 
         for item in result.manual_review:
             any_manual_review = True
@@ -98,7 +117,7 @@ def _run(paths: list[Path], *, write: bool) -> int:
 
 
 def _cmd_source(args: argparse.Namespace) -> int:
-    return _run(args.paths, write=not args.dry_run)
+    return _run(args.paths, write=not args.dry_run, backup=not args.no_backup)
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
@@ -129,6 +148,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Report what would be rewritten without touching any file.",
+    )
+    source_parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help=(
+            "Don't back up a rewritten file to <name>.bak first. "
+            "Backing up is the default."
+        ),
     )
     source_parser.set_defaults(func=_cmd_source)
 

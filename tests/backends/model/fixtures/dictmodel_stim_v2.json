@@ -1,0 +1,144 @@
+{
+  "encode_type": "Serializable",
+  "module": "loqs.backends.model.dictmodel",
+  "class": "DictNoiseModel",
+  "version": 2,
+  "gate_dict": {
+    "encode_type": "dict",
+    "version": 2,
+    "items": {
+      "X": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "StimCircuitGateRep",
+        "version": 2,
+        "circuit_str": {
+          "encode_type": "primitive",
+          "version": 2,
+          "value": "X 0"
+        },
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            }
+          ]
+        }
+      },
+      "H": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "StimCircuitGateRep",
+        "version": 2,
+        "circuit_str": {
+          "encode_type": "primitive",
+          "version": 2,
+          "value": "H 0"
+        },
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            }
+          ]
+        }
+      },
+      "CNOT": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "StimCircuitGateRep",
+        "version": 2,
+        "circuit_str": {
+          "encode_type": "primitive",
+          "version": 2,
+          "value": "CNOT 0 1"
+        },
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            },
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q1"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "inst_dict": {
+    "encode_type": "dict",
+    "version": 2,
+    "items": {
+      "M": {
+        "encode_type": "Serializable",
+        "module": "loqs.backends.reps.instrumentreps",
+        "class": "ZBasisProjectionInstrumentRep",
+        "version": 2,
+        "reset": null,
+        "include_outcome": true,
+        "qubit_labels": {
+          "encode_type": "iterable",
+          "version": 2,
+          "iterable_type": "tuple",
+          "items": [
+            {
+              "encode_type": "primitive",
+              "version": 2,
+              "value": "Q0"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "_gatereps": {
+    "encode_type": "iterable",
+    "version": 2,
+    "iterable_type": "list",
+    "items": [
+      {
+        "encode_type": "class",
+        "module": "loqs.backends.reps.gatereps",
+        "class": "StimCircuitGateRep",
+        "version": 2
+      }
+    ]
+  },
+  "_instreps": {
+    "encode_type": "iterable",
+    "version": 2,
+    "iterable_type": "list",
+    "items": [
+      {
+        "encode_type": "class",
+        "module": "loqs.backends.reps.instrumentreps",
+        "class": "ZBasisProjectionInstrumentRep",
+        "version": 2
+      },
+      {
+        "encode_type": "class",
+        "module": "loqs.backends.reps.instrumentreps",
+        "class": "StimCircuitInstrumentRep",
+        "version": 2
+      }
+    ]
+  }
+}

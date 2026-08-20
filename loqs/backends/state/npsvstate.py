@@ -106,11 +106,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     _SERIALIZE_ATTRS = [
         "_state",
         "qubit_labels",
-        "seed",
         "kraus_sampling",
         "contraction",
         "d",
     ]
+    """`seed` is deliberately not here to avoid triggering re-caching.
+    See #118 for more details."""
 
     _SERIALIZE_ATTRS_MAP = {"_state": "state"}
 

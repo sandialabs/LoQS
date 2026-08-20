@@ -156,19 +156,21 @@ class TestSerializableParameterized:
         else:  # hdf5
             with make_temp_path(suffix='.h5') as temp_file:
                 with h5py.File(temp_file, 'w') as h5_file:
-                    root_group = h5_file.create_group('root')
-                    Serializable.encode(obj, format="hdf5", h5_group=root_group, reset_encode_id=True)
-                
+                    obj.dump(h5_file, format="hdf5")
+
                 with h5py.File(temp_file, 'r') as h5_file:
                     root_group = h5_file['root']
-                    # Find the encoded object group
                     assert isinstance(root_group, h5py.Group)
-                    obj_group_name = list(root_group.keys())[0]
-                    encoded_group = root_group[obj_group_name]
-                    
-                    # Verify version is included
-                    assert "version" in encoded_group.attrs
-                    assert encoded_group.attrs["version"] == SERIALIZATION_VERSION
+
+                    # Version is stamped once on the file's root group,
+                    # not repeated at every node (see HDF5Encoder's
+                    # `_HDF5_DECODE_VERSION`).
+                    assert "version" in root_group.attrs
+                    assert root_group.attrs["version"] == SERIALIZATION_VERSION
+
+                # Test that objects can be deserialized with current version
+                loaded_obj = MockSerializable.read(temp_file)
+                assert obj == loaded_obj
 
     def test_serialization_with_nested_data(self, format_param, make_temp_path):
         """Test serialization with complex nested data structures."""
@@ -193,8 +195,10 @@ class TestSerializableParameterized:
 
             # Verify structure
             assert state["encode_type"] == "Serializable"
+            # Non-string primitives are stored bare; strings stay wrapped
+            # (see JSONEncoder.encode_primitive for why).
             assert state["name"]["value"] == "nested_test" # type: ignore
-            assert state["value"]["value"] == 777 # type: ignore
+            assert state["value"] == 777 # type: ignore
 
             # Test deserialization
             loaded_obj = Serializable.decode(state, format="json")
@@ -727,6 +731,79 @@ class TestSerializableNestedData:
 
         # obj4 is obj3
         assert decoded["obj4"] is decoded["obj3"]
+
+    def test_history_copy_reconstruction_does_not_alias_frame_list(
+        self, format_param, make_temp_path
+    ):
+        """A regression test for the "copy" cache-type reconstruction
+        using History's own cheap wrap-constructor (sharing Frame
+        identity) instead of a full `copy.deepcopy()`. Two independently-
+        decoded Histories built from identical content deliberately share
+        their underlying Frame objects by identity -- confirmed here as
+        the expected, intentional behavior -- but must never share the
+        same underlying frame list itself, or mutating one (`.append()`
+        genuinely mutates `History` in place) would silently corrupt the
+        other."""
+        from loqs.core.history import History
+
+        shared_frame = Frame({"x": 1})
+        history_a = History([shared_frame])
+        history_b = History([shared_frame])  # same content, different identity
+
+        container = Frame({"history_a": history_a, "history_b": history_b})
+
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            container.write(temp_file)
+            decoded = Frame.read(temp_file)
+
+        decoded_a = decoded["history_a"]
+        decoded_b = decoded["history_b"]
+
+        assert decoded_a is not decoded_b
+        assert len(decoded_a) == len(decoded_b) == 1
+        # The whole point of the optimization: the underlying Frame is
+        # shared by identity, not deep-copied.
+        assert decoded_a[0] is decoded_b[0]
+
+        # But the outer History containers must stay independent.
+        decoded_a.append(Frame({"y": 2}))
+        assert len(decoded_a) == 2
+        assert len(decoded_b) == 1
+
+    def test_instructionstack_copy_reconstruction_does_not_alias_list(
+        self, format_param, make_temp_path
+    ):
+        """The same regression test as above, for `InstructionStack`'s
+        own cheap wrap-constructor. `InstructionStack` itself never
+        mutates in place (every "mutation" method returns a new stack),
+        so the sharper risk here is simpler: two independently-decoded
+        stacks built from identical content must never resolve to the
+        *same* object."""
+        from loqs.core.instructions.instructionstack import InstructionStack
+
+        stack_a = InstructionStack([("Increment", "L0")])
+        stack_b = InstructionStack([("Increment", "L0")])
+
+        container = Frame({"stack_a": stack_a, "stack_b": stack_b})
+
+        with make_temp_path(suffix=f".{format_param}") as temp_file:
+            container.write(temp_file)
+            decoded = Frame.read(temp_file)
+
+        decoded_a = decoded["stack_a"]
+        decoded_b = decoded["stack_b"]
+
+        assert decoded_a is not decoded_b
+        assert len(decoded_a) == len(decoded_b) == 1
+        # Sharing the underlying InstructionLabel by identity is fine --
+        # InstructionStack's own mutation methods never modify one in
+        # place, always returning a new stack.
+        assert decoded_a[0] is decoded_b[0]
+
+        appended = decoded_a.append_instruction(("Increment", "L1"))
+        assert len(appended) == 2
+        assert len(decoded_a) == 1
+        assert len(decoded_b) == 1
 
 
 def _load_module_from_source(tmp_path, filename, source):

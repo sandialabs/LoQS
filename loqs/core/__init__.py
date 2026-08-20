@@ -41,3 +41,16 @@ from .syndromelabel import SyndromeLabel
 # After QECCodePatch
 from .quantumprogram import QuantumProgram
 from .programresults import ProgramResults
+
+from loqs.internal.legacy import install_legacy_module_aliases_for_relocations
+from loqs.internal.serializable import Serializable
+
+# Keeps every historical import path that's a pure module relocation (the
+# class itself unchanged, just moved files -- e.g. SyndromeLabel's old
+# loqs.core.syndrome path) importable, without needing its own explicit
+# shim. A real rename (the class's own name also changed, e.g. PatchDict
+# -> PatchLayout) is never auto-forwarded this way -- see
+# install_legacy_module_aliases_for_relocations's own docstring for why.
+install_legacy_module_aliases_for_relocations(
+    Serializable._get_cumulative_changes(0)
+)

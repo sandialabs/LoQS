@@ -16,6 +16,27 @@ additional entries that never needed a decode-time compatibility entry at
 all (e.g. a class renamed before its old name ever shipped), but are still
 worth fixing in a user's own source files.
 
+Two entries are deliberately *overridden* to a deleted-outright (`None`)
+target rather than reused as-is, even though a real decode-time target
+exists for each: `RepTuple` and `STIMDictNoiseModel`. Decoding
+already-serialized data only ever needs to know *where the modern class
+lives*, since the decoded attribute values are already correctly shaped
+for it. Rewriting live source code is a different problem -- it needs the
+old *constructor call* to also make sense as a call to the new class, and
+for these two specifically it doesn't: `RepTuple(rep, qubits, reptype)`'s
+`reptype` dispatches across ~10 differently-shaped concrete `GateRep`/
+`InstrumentRep` classes (no single new class to rewrite the call to), and
+`STIMDictNoiseModel(model_or_dicts, ...)` takes its gate/instrument data
+as one positional tuple where `DictNoiseModel(gate_dict, inst_dict, ...)`
+takes two separate positional arguments -- a blind text rewrite of either
+would produce code that runs but silently misbehaves or breaks outright.
+Both are still *constructible* today via a deprecated compatibility shim
+(see `loqs.backends.model.__init__` for `STIMDictNoiseModel`; `RepTuple`
+has no such shim, since even its shim's own realistic call pattern -- an
+old `GateRep`/`InstrumentRep` enum member as `reptype` -- fails on that
+attribute access before a shim could ever run), so flagging rather than
+either rewriting or hard-erroring is the honest outcome here.
+
 [](api:Serializable._update_imports) is a thin wrapper around this same
 function, so frozen function source and whole user source files share one
 rewrite mechanism, built on `libcst`'s `RenameCommand`
@@ -83,6 +104,12 @@ RENAMES: dict[tuple[str, str], tuple[str, str] | None] = {
         "loqs.backends.reps.instrumentreps",
         "OutcomeOperationDictInstrumentRep",
     ),
+    # RepTuple/STIMDictNoiseModel: overridden to a deleted-outright entry
+    # for *this* table specifically, even though a real decode-time
+    # target exists in IMPORT_LOCATION_CHANGES_BY_VERSION -- see the
+    # module docstring for why a blind rewrite would be wrong for both.
+    ("loqs.backends.reps", "RepTuple"): None,
+    ("loqs.backends.model.stimdictmodel", "STIMDictNoiseModel"): None,
 }
 """`(old_module, old_name) -> (new_module, new_name) | None` (`None` means
 deleted outright, not relocated -- rewriting flags real remaining code

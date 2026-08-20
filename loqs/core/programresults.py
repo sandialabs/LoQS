@@ -52,6 +52,15 @@ class ProgramResults(Displayable):
         "parent_program",
     ]
 
+    # `_merge_into_existing_checkpoint`/`_merge_iterable` navigate directly
+    # into this attr's raw HDF5 structure (dict -> keys/values -> iterable,
+    # one group per shot) to append new shots cheaply, bypassing the normal
+    # recursive decode entirely -- HDF5's array-free-subtree collapse would
+    # silently break that navigation whenever a batch of shots happens to
+    # have no array anywhere in it (e.g. an all-classical program with no
+    # quantum state), so this attr is exempted from collapse.
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset({"shot_histories"})
+
     def __init__(
         self,
         shot_histories: dict[int, History] | None = None,
@@ -112,6 +121,11 @@ class ProgramResults(Displayable):
 
         self._memory_cache = {}  # Cache for loaded shots
         self._cache_order = []  # Track order of cache usage for LRU eviction
+
+        self._checkpoint_encode_cache: dict = {}
+        """Persistent `Serializable.encode` cache shared across every `checkpoint()`
+        call for this object's lifetime, so an object reused across shots is written
+        once and cheaply referenced afterward, instead of re-expanded every time."""
 
         # If checkpointing is enabled and parent_program is a QuantumProgram object,
         # we need to write it to file and store the filename instead
@@ -525,8 +539,18 @@ class ProgramResults(Displayable):
                 next_index = len(group.keys())
 
                 for i in new_data:
-                    item_group = group.create_group(str(next_index))
-                    Serializable.encode(i, format="hdf5", h5_group=item_group)
+                    # track_order=True for consistent group storage; encode_cache
+                    # reuses this object's persistent cache so a shared object is a
+                    # cheap reference here, not re-expanded from scratch.
+                    item_group = group.create_group(
+                        str(next_index), track_order=True
+                    )
+                    Serializable.encode(
+                        i,
+                        format="hdf5",
+                        h5_group=item_group,
+                        encode_cache=self._checkpoint_encode_cache,
+                    )
                     next_index += 1
 
         _merge_iterable(
@@ -552,8 +576,14 @@ class ProgramResults(Displayable):
         # This will use the standard Serializable encoding
         temp_results = ProgramResults(shot_histories=shot_histories)
 
-        # Encode the ProgramResults object to HDF5
-        Serializable.encode(temp_results, format="hdf5", h5_group=h5_file)
+        # Reuses this object's own persistent encode_cache (no reset_encode_id),
+        # so a shared object stays cheaply referenced across checkpoint() calls.
+        Serializable.encode(
+            temp_results,
+            format="hdf5",
+            h5_group=h5_file,
+            encode_cache=self._checkpoint_encode_cache,
+        )
 
     def load_checkpoint(
         self,

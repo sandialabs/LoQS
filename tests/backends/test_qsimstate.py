@@ -30,7 +30,7 @@ class TestQSimQuantumState:
 
     def _check(self, state, expected_state):
         assert state.state.names == expected_state.state.names
-        assert state.seed == expected_state.seed
+        # assert state.seed == expected_state.seed  # seed is no longer serialized
         assert np.allclose(state.state.full_dm.dm, expected_state.state.full_dm.dm)
 
     def test_init(self):
@@ -423,7 +423,7 @@ class TestQSimQuantumState:
             test2 = QSimState.read(tmp_path)
 
         assert isinstance(test2, QSimState)
-        assert test2.seed == 20260712
+        # assert test2.seed == 20260712  # seed is no longer serialized
         # X(pi/2) gives a random measurement outcome, but reset=0 must
         # always leave the qubit in |0> regardless -- both before and
         # after the round trip.

@@ -58,7 +58,6 @@ class QSimQuantumState(BaseQuantumState):
 
     _SERIALIZE_ATTRS = [
         "qubit_labels",
-        "seed",
         "_qsim_classical",
         "_qsim_idx_in_full_dm",
         "_qsim_dm_class",
@@ -70,6 +69,8 @@ class QSimQuantumState(BaseQuantumState):
         "_qsim_maj_vot_mask",
         "_qsim_maj_vot_array",
     ]
+    """`seed` is deliberately not here to avoid triggering re-caching.
+    See #118 for more details."""
 
     _state: _SparseDM
     """Underlying state object."""
@@ -378,7 +379,10 @@ class QSimQuantumState(BaseQuantumState):
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         qubit_labels = attr_dict["qubit_labels"]
         obj = cls(len(qubit_labels), qubit_labels)
-        obj.reset_seed(attr_dict["seed"])
+        # "seed" is no longer written, but an older file may still have
+        # it -- restoring it there is harmless (if not genuinely
+        # meaningful; see _SERIALIZE_ATTRS's own note on why it's dropped).
+        obj.reset_seed(attr_dict.get("seed"))
 
         # Restore internal QuantumSim state
         obj.state.classical = attr_dict["_qsim_classical"]

@@ -65,6 +65,41 @@ class TestRewriteRenames:
         after = FIXTURES.joinpath("renames_after.py").read_text(encoding="utf-8")
         result = rewrite_renames(before)
         assert result.source == after
+        # RepTuple's import (line 3) and usage (line 6) are left untouched
+        # but flagged, not rewritten to OperationRep -- see
+        # test_reptuple_is_flagged_not_blindly_rewritten.
+        assert {item.line for item in result.manual_review} == {3, 6}
+
+    def test_reptuple_is_flagged_not_blindly_rewritten(self):
+        """`RepTuple`'s decode-time redirect target (`OperationRep`, an
+        abstract class) is not a valid rewrite of its own constructor
+        call -- confirms it's flagged instead of silently producing
+        broken code (see renames.py's module docstring)."""
+        src = (
+            "from loqs.backends.reps import RepTuple\n\n"
+            "rep = RepTuple(matrix, (0,), GateRep.UNITARY)\n"
+        )
+        result = rewrite_renames(src)
+        assert result.source == src  # never rewritten, only flagged
+        assert "OperationRep" not in result.source
+        lines = {item.line for item in result.manual_review}
+        assert lines == {1, 3}  # the import line and the usage line
+
+    def test_stimdictnoisemodel_is_flagged_not_blindly_rewritten(self):
+        """`STIMDictNoiseModel`'s decode-time redirect target
+        (`DictNoiseModel`) takes `(gate_dict, inst_dict)` as two separate
+        positional arguments where `STIMDictNoiseModel` took one
+        `(gate_dict, inst_dict)` tuple -- confirms a blind rewrite (which
+        would silently pass the whole tuple as `gate_dict` alone) doesn't
+        happen."""
+        src = (
+            "from loqs.backends.model.stimdictmodel import STIMDictNoiseModel\n\n"
+            "model = STIMDictNoiseModel((gate_dict, inst_dict))\n"
+        )
+        result = rewrite_renames(src)
+        assert result.source == src  # never rewritten, only flagged
+        lines = {item.line for item in result.manual_review}
+        assert lines == {1, 3}  # the import line and the usage line
 
 
 class TestMigrateInstructionLabels:

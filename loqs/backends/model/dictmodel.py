@@ -397,6 +397,55 @@ class DictNoiseModel(BaseNoiseModel):
         return cls(gate_dict, inst_dict, gatereps, instreps)
 
 
+def build_legacy_stim_dict_model(
+    model_or_dicts: "DictNoiseModel | tuple[Mapping, Mapping]",
+    gatereps: Sequence[type[GateRep]] | None = None,
+    instreps: Sequence[type[InstrumentRep]] | None = None,
+    gaterep_array_cast_rep: type[GateRep] | None = None,
+    instrep_cast_reset: Literal[0, 1, None] = None,
+    instrep_cast_include_outcomes: bool = True,
+) -> "DictNoiseModel":
+    """Build a [](api:DictNoiseModel) from a pre-1.2 `STIMDictNoiseModel(...)`
+    call's arguments -- the `build=` callable behind that class's legacy
+    construction shim (see `loqs.backends.model.__init__`).
+
+    `STIMDictNoiseModel` was removed in v1.2 because its one real feature
+    (case/alias-insensitive STIM command lookup) is now built directly
+    into [](api:DictNoiseModel.get_reps)'s own STIM handling, applied
+    uniformly regardless of how `gate_dict`/`inst_dict` were built -- so a
+    plain [](api:DictNoiseModel) needs no separate STIM-aware subclass.
+    Positional-argument order and meaning otherwise match the old
+    constructor exactly, except `model_or_dicts` accepting a
+    [](api:DictNoiseModel) instance to copy in place of the old class's
+    own instances (never possible to receive one of those anymore).
+    """
+    if isinstance(model_or_dicts, DictNoiseModel):
+        gate_dict = dict(model_or_dicts.gate_dict)
+        inst_dict = dict(model_or_dicts.inst_dict)
+    elif isinstance(model_or_dicts, tuple) and len(model_or_dicts) == 2:
+        gate_dict = dict(model_or_dicts[0])
+        inst_dict = dict(model_or_dicts[1])
+    else:
+        raise TypeError(
+            "STIMDictNoiseModel's first argument must be an existing "
+            "noise model to copy or a 2-tuple of (gate_dict, inst_dict)."
+        )
+
+    kwargs: dict[str, Any] = dict(
+        gate_dict=gate_dict,
+        inst_dict=inst_dict,
+        gatereps=list(gatereps)
+        if gatereps is not None
+        else [StimCircuitGateRep, ProbabilisticStimGateRep],
+        instreps=list(instreps) if instreps is not None else [StimCircuitInstrumentRep],
+        instrep_cast_reset=instrep_cast_reset,
+        instrep_cast_include_outcomes=instrep_cast_include_outcomes,
+    )
+    if gaterep_array_cast_rep is not None:
+        kwargs["gaterep_array_cast_rep"] = gaterep_array_cast_rep
+    return DictNoiseModel(**kwargs)
+
+
 def _merge_common_rep(
     command: str,
     qt: tuple,

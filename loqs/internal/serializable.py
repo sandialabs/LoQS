@@ -174,13 +174,25 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.core.recordables.patchlayout",
             "PatchLayout",
         ),
-        # RepTuple/STIMDictNoiseModel: deleted outright, with no
-        # construction shim (both already hard-failed on direct
-        # construction). Decode redirects to the modern class instead.
+        # RepTuple: deleted outright, with no construction shim -- its old
+        # (rep, qubits, reptype) constructor doesn't map onto any single
+        # modern class (reptype dispatches across ~10 differently-shaped
+        # concrete GateRep/InstrumentRep classes), and the far more common
+        # failure mode (an old GateRep/InstrumentRep enum member passed as
+        # reptype) already breaks on that attribute access before a
+        # RepTuple shim could ever run anyway. Decode redirects to the
+        # modern class instead.
         ("loqs.backends.reps", "RepTuple"): (
             "loqs.backends.reps.base",
             "OperationRep",
         ),
+        # STIMDictNoiseModel: deleted outright, but does have a live
+        # construction shim (loqs.backends.model.__init__) translating its
+        # old (gate_dict, inst_dict) positional-tuple call shape onto
+        # DictNoiseModel's own two separate positional arguments -- unlike
+        # RepTuple above, loqs-migrate still can't blindly rewrite this
+        # call (the shapes genuinely differ), but a live call keeps
+        # working via the shim regardless.
         ("loqs.backends.model.stimdictmodel", "STIMDictNoiseModel"): (
             "loqs.backends.model.dictmodel",
             "DictNoiseModel",
@@ -448,6 +460,22 @@ class Serializable:
     If encoding requires a different access pattern
     than getattr(), derived classes should
     implement [](api:Serializable._get_encoding_attr).
+    """
+
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset()
+    """`_SERIALIZE_ATTRS` names that must always keep their own real HDF5
+    group (and, one level further in, their own individually-addressable
+    per-element groups if their value is a dict/list), never folded into
+    HDF5's array-free-subtree collapse blob even when their content happens
+    to have no array anywhere in it.
+
+    Exists for attrs some other code depends on being able to navigate to
+    and incrementally append into via raw HDF5 structure, bypassing the
+    normal recursive decode entirely for speed -- collapsing would silently
+    break that navigation whenever the attr's content happens to be
+    array-free (e.g. `ProgramResults.shot_histories` for an all-classical
+    program with no quantum state at all). Content nested more than one
+    level below a listed attr is unaffected and still collapses normally.
     """
 
     _SERIALIZE_ATTRS_MAP: ClassVar[dict[str, str]] = {}
@@ -747,14 +775,8 @@ class Serializable:
                 json_format_kwargs = {}
             json_format_kwargs = dict(json_format_kwargs)
 
-            # Sanity check format kwargs
-            if (
-                "indent" not in json_format_kwargs
-            ):  # default indent=4 JSON argument
-                json_format_kwargs = (
-                    json_format_kwargs.copy()
-                )  # don't update caller's dict!
-                json_format_kwargs["indent"] = 4
+            # Compact by default; pass json_format_kwargs={"indent": 4} to opt
+            # into human-readable pretty-printing instead.
 
             if "sort_keys" in json_format_kwargs:
                 # Sorting keys will potentially break caching on deserialization,
@@ -773,7 +795,13 @@ class Serializable:
         elif format in ["hdf5", "h5"]:
             assert isinstance(f, h5py.File)
 
-            root_group = f.create_group("root")
+            # track_order=True: see HDF5Encoder's own _create_group helper for why
+            # every HDF5 group this codebase creates tracks link creation order.
+            root_group = f.create_group("root", track_order=True)
+            # The only "version" attribute written anywhere in the file --
+            # see HDF5Encoder's `_HDF5_DECODE_VERSION` for why every other
+            # node no longer repeats it.
+            root_group.attrs["version"] = SERIALIZATION_VERSION
             Serializable.encode(
                 self,
                 "hdf5",

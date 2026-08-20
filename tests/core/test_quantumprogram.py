@@ -127,3 +127,31 @@ class TestQuantumProgram:
             # But now it should
             loaded_program2_results3 = loaded_program2.run(num_shots=2)
             assert len(loaded_program2_results3.shot_histories) == 2
+
+
+class TestResolveInstructionLegacyNameHint:
+    """`_resolve_instruction`'s "not found" errors hint at the "Iz" ->
+    "Imrz" v1.2 rename when that's the name that failed to resolve --
+    exercised directly against a minimal duck-typed `self`, since only
+    `global_instructions` is needed for the global-lookup branch."""
+
+    def test_global_instruction_not_found_with_iz_hints_the_rename(self):
+        from types import SimpleNamespace
+
+        from loqs.core.instructions import InstructionLabel
+
+        fake_self = SimpleNamespace(global_instructions={})
+        label = InstructionLabel("Iz")
+        with pytest.raises(RuntimeError, match="Imrz.*v1\\.2"):
+            QuantumProgram._resolve_instruction(fake_self, label, frame={})
+
+    def test_global_instruction_not_found_without_iz_has_no_hint(self):
+        from types import SimpleNamespace
+
+        from loqs.core.instructions import InstructionLabel
+
+        fake_self = SimpleNamespace(global_instructions={})
+        label = InstructionLabel("SomeOtherName")
+        with pytest.raises(RuntimeError) as exc_info:
+            QuantumProgram._resolve_instruction(fake_self, label, frame={})
+        assert "v1.2" not in str(exc_info.value)

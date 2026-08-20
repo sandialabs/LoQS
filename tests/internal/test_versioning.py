@@ -99,9 +99,12 @@ class TestVersionBoundHandling:
         from loqs.internal.serializable import Serializable
 
         assert SERIALIZATION_VERSION == 2
-        encoded = Serializable.encode(42, format="json")
+        # A bare primitive carries no "version" tag at all since 4.1 (see
+        # JSONEncoder.encode_primitive) -- use a dict, which still stamps an
+        # explicit "version" field, to check the round trip end to end.
+        encoded = Serializable.encode({"x": 42}, format="json")
         assert encoded["version"] == 2
-        assert Serializable.decode(encoded, format="json") == 42
+        assert Serializable.decode(encoded, format="json") == {"x": 42}
 
     def test_unregistered_future_version_rejected(self):
         from loqs.internal.encoder.jsonencoder import JSONEncoder

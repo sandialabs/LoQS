@@ -96,12 +96,12 @@ _LAYOUT_NAMES = {"surf17": "Surface-17 Code", "surf13": "Surface-13 Code", "surf
 # module (codepack_surf17_multipatch.py and codepack_surf17_surgery.py both
 # import these rather than keeping their own copies).
 DEFAULT_GATE_DURATIONS: dict[str, int | float] = {
-    "Gi": 1, "Gi1Q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
+    "Gi": 1, "Gi1q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
     "Gzpi2": 1, "Gzmpi2": 1, "Gh": 1,
-    "Gcnot": 2, "Gi2Q": 2,
-    "Imrz": 3, "GiMCM": 3,
+    "Gcnot": 2, "Gi2q": 2,
+    "Imrz": 3, "Gimcm": 3,
 }
-DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
+DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1q", 2: "Gi2q", 3: "Gimcm"}
 
 # Syndrome-extraction tiles in execution order (template data labels), and
 # which H-check row each execution tile measures. Slot order is
@@ -1154,15 +1154,15 @@ def create_ideal_model(
         "Gh",
         "Gcnot",
         "Gi",
-        "Gi1Q",
-        "Gi2Q",
-        "GiMCM",
+        "Gi1q",
+        "Gi2q",
+        "Gimcm",
     ]
 
     nonstd_unitaries = {
-        "Gi1Q": np.eye(2),
-        "Gi2Q": np.eye(2),
-        "GiMCM": np.eye(2),
+        "Gi1q": np.eye(2),
+        "Gi2q": np.eye(2),
+        "Gimcm": np.eye(2),
     }
 
     if model_backend == PyGSTiNoiseModel:
@@ -1181,12 +1181,18 @@ def create_ideal_model(
             availability={k: "all-permutations" for k in gate_names},
         )
 
-        ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(pspec)
+        # evotype="statevec": this model is ideal (noiseless), so a pure-state
+        # representation is exact, not an approximation. Without it, pyGSTi
+        # defaults to "densitymx" (density-matrix superoperators), which
+        # needs a 2**(2n)-sized array -- at 17 qubits, a MemoryError outright.
+        ideal_model_pygsti = pygsti.models.create_crosstalk_free_model(
+            pspec, evotype="statevec"
+        )
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
 
     elif model_backend == DictNoiseModel:
         # Standard-gate-name unitaries needed alongside `nonstd_unitaries`
-        # (which already covers "Gi1Q"/"Gi2Q"/"GiMCM" above). Sourced from
+        # (which already covers "Gi1q"/"Gi2q"/"Gimcm" above). Sourced from
         # `STANDARD_GATE_UNITARIES` rather than
         # `pygsti.tools.internalgates.standard_gatename_unitaries()` so
         # this branch doesn't need pyGSTi installed at all (matching the

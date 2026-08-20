@@ -27,7 +27,7 @@ class TestNumPyStatevectorQuantumState:
 
     def _check(self, state, expected_state):
         assert state.qubit_labels == expected_state.qubit_labels
-        assert state.seed == expected_state.seed
+        # assert state.seed == expected_state.seed  # seed is no longer serialized
         assert np.allclose(state.state, expected_state.state)
 
     def test_init(self):

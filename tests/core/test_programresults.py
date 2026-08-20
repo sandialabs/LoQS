@@ -610,6 +610,52 @@ class TestProgramResults:
                 assert history[0]["batch"] == expected_original_batch
                 assert history[0]["shot"] == i
 
+    def test_checkpoint_append_structure_survives_array_free_shots(self):
+        """`shot_histories` must keep its real dict/keys/values/iterable HDF5
+        structure (one group per shot) even when every shot's content is
+        entirely array-free, since the checkpoint-append path above
+        navigates directly into that structure by name rather than through
+        a normal recursive decode -- HDF5's array-free-subtree collapse
+        would otherwise fold it into a single blob and break that lookup."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            results = ProgramResults(name="All-classical")
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+            for i in range(3):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history)
+
+            # batch_size=1/current_batch_index=1 checkpoints every unwritten
+            # shot in one call, avoiding this method's own partial-batch
+            # arithmetic (irrelevant to what this test is actually checking).
+            results.checkpoint(checkpoint_dir=checkpoint_dir, strategy="single_file", worker_id=0)
+
+            checkpoint_file = next(checkpoint_dir.glob("*.h5"))
+            with h5py.File(checkpoint_file, "r") as f:
+                root_group = f[list(f.keys())[0]]
+                assert isinstance(root_group["shot_histories"], h5py.Group)
+                dict_group = root_group["shot_histories"]["dict"]
+                values_iterable = dict_group["values"]["iterable"]
+                assert values_iterable.attrs["storage_format"] == "groups"
+                assert {"0", "1", "2"} <= set(values_iterable.keys())
+
+            # Append a second, also entirely array-free batch and confirm
+            # the fast append path still works end to end, not just that
+            # the structure looks right after the first checkpoint.
+            for i in range(3, 6):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history)
+
+            results.checkpoint(checkpoint_dir=checkpoint_dir, strategy="single_file", worker_id=0)
+
+            new_results = ProgramResults()
+            new_results.load_checkpoint(
+                checkpoint_dir=checkpoint_dir, strategy="single_file", worker_id=0
+            )
+            assert set(new_results.shot_histories.keys()) == set(range(6))
+
     def test_checkpoint_with_empty_results(self):
         """Test checkpointing with empty ProgramResults."""
         with tempfile.TemporaryDirectory() as temp_dir:

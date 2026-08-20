@@ -80,6 +80,17 @@ class TestInstructionLabel:
         with pytest.raises(TypeError, match="Tuples longer than 2 elements"):
             InstructionLabel.from_raw(("Label", "L0", (), {"flagged_check": "XZIIZ"}))
 
+    def test_from_raw_rejects_long_tuples_points_to_loqs_migrate(self):
+        with pytest.raises(TypeError, match="loqs-migrate"):
+            InstructionLabel.from_raw(("Label", "L0", (), {"flagged_check": "XZIIZ"}))
+
+    def test_legacy_positional_with_bare_string_instruction_points_to_loqs_migrate(self):
+        # A bare instruction name can't be remapped without an already-
+        # resolved Instruction's param_priorities -- this is a hard
+        # failure, not a warn-and-remap, unlike the Instruction-object case.
+        with pytest.raises(TypeError, match="loqs-migrate"):
+            InstructionLabel("Label", "L0", (), {"flagged_check": "XZIIZ"})
+
     def test_from_raw_rejects_unrecognized_type(self):
         with pytest.raises(TypeError, match="Cannot cast"):
             InstructionLabel.from_raw(3)  # type: ignore

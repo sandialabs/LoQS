@@ -46,6 +46,7 @@ from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchLayout
 from loqs.core.programresults import ProgramResults
 from loqs.internal import Displayable
+from loqs.internal.legacy import legacy_name_hint
 
 T = TypeVar("T", bound="QuantumProgram")
 
@@ -752,6 +753,7 @@ class QuantumProgram(Displayable):
             except KeyError:
                 raise RuntimeError(
                     f"Could not resolve global instruction from {ilbl}"
+                    f"{legacy_name_hint(inst_name)}"
                 )
 
             return inst
@@ -776,6 +778,7 @@ class QuantumProgram(Displayable):
         except KeyError:
             raise RuntimeError(
                 f"{inst_name} not available in patch for resolving {ilbl}"
+                f"{legacy_name_hint(inst_name)}"
             )
 
         return inst
