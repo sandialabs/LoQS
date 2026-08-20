@@ -142,7 +142,8 @@ def create_ideal_parity_program(num_qubits, num_rounds, prep_instructions=None):
     }
 
     noise_model = DictNoiseModel(
-        (gate_dict, inst_dict),
+        gate_dict,
+        inst_dict,
         gatereps=[KrausGateRep],
         instreps=[ZBasisProjectionInstrumentRep]
     )
@@ -303,7 +304,8 @@ def create_noiseless_leakage_program(num_qubits, num_rounds, prep_instructions=N
     }
 
     noise_model = DictNoiseModel(
-        (gate_dict, inst_dict),
+        gate_dict,
+        inst_dict,
         gatereps=[KrausGateRep],
         instreps=[ZBasisProjectionInstrumentRep]
     )
@@ -444,7 +446,8 @@ def create_noisy_leakage_program(num_qubits, num_rounds, prep_instructions=None)
     }
 
     noise_model = DictNoiseModel(
-        (gate_dict, inst_dict),
+        gate_dict,
+        inst_dict,
         gatereps=[KrausGateRep],
         instreps=[ZBasisProjectionInstrumentRep]
     )

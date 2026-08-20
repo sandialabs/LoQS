@@ -163,6 +163,8 @@ program_td1 = QuantumProgram(
 ```
 
 ```{code-cell} ipython3
+:tags: [raises-exception]
+
 program_td1.run(10)
 ```
 
@@ -287,8 +289,8 @@ model_td2.current_time = 0
 ```
 
 ```{code-cell} ipython3
-reps = model_td2.get_reps(PyGSTiPhysicalCircuit([("Gi", "D2")]), gatereps=[loqs.backends.GateRep.QSIM_SUPEROPERATOR], instreps=[loqs.backends.InstrumentRep.ZBASIS_PROJECTION])
-pygsti.print_mx(reps[0].rep)
+reps = model_td2.get_reps(PyGSTiPhysicalCircuit([("Gi", "D2")]), gatereps=[loqs.backends.QSimSuperopGateRep], instreps=[loqs.backends.ZBasisProjectionInstrumentRep])
+pygsti.print_mx(reps[0].superop)
 ```
 
 ```{code-cell} ipython3
@@ -297,8 +299,8 @@ model_td2.current_time = 135
 ```
 
 ```{code-cell} ipython3
-reps = model_td2.get_reps(PyGSTiPhysicalCircuit([("Gi", "D2")]), gatereps=[loqs.backends.GateRep.QSIM_SUPEROPERATOR], instreps=[loqs.backends.InstrumentRep.ZBASIS_PROJECTION])
-pygsti.print_mx(reps[0].rep)
+reps = model_td2.get_reps(PyGSTiPhysicalCircuit([("Gi", "D2")]), gatereps=[loqs.backends.QSimSuperopGateRep], instreps=[loqs.backends.ZBasisProjectionInstrumentRep])
+pygsti.print_mx(reps[0].superop)
 ```
 
 ```{code-cell} ipython3

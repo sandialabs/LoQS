@@ -30,8 +30,7 @@ gst_model = modelpack.target_model(qubit_labels=["Q0"]) # 1 physical qubit model
 ## Step 2: Convert each `Circuit` into a `QuantumProgram`
 
 ```{code-cell} ipython3
-from loqs.backends.circuit import PyGSTiPhysicalCircuit
-from loqs.backends.state import QSimQuantumState
+from loqs.backends import PyGSTiPhysicalCircuit, QSimQuantumState
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack
 from loqs.tools import pygstitools as pt
 ```

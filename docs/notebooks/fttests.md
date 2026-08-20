@@ -66,9 +66,9 @@ program = QuantumProgram(
 
 ```{code-cell} ipython3
 # And now we can run it for real!
-program.run(num_shots=10)
+results = program.run(num_shots=10)
 
-Counter(program.collect_shot_data("logical_measurement", -1))
+Counter(results.collect_shot_data("logical_measurement", -1))
 ```
 
 ## Sanity Check: Logical Minus Prep
@@ -87,9 +87,9 @@ stack_prep_check = [
 
 program_prep_check = QuantumProgram.from_quantum_program(program, stack_prep_check, name="Prep -")
 
-program_prep_check.run()
+results_prep_check = program_prep_check.run()
 
-hist = program_prep_check.shot_histories[-1]
+hist = results_prep_check.shot_histories[0]
 final_state = hist[-1]["state"]
 print_state_probs_phases(final_state)
 
@@ -117,9 +117,9 @@ for stab in ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]:
 
     program_stab = QuantumProgram.from_quantum_program(program, stack_stab, name=f"Prep -, Stab {stab}, Unprep -")
 
-    program_stab.run()
+    results_stab = program_stab.run()
 
-    hist = program_stab.shot_histories[-1]
+    hist = results_stab.shot_histories[0]
     final_state = hist[-1]["state"]
 
     print(f"{stab} Probabilities")
@@ -143,9 +143,9 @@ for stab in ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]:
 
     program_stab = QuantumProgram.from_quantum_program(program, stack_stab, name=f"Prep -, Stab {stab}, Unprep -")
 
-    program_stab.run()
+    results_stab = program_stab.run()
 
-    hist = program_stab.shot_histories[-1]
+    hist = results_stab.shot_histories[0]
     final_state = hist[-1]["state"]
 
     print(f"{stab} Check Probabilities")
@@ -165,9 +165,9 @@ for stab in ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]:
 
     program_stab = QuantumProgram.from_quantum_program(program, stack_stab, name=f"Prep -, Stab {stab}, Unprep -")
 
-    program_stab.run()
+    results_stab = program_stab.run()
 
-    hist = program_stab.shot_histories[-1]
+    hist = results_stab.shot_histories[0]
     final_state = hist[-1]["state"]
 
     print(f"{stab} Check Probabilities")
@@ -188,9 +188,9 @@ stack_ft = [
 
 program_ft = QuantumProgram.from_quantum_program(program, stack_ft, name="FT Prep -, measure X")
 
-program_ft.run(num_shots=10)
+results_ft = program_ft.run(num_shots=10)
 
-Counter(program_ft.collect_shot_data("logical_measurement", -1))
+Counter(results_ft.collect_shot_data("logical_measurement", -1))
 ```
 
 ## FT Prep with Single Errors
@@ -212,7 +212,7 @@ program_ftprep = QuantumProgram.from_quantum_program(program, stack_ftprep, name
 # Let's try to use some of my new FT tools for this
 noise_injected_programs = fttools.build_discrete_error_injection_programs(
     base_program=program_ftprep,
-    instruction_to_analyze=code_5q.instructions["FT Minus Prep"],
+    instruction_to_analyze=code_5q.instructions["Non-FT Minus Prep + Checks"],
     stack_idx_to_modify=2,
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )

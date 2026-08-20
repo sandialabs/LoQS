@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [Unreleased Changes]
+## [1.2] - 2026-08-20
 
 ### New
 - **Multi-qubit, multi-outcome instruments (#51, @sserita):** `ZBasisOutcomeOperationDictInstrumentRep` gains an `outcome_qubits` field, decoupled from the physical qubits its `outcome_ops` act on, so a single classical channel can carry any number of arbitrary outcome keys -- enabling a joint instrument (e.g. a 2Q/4Q parity check, or a leakage-discriminating readout) that needs no auxiliary qubit. `PyGSTiNoiseModel` gains a matching `instrument_outcome_qubits` parameter naming which classical register a joint instrument's outcome belongs to. Includes new tutorials: `docs/notebooks/multiqubitinstruments.md` and a leakage-readout stage in `docs/notebooks/leakage.md`.
