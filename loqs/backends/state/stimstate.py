@@ -74,7 +74,9 @@ class STIMQuantumState(BaseQuantumState):
 
     name: ClassVar[str] = "STIM Tableau"
 
-    _SERIALIZE_ATTRS = ["qubit_labels", "seed", "_stim_state_vector"]
+    _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
+    """`seed` is deliberately not here to avoid triggering re-caching.
+    See #118 for more details."""
 
     _state: _TableauSimulator
     """Underlying state object."""
@@ -443,9 +445,12 @@ class STIMQuantumState(BaseQuantumState):
         return cbit
 
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
-        # Retrieve STIM state vector
         if attr == "_stim_state_vector":
-            return self.state.state_vector(endian="little")
+            # The tableau itself (six small bit-packed arrays, O(n^2) bits)
+            # rather than its exponentially-sized dense state vector -- the
+            # same information `state_vector()` would derive, at a fraction
+            # of the size and with no exponential reconstruction cost.
+            return self.state.current_inverse_tableau().to_numpy(bit_packed=True)
 
         # Otherwise fallback
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
@@ -453,13 +458,22 @@ class STIMQuantumState(BaseQuantumState):
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
         qubit_labels = attr_dict["qubit_labels"]
-        seed = attr_dict["seed"]
-        state_vector = attr_dict["_stim_state_vector"]
-        assert isinstance(state_vector, np.ndarray)
+        # "seed" is no longer written, but an older file may still have
+        # it -- restoring it there is harmless (if not genuinely
+        # meaningful; see _SERIALIZE_ATTRS's own note on why it's dropped).
+        seed = attr_dict.get("seed")
+        encoded_tableau = attr_dict["_stim_state_vector"]
 
-        obj = cls(
-            _Tableau.from_state_vector(state_vector, endian="little"),
-            qubit_labels=qubit_labels,
-        )
+        if isinstance(encoded_tableau, np.ndarray):
+            # A dense state vector, from a file written before this class
+            # stored the tableau's own compact bit-packed form directly.
+            tableau = _Tableau.from_state_vector(encoded_tableau, endian="little")
+        else:
+            x2x, x2z, z2x, z2z, x_signs, z_signs = encoded_tableau
+            tableau = _Tableau.from_numpy(
+                x2x=x2x, x2z=x2z, z2x=z2x, z2z=z2z, x_signs=x_signs, z_signs=z_signs
+            )
+
+        obj = cls(tableau, qubit_labels=qubit_labels)
         obj.reset_seed(seed)
         return obj

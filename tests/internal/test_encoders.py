@@ -991,6 +991,37 @@ class TestHDF5Collapse:
                 decoded = HDF5Encoder.decode_iterable(root_group, decode_cache=decode_cache) # type: ignore
                 assert decoded == elements
 
+    def test_second_reference_to_array_containing_object_collapses_once_registered(self, make_temp_path):
+        """A shared, array-containing, cache-eligible object's first
+        occurrence (checked, and forced into its own real group, before
+        anything has registered it in the cache) must not affect a later
+        reference to that exact same object once it *is* registered -- a
+        second reference, checked after the first one has actually been
+        encoded, must correctly collapse into the shared blob rather than
+        also getting its own real group."""
+        shared = MockSerializableWithArray(name="shared", data=np.array([1.0, 2.0]))
+        elements = [shared, "an array-free sibling", shared]
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                root_group = h5_file.create_group("root")
+                encode_cache = {}
+                HDF5Encoder.encode_iterable(elements, h5_group=root_group, encode_cache=encode_cache)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                root_group = h5_file["root"]
+                list_group = root_group["iterable"]
+                # Only the first, genuine occurrence of "shared" needs a
+                # real group; the array-free string and the second
+                # reference to the now-registered "shared" both fold into
+                # the shared blob.
+                assert set(list_group.keys()) == {"0", _COLLAPSED_BLOB_NAME}
+
+                decode_cache = {}
+                decoded = HDF5Encoder.decode_iterable(root_group, decode_cache=decode_cache) # type: ignore
+                assert decoded == elements
+                assert decoded[0] is decoded[2]
+
     def test_collapsed_blob_respects_gzip_threshold(self, make_temp_path):
         """A collapsed blob's raw JSON text is only gzip-compressed once it
         reaches `_GZIP_MIN_BYTES` -- below that, compression reliably costs
