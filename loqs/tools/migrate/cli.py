@@ -13,16 +13,17 @@ resolve/rewrite logic lives there, reusable without going through a
 subprocess at all.
 
 ```
-loqs-migrate source <path> [--dry-run] [--no-backup]
-loqs-migrate check <path>       # detect-only, no rewrite; for CI/pre-flight
+loqs-migrate <path> [--dry-run] [--no-backup]
 ```
 
-`<path>` may be a single file or a directory (walked recursively for
-`.py`/`.ipynb`/`.md` files). A `.py` file is migrated with
-[](api:migrate_source); a `.md` file is treated as a MyST Markdown
+Rewriting in place is the default action; `--dry-run` instead only
+reports what would happen, never touching a file -- useful as a CI/
+pre-flight gate. `<path>` may be a single file or a directory (walked
+recursively for `.py`/`.ipynb`/`.md` files). A `.py` file is migrated
+with [](api:migrate_source); a `.md` file is treated as a MyST Markdown
 notebook and migrated with [](api:migrate_notebook_source); a `.ipynb`
 file is migrated cell-by-cell with [](api:migrate_ipynb_source). There
-is deliberately no `loqs-migrate data <file>` subcommand: migrating an
+is deliberately no `loqs-migrate data <file>` option: migrating an
 already-serialized file is free via [](api:Serializable)'s own decode
 compatibility and an ordinary `program.write(path)` round-trip, needing
 no bespoke tool.
@@ -33,13 +34,13 @@ when there's nothing to report -- otherwise a scan that finds nothing to
 do is indistinguishable from one that silently failed to look at the
 right files.
 
-`source` backs up every file it actually rewrites to a sibling `<name>.bak`
-before writing, unless `--no-backup` is given; `--dry-run` never writes
-anything, so no backup is made either. An existing `.bak` from a previous
-run is silently overwritten, since it's meant as a one-shot undo for the
-rewrite about to happen, not a growing history.
+Rewriting a file backs it up to a sibling `<name>.bak` first, unless
+`--no-backup` is given; `--dry-run` never writes anything, so no backup
+is made either. An existing `.bak` from a previous run is silently
+overwritten, since it's meant as a one-shot undo for the rewrite about to
+happen, not a growing history.
 
-FUTURE WORK: wiring `loqs-migrate check` into LoQS's own CI as a gate
+FUTURE WORK: wiring `loqs-migrate --dry-run` into LoQS's own CI as a gate
 against new legacy patterns creeping back in would be low-cost and high-
 value once real-world use has proven the detection half solid, but isn't
 done as part of this tool's initial version.
@@ -82,10 +83,10 @@ def _backup_path(path: Path) -> Path:
 
 
 def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
-    """Shared implementation for both subcommands. Returns a process exit
-    code: 0 if nothing needed attention, 1 if anything was flagged for
-    manual review (whether or not anything else was also rewritten), 2 on
-    a file-level error."""
+    """The CLI's actual implementation, shared by both write and
+    `--dry-run` modes. Returns a process exit code: 0 if nothing needed
+    attention, 1 if anything was flagged for manual review (whether or
+    not anything else was also rewritten), 2 on a file-level error."""
     any_manual_review = False
     any_error = False
     changed_files = 0
@@ -140,14 +141,6 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
     return 0
 
 
-def _cmd_source(args: argparse.Namespace) -> int:
-    return _run(args.paths, write=not args.dry_run, backup=not args.no_backup)
-
-
-def _cmd_check(args: argparse.Namespace) -> int:
-    return _run(args.paths, write=False)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loqs-migrate",
@@ -155,25 +148,21 @@ def build_parser() -> argparse.ArgumentParser:
             "Rewrite .py/.ipynb/MyST Markdown source still using pre-1.2 LoQS APIs."
         ),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
+    parser.add_argument(
         "paths",
         nargs="+",
         type=Path,
         help="File(s) or directory/directories to scan.",
     )
-
-    source_parser = subparsers.add_parser(
-        "source", parents=[common], help="Rewrite files in place."
-    )
-    source_parser.add_argument(
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Report what would be rewritten without touching any file.",
+        help=(
+            "Report what would be rewritten without touching any file. "
+            "Useful as a CI/pre-flight gate."
+        ),
     )
-    source_parser.add_argument(
+    parser.add_argument(
         "--no-backup",
         action="store_true",
         help=(
@@ -181,21 +170,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Backing up is the default."
         ),
     )
-    source_parser.set_defaults(func=_cmd_source)
-
-    check_parser = subparsers.add_parser(
-        "check",
-        parents=[common],
-        help="Detect-only; never rewrites. Useful as a CI/pre-flight gate.",
-    )
-    check_parser.set_defaults(func=_cmd_check)
-
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    return _run(args.paths, write=not args.dry_run, backup=not args.no_backup)
 
 
 if __name__ == "__main__":

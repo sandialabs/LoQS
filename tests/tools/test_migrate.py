@@ -200,11 +200,27 @@ class TestMigrateInstructionLabels:
         )
         assert result.manual_review == []
 
-    def test_non_literal_kwargs_is_flagged(self):
+    def test_non_literal_kwargs_is_spliced_via_double_star(self):
+        """A non-literal `inst_kwargs` (or a literal dict whose keys
+        aren't all string literals) is spliced in whole via `**` instead
+        of being flagged -- correct regardless of its actual keys, since
+        a `**`-unpack is behaviorally identical to the old dict."""
         src = 'InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
         result = migrate_instruction_labels(src)
-        assert not result.changed
-        assert "literal dict" in result.manual_review[0].message
+        assert result.changed
+        assert not result.manual_review
+        assert result.source == (
+            'InstructionLabel("Increment", patch_label="L0", **extra_kwargs)\n'
+        )
+
+    def test_bare_tuple_with_non_literal_kwargs_is_spliced_via_double_star(self):
+        src = '("Increment", "L0", (), extra_kwargs)\n'
+        result = migrate_instruction_labels(src)
+        assert result.changed
+        assert not result.manual_review
+        assert result.source == (
+            '{"instruction": "Increment", **extra_kwargs, "patch_label": "L0"}\n'
+        )
 
     def test_splat_call_is_flagged(self):
         src = "InstructionLabel(*label_tuple)\n"
@@ -249,7 +265,7 @@ class TestMigrateInstructionLabels:
         after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
         result = migrate_instruction_labels(before)
         assert result.source == after
-        assert len(result.manual_review) == 2
+        assert len(result.manual_review) == 1
 
     def test_manual_review_line_survives_an_earlier_line_collapse(self):
         """A multi-line call rewritten onto a single line shortens the
@@ -260,16 +276,14 @@ class TestMigrateInstructionLabels:
             'label_kwargs_only = InstructionLabel(\n'
             '    "Increment", "L0", (), {"increment_by": 2}\n'
             ')\n'
-            'unresolvable_kwargs = InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
+            'splat_call = InstructionLabel(*label_tuple)\n'
         )
         result = migrate_instruction_labels(src)
         assert result.changed
         lines = result.source.splitlines()
         assert len(result.manual_review) == 1
         item = result.manual_review[0]
-        assert lines[item.line - 1] == (
-            'unresolvable_kwargs = InstructionLabel("Increment", "L0", (), extra_kwargs)'
-        )
+        assert lines[item.line - 1] == "splat_call = InstructionLabel(*label_tuple)"
 
 
 class TestDetectFlaggedPatterns:
@@ -382,7 +396,7 @@ class TestMigrateNotebookSource:
         source = (
             "```{code-cell} ipython3\n"
             "from loqs.backends.reps import RepTuple\n"
-            "rep = RepTuple(1, 2, 3)\n"
+            "rep_class = RepTuple\n"
             "```\n"
             "\n"
             "```{code-cell} ipython3\n"
@@ -427,7 +441,7 @@ class TestMigrateIpynbSource:
         result = migrate_ipynb_source(before)
         messages = [str(item) for item in result.manual_review]
         assert any("[cell 2]" in m and "RepTuple" in m for m in messages)
-        assert any("[cell 4]" in m and "inst_kwargs" in m for m in messages)
+        assert any("[cell 4]" in m and "splat call" in m for m in messages)
 
     def test_explicit_call_and_bare_tuple_both_rewrite_in_a_cell(self):
         before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
@@ -438,8 +452,13 @@ class TestMigrateIpynbSource:
             '{"instruction": "Increment", "increment_by": 3, "patch_label": "L0"}'
             in cell_source
         )
-        # left untouched, not silently guessed at
-        assert 'InstructionLabel("Increment", "L0", (), extra_kwargs)' in cell_source
+        # a non-literal inst_kwargs still rewrites confidently, via **
+        assert (
+            'InstructionLabel("Increment", patch_label="L0", **extra_kwargs)'
+            in cell_source
+        )
+        # a positional splat, unlike the above, is left untouched, not silently guessed at
+        assert "InstructionLabel(*label_tuple)" in cell_source
 
     def test_source_stored_as_a_single_string_round_trips(self):
         """`nbformat`'s schema also allows a code cell's `source` as one
@@ -475,7 +494,7 @@ class TestMigrateIpynbSource:
                     "metadata": {},
                     "source": [
                         "from loqs.backends.reps import RepTuple\n",
-                        "rep = RepTuple(1, 2, 3)\n",
+                        "rep_class = RepTuple\n",
                     ],
                 },
                 {

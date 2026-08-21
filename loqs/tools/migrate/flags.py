@@ -35,11 +35,12 @@ just name, so guessing a rewrite would be dishonest rather than helpful.
   an identifier reference, so a blind rewrite risks matching unrelated
   text that just happens to contain the same two characters.
 
-`RepTuple`/`STIMDictNoiseModel` real code references are flagged too, but
-via [](api:loqs.tools.migrate.renames)'s own `RENAMES` table (both are
-overridden there to a deleted-outright entry) rather than a pattern here
--- see that module's docstring for why a blind rename would be actively
-wrong for these two specifically.
+`STIMDictNoiseModel` real code references, and any `RepTuple` construction
+[](api:loqs.tools.migrate.reptuple) can't confidently resolve to a concrete
+class, are flagged too, but via [](api:loqs.tools.migrate.renames)'s own
+`RENAMES` table (both are overridden there to a deleted-outright entry)
+rather than a pattern here -- see that module's docstring for why a blind
+rename would be actively wrong for these two specifically.
 """
 
 from __future__ import annotations

@@ -18,12 +18,13 @@ LEGACY_SOURCE = (
     'label = InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
 )
 
-# The rename still rewrites confidently, but the non-literal inst_kwargs
-# can't be spliced as keywords and is left flagged for manual review.
+# The rename still rewrites confidently, but a positional splat call's
+# contents can't be statically resolved and is left flagged for manual
+# review.
 FLAGGED_SOURCE = (
     "from loqs.core.recordables.patchdict import PatchDict\n\n"
     'patches = PatchDict({"L0": None})\n'
-    'label = InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
+    "label = InstructionLabel(*label_tuple)\n"
 )
 
 
@@ -67,51 +68,42 @@ def flagged_ipynb_file(tmp_path):
 
 
 class TestBuildParser:
-    def test_requires_a_subcommand(self):
+    def test_requires_at_least_one_path(self):
         with pytest.raises(SystemExit):
             build_parser().parse_args([])
 
-    def test_source_defaults(self, tmp_path):
-        args = build_parser().parse_args(["source", str(tmp_path)])
-        assert args.command == "source"
+    def test_defaults(self, tmp_path):
+        args = build_parser().parse_args([str(tmp_path)])
         assert args.paths == [tmp_path]
         assert args.dry_run is False
         assert args.no_backup is False
 
-    def test_check_has_no_dry_run_flag(self, tmp_path):
-        args = build_parser().parse_args(["check", str(tmp_path)])
-        assert args.command == "check"
-        assert not hasattr(args, "dry_run")
+    def test_accepts_multiple_paths(self, tmp_path):
+        other = tmp_path / "other"
+        args = build_parser().parse_args([str(tmp_path), str(other)])
+        assert args.paths == [tmp_path, other]
 
 
 class TestMainAsLibraryCall:
     """Exercises `main()` directly (in-process), for fast, precise
     exit-code/side-effect assertions."""
 
-    def test_check_never_writes_and_reports_nonzero(self, flagged_file):
+    def test_dry_run_never_writes_and_reports_nonzero(self, flagged_file):
         before = flagged_file.read_text(encoding="utf-8")
-        code = main(["check", str(flagged_file)])
-        assert code == 1  # the non-literal inst_kwargs candidate
+        code = main(["--dry-run", str(flagged_file)])
+        assert code == 1  # the positional splat call
         assert flagged_file.read_text(encoding="utf-8") == before
 
-    def test_source_dry_run_never_writes(self, flagged_file):
-        before = flagged_file.read_text(encoding="utf-8")
-        code = main(["source", "--dry-run", str(flagged_file)])
-        assert code == 1
-        assert flagged_file.read_text(encoding="utf-8") == before
-
-    def test_source_writes_confident_rewrites(self, flagged_file):
-        code = main(["source", str(flagged_file)])
-        assert code == 1  # the non-literal inst_kwargs candidate still flagged
+    def test_writes_confident_rewrites(self, flagged_file):
+        code = main([str(flagged_file)])
+        assert code == 1  # the positional splat call still flagged
         rewritten = flagged_file.read_text(encoding="utf-8")
         assert "PatchLayout" in rewritten
         assert "PatchDict" not in rewritten
-        assert "extra_kwargs" in rewritten  # left untouched, not silently dropped
+        assert "InstructionLabel(*label_tuple)" in rewritten  # left untouched, not silently dropped
 
-    def test_source_fully_resolves_when_nothing_needs_manual_review(
-        self, legacy_file
-    ):
-        code = main(["source", str(legacy_file)])
+    def test_fully_resolves_when_nothing_needs_manual_review(self, legacy_file):
+        code = main([str(legacy_file)])
         assert code == 0
         rewritten = legacy_file.read_text(encoding="utf-8")
         assert "increment_by=2" in rewritten
@@ -119,29 +111,29 @@ class TestMainAsLibraryCall:
     def test_clean_file_exits_zero(self, tmp_path):
         path = tmp_path / "clean.py"
         path.write_text("x = 1\n", encoding="utf-8")
-        assert main(["check", str(path)]) == 0
-        assert main(["source", str(path)]) == 0
+        assert main(["--dry-run", str(path)]) == 0
+        assert main([str(path)]) == 0
 
     def test_directory_is_walked_for_py_ipynb_and_md_files(self, tmp_path):
         (tmp_path / "a.py").write_text(FLAGGED_SOURCE, encoding="utf-8")
         (tmp_path / "b.ipynb").write_text(_notebook_with_cell(FLAGGED_SOURCE), encoding="utf-8")
         (tmp_path / "c.txt").write_text(FLAGGED_SOURCE, encoding="utf-8")  # ignored, wrong suffix
-        code = main(["check", str(tmp_path)])
+        code = main(["--dry-run", str(tmp_path)])
         assert code == 1
 
     def test_no_matching_files_is_an_error(self, tmp_path):
         (tmp_path / "b.txt").write_text("not python\n", encoding="utf-8")
-        assert main(["check", str(tmp_path)]) == 2
+        assert main(["--dry-run", str(tmp_path)]) == 2
 
-    def test_ipynb_check_flags_without_writing(self, flagged_ipynb_file):
+    def test_ipynb_dry_run_flags_without_writing(self, flagged_ipynb_file):
         before = flagged_ipynb_file.read_text(encoding="utf-8")
-        code = main(["check", str(flagged_ipynb_file)])
+        code = main(["--dry-run", str(flagged_ipynb_file)])
         assert code == 1
         assert flagged_ipynb_file.read_text(encoding="utf-8") == before
 
-    def test_ipynb_source_rewrites_in_place(self, flagged_ipynb_file):
-        code = main(["source", str(flagged_ipynb_file)])
-        assert code == 1  # the non-literal inst_kwargs candidate still flagged
+    def test_ipynb_rewrites_in_place(self, flagged_ipynb_file):
+        code = main([str(flagged_ipynb_file)])
+        assert code == 1  # the positional splat call still flagged
         rewritten = json.loads(flagged_ipynb_file.read_text(encoding="utf-8"))
         cell_source = "".join(rewritten["cells"][0]["source"])
         assert "PatchLayout" in cell_source
@@ -152,45 +144,40 @@ class TestMainAsLibraryCall:
         good.write_text("x = 1\n", encoding="utf-8")
         bad = tmp_path / "bad.py"
         bad.write_text("this is not ( valid python\n", encoding="utf-8")
-        code = main(["check", str(tmp_path)])
+        code = main(["--dry-run", str(tmp_path)])
         assert code == 2
 
 
 class TestBackup:
-    """`source` backs up a file it actually rewrites to `<name>.bak` by
+    """Rewriting backs up a file it actually rewrites to `<name>.bak` by
     default, unless `--no-backup`/`--dry-run` is given."""
 
     def test_backs_up_before_rewriting(self, flagged_file):
         before = flagged_file.read_text(encoding="utf-8")
         backup_file = flagged_file.with_name(flagged_file.name + ".bak")
 
-        code = main(["source", str(flagged_file)])
+        code = main([str(flagged_file)])
 
-        assert code == 1  # the non-literal inst_kwargs candidate still flagged
+        assert code == 1  # the positional splat call still flagged
         assert backup_file.exists()
         assert backup_file.read_text(encoding="utf-8") == before
         assert flagged_file.read_text(encoding="utf-8") != before
 
     def test_no_backup_flag_skips_backup(self, flagged_file):
         backup_file = flagged_file.with_name(flagged_file.name + ".bak")
-        main(["source", "--no-backup", str(flagged_file)])
+        main(["--no-backup", str(flagged_file)])
         assert not backup_file.exists()
 
     def test_dry_run_never_creates_a_backup(self, flagged_file):
         backup_file = flagged_file.with_name(flagged_file.name + ".bak")
-        main(["source", "--dry-run", str(flagged_file)])
+        main(["--dry-run", str(flagged_file)])
         assert not backup_file.exists()
 
     def test_no_backup_for_a_file_that_needs_no_changes(self, tmp_path):
         path = tmp_path / "clean.py"
         path.write_text("x = 1\n", encoding="utf-8")
         backup_file = path.with_name(path.name + ".bak")
-        main(["source", str(path)])
-        assert not backup_file.exists()
-
-    def test_check_never_creates_a_backup(self, flagged_file):
-        backup_file = flagged_file.with_name(flagged_file.name + ".bak")
-        main(["check", str(flagged_file)])
+        main([str(path)])
         assert not backup_file.exists()
 
     def test_existing_backup_is_overwritten(self, legacy_file):
@@ -198,7 +185,7 @@ class TestBackup:
         backup_file.write_text("stale content from a previous run\n", encoding="utf-8")
         original = legacy_file.read_text(encoding="utf-8")
 
-        main(["source", str(legacy_file)])
+        main([str(legacy_file)])
 
         assert backup_file.read_text(encoding="utf-8") == original
 
@@ -212,24 +199,24 @@ class TestSummaryLine:
         path = tmp_path / "clean.py"
         path.write_text("x = 1\n", encoding="utf-8")
 
-        code = main(["check", str(path)])
+        code = main(["--dry-run", str(path)])
 
         assert code == 0
         out = capsys.readouterr().out
         assert "1 file scanned: 0 would be rewritten, 0 flagged" in out
 
-    def test_check_reports_would_be_rewritten(self, legacy_file, capsys):
-        main(["check", str(legacy_file)])
+    def test_dry_run_reports_would_be_rewritten(self, legacy_file, capsys):
+        main(["--dry-run", str(legacy_file)])
         out = capsys.readouterr().out
         assert "1 file scanned: 1 would be rewritten, 0 flagged" in out
 
-    def test_source_reports_rewritten(self, legacy_file, capsys):
-        main(["source", str(legacy_file)])
+    def test_reports_rewritten(self, legacy_file, capsys):
+        main([str(legacy_file)])
         out = capsys.readouterr().out
         assert "1 file scanned: 1 rewritten, 0 flagged" in out
 
     def test_flagged_file_reports_nonzero_flagged_count(self, flagged_file, capsys):
-        main(["check", str(flagged_file)])
+        main(["--dry-run", str(flagged_file)])
         out = capsys.readouterr().out
         assert "1 file scanned: 1 would be rewritten, 1 flagged" in out
 
@@ -237,7 +224,7 @@ class TestSummaryLine:
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "b.py").write_text("y = 2\n", encoding="utf-8")
 
-        main(["check", str(tmp_path)])
+        main(["--dry-run", str(tmp_path)])
 
         out = capsys.readouterr().out
         assert "2 files scanned: 0 would be rewritten, 0 flagged" in out
@@ -253,18 +240,16 @@ class TestConsoleScriptSubprocess:
         if executable is None:
             pytest.skip("loqs-migrate console script not installed")
         result = subprocess.run(
-            [executable, "check", str(flagged_file)],
+            [executable, "--dry-run", str(flagged_file)],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 1
-        assert "InstructionLabel" in result.stdout or "literal dict" in (
-            result.stdout
-        )
+        assert "splat call" in result.stdout
 
     def test_module_invocation_matches_console_script(self, flagged_file):
         result = subprocess.run(
-            [sys.executable, "-m", "loqs.tools.migrate.cli", "check", str(flagged_file)],
+            [sys.executable, "-m", "loqs.tools.migrate.cli", "--dry-run", str(flagged_file)],
             capture_output=True,
             text=True,
         )

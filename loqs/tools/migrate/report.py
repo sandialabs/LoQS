@@ -127,27 +127,41 @@ def annotate_manual_review(
         for item in manual_review
     }
 
-    # Every item's flagged code line shifts down by its own comment's
-    # line count plus every earlier item's, since all of those insert
-    # above it in the final text.
-    remapped: list[ManualReviewItem] = []
+    # Two items (e.g. from two independent passes) can flag the exact
+    # same original line -- grouped here so their comments stack as one
+    # combined insertion, rather than each being applied independently
+    # and misplacing the second relative to the first.
+    items_by_line: dict[int, list[ManualReviewItem]] = {}
+    for item in manual_review:
+        items_by_line.setdefault(item.line, []).append(item)
+
+    # Every line's own flagged code shifts down by that line's own
+    # combined comment-line count plus every earlier line's, since all
+    # of those insert above it in the final text. Items sharing a line
+    # necessarily end up reporting the same (correct) final position.
+    final_line_for: dict[int, int] = {}
     cumulative_shift = 0
-    for item in sorted(manual_review, key=lambda i: i.line):
-        cumulative_shift += len(wrapped_by_id[id(item)])
-        remapped.append(ManualReviewItem(line=item.line + cumulative_shift, message=item.message))
+    for line in sorted(items_by_line):
+        cumulative_shift += sum(len(wrapped_by_id[id(i)]) for i in items_by_line[line])
+        final_line_for[line] = line + cumulative_shift
+    remapped = [
+        ManualReviewItem(line=final_line_for[item.line], message=item.message)
+        for item in manual_review
+    ]
 
     # Mutate from the bottom up so an earlier insertion never invalidates
     # a not-yet-processed (larger) original line index.
     lines = source.splitlines(keepends=True)
-    for item in sorted(manual_review, key=lambda i: i.line, reverse=True):
-        if not (1 <= item.line <= len(lines)):
+    for line in sorted(items_by_line, reverse=True):
+        if not (1 <= line <= len(lines)):
             continue
-        target_line = lines[item.line - 1]
+        target_line = lines[line - 1]
         indent = target_line[: len(target_line) - len(target_line.lstrip())]
         comment_lines = [
             f"{indent}{_MANUAL_REVIEW_COMMENT_PREFIX}{text}\n"
+            for item in items_by_line[line]
             for text in wrapped_by_id[id(item)]
         ]
-        lines[item.line - 1 : item.line - 1] = comment_lines
+        lines[line - 1 : line - 1] = comment_lines
 
     return "".join(lines), remapped

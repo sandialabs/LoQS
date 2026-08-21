@@ -19,13 +19,17 @@ custom `apply_fn`/`map_qubits_fn` that will be frozen into future
 serialized data -- so it stops relying on removed/renamed APIs going
 forward.
 
-Three independent passes, run in order, together making up [](api:migrate_source):
+Four independent passes, run in order, together making up [](api:migrate_source):
 
-1. [](api:loqs.tools.migrate.renames): straight `(module, name)` renames,
-   always confidently rewritable.
-2. [](api:loqs.tools.migrate.labels): pre-1.2 positional `InstructionLabel`
+1. [](api:loqs.tools.migrate.reptuple): confidently-resolvable
+   `RepTuple(...)` construction calls, rewritten to the concrete
+   `OperationRep` subclass they actually meant.
+2. [](api:loqs.tools.migrate.renames): straight `(module, name)` renames,
+   always confidently rewritable -- including anything `reptuple`
+   couldn't resolve, still bare `RepTuple` references at this point.
+3. [](api:loqs.tools.migrate.labels): pre-1.2 positional `InstructionLabel`
    construction, rewritten to modern keyword form.
-3. [](api:loqs.tools.migrate.flags): patterns whose replacement is a
+4. [](api:loqs.tools.migrate.flags): patterns whose replacement is a
    semantic change, not a pure rename (`.cast()`, `include_idles=`, an
    `"Iz"` string) -- always flagged, never auto-rewritten.
 
@@ -42,6 +46,7 @@ from __future__ import annotations
 from loqs.tools.migrate.flags import detect_flagged_patterns
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.renames import rewrite_renames
+from loqs.tools.migrate.reptuple import rewrite_reptuple_construction
 from loqs.tools.migrate.report import (
     ManualReviewItem,
     MigrationResult,
@@ -54,6 +59,21 @@ __all__ = [
     "MigrationResult",
     "migrate_source",
 ]
+
+
+def _chain(result: MigrationResult, next_result: MigrationResult) -> MigrationResult:
+    """Combine `result` with the next pass's own result over `result`'s
+    (already-updated) source, remapping `result`'s own manual-review
+    lines forward in case `next_result` changed the surrounding line
+    count."""
+    return MigrationResult(
+        source=next_result.source,
+        changed=result.changed or next_result.changed,
+        manual_review=(
+            remap_manual_review(result.source, next_result.source, result.manual_review)
+            + next_result.manual_review
+        ),
+    )
 
 
 def migrate_source(source: str) -> MigrationResult:
@@ -76,18 +96,9 @@ def migrate_source(source: str) -> MigrationResult:
     file itself still documents what needs a look even without this
     call's own return value kept around.
     """
-    rename_result = rewrite_renames(source)
-    label_result = migrate_instruction_labels(rename_result.source)
-    result = MigrationResult(
-        source=label_result.source,
-        changed=rename_result.changed or label_result.changed,
-        manual_review=(
-            remap_manual_review(
-                rename_result.source, label_result.source, rename_result.manual_review
-            )
-            + label_result.manual_review
-        ),
-    )
+    result = rewrite_reptuple_construction(source)
+    result = _chain(result, rewrite_renames(result.source))
+    result = _chain(result, migrate_instruction_labels(result.source))
     result.manual_review.extend(detect_flagged_patterns(result.source))
     if result.changed:
         result.source, result.manual_review = annotate_manual_review(

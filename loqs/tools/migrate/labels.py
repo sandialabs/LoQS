@@ -35,10 +35,17 @@ carried through verbatim under the reserved
 [](api:LEGACY_PENDING_INST_ARGS) key, the same mechanism
 [](api:QuantumProgram._label_kwargs) already uses to remap a pending
 positional-args stash once the real instruction is available at run
-time -- no static lookup needed either way. Only `inst_kwargs` must be a
-literal dict with string-literal keys, since its individual entries are
-spliced in as real keyword arguments; anything else is flagged for
-manual review rather than guessed.
+time -- no static lookup needed either way.
+
+`inst_kwargs` is spliced in as individual named keyword arguments (e.g.
+`increment_by=2`) whenever it's a literal dict with string-literal keys,
+since that's the more readable result; otherwise it's spliced in whole
+via `**inst_kwargs` -- a `**`-unpack is behaviorally identical to the old
+dict regardless of what keys it actually holds, so no case is left
+unresolvable here. The one real behavior change from the old dict-based
+call: if `inst_kwargs` and an explicit `patch_label`/keyword argument
+disagree on a key, Python raises `TypeError` at call time instead of one
+silently overriding the other -- preferable to guessing which was meant.
 """
 
 from __future__ import annotations
@@ -136,12 +143,19 @@ def _build_call(
     instruction_expr: cst.BaseExpression,
     keyword_args: Mapping[str, cst.BaseExpression],
     extra_args: Sequence[cst.Arg] = (),
+    unpack_expr: cst.BaseExpression | None = None,
 ) -> cst.Call:
+    # `unpack_expr` goes after `keyword_args` (unlike `_build_dict` below):
+    # a real call raises on a genuine key conflict regardless of order, so
+    # this is free to match the old tuple's own (patch_label, ..., kwargs)
+    # ordering rather than needing to encode any override precedence.
     args = [cst.Arg(value=instruction_expr)]
     for key, value in keyword_args.items():
         args.append(
             cst.Arg(keyword=cst.Name(key), value=value, equal=_NO_SPACE_EQUAL)
         )
+    if unpack_expr is not None:
+        args.append(cst.Arg(value=unpack_expr, star="**"))
     # Any `**kwargs`-style unpack from the original call is carried
     # through verbatim, last, matching its original precedence.
     args.extend(
@@ -153,16 +167,25 @@ def _build_call(
 def _build_dict(
     instruction_expr: cst.BaseExpression,
     keyword_args: Mapping[str, cst.BaseExpression],
+    unpack_expr: cst.BaseExpression | None = None,
 ) -> cst.Dict:
     """A bare `{"instruction": ..., **kwargs}` dict, matching
     `InstructionLabel`'s own modern raw-dict shape -- used instead of an
     explicit `InstructionLabel(...)` call so a rewritten bare tuple never
-    needs a new `InstructionLabel` import added to the file."""
+    needs a new `InstructionLabel` import added to the file.
+
+    `unpack_expr` goes *before* `keyword_args` here, unlike `_build_call`:
+    a dict literal silently lets the later key win on a collision, so
+    `patch_label` (in `keyword_args`) has to come after it to keep
+    overriding a same-named key the way it always has.
+    """
     elements = [
         cst.DictElement(
             key=cst.SimpleString('"instruction"'), value=instruction_expr
         )
     ]
+    if unpack_expr is not None:
+        elements.append(cst.StarredDictElement(value=unpack_expr))
     for key, value in keyword_args.items():
         elements.append(
             cst.DictElement(key=cst.SimpleString(f'"{key}"'), value=value)
@@ -207,14 +230,13 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         introduce a new `InstructionLabel` reference the file may not
         already import)."""
         literal_kwargs = _literal_str_keyed_dict(inst_kwargs_expr)
+        unpack_expr = None
         if literal_kwargs is None:
-            self._flag(
-                original_node,
-                "inst_kwargs isn't a literal dict with string-literal "
-                "keys -- can't confidently splice its entries as keyword "
-                "arguments; migrate by hand.",
-            )
-            return None
+            # Not a literal dict (or not one with exclusively string-literal
+            # keys) -- splice the whole expression in via `**` instead of
+            # giving up, since that's correct regardless of its actual keys.
+            literal_kwargs = {}
+            unpack_expr = inst_kwargs_expr
 
         remapped = dict(literal_kwargs)
         if patch_label_expr is not None and not _is_none(patch_label_expr):
@@ -226,8 +248,10 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             remapped[LEGACY_PENDING_INST_ARGS] = inst_args_expr
         self.changed = True
         if func is None:
-            return _build_dict(instruction_expr, remapped)
-        return _build_call(func, instruction_expr, remapped, extra_args)
+            return _build_dict(instruction_expr, remapped, unpack_expr=unpack_expr)
+        return _build_call(
+            func, instruction_expr, remapped, extra_args, unpack_expr=unpack_expr
+        )
 
     def leave_Call(
         self, original_node: cst.Call, updated_node: cst.Call
