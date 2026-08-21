@@ -24,6 +24,7 @@ docs/**/*.json.gz
 docs/.refcache
 site/
 docs/_gen_md
+/notebook-output/
 
 checkpoints/
 

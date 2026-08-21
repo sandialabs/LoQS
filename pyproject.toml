@@ -59,6 +59,7 @@ dev = [
 ]
 docs = [
     "griffelib==2.0.2",
+    "ipykernel",
     "jupytext",
     "mkdocs==1.6.1",
     "mkdocs-autorefs~=1.4.4",
@@ -70,6 +71,7 @@ docs = [
     "mkdocs-simple-hooks~=0.1.5",
     "mkdocstrings==1.0.3",
     "mkdocstrings-python==2.0.3",
+    "nbclient",
     "pymdown-extensions~=10.21.2",
     "pypandoc==1.17",
     "pypandoc-binary==1.17",
