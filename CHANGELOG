@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## [Unreleased Changes]
+
+### New
+- **`codepack_7_1_3_multipatch`, a transversal logical CX for the [[7,1,3]] codepack (@sserita):** One physical `Gcnot` per aligned data-qubit pair between two [](api:codepack_7_1_3_quantinuum2021) patches, plus a bookkeeping instruction conjugating both patches' `logical_pauli_frame` through the standard CNOT rule. Unlike the Surface-17 multi-patch codepack's transversal CNOT, this does not yet correct `latest_syndrome` for the syndrome coupling a transversal CX introduces between the two patches -- only non-FT measurements, or a single FT logical measurement with no intervening QEC round, are currently safe to use on either patch afterward.
+
 ## [1.2] - 2026-08-21
 
 ### New
