@@ -23,9 +23,11 @@ _EXPECTED_EXCEPTIONS = {
     # This tool's own source: `.cast(`/`"Iz"` appear as real regex
     # patterns and report-message text (loqs/tools/migrate/flags.py), or
     # are named in the package's own summary docstring
-    # (loqs/tools/migrate/__init__.py) -- not leftover legacy code.
+    # (loqs/tools/migrate/__init__.py) or `--rename_Iz`'s own help text
+    # (loqs/tools/migrate/cli.py) -- not leftover legacy code.
     "loqs/tools/migrate/flags.py",
     "loqs/tools/migrate/__init__.py",
+    "loqs/tools/migrate/cli.py",
     # This tool's own golden-file test fixtures: deliberately contain
     # every legacy pattern on purpose (see tests/tools/test_migrate.py).
     "tests/tools/migrate_fixtures",
@@ -52,6 +54,11 @@ _EXPECTED_EXCEPTIONS = {
     "tests/internal/test_internal_legacy.py",
     "tests/backends/model/test_pygstimodel.py",
     "tests/core/test_quantumprogram.py",
+    # This tool's own test suite: directly exercises `"Iz"` detection and
+    # `--rename_Iz`'s rewrite, both of which need the literal old string
+    # as real test input.
+    "tests/tools/test_migrate.py",
+    "tests/tools/test_migrate_cli.py",
     # Tests exercising STIMDictNoiseModel's legacy construction shim
     # directly, which requires deliberately constructing it by name.
     "tests/backends/model/test_dictmodel.py",

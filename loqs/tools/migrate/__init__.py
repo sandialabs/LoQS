@@ -31,7 +31,14 @@ Four independent passes, run in order, together making up [](api:migrate_source)
    construction, rewritten to modern keyword form.
 4. [](api:loqs.tools.migrate.flags): patterns whose replacement is a
    semantic change, not a pure rename (`.cast()`, `include_idles=`, an
-   `"Iz"` string) -- always flagged, never auto-rewritten.
+   `"Iz"` string) -- flagged by default, never guessed at automatically.
+
+Two of the above are opt-in exceptions to "never guessed at automatically",
+each gated behind its own [](api:migrate_source) keyword argument (and the
+CLI's matching `--rename_Iz`/`--rename_patch_label` flags): rewriting a
+bare `"Iz"` string to `"Imrz"` (pass 4), and renaming a colliding
+`inst_kwargs["patch_label"]` key (pass 3) -- both still risk being wrong
+in a way this tool can't verify itself, which is why they default to off.
 
 A pass's own manual-review items are always relative to *its own* input
 line numbering; since an earlier pass may itself change the surrounding
@@ -43,7 +50,7 @@ in the final result is accurate relative to the file actually written.
 
 from __future__ import annotations
 
-from loqs.tools.migrate.flags import detect_flagged_patterns
+from loqs.tools.migrate.flags import detect_flagged_patterns, rewrite_iz_literal
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.renames import rewrite_renames
 from loqs.tools.migrate.reptuple import rewrite_reptuple_construction
@@ -76,7 +83,9 @@ def _chain(result: MigrationResult, next_result: MigrationResult) -> MigrationRe
     )
 
 
-def migrate_source(source: str) -> MigrationResult:
+def migrate_source(
+    source: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+) -> MigrationResult:
     """Run every migration pass over `source`, returning the combined result.
 
     Parameters
@@ -84,6 +93,21 @@ def migrate_source(source: str) -> MigrationResult:
     source:
         The full text of a `.py` file (or an extracted MyST code cell --
         see [](api:loqs.tools.migrate.notebook)).
+
+    rename_iz:
+        If `True`, confidently rewrite every bare `"Iz"`/`'Iz'` string
+        literal to `"Imrz"`/`'Imrz'` (see
+        [](api:loqs.tools.migrate.flags.rewrite_iz_literal)) instead of
+        only flagging it. Off by default, since a blind string rewrite
+        can't rule out an unrelated match.
+
+    rename_patch_label:
+        If given, rewrite a legacy `InstructionLabel`'s colliding
+        `inst_kwargs["patch_label"]` key (see
+        [](api:loqs.tools.migrate.labels)) to this name instead of only
+        flagging it. Still flagged either way, as a reminder that the
+        corresponding `Instruction`'s `apply_fn` parameter needs the same
+        rename by hand.
 
     Returns
     -------
@@ -98,8 +122,13 @@ def migrate_source(source: str) -> MigrationResult:
     """
     result = rewrite_reptuple_construction(source)
     result = _chain(result, rewrite_renames(result.source))
-    result = _chain(result, migrate_instruction_labels(result.source))
-    result.manual_review.extend(detect_flagged_patterns(result.source))
+    result = _chain(
+        result,
+        migrate_instruction_labels(result.source, rename_patch_label=rename_patch_label),
+    )
+    if rename_iz:
+        result = _chain(result, rewrite_iz_literal(result.source))
+    result.manual_review.extend(detect_flagged_patterns(result.source, rename_iz=rename_iz))
     if result.changed:
         result.source, result.manual_review = annotate_manual_review(
             result.source, result.manual_review

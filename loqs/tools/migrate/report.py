@@ -23,14 +23,34 @@ class ManualReviewItem:
     auto-rewrite, needing a human to look at it instead."""
 
     line: int
-    """1-indexed line number the item starts at."""
+    """1-indexed line number the item starts at (relative to the cell it
+    was found in, if `cell` is set -- a whole-file line number has no
+    meaningful counterpart in a JSON notebook)."""
 
     message: str
     """A human-readable description of what was found and why it wasn't
     auto-rewritten."""
 
+    cell: int | None = None
+    """1-indexed notebook cell this item was found in, or `None` for a
+    plain `.py`/MyST Markdown file, where `line` alone already locates it
+    in the whole document."""
+
+    kind: str | None = None
+    """A stable category tag for items an opt-in CLI flag can act on
+    (currently `"iz"`/`"patch_label_kwarg"`), used to decide whether to
+    suggest one of those flags at the end of a run; `None` for anything
+    else."""
+
+    @property
+    def location(self) -> str:
+        """A human-readable locator, e.g. `"Line 25"` or `"Cell 8, Line 3"`."""
+        if self.cell is not None:
+            return f"Cell {self.cell}, Line {self.line}"
+        return f"Line {self.line}"
+
     def __str__(self) -> str:
-        return f"line {self.line}: {self.message}"
+        return f"{self.location}: {self.message}"
 
 
 @dataclass
@@ -87,7 +107,9 @@ def remap_manual_review(
         return len(new_lines)  # fell past the end of a shrunk file
 
     return [
-        ManualReviewItem(line=remap(item.line), message=item.message)
+        ManualReviewItem(
+            line=remap(item.line), message=item.message, cell=item.cell, kind=item.kind
+        )
         for item in manual_review
     ]
 
@@ -145,7 +167,12 @@ def annotate_manual_review(
         cumulative_shift += sum(len(wrapped_by_id[id(i)]) for i in items_by_line[line])
         final_line_for[line] = line + cumulative_shift
     remapped = [
-        ManualReviewItem(line=final_line_for[item.line], message=item.message)
+        ManualReviewItem(
+            line=final_line_for[item.line],
+            message=item.message,
+            cell=item.cell,
+            kind=item.kind,
+        )
         for item in manual_review
     ]
 
@@ -165,3 +192,18 @@ def annotate_manual_review(
         lines[line - 1 : line - 1] = comment_lines
 
     return "".join(lines), remapped
+
+
+_REPORT_RULE_WIDTH = 88
+
+
+def format_manual_review_block(label: str, items: Sequence[ManualReviewItem]) -> str:
+    """A `label`-headed block listing `items`, one per line by
+    `location`, bracketed above and below by a horizontal rule -- so a
+    run flagging several files reads as clearly file-by-file rather than
+    one undifferentiated stream of `file:line:` entries.
+    """
+    rule = "=" * _REPORT_RULE_WIDTH
+    lines = [rule, label, rule]
+    lines.extend(f"{item.location}: {item.message}" for item in items)
+    return "\n".join(lines)

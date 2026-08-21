@@ -228,6 +228,70 @@ class TestMigrateInstructionLabels:
         assert not result.changed
         assert "splat call" in result.manual_review[0].message
 
+    def test_colliding_patch_label_kwarg_with_global_resolution_is_flagged(self):
+        """Pre-1.2, a global instruction (positional patch_label is None)
+        could still carry an unrelated `inst_kwargs["patch_label"]` apply_fn
+        kwarg -- the modern single `patch_label` key can't represent both,
+        so this must be flagged rather than silently resolved as per-patch."""
+        src = 'InstructionLabel("Init Something", None, (), {"patch_label": "L0"})\n'
+        result = migrate_instruction_labels(src)
+        assert not result.changed
+        assert "patch_label" in result.manual_review[0].message
+        assert result.manual_review[0].kind == "patch_label_kwarg"
+
+    def test_colliding_patch_label_kwarg_with_per_patch_resolution_is_flagged(self):
+        """Same collision, but with a real per-patch positional patch_label
+        alongside a same-named inst_kwargs entry -- also flagged, since a
+        silent merge would arbitrarily pick a winner either way."""
+        src = 'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
+        result = migrate_instruction_labels(src)
+        assert not result.changed
+        assert "patch_label" in result.manual_review[0].message
+
+    def test_colliding_patch_label_kwarg_in_bare_tuple_is_flagged(self):
+        src = 'tup = ("Init Something", None, (), {"patch_label": "L0"})\n'
+        result = migrate_instruction_labels(src)
+        assert not result.changed
+        assert "patch_label" in result.manual_review[0].message
+
+    def test_rename_patch_label_renames_the_key_and_still_flags(self):
+        """`rename_patch_label` fixes the collision by renaming the
+        colliding inst_kwargs key, but a manual-review item is still
+        emitted -- the corresponding Instruction's apply_fn parameter
+        still needs the same rename by hand, which this tool can't do."""
+        src = 'InstructionLabel("Init Something", None, (), {"patch_label": "L0"})\n'
+        result = migrate_instruction_labels(src, rename_patch_label="new_patch_label")
+        assert result.changed
+        assert (
+            result.source
+            == 'InstructionLabel("Init Something", new_patch_label="L0")\n'
+        )
+        assert len(result.manual_review) == 1
+        assert result.manual_review[0].kind == "patch_label_kwarg"
+        assert "new_patch_label" in result.manual_review[0].message
+
+    def test_rename_patch_label_preserves_real_resolution_slot(self):
+        """The real, non-colliding positional patch_label (resolution
+        scope) is untouched by the rename -- only the colliding
+        inst_kwargs entry is renamed."""
+        src = 'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
+        result = migrate_instruction_labels(src, rename_patch_label="new_patch_label")
+        assert result.changed
+        assert (
+            result.source
+            == 'InstructionLabel("Increment", new_patch_label="L1", patch_label="L0")\n'
+        )
+
+    def test_rename_patch_label_in_bare_tuple(self):
+        src = 'tup = ("Init Something", None, (), {"patch_label": "L0"})\n'
+        result = migrate_instruction_labels(src, rename_patch_label="new_patch_label")
+        assert result.changed
+        assert (
+            result.source
+            == 'tup = {"instruction": "Init Something", "new_patch_label": "L0"}\n'
+        )
+        assert len(result.manual_review) == 1
+
     def test_double_star_kwargs_unpack_is_already_modern(self):
         """A real false positive found by testing against this repo's own
         `builders.py`/`instructionlabel.py`: `InstructionLabel(instruction,
@@ -290,7 +354,19 @@ class TestDetectFlaggedPatterns:
     def test_matches_golden_fixture(self):
         src = FIXTURES.joinpath("flags_before.py").read_text(encoding="utf-8")
         items = detect_flagged_patterns(src)
-        assert [item.line for item in items] == [3, 5, 4, 4]
+        assert [item.line for item in items] == [3, 4, 4, 5]
+
+    def test_iz_item_has_iz_kind(self):
+        src = FIXTURES.joinpath("flags_before.py").read_text(encoding="utf-8")
+        items = detect_flagged_patterns(src)
+        iz_items = [item for item in items if item.kind == "iz"]
+        assert len(iz_items) == 1
+        assert iz_items[0].line == 5
+
+    def test_iz_not_flagged_when_rename_iz_is_true(self):
+        src = FIXTURES.joinpath("flags_before.py").read_text(encoding="utf-8")
+        items = detect_flagged_patterns(src, rename_iz=True)
+        assert not any(item.kind == "iz" for item in items)
 
     def test_no_false_positive_on_ordinary_dict_access(self):
         assert detect_flagged_patterns('x = d["key"]\n') == []
@@ -338,6 +414,24 @@ class TestMigrateSource:
         result = migrate_source(after)
         assert result.source == after
         assert not result.changed
+
+    def test_rename_iz_rewrites_confidently(self):
+        src = 'instrument_name = "Iz"\n'
+        result = migrate_source(src, rename_iz=True)
+        assert result.changed
+        assert result.source == 'instrument_name = "Imrz"\n'
+        assert not result.manual_review
+
+    def test_rename_iz_preserves_single_quote_style(self):
+        src = "instrument_name = 'Iz'\n"
+        result = migrate_source(src, rename_iz=True)
+        assert result.source == "instrument_name = 'Imrz'\n"
+
+    def test_iz_still_flagged_when_rename_iz_is_false(self):
+        src = 'instrument_name = "Iz"\n'
+        result = migrate_source(src)
+        assert not result.changed
+        assert any(item.kind == "iz" for item in result.manual_review)
 
     def test_manual_review_lines_stay_accurate_after_annotation(self):
         """Every reported `manual_review.line` must point at the exact
@@ -439,9 +533,12 @@ class TestMigrateIpynbSource:
     def test_manual_review_items_are_labeled_by_cell(self):
         before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
         result = migrate_ipynb_source(before)
-        messages = [str(item) for item in result.manual_review]
-        assert any("[cell 2]" in m and "RepTuple" in m for m in messages)
-        assert any("[cell 4]" in m and "splat call" in m for m in messages)
+        assert any(
+            item.cell == 2 and "RepTuple" in item.message for item in result.manual_review
+        )
+        assert any(
+            item.cell == 4 and "splat call" in item.message for item in result.manual_review
+        )
 
     def test_explicit_call_and_bare_tuple_both_rewrite_in_a_cell(self):
         before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
@@ -514,7 +611,7 @@ class TestMigrateIpynbSource:
         assert "# LOQS-MIGRATE" in first_cell_source
         assert len(result.manual_review) == 2
         for item in result.manual_review:
-            assert "[cell 1]" in item.message
+            assert item.cell == 1
 
     def test_ipython_magic_line_is_skipped_without_aborting_the_cell(self):
         """A `%matplotlib inline`-style line isn't valid Python on its
@@ -584,7 +681,7 @@ class TestMigrateIpynbSource:
         assert not result.changed
         cell_source = "".join(json.loads(result.source)["cells"][0]["source"])
         assert cell_source == bash_script
-        assert any("cell 1" in item.message for item in result.manual_review)
+        assert any(item.cell == 1 for item in result.manual_review)
 
 
 class TestRenamesTableCoverage:

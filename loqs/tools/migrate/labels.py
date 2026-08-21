@@ -41,11 +41,32 @@ time -- no static lookup needed either way.
 `increment_by=2`) whenever it's a literal dict with string-literal keys,
 since that's the more readable result; otherwise it's spliced in whole
 via `**inst_kwargs` -- a `**`-unpack is behaviorally identical to the old
-dict regardless of what keys it actually holds, so no case is left
-unresolvable here. The one real behavior change from the old dict-based
-call: if `inst_kwargs` and an explicit `patch_label`/keyword argument
-disagree on a key, Python raises `TypeError` at call time instead of one
-silently overriding the other -- preferable to guessing which was meant.
+dict regardless of what keys it actually holds. The one real behavior
+change from the old dict-based call: if `inst_kwargs` and an explicit
+`patch_label`/keyword argument disagree on a key, Python raises
+`TypeError` at call time instead of one silently overriding the other --
+preferable to guessing which was meant.
+
+One case is flagged rather than rewritten by default: pre-1.2, the
+`patch_label` positional slot and a same-named `"patch_label"` entry
+inside `inst_kwargs` were unrelated -- the slot picked global-vs-per-patch
+resolution, while an `inst_kwargs["patch_label"]` was just an ordinary
+apply_fn kwarg with no reserved meaning. The modern dict form has only
+one `"patch_label"` key, read for both purposes at once (see
+`QuantumProgram._resolve_instruction`/`_collect_kwarg`), so merging the
+two could silently change which instruction gets resolved -- when
+`inst_kwargs` is a literal dict that already has a `"patch_label"` key,
+this is flagged instead of guessed. Passing `rename_patch_label` renames
+that colliding key instead of just flagging it, but a manual-review item
+is still emitted either way, since renaming the label's own key alone
+does nothing without also renaming the matching `apply_fn` parameter on
+the corresponding `Instruction` -- a rename this tool can't perform
+itself, since it has no visibility into where or how that `Instruction`
+is defined. A non-literal `inst_kwargs` spliced via `**` can't be checked
+(or rewritten) the same way, since its keys aren't known statically --
+this exact collision can still recur silently at runtime in that case, a
+residual limitation this tool can't close without evaluating the
+expression.
 """
 
 from __future__ import annotations
@@ -196,17 +217,20 @@ def _build_dict(
 class _InstructionLabelRewriter(cst.CSTTransformer):
     METADATA_DEPENDENCIES = (PositionProvider,)
 
-    def __init__(self) -> None:
+    def __init__(self, rename_patch_label: str | None = None) -> None:
         self.changed = False
         self.manual_review: list[ManualReviewItem] = []
+        self._rename_patch_label = rename_patch_label
 
-    def _flag(self, node: cst.CSTNode, message: str) -> None:
+    def _flag(
+        self, node: cst.CSTNode, message: str, *, kind: str | None = None
+    ) -> None:
         # Relative to this transform's own *input* text -- an earlier
         # rewrite elsewhere in the same file can change the line count
         # before this node, so `migrate_instruction_labels` remaps every
         # line here against its actual output before returning.
         line = self.get_metadata(PositionProvider, node).start.line
-        self.manual_review.append(ManualReviewItem(line=line, message=message))
+        self.manual_review.append(ManualReviewItem(line=line, message=message, kind=kind))
 
     def _resolve_and_rewrite(
         self,
@@ -237,6 +261,33 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             # giving up, since that's correct regardless of its actual keys.
             literal_kwargs = {}
             unpack_expr = inst_kwargs_expr
+        elif "patch_label" in literal_kwargs:
+            # Pre-1.2, this positional slot and a same-named inst_kwargs
+            # entry were unrelated (see module docstring) -- the modern
+            # single `patch_label` key can't represent both, so don't
+            # guess which one the merge should keep.
+            if self._rename_patch_label is None:
+                self._flag(
+                    original_node,
+                    "patch_label as an inst_kwarg can't be migrated "
+                    "automatically -- rename it (e.g. 'new_patch_label', as "
+                    "build_patch_creator_instruction does) and update the "
+                    "corresponding Instruction's apply_fn parameter to match.",
+                    kind="patch_label_kwarg",
+                )
+                return None
+            # Renaming the label's own key is only half the fix -- flag it
+            # regardless, since the matching Instruction's apply_fn
+            # parameter still needs the same rename by hand.
+            literal_kwargs = dict(literal_kwargs)
+            literal_kwargs[self._rename_patch_label] = literal_kwargs.pop("patch_label")
+            self._flag(
+                original_node,
+                f"inst_kwargs's 'patch_label' key renamed to "
+                f"'{self._rename_patch_label}' -- update the corresponding "
+                "Instruction's apply_fn parameter name to match.",
+                kind="patch_label_kwarg",
+            )
 
         remapped = dict(literal_kwargs)
         if patch_label_expr is not None and not _is_none(patch_label_expr):
@@ -338,7 +389,9 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         return rewritten if rewritten is not None else updated_node
 
 
-def migrate_instruction_labels(source: str) -> MigrationResult:
+def migrate_instruction_labels(
+    source: str, *, rename_patch_label: str | None = None
+) -> MigrationResult:
     """Detect and rewrite pre-1.2 positional `InstructionLabel`
     construction throughout `source` (see the module docstring for exactly
     which shapes are recognized and when a confident rewrite is possible).
@@ -347,10 +400,15 @@ def migrate_instruction_labels(source: str) -> MigrationResult:
     ----------
     source:
         The full text of a `.py` file (or an extracted code cell).
+
+    rename_patch_label:
+        If given, rewrite a colliding `inst_kwargs["patch_label"]` key
+        (see the module docstring) to this name instead of only flagging
+        it.
     """
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
-    transformer = _InstructionLabelRewriter()
+    transformer = _InstructionLabelRewriter(rename_patch_label=rename_patch_label)
     new_module = wrapper.visit(transformer)
     new_source = new_module.code
     return MigrationResult(

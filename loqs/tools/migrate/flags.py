@@ -33,7 +33,9 @@ just name, so guessing a rewrite would be dishonest rather than helpful.
 - A bare `"Iz"` string literal: likely an old instrument-name reference to
   what's now `"Imrz"` (renamed in v1.2), but this is a plain string, not
   an identifier reference, so a blind rewrite risks matching unrelated
-  text that just happens to contain the same two characters.
+  text that just happens to contain the same two characters -- flagged by
+  default, but rewritten for real when the caller opts in (the CLI's
+  `--rename_Iz`), via [](api:rewrite_iz_literal).
 
 `STIMDictNoiseModel` real code references, and any `RepTuple` construction
 [](api:loqs.tools.migrate.reptuple) can't confidently resolve to a concrete
@@ -50,7 +52,7 @@ import re
 import libcst as cst
 
 from loqs.tools.migrate.renames import RENAMES
-from loqs.tools.migrate.report import ManualReviewItem
+from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
 
 _CASTABLE_CLASS_NAMES = sorted(
     {
@@ -65,11 +67,13 @@ _LINE_PATTERNS: dict[str, re.Pattern] = {
         rf"\b{re.escape(cls)}\.cast\("
     )
     for cls in _CASTABLE_CLASS_NAMES
-} | {
-    '"Iz" string literal (likely the old instrument name, renamed to "Imrz" in v1.2)': re.compile(
-        r"""(['"])Iz\1"""
-    ),
 }
+
+# Kept separate from `_LINE_PATTERNS` above: unlike those, this one is
+# also used for a real rewrite (`rewrite_iz_literal`), and its items need
+# the `"iz"` `kind` tag so the CLI can suggest `--rename_Iz`.
+_IZ_MESSAGE = '"Iz" string literal (likely the old instrument name, renamed to "Imrz" in v1.2)'
+_IZ_PATTERN = re.compile(r"""(['"])Iz\1""")
 
 _QEC_CODE_KWARGS = {
     "include_idles": "idle_layout",
@@ -86,6 +90,34 @@ def _detect_line_patterns(source: str) -> list[ManualReviewItem]:
             if pattern.search(line):
                 items.append(ManualReviewItem(line=lineno, message=name))
     return items
+
+
+def _detect_iz_literal(source: str) -> list[ManualReviewItem]:
+    items = []
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if _IZ_PATTERN.search(line):
+            items.append(ManualReviewItem(line=lineno, message=_IZ_MESSAGE, kind="iz"))
+    return items
+
+
+def rewrite_iz_literal(source: str) -> MigrationResult:
+    """Rewrite every bare `"Iz"`/`'Iz'` string literal to `"Imrz"`/`'Imrz'`,
+    preserving its original quote style. Opt-in only (the CLI's
+    `--rename_Iz`) -- see the module docstring for why this isn't done by
+    default. No manual-review item is produced for a line this rewrites;
+    unlike the `patch_label` inst_kwarg case in
+    [](api:loqs.tools.migrate.labels), nothing else needs a follow-up
+    once the string itself is renamed.
+    """
+    changed = False
+
+    def _replace(match: re.Match) -> str:
+        nonlocal changed
+        changed = True
+        quote = match.group(1)
+        return f"{quote}Imrz{quote}"
+
+    return MigrationResult(source=_IZ_PATTERN.sub(_replace, source), changed=changed)
 
 
 def _func_name(node: cst.BaseExpression) -> str | None:
@@ -136,9 +168,20 @@ def _detect_qec_code_kwargs(source: str) -> list[ManualReviewItem]:
     return finder.items
 
 
-def detect_flagged_patterns(source: str) -> list[ManualReviewItem]:
+def detect_flagged_patterns(
+    source: str, *, rename_iz: bool = False
+) -> list[ManualReviewItem]:
     """Scan `source` for every pattern described in this module's
     docstring, returning one [](api:ManualReviewItem) per match (not per
     pattern -- a pattern appearing 3 times produces 3 items, each with
-    its own line number)."""
-    return _detect_line_patterns(source) + _detect_qec_code_kwargs(source)
+    its own line number).
+
+    `rename_iz` should be `True` exactly when [](api:rewrite_iz_literal)
+    already ran over the same source -- the `"Iz"` literal pattern is
+    skipped here in that case, since it was already rewritten rather than
+    left to flag.
+    """
+    items = _detect_line_patterns(source) + _detect_qec_code_kwargs(source)
+    if not rename_iz:
+        items += _detect_iz_literal(source)
+    return items

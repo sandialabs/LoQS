@@ -13,7 +13,7 @@ resolve/rewrite logic lives there, reusable without going through a
 subprocess at all.
 
 ```
-loqs-migrate <path> [--dry-run] [--no-backup]
+loqs-migrate <path> [--dry-run] [--no-backup] [--rename_Iz] [--rename_patch_label NAME]
 ```
 
 Rewriting in place is the default action; `--dry-run` instead only
@@ -27,6 +27,12 @@ is deliberately no `loqs-migrate data <file>` option: migrating an
 already-serialized file is free via [](api:Serializable)'s own decode
 compatibility and an ordinary `program.write(path)` round-trip, needing
 no bespoke tool.
+
+`--rename_Iz` and `--rename_patch_label NAME` opt into two rewrites that
+are otherwise only flagged (see [](api:migrate_source)'s own docstring
+for why each defaults to off). Whenever a run finds something either
+flag would have addressed, a hint suggesting the exact follow-up
+invocation is printed after the summary line.
 
 Every run ends with a one-line summary (files scanned, how many were
 rewritten or would be, how many were flagged for manual review) even
@@ -55,6 +61,7 @@ from pathlib import Path
 from loqs.tools.migrate import MigrationResult, migrate_source
 from loqs.tools.migrate.ipynb import migrate_ipynb_source
 from loqs.tools.migrate.notebook import migrate_notebook_source
+from loqs.tools.migrate.report import format_manual_review_block
 
 _TARGET_SUFFIXES = (".py", ".ipynb", ".md")
 
@@ -69,20 +76,60 @@ def _iter_target_files(path: Path) -> list[Path]:
     )
 
 
-def _migrate_file(path: Path) -> MigrationResult:
+def _migrate_file(
+    path: Path, *, rename_iz: bool = False, rename_patch_label: str | None = None
+) -> MigrationResult:
     source = path.read_text(encoding="utf-8")
+    kwargs = {"rename_iz": rename_iz, "rename_patch_label": rename_patch_label}
     if path.suffix == ".md":
-        return migrate_notebook_source(source)
+        return migrate_notebook_source(source, **kwargs)
     if path.suffix == ".ipynb":
-        return migrate_ipynb_source(source)
-    return migrate_source(source)
+        return migrate_ipynb_source(source, **kwargs)
+    return migrate_source(source, **kwargs)
 
 
 def _backup_path(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
 
 
-def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
+def _format_followup_suggestion(
+    paths: list[Path], *, iz_found: bool, patch_label_found: bool, rewrote: bool
+) -> str | None:
+    """A suggested follow-up invocation using whichever of
+    `--rename_Iz`/`--rename_patch_label` would address something this run
+    only flagged, or `None` if neither applies.
+
+    `--no-backup` is only appended when `rewrote` is true -- this run
+    already wrote (and backed up) at least one file, so suggesting
+    another backup pass is redundant; when nothing was actually written
+    yet (a `--dry-run`, or nothing else needed a confident rewrite), the
+    suggested command keeps the default backup protection for what would
+    be its first real write.
+    """
+    if not (iz_found or patch_label_found):
+        return None
+    flags = []
+    if iz_found:
+        flags.append("--rename_Iz")
+    if patch_label_found:
+        flags.append("--rename_patch_label <new_patch_label>")
+    if rewrote:
+        flags.append("--no-backup")
+    targets = " ".join(str(p) for p in paths)
+    return (
+        "Hint: some manual-review items above can be auto-migrated. Consider running:\n"
+        f"  loqs-migrate {targets} {' '.join(flags)}"
+    )
+
+
+def _run(
+    paths: list[Path],
+    *,
+    write: bool,
+    backup: bool = True,
+    rename_iz: bool = False,
+    rename_patch_label: str | None = None,
+) -> int:
     """The CLI's actual implementation, shared by both write and
     `--dry-run` modes. Returns a process exit code: 0 if nothing needed
     attention, 1 if anything was flagged for manual review (whether or
@@ -91,6 +138,8 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
     any_error = False
     changed_files = 0
     flagged_files = 0
+    iz_found = False
+    patch_label_found = False
 
     files = [f for path in paths for f in _iter_target_files(path)]
     if not files:
@@ -99,7 +148,9 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
 
     for file in files:
         try:
-            result = _migrate_file(file)
+            result = _migrate_file(
+                file, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+            )
         except Exception as exc:  # noqa: BLE001 -- report and keep going
             print(f"{file}: error: {exc}", file=sys.stderr)
             any_error = True
@@ -123,9 +174,17 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
 
         if result.manual_review:
             flagged_files += 1
-        for item in result.manual_review:
             any_manual_review = True
-            print(f"{file}:{item.line}: {item.message}")
+            print(format_manual_review_block(str(file), result.manual_review))
+            iz_found = iz_found or any(item.kind == "iz" for item in result.manual_review)
+            # Still flagged (as a reminder to update the matching
+            # Instruction's apply_fn) even once --rename_patch_label is
+            # already in use -- only suggest the flag while it hasn't
+            # been supplied yet, or the hint would just loop.
+            if rename_patch_label is None:
+                patch_label_found = patch_label_found or any(
+                    item.kind == "patch_label_kwarg" for item in result.manual_review
+                )
 
     noun = "file" if len(files) == 1 else "files"
     rewrite_verb = "rewritten" if write else "would be rewritten"
@@ -133,6 +192,15 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
         f"{len(files)} {noun} scanned: {changed_files} {rewrite_verb}, "
         f"{flagged_files} flagged for manual review."
     )
+
+    suggestion = _format_followup_suggestion(
+        paths,
+        iz_found=iz_found,
+        patch_label_found=patch_label_found,
+        rewrote=write and changed_files > 0,
+    )
+    if suggestion:
+        print(suggestion)
 
     if any_error:
         return 2
@@ -170,12 +238,42 @@ def build_parser() -> argparse.ArgumentParser:
             "Backing up is the default."
         ),
     )
+    parser.add_argument(
+        "--rename_Iz",
+        dest="rename_iz",
+        action="store_true",
+        help=(
+            'Confidently rewrite a bare "Iz"/\'Iz\' string literal to '
+            '"Imrz"/\'Imrz\' instead of only flagging it. Off by default, '
+            "since this is a blind string match that could collide with "
+            "unrelated text."
+        ),
+    )
+    parser.add_argument(
+        "--rename_patch_label",
+        dest="rename_patch_label",
+        metavar="NEW_NAME",
+        default=None,
+        help=(
+            "Rewrite a legacy InstructionLabel's colliding "
+            "inst_kwargs['patch_label'] key to NEW_NAME instead of only "
+            "flagging it. Still flagged either way, as a reminder that "
+            "the corresponding Instruction's apply_fn parameter needs "
+            "the same rename by hand."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return _run(args.paths, write=not args.dry_run, backup=not args.no_backup)
+    return _run(
+        args.paths,
+        write=not args.dry_run,
+        backup=not args.no_backup,
+        rename_iz=args.rename_iz,
+        rename_patch_label=args.rename_patch_label,
+    )
 
 
 if __name__ == "__main__":

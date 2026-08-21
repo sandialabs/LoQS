@@ -125,7 +125,9 @@ def _strip_unparseable_lines(text: str) -> tuple[str, dict[str, str]] | None:
             lines[index] = f"{indent}pass  # {token}\n"
 
 
-def _migrate_cell_text(cell_text: str) -> MigrationResult:
+def _migrate_cell_text(
+    cell_text: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+) -> MigrationResult:
     """[](api:migrate_source) a code cell's text, first substituting out
     any line the parser can't handle on its own (see module docstring)
     and restoring it verbatim afterward. Raises `cst.ParserSyntaxError`
@@ -142,7 +144,9 @@ def _migrate_cell_text(cell_text: str) -> MigrationResult:
     if placeholders and len(placeholders) >= nonblank_lines:
         raise _NotPythonCell(f"stripped {len(placeholders)}/{nonblank_lines} non-blank lines")
 
-    result = migrate_source(patched_text)
+    result = migrate_source(
+        patched_text, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+    )
     if not placeholders:
         return result
 
@@ -154,16 +158,18 @@ def _migrate_cell_text(cell_text: str) -> MigrationResult:
     )
 
 
-def migrate_ipynb_source(source: str) -> MigrationResult:
+def migrate_ipynb_source(
+    source: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+) -> MigrationResult:
     """Run [](api:migrate_source) over every `code` cell in a Jupyter
     notebook, leaving markdown/raw cells, outputs, and all other
     notebook structure untouched.
 
     A [](api:ManualReviewItem)'s `line` is relative to the cell it was
     found in (a whole-file line number has no meaningful counterpart in
-    a JSON notebook); its `message` is prefixed with that cell's
-    1-indexed position among all cells so the two together locate it
-    unambiguously. Whenever anything in the notebook changes, every
+    a JSON notebook); its `cell` is set to that cell's 1-indexed position
+    among all cells, so the two together locate it unambiguously (see
+    [](api:ManualReviewItem.location)). Whenever anything in the notebook changes, every
     remaining flagged cell also gets its own [](api:annotate_manual_review)
     pass, even a cell that had no rewrite of its own -- the notebook is
     being rewritten either way, so there's no reason to leave some of
@@ -173,6 +179,10 @@ def migrate_ipynb_source(source: str) -> MigrationResult:
     ----------
     source:
         The full text of an `.ipynb` file.
+
+    rename_iz, rename_patch_label:
+        Forwarded to every cell's own [](api:migrate_source) call
+        unchanged.
     """
     notebook = json.loads(source)
     unparseable_review: list[ManualReviewItem] = []
@@ -186,16 +196,20 @@ def migrate_ipynb_source(source: str) -> MigrationResult:
         was_list = isinstance(original_source, list)
 
         try:
-            result = _migrate_cell_text(_cell_source_text(cell))
+            result = _migrate_cell_text(
+                _cell_source_text(cell),
+                rename_iz=rename_iz,
+                rename_patch_label=rename_patch_label,
+            )
         except (cst.ParserSyntaxError, _NotPythonCell):
             unparseable_review.append(
                 ManualReviewItem(
                     line=1,
                     message=(
-                        f"[cell {index}] couldn't parse as plain Python "
-                        "(IPython magic or shell syntax?) -- skipped; "
-                        "review by hand."
+                        "couldn't parse as plain Python (IPython magic or "
+                        "shell syntax?) -- skipped; review by hand."
                     ),
+                    cell=index,
                 )
             )
             continue
@@ -211,7 +225,7 @@ def migrate_ipynb_source(source: str) -> MigrationResult:
         for index, _cell, _was_list, result in cell_results:
             for item in result.manual_review:
                 manual_review.append(
-                    ManualReviewItem(line=item.line, message=f"[cell {index}] {item.message}")
+                    ManualReviewItem(line=item.line, message=item.message, cell=index, kind=item.kind)
                 )
         return MigrationResult(source=source, changed=False, manual_review=manual_review)
 
@@ -229,7 +243,7 @@ def migrate_ipynb_source(source: str) -> MigrationResult:
         cell["source"] = _text_to_cell_source(cell_source, was_list)
         for item in cell_manual_review:
             manual_review.append(
-                ManualReviewItem(line=item.line, message=f"[cell {index}] {item.message}")
+                ManualReviewItem(line=item.line, message=item.message, cell=index, kind=item.kind)
             )
 
     new_source = json.dumps(notebook, indent=1, sort_keys=True, ensure_ascii=False)

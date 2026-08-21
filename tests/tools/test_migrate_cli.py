@@ -27,6 +27,15 @@ FLAGGED_SOURCE = (
     "label = InstructionLabel(*label_tuple)\n"
 )
 
+# A bare "Iz" string literal -- flagged by default, confidently rewritten
+# to "Imrz" with --rename_Iz.
+IZ_SOURCE = 'instrument_name = "Iz"\n'
+
+# A colliding inst_kwargs["patch_label"] -- flagged by default (never
+# silently merged), renamed with --rename_patch_label (still flagged
+# afterward, as a reminder to update the matching Instruction by hand).
+PATCH_LABEL_SOURCE = 'label = InstructionLabel("Init Something", None, (), {"patch_label": "L0"})\n'
+
 
 def _notebook_with_cell(source: str) -> str:
     """A minimal, single-code-cell notebook wrapping `source`."""
@@ -67,6 +76,20 @@ def flagged_ipynb_file(tmp_path):
     return path
 
 
+@pytest.fixture
+def iz_file(tmp_path):
+    path = tmp_path / "sample.py"
+    path.write_text(IZ_SOURCE, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def patch_label_file(tmp_path):
+    path = tmp_path / "sample.py"
+    path.write_text(PATCH_LABEL_SOURCE, encoding="utf-8")
+    return path
+
+
 class TestBuildParser:
     def test_requires_at_least_one_path(self):
         with pytest.raises(SystemExit):
@@ -77,11 +100,20 @@ class TestBuildParser:
         assert args.paths == [tmp_path]
         assert args.dry_run is False
         assert args.no_backup is False
+        assert args.rename_iz is False
+        assert args.rename_patch_label is None
 
     def test_accepts_multiple_paths(self, tmp_path):
         other = tmp_path / "other"
         args = build_parser().parse_args([str(tmp_path), str(other)])
         assert args.paths == [tmp_path, other]
+
+    def test_accepts_rename_flags(self, tmp_path):
+        args = build_parser().parse_args(
+            [str(tmp_path), "--rename_Iz", "--rename_patch_label", "new_patch_label"]
+        )
+        assert args.rename_iz is True
+        assert args.rename_patch_label == "new_patch_label"
 
 
 class TestMainAsLibraryCall:
@@ -228,6 +260,125 @@ class TestSummaryLine:
 
         out = capsys.readouterr().out
         assert "2 files scanned: 0 would be rewritten, 0 flagged" in out
+
+
+class TestManualReviewReport:
+    """Manual-review output is grouped file-by-file, each under its own
+    heading bracketed by a horizontal rule, rather than one
+    undifferentiated stream of `file:line:` entries."""
+
+    def test_flagged_file_reports_a_headed_block(self, flagged_file, capsys):
+        main(["--dry-run", str(flagged_file)])
+        out = capsys.readouterr().out
+        lines = out.splitlines()
+        rule = "=" * 88
+        heading_index = lines.index(str(flagged_file))
+        assert lines[heading_index - 1] == rule
+        assert lines[heading_index + 1] == rule
+        assert any("splat call" in line for line in lines[heading_index + 2 :])
+
+    def test_ipynb_flagged_items_report_a_cell_location(self, flagged_ipynb_file, capsys):
+        main(["--dry-run", str(flagged_ipynb_file)])
+        out = capsys.readouterr().out
+        assert any("Cell 1" in line and "splat call" in line for line in out.splitlines())
+
+    def test_clean_file_gets_no_block(self, tmp_path, capsys):
+        path = tmp_path / "clean.py"
+        path.write_text("x = 1\n", encoding="utf-8")
+        main(["--dry-run", str(path)])
+        out = capsys.readouterr().out
+        assert "=" * 88 not in out
+
+
+class TestRenameIzFlag:
+    def test_rewrites_and_leaves_nothing_flagged(self, iz_file):
+        code = main(["--rename_Iz", str(iz_file)])
+        assert code == 0
+        assert iz_file.read_text(encoding="utf-8") == 'instrument_name = "Imrz"\n'
+
+    def test_dry_run_reports_would_rewrite_without_writing(self, iz_file):
+        before = iz_file.read_text(encoding="utf-8")
+        code = main(["--dry-run", "--rename_Iz", str(iz_file)])
+        assert code == 0
+        assert iz_file.read_text(encoding="utf-8") == before
+
+    def test_without_the_flag_is_only_flagged_not_rewritten(self, iz_file):
+        before = iz_file.read_text(encoding="utf-8")
+        code = main(["--dry-run", str(iz_file)])
+        assert code == 1
+        assert iz_file.read_text(encoding="utf-8") == before
+
+
+class TestRenamePatchLabelFlag:
+    def test_renames_the_key_and_still_flags(self, patch_label_file):
+        code = main([str(patch_label_file), "--rename_patch_label", "new_patch_label"])
+        assert code == 1  # still flagged, as a reminder to update the Instruction
+        rewritten = patch_label_file.read_text(encoding="utf-8")
+        assert "new_patch_label" in rewritten
+        assert "# LOQS-MIGRATE" in rewritten
+
+    def test_without_the_flag_is_only_flagged_not_rewritten(self, patch_label_file):
+        before = patch_label_file.read_text(encoding="utf-8")
+        code = main(["--dry-run", str(patch_label_file)])
+        assert code == 1
+        assert patch_label_file.read_text(encoding="utf-8") == before
+
+
+class TestFollowupSuggestion:
+    """A run that finds something `--rename_Iz`/`--rename_patch_label`
+    could have addressed ends with a suggested follow-up invocation."""
+
+    def test_suggests_rename_iz(self, iz_file, capsys):
+        main(["--dry-run", str(iz_file)])
+        out = capsys.readouterr().out
+        assert "--rename_Iz" in out
+        assert "--rename_patch_label" not in out
+
+    def test_suggests_rename_patch_label(self, patch_label_file, capsys):
+        main(["--dry-run", str(patch_label_file)])
+        out = capsys.readouterr().out
+        assert "--rename_patch_label" in out
+        assert "--rename_Iz" not in out
+
+    def test_no_suggestion_when_nothing_applies(self, flagged_file, capsys):
+        main(["--dry-run", str(flagged_file)])
+        out = capsys.readouterr().out
+        assert "Hint:" not in out
+
+    def test_no_suggestion_once_rename_iz_already_used(self, iz_file, capsys):
+        main(["--dry-run", "--rename_Iz", str(iz_file)])
+        out = capsys.readouterr().out
+        assert "Hint:" not in out
+
+    def test_no_suggestion_once_rename_patch_label_already_used(
+        self, patch_label_file, capsys
+    ):
+        main([str(patch_label_file), "--rename_patch_label", "new_patch_label"])
+        out = capsys.readouterr().out
+        assert "Hint:" not in out
+
+    def test_no_backup_suggested_when_nothing_was_rewritten_yet(self, iz_file, capsys):
+        """A pure --dry-run (or a run with nothing else confidently
+        rewritable) hasn't backed anything up yet, so the suggested
+        follow-up keeps the default backup protection."""
+        main(["--dry-run", str(iz_file)])
+        out = capsys.readouterr().out
+        assert "--no-backup" not in out
+
+    def test_no_backup_suggested_once_this_run_already_rewrote_a_file(
+        self, tmp_path, capsys
+    ):
+        """A real write this run already produced a `.bak`, so the
+        suggested follow-up skips creating another one."""
+        source = LEGACY_SOURCE + IZ_SOURCE
+        path = tmp_path / "sample.py"
+        path.write_text(source, encoding="utf-8")
+
+        main([str(path)])  # a real write: increment_by=2 rewrites confidently
+
+        out = capsys.readouterr().out
+        assert "--rename_Iz" in out
+        assert "--no-backup" in out
 
 
 class TestConsoleScriptSubprocess:
