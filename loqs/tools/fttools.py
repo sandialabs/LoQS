@@ -115,7 +115,7 @@ Clifford gates; anything not here or in
 mis-pruning."""
 
 PAULI_PROPAGATION_IDLE_GATES: frozenset[str] = frozenset(
-    {"Imrz", "Gi1q", "Gi2q", "Gimcm"}
+    {"Imrz", "Gi1Q", "Gi2Q", "GiMCM"}
 )
 """LoQS idle-gate names, which never change a Pauli's support/type and
 so are skipped during propagation."""

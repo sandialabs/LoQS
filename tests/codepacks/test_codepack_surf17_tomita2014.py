@@ -236,7 +236,7 @@ class TestSurf17Codepack:
         assert len(failed) == 0
 
 
-_IDLE_NAMES = {"Gi1q", "Gi2q", "Gimcm", "Gi"}
+_IDLE_NAMES = {"Gi1Q", "Gi2Q", "GiMCM", "Gi"}
 _DATA_QUBITS = [f"D{i}" for i in range(9)]
 
 

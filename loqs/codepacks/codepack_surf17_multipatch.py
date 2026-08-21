@@ -181,7 +181,7 @@ def build_transversal_cnot_circuit_instruction(
 
     gate_durations, idle_gates:
         See [](api:codepack_surf17_tomita2014.create_qec_code); defaults
-        to a duration-2 Gcnot padded with Gi2q, matching that codepack's
+        to a duration-2 Gcnot padded with Gi2Q, matching that codepack's
         convention.
 
     name:

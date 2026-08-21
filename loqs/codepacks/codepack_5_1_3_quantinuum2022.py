@@ -83,8 +83,8 @@ def create_qec_code(
 
     idle_gates : dict[int | float, str] | None, optional
         Mapping from gate duration to idle gate names. Defaults to None,
-        which maps the dummy values from `gate_durations` to `"Gi1q"`,
-        `"Gi2q"`, and `"Gimcm"`, respectively.
+        which maps the dummy values from `gate_durations` to `"Gi1Q"`,
+        `"Gi2Q"`, and `"GiMCM"`, respectively.
         See `idle_names` from
         [](api:BasePhysicalCircuit.pad_single_qubit_idles_by_duration_inplace)
         for more details.
@@ -111,7 +111,7 @@ def create_qec_code(
             k: 1
             for k in [
                 "Gi",
-                "Gi1q",
+                "Gi1Q",
                 "Gxpi",
                 "Gypi",
                 "Gzpi",
@@ -123,11 +123,11 @@ def create_qec_code(
         }
         gate_durations["Gcnot"] = 2
         gate_durations["Gcphase"] = 2
-        gate_durations["Gi2q"] = 2
+        gate_durations["Gi2Q"] = 2
         gate_durations["Imrz"] = 3
-        gate_durations["Gimcm"] = 3
+        gate_durations["GiMCM"] = 3
     if idle_gates is None:
-        idle_gates = {1: "Gi1q", 2: "Gi2q", 3: "Gimcm"}
+        idle_gates = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 
     # Non-FT |-> state prep
     # First gray box of Fig 3 of arxiv:2208.01863
@@ -640,9 +640,9 @@ def create_ideal_model(  # noqa: C901
         "Gcnot",
         "Gcphase",
         "Gi",
-        "Gi1q",
-        "Gi2q",
-        "Gimcm",
+        "Gi1Q",
+        "Gi2Q",
+        "GiMCM",
     ]
 
     nonstd_unitaries = {
@@ -652,9 +652,9 @@ def create_ideal_model(  # noqa: C901
                 [1j / np.sqrt(2), -1j / np.sqrt(2)],
             ]
         ),
-        "Gi1q": np.eye(2),
-        "Gi2q": np.eye(2),
-        "Gimcm": np.eye(2),
+        "Gi1Q": np.eye(2),
+        "Gi2Q": np.eye(2),
+        "GiMCM": np.eye(2),
     }
 
     if model_backend == PyGSTiNoiseModel:
@@ -679,7 +679,7 @@ def create_ideal_model(  # noqa: C901
         model = PyGSTiNoiseModel(ideal_model_pygsti, qubits)
     elif model_backend == DictNoiseModel:
         # Standard-gate-name unitaries needed alongside `nonstd_unitaries`
-        # (which already covers "Gk"/"Gi1q"/"Gi2q"/"Gimcm" above). Sourced
+        # (which already covers "Gk"/"Gi1Q"/"Gi2Q"/"GiMCM" above). Sourced
         # from `STANDARD_GATE_UNITARIES` rather than
         # `pygsti.tools.internalgates.standard_gatename_unitaries()` so
         # this branch doesn't need pyGSTi installed at all (matching the
