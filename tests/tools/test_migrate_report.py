@@ -2,9 +2,12 @@
 
 from loqs.tools.migrate.report import (
     ManualReviewItem,
+    RewriteItem,
     annotate_manual_review,
     format_manual_review_block,
+    format_rewrite_block,
     remap_manual_review,
+    remap_rewrites,
 )
 
 
@@ -12,12 +15,12 @@ class TestManualReviewItemLocation:
     def test_line_only_when_no_cell(self):
         item = ManualReviewItem(line=25, message="m")
         assert item.location == "Line 25"
-        assert str(item) == "Line 25: m"
+        assert str(item) == "FLAG Line 25: m"
 
     def test_cell_and_line_when_cell_is_set(self):
         item = ManualReviewItem(line=3, message="m", cell=8)
         assert item.location == "Cell 8, Line 3"
-        assert str(item) == "Cell 8, Line 3: m"
+        assert str(item) == "FLAG Cell 8, Line 3: m"
 
 
 class TestFormatManualReviewBlock:
@@ -27,13 +30,13 @@ class TestFormatManualReviewBlock:
         lines = block.splitlines()
         assert lines[0] == lines[2] == "=" * 88
         assert lines[1] == "some/file.py"
-        assert lines[3] == "Line 1: first"
-        assert lines[4] == "Line 2: second"
+        assert lines[3] == "FLAG Line 1: first"
+        assert lines[4] == "FLAG Line 2: second"
 
     def test_cell_items_use_cell_location(self):
         items = [ManualReviewItem(line=3, message="m", cell=8)]
         block = format_manual_review_block("some/notebook.ipynb", items)
-        assert "Cell 8, Line 3: m" in block
+        assert "FLAG Cell 8, Line 3: m" in block
 
 
 class TestRemapManualReview:
@@ -63,6 +66,44 @@ class TestRemapManualReview:
         new = "a\nb\nc\nd\n"  # appended after everything
         items = [ManualReviewItem(line=1, message="about a")]
         assert remap_manual_review(old, new, items) == items
+
+
+class TestRewriteItemLocation:
+    def test_line_only_when_no_cell(self):
+        item = RewriteItem(line=25, message="Old -> New")
+        assert item.location == "Line 25"
+        assert str(item) == "REWRITE Line 25: Old -> New"
+
+    def test_cell_and_line_when_cell_is_set(self):
+        item = RewriteItem(line=3, message="Old -> New", cell=8)
+        assert item.location == "Cell 8, Line 3"
+        assert str(item) == "REWRITE Cell 8, Line 3: Old -> New"
+
+
+class TestFormatRewriteBlock:
+    def test_heading_and_rule_bracket_the_items(self):
+        items = [
+            RewriteItem(line=1, message="PatchDict -> PatchLayout"),
+            RewriteItem(line=25, message="RepTuple(...) -> UnitaryGateRep(...)"),
+        ]
+        block = format_rewrite_block("some/file.py", items)
+        lines = block.splitlines()
+        assert lines[0] == lines[2] == "=" * 88
+        assert lines[1] == "some/file.py"
+        assert lines[3] == "REWRITE Line 1: PatchDict -> PatchLayout"
+        assert lines[4] == "REWRITE Line 25: RepTuple(...) -> UnitaryGateRep(...)"
+
+
+class TestRemapRewrites:
+    def test_line_shifts_forward_when_earlier_lines_are_removed(self):
+        old = "a\nb\nc\nd\n"
+        new = "a\nc\nd\n"  # "b" removed
+        items = [RewriteItem(line=4, message="about d")]
+        remapped = remap_rewrites(old, new, items)
+        assert remapped == [RewriteItem(line=3, message="about d")]
+
+    def test_empty_rewrites_list_is_a_no_op(self):
+        assert remap_rewrites("a\n", "b\n", []) == []
 
 
 class TestAnnotateManualReview:

@@ -13,14 +13,18 @@ resolve/rewrite logic lives there, reusable without going through a
 subprocess at all.
 
 ```
-loqs-migrate <path> [--dry-run] [--no-backup] [--rename_Iz] [--rename_patch_label NAME]
+loqs-migrate <path> [--dry-run] [--no-backup] [--rename-Iz] [--rename-patch-label NAME]
 ```
 
-Rewriting in place is the default action; `--dry-run` instead only
-reports what would happen, never touching a file -- useful as a CI/
-pre-flight gate. `<path>` may be a single file or a directory (walked
-recursively for `.py`/`.ipynb`/`.md` files). A `.py` file is migrated
-with [](api:migrate_source); a `.md` file is treated as a MyST Markdown
+Rewriting in place is the default action; `--dry-run` instead prints one
+`"REWRITE <location>: <old> -> <new>"` line per confident rewrite it
+would have made -- the same `"<TAG> <location>: <message>"` shape an
+unresolved (`"FLAG"`-tagged) item is reported in -- and never touches a
+file, useful as a CI/pre-flight gate.
+
+`<path>` may be a single file or a directory (walked recursively for
+`.py`/`.ipynb`/`.md` files). A `.py` file is migrated with
+[](api:migrate_source); a `.md` file is treated as a MyST Markdown
 notebook and migrated with [](api:migrate_notebook_source); a `.ipynb`
 file is migrated cell-by-cell with [](api:migrate_ipynb_source). There
 is deliberately no `loqs-migrate data <file>` option: migrating an
@@ -28,7 +32,7 @@ already-serialized file is free via [](api:Serializable)'s own decode
 compatibility and an ordinary `program.write(path)` round-trip, needing
 no bespoke tool.
 
-`--rename_Iz` and `--rename_patch_label NAME` opt into two rewrites that
+`--rename-Iz` and `--rename-patch-label NAME` opt into two rewrites that
 are otherwise only flagged (see [](api:migrate_source)'s own docstring
 for why each defaults to off). Whenever a run finds something either
 flag would have addressed, a hint suggesting the exact follow-up
@@ -61,7 +65,7 @@ from pathlib import Path
 from loqs.tools.migrate import MigrationResult, migrate_source
 from loqs.tools.migrate.ipynb import migrate_ipynb_source
 from loqs.tools.migrate.notebook import migrate_notebook_source
-from loqs.tools.migrate.report import format_manual_review_block
+from loqs.tools.migrate.report import format_manual_review_block, format_rewrite_block
 
 _TARGET_SUFFIXES = (".py", ".ipynb", ".md")
 
@@ -77,9 +81,12 @@ def _iter_target_files(path: Path) -> list[Path]:
 
 
 def _migrate_file(
-    path: Path, *, rename_iz: bool = False, rename_patch_label: str | None = None
+    path: Path,
+    source: str,
+    *,
+    rename_iz: bool = False,
+    rename_patch_label: str | None = None,
 ) -> MigrationResult:
-    source = path.read_text(encoding="utf-8")
     kwargs = {"rename_iz": rename_iz, "rename_patch_label": rename_patch_label}
     if path.suffix == ".md":
         return migrate_notebook_source(source, **kwargs)
@@ -96,7 +103,7 @@ def _format_followup_suggestion(
     paths: list[Path], *, iz_found: bool, patch_label_found: bool, rewrote: bool
 ) -> str | None:
     """A suggested follow-up invocation using whichever of
-    `--rename_Iz`/`--rename_patch_label` would address something this run
+    `--rename-Iz`/`--rename-patch-label` would address something this run
     only flagged, or `None` if neither applies.
 
     `--no-backup` is only appended when `rewrote` is true -- this run
@@ -110,9 +117,9 @@ def _format_followup_suggestion(
         return None
     flags = []
     if iz_found:
-        flags.append("--rename_Iz")
+        flags.append("--rename-Iz")
     if patch_label_found:
-        flags.append("--rename_patch_label <new_patch_label>")
+        flags.append("--rename-patch-label <new_patch_label>")
     if rewrote:
         flags.append("--no-backup")
     targets = " ".join(str(p) for p in paths)
@@ -140,6 +147,18 @@ def _run(
     flagged_files = 0
     iz_found = False
     patch_label_found = False
+    printed_block = False
+
+    def _print_block(text: str) -> None:
+        # A blank line between two consecutive blocks (whether from the
+        # same file's own rewrite/manual-review pair or two different
+        # files), so a multi-file run doesn't read as one undifferentiated
+        # wall of "====" rules.
+        nonlocal printed_block
+        if printed_block:
+            print()
+        print(text)
+        printed_block = True
 
     files = [f for path in paths for f in _iter_target_files(path)]
     if not files:
@@ -148,8 +167,9 @@ def _run(
 
     for file in files:
         try:
+            source = file.read_text(encoding="utf-8")
             result = _migrate_file(
-                file, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+                file, source, rename_iz=rename_iz, rename_patch_label=rename_patch_label
             )
         except Exception as exc:  # noqa: BLE001 -- report and keep going
             print(f"{file}: error: {exc}", file=sys.stderr)
@@ -158,9 +178,8 @@ def _run(
 
         if result.changed:
             changed_files += 1
-            action = "would rewrite" if not write else "rewrote"
-            print(f"{file}: {action}")
             if write:
+                print(f"{file}: rewrote")
                 try:
                     if backup:
                         backup_file = _backup_path(file)
@@ -171,14 +190,16 @@ def _run(
                     print(f"{file}: error: {exc}", file=sys.stderr)
                     any_error = True
                     continue
+            else:
+                _print_block(format_rewrite_block(str(file), result.rewrites))
 
         if result.manual_review:
             flagged_files += 1
             any_manual_review = True
-            print(format_manual_review_block(str(file), result.manual_review))
+            _print_block(format_manual_review_block(str(file), result.manual_review))
             iz_found = iz_found or any(item.kind == "iz" for item in result.manual_review)
             # Still flagged (as a reminder to update the matching
-            # Instruction's apply_fn) even once --rename_patch_label is
+            # Instruction's apply_fn) even once --rename-patch-label is
             # already in use -- only suggest the flag while it hasn't
             # been supplied yet, or the hint would just loop.
             if rename_patch_label is None:
@@ -189,7 +210,7 @@ def _run(
     noun = "file" if len(files) == 1 else "files"
     rewrite_verb = "rewritten" if write else "would be rewritten"
     print(
-        f"{len(files)} {noun} scanned: {changed_files} {rewrite_verb}, "
+        f"\n{len(files)} {noun} scanned: {changed_files} {rewrite_verb}, "
         f"{flagged_files} flagged for manual review."
     )
 
@@ -239,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--rename_Iz",
+        "--rename-Iz",
         dest="rename_iz",
         action="store_true",
         help=(
@@ -250,7 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--rename_patch_label",
+        "--rename-patch-label",
         dest="rename_patch_label",
         metavar="NEW_NAME",
         default=None,

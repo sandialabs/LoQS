@@ -57,7 +57,13 @@ from libcst.codemod import CodemodContext
 from libcst.codemod.visitors import AddImportsVisitor, RemoveImportsVisitor
 from libcst.metadata import MetadataWrapper, PositionProvider
 
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, remap_manual_review
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    RewriteItem,
+    remap_manual_review,
+    remap_rewrites,
+)
 
 _OLD_REPTUPLE_MODULE = "loqs.backends.reps"
 _GATEREP_MODULE = "loqs.backends.reps.gatereps"
@@ -173,6 +179,7 @@ class _RepTupleRewriter(cst.CSTTransformer):
         self.context = context
         self.changed = False
         self.manual_review: list[ManualReviewItem] = []
+        self.rewrites: list[RewriteItem] = []
 
     def leave_Call(
         self, original_node: cst.Call, updated_node: cst.Call
@@ -221,6 +228,10 @@ class _RepTupleRewriter(cst.CSTTransformer):
             )
         )
         self.changed = True
+        line = self.get_metadata(PositionProvider, original_node).start.line
+        self.rewrites.append(
+            RewriteItem(line=line, message=f"RepTuple(...) -> {new_class}(...)")
+        )
         return cst.Call(func=cst.Name(new_class), args=args)
 
 
@@ -241,7 +252,7 @@ def rewrite_reptuple_construction(source: str) -> MigrationResult:
     # real CST/import-machinery overhead for files that never mention
     # `RepTuple` at all -- the overwhelming majority of files scanned.
     if "RepTuple" not in source:
-        return MigrationResult(source=source, changed=False, manual_review=[])
+        return MigrationResult(source=source, changed=False, manual_review=[], rewrites=[])
 
     context = CodemodContext()
     module = cst.parse_module(source)
@@ -256,4 +267,5 @@ def rewrite_reptuple_construction(source: str) -> MigrationResult:
         source=new_source,
         changed=transformer.changed,
         manual_review=remap_manual_review(source, new_source, transformer.manual_review),
+        rewrites=remap_rewrites(source, new_source, transformer.rewrites),
     )

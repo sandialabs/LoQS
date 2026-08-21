@@ -27,6 +27,25 @@ class TestRewriteRenames:
         assert "PatchDict" not in result.source
         assert result.manual_review == []
 
+    @pytest.mark.parametrize(
+        "old_module", ["loqs.core.recordables", "loqs.core"]
+    )
+    def test_rewrites_patchdict_reexport_imports(self, old_module):
+        """`PatchDict` is overwhelmingly imported from one of its two
+        convenience re-exports rather than its own defining submodule
+        (see `test_rewrites_import_and_usage` above) -- both need their
+        own table entry alongside it, since a rewrite keyed only on the
+        defining submodule never matches either re-export's own
+        qualified name."""
+        src = (
+            f"from {old_module} import PatchDict\n\n"
+            'patches = PatchDict({"L0": None})\n'
+        )
+        result = rewrite_renames(src)
+        assert result.changed
+        assert f"from {old_module} import PatchLayout" in result.source
+        assert "PatchDict" not in result.source
+
     def test_does_not_corrupt_docstring_narrating_history(self):
         """A docstring describing the *history* of a rename must not be
         rewritten -- doing so would silently invert its meaning (see

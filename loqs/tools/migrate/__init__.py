@@ -35,17 +35,18 @@ Four independent passes, run in order, together making up [](api:migrate_source)
 
 Two of the above are opt-in exceptions to "never guessed at automatically",
 each gated behind its own [](api:migrate_source) keyword argument (and the
-CLI's matching `--rename_Iz`/`--rename_patch_label` flags): rewriting a
+CLI's matching `--rename-Iz`/`--rename-patch-label` flags): rewriting a
 bare `"Iz"` string to `"Imrz"` (pass 4), and renaming a colliding
 `inst_kwargs["patch_label"]` key (pass 3) -- both still risk being wrong
 in a way this tool can't verify itself, which is why they default to off.
 
-A pass's own manual-review items are always relative to *its own* input
-line numbering; since an earlier pass may itself change the surrounding
-line count (e.g. collapsing a multi-line call onto one line), those items
-are remapped forward through each later pass via
-[](api:remap_manual_review) before being combined, so every reported line
-in the final result is accurate relative to the file actually written.
+A pass's own manual-review and rewrite items are always relative to
+*its own* input line numbering; since an earlier pass may itself change
+the surrounding line count (e.g. collapsing a multi-line call onto one
+line), those items are remapped forward through each later pass via
+[](api:remap_manual_review)/[](api:remap_rewrites) before being combined,
+so every reported line in the final result is accurate relative to the
+file actually written.
 """
 
 from __future__ import annotations
@@ -57,28 +58,35 @@ from loqs.tools.migrate.reptuple import rewrite_reptuple_construction
 from loqs.tools.migrate.report import (
     ManualReviewItem,
     MigrationResult,
+    RewriteItem,
     annotate_manual_review,
     remap_manual_review,
+    remap_rewrites,
 )
 
 __all__ = [
     "ManualReviewItem",
     "MigrationResult",
+    "RewriteItem",
     "migrate_source",
 ]
 
 
 def _chain(result: MigrationResult, next_result: MigrationResult) -> MigrationResult:
     """Combine `result` with the next pass's own result over `result`'s
-    (already-updated) source, remapping `result`'s own manual-review
-    lines forward in case `next_result` changed the surrounding line
-    count."""
+    (already-updated) source, remapping `result`'s own manual-review and
+    rewrite items forward in case `next_result` changed the surrounding
+    line count."""
     return MigrationResult(
         source=next_result.source,
         changed=result.changed or next_result.changed,
         manual_review=(
             remap_manual_review(result.source, next_result.source, result.manual_review)
             + next_result.manual_review
+        ),
+        rewrites=(
+            remap_rewrites(result.source, next_result.source, result.rewrites)
+            + next_result.rewrites
         ),
     )
 
@@ -130,7 +138,9 @@ def migrate_source(
         result = _chain(result, rewrite_iz_literal(result.source))
     result.manual_review.extend(detect_flagged_patterns(result.source, rename_iz=rename_iz))
     if result.changed:
+        pre_annotate_source = result.source
         result.source, result.manual_review = annotate_manual_review(
             result.source, result.manual_review
         )
+        result.rewrites = remap_rewrites(pre_annotate_source, result.source, result.rewrites)
     return result

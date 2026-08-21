@@ -77,7 +77,13 @@ import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
 
 from loqs.core.instructions.instructionlabel import LEGACY_PENDING_INST_ARGS
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, remap_manual_review
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    RewriteItem,
+    remap_manual_review,
+    remap_rewrites,
+)
 
 
 def _func_name(node: cst.BaseExpression) -> str | None:
@@ -220,6 +226,7 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
     def __init__(self, rename_patch_label: str | None = None) -> None:
         self.changed = False
         self.manual_review: list[ManualReviewItem] = []
+        self.rewrites: list[RewriteItem] = []
         self._rename_patch_label = rename_patch_label
 
     def _flag(
@@ -298,6 +305,13 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         if _literal_sequence(inst_args_expr) != []:
             remapped[LEGACY_PENDING_INST_ARGS] = inst_args_expr
         self.changed = True
+        line = self.get_metadata(PositionProvider, original_node).start.line
+        message = (
+            "bare instruction tuple -> keyword-form dict"
+            if func is None
+            else "positional InstructionLabel(...) -> keyword form"
+        )
+        self.rewrites.append(RewriteItem(line=line, message=message))
         if func is None:
             return _build_dict(instruction_expr, remapped, unpack_expr=unpack_expr)
         return _build_call(
@@ -415,4 +429,5 @@ def migrate_instruction_labels(
         source=new_source,
         changed=transformer.changed,
         manual_review=remap_manual_review(source, new_source, transformer.manual_review),
+        rewrites=remap_rewrites(source, new_source, transformer.rewrites),
     )

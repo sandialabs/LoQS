@@ -50,7 +50,12 @@ import re
 import libcst as cst
 
 from loqs.tools.migrate import migrate_source
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, annotate_manual_review
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    RewriteItem,
+    annotate_manual_review,
+)
 
 _PARSE_ERROR_LOCATION = re.compile(r"error at (\d+):\d+")
 
@@ -154,7 +159,10 @@ def _migrate_cell_text(
     for token, original_line in placeholders.items():
         restored_source = restored_source.replace(f"pass  # {token}\n", original_line)
     return MigrationResult(
-        source=restored_source, changed=result.changed, manual_review=result.manual_review
+        source=restored_source,
+        changed=result.changed,
+        manual_review=result.manual_review,
+        rewrites=result.rewrites,
     )
 
 
@@ -165,15 +173,16 @@ def migrate_ipynb_source(
     notebook, leaving markdown/raw cells, outputs, and all other
     notebook structure untouched.
 
-    A [](api:ManualReviewItem)'s `line` is relative to the cell it was
-    found in (a whole-file line number has no meaningful counterpart in
-    a JSON notebook); its `cell` is set to that cell's 1-indexed position
-    among all cells, so the two together locate it unambiguously (see
-    [](api:ManualReviewItem.location)). Whenever anything in the notebook changes, every
-    remaining flagged cell also gets its own [](api:annotate_manual_review)
-    pass, even a cell that had no rewrite of its own -- the notebook is
-    being rewritten either way, so there's no reason to leave some of
-    its flagged spots undocumented in the file itself.
+    A [](api:ManualReviewItem)/[](api:RewriteItem)'s `line` is relative
+    to the cell it was found in (a whole-file line number has no
+    meaningful counterpart in a JSON notebook); its `cell` is set to that
+    cell's 1-indexed position among all cells, so the two together locate
+    it unambiguously (see [](api:ManualReviewItem.location)). Whenever
+    anything in the notebook changes, every remaining flagged cell also
+    gets its own [](api:annotate_manual_review) pass, even a cell that
+    had no rewrite of its own -- the notebook is being rewritten either
+    way, so there's no reason to leave some of its flagged spots
+    undocumented in the file itself.
 
     Parameters
     ----------
@@ -219,17 +228,23 @@ def migrate_ipynb_source(
 
     if not changed:
         # Nothing is being written back, so nothing gets annotated either
-        # -- report every cell's own (un-annotated) manual-review lines
-        # exactly as migrate_source found them.
+        # -- report every cell's own (un-annotated) manual-review/rewrite
+        # lines exactly as migrate_source found them.
         manual_review = list(unparseable_review)
+        rewrites: list[RewriteItem] = []
         for index, _cell, _was_list, result in cell_results:
             for item in result.manual_review:
                 manual_review.append(
                     ManualReviewItem(line=item.line, message=item.message, cell=index, kind=item.kind)
                 )
-        return MigrationResult(source=source, changed=False, manual_review=manual_review)
+            for item in result.rewrites:
+                rewrites.append(RewriteItem(line=item.line, message=item.message, cell=index))
+        return MigrationResult(
+            source=source, changed=False, manual_review=manual_review, rewrites=rewrites
+        )
 
     manual_review = list(unparseable_review)
+    rewrites = []
     for index, cell, was_list, result in cell_results:
         cell_source = result.source
         cell_manual_review = result.manual_review
@@ -245,8 +260,12 @@ def migrate_ipynb_source(
             manual_review.append(
                 ManualReviewItem(line=item.line, message=item.message, cell=index, kind=item.kind)
             )
+        for item in result.rewrites:
+            rewrites.append(RewriteItem(line=item.line, message=item.message, cell=index))
 
     new_source = json.dumps(notebook, indent=1, sort_keys=True, ensure_ascii=False)
     if source.endswith("\n"):
         new_source += "\n"
-    return MigrationResult(source=new_source, changed=True, manual_review=manual_review)
+    return MigrationResult(
+        source=new_source, changed=True, manual_review=manual_review, rewrites=rewrites
+    )
