@@ -49,7 +49,7 @@ import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
 
 from loqs.core.instructions.instructionlabel import LEGACY_PENDING_INST_ARGS
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
+from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, remap_manual_review
 
 
 def _func_name(node: cst.BaseExpression) -> str | None:
@@ -178,6 +178,10 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         self.manual_review: list[ManualReviewItem] = []
 
     def _flag(self, node: cst.CSTNode, message: str) -> None:
+        # Relative to this transform's own *input* text -- an earlier
+        # rewrite elsewhere in the same file can change the line count
+        # before this node, so `migrate_instruction_labels` remaps every
+        # line here against its actual output before returning.
         line = self.get_metadata(PositionProvider, node).start.line
         self.manual_review.append(ManualReviewItem(line=line, message=message))
 
@@ -328,5 +332,5 @@ def migrate_instruction_labels(source: str) -> MigrationResult:
     return MigrationResult(
         source=new_source,
         changed=transformer.changed,
-        manual_review=transformer.manual_review,
+        manual_review=remap_manual_review(source, new_source, transformer.manual_review),
     )

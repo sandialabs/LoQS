@@ -11,6 +11,9 @@
 
 from __future__ import annotations
 
+import difflib
+import textwrap
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 
@@ -52,3 +55,99 @@ class MigrationResult:
             changed=self.changed or other.changed,
             manual_review=self.manual_review + other.manual_review,
         )
+
+
+def remap_manual_review(
+    old_source: str, new_source: str, manual_review: Sequence[ManualReviewItem]
+) -> list[ManualReviewItem]:
+    """Re-locate each item's `line` (given relative to `old_source`) to
+    its corresponding line in `new_source`, via their textual diff.
+
+    Needed whenever a rewrite changes the surrounding line count (e.g.
+    collapsing a multi-line call onto one line) somewhere before an item
+    that was flagged, but not itself rewritten, relative to the
+    unmodified line numbering -- without this, such an item's reported
+    line silently drifts out of sync with the file it's actually
+    reported against.
+    """
+    if old_source == new_source or not manual_review:
+        return list(manual_review)
+
+    old_lines = old_source.splitlines()
+    new_lines = new_source.splitlines()
+    opcodes = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False).get_opcodes()
+
+    def remap(line: int) -> int:
+        index = line - 1
+        for tag, i1, i2, j1, j2 in opcodes:
+            if i1 <= index < i2:
+                if tag == "equal":
+                    return j1 + (index - i1) + 1
+                return j1 + 1  # inside a changed region: best-effort, start of it
+        return len(new_lines)  # fell past the end of a shrunk file
+
+    return [
+        ManualReviewItem(line=remap(item.line), message=item.message)
+        for item in manual_review
+    ]
+
+
+_MANUAL_REVIEW_COMMENT_PREFIX = "# LOQS-MIGRATE (pre-1.2 API): "
+_MANUAL_REVIEW_COMMENT_MAX_LINES = 2
+_MANUAL_REVIEW_COMMENT_WIDTH = 88
+
+
+def annotate_manual_review(
+    source: str, manual_review: Sequence[ManualReviewItem]
+) -> tuple[str, list[ManualReviewItem]]:
+    """Insert a short comment directly above each flagged line in
+    `source`, wrapped to at most two lines and explicitly naming v1.2 as
+    the API-transition point, so a later reader of the migrated file
+    itself -- not just this tool's own stdout, which is easy to lose
+    track of once a run is over -- can find what still needs a look.
+
+    `item.line` in `manual_review` must already be relative to `source`
+    itself (see [](api:remap_manual_review) if it isn't). Returns the
+    annotated source alongside a matching, re-located copy of
+    `manual_review`: inserting comment lines necessarily pushes every
+    flagged code line further down, so a caller that reports or further
+    processes these items afterward needs their corrected positions, not
+    the ones relative to the un-annotated `source` passed in.
+    """
+    if not manual_review:
+        return source, list(manual_review)
+
+    wrapped_by_id = {
+        id(item): textwrap.wrap(
+            item.message,
+            width=_MANUAL_REVIEW_COMMENT_WIDTH,
+            max_lines=_MANUAL_REVIEW_COMMENT_MAX_LINES,
+            placeholder=" [...]",
+        )
+        for item in manual_review
+    }
+
+    # Every item's flagged code line shifts down by its own comment's
+    # line count plus every earlier item's, since all of those insert
+    # above it in the final text.
+    remapped: list[ManualReviewItem] = []
+    cumulative_shift = 0
+    for item in sorted(manual_review, key=lambda i: i.line):
+        cumulative_shift += len(wrapped_by_id[id(item)])
+        remapped.append(ManualReviewItem(line=item.line + cumulative_shift, message=item.message))
+
+    # Mutate from the bottom up so an earlier insertion never invalidates
+    # a not-yet-processed (larger) original line index.
+    lines = source.splitlines(keepends=True)
+    for item in sorted(manual_review, key=lambda i: i.line, reverse=True):
+        if not (1 <= item.line <= len(lines)):
+            continue
+        target_line = lines[item.line - 1]
+        indent = target_line[: len(target_line) - len(target_line.lstrip())]
+        comment_lines = [
+            f"{indent}{_MANUAL_REVIEW_COMMENT_PREFIX}{text}\n"
+            for text in wrapped_by_id[id(item)]
+        ]
+        lines[item.line - 1 : item.line - 1] = comment_lines
+
+    return "".join(lines), remapped

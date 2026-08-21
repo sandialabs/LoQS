@@ -1,5 +1,6 @@
 """Tester for loqs.tools.migrate.cli"""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,24 @@ FLAGGED_SOURCE = (
 )
 
 
+def _notebook_with_cell(source: str) -> str:
+    """A minimal, single-code-cell notebook wrapping `source`."""
+    notebook = {
+        "cells": [
+            {
+                "cell_type": "code",
+                "metadata": {},
+                "outputs": [],
+                "source": source.splitlines(keepends=True),
+            }
+        ],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    return json.dumps(notebook)
+
+
 @pytest.fixture
 def legacy_file(tmp_path):
     path = tmp_path / "sample.py"
@@ -37,6 +56,13 @@ def legacy_file(tmp_path):
 def flagged_file(tmp_path):
     path = tmp_path / "sample.py"
     path.write_text(FLAGGED_SOURCE, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def flagged_ipynb_file(tmp_path):
+    path = tmp_path / "sample.ipynb"
+    path.write_text(_notebook_with_cell(FLAGGED_SOURCE), encoding="utf-8")
     return path
 
 
@@ -96,15 +122,30 @@ class TestMainAsLibraryCall:
         assert main(["check", str(path)]) == 0
         assert main(["source", str(path)]) == 0
 
-    def test_directory_is_walked_for_py_and_md_files(self, tmp_path):
+    def test_directory_is_walked_for_py_ipynb_and_md_files(self, tmp_path):
         (tmp_path / "a.py").write_text(FLAGGED_SOURCE, encoding="utf-8")
-        (tmp_path / "b.txt").write_text(FLAGGED_SOURCE, encoding="utf-8")  # ignored, wrong suffix
+        (tmp_path / "b.ipynb").write_text(_notebook_with_cell(FLAGGED_SOURCE), encoding="utf-8")
+        (tmp_path / "c.txt").write_text(FLAGGED_SOURCE, encoding="utf-8")  # ignored, wrong suffix
         code = main(["check", str(tmp_path)])
         assert code == 1
 
     def test_no_matching_files_is_an_error(self, tmp_path):
         (tmp_path / "b.txt").write_text("not python\n", encoding="utf-8")
         assert main(["check", str(tmp_path)]) == 2
+
+    def test_ipynb_check_flags_without_writing(self, flagged_ipynb_file):
+        before = flagged_ipynb_file.read_text(encoding="utf-8")
+        code = main(["check", str(flagged_ipynb_file)])
+        assert code == 1
+        assert flagged_ipynb_file.read_text(encoding="utf-8") == before
+
+    def test_ipynb_source_rewrites_in_place(self, flagged_ipynb_file):
+        code = main(["source", str(flagged_ipynb_file)])
+        assert code == 1  # the non-literal inst_kwargs candidate still flagged
+        rewritten = json.loads(flagged_ipynb_file.read_text(encoding="utf-8"))
+        cell_source = "".join(rewritten["cells"][0]["source"])
+        assert "PatchLayout" in cell_source
+        assert "PatchDict" not in cell_source
 
     def test_file_level_error_does_not_abort_the_whole_run(self, tmp_path):
         good = tmp_path / "good.py"
@@ -160,6 +201,46 @@ class TestBackup:
         main(["source", str(legacy_file)])
 
         assert backup_file.read_text(encoding="utf-8") == original
+
+
+class TestSummaryLine:
+    """A run always ends with a one-line summary, even when there's
+    nothing to report -- otherwise a scan that finds nothing to do looks
+    identical to one that silently failed to look at the right files."""
+
+    def test_clean_file_reports_zero_changed_and_flagged(self, tmp_path, capsys):
+        path = tmp_path / "clean.py"
+        path.write_text("x = 1\n", encoding="utf-8")
+
+        code = main(["check", str(path)])
+
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "1 file scanned: 0 would be rewritten, 0 flagged" in out
+
+    def test_check_reports_would_be_rewritten(self, legacy_file, capsys):
+        main(["check", str(legacy_file)])
+        out = capsys.readouterr().out
+        assert "1 file scanned: 1 would be rewritten, 0 flagged" in out
+
+    def test_source_reports_rewritten(self, legacy_file, capsys):
+        main(["source", str(legacy_file)])
+        out = capsys.readouterr().out
+        assert "1 file scanned: 1 rewritten, 0 flagged" in out
+
+    def test_flagged_file_reports_nonzero_flagged_count(self, flagged_file, capsys):
+        main(["check", str(flagged_file)])
+        out = capsys.readouterr().out
+        assert "1 file scanned: 1 would be rewritten, 1 flagged" in out
+
+    def test_pluralizes_file_count(self, tmp_path, capsys):
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "b.py").write_text("y = 2\n", encoding="utf-8")
+
+        main(["check", str(tmp_path)])
+
+        out = capsys.readouterr().out
+        assert "2 files scanned: 0 would be rewritten, 0 flagged" in out
 
 
 class TestConsoleScriptSubprocess:

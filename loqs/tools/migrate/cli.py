@@ -18,13 +18,20 @@ loqs-migrate check <path>       # detect-only, no rewrite; for CI/pre-flight
 ```
 
 `<path>` may be a single file or a directory (walked recursively for
-`.py`/`.md` files). A `.py` file is migrated with
+`.py`/`.ipynb`/`.md` files). A `.py` file is migrated with
 [](api:migrate_source); a `.md` file is treated as a MyST Markdown
-notebook and migrated with [](api:migrate_notebook_source) instead. There
+notebook and migrated with [](api:migrate_notebook_source); a `.ipynb`
+file is migrated cell-by-cell with [](api:migrate_ipynb_source). There
 is deliberately no `loqs-migrate data <file>` subcommand: migrating an
 already-serialized file is free via [](api:Serializable)'s own decode
 compatibility and an ordinary `program.write(path)` round-trip, needing
 no bespoke tool.
+
+Every run ends with a one-line summary (files scanned, how many were
+rewritten or would be, how many were flagged for manual review) even
+when there's nothing to report -- otherwise a scan that finds nothing to
+do is indistinguishable from one that silently failed to look at the
+right files.
 
 `source` backs up every file it actually rewrites to a sibling `<name>.bak`
 before writing, unless `--no-backup` is given; `--dry-run` never writes
@@ -45,7 +52,10 @@ import sys
 from pathlib import Path
 
 from loqs.tools.migrate import MigrationResult, migrate_source
+from loqs.tools.migrate.ipynb import migrate_ipynb_source
 from loqs.tools.migrate.notebook import migrate_notebook_source
+
+_TARGET_SUFFIXES = (".py", ".ipynb", ".md")
 
 
 def _iter_target_files(path: Path) -> list[Path]:
@@ -54,7 +64,7 @@ def _iter_target_files(path: Path) -> list[Path]:
     return sorted(
         p
         for p in path.rglob("*")
-        if p.suffix in (".py", ".md") and p.is_file()
+        if p.suffix in _TARGET_SUFFIXES and p.is_file()
     )
 
 
@@ -62,6 +72,8 @@ def _migrate_file(path: Path) -> MigrationResult:
     source = path.read_text(encoding="utf-8")
     if path.suffix == ".md":
         return migrate_notebook_source(source)
+    if path.suffix == ".ipynb":
+        return migrate_ipynb_source(source)
     return migrate_source(source)
 
 
@@ -76,10 +88,12 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
     a file-level error."""
     any_manual_review = False
     any_error = False
+    changed_files = 0
+    flagged_files = 0
 
     files = [f for path in paths for f in _iter_target_files(path)]
     if not files:
-        print("No .py/.md files found.", file=sys.stderr)
+        print("No .py/.ipynb/.md files found.", file=sys.stderr)
         return 2
 
     for file in files:
@@ -91,6 +105,7 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
             continue
 
         if result.changed:
+            changed_files += 1
             action = "would rewrite" if not write else "rewrote"
             print(f"{file}: {action}")
             if write:
@@ -105,9 +120,18 @@ def _run(paths: list[Path], *, write: bool, backup: bool = True) -> int:
                     any_error = True
                     continue
 
+        if result.manual_review:
+            flagged_files += 1
         for item in result.manual_review:
             any_manual_review = True
             print(f"{file}:{item.line}: {item.message}")
+
+    noun = "file" if len(files) == 1 else "files"
+    rewrite_verb = "rewritten" if write else "would be rewritten"
+    print(
+        f"{len(files)} {noun} scanned: {changed_files} {rewrite_verb}, "
+        f"{flagged_files} flagged for manual review."
+    )
 
     if any_error:
         return 2
@@ -128,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loqs-migrate",
         description=(
-            "Rewrite .py/MyST Markdown source still using pre-1.2 LoQS APIs."
+            "Rewrite .py/.ipynb/MyST Markdown source still using pre-1.2 LoQS APIs."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

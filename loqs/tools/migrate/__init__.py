@@ -7,15 +7,17 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Rewrite `.py`/MyST Markdown source files still using pre-1.2 LoQS APIs.
+"""Rewrite `.py`/`.ipynb`/MyST Markdown source files still using pre-1.2
+LoQS APIs.
 
 `loqs.tools.migrate` and the `loqs-migrate` console script (see
 [](api:loqs.tools.migrate.cli)) address a different problem than
 [](api:Serializable)'s own decode-time compatibility machinery: that
 machinery keeps *already-serialized data* readable; this tool rewrites a
-user's own *source code* -- experiment scripts, or a custom
-`apply_fn`/`map_qubits_fn` that will be frozen into future serialized data
--- so it stops relying on removed/renamed APIs going forward.
+user's own *source code* -- experiment scripts, a Jupyter notebook, or a
+custom `apply_fn`/`map_qubits_fn` that will be frozen into future
+serialized data -- so it stops relying on removed/renamed APIs going
+forward.
 
 Three independent passes, run in order, together making up [](api:migrate_source):
 
@@ -26,6 +28,13 @@ Three independent passes, run in order, together making up [](api:migrate_source
 3. [](api:loqs.tools.migrate.flags): patterns whose replacement is a
    semantic change, not a pure rename (`.cast()`, `include_idles=`, an
    `"Iz"` string) -- always flagged, never auto-rewritten.
+
+A pass's own manual-review items are always relative to *its own* input
+line numbering; since an earlier pass may itself change the surrounding
+line count (e.g. collapsing a multi-line call onto one line), those items
+are remapped forward through each later pass via
+[](api:remap_manual_review) before being combined, so every reported line
+in the final result is accurate relative to the file actually written.
 """
 
 from __future__ import annotations
@@ -33,7 +42,12 @@ from __future__ import annotations
 from loqs.tools.migrate.flags import detect_flagged_patterns
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.renames import rewrite_renames
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    annotate_manual_review,
+    remap_manual_review,
+)
 
 __all__ = [
     "ManualReviewItem",
@@ -56,9 +70,27 @@ def migrate_source(source: str) -> MigrationResult:
     A [](api:MigrationResult): `.source` is safe to write back to disk
     even when `.manual_review` is non-empty -- only confidently-resolvable
     rewrites are ever applied, so nothing already flagged was also
-    (possibly wrongly) rewritten.
+    (possibly wrongly) rewritten. Whenever `.changed` is true, `.source`
+    also has a short explanatory comment inserted above each remaining
+    `.manual_review` line (see [](api:annotate_manual_review)), so the
+    file itself still documents what needs a look even without this
+    call's own return value kept around.
     """
-    result = rewrite_renames(source)
-    result = result.merge(migrate_instruction_labels(result.source))
+    rename_result = rewrite_renames(source)
+    label_result = migrate_instruction_labels(rename_result.source)
+    result = MigrationResult(
+        source=label_result.source,
+        changed=rename_result.changed or label_result.changed,
+        manual_review=(
+            remap_manual_review(
+                rename_result.source, label_result.source, rename_result.manual_review
+            )
+            + label_result.manual_review
+        ),
+    )
     result.manual_review.extend(detect_flagged_patterns(result.source))
+    if result.changed:
+        result.source, result.manual_review = annotate_manual_review(
+            result.source, result.manual_review
+        )
     return result

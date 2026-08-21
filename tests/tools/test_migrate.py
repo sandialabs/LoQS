@@ -1,9 +1,13 @@
 """Tester for loqs.tools.migrate"""
 
+import json
 from pathlib import Path
+
+import pytest
 
 from loqs.tools.migrate import migrate_source
 from loqs.tools.migrate.flags import detect_flagged_patterns
+from loqs.tools.migrate.ipynb import migrate_ipynb_source
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.notebook import migrate_notebook_source
 from loqs.tools.migrate.renames import RENAMES, rewrite_renames
@@ -247,6 +251,26 @@ class TestMigrateInstructionLabels:
         assert result.source == after
         assert len(result.manual_review) == 2
 
+    def test_manual_review_line_survives_an_earlier_line_collapse(self):
+        """A multi-line call rewritten onto a single line shortens the
+        file; anything flagged further down must still point at its own
+        correct line in the *rewritten* output, not the line it was on
+        before that collapse happened."""
+        src = (
+            'label_kwargs_only = InstructionLabel(\n'
+            '    "Increment", "L0", (), {"increment_by": 2}\n'
+            ')\n'
+            'unresolvable_kwargs = InstructionLabel("Increment", "L0", (), extra_kwargs)\n'
+        )
+        result = migrate_instruction_labels(src)
+        assert result.changed
+        lines = result.source.splitlines()
+        assert len(result.manual_review) == 1
+        item = result.manual_review[0]
+        assert lines[item.line - 1] == (
+            'unresolvable_kwargs = InstructionLabel("Increment", "L0", (), extra_kwargs)'
+        )
+
 
 class TestDetectFlaggedPatterns:
     def test_matches_golden_fixture(self):
@@ -279,14 +303,19 @@ class TestDetectFlaggedPatterns:
 
 class TestMigrateSource:
     def test_matches_golden_fixture_labels(self):
+        """`migrate_source`'s own output, unlike `migrate_instruction_labels`
+        called directly, also has a `# LOQS-MIGRATE` comment inserted
+        above each remaining flagged line (see `labels_after_annotated.py`
+        vs. the lower-level `labels_after.py`), since a confident rewrite
+        happened elsewhere in the same file."""
         before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("labels_after_annotated.py").read_text(encoding="utf-8")
         result = migrate_source(before)
         assert result.source == after
 
     def test_matches_golden_fixture_renames(self):
         before = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("renames_after.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("renames_after_annotated.py").read_text(encoding="utf-8")
         result = migrate_source(before)
         assert result.source == after
 
@@ -295,6 +324,19 @@ class TestMigrateSource:
         result = migrate_source(after)
         assert result.source == after
         assert not result.changed
+
+    def test_manual_review_lines_stay_accurate_after_annotation(self):
+        """Every reported `manual_review.line` must point at the exact
+        line the message is actually about in the *final* `.source` --
+        both the earlier rewrite that collapses a multi-line call onto
+        one line, and this pass's own inline `# LOQS-MIGRATE` comments,
+        push later lines down and have to be accounted for."""
+        before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
+        result = migrate_source(before)
+        lines = result.source.splitlines()
+        for item in result.manual_review:
+            assert 1 <= item.line <= len(lines)
+            assert "InstructionLabel" in lines[item.line - 1]
 
 
 class TestMigrateNotebookSource:
@@ -330,6 +372,200 @@ class TestMigrateNotebookSource:
         before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
         result = migrate_notebook_source(before)
         assert "patches2 = PatchDict()" in result.source
+
+    def test_flagged_cell_is_annotated_even_without_its_own_rewrite(self):
+        """A cell with nothing confidently rewritten still gets its own
+        `# LOQS-MIGRATE` comment once *some* cell in the document needs
+        rewriting -- the whole document is being modified either way, so
+        every remaining flagged spot should be documented in the file
+        itself, not just the one cell that happened to trigger a rewrite."""
+        source = (
+            "```{code-cell} ipython3\n"
+            "from loqs.backends.reps import RepTuple\n"
+            "rep = RepTuple(1, 2, 3)\n"
+            "```\n"
+            "\n"
+            "```{code-cell} ipython3\n"
+            "from loqs.core.recordables.patchdict import PatchDict\n"
+            'patches = PatchDict({"L0": None})\n'
+            "```\n"
+        )
+        result = migrate_notebook_source(source)
+        assert result.changed
+        lines = result.source.splitlines()
+        assert len(result.manual_review) == 2
+        for item in result.manual_review:
+            assert "RepTuple" in lines[item.line - 1]
+
+
+class TestMigrateIpynbSource:
+    def test_matches_golden_fixture(self):
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("notebook_after.ipynb").read_text(encoding="utf-8")
+        result = migrate_ipynb_source(before)
+        assert result.source == after
+        assert result.changed
+
+    def test_idempotent_on_already_migrated_source(self):
+        after = FIXTURES.joinpath("notebook_after.ipynb").read_text(encoding="utf-8")
+        result = migrate_ipynb_source(after)
+        assert result.source == after
+        assert not result.changed
+
+    def test_markdown_cells_are_never_touched(self):
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        result = migrate_ipynb_source(before)
+        markdown_cell = json.loads(result.source)["cells"][0]
+        assert markdown_cell["cell_type"] == "markdown"
+        assert (
+            'Mentions `PatchDict` and `InstructionLabel("Name", "L0", (), {})`'
+            in "".join(markdown_cell["source"])
+        )
+
+    def test_manual_review_items_are_labeled_by_cell(self):
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        result = migrate_ipynb_source(before)
+        messages = [str(item) for item in result.manual_review]
+        assert any("[cell 2]" in m and "RepTuple" in m for m in messages)
+        assert any("[cell 4]" in m and "inst_kwargs" in m for m in messages)
+
+    def test_explicit_call_and_bare_tuple_both_rewrite_in_a_cell(self):
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        result = migrate_ipynb_source(before)
+        cell_source = "".join(json.loads(result.source)["cells"][3]["source"])
+        assert 'InstructionLabel("Increment", increment_by=2, patch_label="L0")' in cell_source
+        assert (
+            '{"instruction": "Increment", "increment_by": 3, "patch_label": "L0"}'
+            in cell_source
+        )
+        # left untouched, not silently guessed at
+        assert 'InstructionLabel("Increment", "L0", (), extra_kwargs)' in cell_source
+
+    def test_source_stored_as_a_single_string_round_trips(self):
+        """`nbformat`'s schema also allows a code cell's `source` as one
+        bare string rather than a list of lines -- less common in
+        practice than Jupyter's own list convention, but still valid."""
+        notebook = {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": "x = 1 + 1\n",
+                }
+            ]
+        }
+        result = migrate_ipynb_source(json.dumps(notebook))
+        assert not result.changed
+        assert json.loads(result.source)["cells"][0]["source"] == "x = 1 + 1\n"
+
+    def test_invalid_json_raises(self):
+        with pytest.raises(Exception):
+            migrate_ipynb_source("not valid json")
+
+    def test_flagged_cell_is_annotated_even_without_its_own_rewrite(self):
+        """A cell with nothing confidently rewritten still gets its own
+        `# LOQS-MIGRATE` comment once *some* cell in the notebook needs
+        rewriting -- the whole file is being modified either way, so
+        every remaining flagged spot should be documented in the file
+        itself, not just the one cell that happened to trigger a rewrite."""
+        notebook = {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": [
+                        "from loqs.backends.reps import RepTuple\n",
+                        "rep = RepTuple(1, 2, 3)\n",
+                    ],
+                },
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": [
+                        "from loqs.core.recordables.patchdict import PatchDict\n",
+                        'patches = PatchDict({"L0": None})\n',
+                    ],
+                },
+            ]
+        }
+        result = migrate_ipynb_source(json.dumps(notebook))
+        assert result.changed
+        cells = json.loads(result.source)["cells"]
+        first_cell_source = "".join(cells[0]["source"])
+        assert "# LOQS-MIGRATE" in first_cell_source
+        assert len(result.manual_review) == 2
+        for item in result.manual_review:
+            assert "[cell 1]" in item.message
+
+    def test_ipython_magic_line_is_skipped_without_aborting_the_cell(self):
+        """A `%matplotlib inline`-style line isn't valid Python on its
+        own, but real code before and after it in the same cell should
+        still migrate normally rather than the whole cell being left
+        untouched."""
+        notebook = {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": [
+                        "%matplotlib inline\n",
+                        "from loqs.core.recordables.patchdict import PatchDict\n",
+                        'patches = PatchDict({"L0": None})\n',
+                    ],
+                }
+            ]
+        }
+        result = migrate_ipynb_source(json.dumps(notebook))
+        assert result.changed
+        cell_source = "".join(json.loads(result.source)["cells"][0]["source"])
+        assert "%matplotlib inline" in cell_source
+        assert "PatchLayout" in cell_source
+        assert "PatchDict" not in cell_source
+
+    def test_cell_magic_first_line_does_not_block_the_rest_of_the_cell(self):
+        """A `%%time`/`%%capture`-style cell magic only makes its own
+        first line non-Python -- the rest of the cell is ordinary code
+        that should still migrate."""
+        notebook = {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": [
+                        "%%time\n",
+                        "from loqs.core.recordables.patchdict import PatchDict\n",
+                        'patches = PatchDict({"L0": None})\n',
+                    ],
+                }
+            ]
+        }
+        result = migrate_ipynb_source(json.dumps(notebook))
+        assert result.changed
+        cell_source = "".join(json.loads(result.source)["cells"][0]["source"])
+        assert "%%time" in cell_source
+        assert "PatchLayout" in cell_source
+
+    def test_wholly_non_python_cell_magic_is_flagged_not_mangled(self):
+        """A `%%bash` (or `%%html`/`%%javascript`) cell's body isn't
+        Python at all -- stripping every line down to something
+        parseable would eventually succeed on an all-`pass` module, but
+        the cell should be left completely untouched and flagged instead
+        of silently reduced to that."""
+        bash_script = "%%bash\necho hello\nfor f in *.txt; do cat \"$f\"; done\n"
+        notebook = {
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": bash_script.splitlines(keepends=True),
+                }
+            ]
+        }
+        result = migrate_ipynb_source(json.dumps(notebook))
+        assert not result.changed
+        cell_source = "".join(json.loads(result.source)["cells"][0]["source"])
+        assert cell_source == bash_script
+        assert any("cell 1" in item.message for item in result.manual_review)
 
 
 class TestRenamesTableCoverage:
