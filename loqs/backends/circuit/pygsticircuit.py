@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence, Mapping
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 
+from loqs.backends._pygsti_gatenames import gatename_pygsti_safe_renames
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 
@@ -302,29 +303,11 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         self.circuit.line_labels = qubit_labels
 
     @staticmethod
-    def _pygsti_safe_gatename(name: str) -> str:
-        """The version of `name` that survives pyGSTi's string-form
-        circuit parser round-trip.
-
-        pyGSTi >=0.10's parser splits a gate name at its first uppercase
-        letter after the initial character (e.g. `"GiMCM"` parses back as
-        just `"Gi"`), a stricter grammar than earlier pyGSTi versions
-        tolerated. Lowercasing everything after that first character is
-        always safe here, since the first character is only ever checked
-        against pyGSTi's own fixed gate-name prefix (`"G"`).
-        """
-        return name if len(name) <= 1 else name[0] + name[1:].lower()
-
-    @classmethod
-    def _gatename_pygsti_safe_renames(cls, circuit: _Circuit) -> dict[str, str]:
+    def _gatename_pygsti_safe_renames(circuit: _Circuit) -> dict[str, str]:
         """`{original_name: pygsti_safe_name}` for every distinct gate
-        name in `circuit` that doesn't already survive pyGSTi's string
-        parser round-trip (see [](api:_pygsti_safe_gatename)).
-
-        Raises `ValueError` on a collision, i.e. two distinct gate names
-        that share the same safe form (e.g. `"GiMCM"` and `"Gimcm"`) --
-        aliasing both to the same name here would make the collision this
-        rewrite exists to avoid, rather than prevent it.
+        name in `circuit` that doesn't already survive pyGSTi's
+        string-form circuit parser round-trip (see
+        [](api:loqs.backends._pygsti_gatenames.gatename_pygsti_safe_renames)).
         """
         names = {
             comp.name
@@ -332,20 +315,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             for comp in circuit._layer_components(lidx)
             if comp.name
         }
-        renames: dict[str, str] = {}
-        safe_to_original: dict[str, str] = {}
-        for name in names:
-            safe_name = cls._pygsti_safe_gatename(name)
-            existing = safe_to_original.setdefault(safe_name, name)
-            if existing != name:
-                raise ValueError(
-                    f"Gate names {existing!r} and {name!r} both round-trip "
-                    f"through pyGSTi's string parser as {safe_name!r} -- "
-                    "rename one of them to serialize this circuit."
-                )
-            if safe_name != name:
-                renames[name] = safe_name
-        return renames
+        return gatename_pygsti_safe_renames(names)
 
     @classmethod
     def _deserialize_circuit(
@@ -404,9 +374,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     def _serialize_circuit(self) -> str | list | dict:
         # For pyGSTi circuit, we use the string rep -- but that only
         # round-trips through pyGSTi's own parser for gate names that
-        # survive it unchanged (see `_pygsti_safe_gatename`), so any
-        # gate name that doesn't gets serialized under a safe alias
-        # alongside the rename table needed to undo it on decode.
+        # survive it unchanged, so any gate name that doesn't gets
+        # serialized under a safe alias alongside the rename table
+        # needed to undo it on decode.
         renames = self._gatename_pygsti_safe_renames(self.circuit)
         if not renames:
             return repr(self.circuit)

@@ -87,6 +87,23 @@ def _build_implicit_model():
     return model
 
 
+def _build_implicit_model_with_idle_names(idle_names):
+    # Only an implicit (crosstalk-free/local-noise) model can hold gate
+    # names like "GiMCM" at all -- unlike ExplicitOpModel, its member
+    # dicts don't validate that a key round-trips through pyGSTi's own
+    # string-form label parser at assignment time (see
+    # `Model-member key ... does not round-trip through parse_label`).
+    all_names = ["Gxpi", *idle_names]
+    pspec = pygsti.processors.QubitProcessorSpec(
+        1,
+        gate_names=all_names,
+        nonstd_gate_unitaries={name: np.eye(2) for name in idle_names},
+        qubit_labels=["Q0"],
+        availability={name: "all-permutations" for name in all_names},
+    )
+    return pygsti.models.create_crosstalk_free_model(pspec)
+
+
 class TestConstruction:
     def test_raises_import_error_when_unavailable(self):
         original = backends_module._backend_availability["pygsti_model"]
@@ -968,3 +985,38 @@ class TestSerialization:
         rep = pgm2._get_gate_rep("Gxpi", ["Q0"], [UnitaryGateRep])
         assert isinstance(rep, UnitaryGateRep)
         assert rep.unitary.shape == (2, 2)
+
+    def test_round_trip_gatename_needing_pygsti_safe_alias(
+        self, make_temp_path
+    ):
+        # "GiMCM" doesn't survive pyGSTi's own string-form label parser
+        # unaliased -- it truncates a name at its first uppercase letter
+        # after the initial character, so "GiMCM" would otherwise
+        # round-trip as "Gi" and collide with the real "Gi" gate below,
+        # which pyGSTi's own model deserialization raises on.
+        model = _build_implicit_model_with_idle_names(["Gi", "GiMCM"])
+        pgm = PyGSTiNoiseModel(model)
+
+        encoded = pgm._get_encoding_attr("model")
+        assert isinstance(encoded, dict)
+        assert encoded["gatename_renames"] == {"GiMCM": "Gimcm"}
+
+        with make_temp_path(suffix=".json") as tmp_path:
+            pgm.write(tmp_path)
+            pgm2 = PyGSTiNoiseModel.read(tmp_path)
+
+        assert pgm2.model.is_similar(model)
+        assert set(pgm2.model.operation_blks["gates"].keys()) == set(
+            model.operation_blks["gates"].keys()
+        )
+        assert set(pgm2.model.operation_blks["layers"].keys()) == set(
+            model.operation_blks["layers"].keys()
+        )
+
+    def test_gatename_alias_collision_raises(self):
+        # "GiMCM" and "Gimcm" both alias to the same pyGSTi-safe name --
+        # serializing both in one model can't be reversed unambiguously.
+        model = _build_implicit_model_with_idle_names(["GiMCM", "Gimcm"])
+        pgm = PyGSTiNoiseModel(model)
+        with pytest.raises(ValueError, match="both round-trip"):
+            pgm._get_encoding_attr("model")

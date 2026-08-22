@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
+import re
 import warnings
 import numpy as np
 from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
+from loqs.backends._pygsti_gatenames import gatename_pygsti_safe_renames
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.model import BaseNoiseModel, TimeDependentBaseNoiseModel
 from loqs.backends.reps import (
@@ -812,21 +815,123 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             + "\n".join([str(e) for e in errors])
         )
 
+    _LABEL_NAME_RE: ClassVar = re.compile(r"[:;!]")
+
+    @classmethod
+    def _model_label_name(cls, label_str: str) -> str | None:
+        """The gate/operation name a pyGSTi label string starts with, or
+        `None` for a composite/parallel-layer label (one starting with
+        `"["` or `"("`) that this simple prefix split can't handle.
+
+        A pyGSTi `Label`'s string form always starts with its name,
+        immediately followed by one of `":"` (state-space labels),
+        `";"` (args), `"!"` (time), or nothing -- see the various
+        `Label.__str__` implementations in `pygsti.baseobjs.label`.
+        """
+        if label_str.startswith("[") or label_str.startswith("("):
+            return None
+        return cls._LABEL_NAME_RE.split(label_str, maxsplit=1)[0]
+
+    @classmethod
+    def _model_gatename_renames(cls, model_state: dict) -> dict[str, str]:
+        """`{original_name: pygsti_safe_name}` for every distinct
+        operation/gate name in `model_state` (a pyGSTi `Model`'s
+        `to_nice_serialization()`-style dict, as produced by
+        `json.loads(model.dumps())`) that doesn't survive pyGSTi's
+        string-form label parser round-trip (see
+        [](api:loqs.backends._pygsti_gatenames.gatename_pygsti_safe_renames)).
+        """
+        names = {
+            name
+            for node in model_state.get("modelmembers", {}).values()
+            for label_str in node.get("memberdict_labels", [])
+            for name in [cls._model_label_name(label_str)]
+            if name
+        }
+        return gatename_pygsti_safe_renames(names)
+
+    @classmethod
+    def _resolve_modelmember_container(cls, model: Model, mm_type: str):
+        """The `OrderedMemberDict`-like container a pyGSTi modelmember
+        graph's `mm_type` string (e.g. `"operation_blks|gates"` or
+        `"operations"`) refers to on `model` -- the same convention
+        `Model._from_nice_serialization` itself relies on to place
+        decoded modelmembers back onto the model.
+        """
+        parts = mm_type.split("|")
+        container = getattr(model, parts[0])
+        return container[parts[1]] if len(parts) > 1 else container
+
     def _get_encoding_attr(self, attr, ignore_no_serialize_flags=False):
         if attr == "model":
             # One opaque string via pyGSTi's own dumps(), instead of the raw
             # to_nice_serialization() dict LoQS's generic machinery would
             # otherwise wrap node-by-node -- much smaller in both formats.
-            return self.model.dumps()
+            model_str = self.model.dumps()
+
+            # But that string only round-trips through pyGSTi's own label
+            # parser for gate names that survive it unchanged, so any
+            # gate name that doesn't gets aliased in the dumped JSON
+            # alongside the rename table needed to undo it on decode.
+            model_state = json.loads(model_str)
+            renames = self._model_gatename_renames(model_state)
+            if not renames:
+                return model_str
+
+            for node in model_state.get("modelmembers", {}).values():
+                labels = node.get("memberdict_labels", [])
+                for i, label_str in enumerate(labels):
+                    name = self._model_label_name(label_str)
+                    if name in renames:
+                        labels[i] = renames[name] + label_str[len(name):]
+            return {
+                "model": json.dumps(model_state),
+                "gatename_renames": renames,
+            }
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
     def _from_decoded_attrs(cls: type[T], attr_dict: Mapping) -> T:
-        # A decoded "model" attr is either the new bare string or the older
-        # nested dict -- distinguishable by type, so both decode correctly.
+        # A decoded "model" attr is a bare (pygsti-safe) string, a
+        # {"model", "gatename_renames"} dict (see `_get_encoding_attr`),
+        # or an older raw to_nice_serialization() dict -- all
+        # distinguishable, so all decode correctly.
         encoded_model = attr_dict["model"]
         if isinstance(encoded_model, str):
             model = Model.loads(encoded_model)
+        elif "gatename_renames" in encoded_model:
+            model_str = encoded_model["model"]
+            model = Model.loads(model_str)
+
+            # Undo the safe aliasing from `_get_encoding_attr`: only the
+            # mm_types containing a renamed label actually need fixing up,
+            # found by re-scanning the (still-safely-aliased) state dict.
+            safe_to_original = {
+                v: k for k, v in encoded_model["gatename_renames"].items()
+            }
+            model_state = json.loads(model_str)
+            affected_mm_types = {
+                mm_type
+                for node in model_state.get("modelmembers", {}).values()
+                for mm_type, label_str in zip(
+                    node.get("memberdict_types", []),
+                    node.get("memberdict_labels", []),
+                )
+                if cls._model_label_name(label_str) in safe_to_original
+            }
+            for mm_type in affected_mm_types:
+                container = cls._resolve_modelmember_container(
+                    model, mm_type
+                )
+                for key in list(container.keys()):
+                    original_name = safe_to_original.get(
+                        getattr(key, "name", None)
+                    )
+                    if original_name is not None:
+                        value = container[key]
+                        del container[key]
+                        new_key = key.replace_name(key.name, original_name)
+                        container[new_key] = value
         else:
             model = Model.from_nice_serialization(encoded_model)
         qubit_aliases = attr_dict["qubit_aliases"]
