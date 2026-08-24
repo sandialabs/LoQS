@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence, Mapping
 from typing import ClassVar, TypeAlias, TYPE_CHECKING, Any
 
+from loqs.backends._pygsti_gatenames import gatename_pygsti_safe_renames
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 
@@ -301,12 +302,33 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
     ) -> None:
         self.circuit.line_labels = qubit_labels
 
+    @staticmethod
+    def _gatename_pygsti_safe_renames(circuit: _Circuit) -> dict[str, str]:
+        """`{original_name: pygsti_safe_name}` for every distinct gate
+        name in `circuit` that doesn't already survive pyGSTi's
+        string-form circuit parser round-trip (see
+        [](api:loqs.backends._pygsti_gatenames.gatename_pygsti_safe_renames)).
+        """
+        names = {
+            comp.name
+            for lidx in range(circuit.depth)
+            for comp in circuit._layer_components(lidx)
+            if comp.name
+        }
+        return gatename_pygsti_safe_renames(names)
+
     @classmethod
     def _deserialize_circuit(
         cls,
         serial_circuit: str | list | dict,
         qubit_labels: Sequence | None = None,
     ) -> _Circuit:
+        if isinstance(serial_circuit, dict):
+            circ = cls._deserialize_circuit(serial_circuit["circuit"], qubit_labels)
+            for old_name, safe_name in serial_circuit["gatename_renames"].items():
+                circ.replace_gatename_inplace(safe_name, old_name)
+            return circ
+
         # For pyGSTi circuit, we can load from string rep
         # (minus leading "Circuit(" and trailing ")" )
         assert isinstance(serial_circuit, str)
@@ -350,5 +372,16 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         return circ
 
     def _serialize_circuit(self) -> str | list | dict:
-        # For pyGSTi circuit, we use the string rep
-        return repr(self.circuit)
+        # For pyGSTi circuit, we use the string rep -- but that only
+        # round-trips through pyGSTi's own parser for gate names that
+        # survive it unchanged, so any gate name that doesn't gets
+        # serialized under a safe alias alongside the rename table
+        # needed to undo it on decode.
+        renames = self._gatename_pygsti_safe_renames(self.circuit)
+        if not renames:
+            return repr(self.circuit)
+
+        safe_circuit = self.circuit
+        for old_name, safe_name in renames.items():
+            safe_circuit = safe_circuit.replace_gatename(old_name, safe_name)
+        return {"circuit": repr(safe_circuit), "gatename_renames": renames}

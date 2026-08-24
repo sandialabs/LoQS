@@ -33,7 +33,7 @@
   - **`QuantumProgram.from_quantum_program`:** no longer unconditionally rebuilds unchanged `"Init State"`/`"Init Patch"`/`"Remove Patch"` instructions (~28x faster program construction).
   - **`ProgramResults.checkpoint()`:** now actually deduplicates shared objects across checkpoint calls instead of fully re-serializing each one every time, drastically shrinking checkpointed files.
   - **`History`/`InstructionStack` decoding:** no longer deep-copies content it already owns exclusively, making decode noticeably faster.
-  - **Surface-17/Quantinuum pyGSTi model bugs:** fixed idle-gate names colliding with pyGSTi's own gate-label parser, and the 17-qubit ideal model running out of memory by defaulting to a density-matrix instead of pure-state representation.
+  - **Surface-17/Quantinuum pyGSTi model bugs:** fixed idle-gate names colliding with pyGSTi's own gate-label parser for serialization, and the 17-qubit ideal model running out of memory by defaulting to a density-matrix instead of pure-state representation.
 - **Codepack `"Iz"` instrument renamed to `"Imrz"` (#101, @sserita):** Matches STIM's `MRZ` naming, clearer than the pyGSTi-inherited `"Iz"`. A handful of "instruction/gate not found"-style errors now mention this rename specifically when `"Iz"` is the name that failed to resolve.
 - **Simplifying multi-patch codepacks (#103, #112, @sserita):** Two complementary changes for codepacks with more than one patch.
   - **Runtime: `PatchDict` -> `PatchLayout`/`PatchRelation`.** `PatchDict` is renamed to `PatchLayout`, a strict superset additionally tracking `PatchRelation` objects (relationship data between a set of patches, e.g. lattice-surgery seam bookkeeping) keyed by participant patch labels; also adds `QECCodePatch.data_qubits`.

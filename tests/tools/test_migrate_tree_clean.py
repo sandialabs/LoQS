@@ -23,7 +23,7 @@ _EXPECTED_EXCEPTIONS = {
     # This tool's own source: `.cast(`/`"Iz"` appear as real regex
     # patterns and report-message text (loqs/tools/migrate/flags.py), or
     # are named in the package's own summary docstring
-    # (loqs/tools/migrate/__init__.py) or `--rename_Iz`'s own help text
+    # (loqs/tools/migrate/__init__.py) or `--rename-Iz`'s own help text
     # (loqs/tools/migrate/cli.py) -- not leftover legacy code.
     "loqs/tools/migrate/flags.py",
     "loqs/tools/migrate/__init__.py",
@@ -55,7 +55,7 @@ _EXPECTED_EXCEPTIONS = {
     "tests/backends/model/test_pygstimodel.py",
     "tests/core/test_quantumprogram.py",
     # This tool's own test suite: directly exercises `"Iz"` detection and
-    # `--rename_Iz`'s rewrite, both of which need the literal old string
+    # `--rename-Iz`'s rewrite, both of which need the literal old string
     # as real test input.
     "tests/tools/test_migrate.py",
     "tests/tools/test_migrate_cli.py",

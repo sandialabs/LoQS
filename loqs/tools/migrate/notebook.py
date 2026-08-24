@@ -46,7 +46,12 @@ from __future__ import annotations
 import re
 
 from loqs.tools.migrate import migrate_source
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, annotate_manual_review
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    RewriteItem,
+    annotate_manual_review,
+)
 
 _CELL_OPEN = re.compile(r"^```\{code-cell\}.*$")
 _FENCE_CLOSE = re.compile(r"^```\s*$")
@@ -59,10 +64,11 @@ def migrate_notebook_source(
     """Run [](api:migrate_source) over every code cell in a MyST Markdown
     document, leaving everything else untouched.
 
-    A [](api:ManualReviewItem)'s line number is relative to the whole
-    document (not the cell), matching [](api:migrate_source)'s own
-    per-file convention. `rename_iz`/`rename_patch_label` are forwarded
-    to every cell's own [](api:migrate_source) call unchanged.
+    A [](api:ManualReviewItem)/[](api:RewriteItem)'s line number is
+    relative to the whole document (not the cell), matching
+    [](api:migrate_source)'s own per-file convention.
+    `rename_iz`/`rename_patch_label` are forwarded to every cell's own
+    [](api:migrate_source) call unchanged.
     """
     lines = source.splitlines(keepends=True)
     # Each entry is either a plain passthrough string (prose, fences,
@@ -110,6 +116,7 @@ def migrate_notebook_source(
 
     output: list[str] = []
     manual_review: list[ManualReviewItem] = []
+    rewrites: list[RewriteItem] = []
     for segment in segments:
         if isinstance(segment, str):
             output.append(segment)
@@ -132,9 +139,12 @@ def migrate_notebook_source(
                     line=item.line + code_start, message=item.message, kind=item.kind
                 )
             )
+        for item in result.rewrites:
+            rewrites.append(RewriteItem(line=item.line + code_start, message=item.message))
 
     return MigrationResult(
         source="".join(output),
         changed=changed,
         manual_review=manual_review,
+        rewrites=rewrites,
     )

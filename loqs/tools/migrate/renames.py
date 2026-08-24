@@ -84,7 +84,12 @@ from libcst.metadata import (
 )
 
 from loqs.internal.serializable import Serializable
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    RewriteItem,
+    remap_rewrites,
+)
 
 _OLD_INSTRUMENT_REP_NAME = "ZBasisOutcomeOperationDictInstrumentRep"
 """The pre-1.2 name being renamed away from -- named as its own constant
@@ -110,6 +115,18 @@ RENAMES: dict[tuple[str, str], tuple[str, str] | None] = {
     # module docstring for why a blind rewrite would be wrong for both.
     ("loqs.backends.reps", "RepTuple"): None,
     ("loqs.backends.model.stimdictmodel", "STIMDictNoiseModel"): None,
+    # PatchDict -> PatchLayout: IMPORT_LOCATION_CHANGES_BY_VERSION only
+    # records where the class was actually *defined* pre-1.2
+    # (loqs.core.recordables.patchdict), but real source overwhelmingly
+    # imports it from one of the two convenience re-exports instead
+    # (both of which already export PatchLayout under its own name too,
+    # so each rewrites to a same-module class-name swap rather than a
+    # module change).
+    ("loqs.core.recordables", "PatchDict"): (
+        "loqs.core.recordables",
+        "PatchLayout",
+    ),
+    ("loqs.core", "PatchDict"): ("loqs.core", "PatchLayout"),
 }
 """`(old_module, old_name) -> (new_module, new_name) | None` (`None` means
 deleted outright, not relocated -- rewriting flags real remaining code
@@ -117,13 +134,14 @@ references for manual review instead of guessing a replacement).
 """
 
 
-class _DeletedNameFinder(cst.CSTVisitor):
+class _QualifiedNameFinder(cst.CSTVisitor):
     """Find real code references (not docstring/comment mentions) to a
-    deleted `(module, name)`: both an `import` of it (via a plain module/
-    name comparison -- `QualifiedNameProvider` doesn't resolve anything
-    useful for an import statement's own name node) and any later usage
-    of it (via the same `QualifiedNameProvider` resolution
-    [](api:RenameCommand) itself uses)."""
+    `(module, name)`, whether it's being renamed or deleted outright:
+    both an `import` of it (via a plain module/name comparison --
+    `QualifiedNameProvider` doesn't resolve anything useful for an import
+    statement's own name node) and any later usage of it (via the same
+    `QualifiedNameProvider` resolution [](api:RenameCommand) itself
+    uses)."""
 
     METADATA_DEPENDENCIES = (QualifiedNameProvider, PositionProvider)
 
@@ -184,9 +202,26 @@ def rewrite_renames(
     # file's text can't be referenced in its code either.
     applicable_renames = {k: v for k, v in renames.items() if k[1] in source}
     if not applicable_renames:
-        return MigrationResult(source=source, changed=False, manual_review=[])
+        return MigrationResult(source=source, changed=False, manual_review=[], rewrites=[])
 
     module = cst.parse_module(source)
+
+    # Every renamed (not deleted-outright) entry's own real references,
+    # found against the original, not-yet-rewritten module -- remapped
+    # to their final positions once every pass below has actually run
+    # (module-level line counts can shift, e.g. a new import added).
+    original_wrapper = MetadataWrapper(module)
+    rewrite_items: list[RewriteItem] = []
+    for (old_module, old_name), new_loc in applicable_renames.items():
+        if new_loc is None:
+            continue
+        _, new_name = new_loc
+        finder = _QualifiedNameFinder(old_module, old_name)
+        original_wrapper.visit(finder)
+        rewrite_items.extend(
+            RewriteItem(line=line, message=f"{old_name} -> {new_name}")
+            for line in finder.lines
+        )
 
     for (old_module, old_name), new_loc in applicable_renames.items():
         if new_loc is None:
@@ -212,10 +247,11 @@ def rewrite_renames(
             source=new_source,
             changed=new_source != source,
             manual_review=[],
+            rewrites=remap_rewrites(source, new_source, rewrite_items),
         )
     wrapper = MetadataWrapper(module)
     for old_module, old_name in deleted_names:
-        finder = _DeletedNameFinder(old_module, old_name)
+        finder = _QualifiedNameFinder(old_module, old_name)
         wrapper.visit(finder)
         for line in finder.lines:
             manual_review.append(
@@ -235,4 +271,5 @@ def rewrite_renames(
         source=new_source,
         changed=new_source != source,
         manual_review=manual_review,
+        rewrites=remap_rewrites(source, new_source, rewrite_items),
     )

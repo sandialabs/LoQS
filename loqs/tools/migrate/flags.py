@@ -35,7 +35,7 @@ just name, so guessing a rewrite would be dishonest rather than helpful.
   an identifier reference, so a blind rewrite risks matching unrelated
   text that just happens to contain the same two characters -- flagged by
   default, but rewritten for real when the caller opts in (the CLI's
-  `--rename_Iz`), via [](api:rewrite_iz_literal).
+  `--rename-Iz`), via [](api:rewrite_iz_literal).
 
 `STIMDictNoiseModel` real code references, and any `RepTuple` construction
 [](api:loqs.tools.migrate.reptuple) can't confidently resolve to a concrete
@@ -52,7 +52,7 @@ import re
 import libcst as cst
 
 from loqs.tools.migrate.renames import RENAMES
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult
+from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, RewriteItem
 
 _CASTABLE_CLASS_NAMES = sorted(
     {
@@ -71,7 +71,7 @@ _LINE_PATTERNS: dict[str, re.Pattern] = {
 
 # Kept separate from `_LINE_PATTERNS` above: unlike those, this one is
 # also used for a real rewrite (`rewrite_iz_literal`), and its items need
-# the `"iz"` `kind` tag so the CLI can suggest `--rename_Iz`.
+# the `"iz"` `kind` tag so the CLI can suggest `--rename-Iz`.
 _IZ_MESSAGE = '"Iz" string literal (likely the old instrument name, renamed to "Imrz" in v1.2)'
 _IZ_PATTERN = re.compile(r"""(['"])Iz\1""")
 
@@ -103,21 +103,22 @@ def _detect_iz_literal(source: str) -> list[ManualReviewItem]:
 def rewrite_iz_literal(source: str) -> MigrationResult:
     """Rewrite every bare `"Iz"`/`'Iz'` string literal to `"Imrz"`/`'Imrz'`,
     preserving its original quote style. Opt-in only (the CLI's
-    `--rename_Iz`) -- see the module docstring for why this isn't done by
+    `--rename-Iz`) -- see the module docstring for why this isn't done by
     default. No manual-review item is produced for a line this rewrites;
     unlike the `patch_label` inst_kwarg case in
     [](api:loqs.tools.migrate.labels), nothing else needs a follow-up
     once the string itself is renamed.
     """
-    changed = False
+    rewrites: list[RewriteItem] = []
 
     def _replace(match: re.Match) -> str:
-        nonlocal changed
-        changed = True
+        line = source.count("\n", 0, match.start()) + 1
+        rewrites.append(RewriteItem(line=line, message='"Iz" -> "Imrz"'))
         quote = match.group(1)
         return f"{quote}Imrz{quote}"
 
-    return MigrationResult(source=_IZ_PATTERN.sub(_replace, source), changed=changed)
+    new_source = _IZ_PATTERN.sub(_replace, source)
+    return MigrationResult(source=new_source, changed=bool(rewrites), rewrites=rewrites)
 
 
 def _func_name(node: cst.BaseExpression) -> str | None:

@@ -96,12 +96,12 @@ _LAYOUT_NAMES = {"surf17": "Surface-17 Code", "surf13": "Surface-13 Code", "surf
 # module (codepack_surf17_multipatch.py and codepack_surf17_surgery.py both
 # import these rather than keeping their own copies).
 DEFAULT_GATE_DURATIONS: dict[str, int | float] = {
-    "Gi": 1, "Gi1q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
+    "Gi": 1, "Gi1Q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
     "Gzpi2": 1, "Gzmpi2": 1, "Gh": 1,
-    "Gcnot": 2, "Gi2q": 2,
-    "Imrz": 3, "Gimcm": 3,
+    "Gcnot": 2, "Gi2Q": 2,
+    "Imrz": 3, "GiMCM": 3,
 }
-DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1q", 2: "Gi2q", 3: "Gimcm"}
+DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 
 # Syndrome-extraction tiles in execution order (template data labels), and
 # which H-check row each execution tile measures. Slot order is
@@ -1154,15 +1154,15 @@ def create_ideal_model(
         "Gh",
         "Gcnot",
         "Gi",
-        "Gi1q",
-        "Gi2q",
-        "Gimcm",
+        "Gi1Q",
+        "Gi2Q",
+        "GiMCM",
     ]
 
     nonstd_unitaries = {
-        "Gi1q": np.eye(2),
-        "Gi2q": np.eye(2),
-        "Gimcm": np.eye(2),
+        "Gi1Q": np.eye(2),
+        "Gi2Q": np.eye(2),
+        "GiMCM": np.eye(2),
     }
 
     if model_backend == PyGSTiNoiseModel:
@@ -1192,7 +1192,7 @@ def create_ideal_model(
 
     elif model_backend == DictNoiseModel:
         # Standard-gate-name unitaries needed alongside `nonstd_unitaries`
-        # (which already covers "Gi1q"/"Gi2q"/"Gimcm" above). Sourced from
+        # (which already covers "Gi1Q"/"Gi2Q"/"GiMCM" above). Sourced from
         # `STANDARD_GATE_UNITARIES` rather than
         # `pygsti.tools.internalgates.standard_gatename_unitaries()` so
         # this branch doesn't need pyGSTi installed at all (matching the

@@ -183,15 +183,15 @@ model_td1.default_gate_durations = {
     "Gzpi2": 0,
     "Gzmpi2": 0,
     "Gi": 1,
-    "Gi1q": 1,
+    "Gi1Q": 1,
     'Gxpi': 1,
     'Gypi': 1,
     'Gh': 1,
     'Gk': 1,
-    'Gi2q': 10,
+    'Gi2Q': 10,
     'Gcnot': 10,
     'Gcphase': 10,
-    'Gimcm': 100
+    'GiMCM': 100
 }
 
 model_td1.default_instrument_durations = {

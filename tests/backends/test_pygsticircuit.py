@@ -259,6 +259,36 @@ class TestPyGSTiPhysicalCircuit:
         assert isinstance(pc2, PhysCirc)
         self._check(pc2, self.test_circ)
 
+    def test_serialization_gatename_needing_pygsti_safe_alias(self, make_temp_path):
+        # "GiMCM" doesn't survive pyGSTi's own string-form circuit parser
+        # unaliased -- it truncates a gate name at its first uppercase
+        # letter after the initial character, so "GiMCM" would otherwise
+        # round-trip as "Gi" and collide with the real "Gi" gate below.
+        circ = Circuit(
+            [[("GiMCM", "Q0")], [("Gi", "Q0")]], line_labels=["Q0"]
+        )  # type: ignore
+        pc = PhysCirc(circ)
+
+        serialized = pc._serialize_circuit()
+        assert isinstance(serialized, dict)
+        assert serialized["gatename_renames"] == {"GiMCM": "Gimcm"}
+
+        with make_temp_path(suffix=".json") as tmp_path:
+            pc.write(tmp_path)
+            pc2 = PhysCirc.read(tmp_path)
+
+        self._check(pc2, circ)
+
+    def test_serialization_gatename_alias_collision_raises(self):
+        # "GiMCM" and "Gimcm" both alias to the same pyGSTi-safe name --
+        # serializing both in one circuit can't be reversed unambiguously.
+        circ = Circuit(
+            [[("GiMCM", "Q0")], [("Gimcm", "Q0")]], line_labels=["Q0"]
+        )  # type: ignore
+        pc = PhysCirc(circ)
+        with pytest.raises(ValueError, match="both round-trip"):
+            pc._serialize_circuit()
+
 
 # class TestPyGSTiPhysicalCircuitFailedImport:
 #         # Mock not having the pygsti available
