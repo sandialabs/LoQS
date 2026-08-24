@@ -435,6 +435,8 @@ class QuantumProgram(Displayable):
         -------
         ProgramResults
              A [](api:ProgramResults) object containing the shot histories.
+             Also cached on `self._last_results`, so code that doesn't keep
+             this return value can still retrieve it afterward.
         """
 
         # Create ProgramResults object to store results
@@ -559,6 +561,11 @@ class QuantumProgram(Displayable):
                                     checkpoint_dir,
                                     checkpoint_strategy,
                                 )
+
+        # Cache the results so a caller who doesn't hold onto this return
+        # value (e.g. `for program in programs: program.run(...)`) can still
+        # have them picked up later via `getattr(program, "_last_results", None)`.
+        self._last_results = program_results
 
         return program_results
 

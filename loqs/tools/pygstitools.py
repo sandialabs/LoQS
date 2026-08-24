@@ -91,7 +91,8 @@ def convert_edesign_to_programs(
 
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
-    collect_shot_data_args: HistoryCollectDataArgsType = (
+    collect_shot_data_args: HistoryCollectDataArgsType
+    | Mapping[str, HistoryCollectDataArgsType] = (
         "logical_measurement",
         -1,
     ),
@@ -105,9 +106,14 @@ def convert_run_programs_to_dataset(
         with [](api:QuantumProgram.run) having been called on the programs
         with the desired number of shots.
 
-    collect_shot_data_args : HistoryCollectDataArgsType, optional
+    collect_shot_data_args : HistoryCollectDataArgsType | Mapping[str, HistoryCollectDataArgsType], optional
         The arguments to [](api:ProgramResults.collect_shot_data) to extract
-        outcomes from each shot. The output should be a single element per shot, by default ("logical_measurement", -1)
+        outcomes from each shot. The output should be a single element per shot, by default ("logical_measurement", -1).
+        For circuits acting on multiple logical qubits/patches whose outcomes each need their own
+        `collect_shot_data` call (e.g. one `"logical_measurement"` per patch), pass a mapping instead,
+        e.g. `{"Q0": ("logical_measurement", -4), "Q1": ("logical_measurement", -1)}`. Each shot's
+        per-key values are then joined (in the mapping's iteration order) into a single outcome
+        string, e.g. `"01"`, rather than each key producing its own separate outcome.
 
     Returns
     -------
@@ -125,9 +131,24 @@ def convert_run_programs_to_dataset(
         if program_results is None:
             # If no results stored, run the program
             program_results = prog.run()
-        counts = Counter(
-            program_results.collect_shot_data(*collect_shot_data_args)
-        )
+
+        if isinstance(collect_shot_data_args, Mapping):
+            # One collect_shot_data call per key, then join each shot's
+            # per-key values (in mapping order) into a single outcome string.
+            per_key_shot_values = [
+                program_results.collect_shot_data(*args)
+                for args in collect_shot_data_args.values()
+            ]
+            outcomes = [
+                "".join(str(v) for v in shot_values)
+                for shot_values in zip(*per_key_shot_values)
+            ]
+        else:
+            outcomes = program_results.collect_shot_data(
+                *collect_shot_data_args
+            )
+
+        counts = Counter(outcomes)
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)
