@@ -7,16 +7,18 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Generic machinery for keeping old class names constructible after a move or removal."""
+"""Generic machinery for deprecating old classes and functions after a move, rename, or removal."""
 
 from __future__ import annotations
 
+import functools
 import importlib
 import importlib.util
 import sys
 import types
 import warnings
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from loqs.internal import Displayable
@@ -150,3 +152,52 @@ def make_legacy_construction_shim(
         return build(*args, **kwargs)
 
     return type(name, (Displayable,), {"__new__": __new__})
+
+
+@dataclass
+class DeprecationInfo:
+    """Structured info describing why a function is deprecated, stored on
+    its wrapped version by [](api:deprecated) for later introspection --
+    e.g. by a future `loqs-migrate` rename-table entry once the function
+    is actually removed."""
+
+    replacement: str
+    note: str | None
+
+
+_DEFAULT_DEPRECATION_NOTE = (
+    "Will possibly be removed in a future release. Create a GitHub issue "
+    "if new functionality does not cover your usecase."
+)
+
+
+def deprecated(
+    replacement: str,
+    *,
+    note: str | None = _DEFAULT_DEPRECATION_NOTE,
+    stacklevel: int = 2,
+) -> Callable[[Callable], Callable]:
+    """Mark a function as deprecated.
+
+    Wraps the function so calling it warns (`DeprecationWarning`) with a
+    consistently-formatted message naming `replacement`, then delegates to
+    the original function unchanged. Unlike
+    [](api:make_legacy_construction_shim), which replaces a class's
+    construction outright, this leaves the function's own behavior
+    untouched and only adds the warning.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        message = f"{func.__name__} is deprecated; use {replacement} instead."
+        if note:
+            message += f" {note}"
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
+            return func(*args, **kwargs)
+
+        wrapper.__deprecated__ = DeprecationInfo(replacement=replacement, note=note)
+        return wrapper
+
+    return decorator
