@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 import numpy as np
@@ -18,6 +19,7 @@ from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tqdm import tqdm
 
 from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.historydatacollector import (
@@ -63,6 +65,7 @@ def _build_program_for_circuit(
     for label in completed_circ._labels:  # type: ignore
         stack.extend(label_to_logical[label])
 
+    program_kwargs.pop("name", None)
     return QuantumProgram(stack, name=repr(circ), **program_kwargs)
 
 
@@ -131,9 +134,6 @@ def convert_edesign_to_programs(
     """
     label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
 
-    if "name" in kwargs:
-        del kwargs["name"]
-
     return [
         _build_program_for_circuit(circ, model, label_to_logical, **kwargs)
         for circ in edesign.all_circuits_needing_data
@@ -175,8 +175,6 @@ def convert_run_programs_to_dataset(
     DataSet
         A pyGSTi `DataSet` with outcomes stripped from the programs.
     """
-    from collections import Counter
-
     circs = [Circuit(p.name[8:-1]) for p in programs]
 
     ds = DataSet()
@@ -195,6 +193,90 @@ def convert_run_programs_to_dataset(
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)
+
+    return ds
+
+
+def simulate_dataset_for_edesign(
+    edesign: ExperimentDesign,
+    physical_model: ExplicitOpModel,
+    physical_to_logical: Mapping[
+        str | tuple, list[InstructionLabelLike]
+    ],
+    num_shots: int,
+    collect_shot_data_args: HistoryDataCollectorLike
+    | list[HistoryDataCollectorLike] = (
+        "logical_measurement",
+        -1,
+    ),
+    **program_kwargs,
+) -> DataSet:
+    """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
+
+    Fuses `convert_edesign_to_programs`, [](api:QuantumProgram.run), and
+    `convert_run_programs_to_dataset`'s collection step into a single pass
+    over `edesign.all_circuits_needing_data`: each circuit's program is
+    built, run, and reduced to a row of counts in turn, with the program
+    and its results dropped before the next circuit starts. This bounds
+    peak memory to roughly one circuit's worth of shots, rather than
+    every circuit's `QuantumProgram`/`ProgramResults` at once. Progress is
+    reported with one bar over circuits rather than [](api:QuantumProgram.run)'s
+    own per-shot bar, which would otherwise print once per circuit.
+
+    Parameters
+    ----------
+    edesign : ExperimentDesign
+        pyGSTi `ExperimentDesign` to simulate.
+
+    physical_model : ExplicitOpModel
+        pyGSTi model for the edesign. Currently only used
+        for `physical_model.complete_circuit`, to be removed soon.
+
+    physical_to_logical : Mapping[str | tuple, list[InstructionLabelLike]]
+        A mapping from pyGSTi physical circuit labels to
+        [](api:InstructionStackLike) to build up
+        the [](api:InstructionStack) for each circuit's program.
+
+    num_shots : int
+        Number of shots to run for each circuit.
+
+    collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
+        The [](api:HistoryDataCollector) recipe(s) used to extract outcomes
+        from each shot. See `convert_run_programs_to_dataset` for the
+        single-recipe vs. multi-recipe list behavior, by default
+        `("logical_measurement", -1)`.
+
+    **program_kwargs : Any
+        Any additional kwargs that should be passed to each circuit's
+        [](api:QuantumProgram).
+
+    Returns
+    -------
+    DataSet
+        A pyGSTi `DataSet` with one row of counts per circuit in
+        `edesign.all_circuits_needing_data`.
+    """
+    label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
+
+    ds = DataSet()
+    circuits = edesign.all_circuits_needing_data
+    for circ in tqdm(circuits, desc="Simulating edesign circuits"):
+        program = _build_program_for_circuit(
+            circ, physical_model, label_to_logical, **program_kwargs
+        )
+        program_results = program.run(num_shots, verbose=False)
+
+        outcomes = _collect_program_outcomes(
+            program_results, collect_shot_data_args
+        )
+        counts = Counter(outcomes)
+        count_dict = {(str(k),): v for k, v in counts.items()}
+
+        ds.add_count_dict(circ, count_dict)
+
+        # Drop references so the program/results are collectible before
+        # the next circuit, bounding peak memory across the whole edesign.
+        del program, program_results
 
     return ds
 
