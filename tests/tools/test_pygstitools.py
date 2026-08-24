@@ -1,5 +1,9 @@
 """Tester for loqs.tools.pygstitools"""
 
+import copy
+import gc
+import weakref
+
 import pytest
 
 pygsti = pytest.importorskip("pygsti")
@@ -14,10 +18,75 @@ from loqs.backends import DictNoiseModel, STIMQuantumState, StimCircuitGateRep
 from loqs.core import Frame, History, PatchGeometry, ProgramResults, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.tools import pygstitools
 from loqs.tools.pygstitools import (
     convert_edesign_to_programs,
     convert_run_programs_to_dataset,
+    simulate_dataset_for_edesign,
 )
+
+
+class _TrivialCounterSetup:
+    """A minimal single-qubit edesign (an empty circuit and a one-`Gxpi2`
+    circuit) plus a `physical_to_logical` mapping onto the trivial-counter
+    codepack, shared by every `simulate_dataset_for_edesign` test below.
+    The empty circuit never increments the counter (outcome `"0"`); the
+    one-gate circuit increments it once (outcome `"1"`).
+    """
+
+    def __init__(self):
+        pspec = QubitProcessorSpec(
+            num_qubits=1, gate_names=["Gxpi2"], qubit_labels=["Q0"]
+        )
+        self.model = create_explicit_model(pspec, ideal_gate_type="full TP")
+        self.circs = [
+            Circuit([], line_labels=["Q0"]),
+            Circuit([("Gxpi2", "Q0")], line_labels=["Q0"]),
+        ]
+        self.edesign = ExperimentDesign(self.circs)
+        self.physical_to_logical = {
+            "rho0": [
+                {
+                    "instruction": "Init Patch Trivial",
+                    "new_patch_label": "L0",
+                    "qubits": ["Q0"],
+                },
+                {
+                    "instruction": "Init Counter",
+                    "patch_label": "L0",
+                    "initial_value": 0,
+                },
+            ],
+            ("Gxpi2", "Q0"): [("Increment", "L0")],
+            "Mdefault": [],
+        }
+        trivial_code = trivial_codepack.create_qec_code()
+        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        self.program_kwargs = dict(
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+        )
+
+    def simulate(self, ckpt=None, **overrides):
+        """Call `simulate_dataset_for_edesign` with this setup's edesign/model/
+        physical_to_logical/`collect_shot_data_args=("counter", -1)` and
+        `num_shots=1` as defaults, overridable via `overrides`."""
+        kwargs = dict(
+            edesign=self.edesign,
+            physical_model=self.model,
+            physical_to_logical=self.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            checkpoint_path=ckpt,
+        )
+        kwargs.update(overrides)
+        kwargs.update(self.program_kwargs)
+        return simulate_dataset_for_edesign(**kwargs)
+
+
+@pytest.fixture
+def trivial_counter_setup():
+    return _TrivialCounterSetup()
 
 
 def _fake_program(circuit_repr, shot_frames):
@@ -140,6 +209,18 @@ class TestConvertRunProgramsToDataset:
 
         assert ds[Circuit("()")].counts[("2",)] == 1
 
+    def test_warns_deprecation(self):
+        """Calling convert_run_programs_to_dataset warns DeprecationWarning,
+        pointing at simulate_dataset_for_edesign as its replacement."""
+        circ = Circuit([("Gh", "Q0")], line_labels=["Q0"])
+        program = _fake_program(
+            repr(circ), [[Frame({"logical_measurement": 0})]]
+        )
+        with pytest.warns(
+            DeprecationWarning, match="simulate_dataset_for_edesign"
+        ):
+            convert_run_programs_to_dataset([program])
+
 
 class TestConvertEdesignToPrograms:
 
@@ -195,6 +276,17 @@ class TestConvertEdesignToPrograms:
         # circuit increments it once.
         assert ds[circs[0]].counts[("0",)] == 1
         assert ds[circs[1]].counts[("1",)] == 1
+
+    def test_warns_deprecation(self, trivial_counter_setup):
+        """Calling convert_edesign_to_programs warns DeprecationWarning,
+        pointing at simulate_dataset_for_edesign as its replacement."""
+        s = trivial_counter_setup
+        with pytest.warns(
+            DeprecationWarning, match="simulate_dataset_for_edesign"
+        ):
+            convert_edesign_to_programs(
+                s.edesign, s.model, s.physical_to_logical, **s.program_kwargs
+            )
 
 
 class TestPipelineWithMultiplePatches:
@@ -258,3 +350,183 @@ class TestPipelineWithMultiplePatches:
 
         # Deterministic, noiseless model: L0 always "1", L1 always "0".
         assert ds[Circuit("()")].counts[("10",)] == 5
+
+
+class TestSimulateDatasetForEdesign:
+
+    def test_end_to_end_matches_deprecated_pipeline(self, trivial_counter_setup):
+        """A normal (non-checkpointed) run produces the same per-circuit
+        counts as the deprecated convert_edesign_to_programs +
+        convert_run_programs_to_dataset pipeline."""
+        s = trivial_counter_setup
+        ds = s.simulate()
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_resume_without_checkpoint_path_raises(self, trivial_counter_setup):
+        """resume=True with no checkpoint_path is a configuration error,
+        not something that's silently ignored."""
+        s = trivial_counter_setup
+        with pytest.raises(ValueError, match="checkpoint_path"):
+            s.simulate(resume=True)
+
+
+class TestSimulateDatasetForEdesignCheckpointing:
+
+    def test_checkpoint_run_matches_non_checkpointed_result(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Checkpointing doesn't change the resulting counts, and leaves a
+        checkpoint file behind."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+
+        ds = s.simulate(ckpt=ckpt)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+        assert ckpt.exists()
+
+    def test_resume_false_with_existing_checkpoint_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A checkpoint that already exists is never silently overwritten
+        or ignored -- resume=True must be passed explicitly."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+        s.simulate(ckpt=ckpt)
+
+        with pytest.raises(FileExistsError, match=str(ckpt)):
+            s.simulate(ckpt=ckpt)
+
+    def test_resume_skips_already_checkpointed_circuits(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Resuming only re-simulates circuits missing from the checkpoint,
+        while still returning a complete DataSet covering every circuit."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+
+        # Checkpoint only the first circuit up front.
+        partial_edesign = ExperimentDesign([s.circs[0]])
+        s.simulate(ckpt=ckpt, edesign=partial_edesign)
+
+        ds = s.simulate(ckpt=ckpt, resume=True)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_crash_truncated_last_row_is_redone_on_resume(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A checkpoint row left incomplete by a simulated crash (no
+        trailing newline) is dropped and its circuit redone from scratch,
+        rather than failing to parse or being treated as complete."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+        s.simulate(ckpt=ckpt)
+
+        lines = ckpt.read_text().splitlines(keepends=True)
+        truncated = "".join(lines[:-1]) + lines[-1][: len(lines[-1]) // 2]
+        ckpt.write_text(truncated)
+
+        ds = s.simulate(ckpt=ckpt, resume=True)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_resume_mismatched_num_shots_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed call with a different num_shots than the checkpoint
+        was written with is a hard error naming that field."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+        s.simulate(ckpt=ckpt)
+
+        with pytest.raises(ValueError, match="num_shots"):
+            s.simulate(ckpt=ckpt, resume=True, num_shots=2)
+
+    def test_resume_mismatched_collect_shot_data_args_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed call with a different collect_shot_data_args than the
+        checkpoint was written with is a hard error naming that field."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+        s.simulate(ckpt=ckpt)
+
+        with pytest.raises(ValueError, match="collect_shot_data_args"):
+            s.simulate(
+                ckpt=ckpt, resume=True, collect_shot_data_args=("counter", -2)
+            )
+
+    def test_resume_mismatched_physical_to_logical_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed call with a different physical_to_logical than the
+        checkpoint was written with is a hard error naming that field, even
+        though only one leaf value actually changed."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+        s.simulate(ckpt=ckpt)
+
+        changed_p2l = copy.deepcopy(s.physical_to_logical)
+        changed_p2l["rho0"][1]["initial_value"] = 1
+
+        with pytest.raises(ValueError, match="physical_to_logical"):
+            s.simulate(ckpt=ckpt, resume=True, physical_to_logical=changed_p2l)
+
+    def test_force_resume_bypasses_config_mismatch(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """force_resume=True proceeds despite a config mismatch that would
+        otherwise raise, rather than requiring an untouched checkpoint."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+        s.simulate(ckpt=ckpt)
+
+        ds = s.simulate(ckpt=ckpt, resume=True, force_resume=True, num_shots=2)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+
+class TestSimulateDatasetForEdesignMemoryBound:
+
+    def test_previous_circuits_program_is_dropped_before_the_next_is_built(
+        self, trivial_counter_setup, monkeypatch
+    ):
+        """Each circuit's QuantumProgram/ProgramResults is actually
+        collectible before the next circuit's program is built, not just
+        intended to be -- confirms peak memory stays bounded across
+        circuits rather than merely relying on the loop eventually
+        finishing."""
+        s = trivial_counter_setup
+        circs = s.circs + [
+            Circuit([("Gxpi2", "Q0"), ("Gxpi2", "Q0")], line_labels=["Q0"])
+        ]
+        edesign = ExperimentDesign(circs)
+
+        live_refs = []
+        original_build = pygstitools._build_program_for_circuit
+
+        def tracking_build(circ, physical_model, label_to_logical, **kwargs):
+            gc.collect()
+            for ref in live_refs:
+                assert ref() is None, (
+                    "A previous circuit's QuantumProgram was still alive "
+                    "when building the next one."
+                )
+            program = original_build(
+                circ, physical_model, label_to_logical, **kwargs
+            )
+            live_refs.append(weakref.ref(program))
+            return program
+
+        monkeypatch.setattr(
+            pygstitools, "_build_program_for_circuit", tracking_build
+        )
+
+        s.simulate(edesign=edesign)
