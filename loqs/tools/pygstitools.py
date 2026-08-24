@@ -19,7 +19,7 @@ import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
-from loqs.core import QuantumProgram
+from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.historydatacollector import (
     HistoryDataCollector,
     HistoryDataCollectorLike,
@@ -27,6 +27,7 @@ from loqs.core.historydatacollector import (
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
+from loqs.internal.legacy import deprecated
 
 try:
     import pygsti  # noqa: F401
@@ -42,6 +43,58 @@ except ImportError as e:
 
 
 ## EDESIGN CONVERSION TOOLS
+def _build_program_for_circuit(
+    circ: Circuit,
+    physical_model: ExplicitOpModel,
+    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
+    **program_kwargs,
+) -> QuantumProgram:
+    """Build the [](api:QuantumProgram) for a single edesign circuit.
+
+    Used by `convert_edesign_to_programs`, and shared by any other caller
+    that builds one program at a time rather than materializing every
+    program in an edesign up front. `label_to_logical` is expected to
+    already have `Label`-typed keys, converted once by the caller rather
+    than per circuit.
+    """
+    completed_circ: Circuit = physical_model.complete_circuit(circ)  # type: ignore
+
+    stack = []
+    for label in completed_circ._labels:  # type: ignore
+        stack.extend(label_to_logical[label])
+
+    return QuantumProgram(stack, name=repr(circ), **program_kwargs)
+
+
+def _collect_program_outcomes(
+    program_results: ProgramResults,
+    collect_shot_data_args: HistoryDataCollectorLike
+    | list[HistoryDataCollectorLike],
+) -> list[str]:
+    """Extract one outcome-label string per shot from a single program's results.
+
+    Used by `convert_run_programs_to_dataset`, and shared by any other
+    caller that needs to turn one program's raw shot results into outcome
+    labels. A single recipe (cast via [](api:HistoryDataCollector.from_raw))
+    returns its `collect` output unchanged; a `list` of recipes instead makes
+    one `collect` call per entry and joins each shot's per-entry values, in
+    list order, into a single combined outcome string.
+    """
+    if isinstance(collect_shot_data_args, list):
+        per_collector_shot_values = [
+            HistoryDataCollector.from_raw(c).collect(program_results)
+            for c in collect_shot_data_args
+        ]
+        return [
+            "".join(str(v) for v in shot_values)
+            for shot_values in zip(*per_collector_shot_values)
+        ]
+    return HistoryDataCollector.from_raw(collect_shot_data_args).collect(
+        program_results
+    )
+
+
+@deprecated("simulate_dataset_for_edesign")
 def convert_edesign_to_programs(
     edesign: ExperimentDesign,
     model: ExplicitOpModel,
@@ -81,19 +134,13 @@ def convert_edesign_to_programs(
     if "name" in kwargs:
         del kwargs["name"]
 
-    programs = []
-    for circ in edesign.all_circuits_needing_data:
-        completed_circ: Circuit = model.complete_circuit(circ)  # type: ignore
-
-        stack = []
-        for label in completed_circ._labels:  # type: ignore
-            stack.extend(label_to_logical[label])
-
-        programs.append(QuantumProgram(stack, name=repr(circ), **kwargs))
-
-    return programs
+    return [
+        _build_program_for_circuit(circ, model, label_to_logical, **kwargs)
+        for circ in edesign.all_circuits_needing_data
+    ]
 
 
+@deprecated("simulate_dataset_for_edesign")
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
     collect_shot_data_args: HistoryDataCollectorLike
@@ -140,21 +187,9 @@ def convert_run_programs_to_dataset(
             # If no results stored, run the program
             program_results = prog.run()
 
-        if isinstance(collect_shot_data_args, list):
-            # One HistoryDataCollector per entry, joining each shot's
-            # per-collector values (in list order) into a single outcome string.
-            per_collector_shot_values = [
-                HistoryDataCollector.from_raw(c).collect(program_results)
-                for c in collect_shot_data_args
-            ]
-            outcomes = [
-                "".join(str(v) for v in shot_values)
-                for shot_values in zip(*per_collector_shot_values)
-            ]
-        else:
-            outcomes = HistoryDataCollector.from_raw(
-                collect_shot_data_args
-            ).collect(program_results)
+        outcomes = _collect_program_outcomes(
+            program_results, collect_shot_data_args
+        )
 
         counts = Counter(outcomes)
         count_dict = {(str(k),): v for k, v in counts.items()}
