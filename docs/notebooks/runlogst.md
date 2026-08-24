@@ -27,7 +27,9 @@ gst_design = modelpack.create_gst_experiment_design(max_max_length=16, qubit_lab
 gst_model = modelpack.target_model(qubit_labels=["Q0"]) # 1 physical qubit model
 ```
 
-## Step 2: Convert each `Circuit` into a `QuantumProgram`
+## Step 2: Simulate the GST design directly into a `DataSet`
+
+`simulate_dataset_for_edesign` takes the place of a `pygsti.data.simulate_data`: it builds, runs, and collects outcomes for one circuit at a time, so LoQS never has to hold every circuit's `QuantumProgram`/`ProgramResults` in memory at once.
 
 ```{code-cell} ipython3
 from loqs.backends import PyGSTiPhysicalCircuit, QSimQuantumState
@@ -70,28 +72,13 @@ physical_to_logical = {
 ```
 
 ```{code-cell} ipython3
-programs = pt.convert_edesign_to_programs(gst_design, gst_model, physical_to_logical, **program_kwargs)
+ds = pt.simulate_dataset_for_edesign(gst_design, gst_model, physical_to_logical, num_shots=10, **program_kwargs)
 ```
 
 ```{code-cell} ipython3
-len(gst_design.all_circuits_needing_data) == len(programs)
+len(gst_design.all_circuits_needing_data) == len(ds)
 ```
 
-## Step 3: Run the programs
+## Step 3: Normal GST pipeline
 
-This takes the place of a `pygsti.data.simulate_data`
-
-```{code-cell} ipython3
-for program in programs:
-    program.run(num_shots=10)
-```
-
-## Step 4: Convert this to a pyGSTi dataset
-
-```{code-cell} ipython3
-ds = pt.convert_run_programs_to_dataset(gst_design, programs)
-```
-
-## Step 5: Normal GST pipeline
-
-## Step 6: Profit $$$
+## Step 4: Profit $$$
