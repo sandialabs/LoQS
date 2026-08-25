@@ -2,6 +2,7 @@
 
 import copy
 import gc
+import re
 import weakref
 
 import pytest
@@ -397,7 +398,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         ckpt = tmp_path / "checkpoint.txt"
         s.simulate(ckpt=ckpt)
 
-        with pytest.raises(FileExistsError, match=str(ckpt)):
+        with pytest.raises(FileExistsError, match=re.escape(str(ckpt))):
             s.simulate(ckpt=ckpt)
 
     def test_resume_skips_already_checkpointed_circuits(
