@@ -15,11 +15,13 @@ import ast
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+import functools
 import numpy as np
 from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+from typing import Any
 from tqdm import tqdm
 
 from loqs.core import ProgramResults, QuantumProgram
@@ -31,6 +33,13 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
 from loqs.internal.legacy import deprecated
+from loqs.tools.paralleltools import (
+    ChunkExecutor,
+    chunk_round_robin,
+    pin_worker_threads,
+    run_chunks_with_executor,
+    run_chunks_with_submitit,
+)
 
 try:
     import pygsti  # noqa: F401
@@ -96,6 +105,73 @@ def _collect_program_outcomes(
         ]
     return HistoryDataCollector.from_raw(collect_shot_data_args).collect(
         program_results
+    )
+
+
+def _process_circuit_chunk(
+    physical_model: ExplicitOpModel,
+    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
+    num_shots: int,
+    collect_shot_data_args: HistoryDataCollectorLike
+    | list[HistoryDataCollectorLike],
+    max_frame_limit: int,
+    program_kwargs: dict,
+    chunk: list[Circuit],
+) -> list[tuple[Circuit, dict[tuple, int]]]:
+    """Build, run, and reduce every circuit in one chunk to a row of counts.
+
+    The actual per-chunk work shared by both of `simulate_dataset_for_edesign`'s
+    program-level dispatch entry points: each circuit's program is built,
+    run, and collected in turn, mirroring the body of the function's serial
+    loop. Every program object (including any closures nested inside its
+    built `Instruction`s) is built and consumed entirely inside this worker
+    -- only plain, `pickle`-friendly ingredients (`physical_model`,
+    `label_to_logical`, `chunk` itself) ever cross a process boundary, so
+    this stays compatible with `mpi4py.futures.MPIPoolExecutor`'s plain
+    `pickle` transport, not just `loky`'s `cloudpickle` fallback.
+    """
+    results = []
+    for circ in chunk:
+        program = _build_program_for_circuit(
+            circ, physical_model, label_to_logical, **program_kwargs
+        )
+        program_results = program.run(
+            num_shots, max_frame_limit=max_frame_limit, verbose=False
+        )
+        outcomes = _collect_program_outcomes(
+            program_results, collect_shot_data_args
+        )
+        counts = Counter(outcomes)
+        count_dict = {(str(k),): v for k, v in counts.items()}
+        results.append((circ, count_dict))
+        del program, program_results
+    return results
+
+
+# Entry point submitted to a parallel executor: pins this worker's thread
+# pools to one thread before doing real numerical work, then delegates to
+# `_process_circuit_chunk`. Kept as a plain module-level function (not a
+# closure) so plain `pickle` can resolve it by dotted import path, needed
+# by `MPIPoolExecutor`.
+def _process_circuit_chunk_worker(
+    physical_model: ExplicitOpModel,
+    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
+    num_shots: int,
+    collect_shot_data_args: HistoryDataCollectorLike
+    | list[HistoryDataCollectorLike],
+    max_frame_limit: int,
+    program_kwargs: dict,
+    chunk: list[Circuit],
+) -> list[tuple[Circuit, dict[tuple, int]]]:
+    pin_worker_threads()
+    return _process_circuit_chunk(
+        physical_model,
+        label_to_logical,
+        num_shots,
+        collect_shot_data_args,
+        max_frame_limit,
+        program_kwargs,
+        chunk,
     )
 
 
@@ -344,6 +420,9 @@ def simulate_dataset_for_edesign(
     resume: bool = False,
     force_resume: bool = False,
     max_frame_limit: int = 100,
+    executor: ChunkExecutor | None = None,
+    submitit_executor: Any | None = None,
+    n_chunks: int | None = None,
     **program_kwargs,
 ) -> DataSet:
     """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
@@ -357,6 +436,24 @@ def simulate_dataset_for_edesign(
     every circuit's `QuantumProgram`/`ProgramResults` at once. Progress is
     reported with one bar over circuits rather than [](api:QuantumProgram.run)'s
     own per-shot bar, which would otherwise print once per circuit.
+
+    Passing `executor` or `submitit_executor` (mutually exclusive) instead
+    parallelizes across circuits: circuits still needing data are split
+    into `n_chunks` round-robin chunks (so cost drift across the circuit
+    list, e.g. later GST circuits typically being deeper, doesn't
+    concentrate onto a few chunks), and each chunk is built/run/collected
+    as a unit by a worker that pins its own thread pools to one thread
+    before doing any real numerical work. `executor` accepts any
+    `ChunkExecutor` (e.g. `loky.get_reusable_executor()` or
+    `mpi4py.futures.MPIPoolExecutor`), with per-chunk progress reported via
+    `tqdm(as_completed(...))`. `submitit_executor` instead accepts a
+    `submitit.Executor`, dispatched via a single bulk `map_array` call (one
+    `sbatch` submission covering every chunk) with progress reported by
+    polling each `Job`'s `.done()`. Checkpointing (if `checkpoint_path` is
+    given) still happens from this driving process, once per circuit, as
+    each chunk's results come back -- not from inside the workers
+    themselves; real per-worker parallel checkpointing is tracked
+    separately under #105.
 
     If `checkpoint_path` is given, each circuit's row is also appended to an
     on-disk text `DataSet` as soon as it's computed, so a crash partway through
@@ -417,6 +514,28 @@ def simulate_dataset_for_edesign(
         more frames than that should raise this explicitly, or they will be
         silently truncated and then fail during outcome collection.
 
+    executor : ChunkExecutor | None, optional
+        A `.submit()`-based executor (e.g. `loky.get_reusable_executor()` or
+        `mpi4py.futures.MPIPoolExecutor`) to parallelize circuit chunks
+        across. Defaults to `None`, which runs circuits serially. Mutually
+        exclusive with `submitit_executor`.
+
+    submitit_executor : submitit.Executor | None, optional
+        A `submitit.Executor` to parallelize circuit chunks across via a
+        single bulk `map_array` submission (e.g. one SLURM job array).
+        Defaults to `None`. Mutually exclusive with `executor`; requires
+        `n_chunks` to be given explicitly, since submitting one array task
+        per circuit would be dominated by scheduling overhead for typical
+        LoQS workloads.
+
+    n_chunks : int | None, optional
+        Number of round-robin chunks to split the still-to-run circuits
+        into when `executor` or `submitit_executor` is given. Defaults to
+        one chunk per circuit when `executor` is given (matching
+        [](api:QuantumProgram.run)'s own per-shot dispatch granularity);
+        has no default (must be given explicitly) when `submitit_executor`
+        is given. Ignored when neither executor is given.
+
     **program_kwargs : Any
         Any additional kwargs that should be passed to each circuit's
         [](api:QuantumProgram).
@@ -471,33 +590,124 @@ def simulate_dataset_for_edesign(
     else:
         ds = DataSet()
 
+    if executor is not None and submitit_executor is not None:
+        raise ValueError(
+            "Pass at most one of executor or submitit_executor, not both."
+        )
+
     label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
 
     circuits = edesign.all_circuits_needing_data
-    for circ in tqdm(circuits, desc="Simulating edesign circuits"):
-        if checkpoint_path is not None and circ in ds:
-            continue
 
-        program = _build_program_for_circuit(
-            circ, physical_model, label_to_logical, **program_kwargs
+    if executor is None and submitit_executor is None:
+        for circ in tqdm(circuits, desc="Simulating edesign circuits"):
+            if checkpoint_path is not None and circ in ds:
+                continue
+
+            program = _build_program_for_circuit(
+                circ, physical_model, label_to_logical, **program_kwargs
+            )
+            program_results = program.run(
+                num_shots, max_frame_limit=max_frame_limit, verbose=False
+            )
+
+            outcomes = _collect_program_outcomes(
+                program_results, collect_shot_data_args
+            )
+            counts = Counter(outcomes)
+            count_dict = {(str(k),): v for k, v in counts.items()}
+
+            ds.add_count_dict(circ, count_dict)
+            if checkpoint_path is not None:
+                _append_checkpoint_row(checkpoint_path, circ, count_dict)
+
+            # Drop references so the program/results are collectible before
+            # the next circuit, bounding peak memory across the whole edesign.
+            del program, program_results
+
+        return ds
+
+    return _run_program_level_parallel(
+        ds,
+        circuits,
+        checkpoint_path,
+        executor,
+        submitit_executor,
+        n_chunks,
+        physical_model,
+        label_to_logical,
+        num_shots,
+        collect_shot_data_args,
+        max_frame_limit,
+        program_kwargs,
+    )
+
+
+def _run_program_level_parallel(
+    ds: DataSet,
+    circuits: Sequence[Circuit],
+    checkpoint_path: Path | None,
+    executor: ChunkExecutor | None,
+    submitit_executor: Any | None,
+    n_chunks: int | None,
+    physical_model: ExplicitOpModel,
+    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
+    num_shots: int,
+    collect_shot_data_args: HistoryDataCollectorLike
+    | list[HistoryDataCollectorLike],
+    max_frame_limit: int,
+    program_kwargs: dict,
+) -> DataSet:
+    """`simulate_dataset_for_edesign`'s program-level parallel path: chunk
+    whatever circuits still need data, dispatch one worker call per chunk
+    via `executor` or `submitit_executor`, then checkpoint/collect results
+    into `ds` from this driving process as each chunk comes back.
+    """
+    circuits_to_run = [
+        circ
+        for circ in circuits
+        if checkpoint_path is None or circ not in ds
+    ]
+    if not circuits_to_run:
+        return ds
+
+    if submitit_executor is not None and n_chunks is None:
+        raise ValueError(
+            "n_chunks is required when submitit_executor is given -- "
+            "submitting one array task per circuit would be dominated by "
+            "SLURM scheduling overhead for typical LoQS workloads, so a "
+            "chunk count must be chosen deliberately rather than defaulted."
         )
-        program_results = program.run(
-            num_shots, max_frame_limit=max_frame_limit, verbose=False
+    if n_chunks is None:
+        n_chunks = len(circuits_to_run)
+
+    chunks = chunk_round_robin(circuits_to_run, n_chunks)
+    worker = functools.partial(
+        _process_circuit_chunk_worker,
+        physical_model,
+        label_to_logical,
+        num_shots,
+        collect_shot_data_args,
+        max_frame_limit,
+        program_kwargs,
+    )
+    if executor is not None:
+        chunk_results = run_chunks_with_executor(
+            executor, worker, chunks, desc="Simulating edesign circuit chunks"
+        )
+    else:
+        chunk_results = run_chunks_with_submitit(
+            submitit_executor,
+            worker,
+            chunks,
+            desc="Simulating edesign circuit chunks",
         )
 
-        outcomes = _collect_program_outcomes(
-            program_results, collect_shot_data_args
-        )
-        counts = Counter(outcomes)
-        count_dict = {(str(k),): v for k, v in counts.items()}
-
-        ds.add_count_dict(circ, count_dict)
-        if checkpoint_path is not None:
-            _append_checkpoint_row(checkpoint_path, circ, count_dict)
-
-        # Drop references so the program/results are collectible before
-        # the next circuit, bounding peak memory across the whole edesign.
-        del program, program_results
+    for chunk_result in chunk_results:
+        for circ, count_dict in chunk_result:
+            ds.add_count_dict(circ, count_dict)
+            if checkpoint_path is not None:
+                _append_checkpoint_row(checkpoint_path, circ, count_dict)
 
     return ds
 
