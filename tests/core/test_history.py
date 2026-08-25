@@ -279,3 +279,54 @@ class TestHistory:
             assert isinstance(fdata, dict)
             assert fdata["nested"]["value"] == 0
             assert loaded_history[2]["index"] == 2
+
+
+class TestCollectDataFrameFilter:
+    """`History.collect_data`'s `frame_filter` parameter: narrowing
+    candidate frames to those matching every `field: value` pair before
+    `indices` is applied."""
+
+    def _history(self):
+        return History(
+            [
+                Frame({"val": 0, "patch_label": "L0"}),
+                Frame({"val": 10, "patch_label": "L1"}),
+                Frame({"val": 1, "patch_label": "L0"}),
+                Frame({"val": 11, "patch_label": "L1"}),
+            ]
+        )
+
+    def test_single_field_filter_narrows_before_indexing(self):
+        h = self._history()
+        assert h.collect_data("val", indices=-1, frame_filter={"patch_label": "L0"}) == 1
+        assert h.collect_data("val", indices=0, frame_filter={"patch_label": "L1"}) == 10
+
+    def test_all_indices_returns_every_match_not_just_the_most_recent(self):
+        h = self._history()
+        assert h.collect_data("val", indices="all", frame_filter={"patch_label": "L0"}) == [0, 1]
+        assert h.collect_data("val", indices="all", frame_filter={"patch_label": "L1"}) == [10, 11]
+
+    def test_multi_field_filter_requires_every_pair_to_match(self):
+        h = History(
+            [
+                Frame({"val": 0, "patch_label": "L0", "round": 0}),
+                Frame({"val": 1, "patch_label": "L0", "round": 1}),
+                Frame({"val": 2, "patch_label": "L1", "round": 1}),
+            ]
+        )
+        assert h.collect_data(
+            "val", indices=-1, frame_filter={"patch_label": "L0", "round": 1}
+        ) == 1
+
+    def test_no_frame_filter_behaves_like_the_unfiltered_history(self):
+        h = self._history()
+        assert h.collect_data("val", indices="all") == h.collect_data(
+            "val", indices="all", frame_filter=None
+        )
+
+    def test_no_matching_frames_raises_index_error(self):
+        h = self._history()
+        with pytest.raises(IndexError):
+            h.collect_data("val", indices=-1, frame_filter={"patch_label": "nonexistent"})
+        with pytest.raises(IndexError):
+            h.collect_data("val", indices=[0], frame_filter={"patch_label": "nonexistent"})
