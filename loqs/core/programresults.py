@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from typing import ClassVar
 from pathlib import Path
 import h5py
@@ -202,6 +203,7 @@ class ProgramResults(Displayable):
         indices: HistoryCollectDataIndexTypes,
         strip_none_entries: bool = False,
         return_counter: bool = False,
+        frame_filter: Mapping[str, object] | None = None,
     ) -> list | Counter:
         """Collate frame data over executed shots.
 
@@ -219,13 +221,21 @@ class ProgramResults(Displayable):
         return_counter:
             Whether to return using a collections.Counter or not (default).
 
+        frame_filter:
+            See `frame_filter` in [](api:History.collect_data)
+
         Returns
         -------
         list
             List of [](api:History.collect_data) outputs per shot
         """
         data = [
-            h.collect_data(key, indices, strip_none_entries)
+            h.collect_data(
+                key,
+                indices,
+                strip_none_entries=strip_none_entries,
+                frame_filter=frame_filter,
+            )
             for h in self.shot_histories.values()
         ]
         return Counter(data) if return_counter else data

@@ -28,7 +28,11 @@ import warnings
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, QuantumProgram
-from loqs.core.history import HistoryLike, HistoryCollectDataArgsType
+from loqs.core.history import HistoryLike
+from loqs.core.historydatacollector import (
+    HistoryDataCollector,
+    HistoryDataCollectorLike,
+)
 from loqs.core.instructions.instructionstack import (
     InstructionStackLike,
 )
@@ -119,7 +123,7 @@ def _resolve_program_results_path(
 
 def _compute_failure_rate(
     program_results: ProgramResults,
-    collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
     expected_outcomes: Sequence,
     num_shots: int,
 ) -> tuple[float, float]:
@@ -131,7 +135,7 @@ def _compute_failure_rate(
     """
     shot_failed = [False] * num_shots
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
-        outs = program_results.collect_shot_data(*args)
+        outs = HistoryDataCollector.from_raw(args).collect(program_results)
         for i, out in enumerate(outs[-num_shots:]):
             if out != expected:
                 shot_failed[i] = True
@@ -330,7 +334,7 @@ class NoiseSweepRunner(Displayable):
     def run(
         self,
         num_shots: int,
-        collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
+        collect_shot_data_args: Sequence[HistoryDataCollectorLike],
         expected_outcomes: Sequence,
         keep_program_results: bool = False,
         program_results_dir: (

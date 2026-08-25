@@ -31,11 +31,6 @@ HistoryCollectDataIndexTypes: TypeAlias = (
 )
 """Types that can be passed into `indices` for [](api:History.collect_data)"""
 
-HistoryCollectDataArgsType: TypeAlias = tuple[
-    str, HistoryCollectDataIndexTypes
-]
-"""Type alias for arguments to [](api:History.collect_data)"""
-
 
 class History(Sequence[Frame], Displayable):
     """A semi-mutable list of [](api:Frame) objects.
@@ -290,6 +285,7 @@ class History(Sequence[Frame], Displayable):
         key: str,
         indices: HistoryCollectDataIndexTypes,
         strip_none_entries: bool = False,
+        frame_filter: Mapping[str, object] | None = None,
     ) -> list | object:
         """Pull data by key out of one or several stored [](api:Frame) objects.
 
@@ -304,11 +300,18 @@ class History(Sequence[Frame], Displayable):
             or `"all"` (which is equivalent to `slice(0, None)`).
             These values can either be positive and index starting from the beginning,
             or negative and index from the last frame, i.e. -1 is a common way to get
-            data from the last frame.
+            data from the last frame. Indexing is relative to the frames remaining
+            after `frame_filter` is applied, not the full history.
 
         strip_none_entries : bool, optional
             Whether to keep None entries (`False`, default) or remove them (`True`).
             Only has an effect if returned data will have more than one value.
+
+        frame_filter : Mapping[str, object] | None, optional
+            If given, only consider frames where every `field: value` pair matches
+            (`frame.get(field) == value`) before applying `indices`. A filter that
+            matches no frames raises `IndexError`, same as an out-of-range `indices`
+            would on the unfiltered history.
 
         Returns
         -------
@@ -324,10 +327,19 @@ class History(Sequence[Frame], Displayable):
         [10, 30]
         """
 
+        if frame_filter is None:
+            candidates: Sequence[Frame] = self._history
+        else:
+            candidates = [
+                frame
+                for frame in self._history
+                if all(frame.get(field) == value for field, value in frame_filter.items())
+            ]
+
         if isinstance(indices, int):
             iter_indices: list[int] | slice = [indices]
         elif indices == "all":
-            iter_indices = slice(len(self._history))
+            iter_indices = slice(len(candidates))
         elif isinstance(indices, slice):
             iter_indices = indices
         elif isinstance(indices, Sequence):
@@ -337,9 +349,9 @@ class History(Sequence[Frame], Displayable):
             raise ValueError("Invalid type for indices")
 
         if isinstance(iter_indices, slice):
-            iter_indices = list(range(len(self._history))[iter_indices])
+            iter_indices = list(range(len(candidates))[iter_indices])
 
-        data = [self._history[i].get(key, None) for i in iter_indices]
+        data = [candidates[i].get(key, None) for i in iter_indices]
 
         if isinstance(indices, int):
             # If we only requested one entry, return bare object

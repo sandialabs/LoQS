@@ -21,7 +21,10 @@ except ImportError:
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
-from loqs.core.history import HistoryCollectDataArgsType
+from loqs.core.historydatacollector import (
+    HistoryDataCollector,
+    HistoryDataCollectorLike,
+)
 from loqs.core.instructions import Instruction, InstructionLabel
 
 # from loqs.tools.dasktools import run_program_list
@@ -402,7 +405,7 @@ def build_discrete_error_injection_programs(
 
 def run_discrete_error_injected_programs(
     errored_programs: Sequence[QuantumProgram],
-    collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
     expected_outcomes: Sequence,
     num_shots: int = 1,
     dask_client: Client | None = None,  # type: ignore
@@ -415,7 +418,7 @@ def run_discrete_error_injected_programs(
         A list of programs to test, usually the output of
         [](api:build_discrete_error_injection_programs).
 
-    collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
+    collect_shot_data_args : Sequence[HistoryDataCollectorLike]
         See [](api:test_program_output).
 
     expected_outcomes : Sequence
@@ -473,7 +476,7 @@ def run_discrete_error_injected_programs(
 
 def test_program_output(
     test_program: QuantumProgram,
-    collect_shot_data_args: Sequence[HistoryCollectDataArgsType],
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
     expected_outcomes: Sequence,
     num_shots: int = 1,
     verbose: bool = False,
@@ -486,7 +489,7 @@ def test_program_output(
     test_program : QuantumProgram
         The [](api:QuantumProgram) to test
 
-    collect_shot_data_args : Sequence[HistoryCollectDataArgsType]
+    collect_shot_data_args : Sequence[HistoryDataCollectorLike]
         A list of arguments to [](api:ProgramResults.collect_shot_data).
 
     expected_outcomes : Sequence
@@ -522,7 +525,7 @@ def test_program_output(
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
-        outs = program_results.collect_shot_data(*args)
+        outs = HistoryDataCollector.from_raw(args).collect(program_results)
         for out in outs[-num_shots:]:
             if out != expected:
                 if verbose:

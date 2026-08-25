@@ -3,7 +3,12 @@
 ## [Unreleased Changes]
 
 ### New
+- **`frame_filter` and `HistoryDataCollector` for `ProgramResults.collect_shot_data` (#121, @sserita):** `frame_filter` narrows candidate frames to those matching every given `field: value` pair (e.g. `{"patch_label": "L0"}`) before `indices` is applied.  `HistoryDataCollector` bundles `key`/`indices`/`frame_filter`/`strip_none_entries` into one reusable recipe, castable via `HistoryDataCollector.from_raw` from a bare key string, a `(key, indices)` tuple, or a kwargs mapping.
 - **Transversal logical CX for the [[7,1,3]] codepack (#122, @sserita):** Adds `codepack_7_1_3_multipatch` which builds the transversal `Gcnot` between two [](api:codepack_7_1_3_quantinuum2021) patches, plus a bookkeeping instruction conjugating both patches' `logical_pauli_frame` and `latest_syndrome` through the standard CSS transversal-CNOT stabilizer map.
+
+### Fixed
+- **`QuantumProgram._last_result` not caching properly (#121, @sserita):** The returned `ProgramResults` is now also properly cached on `self._last_results`.
+
 
 ## [1.2] - 2026-08-21
 

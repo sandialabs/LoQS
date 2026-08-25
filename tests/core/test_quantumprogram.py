@@ -129,6 +129,43 @@ class TestQuantumProgram:
             assert len(loaded_program2_results3.shot_histories) == 2
 
 
+class TestRunCachesLastResults:
+    """`QuantumProgram.run()` caches its return value on `_last_results`,
+    so a caller that discards the return value (e.g. a bare
+    `program.run(num_shots=N)` statement in a loop) can still retrieve
+    the actual results afterward."""
+
+    def _build_counter_program(self):
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        stack = [
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {"instruction": "Increment", "patch_label": "L0", "increment_by": 1},
+        ]
+        return QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            name="last results cache test",
+        )
+
+    def test_run_sets_last_results_to_its_return_value(self):
+        program = self._build_counter_program()
+        assert getattr(program, "_last_results", None) is None
+
+        results = program.run(num_shots=3, verbose=False)
+
+        assert program._last_results is results
+
+    def test_last_results_reflects_the_actual_requested_shot_count(self):
+        program = self._build_counter_program()
+        program.run(num_shots=5, verbose=False)
+
+        assert len(program._last_results.shot_histories) == 5
+
+
 class TestResolveInstructionLegacyNameHint:
     """`_resolve_instruction`'s "not found" errors hint at the "Iz" ->
     "Imrz" v1.2 rename when that's the name that failed to resolve --

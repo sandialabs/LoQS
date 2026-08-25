@@ -27,6 +27,7 @@ docs/_gen_md
 /notebook-output/
 
 checkpoints/
+standard_gst_checkpoints/
 
 .vscode
 venv*/

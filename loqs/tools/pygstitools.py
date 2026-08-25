@@ -9,6 +9,8 @@
 
 """A collection of tools using/for pyGSTi."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 import numpy as np
@@ -18,7 +20,10 @@ from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from loqs.core import QuantumProgram
-from loqs.core.history import HistoryCollectDataArgsType
+from loqs.core.historydatacollector import (
+    HistoryDataCollector,
+    HistoryDataCollectorLike,
+)
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
@@ -91,7 +96,8 @@ def convert_edesign_to_programs(
 
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
-    collect_shot_data_args: HistoryCollectDataArgsType = (
+    collect_shot_data_args: HistoryDataCollectorLike
+    | list[HistoryDataCollectorLike] = (
         "logical_measurement",
         -1,
     ),
@@ -105,9 +111,17 @@ def convert_run_programs_to_dataset(
         with [](api:QuantumProgram.run) having been called on the programs
         with the desired number of shots.
 
-    collect_shot_data_args : HistoryCollectDataArgsType, optional
-        The arguments to [](api:ProgramResults.collect_shot_data) to extract
-        outcomes from each shot. The output should be a single element per shot, by default ("logical_measurement", -1)
+    collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
+        The [](api:HistoryDataCollector) recipe(s) used to extract outcomes from each
+        shot, cast via [](api:HistoryDataCollector.from_raw). The output should be a
+        single element per shot, by default `("logical_measurement", -1)`. For circuits
+        acting on multiple logical qubits/patches whose outcomes each need their own
+        [](api:ProgramResults.collect_shot_data) call (e.g. one `"logical_measurement"`
+        per patch), pass a `list` of recipes instead, e.g.
+        `[{"key": "logical_measurement", "frame_filter": {"patch_label": "L0"}},
+        {"key": "logical_measurement", "frame_filter": {"patch_label": "L1"}}]`. Each
+        shot's per-recipe values are then joined (in list order) into a single outcome
+        string, e.g. `"01"`, rather than each recipe producing its own separate outcome.
 
     Returns
     -------
@@ -125,9 +139,24 @@ def convert_run_programs_to_dataset(
         if program_results is None:
             # If no results stored, run the program
             program_results = prog.run()
-        counts = Counter(
-            program_results.collect_shot_data(*collect_shot_data_args)
-        )
+
+        if isinstance(collect_shot_data_args, list):
+            # One HistoryDataCollector per entry, joining each shot's
+            # per-collector values (in list order) into a single outcome string.
+            per_collector_shot_values = [
+                HistoryDataCollector.from_raw(c).collect(program_results)
+                for c in collect_shot_data_args
+            ]
+            outcomes = [
+                "".join(str(v) for v in shot_values)
+                for shot_values in zip(*per_collector_shot_values)
+            ]
+        else:
+            outcomes = HistoryDataCollector.from_raw(
+                collect_shot_data_args
+            ).collect(program_results)
+
+        counts = Counter(outcomes)
         count_dict = {(str(k),): v for k, v in counts.items()}
 
         ds.add_count_dict(circ, count_dict)

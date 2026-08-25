@@ -73,6 +73,30 @@ class TestProgramResults:
         assert len(test_data) == 3
         assert test_data == [["value_0"], ["value_1"], ["value_2"]]
 
+    def test_collect_shot_data_frame_filter_and_strip_none_entries(self):
+        """`frame_filter`/`strip_none_entries` are forwarded to each shot's
+        `History.collect_data` call, not swallowed at the `ProgramResults` level."""
+        results = ProgramResults()
+
+        for i in range(3):
+            history = History()
+            history.append(Frame({"val": i, "patch_label": "L0"}))
+            history.append(Frame({"patch_label": "L1"}))
+            results.add_shot(i, history)
+
+        # frame_filter narrows to the "L0" frame in each shot, where "val" is set.
+        filtered = results.collect_shot_data(
+            "val", "all", frame_filter={"patch_label": "L0"}
+        )
+        assert filtered == [[0], [1], [2]]
+
+        # Without the filter, "val" is missing (None) on every shot's second
+        # frame; strip_none_entries=True drops those Nones per shot.
+        stripped = results.collect_shot_data(
+            "val", "all", strip_none_entries=True
+        )
+        assert stripped == [[0], [1], [2]]
+
     def test_mark_shots_as_written(self):
         """Test marking shots as written to checkpoint."""
         results = ProgramResults()
