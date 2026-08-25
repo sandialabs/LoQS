@@ -9,6 +9,8 @@
 
 """A collection of tools using/for pyGSTi."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 import numpy as np
@@ -18,7 +20,7 @@ from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from loqs.core import QuantumProgram
-from loqs.core.history import HistoryCollectDataArgsType
+from loqs.core.historydatacollector import HistoryDataCollectorLike
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
@@ -91,8 +93,8 @@ def convert_edesign_to_programs(
 
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
-    collect_shot_data_args: HistoryCollectDataArgsType
-    | Mapping[str, HistoryCollectDataArgsType] = (
+    collect_shot_data_args: HistoryDataCollectorLike
+    | Mapping[str, HistoryDataCollectorLike] = (
         "logical_measurement",
         -1,
     ),
@@ -106,7 +108,7 @@ def convert_run_programs_to_dataset(
         with [](api:QuantumProgram.run) having been called on the programs
         with the desired number of shots.
 
-    collect_shot_data_args : HistoryCollectDataArgsType | Mapping[str, HistoryCollectDataArgsType], optional
+    collect_shot_data_args : HistoryDataCollectorLike | Mapping[str, HistoryDataCollectorLike], optional
         The arguments to [](api:ProgramResults.collect_shot_data) to extract
         outcomes from each shot. The output should be a single element per shot, by default ("logical_measurement", -1).
         For circuits acting on multiple logical qubits/patches whose outcomes each need their own

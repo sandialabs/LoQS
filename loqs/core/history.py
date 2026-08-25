@@ -31,11 +31,6 @@ HistoryCollectDataIndexTypes: TypeAlias = (
 )
 """Types that can be passed into `indices` for [](api:History.collect_data)"""
 
-HistoryCollectDataArgsType: TypeAlias = tuple[
-    str, HistoryCollectDataIndexTypes
-]
-"""Type alias for arguments to [](api:History.collect_data)"""
-
 
 class History(Sequence[Frame], Displayable):
     """A semi-mutable list of [](api:Frame) objects.
