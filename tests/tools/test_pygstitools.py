@@ -372,6 +372,46 @@ class TestSimulateDatasetForEdesign:
         with pytest.raises(ValueError, match="checkpoint_path"):
             s.simulate(resume=True)
 
+    def test_max_frame_limit_defaults_to_100(self, trivial_counter_setup):
+        """With no override, each circuit's program.run still sees
+        QuantumProgram.run's own default of 100, unchanged."""
+        s = trivial_counter_setup
+        seen = []
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen.append(kwargs.get("max_frame_limit"))
+            return real_run(self, *args, **kwargs)
+
+        QuantumProgram.run = spy_run
+        try:
+            s.simulate()
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen == [100, 100]
+
+    def test_max_frame_limit_is_forwarded_to_program_run(
+        self, trivial_counter_setup
+    ):
+        """An explicit max_frame_limit override reaches every circuit's
+        program.run call, not just the default."""
+        s = trivial_counter_setup
+        seen = []
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen.append(kwargs.get("max_frame_limit"))
+            return real_run(self, *args, **kwargs)
+
+        QuantumProgram.run = spy_run
+        try:
+            s.simulate(max_frame_limit=250)
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen == [250, 250]
+
 
 class TestSimulateDatasetForEdesignCheckpointing:
 
