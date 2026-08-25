@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## [Unreleased Changes]
+
+### New
+- **`frame_filter` and `HistoryDataCollector` for `ProgramResults.collect_shot_data` (#121, @sserita):** `frame_filter` narrows candidate frames to those matching every given `field: value` pair (e.g. `{"patch_label": "L0"}`) before `indices` is applied, avoiding a frame offset hand-derived from a specific composite instruction's internal frame count. `HistoryDataCollector` bundles `key`/`indices`/`frame_filter`/`strip_none_entries` into one reusable recipe, castable via `HistoryDataCollector.from_raw` from a bare key string, a `(key, indices)` tuple, or a kwargs mapping.
+
+### Fixed
+- **`QuantumProgram.run()` discarding its result when the caller doesn't keep it (#121, @sserita):** The returned `ProgramResults` is now also properly cached on `self._last_results`.
+
 ## [1.2] - 2026-08-21
 
 ### New
