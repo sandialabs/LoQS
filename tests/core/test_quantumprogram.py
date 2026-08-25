@@ -11,6 +11,18 @@ from loqs.backends import QSimQuantumState, STIMQuantumState
 from loqs.core import QuantumProgram
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
+
+def _report_blas_thread_counts():
+    """Force a BLAS op (registering numpy's thread pool if not already
+    registered) and report every detected pool's thread count. Defined at
+    module level so `loky` can pickle a plain reference to it."""
+    import numpy as np
+    import threadpoolctl
+
+    x = np.random.rand(200, 200)
+    _ = x @ x
+    return [pool["num_threads"] for pool in threadpoolctl.threadpool_info()]
+
 @pytest.mark.skipif(os.getenv("CI", "false") == "true", reason="Breaks GitHub runners?")
 class TestQuantumProgram:
 
@@ -164,6 +176,74 @@ class TestRunCachesLastResults:
         program.run(num_shots=5, verbose=False)
 
         assert len(program._last_results.shot_histories) == 5
+
+
+class TestExecutorParallelism:
+    """`QuantumProgram.run(executor=...)`'s parallel path against a real
+    `loky` executor: correctness (same outcomes as a serial run) and the
+    thread-oversubscription discipline every worker must apply."""
+
+    def _build_counter_program(self):
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        stack = [
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {"instruction": "Increment", "patch_label": "L0", "increment_by": 1},
+        ]
+        return QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            default_base_seed=0,
+            name="executor parallelism test",
+        )
+
+    def test_loky_executor_matches_serial_shot_outcomes(self):
+        loky = pytest.importorskip("loky")
+
+        serial_results = self._build_counter_program().run(
+            num_shots=4, verbose=False
+        )
+
+        executor = loky.get_reusable_executor(max_workers=2)
+        parallel_results = self._build_counter_program().run(
+            num_shots=4, executor=executor, verbose=False
+        )
+
+        serial_counters = {
+            i: h[-1]["counter"]
+            for i, h in serial_results.shot_histories.items()
+        }
+        parallel_counters = {
+            i: h[-1]["counter"]
+            for i, h in parallel_results.shot_histories.items()
+        }
+        assert parallel_counters == serial_counters
+
+    def test_run_shot_worker_pins_thread_pools_to_one_thread(self):
+        loky = pytest.importorskip("loky")
+        pytest.importorskip("threadpoolctl")
+
+        program = self._build_counter_program()
+        executor = loky.get_reusable_executor(max_workers=1, reuse=False)
+        try:
+            # Force this worker's BLAS thread pool to register before the
+            # real worker entry point ever runs, matching a real worker
+            # process that already imported numpy.
+            executor.submit(_report_blas_thread_counts).result()
+
+            executor.submit(
+                QuantumProgram._run_shot_worker, program, 100, None, 0
+            ).result()
+
+            after = executor.submit(_report_blas_thread_counts).result()
+        finally:
+            executor.shutdown(wait=True)
+
+        assert after, "expected at least one detected thread pool"
+        assert all(n == 1 for n in after)
 
 
 class TestResolveInstructionLegacyNameHint:
