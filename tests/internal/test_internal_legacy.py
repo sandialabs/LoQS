@@ -1,5 +1,5 @@
 """Tests for loqs/internal/legacy.py's generic legacy-shim machinery:
-install_legacy_module and make_legacy_construction_shim."""
+install_legacy_module, make_legacy_construction_shim, and deprecated."""
 
 import sys
 import warnings
@@ -7,6 +7,8 @@ import warnings
 import pytest
 
 from loqs.internal.legacy import (
+    DeprecationInfo,
+    deprecated,
     install_legacy_module,
     install_legacy_module_aliases_for_relocations,
     legacy_name_hint,
@@ -106,6 +108,60 @@ class TestMakeLegacyConstructionShim:
             warnings.simplefilter("ignore")
             Shim()
         assert calls == [1]
+
+
+class TestDeprecated:
+    def test_warns_with_default_note_and_still_calls_through(self):
+        @deprecated("new_func")
+        def old_func(x):
+            return x + 1
+
+        with pytest.warns(
+            DeprecationWarning,
+            match="old_func is deprecated; use new_func instead. Will possibly",
+        ):
+            assert old_func(5) == 6
+
+    def test_custom_note_overrides_default(self):
+        @deprecated("new_func", note="Custom note.")
+        def old_func():
+            pass
+
+        with pytest.warns(DeprecationWarning, match="Custom note."):
+            old_func()
+
+    def test_empty_note_omits_trailing_sentence(self):
+        @deprecated("new_func", note=None)
+        def old_func():
+            pass
+
+        with pytest.warns(DeprecationWarning) as record:
+            old_func()
+        assert str(record[0].message) == "old_func is deprecated; use new_func instead."
+
+    def test_deprecation_info_stored_on_wrapper(self):
+        @deprecated("new_func", note="A note.")
+        def old_func():
+            pass
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            old_func()
+        assert old_func.__deprecated__ == DeprecationInfo(
+            replacement="new_func", note="A note."
+        )
+
+    def test_preserves_function_identity(self):
+        @deprecated("new_func")
+        def old_func(x, y):
+            """Docstring."""
+            return x + y
+
+        assert old_func.__name__ == "old_func"
+        assert old_func.__doc__ == "Docstring."
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            assert old_func(2, 3) == 5
 
 
 class TestLegacyNameHint:
