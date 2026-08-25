@@ -21,7 +21,10 @@ except ImportError:
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
-from loqs.core.historydatacollector import HistoryDataCollectorLike
+from loqs.core.historydatacollector import (
+    HistoryDataCollector,
+    HistoryDataCollectorLike,
+)
 from loqs.core.instructions import Instruction, InstructionLabel
 
 # from loqs.tools.dasktools import run_program_list
@@ -522,7 +525,7 @@ def test_program_output(
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
-        outs = program_results.collect_shot_data(*args)
+        outs = HistoryDataCollector.from_raw(args).collect(program_results)
         for out in outs[-num_shots:]:
             if out != expected:
                 if verbose:

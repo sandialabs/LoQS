@@ -66,10 +66,10 @@ class TestConvertRunProgramsToDataset:
         assert counts[("0",)] == 1
         assert counts[("1",)] == 2
 
-    def test_mapping_args_join_per_key_outcomes_in_order(self):
-        """A Mapping of per-key (key, index) args -- e.g. one per logical
-        patch -- joins each shot's per-key values, in mapping iteration
-        order, into a single combined outcome label."""
+    def test_list_args_join_per_collector_outcomes_in_order(self):
+        """A list of per-collector (key, index) args -- e.g. one per logical
+        patch -- joins each shot's per-collector values, in list order,
+        into a single combined outcome label."""
         circ = Circuit([("Gh", "Q0"), ("Gh", "Q1")], line_labels=["Q0", "Q1"])
         shots = [
             [
@@ -93,10 +93,10 @@ class TestConvertRunProgramsToDataset:
 
         ds = convert_run_programs_to_dataset(
             [program],
-            collect_shot_data_args={
-                "Q0": ("logical_measurement", -2),
-                "Q1": ("logical_measurement", -1),
-            },
+            collect_shot_data_args=[
+                ("logical_measurement", -2),
+                ("logical_measurement", -1),
+            ],
         )
 
         counts = ds[circ].counts
@@ -199,9 +199,9 @@ class TestConvertEdesignToPrograms:
 
 class TestPipelineWithMultiplePatches:
     """`convert_edesign_to_programs`/`convert_run_programs_to_dataset`
-    against a real two-patch [[7,1,3]] program, to confirm a Mapping's
-    per-key frame indices actually line up with each patch's own
-    `"FT Logical Z Measure"` output rather than just contrived Frames."""
+    against a real two-patch [[7,1,3]] program, confirming `frame_filter`
+    picks out each patch's own `"FT Logical Z Measure"` output correctly
+    regardless of the composite instruction's internal frame count."""
 
     @staticmethod
     def _steane_qubits(suffix: str) -> list[str]:
@@ -250,10 +250,10 @@ class TestPipelineWithMultiplePatches:
         program.run(num_shots=5, verbose=False)
         ds = convert_run_programs_to_dataset(
             [program],
-            collect_shot_data_args={
-                "L0": ("logical_measurement", -4),
-                "L1": ("logical_measurement", -1),
-            },
+            collect_shot_data_args=[
+                {"key": "logical_measurement", "frame_filter": {"patch_label": "L0"}},
+                {"key": "logical_measurement", "frame_filter": {"patch_label": "L1"}},
+            ],
         )
 
         # Deterministic, noiseless model: L0 always "1", L1 always "0".

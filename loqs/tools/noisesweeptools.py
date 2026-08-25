@@ -29,7 +29,10 @@ from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, QuantumProgram
 from loqs.core.history import HistoryLike
-from loqs.core.historydatacollector import HistoryDataCollectorLike
+from loqs.core.historydatacollector import (
+    HistoryDataCollector,
+    HistoryDataCollectorLike,
+)
 from loqs.core.instructions.instructionstack import (
     InstructionStackLike,
 )
@@ -132,7 +135,7 @@ def _compute_failure_rate(
     """
     shot_failed = [False] * num_shots
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
-        outs = program_results.collect_shot_data(*args)
+        outs = HistoryDataCollector.from_raw(args).collect(program_results)
         for i, out in enumerate(outs[-num_shots:]):
             if out != expected:
                 shot_failed[i] = True
