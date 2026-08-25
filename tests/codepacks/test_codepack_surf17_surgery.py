@@ -850,7 +850,14 @@ class TestFTSurgery:
             )
             failed = fttools.run_discrete_error_injected_programs(
                 injected,
-                [(parity_key, "all", True), ("logical_measurement", "all", True)],
+                [
+                    {"key": parity_key, "indices": "all", "strip_none_entries": True},
+                    {
+                        "key": "logical_measurement",
+                        "indices": "all",
+                        "strip_none_entries": True,
+                    },
+                ],
                 [[0], [0, 0]],
             )
             assert not failed, (

@@ -386,7 +386,7 @@ class TestExhaustiveFaultInjectionAcrossCx:
         )
         failed = fttools.run_discrete_error_injected_programs(
             injected,
-            [("logical_measurement", "all", True)],
+            [{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
             [[0, 0]],
         )
         assert len(failed) == 0, (
@@ -405,7 +405,7 @@ class TestExhaustiveFaultInjectionAcrossCx:
         )
         failed = fttools.run_discrete_error_injected_programs(
             injected,
-            [("logical_measurement", "all", True)],
+            [{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
             [[0, 0]],
         )
         assert len(failed) == 0, (
