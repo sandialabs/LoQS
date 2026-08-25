@@ -12,16 +12,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future, as_completed
 import copy
 import os
 from pathlib import Path
-from typing import ClassVar, Literal, TypeVar
+from typing import ClassVar, Literal, Protocol, TypeVar, runtime_checkable
 import warnings
 
 try:
-    from dask.distributed import Client
+    from threadpoolctl import threadpool_limits
 except ImportError:
-    Client = None  # type: ignore
+    threadpool_limits = None  # type: ignore
 
 from tqdm import tqdm
 
@@ -49,6 +50,19 @@ from loqs.internal import Displayable
 from loqs.internal.legacy import legacy_name_hint
 
 T = TypeVar("T", bound="QuantumProgram")
+
+
+@runtime_checkable
+class ShotExecutor(Protocol):
+    """Structural type accepted by [](api:QuantumProgram.run) for parallel shots.
+
+    Only a `.submit()` method returning a `concurrent.futures.Future` is
+    required, so a `loky.get_reusable_executor()` instance or an
+    `mpi4py.futures.MPIPoolExecutor` both satisfy this without LoQS
+    depending on either package directly.
+    """
+
+    def submit(self, fn, /, *args, **kwargs) -> Future: ...
 
 
 class QuantumProgram(Displayable):
@@ -379,8 +393,7 @@ class QuantumProgram(Displayable):
         self,
         num_shots: int = 1,
         max_frame_limit: int = 100,
-        dask_client: Client | None = None,  # type: ignore
-        dask_batch_size: int = 1,
+        executor: ShotExecutor | None = None,
         verbose: bool = True,
         checkpoint_batch_size: int | None = None,
         checkpoint_dir: str | Path | None = None,
@@ -401,15 +414,14 @@ class QuantumProgram(Displayable):
             but this may need to be (significantly) increased for long
             circuits.
 
-        dask_client:
-            A Dask client to use for parallelizing shots.
-            Defaults to `None`, which runs shots in serial.
-
-        dask_batch_size:
-            The number of tasks that should be included in a batch of
-            Dask jobs. Defaults to 1, which submits each shot separately.
-            There may be scheduler overhead benefits to having fewer batches
-            for many (>1K) shots, at the expense of some possible load balancing.
+        executor:
+            A [](api:ShotExecutor) (e.g. a `loky.get_reusable_executor()`
+            instance, or an `mpi4py.futures.MPIPoolExecutor`) to
+            parallelize shots across. Defaults to `None`, which runs
+            shots in serial. Each worker pins its own thread pools to
+            one thread before running, avoiding BLAS/OpenMP
+            oversubscription regardless of how many workers `executor`
+            itself spawns.
 
         verbose:
             Whether to write a progress bar (`True`, default) or not (`False`)
@@ -447,12 +459,6 @@ class QuantumProgram(Displayable):
             checkpoint_enabled=checkpoint_enabled,
         )
 
-        if dask_client is None:
-            program = self
-        else:
-            # Delay program data to avoid copies every time
-            program = dask_client.scatter(self)
-
         # Set up tasks
         start = 0  # Always start from 0 for new ProgramResults
         if start > 0 and verbose:
@@ -467,14 +473,25 @@ class QuantumProgram(Displayable):
 
             tasks.append(
                 (
-                    program,
+                    self,
                     max_frame_limit,
                     seed_for_shot,
                     i,  # Add shot index for tracking
                 )
             )
 
-        if dask_client is None:
+        def _checkpoint_and_add(shot_index: int, result: HistoryLike) -> None:
+            program_results.add_shot(shot_index, result)
+            if checkpoint_batch_size is not None:
+                self._checkpoint_if_needed(
+                    program_results,
+                    shot_index,
+                    checkpoint_batch_size,
+                    checkpoint_dir,
+                    checkpoint_strategy,
+                )
+
+        if executor is None:
             # Execute serially
             for task in tqdm(
                 tasks,
@@ -484,83 +501,22 @@ class QuantumProgram(Displayable):
                 total=num_shots,
             ):
                 result = QuantumProgram._run_shot(*task)
-                program_results.add_shot(
-                    task[3], result
-                )  # task[3] is the shot index
-
-                # Checkpoint if needed
-                if checkpoint_batch_size is not None:
-                    self._checkpoint_if_needed(
-                        program_results,
-                        task[3],
-                        checkpoint_batch_size,
-                        checkpoint_dir,
-                        checkpoint_strategy,
-                    )
+                _checkpoint_and_add(task[3], result)  # task[3] is shot index
         else:
-            # Launch jobs
-            if dask_batch_size == 1:
-                # Each task by itself, just map directly
-                # Reshape to tuple of arglists instead of list of argtuples
-                tasks_arg_lists = zip(*tasks)
-
-                # Not pure because RNG for num_shots underneath
-                futures = dask_client.map(
-                    QuantumProgram._run_shot, *tasks_arg_lists, pure=False
-                )
-
-                # Retrive results (blocks until all tasks are finished)
-                shot_results = dask_client.gather(futures)
-
-                # Add results to ProgramResults
-                for i, result in enumerate(shot_results):
-                    shot_index = tasks[i][
-                        3
-                    ]  # Get shot index from original task
-                    program_results.add_shot(shot_index, result)
-
-                    # Checkpoint if needed
-                    if checkpoint_batch_size is not None:
-                        self._checkpoint_if_needed(
-                            program_results,
-                            shot_index,
-                            checkpoint_batch_size,
-                            checkpoint_dir,
-                            checkpoint_strategy,
-                        )
-            else:
-                # Split tasks into appropriate number of batches
-                batched_tasks = [
-                    tasks[i : i + dask_batch_size]
-                    for i in range(0, num_shots, dask_batch_size)
+            futures_to_shot = {
+                executor.submit(QuantumProgram._run_shot_worker, *task): task[
+                    3
                 ]
-
-                # Not pure because RNG for num_shots underneath
-                futures = dask_client.map(
-                    QuantumProgram._run_shot_batch, batched_tasks, pure=False
+                for task in tasks
+            }
+            completed = as_completed(futures_to_shot)
+            if verbose:
+                completed = tqdm(
+                    completed, f"Program {self.name}", total=num_shots
                 )
-
-                # Retrive results (blocks until all tasks are finished)
-                batched_results = dask_client.gather(futures)
-
-                # Add results to ProgramResults
-                for batch_results in batched_results:  # type: ignore
-                    for i, result in enumerate(batch_results):
-                        # Find the corresponding task to get shot index
-                        task_index = len(program_results.shot_histories)
-                        if task_index < len(tasks):
-                            shot_index = tasks[task_index][3]
-                            program_results.add_shot(shot_index, result)
-
-                            # Checkpoint if needed
-                            if checkpoint_batch_size is not None:
-                                self._checkpoint_if_needed(
-                                    program_results,
-                                    shot_index,
-                                    checkpoint_batch_size,
-                                    checkpoint_dir,
-                                    checkpoint_strategy,
-                                )
+            for future in completed:
+                shot_index = futures_to_shot[future]
+                _checkpoint_and_add(shot_index, future.result())
 
         # Cache the results so a caller who doesn't hold onto this return
         # value (e.g. `for program in programs: program.run(...)`) can still
@@ -603,10 +559,21 @@ class QuantumProgram(Displayable):
                 // checkpoint_batch_size,
             )
 
-    # Helper function to run a chunk of num_shots at once
+    # Entry point submitted to a parallel executor: pins this worker's
+    # thread pools to one thread before doing real numerical work, since
+    # env vars alone don't reliably take effect once a numerical library
+    # has already initialized its own thread pool.
     @staticmethod
-    def _run_shot_batch(tasks: Sequence[tuple]):
-        return [QuantumProgram._run_shot(*task) for task in tasks]
+    def _run_shot_worker(*args, **kwargs):
+        if threadpool_limits is not None:
+            threadpool_limits(1)
+        else:
+            warnings.warn(
+                "threadpoolctl is not installed, so worker thread pools "
+                "cannot be limited to avoid oversubscription. Install "
+                "loqs[parallel] or loqs[mpi]."
+            )
+        return QuantumProgram._run_shot(*args, **kwargs)
 
     # Static for more efficient parallel data movement
     @staticmethod

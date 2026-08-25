@@ -352,7 +352,7 @@ class NoiseSweepRunner(Displayable):
         `num_shots <= seed_stride` (hard failure, since a violation would mean seed ranges from
         adjacent points overlap); for each point, builds the QuantumProgram (`build_program`), runs
         it for `num_shots` shots (a single, ordinary `QuantumProgram.run(num_shots=num_shots,
-        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `dask_client`, or LoQS's own
+        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `executor`, or LoQS's own
         unrelated `checkpoint_dir`/`checkpoint_batch_size`/`checkpoint_strategy` if the caller
         wants *that* mechanism's protection against losing shots mid-way through one single, very
         large point -- entirely orthogonal to this method's own point-level `resume` support),
@@ -364,7 +364,7 @@ class NoiseSweepRunner(Displayable):
         covering every point.
 
         Sweep points are always processed strictly sequentially in a plain Python loop (never
-        parallelized across points -- only `run_kwargs["dask_client"]`, if given, parallelizes
+        parallelized across points -- only `run_kwargs["executor"]`, if given, parallelizes
         shots *within* one point's `QuantumProgram.run` call). This is what makes point-level
         resume tractable: at any moment, every point before the current one is either fully
         complete or not yet started, never partially interleaved with another point.
