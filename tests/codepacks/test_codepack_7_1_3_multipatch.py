@@ -15,6 +15,7 @@ from loqs.core import PatchGeometry, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
+from loqs.tools import fttools
 
 NUM_SHOTS = 20
 
@@ -282,12 +283,6 @@ class TestSyndromeCouplingAfterCx:
         )
         assert all(l0 == 0 and l1 == 0 for l0, l1 in per_shot)
 
-    @pytest.mark.skip(
-        reason=(
-            "Not yet run or verified. Remove this marker once someone has "
-            "reviewed and executed it."
-        )
-    )
     def test_ft_prep_two_qec_rounds_after_cx(self):
         """FT-prep version of the coupled-syndrome test, over two QEC rounds.
 
@@ -330,3 +325,89 @@ class TestSyndromeCouplingAfterCx:
             "logical_measurement", "all", strip_none_entries=True
         )
         assert all(l0 == 0 and l1 == 0 for l0, l1 in per_shot)
+
+
+class TestExhaustiveFaultInjectionAcrossCx:
+    """Exhaustive single-fault sweep over the CX's own physical circuit.
+
+    Unlike `TestSyndromeCouplingAfterCx`, which injects one representative
+    pre-CX data error to exercise the `latest_syndrome` coupling fix, this
+    sweeps every possible single-fault location *inside* the transversal
+    CX's own circuit (the 7-`Gcnot` layer) using `fttools`: every weight-1
+    Pauli fault before each `Gcnot`, and every weight-2 correlated Pauli
+    fault after each `Gcnot`. Both patches use `FT Zero Prep` and `FT
+    Logical Z Measure`, with one `Adaptive QEC` round per patch after the
+    CX -- confirming the composite CX + single QEC round is fault-tolerant
+    to any single fault occurring during the CX itself (not just faults
+    injected before it, as in `TestSyndromeCouplingAfterCx`).
+    """
+
+    def _base_program_and_cx(self):
+        q0 = steane_qubits("_0")
+        q1 = steane_qubits("_1")
+        all_q = q0 + q1
+        geometry = PatchGeometry(
+            patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
+        )
+        cx_circuit = multipatch.build_transversal_cx_circuit_instruction(
+            geometry
+        )
+        cx_bookkeeping = multipatch.build_cx_bookkeeping_instruction(
+            "L0", "L1"
+        )
+        stack = [
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
+            *geometry.init_patch_entries("Steane"),
+            ("FT Zero Prep", "L0"),
+            ("FT Zero Prep", "L1"),
+            (cx_circuit, None),
+            (cx_bookkeeping, None),
+            ("Adaptive QEC", "L0"),
+            ("Adaptive QEC", "L1"),
+            ("FT Logical Z Measure", "L0"),
+            ("FT Logical Z Measure", "L1"),
+        ]
+        cx_stack_idx = stack.index((cx_circuit, None))
+        program = make_program(stack, all_q)
+        return program, cx_circuit, cx_stack_idx
+
+    def test_weight1_pre_gate_faults(self):
+        """Every single-qubit Pauli fault before each of the CX's 7 Gcnots."""
+        program, cx_circuit, cx_idx = self._base_program_and_cx()
+        injected = fttools.build_discrete_error_injection_programs(
+            base_program=program,
+            instruction_to_analyze=cx_circuit,
+            stack_idx_to_modify=cx_idx,
+            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+        )
+        failed = fttools.run_discrete_error_injected_programs(
+            injected,
+            [("logical_measurement", "all", True)],
+            [[0, 0]],
+        )
+        assert len(failed) == 0, (
+            f"{len(failed)} pre-gate fault(s) not corrected"
+        )
+
+    def test_weight2_post_gate_correlated_faults(self):
+        """Every correlated weight-2 fault after each of the CX's 7 Gcnots."""
+        program, cx_circuit, cx_idx = self._base_program_and_cx()
+        injected = fttools.build_discrete_error_injection_programs(
+            base_program=program,
+            instruction_to_analyze=cx_circuit,
+            stack_idx_to_modify=cx_idx,
+            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+            post_twoq_gates=True,
+        )
+        failed = fttools.run_discrete_error_injected_programs(
+            injected,
+            [("logical_measurement", "all", True)],
+            [[0, 0]],
+        )
+        assert len(failed) == 0, (
+            f"{len(failed)} post-gate fault(s) not corrected"
+        )
