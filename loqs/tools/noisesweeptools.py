@@ -42,11 +42,9 @@ from loqs.core.qeccode import QECCode
 from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
-    ChunkExecutor,
-    chunk_round_robin,
+    ParallelStrategy,
     pin_worker_threads,
-    run_chunks_with_executor,
-    run_chunks_with_submitit,
+    resolve_shot_executor,
 )
 
 # Every QuantumProgram.__init__ parameter except `default_base_seed`, which NoiseSweepRunner
@@ -203,11 +201,18 @@ def _run_sweep_point_chunk(
     run_kwargs: dict,
     keep_program_results: bool,
     program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+    shot_executor: Any | None = None,
 ) -> list[tuple[int, float, float, str | None]]:
     """Run every sweep point index in one chunk via `_run_sweep_point`,
     returning one result per index. The actual per-chunk work shared by
-    both of `run`'s program-level dispatch entry points.
+    both of `run`'s program-level dispatch entry points. `shot_executor`,
+    if given, is an already-built executor (resolved once per chunk by the
+    caller, not once per point) forwarded as `QuantumProgram.run`'s own
+    `shot_executor` argument for every point in the chunk, for hybrid
+    shot-/point-level parallelism.
     """
+    if shot_executor is not None:
+        run_kwargs = {**run_kwargs, "shot_executor": shot_executor}
     return [
         _run_sweep_point(
             runner,
@@ -237,6 +242,7 @@ def _run_sweep_point_chunk_worker(
     run_kwargs: dict,
     keep_program_results: bool,
     program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+    shot_executor: Any | None = None,
 ) -> list[tuple[int, float, float, str | None]]:
     pin_worker_threads()
     return _run_sweep_point_chunk(
@@ -248,6 +254,7 @@ def _run_sweep_point_chunk_worker(
         run_kwargs,
         keep_program_results,
         program_results_dir,
+        shot_executor=resolve_shot_executor(shot_executor),
     )
 
 
@@ -450,9 +457,7 @@ class NoiseSweepRunner(Displayable):
         result_path: str | Path | None = None,
         verbose: bool = True,
         metadata: dict | None = None,
-        point_executor: ChunkExecutor | None = None,
-        point_submitit_executor: Any | None = None,
-        n_point_chunks: int | None = None,
+        point_parallel: ParallelStrategy | None = None,
         **run_kwargs,
     ) -> "NoiseSweepResult":
         """Run the full sweep.
@@ -461,46 +466,44 @@ class NoiseSweepRunner(Displayable):
         `num_shots <= seed_stride` (hard failure, since a violation would mean seed ranges from
         adjacent points overlap); for each point, builds the QuantumProgram (`build_program`), runs
         it for `num_shots` shots (a single, ordinary `QuantumProgram.run(num_shots=num_shots,
-        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `executor`, or LoQS's own
-        unrelated `checkpoint_dir`/`checkpoint_batch_size`/`checkpoint_strategy` if the caller
-        wants *that* mechanism's protection against losing shots mid-way through one single, very
-        large point -- entirely orthogonal to this method's own point-level `resume` support),
-        extracts `(failure_rate, stderr)` via `collect_shot_data_args`/`expected_outcomes` (same
-        per-shot pass/fail convention as `fttools.test_program_output`), then immediately disposes
-        of that point's `ProgramResults` -- discarding it if `keep_program_results` is False, or
-        writing it to `program_results_dir` (a single self-contained `ProgramResults.write(...)`
-        dump, not the incremental checkpoint mechanism) if True. Returns one `NoiseSweepResult`
-        covering every point.
+        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `checkpoint_dir`/
+        `checkpoint_batch_size`/`checkpoint_strategy` if the caller wants *that* mechanism's
+        protection against losing shots mid-way through one single, very large point -- entirely
+        orthogonal to this method's own point-level `resume` support), extracts `(failure_rate,
+        stderr)` via `collect_shot_data_args`/`expected_outcomes` (same per-shot pass/fail
+        convention as `fttools.test_program_output`), then immediately disposes of that point's
+        `ProgramResults` -- discarding it if `keep_program_results` is False, or writing it to
+        `program_results_dir` (a single self-contained `ProgramResults.write(...)` dump, not the
+        incremental checkpoint mechanism) if True. Returns one `NoiseSweepResult` covering every
+        point.
 
-        By default (`point_executor`/`point_submitit_executor` both `None`), sweep points are
-        processed strictly sequentially in a plain Python loop (`run_kwargs["executor"]`, if given,
-        still parallelizes shots *within* one point's `QuantumProgram.run` call -- an entirely
-        separate, per-point concern from this method's own point-level dispatch). This is what
-        makes point-level resume tractable at its finest granularity: at any moment, every point
-        before the current one is either fully complete or not yet started, never partially
-        interleaved with another point, and the persisted `NoiseSweepResult` is rewritten after
-        every single completed point.
+        By default (`point_parallel` `None`, or given with `program_executor` unset), sweep points
+        are processed strictly sequentially in a plain Python loop. This is what makes point-level
+        resume tractable at its finest granularity: at any moment, every point before the current
+        one is either fully complete or not yet started, never partially interleaved with another
+        point, and the persisted `NoiseSweepResult` is rewritten after every single completed
+        point.
 
-        Passing `point_executor` or `point_submitit_executor` (mutually exclusive) instead
+        Passing `point_parallel` (a [](api:ParallelStrategy) with `program_executor` set) instead
         parallelizes across the still-remaining sweep points, using the same
-        `loqs.tools.paralleltools` chunking/dispatch machinery
-        [](api:simulate_dataset_for_edesign) uses: remaining points are split into
-        `n_point_chunks` round-robin chunks, and each chunk's points are run as a unit by a worker
-        that pins its own thread pools to one thread before doing any real numerical work. Named
-        distinctly from `run_kwargs["executor"]` (shot-level, forwarded per point) specifically to
-        avoid colliding with it -- but the two cannot currently be combined: a live shot-level
-        executor holds OS resources (pipes/locks) that can't be pickled across the process
-        boundary each dispatched point chunk crosses, so passing both raises `ValueError` rather
-        than failing deep inside a worker with a confusing pickling error. Nesting a shot-level
-        pool inside each point-level worker for genuine hybrid parallelism is tracked as future
-        work (#105). The whole dispatched batch is treated as one atomic unit for resume purposes:
-        the persisted `NoiseSweepResult` is only extended and rewritten once the *entire* batch of
-        remaining points has returned, not once per point -- a crash mid-dispatch loses the whole
-        batch, not just whichever point was in progress, the real trade-off for running points
-        concurrently at all. The `index < len(failure_rates)`-is-complete resume invariant itself
-        is never violated either way: every point ever recorded is genuinely complete, and results
-        are always written back in strict index order regardless of which chunk (or completion
-        order) actually produced them.
+        `loqs.tools.paralleltools` chunking/dispatch machinery [](api:simulate_dataset_for_edesign)
+        uses: remaining points are split into `point_parallel.n_program_chunks` round-robin chunks,
+        and each chunk's points are run as a unit by a worker that pins its own thread pools to one
+        thread before doing any real numerical work. The whole dispatched batch is treated as one
+        atomic unit for resume purposes: the persisted `NoiseSweepResult` is only extended and
+        rewritten once the *entire* batch of remaining points has returned, not once per point --
+        a crash mid-dispatch loses the whole batch, not just whichever point was in progress, the
+        real trade-off for running points concurrently at all. The `index < len(failure_rates)`-
+        is-complete resume invariant itself is never violated either way: every point ever recorded
+        is genuinely complete, and results are always written back in strict index order
+        regardless of which chunk (or completion order) actually produced them.
+
+        For hybrid parallelism (shots within a point *and* points across a chunk, both at once),
+        `point_parallel.shot_executor` is forwarded as `QuantumProgram.run`'s own `shot_executor`
+        argument for every point -- see [](api:ParallelStrategy) for why it must be a factory
+        callable (not a live executor) whenever `program_executor` is also set, and for what
+        happens when it's given without any `program_executor` (resolved once up front and reused
+        across every point, since no process boundary is crossed in that case).
 
         If `keep_program_results` is True, `program_results_dir` must be given (a fixed value or
         callable), or this raises `ValueError`.
@@ -513,8 +516,8 @@ class NoiseSweepRunner(Displayable):
         and completed points are skipped entirely (not even reconstructed). Under the default
         serial path, whichever single point was in progress at the moment of interruption is fully
         re-simulated from scratch; under the parallel path, the whole in-progress batch is.
-        Neither path attempts shot-level resume within a point (see the module/plan discussion;
-        that needs a QuantumProgram.run core change tracked separately). `resume=True` without
+        Neither path attempts shot-level resume within a point (that would need a core
+        `QuantumProgram.run` change, tracked separately under #105). `resume=True` without
         `result_path` raises `ValueError`. `result_path` may also be given with `resume=False`,
         purely to record incremental progress for external monitoring; it just won't be consulted
         on the next call.
@@ -535,25 +538,6 @@ class NoiseSweepRunner(Displayable):
             )
         if resume and result_path is None:
             raise ValueError("result_path is required when resume=True.")
-        if point_executor is not None and point_submitit_executor is not None:
-            raise ValueError(
-                "Pass at most one of point_executor or "
-                "point_submitit_executor, not both."
-            )
-        if (
-            point_executor is not None or point_submitit_executor is not None
-        ) and isinstance(run_kwargs.get("executor"), ChunkExecutor):
-            raise ValueError(
-                "run_kwargs['executor'] (shot-level parallelism within one "
-                "point) cannot be combined with point_executor/"
-                "point_submitit_executor (parallelism across points): the "
-                "shot-level executor is a live object holding OS resources "
-                "(pipes/locks) that cannot be pickled across the process "
-                "boundary each dispatched point chunk crosses. Nesting a "
-                "shot-level pool inside each point-level worker is tracked "
-                "as future work (#105); for now, pick one axis to "
-                "parallelize per call."
-            )
 
         failure_rates: list[float] = []
         stderrs: list[float] = []
@@ -584,7 +568,17 @@ class NoiseSweepRunner(Displayable):
 
         start_index = len(failure_rates)
 
-        if point_executor is None and point_submitit_executor is None:
+        if point_parallel is None or not point_parallel.is_chunked:
+            shot_executor = resolve_shot_executor(
+                point_parallel.shot_executor
+                if point_parallel is not None
+                else None
+            )
+            if shot_executor is not None:
+                # No process boundary is crossed here, so the resolved
+                # executor is reused across every point, rather than
+                # rebuilding it per point.
+                run_kwargs = {**run_kwargs, "shot_executor": shot_executor}
             for index in range(start_index, len(self.strengths)):
                 strength = self.strengths[index]
                 program = self.build_program(index)
@@ -640,9 +634,7 @@ class NoiseSweepRunner(Displayable):
                     keep_program_results,
                     program_results_dir,
                     run_kwargs,
-                    point_executor,
-                    point_submitit_executor,
-                    n_point_chunks,
+                    point_parallel,
                 )
             ):
                 failure_rates.append(failure_rate)
@@ -678,34 +670,25 @@ class NoiseSweepRunner(Displayable):
         keep_program_results: bool,
         program_results_dir: str | Path | Callable[[Any], str | Path] | None,
         run_kwargs: dict,
-        point_executor: ChunkExecutor | None,
-        point_submitit_executor: Any | None,
-        n_point_chunks: int | None,
+        point_parallel: ParallelStrategy,
     ) -> list[tuple[int, float, float, str | None]]:
         """`run`'s program-level parallel dispatch path: split the sweep points
-        from `start_index` onward into `n_point_chunks` round-robin chunks,
-        run each chunk as a unit via `point_executor` or
-        `point_submitit_executor`, and return every point's `(index,
+        from `start_index` onward into `point_parallel.n_program_chunks`
+        round-robin chunks, run each chunk as a unit via
+        `point_parallel.program_executor`, and return every point's `(index,
         failure_rate, stderr, program_results_path)`, sorted back into
         index order (round-robin chunking scrambles that order across
         chunks; each chunk's own internal order is already correct).
+        `point_parallel.shot_executor`, if given, is passed through to each
+        chunk worker unresolved -- it's a picklable factory callable, not a
+        live executor, so it crosses the process boundary safely and each
+        worker resolves it once for hybrid shot-/point-level parallelism.
         """
         remaining = list(range(start_index, len(self.strengths)))
         if not remaining:
             return []
 
-        if point_submitit_executor is not None and n_point_chunks is None:
-            raise ValueError(
-                "n_point_chunks is required when point_submitit_executor is "
-                "given -- submitting one array task per sweep point would "
-                "be dominated by SLURM scheduling overhead for typical "
-                "LoQS workloads, so a chunk count must be chosen "
-                "deliberately rather than defaulted."
-            )
-        if n_point_chunks is None:
-            n_point_chunks = len(remaining)
-
-        chunks = chunk_round_robin(remaining, n_point_chunks)
+        chunks = point_parallel.make_chunks(remaining)
         worker = functools.partial(
             _run_sweep_point_chunk_worker,
             self,
@@ -715,18 +698,11 @@ class NoiseSweepRunner(Displayable):
             run_kwargs=run_kwargs,
             keep_program_results=keep_program_results,
             program_results_dir=program_results_dir,
+            shot_executor=point_parallel.shot_executor,
         )
-        if point_executor is not None:
-            chunk_results = run_chunks_with_executor(
-                point_executor, worker, chunks, desc="Running noise sweep point chunks"
-            )
-        else:
-            chunk_results = run_chunks_with_submitit(
-                point_submitit_executor,
-                worker,
-                chunks,
-                desc="Running noise sweep point chunks",
-            )
+        chunk_results = point_parallel.dispatch(
+            worker, chunks, desc="Running noise sweep point chunks"
+        )
 
         points = [
             point for chunk_result in chunk_results for point in chunk_result

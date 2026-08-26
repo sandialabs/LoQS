@@ -197,9 +197,9 @@ _SEED_COUNTER_INSTRUCTION = Instruction(
 
 
 class TestExecutorParallelism:
-    """`QuantumProgram.run(executor=...)`'s parallel path against a real
-    `loky` executor: correctness (same outcomes as a serial run) and the
-    thread-oversubscription discipline every worker must apply."""
+    """`QuantumProgram.run(shot_executor=...)`'s parallel path against a
+    real `loky` executor: correctness (same outcomes as a serial run) and
+    the thread-oversubscription discipline every worker must apply."""
 
     def _build_counter_program(self):
         trivial_code = trivial_codepack.create_qec_code()
@@ -234,7 +234,7 @@ class TestExecutorParallelism:
 
         executor = loky.get_reusable_executor(max_workers=2)
         parallel_results = self._build_counter_program().run(
-            num_shots=num_shots, executor=executor, verbose=False
+            num_shots=num_shots, shot_executor=executor, verbose=False
         )
 
         serial_counters = {

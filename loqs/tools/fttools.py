@@ -9,24 +9,23 @@
 
 """A collection of functions to help fault-tolerance testing."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
-from typing import Any
+import functools
 from tqdm import tqdm
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
+from loqs.core.executors import SubmitExecutor
 from loqs.core.historydatacollector import (
     HistoryDataCollector,
     HistoryDataCollectorLike,
 )
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.tools.paralleltools import (
-    ChunkExecutor,
-    chunk_round_robin,
+    ParallelStrategy,
     pin_worker_threads,
-    run_chunks_with_executor,
-    run_chunks_with_submitit,
+    resolve_shot_executor,
 )
 
 # One (program, collect_shot_data_args, expected_outcomes, num_shots) task,
@@ -412,25 +411,23 @@ def run_discrete_error_injected_programs(
     collect_shot_data_args: Sequence[HistoryDataCollectorLike],
     expected_outcomes: Sequence,
     num_shots: int = 1,
-    executor: ChunkExecutor | None = None,
-    submitit_executor: Any | None = None,
-    n_chunks: int | None = None,
+    parallel: ParallelStrategy | None = None,
 ) -> list[QuantumProgram]:
     """Call [](api:test_program_output) on many programs.
 
-    Runs serially over `errored_programs` by default. Passing `executor`
-    or `submitit_executor` (mutually exclusive) instead parallelizes
-    across programs, using the same `loqs.tools.paralleltools` chunking/
-    dispatch machinery [](api:simulate_dataset_for_edesign) uses: programs
-    are split into `n_chunks` round-robin chunks, and each chunk is tested
-    as a unit by a worker that pins its own thread pools to one thread
-    before doing any real numerical work. Since each `errored_programs`
-    entry is already a fully built `QuantumProgram` (unlike
-    [](api:simulate_dataset_for_edesign), which builds its programs inside
-    the worker), a program containing closures needs `executor`'s
-    `cloudpickle` fallback (e.g. `loky`) to cross a process boundary --
-    the same requirement [](api:QuantumProgram.run)'s own `executor`
-    parameter has.
+    Runs serially over `errored_programs` by default. Passing `parallel`
+    (a [](api:ParallelStrategy)) instead parallelizes across programs,
+    using the same `loqs.tools.paralleltools` chunking/dispatch machinery
+    [](api:simulate_dataset_for_edesign) uses: programs are split into
+    `parallel.n_program_chunks` round-robin chunks, and each chunk is
+    tested as a unit by a worker that pins its own thread pools to one
+    thread before doing any real numerical work. Since each
+    `errored_programs` entry is already a fully built `QuantumProgram`
+    (unlike [](api:simulate_dataset_for_edesign), which builds its
+    programs inside the worker), a program containing closures needs
+    `parallel.program_executor`'s `cloudpickle` fallback (e.g. `loky`) to
+    cross a process boundary -- the same requirement
+    [](api:QuantumProgram.run)'s own `shot_executor` parameter has.
 
     Parameters
     ----------
@@ -447,25 +444,13 @@ def run_discrete_error_injected_programs(
     num_shots : int, optional
         See [](api:test_program_output), by default 1
 
-    executor : ChunkExecutor | None, optional
-        A `.submit()`-based executor (e.g. `loky.get_reusable_executor()`
-        or `mpi4py.futures.MPIPoolExecutor`) to parallelize program chunks
-        across. Defaults to `None`, which runs programs serially. Mutually
-        exclusive with `submitit_executor`.
-
-    submitit_executor : submitit.Executor | None, optional
-        A `submitit.Executor` to parallelize program chunks across via a
-        single bulk `map_array` submission. Defaults to `None`. Mutually
-        exclusive with `executor`; requires `n_chunks` to be given
-        explicitly, since submitting one array task per program would be
-        dominated by scheduling overhead for typical LoQS workloads.
-
-    n_chunks : int | None, optional
-        Number of round-robin chunks to split `errored_programs` into when
-        `executor` or `submitit_executor` is given. Defaults to one chunk
-        per program when `executor` is given; has no default (must be
-        given explicitly) when `submitit_executor` is given. Ignored when
-        neither executor is given.
+    parallel : ParallelStrategy | None, optional
+        Parallelizes across programs when given -- see
+        [](api:ParallelStrategy) for its `program_executor`/
+        `n_program_chunks`/`shot_executor` fields. Defaults to `None`,
+        which runs programs serially (still honoring
+        `parallel.shot_executor` if a `ParallelStrategy` with only that
+        field set is passed, for shot-level-only parallelism).
 
     Returns
     -------
@@ -474,28 +459,24 @@ def run_discrete_error_injected_programs(
         (not copies that crossed a process boundary), regardless of
         whether the run was serial or parallel.
     """
-    if executor is not None and submitit_executor is not None:
-        raise ValueError(
-            "Pass at most one of executor or submitit_executor, not both."
-        )
-
     tasks: list[_ProgramTask] = [
         (p, collect_shot_data_args, expected_outcomes, num_shots)
         for p in errored_programs
     ]
 
-    if executor is None and submitit_executor is None:
+    if parallel is None or not parallel.is_chunked:
+        shot_executor = resolve_shot_executor(
+            parallel.shot_executor if parallel is not None else None
+        )
         failed = [
             task[0]
             for task in tqdm(
                 tasks, "Running discrete error injected programs"
             )
-            if not test_program_output(*task)
+            if not test_program_output(*task, shot_executor=shot_executor)
         ]
     else:
-        failed = _run_program_tasks_parallel(
-            tasks, executor, submitit_executor, n_chunks
-        )
+        failed = _run_program_tasks_parallel(tasks, parallel)
 
     if len(failed):
         print(f"Failed {len(failed)} programs!")
@@ -507,45 +488,25 @@ def run_discrete_error_injected_programs(
 
 def _run_program_tasks_parallel(
     tasks: list[_ProgramTask],
-    executor: ChunkExecutor | None,
-    submitit_executor: Any | None,
-    n_chunks: int | None,
+    parallel: ParallelStrategy,
 ) -> list[QuantumProgram]:
     """`run_discrete_error_injected_programs`'s parallel dispatch path:
-    chunk `tasks`, dispatch one worker call per chunk via `executor` or
-    `submitit_executor`, then match each chunk's returned success flags
-    back to this process's own program objects by chunk position -- not
-    by trusting whatever copy of a program a worker sends back -- so the
-    returned failed list holds the same objects `tasks` held.
+    chunk `tasks`, dispatch one worker call per chunk via `parallel`, then
+    match each chunk's returned success flags back to this process's own
+    program objects by chunk position -- not by trusting whatever copy of
+    a program a worker sends back -- so the returned failed list holds the
+    same objects `tasks` held.
     """
     if not tasks:
         return []
 
-    if submitit_executor is not None and n_chunks is None:
-        raise ValueError(
-            "n_chunks is required when submitit_executor is given -- "
-            "submitting one array task per program would be dominated by "
-            "SLURM scheduling overhead for typical LoQS workloads, so a "
-            "chunk count must be chosen deliberately rather than defaulted."
-        )
-    if n_chunks is None:
-        n_chunks = len(tasks)
-
-    chunks = chunk_round_robin(tasks, n_chunks)
-    if executor is not None:
-        chunk_results = run_chunks_with_executor(
-            executor,
-            _process_program_chunk_worker,
-            chunks,
-            desc="Running discrete error injected program chunks",
-        )
-    else:
-        chunk_results = run_chunks_with_submitit(
-            submitit_executor,
-            _process_program_chunk_worker,
-            chunks,
-            desc="Running discrete error injected program chunks",
-        )
+    chunks = parallel.make_chunks(tasks)
+    worker = functools.partial(
+        _process_program_chunk_worker, shot_executor=parallel.shot_executor
+    )
+    chunk_results = parallel.dispatch(
+        worker, chunks, desc="Running discrete error injected program chunks"
+    )
 
     failed = []
     for chunk, successes in zip(chunks, chunk_results):
@@ -555,14 +516,22 @@ def _run_program_tasks_parallel(
     return failed
 
 
-def _process_program_chunk(chunk: list[_ProgramTask]) -> list[bool]:
+def _process_program_chunk(
+    chunk: list[_ProgramTask], shot_executor: SubmitExecutor | None = None
+) -> list[bool]:
     """Run [](api:test_program_output) on every task in one chunk,
     returning one success flag per task in the same order. Returns plain
     booleans rather than the tested `QuantumProgram`s themselves, so the
     driving process can match successes back to its own program objects
-    by chunk position instead.
+    by chunk position instead. `shot_executor`, if given, is an
+    already-built executor (resolved once per chunk by the caller, not
+    once per task) forwarded to every task's own `program.run`, for hybrid
+    shot-/program-level parallelism.
     """
-    return [test_program_output(*task) for task in chunk]
+    return [
+        test_program_output(*task, shot_executor=shot_executor)
+        for task in chunk
+    ]
 
 
 # Entry point submitted to a parallel executor: pins this worker's thread
@@ -570,9 +539,14 @@ def _process_program_chunk(chunk: list[_ProgramTask]) -> list[bool]:
 # `_process_program_chunk`. Kept as a plain module-level function (not a
 # closure) so plain `pickle` can resolve it by dotted import path, needed
 # by `MPIPoolExecutor`.
-def _process_program_chunk_worker(chunk: list[_ProgramTask]) -> list[bool]:
+def _process_program_chunk_worker(
+    chunk: list[_ProgramTask],
+    shot_executor: SubmitExecutor | Callable[[], SubmitExecutor] | None = None,
+) -> list[bool]:
     pin_worker_threads()
-    return _process_program_chunk(chunk)
+    return _process_program_chunk(
+        chunk, shot_executor=resolve_shot_executor(shot_executor)
+    )
 
 
 def test_program_output(
@@ -582,6 +556,7 @@ def test_program_output(
     num_shots: int = 1,
     verbose: bool = False,
     skip_run: bool = False,
+    shot_executor: SubmitExecutor | None = None,
 ) -> bool:
     """Test a program against expected output.
 
@@ -609,13 +584,20 @@ def test_program_output(
         Whether to skip running the program and use previous results,
         by default False
 
+    shot_executor : SubmitExecutor | None, optional
+        Forwarded to [](api:QuantumProgram.run) for shot-level
+        parallelism. Defaults to `None`, which runs shots serially.
+        Unused when `skip_run` is `True`.
+
     Returns
     -------
     bool
         `True` if all outputs match expected, `False` on failure
     """
     if not skip_run:
-        program_results = test_program.run(num_shots=num_shots, verbose=False)
+        program_results = test_program.run(
+            num_shots=num_shots, shot_executor=shot_executor, verbose=False
+        )
     else:
         # If we're skipping the run, we need to get the results from somewhere
         program_results = getattr(test_program, "_last_results", None)

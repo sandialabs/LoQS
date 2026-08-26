@@ -44,21 +44,21 @@ program = QuantumProgram(
 
 ## Step 2: Run shots across a `loky` executor
 
-Pass a `loky.get_reusable_executor()` instance as `executor` to
+Pass a `loky.get_reusable_executor()` instance as `shot_executor` to
 [](api:QuantumProgram.run). Any object exposing a
 `concurrent.futures`-style `.submit()` method works the same way,
 including an `mpi4py.futures.MPIPoolExecutor` for multi-node runs. Each
 worker pins its own BLAS/OpenMP thread pools to one thread before
 running, so oversubscription is avoided regardless of how many workers
-`executor` spawns.
+`shot_executor` spawns.
 
 ```{code-cell} ipython3
 import loky
 
 executor = loky.get_reusable_executor(max_workers=4)
-results = program.run(num_shots=20, executor=executor, verbose=False)
+results = program.run(num_shots=20, shot_executor=executor, verbose=False)
 len(results.shot_histories)
 ```
 
-Omitting `executor` (the default) runs shots serially in the calling
+Omitting `shot_executor` (the default) runs shots serially in the calling
 process, exactly as before.

@@ -33,13 +33,7 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
 from loqs.internal.legacy import deprecated
-from loqs.tools.paralleltools import (
-    ChunkExecutor,
-    chunk_round_robin,
-    pin_worker_threads,
-    run_chunks_with_executor,
-    run_chunks_with_submitit,
-)
+from loqs.tools.paralleltools import ParallelStrategy, pin_worker_threads, resolve_shot_executor
 
 try:
     import pygsti  # noqa: F401
@@ -117,6 +111,7 @@ def _process_circuit_chunk(
     max_frame_limit: int,
     program_kwargs: dict,
     chunk: list[Circuit],
+    shot_executor: Any | None = None,
 ) -> list[tuple[Circuit, dict[tuple, int]]]:
     """Build, run, and reduce every circuit in one chunk to a row of counts.
 
@@ -129,6 +124,9 @@ def _process_circuit_chunk(
     `label_to_logical`, `chunk` itself) ever cross a process boundary, so
     this stays compatible with `mpi4py.futures.MPIPoolExecutor`'s plain
     `pickle` transport, not just `loky`'s `cloudpickle` fallback.
+    `shot_executor`, if given, is an already-built executor (resolved once
+    per chunk by the caller, not once per circuit) forwarded to every
+    circuit's own `program.run`, for hybrid shot-/program-level parallelism.
     """
     results = []
     for circ in chunk:
@@ -136,7 +134,10 @@ def _process_circuit_chunk(
             circ, physical_model, label_to_logical, **program_kwargs
         )
         program_results = program.run(
-            num_shots, max_frame_limit=max_frame_limit, verbose=False
+            num_shots,
+            max_frame_limit=max_frame_limit,
+            shot_executor=shot_executor,
+            verbose=False,
         )
         outcomes = _collect_program_outcomes(
             program_results, collect_shot_data_args
@@ -162,6 +163,7 @@ def _process_circuit_chunk_worker(
     max_frame_limit: int,
     program_kwargs: dict,
     chunk: list[Circuit],
+    shot_executor: Any | None = None,
 ) -> list[tuple[Circuit, dict[tuple, int]]]:
     pin_worker_threads()
     return _process_circuit_chunk(
@@ -172,6 +174,7 @@ def _process_circuit_chunk_worker(
         max_frame_limit,
         program_kwargs,
         chunk,
+        shot_executor=resolve_shot_executor(shot_executor),
     )
 
 
@@ -420,9 +423,7 @@ def simulate_dataset_for_edesign(
     resume: bool = False,
     force_resume: bool = False,
     max_frame_limit: int = 100,
-    executor: ChunkExecutor | None = None,
-    submitit_executor: Any | None = None,
-    n_chunks: int | None = None,
+    parallel: ParallelStrategy | None = None,
     **program_kwargs,
 ) -> DataSet:
     """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
@@ -437,23 +438,25 @@ def simulate_dataset_for_edesign(
     reported with one bar over circuits rather than [](api:QuantumProgram.run)'s
     own per-shot bar, which would otherwise print once per circuit.
 
-    Passing `executor` or `submitit_executor` (mutually exclusive) instead
-    parallelizes across circuits: circuits still needing data are split
-    into `n_chunks` round-robin chunks (so cost drift across the circuit
-    list, e.g. later GST circuits typically being deeper, doesn't
-    concentrate onto a few chunks), and each chunk is built/run/collected
-    as a unit by a worker that pins its own thread pools to one thread
-    before doing any real numerical work. `executor` accepts any
-    `ChunkExecutor` (e.g. `loky.get_reusable_executor()` or
-    `mpi4py.futures.MPIPoolExecutor`), with per-chunk progress reported via
-    `tqdm(as_completed(...))`. `submitit_executor` instead accepts a
-    `submitit.Executor`, dispatched via a single bulk `map_array` call (one
-    `sbatch` submission covering every chunk) with progress reported by
-    polling each `Job`'s `.done()`. Checkpointing (if `checkpoint_path` is
-    given) still happens from this driving process, once per circuit, as
-    each chunk's results come back -- not from inside the workers
-    themselves; real per-worker parallel checkpointing is tracked
-    separately under #105.
+    Passing `parallel` (a [](api:ParallelStrategy)) instead parallelizes
+    across circuits: circuits still needing data are split into
+    `parallel.n_program_chunks` round-robin chunks (so cost drift across
+    the circuit list, e.g. later GST circuits typically being deeper,
+    doesn't concentrate onto a few chunks), and each chunk is
+    built/run/collected as a unit by a worker that pins its own thread
+    pools to one thread before doing any real numerical work.
+    `parallel.program_executor` accepts either a `SubmitExecutor` (e.g.
+    `loky.get_reusable_executor()` or `mpi4py.futures.MPIPoolExecutor`,
+    dispatched with per-chunk progress via `tqdm(as_completed(...))`) or a
+    `MapArrayExecutor` (e.g. a `submitit.Executor`, dispatched via a single
+    bulk `map_array` call with progress reported by polling each job's
+    `.done()`) -- see [](api:ParallelStrategy) for the full field
+    reference, including `parallel.shot_executor` for nested shot-level
+    parallelism within each chunk's own programs. Checkpointing (if
+    `checkpoint_path` is given) still happens from this driving process,
+    once per circuit, as each chunk's results come back -- not from inside
+    the workers themselves; real per-worker parallel checkpointing is
+    tracked separately under #105.
 
     If `checkpoint_path` is given, each circuit's row is also appended to an
     on-disk text `DataSet` as soon as it's computed, so a crash partway through
@@ -514,27 +517,13 @@ def simulate_dataset_for_edesign(
         more frames than that should raise this explicitly, or they will be
         silently truncated and then fail during outcome collection.
 
-    executor : ChunkExecutor | None, optional
-        A `.submit()`-based executor (e.g. `loky.get_reusable_executor()` or
-        `mpi4py.futures.MPIPoolExecutor`) to parallelize circuit chunks
-        across. Defaults to `None`, which runs circuits serially. Mutually
-        exclusive with `submitit_executor`.
-
-    submitit_executor : submitit.Executor | None, optional
-        A `submitit.Executor` to parallelize circuit chunks across via a
-        single bulk `map_array` submission (e.g. one SLURM job array).
-        Defaults to `None`. Mutually exclusive with `executor`; requires
-        `n_chunks` to be given explicitly, since submitting one array task
-        per circuit would be dominated by scheduling overhead for typical
-        LoQS workloads.
-
-    n_chunks : int | None, optional
-        Number of round-robin chunks to split the still-to-run circuits
-        into when `executor` or `submitit_executor` is given. Defaults to
-        one chunk per circuit when `executor` is given (matching
-        [](api:QuantumProgram.run)'s own per-shot dispatch granularity);
-        has no default (must be given explicitly) when `submitit_executor`
-        is given. Ignored when neither executor is given.
+    parallel : ParallelStrategy | None, optional
+        Parallelizes across circuits when given -- see
+        [](api:ParallelStrategy) for its `program_executor`/
+        `n_program_chunks`/`shot_executor` fields. Defaults to `None`,
+        which runs circuits serially (still honoring
+        `parallel.shot_executor` if a `ParallelStrategy` with only that
+        field set is passed, for shot-level-only parallelism).
 
     **program_kwargs : Any
         Any additional kwargs that should be passed to each circuit's
@@ -590,16 +579,14 @@ def simulate_dataset_for_edesign(
     else:
         ds = DataSet()
 
-    if executor is not None and submitit_executor is not None:
-        raise ValueError(
-            "Pass at most one of executor or submitit_executor, not both."
-        )
-
     label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
 
     circuits = edesign.all_circuits_needing_data
 
-    if executor is None and submitit_executor is None:
+    if parallel is None or not parallel.is_chunked:
+        shot_executor = resolve_shot_executor(
+            parallel.shot_executor if parallel is not None else None
+        )
         for circ in tqdm(circuits, desc="Simulating edesign circuits"):
             if checkpoint_path is not None and circ in ds:
                 continue
@@ -608,7 +595,10 @@ def simulate_dataset_for_edesign(
                 circ, physical_model, label_to_logical, **program_kwargs
             )
             program_results = program.run(
-                num_shots, max_frame_limit=max_frame_limit, verbose=False
+                num_shots,
+                max_frame_limit=max_frame_limit,
+                shot_executor=shot_executor,
+                verbose=False,
             )
 
             outcomes = _collect_program_outcomes(
@@ -631,9 +621,7 @@ def simulate_dataset_for_edesign(
         ds,
         circuits,
         checkpoint_path,
-        executor,
-        submitit_executor,
-        n_chunks,
+        parallel,
         physical_model,
         label_to_logical,
         num_shots,
@@ -647,9 +635,7 @@ def _run_program_level_parallel(
     ds: DataSet,
     circuits: Sequence[Circuit],
     checkpoint_path: Path | None,
-    executor: ChunkExecutor | None,
-    submitit_executor: Any | None,
-    n_chunks: int | None,
+    parallel: ParallelStrategy,
     physical_model: ExplicitOpModel,
     label_to_logical: Mapping[Label, list[InstructionLabelLike]],
     num_shots: int,
@@ -660,8 +646,8 @@ def _run_program_level_parallel(
 ) -> DataSet:
     """`simulate_dataset_for_edesign`'s program-level parallel path: chunk
     whatever circuits still need data, dispatch one worker call per chunk
-    via `executor` or `submitit_executor`, then checkpoint/collect results
-    into `ds` from this driving process as each chunk comes back.
+    via `parallel`, then checkpoint/collect results into `ds` from this
+    driving process as each chunk comes back.
     """
     circuits_to_run = [
         circ
@@ -671,17 +657,7 @@ def _run_program_level_parallel(
     if not circuits_to_run:
         return ds
 
-    if submitit_executor is not None and n_chunks is None:
-        raise ValueError(
-            "n_chunks is required when submitit_executor is given -- "
-            "submitting one array task per circuit would be dominated by "
-            "SLURM scheduling overhead for typical LoQS workloads, so a "
-            "chunk count must be chosen deliberately rather than defaulted."
-        )
-    if n_chunks is None:
-        n_chunks = len(circuits_to_run)
-
-    chunks = chunk_round_robin(circuits_to_run, n_chunks)
+    chunks = parallel.make_chunks(circuits_to_run)
     worker = functools.partial(
         _process_circuit_chunk_worker,
         physical_model,
@@ -690,18 +666,11 @@ def _run_program_level_parallel(
         collect_shot_data_args,
         max_frame_limit,
         program_kwargs,
+        shot_executor=parallel.shot_executor,
     )
-    if executor is not None:
-        chunk_results = run_chunks_with_executor(
-            executor, worker, chunks, desc="Simulating edesign circuit chunks"
-        )
-    else:
-        chunk_results = run_chunks_with_submitit(
-            submitit_executor,
-            worker,
-            chunks,
-            desc="Simulating edesign circuit chunks",
-        )
+    chunk_results = parallel.dispatch(
+        worker, chunks, desc="Simulating edesign circuit chunks"
+    )
 
     for chunk_result in chunk_results:
         for circ, count_dict in chunk_result:

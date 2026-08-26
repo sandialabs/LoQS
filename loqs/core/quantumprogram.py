@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from concurrent.futures import Future, as_completed
+from concurrent.futures import as_completed
 import copy
 import os
 from pathlib import Path
-from typing import ClassVar, Literal, Protocol, TypeVar, runtime_checkable
+from typing import ClassVar, Literal, TypeVar
 import warnings
 
 try:
@@ -29,6 +29,7 @@ from tqdm import tqdm
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.state import BaseQuantumState
 from loqs.core import Instruction, InstructionStack, Frame
+from loqs.core.executors import SubmitExecutor
 from loqs.core.history import (
     History,
     HistoryLike,
@@ -50,19 +51,6 @@ from loqs.internal import Displayable
 from loqs.internal.legacy import legacy_name_hint
 
 T = TypeVar("T", bound="QuantumProgram")
-
-
-@runtime_checkable
-class ShotExecutor(Protocol):
-    """Structural type accepted by [](api:QuantumProgram.run) for parallel shots.
-
-    Only a `.submit()` method returning a `concurrent.futures.Future` is
-    required, so a `loky.get_reusable_executor()` instance or an
-    `mpi4py.futures.MPIPoolExecutor` both satisfy this without LoQS
-    depending on either package directly.
-    """
-
-    def submit(self, fn, /, *args, **kwargs) -> Future: ...
 
 
 class QuantumProgram(Displayable):
@@ -393,7 +381,7 @@ class QuantumProgram(Displayable):
         self,
         num_shots: int = 1,
         max_frame_limit: int = 100,
-        executor: ShotExecutor | None = None,
+        shot_executor: SubmitExecutor | None = None,
         verbose: bool = True,
         checkpoint_batch_size: int | None = None,
         checkpoint_dir: str | Path | None = None,
@@ -414,14 +402,14 @@ class QuantumProgram(Displayable):
             but this may need to be (significantly) increased for long
             circuits.
 
-        executor:
-            A [](api:ShotExecutor) (e.g. a `loky.get_reusable_executor()`
+        shot_executor:
+            A [](api:SubmitExecutor) (e.g. a `loky.get_reusable_executor()`
             instance, or an `mpi4py.futures.MPIPoolExecutor`) to
             parallelize shots across. Defaults to `None`, which runs
             shots in serial. Each worker pins its own thread pools to
             one thread before running, avoiding BLAS/OpenMP
-            oversubscription regardless of how many workers `executor`
-            itself spawns.
+            oversubscription regardless of how many workers
+            `shot_executor` itself spawns.
 
         verbose:
             Whether to write a progress bar (`True`, default) or not (`False`)
@@ -491,7 +479,7 @@ class QuantumProgram(Displayable):
                     checkpoint_strategy,
                 )
 
-        if executor is None:
+        if shot_executor is None:
             # Execute serially
             for task in tqdm(
                 tasks,
@@ -504,9 +492,9 @@ class QuantumProgram(Displayable):
                 _checkpoint_and_add(task[3], result)  # task[3] is shot index
         else:
             futures_to_shot = {
-                executor.submit(QuantumProgram._run_shot_worker, *task): task[
-                    3
-                ]
+                shot_executor.submit(
+                    QuantumProgram._run_shot_worker, *task
+                ): task[3]
                 for task in tasks
             }
             completed = as_completed(futures_to_shot)

@@ -10,13 +10,23 @@ import pytest
 from loqs.core import Frame, Instruction, ProgramResults, QuantumProgram
 from loqs.backends.state import BaseQuantumState, NumpyStatevectorQuantumState
 from loqs.internal.serializable import Serializable
-from loqs.tools import noisesweeptools
+from loqs.tools import paralleltools
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
     compare_noise_sweeps,
     plot_noise_sweep,
 )
+from loqs.tools.paralleltools import ParallelStrategy
+
+
+def _build_shot_executor():
+    """Module-level factory (not a closure) building a fresh loky
+    executor -- a picklable `shot_executor` factory for hybrid
+    shot-/point-level parallelism tests."""
+    import loky
+
+    return loky.get_reusable_executor(max_workers=1)
 
 
 # ---------------------------------------------------------------------------
@@ -315,16 +325,22 @@ class TestRun:
 
 
 class TestRunParallel:
-    """`NoiseSweepRunner.run`'s `point_executor`/`point_submitit_executor`
-    path, against real `loky` and `submitit` executors -- both must match
-    a serial run exactly (seeding is deterministic per index), and the
-    batch-atomic resume/collision-avoidance guarantees the docstring
-    makes must actually hold."""
+    """`NoiseSweepRunner.run`'s `point_parallel` (a
+    [](api:ParallelStrategy)) path, against real `loky` and `submitit`
+    executors -- both must match a serial run exactly (seeding is
+    deterministic per index), and the batch-atomic resume guarantee the
+    docstring makes must actually hold. `ParallelStrategy`'s own
+    construction-time validation (mutual exclusion, `n_program_chunks`/
+    `shot_executor` requirements) is covered directly in
+    test_paralleltools.py, not duplicated here."""
 
-    def test_loky_point_executor_matches_serial_result(self):
+    def test_loky_program_executor_matches_serial_result(self):
         loky = pytest.importorskip("loky")
         strengths = [0.0, 0.1, 0.2, 0.9]
-        executor = loky.get_reusable_executor(max_workers=2)
+        point_parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
 
         serial = make_runner(strengths, seed_stride=20, base_seed=7).run(
             10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
@@ -334,8 +350,7 @@ class TestRunParallel:
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             verbose=False,
-            point_executor=executor,
-            n_point_chunks=2,
+            point_parallel=point_parallel,
         )
 
         assert parallel.failure_rates == serial.failure_rates
@@ -349,7 +364,10 @@ class TestRunParallel:
         test-module-local `FLIP_COIN` instruction) isn't."""
         submitit = pytest.importorskip("submitit")
         strengths = [0.0, 0.1, 0.2, 0.9]
-        executor = submitit.DebugExecutor(folder=tmp_path)
+        point_parallel = ParallelStrategy(
+            program_executor=submitit.DebugExecutor(folder=tmp_path),
+            n_program_chunks=2,
+        )
 
         serial = make_runner(strengths, seed_stride=20, base_seed=7).run(
             10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
@@ -359,60 +377,56 @@ class TestRunParallel:
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             verbose=False,
-            point_submitit_executor=executor,
-            n_point_chunks=2,
+            point_parallel=point_parallel,
         )
 
         assert parallel.failure_rates == serial.failure_rates
         assert parallel.stderrs == serial.stderrs
 
-    def test_point_executor_and_point_submitit_executor_are_mutually_exclusive(
-        self,
-    ):
-        runner = make_runner([0.0, 0.1], seed_stride=5)
-        with pytest.raises(ValueError, match="at most one"):
-            runner.run(
-                5,
-                COLLECT_SHOT_DATA_ARGS,
-                EXPECTED_OUTCOMES,
-                verbose=False,
-                point_executor=object(),
-                point_submitit_executor=object(),
-            )
-
-    def test_point_submitit_executor_without_n_point_chunks_raises(self):
-        runner = make_runner([0.0, 0.1], seed_stride=5)
-        with pytest.raises(ValueError, match="n_point_chunks"):
-            runner.run(
-                5,
-                COLLECT_SHOT_DATA_ARGS,
-                EXPECTED_OUTCOMES,
-                verbose=False,
-                point_submitit_executor=object(),
-            )
-
-    def test_shot_level_executor_combined_with_point_executor_raises(self):
-        """A live shot-level executor (run_kwargs["executor"]) can't be
-        combined with point-level parallel dispatch: it would have to be
-        pickled across the process boundary each dispatched point chunk
-        crosses, and a real executor holds unpicklable OS resources
-        (pipes/locks). This must fail fast with a clear message, not a
-        deep pickling traceback surfaced from inside a worker."""
+    def test_hybrid_program_and_shot_executor_matches_serial_result(self):
+        """program_executor (across sweep points) and shot_executor
+        (within each point's own shots) nested together -- the real
+        hybrid parallelism this stage adds, replacing the old guardrail
+        that just rejected this combination."""
         loky = pytest.importorskip("loky")
-        runner = make_runner([0.0, 0.1], seed_stride=5)
-        shot_executor = loky.get_reusable_executor(max_workers=1)
+        strengths = [0.0, 0.1, 0.2, 0.9]
+        point_parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+            shot_executor=_build_shot_executor,
+        )
 
-        with pytest.raises(ValueError, match="run_kwargs\\['executor'\\]"):
+        serial = make_runner(strengths, seed_stride=20, base_seed=7).run(
+            10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
+        )
+        parallel = make_runner(strengths, seed_stride=20, base_seed=7).run(
+            10,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            verbose=False,
+            point_parallel=point_parallel,
+        )
+
+        assert parallel.failure_rates == serial.failure_rates
+        assert parallel.stderrs == serial.stderrs
+
+    def test_legacy_run_kwargs_executor_now_fails_naturally(self):
+        """`run_kwargs["executor"]` is no longer special-cased at all --
+        `QuantumProgram.run`'s parameter was renamed to `shot_executor`,
+        so a stray old-style `executor=` kwarg now just fails with a
+        plain TypeError from `QuantumProgram.run` itself, with no
+        NoiseSweepRunner-specific validation required."""
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        with pytest.raises(TypeError, match="executor"):
             runner.run(
                 5,
                 COLLECT_SHOT_DATA_ARGS,
                 EXPECTED_OUTCOMES,
                 verbose=False,
-                point_executor=object(),
-                executor=shot_executor,
+                executor=object(),
             )
 
-    def test_point_executor_writes_result_once_per_batch_not_per_point(
+    def test_point_parallel_writes_result_once_per_batch_not_per_point(
         self, tmp_path
     ):
         """The parallel path only rewrites result_path once the whole
@@ -422,7 +436,10 @@ class TestRunParallel:
         loky = pytest.importorskip("loky")
         result_path = tmp_path / "resume.json"
         runner = make_runner([0.0, 0.1, 0.2, 0.3], seed_stride=5)
-        executor = loky.get_reusable_executor(max_workers=2)
+        point_parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
 
         write_calls = []
         real_write = NoiseSweepResult.write
@@ -440,8 +457,7 @@ class TestRunParallel:
                 verbose=False,
                 resume=True,
                 result_path=result_path,
-                point_executor=executor,
-                n_point_chunks=2,
+                point_parallel=point_parallel,
             )
         finally:
             NoiseSweepResult.write = real_write
@@ -452,7 +468,7 @@ class TestRunParallel:
         self, tmp_path
     ):
         """A crash partway through a serial run leaves only its
-        already-completed points persisted; resuming with a point_executor
+        already-completed points persisted; resuming with a point_parallel
         dispatches exactly the missing indices (not the already-complete
         ones) and produces the same result an uninterrupted serial run
         would."""
@@ -489,15 +505,20 @@ class TestRunParallel:
 
         assert len(NoiseSweepResult.read(result_path).failure_rates) == 2
 
+        # ParallelStrategy.make_chunks (in loqs.tools.paralleltools, not
+        # noisesweeptools) is what actually calls chunk_round_robin now.
         dispatched_items = []
-        real_chunk_round_robin = noisesweeptools.chunk_round_robin
+        real_chunk_round_robin = paralleltools.chunk_round_robin
 
         def recording_chunk_round_robin(items, n_chunks):
             dispatched_items.append(list(items))
             return real_chunk_round_robin(items, n_chunks)
 
-        noisesweeptools.chunk_round_robin = recording_chunk_round_robin
-        executor = loky.get_reusable_executor(max_workers=2)
+        paralleltools.chunk_round_robin = recording_chunk_round_robin
+        point_parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
         try:
             final_result = runner.run(
                 10,
@@ -506,11 +527,10 @@ class TestRunParallel:
                 resume=True,
                 result_path=result_path,
                 verbose=False,
-                point_executor=executor,
-                n_point_chunks=2,
+                point_parallel=point_parallel,
             )
         finally:
-            noisesweeptools.chunk_round_robin = real_chunk_round_robin
+            paralleltools.chunk_round_robin = real_chunk_round_robin
 
         assert dispatched_items == [[2, 3]]
         assert final_result.failure_rates == uninterrupted_result.failure_rates

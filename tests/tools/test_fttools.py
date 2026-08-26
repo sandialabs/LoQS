@@ -11,6 +11,16 @@ from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools import fttools
+from loqs.tools.paralleltools import ParallelStrategy
+
+
+def _build_shot_executor():
+    """Module-level factory (not a closure) building a fresh loky
+    executor -- a picklable `shot_executor` factory for hybrid
+    shot-/program-level parallelism tests."""
+    import loky
+
+    return loky.get_reusable_executor(max_workers=1)
 
 
 def _build_circuit_program():
@@ -216,84 +226,100 @@ class TestRunDiscreteErrorInjectedPrograms:
 
 
 class TestRunDiscreteErrorInjectedProgramsParallel:
-    """`run_discrete_error_injected_programs`'s `executor`/
-    `submitit_executor` path, against real `loky` and `submitit`
+    """`run_discrete_error_injected_programs`'s `parallel` (a
+    [](api:ParallelStrategy)) path, against real `loky` and `submitit`
     executors -- both must return the driver's own original program
     objects in the failed list (per the function's own contract), not
-    copies that crossed a process boundary."""
+    copies that crossed a process boundary. `ParallelStrategy`'s own
+    construction-time validation (mutual exclusion, `n_program_chunks`
+    requirements) is covered directly in test_paralleltools.py, not
+    duplicated here."""
 
-    def test_loky_executor_all_succeed_returns_empty_failed_list(
+    def test_loky_program_executor_all_succeed_returns_empty_failed_list(
         self, capsys
     ):
         loky = pytest.importorskip("loky")
         program = _build_counter_program()
-        executor = loky.get_reusable_executor(max_workers=2)
+        parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
 
         failed = fttools.run_discrete_error_injected_programs(
             [program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            executor=executor,
-            n_chunks=2,
+            parallel=parallel,
         )
 
         assert failed == []
         assert "All programs succeeded!" in capsys.readouterr().out
 
-    def test_loky_executor_failures_are_the_driver_s_own_objects(self):
+    def test_loky_program_executor_failures_are_the_driver_s_own_objects(
+        self,
+    ):
         loky = pytest.importorskip("loky")
         program = _build_counter_program()
-        executor = loky.get_reusable_executor(max_workers=2)
+        parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
 
         failed = fttools.run_discrete_error_injected_programs(
             [program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[999],
             num_shots=1,
-            executor=executor,
-            n_chunks=2,
+            parallel=parallel,
         )
 
         assert failed == [program, program]
         assert all(p is program for p in failed)
 
-    def test_submitit_executor_matches_serial_result(self, tmp_path):
+    def test_submitit_program_executor_matches_serial_result(
+        self, tmp_path
+    ):
         submitit = pytest.importorskip("submitit")
         program = _build_counter_program()
-        executor = submitit.AutoExecutor(folder=tmp_path, cluster="local")
+        parallel = ParallelStrategy(
+            program_executor=submitit.AutoExecutor(
+                folder=tmp_path, cluster="local"
+            ),
+            n_program_chunks=2,
+        )
 
         failed = fttools.run_discrete_error_injected_programs(
             [program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            submitit_executor=executor,
-            n_chunks=2,
+            parallel=parallel,
         )
 
         assert failed == []
 
-    def test_executor_and_submitit_executor_are_mutually_exclusive(self):
+    def test_hybrid_program_and_shot_executor_matches_serial_result(self):
+        """program_executor (across programs) and shot_executor (within
+        each program's own shots) nested together -- the real hybrid
+        parallelism this stage adds."""
+        loky = pytest.importorskip("loky")
         program = _build_counter_program()
-        with pytest.raises(ValueError, match="at most one"):
-            fttools.run_discrete_error_injected_programs(
-                [program],
-                collect_shot_data_args=[("counter", -1)],
-                expected_outcomes=[1],
-                executor=object(),
-                submitit_executor=object(),
-            )
+        parallel = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+            shot_executor=_build_shot_executor,
+        )
 
-    def test_submitit_executor_without_n_chunks_raises(self):
-        program = _build_counter_program()
-        with pytest.raises(ValueError, match="n_chunks"):
-            fttools.run_discrete_error_injected_programs(
-                [program],
-                collect_shot_data_args=[("counter", -1)],
-                expected_outcomes=[1],
-                submitit_executor=object(),
-            )
+        failed = fttools.run_discrete_error_injected_programs(
+            [program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            parallel=parallel,
+        )
+
+        assert failed == []
 
 
 class TestProgramOutput:
