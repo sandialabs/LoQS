@@ -19,6 +19,7 @@ noise model and instruction stack entirely up to the caller.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+import functools
 import math
 from pathlib import Path
 import re
@@ -40,6 +41,11 @@ from loqs.core.programresults import ProgramResults
 from loqs.core.qeccode import QECCode
 from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
+from loqs.tools.paralleltools import (
+    ParallelStrategy,
+    pin_worker_threads,
+    resolve_shot_executor,
+)
 
 # Every QuantumProgram.__init__ parameter except `default_base_seed`, which NoiseSweepRunner
 # controls exclusively. Kept as a single source of truth for both __init__'s explicit parameter
@@ -145,6 +151,113 @@ def _compute_failure_rate(
     return failure_rate, stderr
 
 
+def _run_sweep_point(
+    runner: "NoiseSweepRunner",
+    index: int,
+    num_shots: int,
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
+    expected_outcomes: Sequence,
+    run_kwargs: dict,
+    keep_program_results: bool,
+    program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+) -> tuple[int, float, float, str | None]:
+    """Build, run, and reduce one sweep point, returning `(index,
+    failure_rate, stderr, program_results_path)`. `program_results_path`
+    is `None` unless `keep_program_results` is True, in which case that
+    point's `ProgramResults` is written to disk from inside this call.
+    Forces `verbose=False` regardless of `run_kwargs`, since several of
+    these may run concurrently under `run`'s program-level parallel path
+    -- one shared per-chunk progress bar covers that case instead.
+    """
+    strength = runner.strengths[index]
+    program = runner.build_program(index)
+    resolved_run_kwargs = {
+        key: _resolve_value(value, strength)
+        for key, value in run_kwargs.items()
+    }
+    resolved_run_kwargs["verbose"] = False
+
+    program_results = program.run(num_shots=num_shots, **resolved_run_kwargs)
+    failure_rate, stderr = _compute_failure_rate(
+        program_results, collect_shot_data_args, expected_outcomes, num_shots
+    )
+
+    path = None
+    if keep_program_results:
+        path = _resolve_program_results_path(
+            program_results_dir, strength, index
+        )
+        program_results.write(path)
+
+    return index, failure_rate, stderr, path
+
+
+def _run_sweep_point_chunk(
+    runner: "NoiseSweepRunner",
+    indices: list[int],
+    num_shots: int,
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
+    expected_outcomes: Sequence,
+    run_kwargs: dict,
+    keep_program_results: bool,
+    program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+    shot_executor: Any | None = None,
+) -> list[tuple[int, float, float, str | None]]:
+    """Run every sweep point index in one chunk via `_run_sweep_point`,
+    returning one result per index. The actual per-chunk work shared by
+    both of `run`'s program-level dispatch entry points. `shot_executor`,
+    if given, is an already-built executor (resolved once per chunk by the
+    caller, not once per point) forwarded as `QuantumProgram.run`'s own
+    `shot_executor` argument for every point in the chunk, for hybrid
+    shot-/point-level parallelism.
+    """
+    if shot_executor is not None:
+        run_kwargs = {**run_kwargs, "shot_executor": shot_executor}
+    return [
+        _run_sweep_point(
+            runner,
+            index,
+            num_shots,
+            collect_shot_data_args,
+            expected_outcomes,
+            run_kwargs,
+            keep_program_results,
+            program_results_dir,
+        )
+        for index in indices
+    ]
+
+
+# Entry point submitted to a parallel executor: pins this worker's thread
+# pools to one thread before doing real numerical work, then delegates to
+# `_run_sweep_point_chunk`. Kept as a plain module-level function (not a
+# closure) so plain `pickle` can resolve it by dotted import path, needed
+# by `MPIPoolExecutor`.
+def _run_sweep_point_chunk_worker(
+    runner: "NoiseSweepRunner",
+    indices: list[int],
+    num_shots: int,
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
+    expected_outcomes: Sequence,
+    run_kwargs: dict,
+    keep_program_results: bool,
+    program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+    shot_executor: Any | None = None,
+) -> list[tuple[int, float, float, str | None]]:
+    pin_worker_threads()
+    return _run_sweep_point_chunk(
+        runner,
+        indices,
+        num_shots,
+        collect_shot_data_args,
+        expected_outcomes,
+        run_kwargs,
+        keep_program_results,
+        program_results_dir,
+        shot_executor=resolve_shot_executor(shot_executor),
+    )
+
+
 class NoiseSweepRunner(Displayable):
     """Builds and runs one `QuantumProgram` per value in a range of noise-parameter values.
 
@@ -169,12 +282,9 @@ class NoiseSweepRunner(Displayable):
         base_seed: int = 0,
         seed_stride: int | None = None,
         instruction_stack: (
-            InstructionStackLike
-            | Callable[[Any], InstructionStackLike]
+            InstructionStackLike | Callable[[Any], InstructionStackLike]
         ) = None,
-        initial_history: (
-            HistoryLike | Callable[[Any], HistoryLike]
-        ) = None,
+        initial_history: HistoryLike | Callable[[Any], HistoryLike] = None,
         default_noise_model: (
             BaseNoiseModel | str | Callable[[Any], BaseNoiseModel | str] | None
         ) = None,
@@ -344,6 +454,7 @@ class NoiseSweepRunner(Displayable):
         result_path: str | Path | None = None,
         verbose: bool = True,
         metadata: dict | None = None,
+        parallel: ParallelStrategy | None = None,
         **run_kwargs,
     ) -> "NoiseSweepResult":
         """Run the full sweep.
@@ -352,38 +463,61 @@ class NoiseSweepRunner(Displayable):
         `num_shots <= seed_stride` (hard failure, since a violation would mean seed ranges from
         adjacent points overlap); for each point, builds the QuantumProgram (`build_program`), runs
         it for `num_shots` shots (a single, ordinary `QuantumProgram.run(num_shots=num_shots,
-        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `executor`, or LoQS's own
-        unrelated `checkpoint_dir`/`checkpoint_batch_size`/`checkpoint_strategy` if the caller
-        wants *that* mechanism's protection against losing shots mid-way through one single, very
-        large point -- entirely orthogonal to this method's own point-level `resume` support),
-        extracts `(failure_rate, stderr)` via `collect_shot_data_args`/`expected_outcomes` (same
-        per-shot pass/fail convention as `fttools.test_program_output`), then immediately disposes
-        of that point's `ProgramResults` -- discarding it if `keep_program_results` is False, or
-        writing it to `program_results_dir` (a single self-contained `ProgramResults.write(...)`
-        dump, not the incremental checkpoint mechanism) if True. Returns one `NoiseSweepResult`
-        covering every point.
+        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `checkpoint_dir`/
+        `checkpoint_batch_size`/`checkpoint_strategy` if the caller wants *that* mechanism's
+        protection against losing shots mid-way through one single, very large point -- entirely
+        orthogonal to this method's own point-level `resume` support), extracts `(failure_rate,
+        stderr)` via `collect_shot_data_args`/`expected_outcomes` (same per-shot pass/fail
+        convention as `fttools.test_program_output`), then immediately disposes of that point's
+        `ProgramResults` -- discarding it if `keep_program_results` is False, or writing it to
+        `program_results_dir` (a single self-contained `ProgramResults.write(...)` dump, not the
+        incremental checkpoint mechanism) if True. Returns one `NoiseSweepResult` covering every
+        point.
 
-        Sweep points are always processed strictly sequentially in a plain Python loop (never
-        parallelized across points -- only `run_kwargs["executor"]`, if given, parallelizes
-        shots *within* one point's `QuantumProgram.run` call). This is what makes point-level
-        resume tractable: at any moment, every point before the current one is either fully
-        complete or not yet started, never partially interleaved with another point.
+        By default (`parallel` `None`, or given with `program_executor` unset), sweep points
+        are processed strictly sequentially in a plain Python loop. This is what makes point-level
+        resume tractable at its finest granularity: at any moment, every point before the current
+        one is either fully complete or not yet started, never partially interleaved with another
+        point, and the persisted `NoiseSweepResult` is rewritten after every single completed
+        point.
+
+        Passing `parallel` (a [](api:ParallelStrategy) with `program_executor` set) instead
+        parallelizes across the still-remaining sweep points, using the same
+        `loqs.tools.paralleltools` chunking/dispatch machinery [](api:simulate_dataset_for_edesign)
+        uses: remaining points are split into `parallel.n_program_chunks` round-robin chunks,
+        and each chunk's points are run as a unit by a worker that pins its own thread pools to one
+        thread before doing any real numerical work. The whole dispatched batch is treated as one
+        atomic unit for resume purposes: the persisted `NoiseSweepResult` is only extended and
+        rewritten once the *entire* batch of remaining points has returned, not once per point --
+        a crash mid-dispatch loses the whole batch, not just whichever point was in progress, the
+        real trade-off for running points concurrently at all. The `index < len(failure_rates)`-
+        is-complete resume invariant itself is never violated either way: every point ever recorded
+        is genuinely complete, and results are always written back in strict index order
+        regardless of which chunk (or completion order) actually produced them.
+
+        For hybrid parallelism (shots within a point *and* points across a chunk, both at once),
+        `parallel.shot_executor` is forwarded as `QuantumProgram.run`'s own `shot_executor`
+        argument for every point -- see [](api:ParallelStrategy) for why it must be a factory
+        callable (not a live executor) whenever `program_executor` is also set, and for what
+        happens when it's given without any `program_executor` (resolved once up front and reused
+        across every point, since no process boundary is crossed in that case).
 
         If `keep_program_results` is True, `program_results_dir` must be given (a fixed value or
         callable), or this raises `ValueError`.
 
         Resume (`resume=True`, requires `result_path`): `result_path` is where this method
-        incrementally writes the in-progress `NoiseSweepResult` (`.write(result_path)`) after
-        *every* completed point, not just at the end. On start, if `result_path` already exists, it
-        is read back and validated against this call's `strengths`/`num_shots` (raises `ValueError`
-        on mismatch); a point is considered already-complete if its index is
-        `< len(failure_rates)` in that loaded result, and completed points are skipped entirely
-        (not even reconstructed). Whichever single point was in progress at the moment of
-        interruption is fully re-simulated from scratch -- this does not attempt shot-level resume
-        within a point (see the module/plan discussion; that needs a QuantumProgram.run core
-        change tracked separately). `resume=True` without `result_path` raises `ValueError`.
-        `result_path` may also be given with `resume=False`, purely to record incremental progress
-        for external monitoring; it just won't be consulted on the next call.
+        incrementally writes the in-progress `NoiseSweepResult` (`.write(result_path)`) as
+        described above. On start, if `result_path` already exists, it is read back and validated
+        against this call's `strengths`/`num_shots` (raises `ValueError` on mismatch); a point is
+        considered already-complete if its index is `< len(failure_rates)` in that loaded result,
+        and completed points are skipped entirely (not even reconstructed). Under the default
+        serial path, whichever single point was in progress at the moment of interruption is fully
+        re-simulated from scratch; under the parallel path, the whole in-progress batch is.
+        Neither path attempts shot-level resume within a point (that would need a core
+        `QuantumProgram.run` change, tracked separately under #105). `resume=True` without
+        `result_path` raises `ValueError`. `result_path` may also be given with `resume=False`,
+        purely to record incremental progress for external monitoring; it just won't be consulted
+        on the next call.
         """
         self._resolved_seed_stride = (
             self.seed_stride if self.seed_stride is not None else num_shots
@@ -431,41 +565,80 @@ class NoiseSweepRunner(Displayable):
 
         start_index = len(failure_rates)
 
-        for index in range(start_index, len(self.strengths)):
-            strength = self.strengths[index]
-            program = self.build_program(index)
+        if parallel is None or not parallel.is_chunked:
+            shot_executor = resolve_shot_executor(
+                parallel.shot_executor if parallel is not None else None
+            )
+            if shot_executor is not None:
+                # No process boundary is crossed here, so the resolved
+                # executor is reused across every point, rather than
+                # rebuilding it per point.
+                run_kwargs = {**run_kwargs, "shot_executor": shot_executor}
+            for index in range(start_index, len(self.strengths)):
+                strength = self.strengths[index]
+                program = self.build_program(index)
 
-            resolved_run_kwargs = {
-                key: _resolve_value(value, strength)
-                for key, value in run_kwargs.items()
-            }
-            resolved_run_kwargs.setdefault("verbose", verbose)
+                resolved_run_kwargs = {
+                    key: _resolve_value(value, strength)
+                    for key, value in run_kwargs.items()
+                }
+                resolved_run_kwargs.setdefault("verbose", verbose)
 
-            if verbose:
-                print(
-                    f"NoiseSweepRunner: point {index + 1}/{len(self.strengths)} "
-                    f"(strength={strength!r})"
+                if verbose:
+                    print(
+                        f"NoiseSweepRunner: point {index + 1}/{len(self.strengths)} "
+                        f"(strength={strength!r})"
+                    )
+
+                program_results = program.run(
+                    num_shots=num_shots, **resolved_run_kwargs
                 )
 
-            program_results = program.run(
-                num_shots=num_shots, **resolved_run_kwargs
-            )
+                failure_rate, stderr = _compute_failure_rate(
+                    program_results,
+                    collect_shot_data_args,
+                    expected_outcomes,
+                    num_shots,
+                )
+                failure_rates.append(failure_rate)
+                stderrs.append(stderr)
 
-            failure_rate, stderr = _compute_failure_rate(
-                program_results,
+                if keep_program_results:
+                    path = _resolve_program_results_path(
+                        program_results_dir, strength, index
+                    )
+                    program_results.write(path)
+                    program_results_paths.append(path)
+
+                if result_path is not None:
+                    NoiseSweepResult(
+                        strengths=self.strengths,
+                        failure_rates=failure_rates,
+                        stderrs=stderrs,
+                        num_shots=num_shots,
+                        metadata=metadata,
+                        program_results_paths=program_results_paths,
+                    ).write(result_path)
+        else:
+            for (
+                index,
+                failure_rate,
+                stderr,
+                path,
+            ) in self._run_remaining_points_parallel(
+                start_index,
+                num_shots,
                 collect_shot_data_args,
                 expected_outcomes,
-                num_shots,
-            )
-            failure_rates.append(failure_rate)
-            stderrs.append(stderr)
-
-            if keep_program_results:
-                path = _resolve_program_results_path(
-                    program_results_dir, strength, index
-                )
-                program_results.write(path)
-                program_results_paths.append(path)
+                keep_program_results,
+                program_results_dir,
+                run_kwargs,
+                parallel,
+            ):
+                failure_rates.append(failure_rate)
+                stderrs.append(stderr)
+                if keep_program_results:
+                    program_results_paths.append(path)
 
             if result_path is not None:
                 NoiseSweepResult(
@@ -485,6 +658,55 @@ class NoiseSweepRunner(Displayable):
             metadata=metadata,
             program_results_paths=program_results_paths,
         )
+
+    def _run_remaining_points_parallel(
+        self,
+        start_index: int,
+        num_shots: int,
+        collect_shot_data_args: Sequence[HistoryDataCollectorLike],
+        expected_outcomes: Sequence,
+        keep_program_results: bool,
+        program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+        run_kwargs: dict,
+        parallel: ParallelStrategy,
+    ) -> list[tuple[int, float, float, str | None]]:
+        """`run`'s program-level parallel dispatch path: split the sweep points
+        from `start_index` onward into `parallel.n_program_chunks`
+        round-robin chunks, run each chunk as a unit via
+        `parallel.program_executor`, and return every point's `(index,
+        failure_rate, stderr, program_results_path)`, sorted back into
+        index order (round-robin chunking scrambles that order across
+        chunks; each chunk's own internal order is already correct).
+        `parallel.shot_executor`, if given, is passed through to each
+        chunk worker unresolved -- it's a picklable factory callable, not a
+        live executor, so it crosses the process boundary safely and each
+        worker resolves it once for hybrid shot-/point-level parallelism.
+        """
+        remaining = list(range(start_index, len(self.strengths)))
+        if not remaining:
+            return []
+
+        chunks = parallel.make_chunks(remaining)
+        worker = functools.partial(
+            _run_sweep_point_chunk_worker,
+            self,
+            num_shots=num_shots,
+            collect_shot_data_args=collect_shot_data_args,
+            expected_outcomes=expected_outcomes,
+            run_kwargs=run_kwargs,
+            keep_program_results=keep_program_results,
+            program_results_dir=program_results_dir,
+            shot_executor=parallel.shot_executor,
+        )
+        chunk_results = parallel.dispatch(
+            worker, chunks, desc="Running noise sweep point chunks"
+        )
+
+        points = [
+            point for chunk_result in chunk_results for point in chunk_result
+        ]
+        points.sort(key=lambda point: point[0])
+        return points
 
 
 class NoiseSweepResult(Displayable):

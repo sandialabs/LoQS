@@ -91,6 +91,15 @@ def execute_notebook(notebook: Path, keep_dir: Path) -> Exception | None:
 
 
 def main() -> int:
+    # A failing cell's exception text is arbitrary and can contain
+    # characters outside a console's default encoding (e.g. Windows's
+    # legacy code-page stdout/stderr) -- reconfigure both streams to UTF-8
+    # with lossy fallback so reporting a failure can never itself crash
+    # with a UnicodeEncodeError and hide the real error.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "notebooks",

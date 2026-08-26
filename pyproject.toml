@@ -50,6 +50,10 @@ parallel = [
     "submitit",
     "threadpoolctl>=3.5.0"
 ]
+mpi = [
+    "mpi4py",
+    "threadpoolctl"
+]
 dev = [
     "pre-commit",
     "black==26.3.1",

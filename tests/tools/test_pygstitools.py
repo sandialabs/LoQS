@@ -3,6 +3,7 @@
 import copy
 import gc
 import re
+import sys
 import weakref
 
 import pytest
@@ -20,11 +21,21 @@ from loqs.core import Frame, History, PatchGeometry, ProgramResults, QuantumProg
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools import pygstitools
+from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.pygstitools import (
     convert_edesign_to_programs,
     convert_run_programs_to_dataset,
     simulate_dataset_for_edesign,
 )
+
+
+def _build_shot_executor():
+    """Module-level factory (not a closure) building a fresh loky
+    executor -- a picklable `shot_executor` factory for hybrid
+    shot-/program-level parallelism tests."""
+    import loky
+
+    return loky.get_reusable_executor(max_workers=1)
 
 
 class _TrivialCounterSetup:
@@ -532,6 +543,109 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
+
+
+def _checkpointed_circuits(checkpoint_path) -> set:
+    """Every circuit with a row in a checkpoint text file, parsed as
+    pyGSTi `Circuit`s -- used to confirm a resumed parallel run actually
+    appends the circuits it recomputed, not just returns them in-memory.
+    """
+    from pygsti.io import read_dataset
+
+    return set(read_dataset(str(checkpoint_path), verbosity=0).keys())
+
+
+class TestSimulateDatasetForEdesignParallel:
+    """`simulate_dataset_for_edesign`'s `parallel` (a
+    [](api:ParallelStrategy)) path, against real `loky` and `submitit`
+    executors -- both must produce the same `DataSet` a serial run does,
+    including through checkpoint/resume and hybrid shot-/program-level
+    parallelism together."""
+
+    def test_loky_program_executor_matches_serial_result(
+        self, trivial_counter_setup
+    ):
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+
+        ds = s.simulate(parallel=strategy)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason=(
+            "submitit unconditionally registers a SIGCONT handler for "
+            "every job it runs (submitit/core/job_environment.py), a "
+            "POSIX-only signal that doesn't exist in Windows's `signal` "
+            "module at all -- a real, unconditional upstream limitation "
+            "(submitit targets SLURM, a Linux-only scheduler), not "
+            "something fixable from LoQS's side."
+        ),
+    )
+    def test_submitit_program_executor_matches_serial_result(
+        self, trivial_counter_setup, tmp_path
+    ):
+        submitit = pytest.importorskip("submitit")
+        s = trivial_counter_setup
+        strategy = ParallelStrategy(
+            program_executor=submitit.AutoExecutor(
+                folder=tmp_path, cluster="local"
+            ),
+            n_program_chunks=2,
+        )
+
+        ds = s.simulate(parallel=strategy)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_hybrid_program_and_shot_executor_matches_serial_result(
+        self, trivial_counter_setup
+    ):
+        """program_executor (across circuits) and shot_executor (within
+        each circuit's own shots) nested together -- the real hybrid
+        parallelism this stage adds, replacing the old guardrail that
+        just rejected this combination."""
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+            shot_executor=_build_shot_executor,
+        )
+
+        ds = s.simulate(parallel=strategy, num_shots=3)
+
+        assert ds[s.circs[0]].counts[("0",)] == 3
+        assert ds[s.circs[1]].counts[("1",)] == 3
+
+    def test_loky_program_executor_resume_only_recomputes_missing_circuits(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed parallel run only re-simulates circuits missing from
+        the checkpoint, chunking and dispatching just those, and still
+        returns a complete DataSet covering every circuit."""
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+
+        partial_edesign = ExperimentDesign([s.circs[0]])
+        s.simulate(ckpt=ckpt, edesign=partial_edesign)
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+        )
+        ds = s.simulate(ckpt=ckpt, resume=True, parallel=strategy)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+        assert s.circs[1] in _checkpointed_circuits(ckpt)
 
 
 class TestSimulateDatasetForEdesignMemoryBound:

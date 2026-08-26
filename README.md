@@ -18,7 +18,8 @@ pip install loqs
 
 There are various optional requirements that are available, including:
 
-- `parallel`: Enables single-node (`loky`) parallelization over shots via `QuantumProgram.run`.
+- `parallel`: Enables single-node (`loky`) and SLURM-array (`submitit`) parallelization over shots and/or programs. `submitit`'s SLURM-array support requires Linux/macOS -- it registers a POSIX-only signal internally and does not work on Windows.
+- `mpi`: Enables multi-node parallelization over shots and/or programs via `mpi4py`. Requires a working MPI installation (e.g. OpenMPI/MPICH) already present in the environment -- `pip install` alone does not provide one.
 - `dev`: Allows the use of `black` and `flake8` prior to committing
 (see Code Formatting and Linting below).
 - `docs`: Allows building of the documentation (see Documentation below).
@@ -35,7 +36,9 @@ There are several helper "categories" for optional dependencies, including:
 - `backends`: Packages needed to enable *all* backends
 - `nobackends`: The complement of `backends`, i.e. all developer packages with no backends
 (useful for testing)
-- `all`: All optional dependencies
+- `all`: All optional dependencies except `mpi`, which requires a real MPI installation and is
+  deliberately excluded so it stays opt-in -- combine explicitly instead, e.g.
+  `pip install -e ".[all,mpi]"`
 
 To use these, simply modify the last line of the installation instructions. For example:
 
