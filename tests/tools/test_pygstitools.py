@@ -566,12 +566,12 @@ class TestSimulateDatasetForEdesignParallel:
     ):
         loky = pytest.importorskip("loky")
         s = trivial_counter_setup
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
 
-        ds = s.simulate(parallel=parallel)
+        ds = s.simulate(parallel=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -581,14 +581,14 @@ class TestSimulateDatasetForEdesignParallel:
     ):
         submitit = pytest.importorskip("submitit")
         s = trivial_counter_setup
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=submitit.AutoExecutor(
                 folder=tmp_path, cluster="local"
             ),
             n_program_chunks=2,
         )
 
-        ds = s.simulate(parallel=parallel)
+        ds = s.simulate(parallel=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -602,13 +602,13 @@ class TestSimulateDatasetForEdesignParallel:
         just rejected this combination."""
         loky = pytest.importorskip("loky")
         s = trivial_counter_setup
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
             shot_executor=_build_shot_executor,
         )
 
-        ds = s.simulate(parallel=parallel, num_shots=3)
+        ds = s.simulate(parallel=strategy, num_shots=3)
 
         assert ds[s.circs[0]].counts[("0",)] == 3
         assert ds[s.circs[1]].counts[("1",)] == 3
@@ -626,10 +626,10 @@ class TestSimulateDatasetForEdesignParallel:
         partial_edesign = ExperimentDesign([s.circs[0]])
         s.simulate(ckpt=ckpt, edesign=partial_edesign)
 
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
         )
-        ds = s.simulate(ckpt=ckpt, resume=True, parallel=parallel)
+        ds = s.simulate(ckpt=ckpt, resume=True, parallel=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1

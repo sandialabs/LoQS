@@ -240,7 +240,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
     ):
         loky = pytest.importorskip("loky")
         program = _build_counter_program()
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
@@ -250,7 +250,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=parallel,
+            parallel=strategy,
         )
 
         assert failed == []
@@ -261,7 +261,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
     ):
         loky = pytest.importorskip("loky")
         program = _build_counter_program()
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
@@ -271,7 +271,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[999],
             num_shots=1,
-            parallel=parallel,
+            parallel=strategy,
         )
 
         assert failed == [program, program]
@@ -282,7 +282,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
     ):
         submitit = pytest.importorskip("submitit")
         program = _build_counter_program()
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=submitit.AutoExecutor(
                 folder=tmp_path, cluster="local"
             ),
@@ -294,7 +294,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=parallel,
+            parallel=strategy,
         )
 
         assert failed == []
@@ -305,7 +305,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
         parallelism this stage adds."""
         loky = pytest.importorskip("loky")
         program = _build_counter_program()
-        parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
             shot_executor=_build_shot_executor,
@@ -316,7 +316,32 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=parallel,
+            parallel=strategy,
+        )
+
+        assert failed == []
+
+    def test_hybrid_with_live_loky_shot_executor_needs_no_hand_written_factory(
+        self,
+    ):
+        """A plain live loky executor works as shot_executor here too --
+        ParallelStrategy auto-converts it to a picklable factory, so a
+        caller never needs to write one by hand (see
+        test_paralleltools.py for coverage of the conversion itself)."""
+        loky = pytest.importorskip("loky")
+        program = _build_counter_program()
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+            shot_executor=loky.get_reusable_executor(max_workers=2),
+        )
+
+        failed = fttools.run_discrete_error_injected_programs(
+            [program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            parallel=strategy,
         )
 
         assert failed == []

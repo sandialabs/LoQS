@@ -325,7 +325,7 @@ class TestRun:
 
 
 class TestRunParallel:
-    """`NoiseSweepRunner.run`'s `point_parallel` (a
+    """`NoiseSweepRunner.run`'s `parallel` (a
     [](api:ParallelStrategy)) path, against real `loky` and `submitit`
     executors -- both must match a serial run exactly (seeding is
     deterministic per index), and the batch-atomic resume guarantee the
@@ -337,7 +337,7 @@ class TestRunParallel:
     def test_loky_program_executor_matches_serial_result(self):
         loky = pytest.importorskip("loky")
         strengths = [0.0, 0.1, 0.2, 0.9]
-        point_parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
@@ -350,7 +350,7 @@ class TestRunParallel:
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             verbose=False,
-            point_parallel=point_parallel,
+            parallel=strategy,
         )
 
         assert parallel.failure_rates == serial.failure_rates
@@ -364,7 +364,7 @@ class TestRunParallel:
         test-module-local `FLIP_COIN` instruction) isn't."""
         submitit = pytest.importorskip("submitit")
         strengths = [0.0, 0.1, 0.2, 0.9]
-        point_parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=submitit.DebugExecutor(folder=tmp_path),
             n_program_chunks=2,
         )
@@ -377,7 +377,7 @@ class TestRunParallel:
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             verbose=False,
-            point_parallel=point_parallel,
+            parallel=strategy,
         )
 
         assert parallel.failure_rates == serial.failure_rates
@@ -390,7 +390,7 @@ class TestRunParallel:
         that just rejected this combination."""
         loky = pytest.importorskip("loky")
         strengths = [0.0, 0.1, 0.2, 0.9]
-        point_parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
             shot_executor=_build_shot_executor,
@@ -404,7 +404,7 @@ class TestRunParallel:
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             verbose=False,
-            point_parallel=point_parallel,
+            parallel=strategy,
         )
 
         assert parallel.failure_rates == serial.failure_rates
@@ -426,7 +426,7 @@ class TestRunParallel:
                 executor=object(),
             )
 
-    def test_point_parallel_writes_result_once_per_batch_not_per_point(
+    def test_parallel_writes_result_once_per_batch_not_per_point(
         self, tmp_path
     ):
         """The parallel path only rewrites result_path once the whole
@@ -436,7 +436,7 @@ class TestRunParallel:
         loky = pytest.importorskip("loky")
         result_path = tmp_path / "resume.json"
         runner = make_runner([0.0, 0.1, 0.2, 0.3], seed_stride=5)
-        point_parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
@@ -457,7 +457,7 @@ class TestRunParallel:
                 verbose=False,
                 resume=True,
                 result_path=result_path,
-                point_parallel=point_parallel,
+                parallel=strategy,
             )
         finally:
             NoiseSweepResult.write = real_write
@@ -468,7 +468,7 @@ class TestRunParallel:
         self, tmp_path
     ):
         """A crash partway through a serial run leaves only its
-        already-completed points persisted; resuming with a point_parallel
+        already-completed points persisted; resuming with a parallel
         dispatches exactly the missing indices (not the already-complete
         ones) and produces the same result an uninterrupted serial run
         would."""
@@ -515,7 +515,7 @@ class TestRunParallel:
             return real_chunk_round_robin(items, n_chunks)
 
         paralleltools.chunk_round_robin = recording_chunk_round_robin
-        point_parallel = ParallelStrategy(
+        strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
@@ -527,7 +527,7 @@ class TestRunParallel:
                 resume=True,
                 result_path=result_path,
                 verbose=False,
-                point_parallel=point_parallel,
+                parallel=strategy,
             )
         finally:
             paralleltools.chunk_round_robin = real_chunk_round_robin

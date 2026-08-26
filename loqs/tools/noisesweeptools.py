@@ -282,12 +282,9 @@ class NoiseSweepRunner(Displayable):
         base_seed: int = 0,
         seed_stride: int | None = None,
         instruction_stack: (
-            InstructionStackLike
-            | Callable[[Any], InstructionStackLike]
+            InstructionStackLike | Callable[[Any], InstructionStackLike]
         ) = None,
-        initial_history: (
-            HistoryLike | Callable[[Any], HistoryLike]
-        ) = None,
+        initial_history: HistoryLike | Callable[[Any], HistoryLike] = None,
         default_noise_model: (
             BaseNoiseModel | str | Callable[[Any], BaseNoiseModel | str] | None
         ) = None,
@@ -457,7 +454,7 @@ class NoiseSweepRunner(Displayable):
         result_path: str | Path | None = None,
         verbose: bool = True,
         metadata: dict | None = None,
-        point_parallel: ParallelStrategy | None = None,
+        parallel: ParallelStrategy | None = None,
         **run_kwargs,
     ) -> "NoiseSweepResult":
         """Run the full sweep.
@@ -477,17 +474,17 @@ class NoiseSweepRunner(Displayable):
         incremental checkpoint mechanism) if True. Returns one `NoiseSweepResult` covering every
         point.
 
-        By default (`point_parallel` `None`, or given with `program_executor` unset), sweep points
+        By default (`parallel` `None`, or given with `program_executor` unset), sweep points
         are processed strictly sequentially in a plain Python loop. This is what makes point-level
         resume tractable at its finest granularity: at any moment, every point before the current
         one is either fully complete or not yet started, never partially interleaved with another
         point, and the persisted `NoiseSweepResult` is rewritten after every single completed
         point.
 
-        Passing `point_parallel` (a [](api:ParallelStrategy) with `program_executor` set) instead
+        Passing `parallel` (a [](api:ParallelStrategy) with `program_executor` set) instead
         parallelizes across the still-remaining sweep points, using the same
         `loqs.tools.paralleltools` chunking/dispatch machinery [](api:simulate_dataset_for_edesign)
-        uses: remaining points are split into `point_parallel.n_program_chunks` round-robin chunks,
+        uses: remaining points are split into `parallel.n_program_chunks` round-robin chunks,
         and each chunk's points are run as a unit by a worker that pins its own thread pools to one
         thread before doing any real numerical work. The whole dispatched batch is treated as one
         atomic unit for resume purposes: the persisted `NoiseSweepResult` is only extended and
@@ -499,7 +496,7 @@ class NoiseSweepRunner(Displayable):
         regardless of which chunk (or completion order) actually produced them.
 
         For hybrid parallelism (shots within a point *and* points across a chunk, both at once),
-        `point_parallel.shot_executor` is forwarded as `QuantumProgram.run`'s own `shot_executor`
+        `parallel.shot_executor` is forwarded as `QuantumProgram.run`'s own `shot_executor`
         argument for every point -- see [](api:ParallelStrategy) for why it must be a factory
         callable (not a live executor) whenever `program_executor` is also set, and for what
         happens when it's given without any `program_executor` (resolved once up front and reused
@@ -568,11 +565,9 @@ class NoiseSweepRunner(Displayable):
 
         start_index = len(failure_rates)
 
-        if point_parallel is None or not point_parallel.is_chunked:
+        if parallel is None or not parallel.is_chunked:
             shot_executor = resolve_shot_executor(
-                point_parallel.shot_executor
-                if point_parallel is not None
-                else None
+                parallel.shot_executor if parallel is not None else None
             )
             if shot_executor is not None:
                 # No process boundary is crossed here, so the resolved
@@ -625,17 +620,20 @@ class NoiseSweepRunner(Displayable):
                         program_results_paths=program_results_paths,
                     ).write(result_path)
         else:
-            for index, failure_rate, stderr, path in (
-                self._run_remaining_points_parallel(
-                    start_index,
-                    num_shots,
-                    collect_shot_data_args,
-                    expected_outcomes,
-                    keep_program_results,
-                    program_results_dir,
-                    run_kwargs,
-                    point_parallel,
-                )
+            for (
+                index,
+                failure_rate,
+                stderr,
+                path,
+            ) in self._run_remaining_points_parallel(
+                start_index,
+                num_shots,
+                collect_shot_data_args,
+                expected_outcomes,
+                keep_program_results,
+                program_results_dir,
+                run_kwargs,
+                parallel,
             ):
                 failure_rates.append(failure_rate)
                 stderrs.append(stderr)
@@ -670,16 +668,16 @@ class NoiseSweepRunner(Displayable):
         keep_program_results: bool,
         program_results_dir: str | Path | Callable[[Any], str | Path] | None,
         run_kwargs: dict,
-        point_parallel: ParallelStrategy,
+        parallel: ParallelStrategy,
     ) -> list[tuple[int, float, float, str | None]]:
         """`run`'s program-level parallel dispatch path: split the sweep points
-        from `start_index` onward into `point_parallel.n_program_chunks`
+        from `start_index` onward into `parallel.n_program_chunks`
         round-robin chunks, run each chunk as a unit via
-        `point_parallel.program_executor`, and return every point's `(index,
+        `parallel.program_executor`, and return every point's `(index,
         failure_rate, stderr, program_results_path)`, sorted back into
         index order (round-robin chunking scrambles that order across
         chunks; each chunk's own internal order is already correct).
-        `point_parallel.shot_executor`, if given, is passed through to each
+        `parallel.shot_executor`, if given, is passed through to each
         chunk worker unresolved -- it's a picklable factory callable, not a
         live executor, so it crosses the process boundary safely and each
         worker resolves it once for hybrid shot-/point-level parallelism.
@@ -688,7 +686,7 @@ class NoiseSweepRunner(Displayable):
         if not remaining:
             return []
 
-        chunks = point_parallel.make_chunks(remaining)
+        chunks = parallel.make_chunks(remaining)
         worker = functools.partial(
             _run_sweep_point_chunk_worker,
             self,
@@ -698,9 +696,9 @@ class NoiseSweepRunner(Displayable):
             run_kwargs=run_kwargs,
             keep_program_results=keep_program_results,
             program_results_dir=program_results_dir,
-            shot_executor=point_parallel.shot_executor,
+            shot_executor=parallel.shot_executor,
         )
-        chunk_results = point_parallel.dispatch(
+        chunk_results = parallel.dispatch(
             worker, chunks, desc="Running noise sweep point chunks"
         )
 
