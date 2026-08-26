@@ -215,6 +215,87 @@ class TestRunDiscreteErrorInjectedPrograms:
         assert "Failed 2 programs!" in capsys.readouterr().out
 
 
+class TestRunDiscreteErrorInjectedProgramsParallel:
+    """`run_discrete_error_injected_programs`'s `executor`/
+    `submitit_executor` path, against real `loky` and `submitit`
+    executors -- both must return the driver's own original program
+    objects in the failed list (per the function's own contract), not
+    copies that crossed a process boundary."""
+
+    def test_loky_executor_all_succeed_returns_empty_failed_list(
+        self, capsys
+    ):
+        loky = pytest.importorskip("loky")
+        program = _build_counter_program()
+        executor = loky.get_reusable_executor(max_workers=2)
+
+        failed = fttools.run_discrete_error_injected_programs(
+            [program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            executor=executor,
+            n_chunks=2,
+        )
+
+        assert failed == []
+        assert "All programs succeeded!" in capsys.readouterr().out
+
+    def test_loky_executor_failures_are_the_driver_s_own_objects(self):
+        loky = pytest.importorskip("loky")
+        program = _build_counter_program()
+        executor = loky.get_reusable_executor(max_workers=2)
+
+        failed = fttools.run_discrete_error_injected_programs(
+            [program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[999],
+            num_shots=1,
+            executor=executor,
+            n_chunks=2,
+        )
+
+        assert failed == [program, program]
+        assert all(p is program for p in failed)
+
+    def test_submitit_executor_matches_serial_result(self, tmp_path):
+        submitit = pytest.importorskip("submitit")
+        program = _build_counter_program()
+        executor = submitit.AutoExecutor(folder=tmp_path, cluster="local")
+
+        failed = fttools.run_discrete_error_injected_programs(
+            [program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            submitit_executor=executor,
+            n_chunks=2,
+        )
+
+        assert failed == []
+
+    def test_executor_and_submitit_executor_are_mutually_exclusive(self):
+        program = _build_counter_program()
+        with pytest.raises(ValueError, match="at most one"):
+            fttools.run_discrete_error_injected_programs(
+                [program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                executor=object(),
+                submitit_executor=object(),
+            )
+
+    def test_submitit_executor_without_n_chunks_raises(self):
+        program = _build_counter_program()
+        with pytest.raises(ValueError, match="n_chunks"):
+            fttools.run_discrete_error_injected_programs(
+                [program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                submitit_executor=object(),
+            )
+
+
 class TestProgramOutput:
 
     def test_matching_output_returns_true(self):

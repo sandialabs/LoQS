@@ -488,14 +488,19 @@ class NoiseSweepRunner(Displayable):
         `n_point_chunks` round-robin chunks, and each chunk's points are run as a unit by a worker
         that pins its own thread pools to one thread before doing any real numerical work. Named
         distinctly from `run_kwargs["executor"]` (shot-level, forwarded per point) specifically to
-        avoid colliding with it. The whole dispatched batch is treated as one atomic unit for
-        resume purposes: the persisted `NoiseSweepResult` is only extended and rewritten once the
-        *entire* batch of remaining points has returned, not once per point -- a crash mid-dispatch
-        loses the whole batch, not just whichever point was in progress, the real trade-off for
-        running points concurrently at all. The `index < len(failure_rates)`-is-complete resume
-        invariant itself is never violated either way: every point ever recorded is genuinely
-        complete, and results are always written back in strict index order regardless of which
-        chunk (or completion order) actually produced them.
+        avoid colliding with it -- but the two cannot currently be combined: a live shot-level
+        executor holds OS resources (pipes/locks) that can't be pickled across the process
+        boundary each dispatched point chunk crosses, so passing both raises `ValueError` rather
+        than failing deep inside a worker with a confusing pickling error. Nesting a shot-level
+        pool inside each point-level worker for genuine hybrid parallelism is tracked as future
+        work (#105). The whole dispatched batch is treated as one atomic unit for resume purposes:
+        the persisted `NoiseSweepResult` is only extended and rewritten once the *entire* batch of
+        remaining points has returned, not once per point -- a crash mid-dispatch loses the whole
+        batch, not just whichever point was in progress, the real trade-off for running points
+        concurrently at all. The `index < len(failure_rates)`-is-complete resume invariant itself
+        is never violated either way: every point ever recorded is genuinely complete, and results
+        are always written back in strict index order regardless of which chunk (or completion
+        order) actually produced them.
 
         If `keep_program_results` is True, `program_results_dir` must be given (a fixed value or
         callable), or this raises `ValueError`.
@@ -534,6 +539,20 @@ class NoiseSweepRunner(Displayable):
             raise ValueError(
                 "Pass at most one of point_executor or "
                 "point_submitit_executor, not both."
+            )
+        if (
+            point_executor is not None or point_submitit_executor is not None
+        ) and isinstance(run_kwargs.get("executor"), ChunkExecutor):
+            raise ValueError(
+                "run_kwargs['executor'] (shot-level parallelism within one "
+                "point) cannot be combined with point_executor/"
+                "point_submitit_executor (parallelism across points): the "
+                "shot-level executor is a live object holding OS resources "
+                "(pipes/locks) that cannot be pickled across the process "
+                "boundary each dispatched point chunk crosses. Nesting a "
+                "shot-level pool inside each point-level worker is tracked "
+                "as future work (#105); for now, pick one axis to "
+                "parallelize per call."
             )
 
         failure_rates: list[float] = []

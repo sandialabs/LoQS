@@ -534,6 +534,79 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[1]].counts[("1",)] == 1
 
 
+def _checkpointed_circuits(checkpoint_path) -> set:
+    """Every circuit with a row in a checkpoint text file, parsed as
+    pyGSTi `Circuit`s -- used to confirm a resumed parallel run actually
+    appends the circuits it recomputed, not just returns them in-memory.
+    """
+    from pygsti.io import read_dataset
+
+    return set(read_dataset(str(checkpoint_path), verbosity=0).keys())
+
+
+class TestSimulateDatasetForEdesignParallel:
+    """`simulate_dataset_for_edesign`'s program-level `executor`/
+    `submitit_executor` path, against real `loky` and `submitit`
+    executors -- both must produce the same `DataSet` a serial run does,
+    including through checkpoint/resume."""
+
+    def test_loky_executor_matches_serial_result(self, trivial_counter_setup):
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        executor = loky.get_reusable_executor(max_workers=2)
+
+        ds = s.simulate(executor=executor, n_chunks=2)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_submitit_executor_matches_serial_result(
+        self, trivial_counter_setup, tmp_path
+    ):
+        submitit = pytest.importorskip("submitit")
+        s = trivial_counter_setup
+        executor = submitit.AutoExecutor(folder=tmp_path, cluster="local")
+
+        ds = s.simulate(submitit_executor=executor, n_chunks=2)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_executor_and_submitit_executor_are_mutually_exclusive(
+        self, trivial_counter_setup
+    ):
+        s = trivial_counter_setup
+        with pytest.raises(ValueError, match="at most one"):
+            s.simulate(executor=object(), submitit_executor=object())
+
+    def test_submitit_executor_without_n_chunks_raises(
+        self, trivial_counter_setup
+    ):
+        s = trivial_counter_setup
+        with pytest.raises(ValueError, match="n_chunks"):
+            s.simulate(submitit_executor=object())
+
+    def test_loky_executor_resume_only_recomputes_missing_circuits(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed parallel run only re-simulates circuits missing from
+        the checkpoint, chunking and dispatching just those, and still
+        returns a complete DataSet covering every circuit."""
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint.txt"
+
+        partial_edesign = ExperimentDesign([s.circs[0]])
+        s.simulate(ckpt=ckpt, edesign=partial_edesign)
+
+        executor = loky.get_reusable_executor(max_workers=2)
+        ds = s.simulate(ckpt=ckpt, resume=True, executor=executor, n_chunks=1)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+        assert s.circs[1] in _checkpointed_circuits(ckpt)
+
+
 class TestSimulateDatasetForEdesignMemoryBound:
 
     def test_previous_circuits_program_is_dropped_before_the_next_is_built(

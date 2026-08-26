@@ -10,6 +10,7 @@ import pytest
 from loqs.core import Frame, Instruction, ProgramResults, QuantumProgram
 from loqs.backends.state import BaseQuantumState, NumpyStatevectorQuantumState
 from loqs.internal.serializable import Serializable
+from loqs.tools import noisesweeptools
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
@@ -311,6 +312,209 @@ class TestRun:
             QuantumProgram.run = real_run
 
         assert seen_names == [10, 20]
+
+
+class TestRunParallel:
+    """`NoiseSweepRunner.run`'s `point_executor`/`point_submitit_executor`
+    path, against real `loky` and `submitit` executors -- both must match
+    a serial run exactly (seeding is deterministic per index), and the
+    batch-atomic resume/collision-avoidance guarantees the docstring
+    makes must actually hold."""
+
+    def test_loky_point_executor_matches_serial_result(self):
+        loky = pytest.importorskip("loky")
+        strengths = [0.0, 0.1, 0.2, 0.9]
+        executor = loky.get_reusable_executor(max_workers=2)
+
+        serial = make_runner(strengths, seed_stride=20, base_seed=7).run(
+            10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
+        )
+        parallel = make_runner(strengths, seed_stride=20, base_seed=7).run(
+            10,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            verbose=False,
+            point_executor=executor,
+            n_point_chunks=2,
+        )
+
+        assert parallel.failure_rates == serial.failure_rates
+        assert parallel.stderrs == serial.stderrs
+
+    def test_debug_executor_matches_serial_result(self, tmp_path):
+        """Uses submitit's in-process DebugExecutor rather than a real
+        `cluster="local"` subprocess: a real subprocess can only unpickle
+        a worker function/runner it can import by dotted path, which this
+        test module's own `NoiseSweepRunner` (holding a reference to the
+        test-module-local `FLIP_COIN` instruction) isn't."""
+        submitit = pytest.importorskip("submitit")
+        strengths = [0.0, 0.1, 0.2, 0.9]
+        executor = submitit.DebugExecutor(folder=tmp_path)
+
+        serial = make_runner(strengths, seed_stride=20, base_seed=7).run(
+            10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
+        )
+        parallel = make_runner(strengths, seed_stride=20, base_seed=7).run(
+            10,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            verbose=False,
+            point_submitit_executor=executor,
+            n_point_chunks=2,
+        )
+
+        assert parallel.failure_rates == serial.failure_rates
+        assert parallel.stderrs == serial.stderrs
+
+    def test_point_executor_and_point_submitit_executor_are_mutually_exclusive(
+        self,
+    ):
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        with pytest.raises(ValueError, match="at most one"):
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=False,
+                point_executor=object(),
+                point_submitit_executor=object(),
+            )
+
+    def test_point_submitit_executor_without_n_point_chunks_raises(self):
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        with pytest.raises(ValueError, match="n_point_chunks"):
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=False,
+                point_submitit_executor=object(),
+            )
+
+    def test_shot_level_executor_combined_with_point_executor_raises(self):
+        """A live shot-level executor (run_kwargs["executor"]) can't be
+        combined with point-level parallel dispatch: it would have to be
+        pickled across the process boundary each dispatched point chunk
+        crosses, and a real executor holds unpicklable OS resources
+        (pipes/locks). This must fail fast with a clear message, not a
+        deep pickling traceback surfaced from inside a worker."""
+        loky = pytest.importorskip("loky")
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+        shot_executor = loky.get_reusable_executor(max_workers=1)
+
+        with pytest.raises(ValueError, match="run_kwargs\\['executor'\\]"):
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=False,
+                point_executor=object(),
+                executor=shot_executor,
+            )
+
+    def test_point_executor_writes_result_once_per_batch_not_per_point(
+        self, tmp_path
+    ):
+        """The parallel path only rewrites result_path once the whole
+        dispatched batch of points returns -- coarser than the serial
+        path's per-point persistence, per the atomic-batch resume
+        guarantee `run`'s own docstring makes."""
+        loky = pytest.importorskip("loky")
+        result_path = tmp_path / "resume.json"
+        runner = make_runner([0.0, 0.1, 0.2, 0.3], seed_stride=5)
+        executor = loky.get_reusable_executor(max_workers=2)
+
+        write_calls = []
+        real_write = NoiseSweepResult.write
+
+        def counting_write(self, path):
+            write_calls.append(path)
+            return real_write(self, path)
+
+        NoiseSweepResult.write = counting_write
+        try:
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=False,
+                resume=True,
+                result_path=result_path,
+                point_executor=executor,
+                n_point_chunks=2,
+            )
+        finally:
+            NoiseSweepResult.write = real_write
+
+        assert len(write_calls) == 1
+
+    def test_resume_only_dispatches_missing_points_and_matches_uninterrupted(
+        self, tmp_path
+    ):
+        """A crash partway through a serial run leaves only its
+        already-completed points persisted; resuming with a point_executor
+        dispatches exactly the missing indices (not the already-complete
+        ones) and produces the same result an uninterrupted serial run
+        would."""
+        loky = pytest.importorskip("loky")
+        strengths = [0.0, 0.1, 0.2, 0.3]
+        result_path = tmp_path / "resume.json"
+
+        uninterrupted = make_runner(strengths, seed_stride=20, base_seed=1)
+        uninterrupted_result = uninterrupted.run(
+            10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
+        )
+
+        runner = make_runner(strengths, seed_stride=20, base_seed=1)
+        real_build_program = NoiseSweepRunner.build_program
+
+        def crash_at_index_2(self, index):
+            if index == 2:
+                raise RuntimeError("simulated crash")
+            return real_build_program(self, index)
+
+        NoiseSweepRunner.build_program = crash_at_index_2
+        try:
+            with pytest.raises(RuntimeError):
+                runner.run(
+                    10,
+                    COLLECT_SHOT_DATA_ARGS,
+                    EXPECTED_OUTCOMES,
+                    resume=True,
+                    result_path=result_path,
+                    verbose=False,
+                )
+        finally:
+            NoiseSweepRunner.build_program = real_build_program
+
+        assert len(NoiseSweepResult.read(result_path).failure_rates) == 2
+
+        dispatched_items = []
+        real_chunk_round_robin = noisesweeptools.chunk_round_robin
+
+        def recording_chunk_round_robin(items, n_chunks):
+            dispatched_items.append(list(items))
+            return real_chunk_round_robin(items, n_chunks)
+
+        noisesweeptools.chunk_round_robin = recording_chunk_round_robin
+        executor = loky.get_reusable_executor(max_workers=2)
+        try:
+            final_result = runner.run(
+                10,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                resume=True,
+                result_path=result_path,
+                verbose=False,
+                point_executor=executor,
+                n_point_chunks=2,
+            )
+        finally:
+            noisesweeptools.chunk_round_robin = real_chunk_round_robin
+
+        assert dispatched_items == [[2, 3]]
+        assert final_result.failure_rates == uninterrupted_result.failure_rates
+        assert final_result.is_complete
 
 
 class TestResume:
