@@ -15,6 +15,7 @@ nav:
       - Build QECCode: notebooks/buildqeccode.md
       - Leakage Modeling: notebooks/leakage.md
       - Multi-Patch Surface Code Operations: notebooks/multipatch.md
+      - Parallel Execution: notebooks/parallel.md
   - Examples:
       - Run LoGST: notebooks/runlogst.md
       - FT Tests: notebooks/fttests.md

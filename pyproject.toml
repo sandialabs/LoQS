@@ -45,10 +45,10 @@ classifiers = [
 loqs-migrate = "loqs.tools.migrate.cli:main"
 
 [project.optional-dependencies]
-dask = [
-    "bokeh!=3.0.*,>=2.4.2",
-    "dask[distributed]",
-    "ipywidgets"
+parallel = [
+    "loky>=3.5.6",
+    "submitit",
+    "threadpoolctl>=3.5.0"
 ]
 dev = [
     "pre-commit",
@@ -94,7 +94,7 @@ visualization = [
     "qiskit[visualization]",
 ]
 backends = ["loqs[quantumsim,pygsti,stim,pymatching]"]
-nobackends = ["loqs[dask,dev,docs,test,visualization]"]
+nobackends = ["loqs[parallel,dev,docs,test,visualization]"]
 all = ["loqs[backends,nobackends]"]
 
 [build-system]

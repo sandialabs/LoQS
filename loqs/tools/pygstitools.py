@@ -343,6 +343,7 @@ def simulate_dataset_for_edesign(
     checkpoint_path: str | Path | None = None,
     resume: bool = False,
     force_resume: bool = False,
+    max_frame_limit: int = 100,
     **program_kwargs,
 ) -> DataSet:
     """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
@@ -410,6 +411,12 @@ def simulate_dataset_for_edesign(
         `physical_to_logical`, by default `False`. Only relevant when `resume`
         is `True` and `checkpoint_path` already exists.
 
+    max_frame_limit : int, optional
+        Forwarded to each circuit's [](api:QuantumProgram.run). Defaults to
+        `QuantumProgram.run`'s own default (100); circuits deep enough to need
+        more frames than that should raise this explicitly, or they will be
+        silently truncated and then fail during outcome collection.
+
     **program_kwargs : Any
         Any additional kwargs that should be passed to each circuit's
         [](api:QuantumProgram).
@@ -474,7 +481,9 @@ def simulate_dataset_for_edesign(
         program = _build_program_for_circuit(
             circ, physical_model, label_to_logical, **program_kwargs
         )
-        program_results = program.run(num_shots, verbose=False)
+        program_results = program.run(
+            num_shots, max_frame_limit=max_frame_limit, verbose=False
+        )
 
         outcomes = _collect_program_outcomes(
             program_results, collect_shot_data_args
