@@ -46,9 +46,9 @@ loqs-migrate = "loqs.tools.migrate.cli:main"
 
 [project.optional-dependencies]
 parallel = [
-    "loky",
+    "loky>=3.5.6",
     "submitit",
-    "threadpoolctl"
+    "threadpoolctl>=3.5.0"
 ]
 dev = [
     "pre-commit",

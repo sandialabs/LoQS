@@ -8,7 +8,8 @@ quantumsim = pytest.importorskip("quantumsim")
 stim = pytest.importorskip("stim")
 
 from loqs.backends import QSimQuantumState, STIMQuantumState
-from loqs.core import QuantumProgram
+from loqs.core import Instruction, QuantumProgram
+from loqs.core.frame import Frame
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
 
@@ -178,6 +179,23 @@ class TestRunCachesLastResults:
         assert len(program._last_results.shot_histories) == 5
 
 
+def _init_counter_from_seed(initial_value):
+    """Apply function seeding a counter from the shot's own seed, so a
+    shot's result can be tied back to its originating shot index."""
+    return Frame({"counter": initial_value})
+
+
+# A global instruction whose "initial_value" is sourced from the shot's
+# own seed rather than a fixed value, so each shot's result depends on
+# its own index.
+_SEED_COUNTER_INSTRUCTION = Instruction(
+    _init_counter_from_seed,
+    param_priorities={"initial_value": ["program"]},
+    param_aliases={"initial_value": "seed"},
+    name="Initialize counter from shot seed",
+)
+
+
 class TestExecutorParallelism:
     """`QuantumProgram.run(executor=...)`'s parallel path against a real
     `loky` executor: correctness (same outcomes as a serial run) and the
@@ -189,27 +207,34 @@ class TestExecutorParallelism:
         ideal_model = trivial_codepack.create_ideal_model(qubits)
         stack = [
             {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
-            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {"instruction": "Init Counter From Seed"},
             {"instruction": "Increment", "patch_label": "L0", "increment_by": 1},
         ]
         return QuantumProgram(
             stack,
             default_noise_model=ideal_model,
             patch_types={"Trivial": trivial_code},
+            global_instructions={
+                "Init Counter From Seed": _SEED_COUNTER_INSTRUCTION
+            },
             default_base_seed=0,
             name="executor parallelism test",
         )
 
     def test_loky_executor_matches_serial_shot_outcomes(self):
+        # Each shot's counter is seeded from its own index, so comparing
+        # per-index counters (not just the set of outcomes) also confirms
+        # a shot's result lands under its correct index.
         loky = pytest.importorskip("loky")
 
+        num_shots = 4
         serial_results = self._build_counter_program().run(
-            num_shots=4, verbose=False
+            num_shots=num_shots, verbose=False
         )
 
         executor = loky.get_reusable_executor(max_workers=2)
         parallel_results = self._build_counter_program().run(
-            num_shots=4, executor=executor, verbose=False
+            num_shots=num_shots, executor=executor, verbose=False
         )
 
         serial_counters = {
@@ -220,7 +245,9 @@ class TestExecutorParallelism:
             i: h[-1]["counter"]
             for i, h in parallel_results.shot_histories.items()
         }
-        assert parallel_counters == serial_counters
+        assert parallel_counters == serial_counters == {
+            i: i + 1 for i in range(num_shots)
+        }
 
     def test_run_shot_worker_pins_thread_pools_to_one_thread(self):
         loky = pytest.importorskip("loky")
@@ -235,7 +262,7 @@ class TestExecutorParallelism:
             executor.submit(_report_blas_thread_counts).result()
 
             executor.submit(
-                QuantumProgram._run_shot_worker, program, 100, None, 0
+                QuantumProgram._run_shot_worker, program, 100, 0, 0
             ).result()
 
             after = executor.submit(_report_blas_thread_counts).result()
