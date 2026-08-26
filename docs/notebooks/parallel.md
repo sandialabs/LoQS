@@ -296,7 +296,17 @@ subprocesses rather than real `sbatch` calls, so it works without a real
 scheduler; swap in real `slurm_*` parameters (via
 `executor.update_parameters(...)`) to target an actual cluster.
 
+`submitit` itself only supports Linux/macOS: it unconditionally registers a
+`SIGCONT` handler for every job it runs, a POSIX-only signal that doesn't
+exist in Windows's `signal` module at all (a real, unconditional upstream
+limitation, unsurprising given `submitit` targets SLURM, a Linux-only
+scheduler). The cells below still build and `describe()`/`plot()` a
+`submitit`-backed [ParallelStrategy](api:ParallelStrategy) on every platform,
+but skip actually dispatching it on Windows.
+
 ```{code-cell} ipython3
+import sys
+
 import submitit
 
 # cluster="local" runs each chunk as an ordinary subprocess instead of a
@@ -314,14 +324,17 @@ print(strategy.describe(programs, num_shots=1))
 # allocation per chunk.
 strategy.plot(programs, program_workers=2)
 
-failed = fttools.run_discrete_error_injected_programs(
-    programs,
-    collect_shot_data_args=[("counter", -1)],
-    expected_outcomes=[1],
-    num_shots=1,
-    parallel=strategy,
-)
-len(failed)
+if sys.platform == "win32":
+    print("submitit does not support Windows -- skipping dispatch.")
+else:
+    failed = fttools.run_discrete_error_injected_programs(
+        programs,
+        collect_shot_data_args=[("counter", -1)],
+        expected_outcomes=[1],
+        num_shots=1,
+        parallel=strategy,
+    )
+    print(f"{len(failed)} failed")
 ```
 
 The real hybrid shape a cluster allocation usually wants combines `submitit`
@@ -344,14 +357,17 @@ strategy = ParallelStrategy(
 print(strategy.describe(programs, num_shots=20))
 strategy.plot(programs, program_workers=2)
 
-failed = fttools.run_discrete_error_injected_programs(
-    programs,
-    collect_shot_data_args=[("counter", -1)],
-    expected_outcomes=[1],
-    num_shots=20,
-    parallel=strategy,
-)
-len(failed)
+if sys.platform == "win32":
+    print("submitit does not support Windows -- skipping dispatch.")
+else:
+    failed = fttools.run_discrete_error_injected_programs(
+        programs,
+        collect_shot_data_args=[("counter", -1)],
+        expected_outcomes=[1],
+        num_shots=20,
+        parallel=strategy,
+    )
+    print(f"{len(failed)} failed")
 ```
 
 On a real cluster, `submitit.Executor`'s own `slurm_*` parameters (e.g.
