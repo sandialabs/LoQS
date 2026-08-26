@@ -259,7 +259,14 @@ class TestExecutorParallelism:
             # Force this worker's BLAS thread pool to register before the
             # real worker entry point ever runs, matching a real worker
             # process that already imported numpy.
-            executor.submit(_report_blas_thread_counts).result()
+            before = executor.submit(_report_blas_thread_counts).result()
+            if not before:
+                pytest.skip(
+                    "No threadpoolctl-visible BLAS backend in this worker "
+                    "(e.g. numpy built against Apple's Accelerate on "
+                    "macOS, which threadpoolctl cannot introspect or "
+                    "control at all) -- nothing to verify pinning against."
+                )
 
             executor.submit(
                 QuantumProgram._run_shot_worker, program, 100, 0, 0

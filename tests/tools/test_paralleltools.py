@@ -126,7 +126,14 @@ class TestPinWorkerThreads:
         try:
             # Force this worker's BLAS thread pool to register before
             # pinning, matching a real worker that already imported numpy.
-            executor.submit(_report_blas_thread_counts).result()
+            before = executor.submit(_report_blas_thread_counts).result()
+            if not before:
+                pytest.skip(
+                    "No threadpoolctl-visible BLAS backend in this worker "
+                    "(e.g. numpy built against Apple's Accelerate on "
+                    "macOS, which threadpoolctl cannot introspect or "
+                    "control at all) -- nothing to verify pinning against."
+                )
             executor.submit(_pin_worker_threads_task).result()
             after = executor.submit(_report_blas_thread_counts).result()
         finally:
