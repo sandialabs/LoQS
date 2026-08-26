@@ -2,6 +2,8 @@
 
 import os
 import sys
+import warnings
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -1098,6 +1100,135 @@ class TestProfileStrategies:
         )
         assert results["a"].speedup is None
         assert results["b"].speedup is None
+
+    def test_executor_spec_program_executor_is_shut_down_and_reset(
+        self, monkeypatch
+    ):
+        fake_executor = MagicMock()
+        monkeypatch.setattr(
+            "loky.get_reusable_executor", lambda **kwargs: fake_executor
+        )
+        spec = ExecutorSpec("loky", {"max_workers": 2})
+        strategy = ParallelStrategy(program_executor=spec, n_program_chunks=2)
+
+        def work_fn(s):
+            s._resolve_program_executor()
+            return None
+
+        profile_strategies(work_fn, {"spec": strategy})
+        fake_executor.shutdown.assert_called_once_with(
+            wait=True, kill_workers=True
+        )
+        assert strategy._resolved_program_executor is None
+
+    def test_executor_spec_program_executor_shut_down_on_work_fn_exception(
+        self, monkeypatch
+    ):
+        fake_executor = MagicMock()
+        monkeypatch.setattr(
+            "loky.get_reusable_executor", lambda **kwargs: fake_executor
+        )
+        spec = ExecutorSpec("loky", {"max_workers": 2})
+        strategy = ParallelStrategy(program_executor=spec, n_program_chunks=2)
+
+        def failing_work_fn(s):
+            s._resolve_program_executor()
+            raise RuntimeError("work_fn failed")
+
+        with pytest.raises(RuntimeError, match="work_fn failed"):
+            profile_strategies(failing_work_fn, {"spec": strategy})
+
+        fake_executor.shutdown.assert_called_once_with(
+            wait=True, kill_workers=True
+        )
+        assert strategy._resolved_program_executor is None
+
+    def test_live_program_executor_is_not_shut_down(self):
+        fake_executor = MagicMock()
+        strategy = ParallelStrategy(
+            program_executor=fake_executor, n_program_chunks=2
+        )
+        profile_strategies(lambda s: None, {"live": strategy})
+        fake_executor.shutdown.assert_not_called()
+
+    def test_recycled_worker_pool_warns_when_repeat_slower_than_warmup(
+        self, monkeypatch
+    ):
+        times = iter([0.0, 0.1, 1.0, 1.1, 2.0, 2.5])
+        monkeypatch.setattr(
+            "loqs.tools.paralleltools.time.perf_counter",
+            lambda: next(times),
+        )
+        fake_executor = MagicMock()
+        strategy = ParallelStrategy(
+            program_executor=fake_executor, n_program_chunks=2
+        )
+        with pytest.warns(UserWarning, match="timeout"):
+            profile_strategies(
+                lambda s: None,
+                {"loky": strategy},
+                repeats=2,
+                warmup=True,
+            )
+
+    def test_recycled_worker_pool_warns_when_repeat_slower_without_warmup(
+        self, monkeypatch
+    ):
+        times = iter([0.0, 0.5, 1.0, 1.1])
+        monkeypatch.setattr(
+            "loqs.tools.paralleltools.time.perf_counter",
+            lambda: next(times),
+        )
+        fake_executor = MagicMock()
+        strategy = ParallelStrategy(
+            program_executor=fake_executor, n_program_chunks=2
+        )
+        with pytest.warns(UserWarning, match="timeout"):
+            profile_strategies(
+                lambda s: None,
+                {"loky": strategy},
+                repeats=2,
+                warmup=False,
+            )
+
+    def test_recycled_worker_pool_no_warning_when_timings_consistent(
+        self, monkeypatch
+    ):
+        times = iter([0.0, 0.1, 1.0, 1.1, 2.0, 2.1])
+        monkeypatch.setattr(
+            "loqs.tools.paralleltools.time.perf_counter",
+            lambda: next(times),
+        )
+        fake_executor = MagicMock()
+        strategy = ParallelStrategy(
+            program_executor=fake_executor, n_program_chunks=2
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            profile_strategies(
+                lambda s: None,
+                {"loky": strategy},
+                repeats=2,
+                warmup=True,
+            )
+
+    def test_serial_strategy_does_not_warn_on_slowdown(self, monkeypatch):
+        times = iter([0.0, 0.1, 1.0, 1.1, 2.0, 2.5])
+        monkeypatch.setattr(
+            "loqs.tools.paralleltools.time.perf_counter",
+            lambda: next(times),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            warnings.filterwarnings(
+                "ignore", message=".*resource-sampling intervals.*"
+            )
+            profile_strategies(
+                lambda s: None,
+                {"serial": ParallelStrategy()},
+                repeats=2,
+                warmup=True,
+            )
 
 
 class TestFormatProfileTable:

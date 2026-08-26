@@ -1567,6 +1567,7 @@ ParallelStrategy.plot = _plot
 # ---------------------------------------------------------------------------
 
 _MIN_RELIABLE_SAMPLES = 3
+_RECYCLED_WORKER_RATIO = 2.0
 
 _FAKE_SBATCH_SCRIPT = """\
 #!/bin/bash
@@ -1688,6 +1689,37 @@ def _warn_if_small_chunk_regime(
         )
 
 
+def _warn_if_recycled_worker_pool(
+    label: str, wall_times: Sequence[float], warmup_time: float | None
+) -> None:
+    """Warns once for a chunked strategy if any timed repeat ran
+    substantially slower than the fastest observed measurement across
+    warmup and repeats, typically indicating worker pool recycling."""
+    if not wall_times:
+        return
+    all_times = (
+        [warmup_time, *wall_times]
+        if warmup_time is not None
+        else list(wall_times)
+    )
+    baseline = min(all_times)
+    if baseline <= 0.0:
+        return
+    if any(t > _RECYCLED_WORKER_RATIO * baseline for t in wall_times):
+        warnings.warn(
+            f"One or more timed repeats for strategy {label!r} took "
+            f"substantially longer than the fastest observed measurement "
+            f"({baseline:.3g}s). When using a loky-backed executor, this "
+            "can occur if idle workers auto-shutdown under the default "
+            "timeout=10 and cold-restart on the next task; pass an "
+            "explicit timeout (e.g. ExecutorSpec('loky', {'max_workers': "
+            "N, 'timeout': 300}) or loky.get_reusable_executor(max_workers=N, "
+            "timeout=300)) to keep workers warm across repeats.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def _profile_one_strategy(
     work_fn: Callable[[ParallelStrategy], Any],
     label: str,
@@ -1711,14 +1743,14 @@ def _profile_one_strategy(
         prev_interval = strategy.resource_sample_interval
         strategy.collect_resource_stats = True
         strategy.resource_sample_interval = sample_interval
+        warmup_time: float | None = None
         try:
             if warmup:
-                # A real, throwaway pass through the exact same dispatch
-                # path -- this is what actually warms up program_executor
-                # (and resolves/caches it, see _resolve_program_executor)
-                # plus any nested per-chunk shot-level pool, so the first
-                # timed repeat below doesn't pay for their cold start.
+                # Warms up program_executor and any nested pools so the
+                # first timed repeat below skips their cold-start cost.
+                start = time.perf_counter()
                 work_fn(strategy)
+                warmup_time = time.perf_counter() - start
                 strategy.pop_resource_stats()
             for _ in range(repeats):
                 start = time.perf_counter()
@@ -1728,6 +1760,21 @@ def _profile_one_strategy(
         finally:
             strategy.collect_resource_stats = prev_collect
             strategy.resource_sample_interval = prev_interval
+            if (
+                isinstance(strategy.program_executor, ExecutorSpec)
+                and strategy._resolved_program_executor is not None
+            ):
+                # Shut down spec-owned executors to avoid cross-strategy worker
+                # reuse in singleton pools (e.g. loky) and ensure clean restarts.
+                try:
+                    strategy._resolved_program_executor.shutdown(
+                        wait=True, kill_workers=True
+                    )
+                except Exception:
+                    pass
+                finally:
+                    strategy._resolved_program_executor = None
+        _warn_if_recycled_worker_pool(label, wall_times, warmup_time)
     else:
         # No dispatch() call happens at all for an unchunked/serial
         # strategy -- the driver process itself is the one doing all the
