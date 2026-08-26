@@ -26,10 +26,18 @@ rather than reimplemented per tool.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import as_completed
-from dataclasses import dataclass
+import contextlib
+from dataclasses import dataclass, field
+import functools
 import math
+import os
+from pathlib import Path
+import shutil
+import statistics
+import tempfile
+import threading
 import time
 from typing import Any, TypeVar
 import warnings
@@ -148,30 +156,31 @@ def _indent_rows(rows: Sequence[tuple[str, int]]) -> list[str]:
 
 
 def _describe_executor_tag(executor: Any) -> str:
-    """Short backend tag for a live executor, e.g. `"loky(max_workers=2)"`
-    for a recognized backend (via `_introspect_executor_spec`), or its
-    plain type name otherwise (e.g. `submitit.AutoExecutor`, which isn't
-    introspected for parameters)."""
+    """Short backend tag for an executor axis value, e.g.
+    `"loky(max_workers=2)"` -- for an `ExecutorSpec` directly (its own
+    `describe()`), a live executor of a recognized backend (via
+    `_introspect_executor_spec`), or the plain type name otherwise (e.g.
+    `submitit.AutoExecutor`, which isn't introspected for parameters)."""
+    if isinstance(executor, ExecutorSpec):
+        return executor.describe()
     spec = _introspect_executor_spec(executor)
     return spec.describe() if spec is not None else type(executor).__name__
 
 
-def _shot_executor_worker_count(
-    shot_executor: (
-        SubmitExecutor | ExecutorSpec | Callable[[], SubmitExecutor]
-    ),
+def _axis_worker_count(
+    executor: SubmitExecutor | MapArrayExecutor | ExecutorSpec | Callable,
 ) -> int | None:
-    """Worker count for a resolved `shot_executor` value -- an
-    `ExecutorSpec` (reads its own `max_workers` kwarg directly, without
-    building an executor just to introspect it), a live executor (via
+    """Worker count for either axis's executor value -- an `ExecutorSpec`
+    (reads its own `max_workers` kwarg directly, without building an
+    executor just to introspect it), a live executor (via
     `_executor_worker_count`), or `None` if it's an arbitrary factory
     callable, whose internals aren't introspectable at all."""
-    if isinstance(shot_executor, ExecutorSpec):
-        value = shot_executor.kwargs.get("max_workers")
+    if isinstance(executor, ExecutorSpec):
+        value = executor.kwargs.get("max_workers")
         return value if isinstance(value, int) else None
-    if callable(shot_executor):
+    if callable(executor):
         return None
-    return _executor_worker_count(shot_executor)
+    return _executor_worker_count(executor)
 
 
 def resolve_shot_executor(
@@ -225,6 +234,145 @@ def pin_worker_threads() -> None:
             "cannot be limited to avoid oversubscription. Install "
             "loqs[parallel] or loqs[mpi]."
         )
+
+
+@dataclass
+class ChunkResourceStats:
+    """One dispatched chunk's (or, for an unchunked/serial strategy, the
+    whole run's) own self-reported peak memory / mean CPU utilization,
+    sampled from wherever it actually executed -- see `_ResourceSampler`
+    and [](api:profile_strategies)."""
+
+    peak_memory_mb: float
+    mean_cpu_percent: float
+    num_samples: int
+
+
+class _ResourceSampler:
+    """Background-thread resource monitor: polls `psutil.Process(pid)`
+    and every one of its live children every `interval` seconds, tracking
+    peak summed RSS (across the tracked process and all its children) and
+    mean summed CPU percent (`psutil` convention: percent of one core, so
+    e.g. ~400% means 4 cores fully busy -- not normalized to total
+    machine capacity).
+
+    Used two different ways by [](api:profile_strategies), both via the
+    same primitive: pointed at a worker's own `os.getpid()` from *inside*
+    that worker (self-reporting, for a chunked `ParallelStrategy` -- this
+    is what makes real multi-node measurement work at all, since it's the
+    same code path regardless of which physical node the worker actually
+    runs on), or pointed at the driver's own `os.getpid()` while it
+    directly runs the work (serial/unchunked strategies, where the driver
+    process *is* the one doing all the work, including any bare
+    `shot_executor` pool it spins up as a local child).
+
+    Requires `psutil` -- imported locally here (not at module level),
+    matching how `loky`/`submitit` are imported lazily elsewhere in this
+    module, since profiling is an opt-in feature, not a hard dependency
+    of the rest of it.
+    """
+
+    def __init__(self, pid: int, interval: float) -> None:
+        import psutil
+
+        self._process = psutil.Process(pid)
+        self._interval = interval
+        self._peak_memory_mb = 0.0
+        self._cpu_samples: list[float] = []
+        self._known_procs: dict[int, Any] = {}
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _sample(self) -> None:
+        import psutil
+
+        try:
+            children = self._process.children(recursive=True)
+        except psutil.NoSuchProcess:
+            return
+        current = {self._process.pid: self._process}
+        for child in children:
+            current[child.pid] = child
+
+        # psutil.Process.children() constructs a brand-new Process object
+        # for every child on every call, so cpu_percent(interval=None)'s
+        # own "since the last call on this object" semantics would
+        # otherwise always fall back to its meaningless first-call case
+        # (CPU time since the process started, not since the last real
+        # sample) for every child, on every sample. Caching each PID's
+        # own object across samples (self._known_procs) and priming --
+        # calling cpu_percent() once, discarded -- any PID seen for the
+        # first time fixes this: that PID's own reading only starts
+        # contributing to the running average the *next* time it's seen,
+        # once a real interval has actually elapsed. Memory has no such
+        # issue (an instantaneous value, not a rate), so a newly-seen
+        # process's memory still counts right away.
+        newly_seen = set(current) - set(self._known_procs)
+        for pid in newly_seen:
+            try:
+                current[pid].cpu_percent(interval=None)
+            except psutil.NoSuchProcess:
+                pass
+        self._known_procs = current
+
+        rss = 0.0
+        cpu = 0.0
+        measured_any = False
+        for pid, proc in current.items():
+            try:
+                rss += proc.memory_info().rss
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if pid in newly_seen:
+                continue
+            try:
+                cpu += proc.cpu_percent(interval=None)
+                measured_any = True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        self._peak_memory_mb = max(self._peak_memory_mb, rss / (1024 * 1024))
+        if measured_any:
+            self._cpu_samples.append(cpu)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval):
+            self._sample()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> ChunkResourceStats:
+        self._stop_event.set()
+        self._thread.join()
+        mean_cpu = (
+            statistics.mean(self._cpu_samples) if self._cpu_samples else 0.0
+        )
+        return ChunkResourceStats(
+            peak_memory_mb=self._peak_memory_mb,
+            mean_cpu_percent=mean_cpu,
+            num_samples=len(self._cpu_samples),
+        )
+
+
+def _self_reporting_worker(
+    worker_fn: Callable[[list[T]], R],
+    chunk: list[T],
+    sample_interval: float,
+) -> tuple[R, ChunkResourceStats]:
+    """Wraps `worker_fn` to self-report its own process's resource usage
+    while it runs, via `_ResourceSampler` aimed at this worker's own
+    `os.getpid()` -- module-level (not a closure) so it survives real
+    pickling for `MPIPoolExecutor`/`submitit`. Submitted in place of
+    `worker_fn` by `ParallelStrategy.dispatch` whenever
+    `collect_resource_stats` is set -- see [](api:profile_strategies).
+    """
+    sampler = _ResourceSampler(os.getpid(), sample_interval)
+    sampler.start()
+    try:
+        result = worker_fn(chunk)
+    finally:
+        stats = sampler.stop()
+    return result, stats
 
 
 def run_chunks_with_submit_executor(
@@ -296,7 +444,7 @@ class ParallelStrategy:
 
     Parameters
     ----------
-    program_executor : SubmitExecutor | MapArrayExecutor | None
+    program_executor : SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
         A `SubmitExecutor` (e.g. `loky.get_reusable_executor()` or
         `mpi4py.futures.MPIPoolExecutor`, dispatched one `.submit()` call
         per chunk) or a `MapArrayExecutor` (e.g. a `submitit.Executor`,
@@ -306,7 +454,15 @@ class ParallelStrategy:
         `MapArrayExecutor` first (a `submitit.Executor` satisfies both
         protocols, but `map_array`'s bulk submission is the efficient
         path). `None` means no program-level parallelism: chunks run
-        serially, in the driver process.
+        serially, in the driver process. An `ExecutorSpec` is also
+        accepted directly -- a picklable recipe, resolved into a real
+        executor (and cached) the first time `dispatch()` actually needs
+        it, rather than a live object built up front. This is what lets
+        several differently-sized `ParallelStrategy`s coexist safely in
+        one process: `loky.get_reusable_executor()` is a genuine
+        process-wide singleton, so building more than one live,
+        differently-sized instance up front would silently invalidate
+        the earlier ones.
     n_program_chunks : int | None
         Number of round-robin chunks to split work into. Required when
         `program_executor` is a `MapArrayExecutor` (submitting one array
@@ -327,11 +483,31 @@ class ParallelStrategy:
         fresh executor inside each chunk worker; an unrecognized backend
         instead requires an explicit zero-argument factory callable,
         which is used as given.
+    collect_resource_stats : bool
+        Whether `dispatch()` should have each dispatched chunk
+        self-report its own worker process's peak memory / mean CPU
+        utilization (see `_ResourceSampler`). Primarily set (and later
+        read back via `pop_resource_stats()`) by
+        [](api:profile_strategies) itself, not meant to be hand-set for
+        an ordinary (non-profiling) run.
+    resource_sample_interval : float
+        Sampling interval (seconds) used when `collect_resource_stats`
+        is `True`.
     """
 
-    program_executor: SubmitExecutor | MapArrayExecutor | None = None
+    program_executor: (
+        SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
+    ) = None
     n_program_chunks: int | None = None
     shot_executor: SubmitExecutor | Callable[[], SubmitExecutor] | None = None
+    collect_resource_stats: bool = False
+    resource_sample_interval: float = 0.2
+    _resource_stats: list[ChunkResourceStats] = field(
+        default_factory=list, repr=False, compare=False
+    )
+    _resolved_program_executor: SubmitExecutor | MapArrayExecutor | None = (
+        field(default=None, repr=False, compare=False)
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -381,6 +557,20 @@ class ParallelStrategy:
         )
         return chunk_round_robin(items, n)
 
+    def _resolve_program_executor(self) -> SubmitExecutor | MapArrayExecutor:
+        """Resolves `program_executor` into an actual executor instance,
+        building and caching it (on `_resolved_program_executor`) the
+        first time it's an `ExecutorSpec` -- every later call on this
+        same instance reuses that cached executor rather than rebuilding
+        one from scratch, which is what lets a strategy be warmed up once
+        and then measured across several `dispatch()` calls (e.g.
+        `profile_strategies`'s `warmup`/`repeats`) at steady-state cost."""
+        if isinstance(self.program_executor, ExecutorSpec):
+            if self._resolved_program_executor is None:
+                self._resolved_program_executor = self.program_executor()
+            return self._resolved_program_executor
+        return self.program_executor
+
     def dispatch(
         self,
         worker_fn: Callable[[list[T]], R],
@@ -390,21 +580,53 @@ class ParallelStrategy:
         """Dispatch `worker_fn` over `chunks` via `program_executor`,
         picking the dispatch mechanism (`.submit()`-per-chunk vs. a bulk
         `.map_array()` call) automatically. Only valid when `is_chunked`
-        is `True`."""
+        is `True`.
+
+        When `collect_resource_stats` is set, each chunk's worker is
+        transparently wrapped to self-report its own resource usage (see
+        `_self_reporting_worker`) -- the wrapping/unwrapping happens
+        entirely here, so this method's own return value (one real
+        result per chunk, in `chunks` order) is unaffected either way;
+        collected stats are appended to `_resource_stats`, retrievable
+        via `pop_resource_stats()`.
+        """
         assert self.program_executor is not None, (
             "dispatch() requires program_executor to be set; check "
             "is_chunked first."
         )
+        executor = self._resolve_program_executor()
+        dispatched_fn = worker_fn
+        if self.collect_resource_stats:
+            dispatched_fn = functools.partial(
+                _self_reporting_worker,
+                worker_fn,
+                sample_interval=self.resource_sample_interval,
+            )
         # Checked first: a MapArrayExecutor (e.g. submitit.Executor) also
         # satisfies SubmitExecutor, but map_array's bulk submission is the
         # efficient path it's chosen for.
-        if isinstance(self.program_executor, MapArrayExecutor):
-            return run_chunks_with_map_array_executor(
-                self.program_executor, worker_fn, chunks, desc=desc
+        if isinstance(executor, MapArrayExecutor):
+            raw = run_chunks_with_map_array_executor(
+                executor, dispatched_fn, chunks, desc=desc
             )
-        return run_chunks_with_submit_executor(
-            self.program_executor, worker_fn, chunks, desc=desc
-        )
+        else:
+            raw = run_chunks_with_submit_executor(
+                executor, dispatched_fn, chunks, desc=desc
+            )
+        if not self.collect_resource_stats:
+            return raw
+        results, stats = zip(*raw) if raw else ((), ())
+        self._resource_stats.extend(stats)
+        return list(results)
+
+    def pop_resource_stats(self) -> list[ChunkResourceStats]:
+        """Return and clear every `ChunkResourceStats` collected by
+        `dispatch()` since the last call -- used by
+        [](api:profile_strategies) to drain one run's worth of
+        self-reported stats without leaving them to accumulate silently
+        across unrelated later calls."""
+        stats, self._resource_stats = self._resource_stats, []
+        return stats
 
     def describe(
         self,
@@ -447,7 +669,7 @@ class ParallelStrategy:
         if items is not None and n_chunks is not None:
             programs_per_chunk = math.ceil(len(items) / n_chunks)
             rows.append(("# of programs/chunk:", programs_per_chunk))
-        workers = _executor_worker_count(self.program_executor)
+        workers = _axis_worker_count(self.program_executor)
         if n_chunks is not None and workers is not None:
             chunks_per_worker = math.ceil(n_chunks / workers)
             rows.append(("# of chunks/worker:", chunks_per_worker))
@@ -475,7 +697,7 @@ class ParallelStrategy:
         rows: list[tuple[str, int]] = []
         if num_shots is not None:
             rows.append(("# of shots:", num_shots))
-        workers = _shot_executor_worker_count(self.shot_executor)
+        workers = _axis_worker_count(self.shot_executor)
         if num_shots is not None and workers is not None:
             shots_per_worker = math.ceil(num_shots / workers)
             rows.append(("# of shots/worker:", shots_per_worker))
@@ -1164,14 +1386,14 @@ def _plot(
     strategy = self
     if program_workers is None:
         program_workers = (
-            _executor_worker_count(strategy.program_executor)
+            _axis_worker_count(strategy.program_executor)
             if strategy.program_executor is not None
             else None
         ) or 1
 
     shot_serial = strategy.shot_executor is None and shot_workers is None
     if not shot_serial and shot_workers is None:
-        shot_workers = _shot_executor_worker_count(strategy.shot_executor) or 1
+        shot_workers = _axis_worker_count(strategy.shot_executor) or 1
 
     sizes = _chunk_sizes(strategy, items, program_workers)
     assigned, idle = _assign_chunks_to_workers(sizes, program_workers)
@@ -1336,3 +1558,392 @@ def _plot(
 # Attached here, rather than in the class body above, since _plot depends
 # on drawing helpers defined throughout the rest of this module.
 ParallelStrategy.plot = _plot
+
+
+# ---------------------------------------------------------------------------
+# Performance profiling: measure real wall-clock time and resource usage for
+# a caller-chosen set of ParallelStrategy configurations against a
+# caller-chosen working example. See profile_strategies below.
+# ---------------------------------------------------------------------------
+
+_MIN_RELIABLE_SAMPLES = 3
+
+_FAKE_SBATCH_SCRIPT = """\
+#!/bin/bash
+# Fake `sbatch`, installed on PATH ahead of the real one by
+# profile_strategies(reuse_slurm_allocation=True). Runs the generated
+# submission script directly via bash instead of handing it to the real
+# SLURM scheduler: its "#SBATCH ..." header lines are inert bash comments
+# when run this way, so no new allocation is requested, while the
+# script's own already-correct "srun ..." payload line uses whatever
+# allocation this shell is already inside. Prints a fake job ID matching
+# submitit's own job-ID-parsing regex.
+set -u
+script="$1"
+fake_id=$(date +%s%N)
+nohup bash "$script" >/dev/null 2>&1 &
+echo "Submitted batch job ${fake_id}"
+"""
+
+
+@contextlib.contextmanager
+def _reused_slurm_allocation():
+    """Temporarily installs the fake `sbatch` script (see
+    `_FAKE_SBATCH_SCRIPT`) on `PATH`, so every `submitit`-driven
+    `SlurmExecutor` call made inside this context runs against whatever
+    real SLURM allocation this process is already inside, instead of
+    each independently requesting a new one from the scheduler -- see
+    `profile_strategies`'s `reuse_slurm_allocation` parameter for the
+    full rationale and its accepted limitations.
+
+    Requires actually running inside a real SLURM allocation already
+    (checked via `SLURM_JOB_ID`); raises otherwise, since faking
+    `sbatch` outside one has no real allocation to dispatch against.
+    Restores the original `PATH` and removes the temporary script
+    afterward, regardless of how the `with` block exits.
+    """
+    if "SLURM_JOB_ID" not in os.environ:
+        raise RuntimeError(
+            "reuse_slurm_allocation=True requires already running inside "
+            "a real SLURM allocation (SLURM_JOB_ID is not set) -- obtain "
+            "one first (e.g. `salloc`, or an enclosing `sbatch` job), "
+            "then run this profiling call from inside it."
+        )
+    tmp_dir = Path(tempfile.mkdtemp(prefix="loqs_fake_sbatch_"))
+    script_path = tmp_dir / "sbatch"
+    script_path.write_text(_FAKE_SBATCH_SCRIPT)
+    script_path.chmod(0o755)
+    old_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{tmp_dir}{os.pathsep}{old_path}"
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = old_path
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@dataclass
+class ProfileResult:
+    """One [](api:ParallelStrategy)'s results from
+    [](api:profile_strategies): wall-clock time (`wall_time_mean`/
+    `wall_time_std`, across however many `repeats` were run) plus,
+    whenever real resource stats were collected, `chunk_stats` -- the
+    raw, ungrouped per-chunk (or, for an unchunked/serial strategy,
+    per-repeat) data every measurement was built from, concatenated
+    across every repeat. `peak_memory_mb`/`mean_cpu_percent` are just a
+    convenience summary view over `chunk_stats` (max / mean,
+    respectively) -- nothing about the underlying per-chunk data is
+    discarded, so a caller can build a finer-grained view (e.g. a
+    quartile/box plot, see `plot_profile_results`) directly from it.
+    `speedup` is `wall_time_mean` relative to the fully-serial strategy
+    in the same `profile_strategies` call (its own `program_executor`
+    and `shot_executor` both `None`), when one was given -- `None`
+    otherwise, including for the baseline strategy's own result.
+    """
+
+    wall_time_mean: float
+    wall_time_std: float
+    chunk_stats: list[ChunkResourceStats] = field(default_factory=list)
+    speedup: float | None = None
+
+    @property
+    def peak_memory_mb(self) -> float | None:
+        if not self.chunk_stats:
+            return None
+        return max(c.peak_memory_mb for c in self.chunk_stats)
+
+    @property
+    def mean_cpu_percent(self) -> float | None:
+        if not self.chunk_stats:
+            return None
+        return statistics.mean(c.mean_cpu_percent for c in self.chunk_stats)
+
+
+def _warn_if_small_chunk_regime(
+    label: str, chunk_stats: Sequence[ChunkResourceStats]
+) -> None:
+    """Warns once, per strategy, when a majority of its `chunk_stats`
+    completed in fewer than `_MIN_RELIABLE_SAMPLES` resource-sampling
+    intervals -- not enough time elapsed for a meaningful CPU-percent
+    baseline-plus-reading, so those entries' memory/CPU numbers are
+    likely unreliable. This is a real cost of profiling itself, not just
+    a display nuance: each self-reporting wrapper spends a little real
+    time/overhead per dispatched chunk (a background sampling thread),
+    which matters proportionally more for a workload with many small,
+    fast chunks."""
+    if not chunk_stats:
+        return
+    unreliable = sum(
+        1 for c in chunk_stats if c.num_samples < _MIN_RELIABLE_SAMPLES
+    )
+    if unreliable > len(chunk_stats) / 2:
+        warnings.warn(
+            f"{unreliable}/{len(chunk_stats)} chunk(s) for strategy "
+            f"{label!r} completed in fewer than {_MIN_RELIABLE_SAMPLES} "
+            "resource-sampling intervals -- memory/CPU numbers for "
+            "these may be unreliable. Consider larger chunks (fewer, "
+            "bigger dispatched units) or a smaller sample_interval.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def _profile_one_strategy(
+    work_fn: Callable[[ParallelStrategy], Any],
+    label: str,
+    strategy: ParallelStrategy,
+    repeats: int,
+    sample_interval: float,
+    warmup: bool,
+) -> ProfileResult:
+    """One strategy's worth of `profile_strategies` work -- see that
+    function for the chunked-vs-serial unification this splits into."""
+    wall_times: list[float] = []
+    chunk_stats: list[ChunkResourceStats] = []
+    if strategy.is_chunked:
+        # Self-reporting (see dispatch()/`_self_reporting_worker`): each
+        # dispatched chunk measures its own worker process, wherever it
+        # actually runs -- the only way to get real numbers for a
+        # genuinely multi-node strategy. collect_resource_stats/
+        # resource_sample_interval are restored afterward so `strategy`
+        # isn't left silently mutated if reused for a real run later.
+        prev_collect = strategy.collect_resource_stats
+        prev_interval = strategy.resource_sample_interval
+        strategy.collect_resource_stats = True
+        strategy.resource_sample_interval = sample_interval
+        try:
+            if warmup:
+                # A real, throwaway pass through the exact same dispatch
+                # path -- this is what actually warms up program_executor
+                # (and resolves/caches it, see _resolve_program_executor)
+                # plus any nested per-chunk shot-level pool, so the first
+                # timed repeat below doesn't pay for their cold start.
+                work_fn(strategy)
+                strategy.pop_resource_stats()
+            for _ in range(repeats):
+                start = time.perf_counter()
+                work_fn(strategy)
+                wall_times.append(time.perf_counter() - start)
+                chunk_stats.extend(strategy.pop_resource_stats())
+        finally:
+            strategy.collect_resource_stats = prev_collect
+            strategy.resource_sample_interval = prev_interval
+    else:
+        # No dispatch() call happens at all for an unchunked/serial
+        # strategy -- the driver process itself is the one doing all the
+        # work (including any bare shot_executor pool it spins up as a
+        # local child), so this samples the driver's own PID directly.
+        if warmup:
+            work_fn(strategy)
+        for _ in range(repeats):
+            sampler = _ResourceSampler(os.getpid(), sample_interval)
+            sampler.start()
+            start = time.perf_counter()
+            try:
+                work_fn(strategy)
+            finally:
+                wall_times.append(time.perf_counter() - start)
+                chunk_stats.append(sampler.stop())
+
+    _warn_if_small_chunk_regime(label, chunk_stats)
+    return ProfileResult(
+        wall_time_mean=statistics.mean(wall_times),
+        wall_time_std=(
+            statistics.stdev(wall_times) if len(wall_times) > 1 else 0.0
+        ),
+        chunk_stats=chunk_stats,
+    )
+
+
+def profile_strategies(
+    work_fn: Callable[[ParallelStrategy], Any],
+    strategies: Mapping[str, ParallelStrategy],
+    repeats: int = 1,
+    sample_interval: float = 0.2,
+    warmup: bool = False,
+    reuse_slurm_allocation: bool = False,
+) -> dict[str, ProfileResult]:
+    """Measure real wall-clock time and resource usage for a
+    caller-chosen set of `ParallelStrategy` configurations against a
+    caller-chosen working example.
+
+    Calls `work_fn(strategy)` once per entry in `strategies` (`repeats`
+    times each), returning one `ProfileResult` per entry in a `dict`
+    keyed by the same labels -- `work_fn` is entirely the caller's, e.g.
+    a closure like
+    `lambda strategy: run_discrete_error_injected_programs(programs, ...,
+    parallel=strategy)`, so this function never needs any
+    GST/fault-injection/noise-sweep-specific knowledge of what it's
+    actually timing.
+
+    Peak memory and mean CPU utilization are measured via `psutil`
+    (`pip install loqs[parallel]`/`loqs[mpi]`), summed across every
+    tracked process each sample (so e.g. ~400% CPU means 4 cores fully
+    busy, not normalized to total machine capacity) -- for a chunked
+    strategy, each dispatched chunk self-reports its own worker
+    process's usage from wherever it actually runs (see `dispatch`),
+    which is what makes this work correctly for a genuinely multi-node
+    strategy, not just a local one; for an unchunked/serial strategy,
+    this process's own usage is sampled directly.
+
+    `warmup=True` runs `work_fn(strategy)` once per strategy, discarding
+    its result/timing/stats, before the timed `repeats` loop -- a real
+    pass through the same dispatch path a strategy's executor(s) are
+    only actually built (or reused, per `_resolve_program_executor`) on
+    first use, so an unwarmed first repeat otherwise pays for real
+    worker-process startup/import cost that later repeats don't.
+
+    `reuse_slurm_allocation=True` (only meaningful for `submitit`-backed
+    strategies) installs a fake `sbatch` on `PATH` for the whole sweep,
+    so every candidate strategy dispatches against one already-held
+    SLURM allocation instead of each independently queueing -- see
+    `_reused_slurm_allocation` for the mechanism and its accepted
+    limitations. Requires already running inside a real allocation.
+
+    If one entry in `strategies` is fully serial (`program_executor` and
+    `shot_executor` both `None`), every other entry's `ProfileResult`
+    gets a `speedup` (that strategy's `wall_time_mean` divided into the
+    serial one's) once every result is in -- the baseline entry's own
+    `speedup` stays `None`. Nothing is computed when no entry is fully
+    serial, or (using whichever is found first in `strategies`' own
+    order) when more than one is.
+    """
+    ctx = (
+        _reused_slurm_allocation()
+        if reuse_slurm_allocation
+        else contextlib.nullcontext()
+    )
+    results: dict[str, ProfileResult] = {}
+    with ctx:
+        for label, strategy in strategies.items():
+            results[label] = _profile_one_strategy(
+                work_fn, label, strategy, repeats, sample_interval, warmup
+            )
+
+    baseline_label = next(
+        (
+            label
+            for label, strategy in strategies.items()
+            if strategy.program_executor is None
+            and strategy.shot_executor is None
+        ),
+        None,
+    )
+    if baseline_label is not None:
+        baseline_time = results[baseline_label].wall_time_mean
+        for label, result in results.items():
+            if label != baseline_label:
+                result.speedup = baseline_time / result.wall_time_mean
+    return results
+
+
+def format_profile_table(results: Mapping[str, ProfileResult]) -> str:
+    """Plain, fixed-width text summary of `profile_strategies` results:
+    one row per strategy (in `results`' own order), wall time as `mean
+    +/- std`, speedup vs. a fully-serial baseline when one was profiled
+    (`--` for the baseline itself, or every row, when there wasn't one),
+    peak memory and mean CPU% when resource stats were collected (`--`
+    otherwise)."""
+    headers = (
+        "label",
+        "wall_time_s",
+        "speedup",
+        "peak_memory_mb",
+        "mean_cpu_percent",
+    )
+    rows = []
+    for label, result in results.items():
+        wall = f"{result.wall_time_mean:.3g} +/- {result.wall_time_std:.2g}"
+        speedup = "--" if result.speedup is None else f"{result.speedup:.2f}x"
+        peak = (
+            "--"
+            if result.peak_memory_mb is None
+            else f"{result.peak_memory_mb:.1f}"
+        )
+        cpu = (
+            "--"
+            if result.mean_cpu_percent is None
+            else f"{result.mean_cpu_percent:.1f}"
+        )
+        rows.append((label, wall, speedup, peak, cpu))
+    widths = [
+        max(len(header), *(len(row[i]) for row in rows))
+        for i, header in enumerate(headers)
+    ]
+    lines = [
+        "  ".join(cell.ljust(w) for cell, w in zip(headers, widths)),
+        "  ".join("-" * w for w in widths),
+    ]
+    lines.extend(
+        "  ".join(cell.ljust(w) for cell, w in zip(row, widths))
+        for row in rows
+    )
+    return "\n".join(lines)
+
+
+def plot_profile_results(
+    results: Mapping[str, ProfileResult],
+) -> "matplotlib.axes.Axes":  # noqa: F821
+    """Simple bar/box-plot summary of `profile_strategies` results: a
+    wall-time bar chart (mean, with error bars when `repeats > 1`) plus,
+    whenever resource stats were collected, a peak-memory box plot and a
+    mean-CPU%-percent box plot -- one box per strategy, built directly
+    from each result's raw `chunk_stats` (`Axes.boxplot` computes
+    quartiles directly, no manual computation needed here).
+
+    Requires matplotlib (`pip install loqs[visualization]`); imported
+    lazily like `ParallelStrategy.plot`.
+    """
+    import matplotlib.pyplot as plt
+
+    labels = list(results.keys())
+    times = [results[label].wall_time_mean for label in labels]
+    errs = [results[label].wall_time_std for label in labels]
+    has_resource_stats = any(results[label].chunk_stats for label in labels)
+
+    n_panels = 3 if has_resource_stats else 1
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 4))
+    axes = [axes] if n_panels == 1 else list(axes)
+
+    bars = axes[0].bar(
+        labels, times, yerr=errs if any(errs) else None, capsize=4
+    )
+    axes[0].set_ylabel("Wall time (s)")
+    axes[0].set_title("Wall-clock time")
+    axes[0].tick_params(axis="x", rotation=30)
+    # Annotates each bar with its own speedup vs. the fully-serial
+    # baseline (see profile_strategies), when one was profiled -- omitted
+    # entirely (rather than shown as e.g. "--") for a label with none.
+    for bar, label in zip(bars, labels):
+        speedup = results[label].speedup
+        if speedup is not None:
+            axes[0].text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{speedup:.2f}x",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    if has_resource_stats:
+        mem_data = [
+            [c.peak_memory_mb for c in results[label].chunk_stats]
+            for label in labels
+        ]
+        axes[1].boxplot(mem_data, tick_labels=labels)
+        axes[1].set_ylabel("Peak memory (MB)")
+        axes[1].set_title("Peak memory per chunk")
+        axes[1].tick_params(axis="x", rotation=30)
+
+        cpu_data = [
+            [c.mean_cpu_percent for c in results[label].chunk_stats]
+            for label in labels
+        ]
+        axes[2].boxplot(cpu_data, tick_labels=labels)
+        axes[2].set_ylabel("Mean CPU (%)")
+        axes[2].set_title("CPU utilization per chunk")
+        axes[2].tick_params(axis="x", rotation=30)
+
+    fig.tight_layout()
+    return axes

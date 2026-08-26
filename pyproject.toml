@@ -48,11 +48,13 @@ loqs-migrate = "loqs.tools.migrate.cli:main"
 parallel = [
     "loky>=3.5.6",
     "submitit",
-    "threadpoolctl>=3.5.0"
+    "threadpoolctl>=3.5.0",
+    "psutil"
 ]
 mpi = [
     "mpi4py",
-    "threadpoolctl"
+    "threadpoolctl",
+    "psutil"
 ]
 dev = [
     "pre-commit",

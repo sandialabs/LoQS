@@ -89,39 +89,15 @@ small `dataclass`, reused identically by every program-level call site:
   unrecognized backend still requires an explicit zero-argument factory
   callable instead.
 
-`ParallelStrategy.describe(items, num_shots)` prints a quick summary of both
-axes -- a short backend tag per axis (e.g. `loky(max_workers=2)`), plus
-whichever counts can actually be computed from what's known. The program
-axis can report a real chunk count, programs per chunk, and chunks per
-worker (`n_program_chunks` is an explicit, independently-chosen setting);
-the shot axis has no analogous chunking setting -- shots are dispatched one
-at a time -- so it only reports the total and the resulting average per
-worker.
+[ParallelStrategy.describe](api:ParallelStrategy.describe) prints a quick,
+per-axis text summary of a configuration (backend, chunk/worker counts) before
+running anything. [ParallelStrategy.plot](api:ParallelStrategy.plot) draws
+the same configuration as a worker/chunk/shot diagram instead. The examples
+below show both before each run -- see their API reference entries (linked
+above) for the exact fields/diagram elements each one produces.
 
-[ParallelStrategy.plot](api:ParallelStrategy.plot) draws the same
-information as a diagram: the node is one box, program-axis workers
-(`PW0`, `PW1`, ...) are lanes within it separated by dashed dividers,
-since they really do run concurrently; but a worker's own chunk(s), and
-the programs within one chunk, are *not* concurrent with each other (one
-worker process runs one chunk at a time, and one chunk's programs run one
-at a time inside it), so those are drawn instead as a left-to-right
-sequence connected by curved arrows. Each program's own box directly
-contains a stack of shot boxes (one per shot worker, or a single "Serial"
-one when `shot_executor` is `None`); dashed `SW0`/`SW1`/... lines span the
-whole chunk's width at the gaps between shot-box rows, since it really is
-the same resolved shot executor, reused sequentially by every program in
-that chunk. Workers that would otherwise be exact duplicates of each
-other (the common case under round-robin dispatch) collapse to a single
-`"PW1 = PW0"`-style label rather than being redrawn, and a worker left
-with no chunks at all (more workers requested than there are chunks to
-hand out) is drawn hatched and grayed out rather than silently omitted,
-since that's itself useful information. The examples below show both
-`describe()` and the diagram before each run. `plot()` always builds its
-own new figure (it doesn't accept a caller-supplied `ax` to draw into),
-since embedding one in a caller-managed subplot grid reads as more
-confusing than helpful once a real multi-node layout is in the picture.
-See the [ParallelStrategy](api:ParallelStrategy) API reference for the
-full field-by-field details and validation rules.
+See the [ParallelStrategy](api:ParallelStrategy) API reference for the full
+field-by-field details and validation rules.
 
 ## Build a program
 
@@ -185,11 +161,9 @@ a unit by one worker.
 from loqs.tools import fttools
 from loqs.tools.paralleltools import ParallelStrategy
 
-# 6 copies of the same program, split into 2 chunks of 3 -- each chunk is
-# tested as a unit by one of the 4 loky workers.
 programs = [program] * 6
 strategy = ParallelStrategy(
-    program_executor=loky.get_reusable_executor(max_workers=4),
+    program_executor=loky.get_reusable_executor(max_workers=2),
     n_program_chunks=2,
 )
 print(strategy.describe(programs, num_shots=1))
@@ -317,12 +291,6 @@ strategy = ParallelStrategy(
     ),
     n_program_chunks=2,
 )
-print(strategy.describe(programs, num_shots=1))
-# submitit.Executor's real parallelism is scheduler-determined (unlike
-# loky's fixed max_workers), so plot() can't introspect a worker count --
-# program_workers is given explicitly here, matching one concurrent
-# allocation per chunk.
-strategy.plot(programs, program_workers=2)
 
 if sys.platform == "win32":
     print("submitit does not support Windows -- skipping dispatch.")
@@ -463,3 +431,85 @@ to use every available core for BLAS operations, which would otherwise
 make a parallel run slower than serial rather than faster, and matters
 more, not less, once both axes are combined (as in the hybrid examples
 above).
+
+## Performance profiling
+
+`profile_strategies` measures real wall-clock time -- and, whenever `psutil`
+is installed, peak memory and CPU utilization -- for a caller-chosen set of
+[ParallelStrategy](api:ParallelStrategy) configurations against a
+caller-chosen working example. Deciding between candidate configurations (how
+many outer/inner workers, which backend) is a real, workload-dependent
+question -- this measures it directly on real hardware rather than guessing.
+
+```{code-cell} ipython3
+from loqs.tools.paralleltools import (
+    format_profile_table,
+    plot_profile_results,
+    profile_strategies,
+)
+
+
+def profile_work(strategy):
+    return fttools.run_discrete_error_injected_programs(
+        programs,
+        collect_shot_data_args=[("counter", -1)],
+        expected_outcomes=[1],
+        num_shots=1,
+        parallel=strategy,
+    )
+
+
+strategies = {
+    "serial": ParallelStrategy(),
+    "loky-2x": ParallelStrategy(
+        program_executor=loky.get_reusable_executor(max_workers=2),
+        n_program_chunks=2,
+    ),
+}
+results = profile_strategies(
+    profile_work, strategies, repeats=2, sample_interval=0.02, warmup=True
+)
+print(format_profile_table(results))
+```
+
+A `loky` pool is a persistent, reused singleton (see Single-node parallelism
+above), so its *first* call pays real process-startup/import cost that later
+calls don't -- pass `warmup=True` to run one throwaway pass through the same
+dispatch path before the timed `repeats` loop, so that cost doesn't land on
+whichever repeat happens to run first. Also, if one of `strategies` is fully
+serial (as `"serial"` is here), every other result's table row also reports a
+`speedup` relative to it. And this toy program's own per-item cost is far
+below anything realistic, so a small-chunk-regime `UserWarning` (not enough
+resource-sampling intervals to trust the numbers for very fast items) is
+expected here and should disappear on real work.
+
+Every result's raw per-chunk data (peak memory, mean CPU%, sample count) is
+kept, not just the summary numbers above -- `plot_profile_results` draws a
+wall-time bar chart plus box plots of that per-chunk resource data directly.
+
+```{code-cell} ipython3
+plot_profile_results(results);
+```
+
+### Profiling a `submitit` sweep on a real SLURM allocation
+
+Comparing several `submitit`-backed configurations the way `profile_strategies`
+does above would normally mean each candidate strategy's own dispatch
+independently submits (and queues for) its own `sbatch` job -- exactly the
+"stuck behind someone else's job" risk a real profiling sweep wants to avoid.
+`reuse_slurm_allocation=True` sidesteps this: it installs a small wrapper
+script that intercepts every `sbatch` call `submitit` makes during the sweep,
+running it directly against whatever real SLURM allocation the current
+process is already inside (obtained separately first, e.g. via `salloc` or an
+enclosing `sbatch` job) instead of requesting a new one each time. Requires
+already running inside a real allocation (`SLURM_JOB_ID` set); not runnable in
+this Binder/CI environment, so not executed here.
+
+```python
+# Obtain one allocation sized for the largest candidate strategy first, e.g.
+#   salloc --nodes=4 --ntasks-per-node=1 --cpus-per-task=8
+# then, from inside that shell:
+results = profile_strategies(
+    profile_work, strategies, reuse_slurm_allocation=True
+)
+```

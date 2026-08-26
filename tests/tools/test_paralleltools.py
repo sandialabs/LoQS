@@ -1,18 +1,26 @@
 """Tester for loqs.tools.paralleltools"""
 
+import os
 import sys
 
 import pytest
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
 from loqs.tools.paralleltools import (
+    ChunkResourceStats,
     ExecutorSpec,
     ParallelStrategy,
+    ProfileResult,
     _assign_chunks_to_workers,
     _canonical_shapes,
+    _ResourceSampler,
+    _reused_slurm_allocation,
     _worker_plan,
     chunk_round_robin,
+    format_profile_table,
     pin_worker_threads,
+    plot_profile_results,
+    profile_strategies,
     resolve_shot_executor,
     run_chunks_with_map_array_executor,
     run_chunks_with_submit_executor,
@@ -332,6 +340,53 @@ class TestParallelStrategy:
         results = strategy.dispatch(_double_chunk, chunks)
         assert results == [[2], [4, 4]]
 
+    def test_program_executor_accepts_executor_spec_unresolved(self):
+        """An ExecutorSpec is accepted directly as program_executor and
+        stays unresolved (no live pool built) until dispatch() actually
+        needs one."""
+        spec = ExecutorSpec("loky", {"max_workers": 2})
+        strategy = ParallelStrategy(program_executor=spec, n_program_chunks=2)
+        assert strategy.is_chunked is True
+        assert strategy.program_executor is spec
+        assert strategy._resolved_program_executor is None
+
+    def test_dispatch_resolves_and_caches_executor_spec_program_executor(self):
+        pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            program_executor=ExecutorSpec("loky", {"max_workers": 1}),
+            n_program_chunks=1,
+        )
+        strategy.dispatch(_double_chunk, [[1, 2]])
+        resolved = strategy._resolved_program_executor
+        assert resolved is not None
+        strategy.dispatch(_double_chunk, [[3, 4]])
+        assert strategy._resolved_program_executor is resolved
+
+    def test_multiple_differently_sized_executor_specs_coexist_safely(self):
+        """loky.get_reusable_executor() is a process-wide singleton --
+        building several live, differently-sized instances up front (one
+        per strategy) would silently invalidate the earlier ones.
+        ExecutorSpec sidesteps this by staying unresolved until each
+        strategy's own dispatch() call actually needs it, one strategy
+        at a time."""
+        pytest.importorskip("loky")
+        strategies = {
+            label: ParallelStrategy(
+                program_executor=ExecutorSpec("loky", {"max_workers": n}),
+                n_program_chunks=n,
+            )
+            for label, n in [("4x", 4), ("2x", 2), ("1x", 1)]
+        }
+        for strategy in strategies.values():
+            chunks = strategy.make_chunks([1, 2, 3, 4])
+            results = strategy.dispatch(_double_chunk, chunks)
+            assert sorted(x for chunk in results for x in chunk) == [
+                2,
+                4,
+                6,
+                8,
+            ]
+
 
 class TestParallelStrategyDescribe:
 
@@ -422,6 +477,19 @@ class TestParallelStrategyDescribe:
         assert "# of program chunks: 2" in description
         assert "# of programs/chunk" not in description
         assert "# of chunks/worker:  1" in description
+
+    def test_executor_spec_program_executor_describes_without_resolving(self):
+        """describe() reads an unresolved ExecutorSpec's own kwargs
+        directly (like it already does for shot_executor) rather than
+        building a live pool just to introspect it."""
+        strategy = ParallelStrategy(
+            program_executor=ExecutorSpec("loky", {"max_workers": 4}),
+            n_program_chunks=2,
+        )
+        description = strategy.describe([1, 2, 3, 4])
+        assert "program axis: loky(max_workers=4)" in description
+        assert "# of chunks/worker:  1" in description
+        assert strategy._resolved_program_executor is None
 
 
 class TestWorkerPlan:
@@ -677,3 +745,499 @@ class TestParallelStrategyPlot:
         monkeypatch.setitem(sys.modules, "matplotlib.pyplot", None)
         with pytest.raises(ImportError):
             ParallelStrategy().plot([1, 2, 3])
+
+
+def _double_chunk_slow(chunk: list[int]) -> list[int]:
+    """Module-level worker (not a closure) that does a tiny bit of real
+    work, for profile_strategies tests -- long enough for a handful of
+    real resource samples at a short sample_interval, without making the
+    suite slow."""
+    import time
+
+    time.sleep(0.15)
+    return [x * 2 for x in chunk]
+
+
+def _profiling_work_fn(strategy: ParallelStrategy) -> list[int]:
+    """Module-level work_fn (not a closure) for profile_strategies
+    tests -- real end-to-end dispatch through a caller-built
+    ParallelStrategy, matching how a real call site would be used."""
+    import time
+
+    items = list(range(4))
+    if not strategy.is_chunked:
+        time.sleep(0.15)
+        return [x * 2 for x in items]
+    chunks = strategy.make_chunks(items)
+    return [x for chunk in strategy.dispatch(_double_chunk_slow, chunks) for x in chunk]
+
+
+class _FakeMemInfo:
+    def __init__(self, rss: int) -> None:
+        self.rss = rss
+
+
+class _FakeProcess:
+    """Minimal psutil.Process-like double for TestResourceSampler --
+    exposes just what _ResourceSampler._sample() touches, with a
+    call-counted cpu_percent() so priming behavior is directly
+    observable without needing a real process tree."""
+
+    def __init__(
+        self, pid: int, rss: int = 100 * 1024 * 1024, cpu_value: float = 50.0
+    ) -> None:
+        self.pid = pid
+        self.cpu_percent_calls = 0
+        self._rss = rss
+        self._cpu_value = cpu_value
+
+    def memory_info(self) -> _FakeMemInfo:
+        return _FakeMemInfo(self._rss)
+
+    def cpu_percent(self, interval=None) -> float:
+        self.cpu_percent_calls += 1
+        return self._cpu_value
+
+    def children(self, recursive: bool = True) -> list:
+        return []
+
+
+class TestResourceSampler:
+    """_ResourceSampler._sample()'s per-PID caching/priming logic --
+    psutil.Process.children() constructs a brand-new object for every
+    child on every call, so cpu_percent() needs its own cached object
+    per PID to correctly measure "since the last sample" rather than
+    "since the process started" (see _sample()'s own docstring)."""
+
+    @staticmethod
+    def _bare_sampler() -> _ResourceSampler:
+        """A _ResourceSampler with its real __init__ (which constructs a
+        genuine psutil.Process(pid)) bypassed, so its internal state can
+        be set directly against fake process doubles instead."""
+        sampler = _ResourceSampler.__new__(_ResourceSampler)
+        sampler._known_procs = {}
+        sampler._cpu_samples = []
+        sampler._peak_memory_mb = 0.0
+        return sampler
+
+    def test_newly_seen_process_is_primed_and_excluded_from_cpu(self):
+        sampler = self._bare_sampler()
+        proc = _FakeProcess(pid=1, rss=100 * 1024 * 1024, cpu_value=50.0)
+        sampler._process = proc
+
+        sampler._sample()
+
+        assert sampler._cpu_samples == []
+        assert sampler._peak_memory_mb == pytest.approx(100.0)
+        assert proc.cpu_percent_calls == 1
+        assert 1 in sampler._known_procs
+
+    def test_already_known_process_contributes_cpu_without_double_priming(
+        self,
+    ):
+        sampler = self._bare_sampler()
+        proc = _FakeProcess(pid=1, cpu_value=75.0)
+        sampler._process = proc
+        sampler._known_procs = {1: proc}
+
+        sampler._sample()
+
+        assert sampler._cpu_samples == [75.0]
+        assert proc.cpu_percent_calls == 1
+
+    def test_child_seen_partway_through_is_primed_separately_from_self(self):
+        """A child appearing after self is already known gets primed and
+        excluded on its own first sample, while the already-known self
+        process still contributes normally in that same round -- the
+        child then contributes starting the next sample."""
+        sampler = self._bare_sampler()
+        self_proc = _FakeProcess(pid=1, cpu_value=10.0)
+        child = _FakeProcess(pid=2, cpu_value=99.0)
+        self_proc.children = lambda recursive=True: [child]
+        sampler._process = self_proc
+        sampler._known_procs = {1: self_proc}
+
+        sampler._sample()
+        assert sampler._cpu_samples == [10.0]
+        assert child.cpu_percent_calls == 1
+        assert 2 in sampler._known_procs
+
+        sampler._sample()
+        assert sampler._cpu_samples == [10.0, 10.0 + 99.0]
+
+    def test_real_child_process_is_measured_across_multiple_samples(self):
+        """End-to-end check against a real OS process tree (not a
+        mock/double): a real, sustained-CPU-use child process should show
+        up as multiple real, non-zero samples, confirming the priming
+        mechanism doesn't silently exclude it forever. Deliberately
+        doesn't assert a tight percentage range -- real system load (e.g.
+        other tests running concurrently under pytest-xdist) can
+        legitimately reduce how much of a core this child actually
+        gets."""
+        pytest.importorskip("psutil")
+        import subprocess
+
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import time\nt=time.time()\n"
+                "while time.time() - t < 1.0:\n    pass",
+            ]
+        )
+        try:
+            sampler = _ResourceSampler(os.getpid(), 0.1)
+            sampler.start()
+            child.wait()
+        finally:
+            if child.poll() is None:
+                child.kill()
+            stats = sampler.stop()
+
+        assert stats.num_samples >= 3
+        assert stats.mean_cpu_percent > 0.0
+        assert stats.peak_memory_mb > 0.0
+
+
+class TestParallelStrategyResourceStats:
+    """dispatch()'s transparent self-reporting wrapping -- see
+    TestProfileStrategies for the full profile_strategies-level
+    behavior this exists to support."""
+
+    def test_collect_resource_stats_defaults_false_and_is_a_noop(self):
+        loky = pytest.importorskip("loky")
+        pytest.importorskip("psutil")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1)
+        )
+        results = strategy.dispatch(_double_chunk, [[1], [2]])
+        assert results == [[2], [4]]
+        assert strategy.pop_resource_stats() == []
+
+    def test_collect_resource_stats_true_reports_one_entry_per_chunk(self):
+        loky = pytest.importorskip("loky")
+        pytest.importorskip("psutil")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            collect_resource_stats=True,
+            resource_sample_interval=0.05,
+        )
+        chunks = [[1], [2, 2]]
+        results = strategy.dispatch(_double_chunk_slow, chunks)
+        assert results == [[2], [4, 4]]
+        stats = strategy.pop_resource_stats()
+        assert len(stats) == len(chunks)
+        assert all(isinstance(s, ChunkResourceStats) for s in stats)
+        assert all(s.peak_memory_mb > 0 for s in stats)
+
+    def test_pop_resource_stats_clears_between_calls(self):
+        loky = pytest.importorskip("loky")
+        pytest.importorskip("psutil")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            collect_resource_stats=True,
+            resource_sample_interval=0.05,
+        )
+        strategy.dispatch(_double_chunk_slow, [[1]])
+        first = strategy.pop_resource_stats()
+        assert len(first) == 1
+        assert strategy.pop_resource_stats() == []
+
+
+class TestProfileStrategies:
+
+    def test_serial_strategy_reports_wall_time_and_one_chunk_stat_per_repeat(
+        self,
+    ):
+        pytest.importorskip("psutil")
+        results = profile_strategies(
+            _profiling_work_fn,
+            {"serial": ParallelStrategy()},
+            repeats=2,
+            sample_interval=0.02,
+        )
+        result = results["serial"]
+        assert isinstance(result, ProfileResult)
+        assert result.wall_time_mean > 0
+        assert len(result.chunk_stats) == 2
+        assert result.peak_memory_mb is not None
+        assert result.peak_memory_mb > 0
+
+    def test_chunked_strategy_reports_one_chunk_stat_per_dispatched_chunk(
+        self,
+    ):
+        loky = pytest.importorskip("loky")
+        pytest.importorskip("psutil")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+        results = profile_strategies(
+            _profiling_work_fn,
+            {"loky-2x": strategy},
+            repeats=1,
+            sample_interval=0.02,
+        )
+        result = results["loky-2x"]
+        assert len(result.chunk_stats) == 2
+        assert result.peak_memory_mb is not None
+        assert result.mean_cpu_percent is not None
+        # dispatch()'s own return value is unaffected by profiling --
+        # confirms the strategy object isn't left mutated in a way that
+        # would leak stats-collection into a later, real (non-profiling)
+        # use of the same object.
+        assert strategy.collect_resource_stats is False
+        assert strategy.pop_resource_stats() == []
+
+    def test_results_keyed_by_the_same_labels_given(self):
+        pytest.importorskip("psutil")
+        strategies = {"a": ParallelStrategy(), "b": ParallelStrategy()}
+        results = profile_strategies(
+            _profiling_work_fn, strategies, sample_interval=0.02
+        )
+        assert set(results.keys()) == {"a", "b"}
+
+    def test_repeats_defaults_to_one(self):
+        pytest.importorskip("psutil")
+        results = profile_strategies(
+            _profiling_work_fn, {"serial": ParallelStrategy()}, sample_interval=0.02
+        )
+        assert len(results["serial"].chunk_stats) == 1
+        assert results["serial"].wall_time_std == 0.0
+
+    def test_small_chunk_regime_warns(self):
+        """A large sample_interval relative to how long each chunk
+        actually takes means too few samples land inside it -- should
+        warn rather than silently reporting unreliable numbers."""
+        loky = pytest.importorskip("loky")
+        pytest.importorskip("psutil")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+        with pytest.warns(UserWarning, match="resource-sampling intervals"):
+            profile_strategies(
+                _profiling_work_fn,
+                {"fast": strategy},
+                sample_interval=5.0,
+            )
+
+    def test_reuse_slurm_allocation_requires_a_real_allocation(self, monkeypatch):
+        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+        with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
+            profile_strategies(
+                _profiling_work_fn,
+                {"serial": ParallelStrategy()},
+                reuse_slurm_allocation=True,
+            )
+
+    def test_warmup_false_by_default_calls_work_fn_exactly_repeats_times(self):
+        calls = []
+        results = profile_strategies(
+            lambda strategy: calls.append(1),
+            {"serial": ParallelStrategy()},
+            repeats=3,
+        )
+        assert len(calls) == 3
+        assert len(results["serial"].chunk_stats) == 3
+
+    def test_warmup_true_adds_one_call_excluded_from_results(self):
+        calls = []
+        results = profile_strategies(
+            lambda strategy: calls.append(1),
+            {"serial": ParallelStrategy()},
+            repeats=3,
+            warmup=True,
+        )
+        assert len(calls) == 4  # 1 warmup + 3 real, timed repeats
+        assert len(results["serial"].chunk_stats) == 3
+
+    def test_warmup_true_for_chunked_strategy_excludes_warmup_chunk_stats(self):
+        loky = pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=2,
+        )
+        results = profile_strategies(
+            _profiling_work_fn,
+            {"loky": strategy},
+            repeats=2,
+            sample_interval=0.02,
+            warmup=True,
+        )
+        # 2 chunks x 2 real repeats -- the warmup pass's own 2 chunks of
+        # stats are discarded, not folded in as a third repeat's worth.
+        assert len(results["loky"].chunk_stats) == 4
+
+    def test_speedup_computed_against_fully_serial_baseline(self):
+        import time as time_module
+
+        def work_fn(strategy):
+            time_module.sleep(0.05 if strategy.program_executor is None else 0.01)
+
+        results = profile_strategies(
+            work_fn,
+            {
+                "serial": ParallelStrategy(),
+                "fast": ParallelStrategy(program_executor=object()),
+            },
+            sample_interval=0.02,
+        )
+        assert results["serial"].speedup is None
+        assert results["fast"].speedup is not None
+        assert results["fast"].speedup > 1.0
+
+    def test_speedup_is_none_when_no_fully_serial_strategy_given(self):
+        results = profile_strategies(
+            lambda strategy: None,
+            {
+                "a": ParallelStrategy(program_executor=object()),
+                "b": ParallelStrategy(shot_executor=object()),
+            },
+            sample_interval=0.02,
+        )
+        assert results["a"].speedup is None
+        assert results["b"].speedup is None
+
+
+class TestFormatProfileTable:
+
+    def test_formats_wall_time_and_dashes_for_missing_resource_stats(self):
+        results = {
+            "serial": ProfileResult(wall_time_mean=1.5, wall_time_std=0.1),
+        }
+        table = format_profile_table(results)
+        assert "serial" in table
+        assert "1.5 +/- 0.1" in table
+        assert "--" in table
+
+    def test_formats_resource_stats_when_present(self):
+        results = {
+            "loky": ProfileResult(
+                wall_time_mean=2.0,
+                wall_time_std=0.0,
+                chunk_stats=[
+                    ChunkResourceStats(
+                        peak_memory_mb=100.0, mean_cpu_percent=50.0, num_samples=5
+                    ),
+                    ChunkResourceStats(
+                        peak_memory_mb=200.0, mean_cpu_percent=150.0, num_samples=5
+                    ),
+                ],
+            ),
+        }
+        table = format_profile_table(results)
+        assert "200.0" in table  # max peak memory
+        assert "100.0" in table  # mean CPU% of 50 and 150
+
+    def test_speedup_column_dashes_when_none(self):
+        results = {"serial": ProfileResult(wall_time_mean=1.0, wall_time_std=0.0)}
+        table = format_profile_table(results)
+        assert "speedup" in table
+        assert "--" in table
+
+    def test_speedup_column_formats_value(self):
+        results = {
+            "fast": ProfileResult(
+                wall_time_mean=1.0, wall_time_std=0.0, speedup=2.5
+            ),
+        }
+        table = format_profile_table(results)
+        assert "2.50x" in table
+
+
+class TestPlotProfileResults:
+
+    def test_wall_time_only_panel_when_no_resource_stats(self):
+        pytest.importorskip("matplotlib")
+        results = {
+            "serial": ProfileResult(wall_time_mean=1.0, wall_time_std=0.0),
+        }
+        axes = plot_profile_results(results)
+        assert len(axes) == 1
+
+    def test_speedup_annotated_on_wall_time_bars(self):
+        pytest.importorskip("matplotlib")
+        results = {
+            "serial": ProfileResult(wall_time_mean=2.0, wall_time_std=0.0),
+            "fast": ProfileResult(
+                wall_time_mean=1.0, wall_time_std=0.0, speedup=2.0
+            ),
+        }
+        axes = plot_profile_results(results)
+        texts = [t.get_text() for t in axes[0].texts]
+        assert "2.00x" in texts
+
+    def test_three_panels_when_resource_stats_present(self):
+        pytest.importorskip("matplotlib")
+        results = {
+            "loky": ProfileResult(
+                wall_time_mean=1.0,
+                wall_time_std=0.1,
+                chunk_stats=[
+                    ChunkResourceStats(
+                        peak_memory_mb=100.0, mean_cpu_percent=50.0, num_samples=5
+                    )
+                ],
+            ),
+        }
+        axes = plot_profile_results(results)
+        assert len(axes) == 3
+
+
+class TestReusedSlurmAllocation:
+
+    def test_raises_without_slurm_job_id(self, monkeypatch):
+        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+        with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
+            with _reused_slurm_allocation():
+                pass
+
+    def test_installs_and_restores_path(self, monkeypatch):
+        import os
+
+        monkeypatch.setenv("SLURM_JOB_ID", "12345")
+        original_path = os.environ.get("PATH", "")
+        with _reused_slurm_allocation():
+            new_path = os.environ["PATH"]
+            assert new_path != original_path
+            fake_dir = new_path.split(os.pathsep)[0]
+            fake_sbatch = os.path.join(fake_dir, "sbatch")
+            assert os.path.exists(fake_sbatch)
+            assert os.access(fake_sbatch, os.X_OK)
+        assert os.environ["PATH"] == original_path
+        assert not os.path.exists(fake_dir)
+
+    def test_fake_sbatch_runs_script_directly_and_prints_job_id(
+        self, monkeypatch, tmp_path
+    ):
+        """Real end-to-end check of the trick itself, not just that the
+        wrapper file exists: invoking the fake `sbatch` on a plain
+        script (with `#SBATCH` header lines it should just ignore as
+        bash comments) actually runs that script's real payload (here,
+        writing a marker file) and prints output matching submitit's own
+        job-ID-parsing regex (`"job (?P<id>[0-9]+)"`)."""
+        import re
+        import subprocess
+        import time
+
+        monkeypatch.setenv("SLURM_JOB_ID", "12345")
+        marker = tmp_path / "marker.txt"
+        script = tmp_path / "job.sh"
+        script.write_text(
+            "#!/bin/bash\n#SBATCH --time=10\necho ran > " + str(marker) + "\n"
+        )
+        script.chmod(0o755)
+        with _reused_slurm_allocation():
+            output = subprocess.run(
+                ["sbatch", str(script)],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        assert re.search(r"job \d+", output)
+        for _ in range(50):
+            if marker.exists():
+                break
+            time.sleep(0.1)
+        assert marker.read_text() == "ran\n"
