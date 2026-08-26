@@ -1,5 +1,7 @@
 """Tester for loqs.tools.fttools"""
 
+import sys
+
 import pytest
 
 pygsti = pytest.importorskip("pygsti")
@@ -277,6 +279,17 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
         assert failed == [program, program]
         assert all(p is program for p in failed)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason=(
+            "submitit unconditionally registers a SIGCONT handler for "
+            "every job it runs (submitit/core/job_environment.py), a "
+            "POSIX-only signal that doesn't exist in Windows's `signal` "
+            "module at all -- a real, unconditional upstream limitation "
+            "(submitit targets SLURM, a Linux-only scheduler), not "
+            "something fixable from LoQS's side."
+        ),
+    )
     def test_submitit_program_executor_matches_serial_result(
         self, tmp_path
     ):

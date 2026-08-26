@@ -18,7 +18,7 @@ pip install loqs
 
 There are various optional requirements that are available, including:
 
-- `parallel`: Enables single-node (`loky`) and SLURM-array (`submitit`) parallelization over shots and/or programs.
+- `parallel`: Enables single-node (`loky`) and SLURM-array (`submitit`) parallelization over shots and/or programs. `submitit`'s SLURM-array support requires Linux/macOS -- it registers a POSIX-only signal internally and does not work on Windows.
 - `mpi`: Enables multi-node parallelization over shots and/or programs via `mpi4py`. Requires a working MPI installation (e.g. OpenMPI/MPICH) already present in the environment -- `pip install` alone does not provide one.
 - `dev`: Allows the use of `black` and `flake8` prior to committing
 (see Code Formatting and Linting below).

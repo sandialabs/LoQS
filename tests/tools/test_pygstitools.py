@@ -3,6 +3,7 @@
 import copy
 import gc
 import re
+import sys
 import weakref
 
 import pytest
@@ -576,6 +577,17 @@ class TestSimulateDatasetForEdesignParallel:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason=(
+            "submitit unconditionally registers a SIGCONT handler for "
+            "every job it runs (submitit/core/job_environment.py), a "
+            "POSIX-only signal that doesn't exist in Windows's `signal` "
+            "module at all -- a real, unconditional upstream limitation "
+            "(submitit targets SLURM, a Linux-only scheduler), not "
+            "something fixable from LoQS's side."
+        ),
+    )
     def test_submitit_program_executor_matches_serial_result(
         self, trivial_counter_setup, tmp_path
     ):
