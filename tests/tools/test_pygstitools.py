@@ -688,3 +688,106 @@ class TestSimulateDatasetForEdesignMemoryBound:
         )
 
         s.simulate(edesign=edesign)
+
+
+class TestSimulateDatasetForEdesignShotCheckpointing:
+    """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
+    checkpointing, threaded through `simulate_dataset_for_edesign` via the
+    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading_enabled`
+    parameters."""
+
+    def test_checkpoint_batch_size_without_shot_checkpoint_dir_raises(
+        self, trivial_counter_setup
+    ):
+        """checkpoint_batch_size given without shot_checkpoint_dir is a
+        configuration error, not something that's silently ignored."""
+        s = trivial_counter_setup
+        with pytest.raises(ValueError, match="shot_checkpoint_dir"):
+            s.simulate(checkpoint_batch_size=1)
+
+    def test_serial_shot_checkpoint_creates_per_circuit_subdirs(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A serial (no parallel) run with checkpoint_batch_size=1 and a real
+        shot_checkpoint_dir produces per-circuit subdirectories under it, one
+        per distinct circuit in the edesign, each containing checkpoint files
+        that can be loaded via ProgramResults.load_checkpoint."""
+        s = trivial_counter_setup
+        shot_ckpt_dir = tmp_path / "shot_checkpoints"
+        shot_ckpt_dir.mkdir()
+
+        ds = s.simulate(
+            checkpoint_batch_size=1,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading_enabled=False,  # Keep shots in memory for collection
+        )
+
+        # Confirm the data is correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        # Confirm per-circuit subdirs exist and contain checkpoints
+        subdirs = list(shot_ckpt_dir.iterdir())
+        assert len(subdirs) == 2, (
+            f"Expected 2 circuit subdirs, got {len(subdirs)}: {subdirs}"
+        )
+
+        for circ in s.circs:
+            circ_subdir = pygstitools._circuit_checkpoint_subdir(
+                shot_ckpt_dir, circ
+            )
+            assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
+
+            # Confirm the checkpoint file exists and can load the right number of shots
+            checkpoint_file = circ_subdir / "checkpoint.h5"
+            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+
+            loaded_results = ProgramResults()
+            loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
+            assert len(loaded_results.shot_histories) == 1
+
+    def test_parallel_shot_checkpoint_prevents_circuit_collision(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A parallel run with parallel.n_program_chunks=1 (one worker processes
+        both circuits sequentially) and shot_checkpoint_dir set confirms the
+        per-circuit subdirectory scheme actually prevents collisions despite
+        sharing one worker/hostname_pid."""
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        shot_ckpt_dir = tmp_path / "shot_checkpoints"
+        shot_ckpt_dir.mkdir()
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=1,
+            shot_executor=_build_shot_executor,
+        )
+
+        ds = s.simulate(
+            parallel=strategy,
+            checkpoint_batch_size=1,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading_enabled=False,  # Keep shots in memory for collection
+        )
+
+        # Confirm the data is correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        # Confirm both circuit subdirs exist independently
+        subdirs = list(shot_ckpt_dir.iterdir())
+        assert len(subdirs) == 2
+
+        for circ in s.circs:
+            circ_subdir = pygstitools._circuit_checkpoint_subdir(
+                shot_ckpt_dir, circ
+            )
+            assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
+            checkpoint_file = circ_subdir / "checkpoint.h5"
+            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+
+            # Confirm the checkpoint can be loaded with the right number of shots
+            loaded_results = ProgramResults()
+            loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
+            assert len(loaded_results.shot_histories) == 1

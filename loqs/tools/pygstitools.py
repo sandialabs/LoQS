@@ -16,6 +16,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 import functools
+import hashlib
 import numpy as np
 from pathlib import Path
 import subprocess
@@ -112,6 +113,9 @@ def _process_circuit_chunk(
     program_kwargs: dict,
     chunk: list[Circuit],
     shot_executor: Any | None = None,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
 ) -> list[tuple[Circuit, dict[tuple, int]]]:
     """Build, run, and reduce every circuit in one chunk to a row of counts.
 
@@ -127,17 +131,29 @@ def _process_circuit_chunk(
     `shot_executor`, if given, is an already-built executor (resolved once
     per chunk by the caller, not once per circuit) forwarded to every
     circuit's own `program.run`, for hybrid shot-/program-level parallelism.
+    `checkpoint_batch_size`/`shot_checkpoint_dir`/`lazy_loading_enabled` are
+    likewise forwarded to every circuit's own `program.run`, each circuit
+    getting its own isolated subdirectory under `shot_checkpoint_dir` (see
+    `simulate_dataset_for_edesign`'s own docstring).
     """
     results = []
     for circ in chunk:
         program = _build_program_for_circuit(
             circ, physical_model, label_to_logical, **program_kwargs
         )
+        checkpoint_dir = (
+            _circuit_checkpoint_subdir(shot_checkpoint_dir, circ)
+            if shot_checkpoint_dir is not None
+            else None
+        )
         program_results = program.run(
             num_shots,
             max_frame_limit=max_frame_limit,
             shot_executor=shot_executor,
             verbose=False,
+            checkpoint_batch_size=checkpoint_batch_size,
+            checkpoint_dir=checkpoint_dir,
+            lazy_loading_enabled=lazy_loading_enabled,
         )
         outcomes = _collect_program_outcomes(
             program_results, collect_shot_data_args
@@ -164,6 +180,9 @@ def _process_circuit_chunk_worker(
     program_kwargs: dict,
     chunk: list[Circuit],
     shot_executor: Any | None = None,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
 ) -> list[tuple[Circuit, dict[tuple, int]]]:
     pin_worker_threads()
     return _process_circuit_chunk(
@@ -175,6 +194,9 @@ def _process_circuit_chunk_worker(
         program_kwargs,
         chunk,
         shot_executor=resolve_shot_executor(shot_executor),
+        checkpoint_batch_size=checkpoint_batch_size,
+        shot_checkpoint_dir=shot_checkpoint_dir,
+        lazy_loading_enabled=lazy_loading_enabled,
     )
 
 
@@ -369,6 +391,18 @@ def _outcome_label_to_str(outcome_label: str | tuple) -> str:
     return ":".join(str(part) for part in outcome_label)
 
 
+def _circuit_checkpoint_subdir(
+    shot_checkpoint_dir: str | Path, circ: Circuit
+) -> Path:
+    """A circuit's own isolated subdirectory under `shot_checkpoint_dir`,
+    keyed by a short stable hash of `circ.str` so two different circuits
+    processed by the same worker (sharing one `hostname_pid` identity)
+    never collide on the same [](api:QuantumProgram.run) checkpoint file.
+    """
+    circ_hash = hashlib.sha1(circ.str.encode()).hexdigest()[:16]
+    return Path(shot_checkpoint_dir) / circ_hash
+
+
 def _append_checkpoint_row(
     checkpoint_path: Path,
     circ: Circuit,
@@ -418,6 +452,10 @@ def simulate_dataset_for_edesign(
     force_resume: bool = False,
     max_frame_limit: int = 100,
     parallel: ParallelStrategy | None = None,
+    *,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
     **program_kwargs,
 ) -> DataSet:
     """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
@@ -446,11 +484,11 @@ def simulate_dataset_for_edesign(
     bulk `map_array` call with progress reported by polling each job's
     `.done()`) -- see [](api:ParallelStrategy) for the full field
     reference, including `parallel.shot_executor` for nested shot-level
-    parallelism within each chunk's own programs. Checkpointing (if
-    `checkpoint_path` is given) still happens from this driving process,
-    once per circuit, as each chunk's results come back -- not from inside
-    the workers themselves; real per-worker parallel checkpointing is
-    tracked separately under #105.
+    parallelism within each chunk's own programs. Checkpointing via
+    `checkpoint_path` still happens from this driving process, once per
+    circuit, as each chunk's results come back -- not from inside the
+    workers themselves; `checkpoint_batch_size`/`shot_checkpoint_dir` below
+    are the real per-worker mechanism.
 
     If `checkpoint_path` is given, each circuit's row is also appended to an
     on-disk text `DataSet` as soon as it's computed, so a crash partway through
@@ -464,6 +502,21 @@ def simulate_dataset_for_edesign(
     present in the checkpoint is trusted as complete and never redone; one
     left incomplete by a crash mid-write (a truncated last line) is dropped
     and redone from scratch, never resumed partway through its own shots.
+
+    `checkpoint_batch_size`/`shot_checkpoint_dir`/`lazy_loading_enabled` are a
+    separate, independent mechanism: they enable [](api:QuantumProgram.run)'s
+    own per-worker shot-level HDF5 checkpointing for each circuit's own
+    program, not the plain-text per-circuit checkpoint above. Each circuit
+    gets its own isolated subdirectory under `shot_checkpoint_dir` (keyed by
+    a hash of the circuit itself), so multiple circuits -- potentially
+    running concurrently in different chunk workers -- never collide on the
+    same per-worker file. [](api:QuantumProgram.run) always starts counting
+    shots from 0 and has no built-in resume-from-checkpoint capability of its
+    own, so an interrupted circuit's on-disk shot files only support forensic
+    recovery via [](api:ProgramResults.load_checkpoint) -- a crash or cancel
+    partway through one circuit means that circuit's shots are redone from
+    scratch on the next call, exactly like an incomplete `checkpoint_path`
+    row above.
 
     Parameters
     ----------
@@ -519,6 +572,21 @@ def simulate_dataset_for_edesign(
         `parallel.shot_executor` if a `ParallelStrategy` with only that
         field set is passed, for shot-level-only parallelism).
 
+    checkpoint_batch_size : int | None, optional
+        Forwarded to each circuit's [](api:QuantumProgram.run) as its own
+        `checkpoint_batch_size`, by default `None` (no shot-level
+        checkpointing). Requires `shot_checkpoint_dir` to also be given.
+
+    shot_checkpoint_dir : str | Path | None, optional
+        Base directory for [](api:QuantumProgram.run)'s per-worker shot-level
+        checkpoint files, by default `None`. Each circuit is given its own
+        subdirectory under this path (see above); required if
+        `checkpoint_batch_size` is set, otherwise raises `ValueError`.
+
+    lazy_loading_enabled : bool, optional
+        Forwarded to each circuit's [](api:QuantumProgram.run), by default
+        `True`. Only relevant when `checkpoint_batch_size` is set.
+
     **program_kwargs : Any
         Any additional kwargs that should be passed to each circuit's
         [](api:QuantumProgram).
@@ -533,6 +601,10 @@ def simulate_dataset_for_edesign(
         checkpoint_path = Path(checkpoint_path)
     if resume and checkpoint_path is None:
         raise ValueError("checkpoint_path is required when resume=True.")
+    if checkpoint_batch_size is not None and shot_checkpoint_dir is None:
+        raise ValueError(
+            "shot_checkpoint_dir is required when checkpoint_batch_size is set."
+        )
 
     if checkpoint_path is not None and checkpoint_path.exists():
         if not resume:
@@ -588,11 +660,19 @@ def simulate_dataset_for_edesign(
             program = _build_program_for_circuit(
                 circ, physical_model, label_to_logical, **program_kwargs
             )
+            checkpoint_dir = (
+                _circuit_checkpoint_subdir(shot_checkpoint_dir, circ)
+                if shot_checkpoint_dir is not None
+                else None
+            )
             program_results = program.run(
                 num_shots,
                 max_frame_limit=max_frame_limit,
                 shot_executor=shot_executor,
                 verbose=False,
+                checkpoint_batch_size=checkpoint_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                lazy_loading_enabled=lazy_loading_enabled,
             )
 
             outcomes = _collect_program_outcomes(
@@ -622,6 +702,9 @@ def simulate_dataset_for_edesign(
         collect_shot_data_args,
         max_frame_limit,
         program_kwargs,
+        checkpoint_batch_size,
+        shot_checkpoint_dir,
+        lazy_loading_enabled,
     )
 
 
@@ -637,6 +720,9 @@ def _run_program_level_parallel(
     | list[HistoryDataCollectorLike],
     max_frame_limit: int,
     program_kwargs: dict,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
 ) -> DataSet:
     """`simulate_dataset_for_edesign`'s program-level parallel path: chunk
     whatever circuits still need data, dispatch one worker call per chunk
@@ -661,6 +747,9 @@ def _run_program_level_parallel(
         max_frame_limit,
         program_kwargs,
         shot_executor=parallel.shot_executor,
+        checkpoint_batch_size=checkpoint_batch_size,
+        shot_checkpoint_dir=shot_checkpoint_dir,
+        lazy_loading_enabled=lazy_loading_enabled,
     )
     chunk_results = parallel.dispatch(
         worker, chunks, desc="Simulating edesign circuit chunks"
