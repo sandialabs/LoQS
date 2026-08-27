@@ -823,6 +823,7 @@ class TestResourceSampler:
         return sampler
 
     def test_newly_seen_process_is_primed_and_excluded_from_cpu(self):
+        pytest.importorskip("psutil")
         sampler = self._bare_sampler()
         proc = _FakeProcess(pid=1, rss=100 * 1024 * 1024, cpu_value=50.0)
         sampler._process = proc
@@ -837,6 +838,7 @@ class TestResourceSampler:
     def test_already_known_process_contributes_cpu_without_double_priming(
         self,
     ):
+        pytest.importorskip("psutil")
         sampler = self._bare_sampler()
         proc = _FakeProcess(pid=1, cpu_value=75.0)
         sampler._process = proc
@@ -852,6 +854,7 @@ class TestResourceSampler:
         excluded on its own first sample, while the already-known self
         process still contributes normally in that same round -- the
         child then contributes starting the next sample."""
+        pytest.importorskip("psutil")
         sampler = self._bare_sampler()
         self_proc = _FakeProcess(pid=1, cpu_value=10.0)
         child = _FakeProcess(pid=2, cpu_value=99.0)
@@ -1034,6 +1037,7 @@ class TestProfileStrategies:
             )
 
     def test_warmup_false_by_default_calls_work_fn_exactly_repeats_times(self):
+        pytest.importorskip("psutil")
         calls = []
         results = profile_strategies(
             lambda strategy: calls.append(1),
@@ -1044,6 +1048,7 @@ class TestProfileStrategies:
         assert len(results["serial"].chunk_stats) == 3
 
     def test_warmup_true_adds_one_call_excluded_from_results(self):
+        pytest.importorskip("psutil")
         calls = []
         results = profile_strategies(
             lambda strategy: calls.append(1),
@@ -1071,14 +1076,22 @@ class TestProfileStrategies:
         # stats are discarded, not folded in as a third repeat's worth.
         assert len(results["loky"].chunk_stats) == 4
 
-    def test_speedup_computed_against_fully_serial_baseline(self):
-        import time as time_module
-
-        def work_fn(strategy):
-            time_module.sleep(0.05 if strategy.program_executor is None else 0.01)
-
+    def test_speedup_computed_against_fully_serial_baseline(self, monkeypatch):
+        """Checks the speedup arithmetic itself, not real parallel
+        speedup (that's covered empirically elsewhere) -- so
+        time.perf_counter is mocked to a fixed sequence instead of
+        relying on real time.sleep() calls, which flake on a slow/loaded
+        CI runner where a real 10ms sleep can occasionally exceed a real
+        50ms one. perf_counter is called exactly twice per strategy
+        (start/end) in dict order: serial, then fast."""
+        pytest.importorskip("psutil")
+        times = iter([0.0, 0.5, 0.5, 0.6])
+        monkeypatch.setattr(
+            "loqs.tools.paralleltools.time.perf_counter",
+            lambda: next(times),
+        )
         results = profile_strategies(
-            work_fn,
+            lambda strategy: None,
             {
                 "serial": ParallelStrategy(),
                 "fast": ParallelStrategy(program_executor=object()),
@@ -1087,9 +1100,10 @@ class TestProfileStrategies:
         )
         assert results["serial"].speedup is None
         assert results["fast"].speedup is not None
-        assert results["fast"].speedup > 1.0
+        assert results["fast"].speedup == pytest.approx(5.0)
 
     def test_speedup_is_none_when_no_fully_serial_strategy_given(self):
+        pytest.importorskip("psutil")
         results = profile_strategies(
             lambda strategy: None,
             {
@@ -1104,6 +1118,7 @@ class TestProfileStrategies:
     def test_executor_spec_program_executor_is_shut_down_and_reset(
         self, monkeypatch
     ):
+        pytest.importorskip("loky")
         fake_executor = MagicMock()
         monkeypatch.setattr(
             "loky.get_reusable_executor", lambda **kwargs: fake_executor
@@ -1124,6 +1139,7 @@ class TestProfileStrategies:
     def test_executor_spec_program_executor_shut_down_on_work_fn_exception(
         self, monkeypatch
     ):
+        pytest.importorskip("loky")
         fake_executor = MagicMock()
         monkeypatch.setattr(
             "loky.get_reusable_executor", lambda **kwargs: fake_executor
@@ -1213,6 +1229,7 @@ class TestProfileStrategies:
             )
 
     def test_serial_strategy_does_not_warn_on_slowdown(self, monkeypatch):
+        pytest.importorskip("psutil")
         times = iter([0.0, 0.1, 1.0, 1.1, 2.0, 2.5])
         monkeypatch.setattr(
             "loqs.tools.paralleltools.time.perf_counter",
@@ -1316,6 +1333,19 @@ class TestPlotProfileResults:
         assert len(axes) == 3
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "the fake sbatch mechanism this class exercises writes a POSIX "
+        "(#!/bin/bash) shell script and invokes it directly via "
+        "subprocess.run(['sbatch', ...]) -- Windows has no bash "
+        "interpreter and won't resolve an extension-less file as "
+        "executable via PATH, so this is a real, unconditional platform "
+        "limitation of the mechanism itself (which only ever targets a "
+        "real SLURM cluster, a Linux-only scheduler), not something "
+        "fixable from LoQS's side."
+    ),
+)
 class TestReusedSlurmAllocation:
 
     def test_raises_without_slurm_job_id(self, monkeypatch):
