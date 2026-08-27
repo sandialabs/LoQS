@@ -335,6 +335,12 @@ class _ResourceSampler:
             self._cpu_samples.append(cpu)
 
     def _run(self) -> None:
+        # Sample once immediately, before the first wait, so a short-lived
+        # chunk (or a delayed first scheduling slice on a busy runner) still
+        # gets a real peak_memory_mb reading rather than the 0.0 init value.
+        # This call only primes CPU accounting either way (see _sample()'s
+        # docstring), so num_samples is unaffected.
+        self._sample()
         while not self._stop_event.wait(self._interval):
             self._sample()
 
