@@ -381,17 +381,3 @@ class TestProgramOutput:
         )
         out = capsys.readouterr().out
         assert "Output:" in out and "Expected:" in out
-
-    def test_skip_run_without_previous_results_raises(self):
-        program = _build_counter_program()
-        with pytest.raises(ValueError, match="Cannot skip run"):
-            fttools.test_program_output(
-                program, [("counter", -1)], [1], skip_run=True
-            )
-
-    def test_skip_run_with_previous_results_reuses_them(self):
-        program = _build_counter_program()
-        program._last_results = program.run(num_shots=1)
-        assert fttools.test_program_output(
-            program, [("counter", -1)], [1], skip_run=True
-        )

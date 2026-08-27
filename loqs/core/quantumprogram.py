@@ -16,6 +16,7 @@ from concurrent.futures import as_completed
 import copy
 import os
 from pathlib import Path
+import socket
 from typing import ClassVar, Literal, TypeVar
 import warnings
 
@@ -385,7 +386,7 @@ class QuantumProgram(Displayable):
         verbose: bool = True,
         checkpoint_batch_size: int | None = None,
         checkpoint_dir: str | Path | None = None,
-        checkpoint_strategy: str = "single_file",
+        lazy_loading_enabled: bool = True,
     ) -> ProgramResults:
         """Execute some shots of this [](api:QuantumProgram).
 
@@ -416,136 +417,217 @@ class QuantumProgram(Displayable):
             when running shots.
 
         checkpoint_batch_size:
-            Number of shots to process before checkpointing. If None (default),
-            no checkpointing is performed. If set, shots will be checkpointed
-            in batches of this size.
+            Number of shots to accumulate, per writer, before durably
+            flushing them to that writer's own checkpoint file. If `None`
+            (default), no checkpointing is performed. If `shot_executor` is
+            given, each dispatched batch of this many shots is computed and
+            checkpointed together inside its own worker process, keyed by
+            that worker's own `hostname_pid` identity, so multiple workers
+            never contend for the same file; once every batch has returned,
+            `run()` merges every worker's file into one final,
+            bounded-memory-streamed `checkpoint.h5` (see
+            [](api:ProgramResults.consolidate_checkpoints)). With no
+            `shot_executor` (serial), there is only ever one writer, so
+            shots are checkpointed directly to that same `checkpoint.h5`
+            with no separate merge step needed. Set to `1` to checkpoint
+            every single shot as soon as it completes (the finest possible
+            granularity -- a crash loses at most one in-flight shot per
+            writer); a larger value trades that granularity for fewer,
+            larger writes.
 
         checkpoint_dir:
             Directory to store checkpoint files. If None (default), checkpoints
             are stored in a temporary directory. Required if checkpoint_batch_size
             is set.
 
-        checkpoint_strategy:
-            Strategy for checkpointing. Options are "single_file" (default)
-            where all shots are written to a single file per worker, or
-            "per_batch" where each batch gets its own checkpoint file.
-            Only used when checkpoint_batch_size is set.
+        lazy_loading_enabled:
+            Whether checkpointed shots are evicted from the returned
+            [](api:ProgramResults)'s own in-memory `shot_histories` as soon
+            as they're durably checkpointed (`True`, default -- bounds this
+            process's own memory use, at the cost of the returned object no
+            longer holding every shot in memory; evicted shots can still be
+            read back via [](api:ProgramResults.load_checkpoint) or
+            [](api:ProgramResults.get_shot_history)). Set to `False` to keep
+            every shot in memory regardless of checkpointing. Has no effect
+            when `checkpoint_batch_size` is `None`.
 
         Returns
         -------
         ProgramResults
              A [](api:ProgramResults) object containing the shot histories.
-             Also cached on `self._last_results`, so code that doesn't keep
-             this return value can still retrieve it afterward.
         """
 
-        # Create ProgramResults object to store results
         checkpoint_enabled = checkpoint_batch_size is not None
+        if checkpoint_enabled and checkpoint_batch_size < 1:
+            raise ValueError("checkpoint_batch_size must be >= 1")
+
         program_results = ProgramResults(
             name=f"Results for {self.name}",
             parent_program=self,
             checkpoint_enabled=checkpoint_enabled,
+            lazy_loading_enabled=lazy_loading_enabled,
         )
 
-        # Set up tasks
         start = 0  # Always start from 0 for new ProgramResults
         if start > 0 and verbose:
             print(f"Detecting {start} already completed shots")
 
-        tasks = []
-        for i in range(start, num_shots):
+        def _seed_for_shot(shot_index: int) -> int | None:
             # For RNG seeding, increment the base seed +1 for every shot (if seeded)
-            seed_for_shot = None
-            if self.default_base_seed is not None:
-                seed_for_shot = self.default_base_seed + start + i
+            if self.default_base_seed is None:
+                return None
+            return self.default_base_seed + start + shot_index
 
-            tasks.append(
-                (
-                    self,
-                    max_frame_limit,
-                    seed_for_shot,
-                    i,  # Add shot index for tracking
+        if not checkpoint_enabled:
+            tasks = [
+                (self, max_frame_limit, _seed_for_shot(i), i)
+                for i in range(start, num_shots)
+            ]
+
+            if shot_executor is None:
+                # Execute serially
+                for task in tqdm(
+                    tasks,
+                    f"Program {self.name}",
+                    disable=not verbose,
+                    initial=start,
+                    total=num_shots,
+                ):
+                    result = QuantumProgram._run_shot(*task)
+                    program_results.add_shot(
+                        task[3], result
+                    )  # task[3] is shot index
+            else:
+                futures_to_shot = {
+                    shot_executor.submit(
+                        QuantumProgram._run_shot_worker, *task
+                    ): task[3]
+                    for task in tasks
+                }
+                completed = as_completed(futures_to_shot)
+                if verbose:
+                    completed = tqdm(
+                        completed, f"Program {self.name}", total=num_shots
+                    )
+                for future in completed:
+                    shot_index = futures_to_shot[future]
+                    program_results.add_shot(shot_index, future.result())
+
+            return program_results
+
+        # Checkpointing enabled: every shot ends up durably on disk before
+        # this call returns, one writer at a time. With no `shot_executor`,
+        # this process is the only writer, so shots are checkpointed
+        # straight to the canonical `checkpoint.h5` with no merge step
+        # needed. With a `shot_executor`, each dispatched batch of
+        # `checkpoint_batch_size` shots computes and checkpoints itself
+        # inside its own worker process before returning (see
+        # `_run_shot_batch_worker`), and a single, race-free consolidation
+        # pass merges every worker's file into that same `checkpoint.h5`
+        # only once every batch is confirmed done.
+        with tqdm(
+            total=num_shots, desc=f"Program {self.name}", disable=not verbose
+        ) as pbar:
+            if shot_executor is None:
+                for i in range(start, num_shots):
+                    result = QuantumProgram._run_shot(
+                        self, max_frame_limit, _seed_for_shot(i), i
+                    )
+                    program_results.add_shot(i, result)
+                    pbar.update(1)
+                    if (
+                        len(program_results.get_unwritten_shots())
+                        >= checkpoint_batch_size
+                    ):
+                        program_results.checkpoint(
+                            checkpoint_dir=checkpoint_dir
+                        )
+                # Flush whatever's left of a final, possibly-undersized
+                # batch -- a no-op if num_shots happened to be an exact
+                # multiple of checkpoint_batch_size.
+                program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+            else:
+                batches = [
+                    list(
+                        range(
+                            batch_start,
+                            min(
+                                batch_start + checkpoint_batch_size, num_shots
+                            ),
+                        )
+                    )
+                    for batch_start in range(
+                        start, num_shots, checkpoint_batch_size
+                    )
+                ]
+                futures_to_batch = {
+                    shot_executor.submit(
+                        QuantumProgram._run_shot_batch_worker,
+                        self,
+                        max_frame_limit,
+                        [(_seed_for_shot(i), i) for i in batch_indices],
+                        checkpoint_dir,
+                    ): batch_indices
+                    for batch_indices in batches
+                }
+                for future in as_completed(futures_to_batch):
+                    batch_shots = future.result()
+                    for shot_index, history in batch_shots.items():
+                        program_results.add_shot(shot_index, history)
+                    program_results.mark_shots_checkpointed(
+                        list(batch_shots.keys())
+                    )
+                    pbar.update(len(batch_shots))
+
+                # One race-free, driver-side, streaming (bounded-memory)
+                # consolidation pass, run only now that every dispatched
+                # future is confirmed complete -- never two writers racing
+                # to consolidate at once.
+                program_results.consolidate_checkpoints(
+                    checkpoint_dir=checkpoint_dir
                 )
-            )
-
-        def _checkpoint_and_add(shot_index: int, result: HistoryLike) -> None:
-            program_results.add_shot(shot_index, result)
-            if checkpoint_batch_size is not None:
-                self._checkpoint_if_needed(
-                    program_results,
-                    shot_index,
-                    checkpoint_batch_size,
-                    checkpoint_dir,
-                    checkpoint_strategy,
-                )
-
-        if shot_executor is None:
-            # Execute serially
-            for task in tqdm(
-                tasks,
-                f"Program {self.name}",
-                disable=not verbose,
-                initial=start,
-                total=num_shots,
-            ):
-                result = QuantumProgram._run_shot(*task)
-                _checkpoint_and_add(task[3], result)  # task[3] is shot index
-        else:
-            futures_to_shot = {
-                shot_executor.submit(
-                    QuantumProgram._run_shot_worker, *task
-                ): task[3]
-                for task in tasks
-            }
-            completed = as_completed(futures_to_shot)
-            if verbose:
-                completed = tqdm(
-                    completed, f"Program {self.name}", total=num_shots
-                )
-            for future in completed:
-                shot_index = futures_to_shot[future]
-                _checkpoint_and_add(shot_index, future.result())
-
-        # Cache the results so a caller who doesn't hold onto this return
-        # value (e.g. `for program in programs: program.run(...)`) can still
-        # have them picked up later via `getattr(program, "_last_results", None)`.
-        self._last_results = program_results
+                program_results._checkpoint_dir = Path(checkpoint_dir)
+                program_results._worker_id = None
 
         return program_results
 
-    def _checkpoint_if_needed(
-        self,
-        program_results: "ProgramResults",
-        current_shot_index: int,
-        checkpoint_batch_size: int,
+    # Entry point submitted to a parallel executor when checkpointing is
+    # enabled: computes a whole batch of shots, checkpoints all of them to
+    # this worker's own `hostname_pid`-keyed file in one grouped write, then
+    # returns the computed shots so the driver can still build its own
+    # in-memory `ProgramResults` too.
+    @staticmethod
+    def _run_shot_batch_worker(
+        program: "QuantumProgram",
+        max_frame_limit: int,
+        shot_specs: list[tuple[int | None, int]],
         checkpoint_dir: str | Path | None,
-        checkpoint_strategy: str,
-    ) -> None:
-        """Check if checkpointing is needed and perform it if so.
-
-        Parameters
-        ----------
-        program_results:
-            The ProgramResults object to checkpoint.
-        current_shot_index:
-            The index of the shot that was just completed.
-        checkpoint_batch_size:
-            Number of shots per checkpoint batch.
-        checkpoint_dir:
-            Directory to store checkpoint files.
-        checkpoint_strategy:
-            Strategy for checkpointing ("single_file" or "per_batch").
-        """
-        # Check if we've reached a checkpoint batch boundary
-        if (current_shot_index + 1) % checkpoint_batch_size == 0:
-            # Perform checkpointing
-            program_results.checkpoint(
-                checkpoint_dir=checkpoint_dir,
-                strategy=checkpoint_strategy,
-                batch_size=checkpoint_batch_size,
-                current_batch_index=(current_shot_index + 1)
-                // checkpoint_batch_size,
+    ) -> dict[int, HistoryLike]:
+        if threadpool_limits is not None:
+            threadpool_limits(1)
+        else:
+            warnings.warn(
+                "threadpoolctl is not installed, so worker thread pools "
+                "cannot be limited to avoid oversubscription. Install "
+                "loqs[parallel] or loqs[mpi]."
             )
+
+        # A throwaway ProgramResults scoped to just this batch -- lazy
+        # loading is disabled so checkpoint() doesn't evict the shots we're
+        # about to return to the driver.
+        batch_results = ProgramResults(lazy_loading_enabled=False)
+        for seed, shot_index in shot_specs:
+            history = QuantumProgram._run_shot(
+                program, max_frame_limit, seed, shot_index
+            )
+            batch_results.add_shot(shot_index, history)
+
+        worker_id = f"{socket.gethostname()}_{os.getpid()}"
+        batch_results.checkpoint(
+            checkpoint_dir=checkpoint_dir, worker_id=worker_id
+        )
+
+        return dict(batch_results.shot_histories)
 
     # Entry point submitted to a parallel executor: pins this worker's
     # thread pools to one thread before doing real numerical work, since

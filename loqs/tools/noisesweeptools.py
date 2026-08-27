@@ -464,7 +464,7 @@ class NoiseSweepRunner(Displayable):
         adjacent points overlap); for each point, builds the QuantumProgram (`build_program`), runs
         it for `num_shots` shots (a single, ordinary `QuantumProgram.run(num_shots=num_shots,
         **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `checkpoint_dir`/
-        `checkpoint_batch_size`/`checkpoint_strategy` if the caller wants *that* mechanism's
+        `checkpoint_batch_size` if the caller wants *that* mechanism's
         protection against losing shots mid-way through one single, very large point -- entirely
         orthogonal to this method's own point-level `resume` support), extracts `(failure_rate,
         stderr)` via `collect_shot_data_args`/`expected_outcomes` (same per-shot pass/fail

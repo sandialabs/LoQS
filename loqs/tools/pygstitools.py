@@ -235,9 +235,7 @@ def convert_run_programs_to_dataset(
     Parameters
     ----------
     programs : Sequence[QuantumProgram]
-        List of programs, one per circuit in `edesign.all_circuits_needing_data`,
-        with [](api:QuantumProgram.run) having been called on the programs
-        with the desired number of shots.
+        List of programs, one per circuit in `edesign.all_circuits_needing_data`.
 
     collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
         The [](api:HistoryDataCollector) recipe(s) used to extract outcomes from each
@@ -260,11 +258,7 @@ def convert_run_programs_to_dataset(
 
     ds = DataSet()
     for circ, prog in zip(circs, programs):
-        # Get program results from the program
-        program_results = getattr(prog, "_last_results", None)
-        if program_results is None:
-            # If no results stored, run the program
-            program_results = prog.run()
+        program_results = prog.run()
 
         outcomes = _collect_program_outcomes(
             program_results, collect_shot_data_args

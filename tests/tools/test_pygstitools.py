@@ -104,8 +104,8 @@ def trivial_counter_setup():
 def _fake_program(circuit_repr, shot_frames):
     """A minimal stand-in for a QuantumProgram: only the surface
     `convert_run_programs_to_dataset` actually touches (`.name` plus a
-    pre-populated `_last_results`), skipping a full QuantumProgram/codepack
-    setup entirely.
+    `.run()` returning canned results), skipping a full
+    QuantumProgram/codepack setup entirely.
 
     Parameters
     ----------
@@ -117,14 +117,15 @@ def _fake_program(circuit_repr, shot_frames):
     """
 
     class _FakeProgram:
-        pass
+        def run(self, *args, **kwargs):
+            return self._canned_results
 
     program = _FakeProgram()
     program.name = circuit_repr
     shot_histories = {
         i: History(frames) for i, frames in enumerate(shot_frames)
     }
-    program._last_results = ProgramResults(shot_histories=shot_histories)
+    program._canned_results = ProgramResults(shot_histories=shot_histories)
     return program
 
 
@@ -186,7 +187,7 @@ class TestConvertRunProgramsToDataset:
         assert counts[("10",)] == 2
 
     def test_auto_runs_a_program_with_no_stored_results(self):
-        """A program with no `_last_results` set gets run (at the default
+        """A program that hasn't been run yet gets run (at the default
         `num_shots=1`) rather than raising or being skipped."""
         trivial_code = trivial_codepack.create_qec_code()
         ideal_model = trivial_codepack.create_ideal_model(["Q0"])
@@ -213,7 +214,6 @@ class TestConvertRunProgramsToDataset:
             patch_types={"Trivial": trivial_code},
             name="Circuit()",
         )
-        assert getattr(program, "_last_results", None) is None
 
         ds = convert_run_programs_to_dataset(
             [program], collect_shot_data_args=("counter", -1)
@@ -351,7 +351,10 @@ class TestPipelineWithMultiplePatches:
             name="Circuit()",
         )
 
-        program.run(num_shots=5, verbose=False)
+        # convert_run_programs_to_dataset always runs each program itself
+        # now (at its own default num_shots=1) rather than reusing a
+        # separately pre-run result, so there is no need to run() this
+        # program beforehand.
         ds = convert_run_programs_to_dataset(
             [program],
             collect_shot_data_args=[
@@ -361,7 +364,7 @@ class TestPipelineWithMultiplePatches:
         )
 
         # Deterministic, noiseless model: L0 always "1", L1 always "0".
-        assert ds[Circuit("()")].counts[("10",)] == 5
+        assert ds[Circuit("()")].counts[("10",)] == 1
 
 
 class TestSimulateDatasetForEdesign:

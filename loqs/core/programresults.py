@@ -99,11 +99,11 @@ class ProgramResults(Displayable):
         self._checkpoint_dir = None
         """Directory where checkpoint files are stored."""
 
-        self._checkpoint_strategy = None
-        """Current checkpointing strategy being used."""
-
         self._worker_id = None
-        """Worker ID for parallel checkpointing."""
+        """Which writer's checkpoint file this object last read/wrote --
+        `None` for the un-suffixed `checkpoint.h5` (also what
+        `consolidate_checkpoints` itself writes), or a `hostname_pid`-style
+        string identifying one specific writer's own file."""
 
         self.name = name
         """Name for logging"""
@@ -287,32 +287,31 @@ class ProgramResults(Displayable):
     def checkpoint(
         self,
         checkpoint_dir: str | Path | None = None,
-        strategy: str = "single_file",
-        batch_size: int = 1,
-        current_batch_index: int = 1,
-        worker_id: int | None = None,
+        worker_id: str | None = None,
     ) -> None:
-        """Checkpoint the program results to disk.
+        """Write every currently-unwritten shot to this writer's own checkpoint file.
+
+        Always flushes everything `get_unwritten_shots()` currently reports
+        -- there is no separate "batch index" to compute or track. How
+        often this gets called (once per shot, once per batch of several)
+        is entirely up to the caller; a `QuantumProgram.run()` worker
+        processing `checkpoint_batch_size` shots at a time calls this once
+        per batch, which is what actually controls durability granularity
+        vs. I/O overhead.
 
         Parameters
         ----------
         checkpoint_dir:
-            Directory to store checkpoint files. If None, uses a temporary directory.
-        strategy:
-            Checkpointing strategy. Options are "single_file" (all shots in one file)
-            or "per_batch" (one file per batch).
-        batch_size:
-            Number of shots per batch.
-        current_batch_index:
-            Index of the current batch being checkpointed.
+            Directory to store checkpoint files. If None, uses `./checkpoints`.
         worker_id:
-            Worker ID for parallel checkpointing. If None, assumes single worker.
+            A string identifying which physical writer this file belongs to
+            (e.g. `f"{socket.gethostname()}_{os.getpid()}"`), so multiple
+            concurrent writers never open the same file. If None, writes
+            directly to the un-suffixed `checkpoint.h5` -- the same filename
+            `consolidate_checkpoints` writes its own merged output under, so
+            a single-writer caller can skip both worker identification and
+            consolidation entirely.
         """
-        # Validate strategy early
-        if strategy not in ("single_file", "per_batch"):
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
-        # Set up checkpoint directory
         if checkpoint_dir is None:
             checkpoint_dir = Path("./checkpoints")
         else:
@@ -320,68 +319,18 @@ class ProgramResults(Displayable):
 
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_dir = checkpoint_dir
-        self._checkpoint_strategy = strategy
         self._worker_id = worker_id
 
-        # Get unwritten shots
-        unwritten_shots = self.get_unwritten_shots()
-        if not unwritten_shots:
+        shots_to_checkpoint = self.get_unwritten_shots()
+        if not shots_to_checkpoint:
             return  # Nothing to checkpoint
 
-        # Determine which shots to checkpoint based on batch
-        # For single_file strategy, checkpoint all shots that belong to batches <= current_batch_index
-        # For per_batch strategy, checkpoint only shots that belong to current_batch_index
-        if batch_size == 1 and current_batch_index == 1:
-            # Special case: when using default batching (batch_size=1, current_batch_index=1),
-            # checkpoint all unwritten shots to avoid confusion
-            shots_to_checkpoint = list(unwritten_shots)
+        if worker_id is not None:
+            filename = checkpoint_dir / f"worker_{worker_id}_checkpoint.h5"
         else:
-            # Normal batching logic
-            shots_to_checkpoint = []
-            for shot_index in unwritten_shots:
-                # Use original batch calculation: (shot_index + 1) // batch_size
-                batch_idx = (shot_index + 1) // batch_size
+            filename = checkpoint_dir / "checkpoint.h5"
 
-                if strategy == "single_file":
-                    # For single_file strategy, checkpoint all shots with 1 <= batch_idx <= current_batch_index
-                    # This allows "late" shots that belong to previous batches to be checkpointed
-                    # but excludes shots with batch_idx = 0
-                    if batch_idx >= 1 and batch_idx <= current_batch_index:
-                        shots_to_checkpoint.append(shot_index)
-                else:  # per_batch strategy
-                    # For per_batch strategy, only checkpoint shots that match current_batch_index exactly
-                    if batch_idx == current_batch_index:
-                        shots_to_checkpoint.append(shot_index)
-
-            # If no shots were selected for this batch, but we have unwritten shots,
-            # checkpoint all unwritten shots as a fallback
-            if not shots_to_checkpoint and unwritten_shots:
-                shots_to_checkpoint = list(unwritten_shots)
-
-        if not shots_to_checkpoint:
-            return  # No shots in this batch
-
-        # Create checkpoint filename
-        if strategy == "single_file":
-            if worker_id is not None:
-                filename = checkpoint_dir / f"worker_{worker_id}_checkpoint.h5"
-            else:
-                filename = checkpoint_dir / "checkpoint.h5"
-        elif strategy == "per_batch":
-            if worker_id is not None:
-                filename = (
-                    checkpoint_dir
-                    / f"worker_{worker_id}_batch_{current_batch_index}.h5"
-                )
-            else:
-                filename = checkpoint_dir / f"batch_{current_batch_index}.h5"
-        else:
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
-        # Write checkpoint
-        self._write_checkpoint_file(filename, shots_to_checkpoint, strategy)
-
-        # Mark shots as written
+        self._write_checkpoint_file(filename, shots_to_checkpoint)
         self.mark_shots_as_written(shots_to_checkpoint)
 
         # Implement lazy loading: remove written shots from memory
@@ -390,11 +339,28 @@ class ProgramResults(Displayable):
                 if shot_index in self.shot_histories:
                     del self.shot_histories[shot_index]
 
+    def mark_shots_checkpointed(self, shot_indices: list[int]) -> None:
+        """Record that the given shots are already durably checkpointed
+        somewhere else (e.g. by the worker that computed them), without
+        writing anything here. Lets a driver's own `ProgramResults` still
+        honor `lazy_loading_enabled` (bounding its own memory) for shots it
+        received from a worker rather than checkpointing itself.
+
+        Parameters
+        ----------
+        shot_indices:
+            Shot indices to mark as already-checkpointed.
+        """
+        self.mark_shots_as_written(list(shot_indices))
+        if self._lazy_loading_enabled:
+            for shot_index in shot_indices:
+                if shot_index in self.shot_histories:
+                    del self.shot_histories[shot_index]
+
     def _write_checkpoint_file(
         self,
         filename: Path,
         shot_indices: list[int],
-        strategy: str,
     ) -> None:
         """Write checkpoint data to an HDF5 file using standard Serializable encoding.
 
@@ -404,8 +370,6 @@ class ProgramResults(Displayable):
             Path to the checkpoint file.
         shot_indices:
             List of shot indices to write to the checkpoint.
-        strategy:
-            Checkpointing strategy being used.
         """
         # Prepare data to write - create a dict of unwritten shots
         unwritten_shot_histories = {}
@@ -422,17 +386,7 @@ class ProgramResults(Displayable):
         with h5py.File(
             filename, "a"
         ) as f:  # 'a' mode allows appending to existing files
-            if strategy == "single_file":
-                # For single file strategy, we need to merge into existing structure
-                self._update_single_file_checkpoint(
-                    f, unwritten_shot_histories
-                )
-            else:
-                # For per_batch strategy, create a new file or overwrite
-                # Write all shots using standard encoding
-                self._write_full_checkpoint_structure(
-                    f, unwritten_shot_histories
-                )
+            self._update_single_file_checkpoint(f, unwritten_shot_histories)
 
     def _update_single_file_checkpoint(
         self, h5_file, unwritten_shot_histories: dict[int, History]
@@ -598,8 +552,7 @@ class ProgramResults(Displayable):
     def load_checkpoint(
         self,
         checkpoint_dir: str | Path | None = None,
-        strategy: str = "single_file",
-        worker_id: int | None = None,
+        worker_id: str | None = None,
     ) -> None:
         """Load checkpoint data from disk.
 
@@ -607,10 +560,10 @@ class ProgramResults(Displayable):
         ----------
         checkpoint_dir:
             Directory containing checkpoint files. If None, uses the default checkpoint directory.
-        strategy:
-            Checkpointing strategy that was used. Options are "single_file" or "per_batch".
         worker_id:
-            Worker ID for parallel checkpointing. If None, assumes single worker.
+            Which writer's checkpoint file to load. If None (the common
+            case -- also what `consolidate_checkpoints` writes its own
+            merged output under), loads the un-suffixed `checkpoint.h5`.
         """
         if checkpoint_dir is None:
             if self._checkpoint_dir is None:
@@ -623,29 +576,14 @@ class ProgramResults(Displayable):
         if not checkpoint_dir.exists():
             return  # No checkpoint directory
 
-        # Find checkpoint files based on strategy
-        if strategy == "single_file":
-            if worker_id is not None:
-                pattern = f"worker_{worker_id}_checkpoint.h5"
-            else:
-                pattern = "checkpoint.h5"
-
-            checkpoint_file = checkpoint_dir / pattern
-            if checkpoint_file.exists():
-                self._load_single_checkpoint_file(checkpoint_file)
-
-        elif strategy == "per_batch":
-            if worker_id is not None:
-                pattern = f"worker_{worker_id}_batch_*.h5"
-            else:
-                pattern = "batch_*.h5"
-
-            # Load all batch files
-            for batch_file in checkpoint_dir.glob(pattern):
-                self._load_single_checkpoint_file(batch_file)
-
+        if worker_id is not None:
+            pattern = f"worker_{worker_id}_checkpoint.h5"
         else:
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
+            pattern = "checkpoint.h5"
+
+        checkpoint_file = checkpoint_dir / pattern
+        if checkpoint_file.exists():
+            self._load_single_checkpoint_file(checkpoint_file)
 
     def _load_single_checkpoint_file(self, filename: Path) -> None:
         """Load data from a single checkpoint file using standard Serializable decoding.
@@ -679,30 +617,38 @@ class ProgramResults(Displayable):
         checkpoint_dir: str | Path | None = None,
         output_file: str | Path | None = None,
         delete_originals: bool = True,
-        strategy: str = "single_file",
     ) -> Path:
-        """Consolidate multiple checkpoint files into a single file.
+        """Merge every per-worker checkpoint file in `checkpoint_dir` into one file.
+
+        Streams one worker's file in at a time -- decoding it, merging just
+        its shots into the output, then letting it be garbage collected
+        before moving to the next -- rather than loading every worker's
+        shots into `self.shot_histories` up front and writing once at the
+        end. This bounds peak memory to roughly one worker's own share of
+        the total result, not the whole result, regardless of how many
+        workers or shots are involved. Writes to a temporary file first and
+        renames it into place only once complete, so a crash partway
+        through never leaves a corrupt or partial `output_file` behind.
 
         Parameters
         ----------
         checkpoint_dir:
             Directory containing checkpoint files to consolidate.
         output_file:
-            Path for the consolidated output file. If None, creates a file in checkpoint_dir.
+            Path for the consolidated output file. If None, writes to the
+            un-suffixed `checkpoint_dir / "checkpoint.h5"` -- the same
+            filename `checkpoint(worker_id=None)` itself writes to, so a
+            single-writer run and a many-writer run both end up readable
+            via `load_checkpoint(worker_id=None)`.
         delete_originals:
-            Whether to delete original checkpoint files after consolidation.
-        strategy:
-            The checkpointing strategy that was used.
+            Whether to delete the original per-worker checkpoint files
+            after consolidation.
 
         Returns
         -------
         Path
             Path to the consolidated checkpoint file.
         """
-        # Validate strategy early
-        if strategy not in ("single_file", "per_batch"):
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
         if checkpoint_dir is None:
             if self._checkpoint_dir is None:
                 checkpoint_dir = Path("./checkpoints")
@@ -711,57 +657,65 @@ class ProgramResults(Displayable):
         else:
             checkpoint_dir = Path(checkpoint_dir)
 
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         if output_file is None:
-            output_file = (
-                checkpoint_dir
-                / f"consolidated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
-            )
+            output_file = checkpoint_dir / "checkpoint.h5"
         else:
             output_file = Path(output_file)
 
-        # Load all checkpoint files into self
-        if strategy == "single_file":
-            # Look for worker checkpoint files
-            for worker_file in checkpoint_dir.glob("worker_*_checkpoint.h5"):
-                self._load_single_checkpoint_file(worker_file)
+        worker_files = sorted(checkpoint_dir.glob("worker_*_checkpoint.h5"))
 
-            # Look for main checkpoint file
-            main_file = checkpoint_dir / "checkpoint.h5"
-            if main_file.exists():
-                self._load_single_checkpoint_file(main_file)
+        # Write to a fresh temp file, not `output_file` directly -- avoids
+        # ever reading and writing the same file at once (possible if a
+        # caller passes an `output_file` that coincides with one of the
+        # globbed worker files) and keeps `output_file` atomic: it only
+        # ever appears once fully written.
+        tmp_output_file = output_file.with_name(output_file.name + ".tmp")
+        if tmp_output_file.exists():
+            tmp_output_file.unlink()
 
-        elif strategy == "per_batch":
-            # Look for all batch files
-            for batch_file in checkpoint_dir.glob("worker_*_batch_*.h5"):
-                self._load_single_checkpoint_file(batch_file)
+        with h5py.File(tmp_output_file, "a") as out_f:
+            for worker_file in worker_files:
+                self._stream_checkpoint_file_into(worker_file, out_f)
+            if len(out_f.keys()) == 0:
+                # No worker files (or all were empty) -- still leave behind
+                # a validly-decodable, if empty, ProgramResults structure
+                # rather than a bare, structure-less HDF5 file.
+                self._write_full_checkpoint_structure(out_f, {})
 
-            for batch_file in checkpoint_dir.glob("batch_*.h5"):
-                self._load_single_checkpoint_file(batch_file)
+        tmp_output_file.replace(output_file)
 
-        else:
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
-        # Write consolidated data to new file
-        self.write(output_file)
-
-        # Optionally delete original files
         if delete_originals:
-            if strategy == "single_file":
-                for worker_file in checkpoint_dir.glob(
-                    "worker_*_checkpoint.h5"
-                ):
-                    worker_file.unlink()
-                main_file = checkpoint_dir / "checkpoint.h5"
-                if main_file.exists():
-                    main_file.unlink()
-
-            elif strategy == "per_batch":
-                for batch_file in checkpoint_dir.glob("worker_*_batch_*.h5"):
-                    batch_file.unlink()
-                for batch_file in checkpoint_dir.glob("batch_*.h5"):
-                    batch_file.unlink()
+            for worker_file in worker_files:
+                worker_file.unlink()
 
         return output_file
+
+    def _stream_checkpoint_file_into(
+        self, filename: Path, out_h5_file
+    ) -> None:
+        """Read one worker's checkpoint file into a throwaway `ProgramResults`,
+        merge just its shots into `out_h5_file`, then let it be garbage
+        collected -- the actual "streaming" step `consolidate_checkpoints`
+        relies on to keep peak memory bounded to one worker's share of the
+        total result at a time.
+
+        Parameters
+        ----------
+        filename:
+            Path to the worker checkpoint file to read.
+        out_h5_file:
+            Already-open, writable HDF5 file/group to merge this worker's
+            shots into.
+        """
+        with h5py.File(filename, "r") as in_f:
+            loaded = Serializable.decode(in_f, format="hdf5")
+        assert isinstance(loaded, ProgramResults)
+        if loaded.shot_histories:
+            self._update_single_file_checkpoint(
+                out_h5_file, loaded.shot_histories
+            )
 
     def get_shot_history(self, shot_index: int) -> History | None:
         """Get a shot history, potentially loading from checkpoint if lazy loading is enabled.
@@ -835,38 +789,19 @@ class ProgramResults(Displayable):
         if self._checkpoint_dir is None or not self._checkpoint_dir.exists():
             return False
 
-        # Try to find the shot in any checkpoint file
-        success = False
+        # Try to find the shot in this writer's own checkpoint file
+        if self._worker_id is not None:
+            checkpoint_file = (
+                self._checkpoint_dir
+                / f"worker_{self._worker_id}_checkpoint.h5"
+            )
+        else:
+            checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
 
-        # Look for single file checkpoints
-        if self._checkpoint_strategy == "single_file":
-            if self._worker_id is not None:
-                checkpoint_file = (
-                    self._checkpoint_dir
-                    / f"worker_{self._worker_id}_checkpoint.h5"
-                )
-            else:
-                checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
+        if not checkpoint_file.exists():
+            return False
 
-            if checkpoint_file.exists():
-                success = self._load_shot_from_single_file(
-                    checkpoint_file, shot_index
-                )
-
-        # Look for per-batch checkpoints
-        elif self._checkpoint_strategy == "per_batch":
-            if self._worker_id is not None:
-                pattern = f"worker_{self._worker_id}_batch_*.h5"
-            else:
-                pattern = "batch_*.h5"
-
-            # Check all batch files
-            for batch_file in self._checkpoint_dir.glob(pattern):
-                if self._load_shot_from_batch_file(batch_file, shot_index):
-                    success = True
-                    break
-
-        return success
+        return self._load_shot_from_single_file(checkpoint_file, shot_index)
 
     def _load_shot_from_single_file(
         self, filename: Path, shot_index: int
@@ -908,24 +843,3 @@ class ProgramResults(Displayable):
             return False
 
         return False
-
-    def _load_shot_from_batch_file(
-        self, filename: Path, shot_index: int
-    ) -> bool:
-        """Load a shot from a batch checkpoint file using standard Serializable decoding.
-
-        Parameters
-        ----------
-        filename:
-            Path to the checkpoint file.
-        shot_index:
-            Index of the shot to load.
-
-        Returns
-        -------
-        bool
-            True if shot was successfully loaded, False otherwise.
-        """
-        # For batch files, we use the same loading method as single files
-        # since they both use the standard Serializable encoding
-        return self._load_shot_from_single_file(filename, shot_index)

@@ -555,7 +555,6 @@ def test_program_output(
     expected_outcomes: Sequence,
     num_shots: int = 1,
     verbose: bool = False,
-    skip_run: bool = False,
     shot_executor: SubmitExecutor | None = None,
 ) -> bool:
     """Test a program against expected output.
@@ -580,31 +579,18 @@ def test_program_output(
         Will only print the first failed entry, if more than
         one fails, by default False
 
-    skip_run : bool, optional
-        Whether to skip running the program and use previous results,
-        by default False
-
     shot_executor : SubmitExecutor | None, optional
         Forwarded to [](api:QuantumProgram.run) for shot-level
         parallelism. Defaults to `None`, which runs shots serially.
-        Unused when `skip_run` is `True`.
 
     Returns
     -------
     bool
         `True` if all outputs match expected, `False` on failure
     """
-    if not skip_run:
-        program_results = test_program.run(
-            num_shots=num_shots, shot_executor=shot_executor, verbose=False
-        )
-    else:
-        # If we're skipping the run, we need to get the results from somewhere
-        program_results = getattr(test_program, "_last_results", None)
-        if program_results is None:
-            raise ValueError(
-                "Cannot skip run when no previous results are available"
-            )
+    program_results = test_program.run(
+        num_shots=num_shots, shot_executor=shot_executor, verbose=False
+    )
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
