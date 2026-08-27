@@ -89,39 +89,15 @@ small `dataclass`, reused identically by every program-level call site:
   unrecognized backend still requires an explicit zero-argument factory
   callable instead.
 
-`ParallelStrategy.describe(items, num_shots)` prints a quick summary of both
-axes -- a short backend tag per axis (e.g. `loky(max_workers=2)`), plus
-whichever counts can actually be computed from what's known. The program
-axis can report a real chunk count, programs per chunk, and chunks per
-worker (`n_program_chunks` is an explicit, independently-chosen setting);
-the shot axis has no analogous chunking setting -- shots are dispatched one
-at a time -- so it only reports the total and the resulting average per
-worker.
+[ParallelStrategy.describe](api:ParallelStrategy.describe) prints a quick,
+per-axis text summary of a configuration (backend, chunk/worker counts) before
+running anything. [ParallelStrategy.plot](api:ParallelStrategy.plot) draws
+the same configuration as a worker/chunk/shot diagram instead. The examples
+below show both before each run -- see their API reference entries (linked
+above) for the exact fields/diagram elements each one produces.
 
-[ParallelStrategy.plot](api:ParallelStrategy.plot) draws the same
-information as a diagram: the node is one box, program-axis workers
-(`PW0`, `PW1`, ...) are lanes within it separated by dashed dividers,
-since they really do run concurrently; but a worker's own chunk(s), and
-the programs within one chunk, are *not* concurrent with each other (one
-worker process runs one chunk at a time, and one chunk's programs run one
-at a time inside it), so those are drawn instead as a left-to-right
-sequence connected by curved arrows. Each program's own box directly
-contains a stack of shot boxes (one per shot worker, or a single "Serial"
-one when `shot_executor` is `None`); dashed `SW0`/`SW1`/... lines span the
-whole chunk's width at the gaps between shot-box rows, since it really is
-the same resolved shot executor, reused sequentially by every program in
-that chunk. Workers that would otherwise be exact duplicates of each
-other (the common case under round-robin dispatch) collapse to a single
-`"PW1 = PW0"`-style label rather than being redrawn, and a worker left
-with no chunks at all (more workers requested than there are chunks to
-hand out) is drawn hatched and grayed out rather than silently omitted,
-since that's itself useful information. The examples below show both
-`describe()` and the diagram before each run. `plot()` always builds its
-own new figure (it doesn't accept a caller-supplied `ax` to draw into),
-since embedding one in a caller-managed subplot grid reads as more
-confusing than helpful once a real multi-node layout is in the picture.
-See the [ParallelStrategy](api:ParallelStrategy) API reference for the
-full field-by-field details and validation rules.
+See the [ParallelStrategy](api:ParallelStrategy) API reference for the full
+field-by-field details and validation rules.
 
 ## Build a program
 
@@ -185,11 +161,9 @@ a unit by one worker.
 from loqs.tools import fttools
 from loqs.tools.paralleltools import ParallelStrategy
 
-# 6 copies of the same program, split into 2 chunks of 3 -- each chunk is
-# tested as a unit by one of the 4 loky workers.
 programs = [program] * 6
 strategy = ParallelStrategy(
-    program_executor=loky.get_reusable_executor(max_workers=4),
+    program_executor=loky.get_reusable_executor(max_workers=2),
     n_program_chunks=2,
 )
 print(strategy.describe(programs, num_shots=1))
@@ -230,48 +204,6 @@ failed = fttools.run_discrete_error_injected_programs(
     parallel=strategy,
 )
 len(failed)
-```
-
-#### Comparing worker shapes
-
-The same 4 total workers can be split between the two axes in different
-ways -- 4 program workers x 1 shot worker, 2x2 (as above), or 1x4 -- all
-dispatching the exact same computation, just with a different shape. The
-diagrams below compare all three; only the 2x2 split is actually run below,
-since all three would give identical results.
-
-`ParallelStrategy(program_executor=..., shot_executor=...)` normally takes a
-live executor directly for `shot_executor` (see above) -- but
-`loky.get_reusable_executor()` is a **process-wide singleton**, not one pool
-per `max_workers` value: calling it again with a *different* `max_workers`
-resizes the same underlying pool in place, silently changing what any
-earlier reference to it now points to. Building program and shot executors
-of genuinely different sizes from two separate `get_reusable_executor()`
-calls in the same process (as the three shapes below need) hits this
-directly; passing an explicit [ExecutorSpec](api:ExecutorSpec) for the shot
-axis instead sidesteps it entirely, since it doesn't touch the live pool at
-all until it's actually called (inside a worker subprocess, where no such
-collision can occur). This is unlikely to come up in ordinary use --
-building several *different-sized* strategies side by side like this is
-mainly a showcase/comparison need, not something a real workflow (which
-just builds and uses one strategy per run) normally does.
-
-Each shape gets its own figure below -- `plot()` always builds a new one
-rather than accepting a caller-supplied `ax` to draw into (see above).
-
-```{code-cell} ipython3
-from loqs.tools.paralleltools import ExecutorSpec
-
-for program_workers, shot_workers in [(4, 1), (2, 2), (1, 4)]:
-    shape_strategy = ParallelStrategy(
-        program_executor=loky.get_reusable_executor(
-            max_workers=program_workers
-        ),
-        n_program_chunks=program_workers,
-        shot_executor=ExecutorSpec("loky", {"max_workers": shot_workers}),
-    )
-    print(shape_strategy.describe(programs, num_shots=20))
-    shape_strategy.plot(programs)
 ```
 
 ## Multi-node and hybrid parallelism
@@ -317,12 +249,6 @@ strategy = ParallelStrategy(
     ),
     n_program_chunks=2,
 )
-print(strategy.describe(programs, num_shots=1))
-# submitit.Executor's real parallelism is scheduler-determined (unlike
-# loky's fixed max_workers), so plot() can't introspect a worker count --
-# program_workers is given explicitly here, matching one concurrent
-# allocation per chunk.
-strategy.plot(programs, program_workers=2)
 
 if sys.platform == "win32":
     print("submitit does not support Windows -- skipping dispatch.")
@@ -463,3 +389,180 @@ to use every available core for BLAS operations, which would otherwise
 make a parallel run slower than serial rather than faster, and matters
 more, not less, once both axes are combined (as in the hybrid examples
 above).
+
+## Performance profiling
+
+`profile_strategies` measures real wall-clock time -- and, whenever `psutil`
+is installed, peak memory and CPU utilization -- for a caller-chosen set of
+[ParallelStrategy](api:ParallelStrategy) configurations against a
+caller-chosen working example. Deciding between candidate configurations (how
+many outer/inner workers, which backend, how to split workers between the two
+axes) is a real, workload-dependent question -- this measures it directly on
+real hardware rather than guessing.
+
+The trivial toy program used elsewhere in this tutorial does too little real
+work per shot to show a meaningful difference between configurations. The
+cells below build a small, real workload instead: single-Pauli error
+injection into the [[5,1,3]] code's `FT Minus Prep` stage, the same one used
+in the [Testing Fault Tolerance](fttests.md) tutorial.
+
+```{code-cell} ipython3
+from loqs.backends import QSimQuantumState
+from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
+
+code_5q = codepack_5_1_3.create_qec_code()
+ft_qubits = ["A0", "A1"] + [f"D{i + 2}" for i in range(5)]
+ft_ideal_model = codepack_5_1_3.create_ideal_model(ft_qubits)
+
+stack_ft = [
+    {"instruction": "Init State", "state": len(ft_qubits), "qubit_labels": ft_qubits},
+    {"instruction": "Init Patch 5Q", "new_patch_label": "L0", "qubits": ft_qubits},
+    ("FT Minus Prep", "L0"),
+    ("Flagged QEC", "L0"),
+    ("FT Logical X Measure", "L0"),
+]
+ft_program = QuantumProgram(
+    stack_ft,
+    default_noise_model=ft_ideal_model,
+    state_type=QSimQuantumState,
+    patch_types={"5Q": code_5q},
+    name="FT Prep -, Flagged QEC, FT measure X",
+)
+
+# 8 of the 171 possible single-Pauli-error variants of "FT Minus Prep",
+# enough to give a program-level pool real, evenly-splittable work.
+ft_programs = fttools.build_discrete_error_injection_programs(
+    base_program=ft_program,
+    instruction_to_analyze=code_5q.instructions["Non-FT Minus Prep + Checks"],
+    stack_idx_to_modify=2,
+    error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+)[:8]
+len(ft_programs)
+```
+
+### Comparing worker shapes
+
+The same total workers can be split between the two axes in different ways --
+all program workers, all shot workers, or some balance of both -- dispatching
+the exact same computation with a different shape. `describe()`/`plot()`
+sanity-check a shape before running anything, without needing to actually
+dispatch it:
+
+`ParallelStrategy(program_executor=..., shot_executor=...)` normally takes a
+live executor directly for either axis (see above) -- but
+`loky.get_reusable_executor()` is a **process-wide singleton**, not one pool
+per `max_workers` value: calling it again with a *different* `max_workers`
+resizes the same underlying pool in place, silently changing what any
+earlier reference to it now points to. Building executors of genuinely
+different sizes side by side (as the shapes below do) hits this directly;
+passing an explicit [ExecutorSpec](api:ExecutorSpec) instead sidesteps it
+entirely, since it doesn't touch a live pool at all until it's actually
+called (inside a worker subprocess, where no such collision can occur).
+
+```{code-cell} ipython3
+from loqs.tools.paralleltools import ExecutorSpec
+
+for program_workers, shot_workers in [(4, 1), (2, 2), (1, 4)]:
+    shape_strategy = ParallelStrategy(
+        program_executor=ExecutorSpec("loky", {"max_workers": program_workers}),
+        n_program_chunks=program_workers,
+        shot_executor=ExecutorSpec("loky", {"max_workers": shot_workers}),
+    )
+    print(shape_strategy.describe(ft_programs, num_shots=20))
+    shape_strategy.plot(ft_programs)
+```
+
+Whether splitting workers onto the shot axis actually helps is workload
+dependent, not automatic: [QuantumProgram.run](api:QuantumProgram.run)
+dispatches one `.submit()` call per shot, unbatched, so each shot pays a real
+serialization/IPC cost to cross into a worker process. For a workload whose
+per-shot compute is itself fast (like this one), that per-shot cost can
+outweigh the benefit -- the program axis, which amortizes one dispatch over
+an entire chunk of programs, is usually the more reliable one to reach for
+first. The measurement below sticks to program-axis splits for this reason.
+
+```{code-cell} ipython3
+import os
+
+from loqs.tools.paralleltools import (
+    format_profile_table,
+    plot_profile_results,
+    profile_strategies,
+)
+
+
+def profile_work(strategy):
+    return fttools.run_discrete_error_injected_programs(
+        ft_programs,
+        collect_shot_data_args=[("logical_measurement", -1)],
+        expected_outcomes=[1],
+        num_shots=20,
+        parallel=strategy,
+    )
+
+
+strategies = {
+    "serial": ParallelStrategy(),
+    "program-2x": ParallelStrategy(
+        program_executor=ExecutorSpec("loky", {"max_workers": 2}),
+        n_program_chunks=2,
+    ),
+    "program-4x": ParallelStrategy(
+        program_executor=ExecutorSpec("loky", {"max_workers": 4}),
+        n_program_chunks=4,
+    ),
+}
+
+# Timing-sensitive on a small/shared CI runner (which sets CI=true) --
+# skip the live measurement there and just show how it's called.
+if os.environ.get("CI"):
+    print("Skipping the live profiling sweep in CI -- run interactively instead.")
+    results = None
+else:
+    results = profile_strategies(
+        profile_work, strategies, repeats=2, sample_interval=0.05, warmup=True
+    )
+    print(format_profile_table(results))
+```
+
+`warmup=True` runs one throwaway pass through each strategy's dispatch path
+before the timed `repeats` loop, so real worker-process startup/import cost
+doesn't land on whichever repeat happens to run first. Since `"serial"` is
+fully serial, every other row also reports a `speedup` relative to it. On
+real hardware, splitting this same workload across worker counts like this
+typically shows real, if sub-linear, speedup (e.g. roughly 1.6x-1.9x at 2
+workers, 2.1x-2.8x at 4 workers, relative to the serial baseline) -- workers
+beyond the first pay real, if smaller, marginal overhead of their own, so
+returns diminish rather than scaling linearly.
+
+Every result's raw per-chunk data (peak memory, mean CPU%, sample count) is
+kept, not just the summary numbers above -- `plot_profile_results` draws a
+wall-time bar chart plus box plots of that per-chunk resource data directly.
+
+```{code-cell} ipython3
+if results is not None:
+    plot_profile_results(results);
+```
+
+### Profiling a `submitit` sweep on a real SLURM allocation
+
+Comparing several `submitit`-backed configurations the way `profile_strategies`
+does above would normally mean each candidate strategy's own dispatch
+independently submits (and queues for) its own `sbatch` job -- exactly the
+"stuck behind someone else's job" risk a real profiling sweep wants to avoid.
+`reuse_slurm_allocation=True` sidesteps this: it installs a small wrapper
+script that intercepts every `sbatch` call `submitit` makes during the sweep,
+running it directly against whatever real SLURM allocation the current
+process is already inside (obtained separately first, e.g. via `salloc` or an
+enclosing `sbatch` job) instead of requesting a new one each time. Requires
+already running inside a real allocation (`SLURM_JOB_ID` set); not runnable in
+this Binder/CI environment, so not executed here.
+
+```python
+# Obtain one allocation sized for the largest candidate strategy first, e.g.
+#   salloc --nodes=4 --ntasks-per-node=1 --cpus-per-task=8
+# then, from inside that shell:
+results = profile_strategies(
+    profile_work, strategies, reuse_slurm_allocation=True
+)
+```

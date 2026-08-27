@@ -28,6 +28,7 @@ docs/_gen_md
 
 checkpoints/
 standard_gst_checkpoints/
+submitit-logs/
 
 .vscode
 venv*/
