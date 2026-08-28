@@ -14,6 +14,7 @@ from loqs.tools import paralleltools
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
+    _sweep_point_checkpoint_subdir,
     compare_noise_sweeps,
     plot_noise_sweep,
 )
@@ -322,6 +323,73 @@ class TestRun:
             QuantumProgram.run = real_run
 
         assert seen_names == [10, 20]
+
+    def test_serial_run_respects_verbose_parameter(self):
+        """Serial run with verbose=True should forward verbose=True to
+        each point's QuantumProgram.run call; default or explicit verbose=False
+        should suppress it."""
+        seen_verbose_values = []
+
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen_verbose_values.append(kwargs.get("verbose"))
+            return real_run(self, *args, **kwargs)
+
+        runner = make_runner([0.0, 0.1], seed_stride=5)
+
+        # Test 1: explicit verbose=True should forward True to each point
+        seen_verbose_values.clear()
+        try:
+            QuantumProgram.run = spy_run
+            runner.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=True,
+            )
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen_verbose_values == [True, True], (
+            f"Expected [True, True] with verbose=True, got {seen_verbose_values}"
+        )
+
+        # Test 2: explicit verbose=False should forward False to each point
+        seen_verbose_values.clear()
+        runner2 = make_runner([0.0, 0.1], seed_stride=5)
+        try:
+            QuantumProgram.run = spy_run
+            runner2.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+                verbose=False,
+            )
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen_verbose_values == [False, False], (
+            f"Expected [False, False] with verbose=False, got {seen_verbose_values}"
+        )
+
+        # Test 3: default (no explicit verbose) should forward True
+        # (run() defaults verbose=True in its signature)
+        seen_verbose_values.clear()
+        runner3 = make_runner([0.0, 0.1], seed_stride=5)
+        try:
+            QuantumProgram.run = spy_run
+            runner3.run(
+                5,
+                COLLECT_SHOT_DATA_ARGS,
+                EXPECTED_OUTCOMES,
+            )
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen_verbose_values == [True, True], (
+            f"Expected [True, True] with default verbose, got {seen_verbose_values}"
+        )
 
 
 class TestRunParallel:
@@ -818,3 +886,119 @@ class TestPlotNoiseSweep:
         )
         with pytest.raises(ImportError):
             plot_noise_sweep(result)
+
+
+class TestNoiseSweepRunnerShotCheckpointing:
+    """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
+    checkpointing, threaded through `NoiseSweepRunner.run` via the
+    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading_enabled`
+    parameters."""
+
+    def test_checkpoint_batch_size_without_shot_checkpoint_dir_raises(self):
+        """checkpoint_batch_size given without shot_checkpoint_dir is a
+        configuration error, not something that's silently ignored."""
+        runner = make_runner([0.0, 0.1])
+        with pytest.raises(ValueError, match="shot_checkpoint_dir"):
+            runner.run(
+                num_shots=10,
+                collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+                expected_outcomes=EXPECTED_OUTCOMES,
+                checkpoint_batch_size=1,
+            )
+
+    def test_serial_shot_checkpoint_creates_per_point_subdirs(self, tmp_path):
+        """A serial (no parallel) run with checkpoint_batch_size=1 and a real
+        shot_checkpoint_dir produces per-point subdirectories under it, one
+        per sweep point, each containing checkpoint files that can be loaded
+        via ProgramResults.load_checkpoint."""
+        runner = make_runner([0.0, 0.1])
+        shot_ckpt_dir = tmp_path / "shot_checkpoints"
+        shot_ckpt_dir.mkdir()
+
+        result = runner.run(
+            num_shots=10,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            checkpoint_batch_size=1,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading_enabled=False,  # Keep shots in memory for collection
+        )
+
+        # Confirm the sweep completed successfully
+        assert result.is_complete
+        assert len(result.failure_rates) == 2
+
+        # Confirm per-point subdirs exist and contain checkpoints
+        subdirs = list(shot_ckpt_dir.iterdir())
+        assert len(subdirs) == 2, f"Expected 2 point subdirs, got {len(subdirs)}: {subdirs}"
+
+        for index in range(len(runner.strengths)):
+            point_subdir = _sweep_point_checkpoint_subdir(shot_ckpt_dir, index)
+            assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
+
+            # Confirm the checkpoint file exists and can load the right number of shots
+            checkpoint_file = point_subdir / "checkpoint.h5"
+            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+
+            loaded_results = ProgramResults()
+            loaded_results.load_checkpoint(checkpoint_dir=point_subdir)
+            assert len(loaded_results.shot_histories) == 10
+
+    def test_parallel_shot_checkpoint_prevents_point_collision(self, tmp_path):
+        """A parallel run with parallel.n_program_chunks=1 (one worker processes
+        both points sequentially) and shot_checkpoint_dir set confirms the
+        per-point subdirectory scheme actually prevents collisions despite
+        sharing one worker/hostname_pid."""
+        loky = pytest.importorskip("loky")
+        runner = make_runner([0.0, 0.1])
+        shot_ckpt_dir = tmp_path / "shot_checkpoints"
+        shot_ckpt_dir.mkdir()
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=1,
+            shot_executor=_build_shot_executor,
+        )
+
+        result = runner.run(
+            num_shots=10,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            parallel=strategy,
+            checkpoint_batch_size=1,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading_enabled=False,  # Keep shots in memory for collection
+        )
+
+        # Confirm the sweep completed successfully
+        assert result.is_complete
+        assert len(result.failure_rates) == 2
+
+        # Confirm both point subdirs exist independently
+        subdirs = list(shot_ckpt_dir.iterdir())
+        assert len(subdirs) == 2
+
+        for index in range(len(runner.strengths)):
+            point_subdir = _sweep_point_checkpoint_subdir(shot_ckpt_dir, index)
+            assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
+            checkpoint_file = point_subdir / "checkpoint.h5"
+            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+
+            # Confirm the checkpoint can be loaded with the right number of shots
+            loaded_results = ProgramResults()
+            loaded_results.load_checkpoint(checkpoint_dir=point_subdir)
+            assert len(loaded_results.shot_histories) == 10
+
+    def test_checkpoint_dir_in_run_kwargs_conflicts_with_shot_checkpoint_dir(self):
+        """Passing checkpoint_dir directly via **run_kwargs while
+        shot_checkpoint_dir is also set raises ValueError (the two
+        mechanisms conflict)."""
+        runner = make_runner([0.0, 0.1])
+        with pytest.raises(ValueError, match="checkpoint_dir"):
+            runner.run(
+                num_shots=10,
+                collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+                expected_outcomes=EXPECTED_OUTCOMES,
+                shot_checkpoint_dir="/tmp/dummy",
+                checkpoint_dir="/tmp/also_dummy",
+            )

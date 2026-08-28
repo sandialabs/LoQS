@@ -103,6 +103,42 @@ def _validate_function_source(source: str, param_name: str) -> None:
         )
 
 
+def _sweep_point_checkpoint_subdir(
+    shot_checkpoint_dir: str | Path, index: int
+) -> Path:
+    """A sweep point's own isolated subdirectory under `shot_checkpoint_dir`,
+    keyed by the point's integer index so multiple points processed by the
+    same worker (sharing one `hostname_pid` identity) never collide on the
+    same [](api:QuantumProgram.run) checkpoint file. Unlike
+    `_circuit_checkpoint_subdir` (which hashes a circuit string because
+    circuits have no short, stable, filesystem-safe identifier), a sweep
+    point's index is already short, unique, and stable -- no hashing needed.
+    """
+    return Path(shot_checkpoint_dir) / f"point_{index}"
+
+
+def _validate_checkpoint_kwargs(
+    checkpoint_batch_size: int | None,
+    shot_checkpoint_dir: str | Path | None,
+    run_kwargs: dict,
+) -> None:
+    """Validate checkpoint-related keyword arguments for NoiseSweepRunner.run.
+
+    Raises ValueError if checkpoint_batch_size is set without shot_checkpoint_dir,
+    or if checkpoint_dir is passed in run_kwargs while shot_checkpoint_dir is also set
+    (the two mechanisms conflict).
+    """
+    if checkpoint_batch_size is not None and shot_checkpoint_dir is None:
+        raise ValueError(
+            "checkpoint_batch_size requires shot_checkpoint_dir to be set."
+        )
+    if "checkpoint_dir" in run_kwargs and shot_checkpoint_dir is not None:
+        raise ValueError(
+            "checkpoint_dir in **run_kwargs conflicts with shot_checkpoint_dir; "
+            "use only one of the two (or leave both unset)."
+        )
+
+
 def _resolve_program_results_path(
     program_results_dir: str | Path | Callable[[Any], str | Path],
     strength: Any,
@@ -160,14 +196,23 @@ def _run_sweep_point(
     run_kwargs: dict,
     keep_program_results: bool,
     program_results_dir: str | Path | Callable[[Any], str | Path] | None,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
 ) -> tuple[int, float, float, str | None]:
     """Build, run, and reduce one sweep point, returning `(index,
     failure_rate, stderr, program_results_path)`. `program_results_path`
     is `None` unless `keep_program_results` is True, in which case that
     point's `ProgramResults` is written to disk from inside this call.
-    Forces `verbose=False` regardless of `run_kwargs`, since several of
-    these may run concurrently under `run`'s program-level parallel path
-    -- one shared per-chunk progress bar covers that case instead.
+    Defaults `verbose` to `False` when not already set in `run_kwargs`,
+    since several of these may run concurrently under `run`'s program-level
+    parallel path -- one shared per-chunk progress bar covers that case
+    instead. The serial loop's own `resolved_run_kwargs` may set `verbose`
+    before calling this function, and that value is respected.
+    `checkpoint_batch_size`/`shot_checkpoint_dir`/`lazy_loading_enabled`
+    are forwarded to this point's own `program.run` call, with
+    `checkpoint_dir` automatically computed as a per-point subdirectory
+    under `shot_checkpoint_dir` when the latter is set.
     """
     strength = runner.strengths[index]
     program = runner.build_program(index)
@@ -175,7 +220,16 @@ def _run_sweep_point(
         key: _resolve_value(value, strength)
         for key, value in run_kwargs.items()
     }
-    resolved_run_kwargs["verbose"] = False
+    resolved_run_kwargs.setdefault("verbose", False)
+
+    if checkpoint_batch_size is not None:
+        resolved_run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
+    if shot_checkpoint_dir is not None:
+        checkpoint_dir = _sweep_point_checkpoint_subdir(
+            shot_checkpoint_dir, index
+        )
+        resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
+    resolved_run_kwargs["lazy_loading_enabled"] = lazy_loading_enabled
 
     program_results = program.run(num_shots=num_shots, **resolved_run_kwargs)
     failure_rate, stderr = _compute_failure_rate(
@@ -202,6 +256,9 @@ def _run_sweep_point_chunk(
     keep_program_results: bool,
     program_results_dir: str | Path | Callable[[Any], str | Path] | None,
     shot_executor: Any | None = None,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
 ) -> list[tuple[int, float, float, str | None]]:
     """Run every sweep point index in one chunk via `_run_sweep_point`,
     returning one result per index. The actual per-chunk work shared by
@@ -209,7 +266,9 @@ def _run_sweep_point_chunk(
     if given, is an already-built executor (resolved once per chunk by the
     caller, not once per point) forwarded as `QuantumProgram.run`'s own
     `shot_executor` argument for every point in the chunk, for hybrid
-    shot-/point-level parallelism.
+    shot-/point-level parallelism. `checkpoint_batch_size`/`shot_checkpoint_dir`/
+    `lazy_loading_enabled` are likewise forwarded to every point's own
+    `program.run` call.
     """
     if shot_executor is not None:
         run_kwargs = {**run_kwargs, "shot_executor": shot_executor}
@@ -223,6 +282,9 @@ def _run_sweep_point_chunk(
             run_kwargs,
             keep_program_results,
             program_results_dir,
+            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading_enabled=lazy_loading_enabled,
         )
         for index in indices
     ]
@@ -243,6 +305,9 @@ def _run_sweep_point_chunk_worker(
     keep_program_results: bool,
     program_results_dir: str | Path | Callable[[Any], str | Path] | None,
     shot_executor: Any | None = None,
+    checkpoint_batch_size: int | None = None,
+    shot_checkpoint_dir: str | Path | None = None,
+    lazy_loading_enabled: bool = True,
 ) -> list[tuple[int, float, float, str | None]]:
     pin_worker_threads()
     return _run_sweep_point_chunk(
@@ -255,6 +320,9 @@ def _run_sweep_point_chunk_worker(
         keep_program_results,
         program_results_dir,
         shot_executor=resolve_shot_executor(shot_executor),
+        checkpoint_batch_size=checkpoint_batch_size,
+        shot_checkpoint_dir=shot_checkpoint_dir,
+        lazy_loading_enabled=lazy_loading_enabled,
     )
 
 
@@ -455,6 +523,10 @@ class NoiseSweepRunner(Displayable):
         verbose: bool = True,
         metadata: dict | None = None,
         parallel: ParallelStrategy | None = None,
+        *,
+        checkpoint_batch_size: int | None = None,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading_enabled: bool = True,
         **run_kwargs,
     ) -> "NoiseSweepResult":
         """Run the full sweep.
@@ -463,16 +535,13 @@ class NoiseSweepRunner(Displayable):
         `num_shots <= seed_stride` (hard failure, since a violation would mean seed ranges from
         adjacent points overlap); for each point, builds the QuantumProgram (`build_program`), runs
         it for `num_shots` shots (a single, ordinary `QuantumProgram.run(num_shots=num_shots,
-        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, e.g. `checkpoint_dir`/
-        `checkpoint_batch_size` if the caller wants *that* mechanism's
-        protection against losing shots mid-way through one single, very large point -- entirely
-        orthogonal to this method's own point-level `resume` support), extracts `(failure_rate,
-        stderr)` via `collect_shot_data_args`/`expected_outcomes` (same per-shot pass/fail
-        convention as `fttools.test_program_output`), then immediately disposes of that point's
-        `ProgramResults` -- discarding it if `keep_program_results` is False, or writing it to
-        `program_results_dir` (a single self-contained `ProgramResults.write(...)` dump, not the
-        incremental checkpoint mechanism) if True. Returns one `NoiseSweepResult` covering every
-        point.
+        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, entirely orthogonal to this
+        method's own point-level `resume` support), extracts `(failure_rate, stderr)` via
+        `collect_shot_data_args`/`expected_outcomes` (same per-shot pass/fail convention as
+        `fttools.test_program_output`), then immediately disposes of that point's `ProgramResults`
+        -- discarding it if `keep_program_results` is False, or writing it to `program_results_dir`
+        (a single self-contained `ProgramResults.write(...)` dump, not the incremental checkpoint
+        mechanism) if True. Returns one `NoiseSweepResult` covering every point.
 
         By default (`parallel` `None`, or given with `program_executor` unset), sweep points
         are processed strictly sequentially in a plain Python loop. This is what makes point-level
@@ -505,6 +574,17 @@ class NoiseSweepRunner(Displayable):
         If `keep_program_results` is True, `program_results_dir` must be given (a fixed value or
         callable), or this raises `ValueError`.
 
+        Shot-level checkpointing via [](api:QuantumProgram.run) can be enabled by setting
+        `shot_checkpoint_dir` and `checkpoint_batch_size` together. When `shot_checkpoint_dir`
+        is set, each sweep point gets its own isolated subdirectory under it (named `point_{index}`),
+        preventing collisions when multiple points process under the same worker (whether in the
+        serial loop or within one parallel chunk). `lazy_loading_enabled` controls whether
+        checkpointed shots are evicted from memory once written (see
+        [](api:QuantumProgram.run) for details). If `checkpoint_batch_size` is given without
+        `shot_checkpoint_dir`, raises `ValueError`. Passing `checkpoint_dir` directly via
+        `**run_kwargs` while `shot_checkpoint_dir` is also set raises `ValueError` (the two
+        mechanisms conflict).
+
         Resume (`resume=True`, requires `result_path`): `result_path` is where this method
         incrementally writes the in-progress `NoiseSweepResult` (`.write(result_path)`) as
         described above. On start, if `result_path` already exists, it is read back and validated
@@ -535,6 +615,10 @@ class NoiseSweepRunner(Displayable):
             )
         if resume and result_path is None:
             raise ValueError("result_path is required when resume=True.")
+
+        _validate_checkpoint_kwargs(
+            checkpoint_batch_size, shot_checkpoint_dir, run_kwargs
+        )
 
         failure_rates: list[float] = []
         stderrs: list[float] = []
@@ -576,13 +660,6 @@ class NoiseSweepRunner(Displayable):
                 run_kwargs = {**run_kwargs, "shot_executor": shot_executor}
             for index in range(start_index, len(self.strengths)):
                 strength = self.strengths[index]
-                program = self.build_program(index)
-
-                resolved_run_kwargs = {
-                    key: _resolve_value(value, strength)
-                    for key, value in run_kwargs.items()
-                }
-                resolved_run_kwargs.setdefault("verbose", verbose)
 
                 if verbose:
                     print(
@@ -590,24 +667,29 @@ class NoiseSweepRunner(Displayable):
                         f"(strength={strength!r})"
                     )
 
-                program_results = program.run(
-                    num_shots=num_shots, **resolved_run_kwargs
-                )
+                resolved_run_kwargs = {
+                    key: _resolve_value(value, strength)
+                    for key, value in run_kwargs.items()
+                }
+                resolved_run_kwargs.setdefault("verbose", verbose)
 
-                failure_rate, stderr = _compute_failure_rate(
-                    program_results,
+                index_result, failure_rate, stderr, path = _run_sweep_point(
+                    self,
+                    index,
+                    num_shots,
                     collect_shot_data_args,
                     expected_outcomes,
-                    num_shots,
+                    resolved_run_kwargs,
+                    keep_program_results,
+                    program_results_dir,
+                    checkpoint_batch_size=checkpoint_batch_size,
+                    shot_checkpoint_dir=shot_checkpoint_dir,
+                    lazy_loading_enabled=lazy_loading_enabled,
                 )
+
                 failure_rates.append(failure_rate)
                 stderrs.append(stderr)
-
                 if keep_program_results:
-                    path = _resolve_program_results_path(
-                        program_results_dir, strength, index
-                    )
-                    program_results.write(path)
                     program_results_paths.append(path)
 
                 if result_path is not None:
@@ -634,6 +716,9 @@ class NoiseSweepRunner(Displayable):
                 program_results_dir,
                 run_kwargs,
                 parallel,
+                checkpoint_batch_size=checkpoint_batch_size,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                lazy_loading_enabled=lazy_loading_enabled,
             ):
                 failure_rates.append(failure_rate)
                 stderrs.append(stderr)
@@ -669,6 +754,9 @@ class NoiseSweepRunner(Displayable):
         program_results_dir: str | Path | Callable[[Any], str | Path] | None,
         run_kwargs: dict,
         parallel: ParallelStrategy,
+        checkpoint_batch_size: int | None = None,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading_enabled: bool = True,
     ) -> list[tuple[int, float, float, str | None]]:
         """`run`'s program-level parallel dispatch path: split the sweep points
         from `start_index` onward into `parallel.n_program_chunks`
@@ -681,6 +769,8 @@ class NoiseSweepRunner(Displayable):
         chunk worker unresolved -- it's a picklable factory callable, not a
         live executor, so it crosses the process boundary safely and each
         worker resolves it once for hybrid shot-/point-level parallelism.
+        `checkpoint_batch_size`/`shot_checkpoint_dir`/`lazy_loading_enabled`
+        are likewise passed through to each chunk worker for per-point isolation.
         """
         remaining = list(range(start_index, len(self.strengths)))
         if not remaining:
@@ -697,6 +787,9 @@ class NoiseSweepRunner(Displayable):
             keep_program_results=keep_program_results,
             program_results_dir=program_results_dir,
             shot_executor=parallel.shot_executor,
+            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading_enabled=lazy_loading_enabled,
         )
         chunk_results = parallel.dispatch(
             worker, chunks, desc="Running noise sweep point chunks"
