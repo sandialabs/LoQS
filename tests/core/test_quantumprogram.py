@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 
 # TODO: Rework to run with native backend only if failure to import
 quantumsim = pytest.importorskip("quantumsim")
@@ -269,3 +270,65 @@ class TestResolveInstructionLegacyNameHint:
         with pytest.raises(RuntimeError) as exc_info:
             QuantumProgram._resolve_instruction(fake_self, label, frame={})
         assert "v1.2" not in str(exc_info.value)
+
+    @pytest.mark.skipif(
+        os.getenv("CI", "false") == "true", reason="Breaks GitHub runners?"
+    )
+    def test_run_with_checkpoint_dir_does_not_create_default_checkpoints(self):
+        """Regression test: run(..., checkpoint_dir=...) should not create a
+        ./checkpoints directory relative to cwd -- only the explicit
+        checkpoint_dir should be used."""
+        import tempfile
+
+        # Use the trivial codepack for faster testing
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+
+        stack = [
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            {
+                "instruction": "Init Counter",
+                "patch_label": "L0",
+                "initial_value": 0,
+            },
+        ]
+
+        program = QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            state_type=QSimQuantumState,
+            patch_types={"Trivial": trivial_code},
+            name="Checkpoint dir test",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a separate directory for checkpoints
+            checkpoint_dir = Path(tmpdir) / "my_checkpoints"
+
+            # Run with checkpoint_batch_size (which triggers checkpointing)
+            program.run(
+                num_shots=2,
+                checkpoint_batch_size=1,
+                checkpoint_dir=checkpoint_dir,
+            )
+
+            # Verify that checkpoint_dir was used
+            assert checkpoint_dir.exists()
+            assert (checkpoint_dir / "checkpoint.h5").exists()
+
+            # Verify that no ./checkpoints dir was created relative to cwd
+            cwd_checkpoints = Path("./checkpoints")
+            assert not cwd_checkpoints.exists(), (
+                "Default ./checkpoints was created relative to cwd; "
+                "should use explicit checkpoint_dir instead"
+            )

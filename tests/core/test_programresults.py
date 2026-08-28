@@ -810,3 +810,113 @@ class TestConcurrentCheckpointing:
                     history = consolidated.shot_histories[shot_index]
                     assert history[0]["worker_id"] == worker_id
                     assert history[0]["local_shot"] == i
+
+
+class TestParentProgramFileWriting:
+    """Test parent program file writing with correct checkpoint_dir handling."""
+
+    @pytest.mark.skipif(
+        os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
+    )
+    def test_parent_program_writes_to_specified_checkpoint_dir(self, tmp_path):
+        """Regression test: parent program file should be written to the
+        explicit checkpoint_dir, not a default ./checkpoints relative to cwd."""
+        # Import here to avoid import errors when dependencies are missing
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        from loqs.backends import QSimQuantumState
+        from loqs.core import QuantumProgram
+        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+        # Create a minimal QuantumProgram
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+
+        stack = [
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        ]
+
+        program = QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            state_type=QSimQuantumState,
+            patch_types={"Trivial": trivial_code},
+            name="Test program for parent file writing"
+        )
+
+        # Create ProgramResults with explicit checkpoint_dir
+        checkpoint_dir = tmp_path / "my_checkpoints"
+        results = ProgramResults(
+            name="Test Results",
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
+        )
+
+        # Verify the parent_program path exists and is under checkpoint_dir
+        assert isinstance(results.parent_program, str)
+        parent_file = Path(results.parent_program)
+        assert parent_file.exists()
+        assert parent_file.parent == checkpoint_dir
+        assert "parent_program_" in parent_file.name
+        # Check that UUID suffix is present (8 hex chars after timestamp)
+        assert parent_file.name.count("_") >= 2  # timestamp, uuid, and file ext
+
+    @pytest.mark.skipif(
+        os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
+    )
+    def test_parent_program_uuid_prevents_collision(self, tmp_path):
+        """Regression test: two concurrent ProgramResults constructions should
+        not collide, even if within the same second, due to UUID suffix."""
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        from loqs.backends import QSimQuantumState
+        from loqs.core import QuantumProgram
+        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+        # Create a minimal QuantumProgram
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+
+        stack = [
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        ]
+
+        program = QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            state_type=QSimQuantumState,
+            patch_types={"Trivial": trivial_code},
+            name="Test program for uuid collision"
+        )
+
+        checkpoint_dir = tmp_path / "collide_test"
+
+        # Create two ProgramResults with the same parent program in the same dir
+        results1 = ProgramResults(
+            name="Results 1",
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
+        )
+        results2 = ProgramResults(
+            name="Results 2",
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
+        )
+
+        # Verify they got different files (no collision)
+        file1 = Path(results1.parent_program)
+        file2 = Path(results2.parent_program)
+        assert file1 != file2
+        assert file1.exists()
+        assert file2.exists()
+        assert file1.parent == checkpoint_dir
+        assert file2.parent == checkpoint_dir

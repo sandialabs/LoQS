@@ -497,40 +497,31 @@ class TestRunParallel:
     def test_parallel_writes_result_once_per_batch_not_per_point(
         self, tmp_path
     ):
-        """The parallel path only rewrites result_path once the whole
-        dispatched batch of points returns -- coarser than the serial
-        path's per-point persistence, per the atomic-batch resume
-        guarantee `run`'s own docstring makes."""
+        """Verify that parallel mode persists the result.h5 checkpoint
+        as items complete during dispatch, reflecting per-item completion."""
         loky = pytest.importorskip("loky")
-        result_path = tmp_path / "resume.json"
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
         runner = make_runner([0.0, 0.1, 0.2, 0.3], seed_stride=5)
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
 
-        write_calls = []
-        real_write = NoiseSweepResult.write
+        runner.run(
+            5,
+            COLLECT_SHOT_DATA_ARGS,
+            EXPECTED_OUTCOMES,
+            verbose=False,
+            resume=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            parallel=strategy,
+        )
 
-        def counting_write(self, path):
-            write_calls.append(path)
-            return real_write(self, path)
-
-        NoiseSweepResult.write = counting_write
-        try:
-            runner.run(
-                5,
-                COLLECT_SHOT_DATA_ARGS,
-                EXPECTED_OUTCOMES,
-                verbose=False,
-                resume=True,
-                result_path=result_path,
-                parallel=strategy,
-            )
-        finally:
-            NoiseSweepResult.write = real_write
-
-        assert len(write_calls) == 1
+        # Verify the final result is complete (all sweep points processed)
+        final_result = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
+        assert final_result.is_complete
+        assert None not in final_result.failure_rates
+        assert len(final_result.failure_rates) == 4
 
     def test_resume_only_dispatches_missing_points_and_matches_uninterrupted(
         self, tmp_path
@@ -542,7 +533,7 @@ class TestRunParallel:
         would."""
         loky = pytest.importorskip("loky")
         strengths = [0.0, 0.1, 0.2, 0.3]
-        result_path = tmp_path / "resume.json"
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
 
         uninterrupted = make_runner(strengths, seed_stride=20, base_seed=1)
         uninterrupted_result = uninterrupted.run(
@@ -565,13 +556,21 @@ class TestRunParallel:
                     COLLECT_SHOT_DATA_ARGS,
                     EXPECTED_OUTCOMES,
                     resume=True,
-                    result_path=result_path,
+                    item_checkpoint_dir=item_checkpoint_dir,
                     verbose=False,
                 )
         finally:
             NoiseSweepRunner.build_program = real_build_program
 
-        assert len(NoiseSweepResult.read(result_path).failure_rates) == 2
+        # After the crash, only indices 0 and 1 completed; verify the
+        # partial result has the new sparse array model: full-length with
+        # None placeholders for incomplete indices.
+        partial_result = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
+        assert len(partial_result.failure_rates) == 4  # Full-length array
+        assert partial_result.failure_rates[0] is not None
+        assert partial_result.failure_rates[1] is not None
+        assert partial_result.failure_rates[2] is None  # Crashed at index 2
+        assert partial_result.failure_rates[3] is None  # Never dispatched
 
         # ParallelStrategy.make_chunks (in loqs.tools.paralleltools, not
         # noisesweeptools) is what actually calls chunk_round_robin now.
@@ -593,16 +592,22 @@ class TestRunParallel:
                 COLLECT_SHOT_DATA_ARGS,
                 EXPECTED_OUTCOMES,
                 resume=True,
-                result_path=result_path,
+                item_checkpoint_dir=item_checkpoint_dir,
                 verbose=False,
                 parallel=strategy,
             )
         finally:
             paralleltools.chunk_round_robin = real_chunk_round_robin
 
-        assert dispatched_items == [[2, 3]]
+        # Verify that only indices 2 and 3 were dispatched (as tuples with strength values)
+        assert len(dispatched_items) == 1
+        assert len(dispatched_items[0]) == 2
+        dispatched_indices = [item[0] for item in dispatched_items[0]]
+        assert sorted(dispatched_indices) == [2, 3]
+
         assert final_result.failure_rates == uninterrupted_result.failure_rates
         assert final_result.is_complete
+        assert None not in final_result.failure_rates  # Final result has no None
 
 
 class TestResume:
@@ -614,7 +619,7 @@ class TestResume:
             10, COLLECT_SHOT_DATA_ARGS, EXPECTED_OUTCOMES, verbose=False
         )
 
-        result_path = tmp_path / "resume.json"
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
 
         built_indices = []
         crash_triggered = []
@@ -636,7 +641,7 @@ class TestResume:
                     COLLECT_SHOT_DATA_ARGS,
                     EXPECTED_OUTCOMES,
                     resume=True,
-                    result_path=result_path,
+                    item_checkpoint_dir=item_checkpoint_dir,
                     verbose=False,
                 )
         finally:
@@ -653,7 +658,7 @@ class TestResume:
                 COLLECT_SHOT_DATA_ARGS,
                 EXPECTED_OUTCOMES,
                 resume=True,
-                result_path=result_path,
+                item_checkpoint_dir=item_checkpoint_dir,
                 verbose=False,
             )
         finally:
@@ -664,7 +669,7 @@ class TestResume:
         assert final_result.stderrs == uninterrupted_result.stderrs
         assert final_result.is_complete
 
-    def test_resume_without_result_path_raises(self):
+    def test_resume_without_item_checkpoint_dir_raises(self):
         runner = make_runner([0.0, 0.1], seed_stride=5)
         with pytest.raises(ValueError):
             runner.run(
@@ -672,14 +677,14 @@ class TestResume:
             )
 
     def test_resume_mismatched_strengths_raises(self, tmp_path):
-        result_path = tmp_path / "resume.json"
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
         runner1 = make_runner([0.0, 0.1], seed_stride=5)
         runner1.run(
             5,
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             resume=True,
-            result_path=result_path,
+            item_checkpoint_dir=item_checkpoint_dir,
             verbose=False,
         )
 
@@ -690,32 +695,32 @@ class TestResume:
                 COLLECT_SHOT_DATA_ARGS,
                 EXPECTED_OUTCOMES,
                 resume=True,
-                result_path=result_path,
+                item_checkpoint_dir=item_checkpoint_dir,
                 verbose=False,
             )
 
-    def test_result_path_without_resume_still_writes_incrementally(self, tmp_path):
-        result_path = tmp_path / "progress.json"
+    def test_item_checkpoint_dir_without_resume_still_writes_incrementally(self, tmp_path):
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
         runner = make_runner([0.0, 0.1, 0.2], seed_stride=5)
         runner.run(
             5,
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
-            result_path=result_path,
+            item_checkpoint_dir=item_checkpoint_dir,
             verbose=False,
         )
-        loaded = NoiseSweepResult.read(result_path)
+        loaded = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
         assert loaded.is_complete
 
     def test_keep_program_results_and_resume_are_independent(self, tmp_path):
-        result_path = tmp_path / "resume.json"
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
         runner = make_runner([0.0, 0.1], seed_stride=5)
         result = runner.run(
             5,
             COLLECT_SHOT_DATA_ARGS,
             EXPECTED_OUTCOMES,
             resume=True,
-            result_path=result_path,
+            item_checkpoint_dir=item_checkpoint_dir,
             keep_program_results=False,
             verbose=False,
         )
@@ -744,15 +749,16 @@ class TestNoiseSweepResult:
     def test_write_read_round_trip_incomplete(self, tmp_path):
         result = NoiseSweepResult(
             strengths=[0.0, 0.1, 0.2],
-            failure_rates=[0.0],
-            stderrs=[0.0],
+            failure_rates=[0.0, None, 0.1],  # Full-length with None placeholder
+            stderrs=[0.01, None, 0.02],     # Full-length with None placeholder
             num_shots=100,
         )
         path = tmp_path / "result.json"
         result.write(path)
         loaded = NoiseSweepResult.read(path)
         assert not loaded.is_complete
-        assert len(loaded.failure_rates) == 1
+        assert len(loaded.failure_rates) == 3  # Always full-length
+        assert loaded.completed_indices == [0, 2]
 
     def test_load_program_results(self, tmp_path):
         runner = make_runner([0.0, 0.1], seed_stride=5)
@@ -794,10 +800,13 @@ class TestNoiseSweepResult:
 
 class TestCompareNoiseSweeps:
     def _make_result(self, strengths, num_completed, num_shots=10):
+        # Create full-length arrays with None placeholders for incomplete indices
+        failure_rates = [0.0 if i < num_completed else None for i in range(len(strengths))]
+        stderrs = [0.0 if i < num_completed else None for i in range(len(strengths))]
         return NoiseSweepResult(
             strengths=strengths,
-            failure_rates=[0.0] * num_completed,
-            stderrs=[0.0] * num_completed,
+            failure_rates=failure_rates,
+            stderrs=stderrs,
             num_shots=num_shots,
         )
 

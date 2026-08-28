@@ -18,6 +18,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 from datetime import datetime
+import uuid
 
 from loqs.internal import Displayable, Serializable
 from loqs.core.history import (
@@ -68,6 +69,7 @@ class ProgramResults(Displayable):
         name: str = "(Unnamed program results)",
         parent_program: "QuantumProgram | str | Path | None" = None,
         checkpoint_enabled: bool = False,
+        checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
         max_memory_shots: int = 100,
     ) -> None:
@@ -87,6 +89,11 @@ class ProgramResults(Displayable):
 
         checkpoint_enabled:
             Whether checkpointing is enabled for this ProgramResults.
+
+        checkpoint_dir:
+            Directory where checkpoint files (including the parent program file,
+            if written) are stored. If None, a default of `./checkpoints` is
+            used when a write is actually needed.
         """
         self.shot_histories = (
             shot_histories if shot_histories is not None else {}
@@ -96,7 +103,9 @@ class ProgramResults(Displayable):
         self._unwritten_shots = set()
         """Set of shot indices that have not been written to checkpoint files yet."""
 
-        self._checkpoint_dir = None
+        self._checkpoint_dir = (
+            Path(checkpoint_dir) if checkpoint_dir is not None else None
+        )
         """Directory where checkpoint files are stored."""
 
         self._worker_id = None
@@ -148,12 +157,14 @@ class ProgramResults(Displayable):
         # Create a temporary directory for the program file if checkpoint_dir is not set
         if self._checkpoint_dir is None:
             self._checkpoint_dir = Path("./checkpoints")
-            self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # Ensure checkpoint directory exists
+        self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Create a unique filename for the program
         program_filename = (
             self._checkpoint_dir
-            / f"parent_program_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
+            / f"parent_program_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.h5"
         )
 
         # Write the program to file

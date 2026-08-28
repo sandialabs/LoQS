@@ -465,6 +465,7 @@ class QuantumProgram(Displayable):
             name=f"Results for {self.name}",
             parent_program=self,
             checkpoint_enabled=checkpoint_enabled,
+            checkpoint_dir=checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
         )
 

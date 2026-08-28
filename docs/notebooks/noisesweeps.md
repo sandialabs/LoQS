@@ -328,8 +328,8 @@ Counter(raw_results.collect_shot_data("logical_measurement", -1))
 
 Large sweeps (many strengths, many shots each) can take a while, and it would be a shame to lose
 all progress if the process is interrupted partway through. Passing `resume=True` together with
-`result_path` writes the in-progress `NoiseSweepResult` out after *every* completed point, not just
-at the end. If you call `run` again with the same `result_path`, already-completed points are
+`item_checkpoint_dir` writes the in-progress `NoiseSweepResult` out after *every* completed point, not just
+at the end. If you call `run` again with the same `item_checkpoint_dir`, already-completed points are
 recognized and skipped entirely -- at most one point's worth of shots is ever repeated, no matter
 how large the sweep is.
 
@@ -349,13 +349,13 @@ result_first_pass = resumable_runner.run(
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
     resume=True,
-    result_path="steane_zsweep_progress.json",
+    item_checkpoint_dir="steane_zsweep_progress",
 )
 result_first_pass.failure_rates
 ```
 
 Calling `run` again with the exact same arguments finds every point already recorded as complete in
-`steane_zsweep_progress.json`, so it returns instantly without simulating anything:
+`steane_zsweep_progress`, so it returns instantly without simulating anything:
 
 ```{code-cell} ipython3
 result_second_pass = resumable_runner.run(
@@ -363,7 +363,7 @@ result_second_pass = resumable_runner.run(
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
     resume=True,
-    result_path="steane_zsweep_progress.json",
+    item_checkpoint_dir="steane_zsweep_progress",
 )
 result_second_pass.failure_rates == result_first_pass.failure_rates
 ```
@@ -385,10 +385,14 @@ situations (e.g. generating a final report) where every series needs to be finis
 ```{code-cell} ipython3
 import warnings
 
+# Create a partial result with full-length arrays (None placeholders for incomplete indices)
+partial_failure_rates = [result_z.failure_rates[0], result_z.failure_rates[1], None, None]
+partial_stderrs = [result_z.stderrs[0], result_z.stderrs[1], None, None]
+
 partial_result = NoiseSweepResult(
     strengths=strengths,
-    failure_rates=result_z.failure_rates[:2],  # pretend only the first two points have finished
-    stderrs=result_z.stderrs[:2],
+    failure_rates=partial_failure_rates,  # Full-length array with None for unfinished points
+    stderrs=partial_stderrs,
     num_shots=result_z.num_shots,
 )
 

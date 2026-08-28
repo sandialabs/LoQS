@@ -385,6 +385,19 @@ def _run_parallel(
     for chunk_results in chunk_results_list:
         for index, result in chunk_results:
             newly_computed[index] = result
+
+    # For any items not already observed via journal polling (i.e., when item_checkpoint_dir
+    # is None), invoke on_item_done now so callers can collect results via the callback
+    for index, result in newly_computed.items():
+        if index not in observed_indices:
+            observed_indices.add(index)
+            if index in items_map:
+                item = items_map[index]
+                if on_item_done is not None:
+                    on_item_done(index, item, result)
+                if pbar is not None:
+                    pbar.update(1)
+
     return newly_computed
 
 

@@ -577,3 +577,39 @@ class TestBugRegressions:
         # Each index should appear exactly once, not twice
         for idx, count in index_counts.items():
             assert count == 1, f"Index {idx} was called {count} times (expected 1)"
+
+    def test_parallel_without_checkpoint_dir_still_fires_on_item_done(self):
+        """A parallel run with item_checkpoint_dir=None still invokes on_item_done
+        once per item, via a final catch-up pass over any item not already
+        observed through checkpoint-directory polling."""
+        loky = pytest.importorskip("loky")
+
+        calls = []
+
+        def track_calls(index, item, result):
+            calls.append((index, item, result))
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+
+        run_checkpointed_items(
+            list(range(4)),
+            _double_item,
+            parallel=strategy,
+            item_checkpoint_dir=None,  # No checkpoint directory
+            on_item_done=track_calls,
+        )
+
+        # on_item_done should have been called once for each item
+        assert len(calls) == 4, f"Expected 4 calls to on_item_done, got {len(calls)}"
+
+        # Verify all expected indices were called (order not guaranteed in parallel)
+        called_indices = {call_index for call_index, _, _ in calls}
+        assert called_indices == {0, 1, 2, 3}, f"Not all indices called: {called_indices}"
+
+        # Verify results are correct for each item
+        for call_index, call_item, call_result in calls:
+            assert call_item == call_index, f"Item mismatch for index {call_index}"
+            assert call_result == call_index * 2, f"Result mismatch for index {call_index}"

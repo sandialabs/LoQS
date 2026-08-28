@@ -89,7 +89,7 @@ class _TrivialCounterSetup:
             physical_to_logical=self.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=("counter", -1),
-            checkpoint_path=ckpt,
+            item_checkpoint_dir=ckpt,
         )
         kwargs.update(overrides)
         kwargs.update(self.program_kwargs)
@@ -379,11 +379,11 @@ class TestSimulateDatasetForEdesign:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_resume_without_checkpoint_path_raises(self, trivial_counter_setup):
-        """resume=True with no checkpoint_path is a configuration error,
+    def test_resume_without_item_checkpoint_dir_raises(self, trivial_counter_setup):
+        """resume=True with no item_checkpoint_dir is a configuration error,
         not something that's silently ignored."""
         s = trivial_counter_setup
-        with pytest.raises(ValueError, match="checkpoint_path"):
+        with pytest.raises(ValueError, match="item_checkpoint_dir"):
             s.simulate(resume=True)
 
     def test_max_frame_limit_defaults_to_100(self, trivial_counter_setup):
@@ -433,15 +433,16 @@ class TestSimulateDatasetForEdesignCheckpointing:
         self, trivial_counter_setup, tmp_path
     ):
         """Checkpointing doesn't change the resulting counts, and leaves a
-        checkpoint file behind."""
+        checkpoint directory behind."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
 
         ds = s.simulate(ckpt=ckpt)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
         assert ckpt.exists()
+        assert ckpt.is_dir()
 
     def test_resume_false_with_existing_checkpoint_raises(
         self, trivial_counter_setup, tmp_path
@@ -449,7 +450,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """A checkpoint that already exists is never silently overwritten
         or ignored -- resume=True must be passed explicitly."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(FileExistsError, match=re.escape(str(ckpt))):
@@ -461,7 +462,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """Resuming only re-simulates circuits missing from the checkpoint,
         while still returning a complete DataSet covering every circuit."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
 
         # Checkpoint only the first circuit up front.
         partial_edesign = ExperimentDesign([s.circs[0]])
@@ -475,17 +476,23 @@ class TestSimulateDatasetForEdesignCheckpointing:
     def test_crash_truncated_last_row_is_redone_on_resume(
         self, trivial_counter_setup, tmp_path
     ):
-        """A checkpoint row left incomplete by a simulated crash (no
-        trailing newline) is dropped and its circuit redone from scratch,
-        rather than failing to parse or being treated as complete."""
+        """A circuit left incomplete by a simulated crash (missing its item
+        checkpoint subdirectory) is redone from scratch on resume, rather
+        than failing or being treated as complete."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
+
+        # First run: complete both circuits
         s.simulate(ckpt=ckpt)
 
-        lines = ckpt.read_text().splitlines(keepends=True)
-        truncated = "".join(lines[:-1]) + lines[-1][: len(lines[-1]) // 2]
-        ckpt.write_text(truncated)
+        # Simulate a crash by deleting the second circuit's checkpoint subdir
+        # (indicating it was never completed)
+        item_1_dir = ckpt / "item_1"
+        if item_1_dir.exists():
+            import shutil
+            shutil.rmtree(item_1_dir)
 
+        # Resume should re-run the missing circuit
         ds = s.simulate(ckpt=ckpt, resume=True)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
@@ -497,7 +504,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """A resumed call with a different num_shots than the checkpoint
         was written with is a hard error naming that field."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(ValueError, match="num_shots"):
@@ -509,7 +516,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """A resumed call with a different collect_shot_data_args than the
         checkpoint was written with is a hard error naming that field."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(ValueError, match="collect_shot_data_args"):
@@ -524,7 +531,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         checkpoint was written with is a hard error naming that field, even
         though only one leaf value actually changed."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         changed_p2l = copy.deepcopy(s.physical_to_logical)
@@ -539,7 +546,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """force_resume=True proceeds despite a config mismatch that would
         otherwise raise, rather than requiring an untouched checkpoint."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         ds = s.simulate(ckpt=ckpt, resume=True, force_resume=True, num_shots=2)
@@ -555,7 +562,7 @@ def _checkpointed_circuits(checkpoint_path) -> set:
     """
     from pygsti.io import read_dataset
 
-    return set(read_dataset(str(checkpoint_path), verbosity=0).keys())
+    return set(read_dataset(str(checkpoint_path / "dataset.txt"), verbosity=0).keys())
 
 
 class TestSimulateDatasetForEdesignParallel:
@@ -636,7 +643,7 @@ class TestSimulateDatasetForEdesignParallel:
         returns a complete DataSet covering every circuit."""
         loky = pytest.importorskip("loky")
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
 
         partial_edesign = ExperimentDesign([s.circs[0]])
         s.simulate(ckpt=ckpt, edesign=partial_edesign)
@@ -648,7 +655,13 @@ class TestSimulateDatasetForEdesignParallel:
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
-        assert s.circs[1] in _checkpointed_circuits(ckpt)
+        # Verify both circuits are persisted in the dataset checkpoint file
+        assert (ckpt / "dataset.txt").exists()
+        from pygsti.io import read_dataset
+        persisted_ds = read_dataset(str(ckpt / "dataset.txt"), verbosity=0)
+        assert len(persisted_ds) == 2
+        assert s.circs[0] in persisted_ds
+        assert s.circs[1] in persisted_ds
 
 
 class TestSimulateDatasetForEdesignMemoryBound:
@@ -726,16 +739,17 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-        # Confirm per-circuit subdirs exist and contain checkpoints
+        # Confirm per-circuit subdirs exist and contain checkpoints using the
+        # new item_{index} naming scheme
         subdirs = list(shot_ckpt_dir.iterdir())
         assert len(subdirs) == 2, (
             f"Expected 2 circuit subdirs, got {len(subdirs)}: {subdirs}"
         )
+        assert set(d.name for d in subdirs) == {"item_0", "item_1"}
 
-        for circ in s.circs:
-            circ_subdir = pygstitools._circuit_checkpoint_subdir(
-                shot_ckpt_dir, circ
-            )
+        # Verify each circuit's checkpoint subdirectory by index
+        for circuit_index in range(len(s.circs)):
+            circ_subdir = shot_ckpt_dir / f"item_{circuit_index}"
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
 
             # Confirm the checkpoint file exists and can load the right number of shots
@@ -775,14 +789,15 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-        # Confirm both circuit subdirs exist independently
+        # Confirm both circuit subdirs exist independently using the new
+        # item_{index} naming scheme where index is the circuit's position
         subdirs = list(shot_ckpt_dir.iterdir())
         assert len(subdirs) == 2
+        assert set(d.name for d in subdirs) == {"item_0", "item_1"}
 
-        for circ in s.circs:
-            circ_subdir = pygstitools._circuit_checkpoint_subdir(
-                shot_ckpt_dir, circ
-            )
+        # Verify each circuit's checkpoint subdirectory by index
+        for circuit_index in range(len(s.circs)):
+            circ_subdir = shot_ckpt_dir / f"item_{circuit_index}"
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
             checkpoint_file = circ_subdir / "checkpoint.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
