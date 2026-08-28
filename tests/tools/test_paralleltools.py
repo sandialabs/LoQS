@@ -16,13 +16,13 @@ from loqs.tools.paralleltools import (
     _assign_chunks_to_workers,
     _canonical_shapes,
     _ResourceSampler,
-    _reused_slurm_allocation,
     _worker_plan,
     chunk_round_robin,
     format_profile_table,
     pin_worker_threads,
     plot_profile_results,
     profile_strategies,
+    reused_slurm_allocation,
     resolve_shot_executor,
     run_chunks_with_map_array_executor,
     run_chunks_with_submit_executor,
@@ -1351,7 +1351,7 @@ class TestReusedSlurmAllocation:
     def test_raises_without_slurm_job_id(self, monkeypatch):
         monkeypatch.delenv("SLURM_JOB_ID", raising=False)
         with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
-            with _reused_slurm_allocation():
+            with reused_slurm_allocation():
                 pass
 
     def test_installs_and_restores_path(self, monkeypatch):
@@ -1359,7 +1359,7 @@ class TestReusedSlurmAllocation:
 
         monkeypatch.setenv("SLURM_JOB_ID", "12345")
         original_path = os.environ.get("PATH", "")
-        with _reused_slurm_allocation():
+        with reused_slurm_allocation():
             new_path = os.environ["PATH"]
             assert new_path != original_path
             fake_dir = new_path.split(os.pathsep)[0]
@@ -1389,7 +1389,7 @@ class TestReusedSlurmAllocation:
             "#!/bin/bash\n#SBATCH --time=10\necho ran > " + str(marker) + "\n"
         )
         script.chmod(0o755)
-        with _reused_slurm_allocation():
+        with reused_slurm_allocation():
             output = subprocess.run(
                 ["sbatch", str(script)],
                 capture_output=True,

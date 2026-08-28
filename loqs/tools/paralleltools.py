@@ -1594,14 +1594,15 @@ echo "Submitted batch job ${fake_id}"
 
 
 @contextlib.contextmanager
-def _reused_slurm_allocation():
+def reused_slurm_allocation():
     """Temporarily installs the fake `sbatch` script (see
     `_FAKE_SBATCH_SCRIPT`) on `PATH`, so every `submitit`-driven
     `SlurmExecutor` call made inside this context runs against whatever
     real SLURM allocation this process is already inside, instead of
-    each independently requesting a new one from the scheduler -- see
-    `profile_strategies`'s `reuse_slurm_allocation` parameter for the
-    full rationale and its accepted limitations.
+    each independently requesting a new one from the scheduler -- usable
+    directly around any submitit-driven dispatch, not just through
+    `profile_strategies`'s own `reuse_slurm_allocation` parameter, which
+    is built on top of this same context manager.
 
     Requires actually running inside a real SLURM allocation already
     (checked via `SLURM_JOB_ID`); raises otherwise, since faking
@@ -1850,7 +1851,7 @@ def profile_strategies(
     strategies) installs a fake `sbatch` on `PATH` for the whole sweep,
     so every candidate strategy dispatches against one already-held
     SLURM allocation instead of each independently queueing -- see
-    `_reused_slurm_allocation` for the mechanism and its accepted
+    `reused_slurm_allocation` for the mechanism and its accepted
     limitations. Requires already running inside a real allocation.
 
     If one entry in `strategies` is fully serial (`program_executor` and
@@ -1862,7 +1863,7 @@ def profile_strategies(
     order) when more than one is.
     """
     ctx = (
-        _reused_slurm_allocation()
+        reused_slurm_allocation()
         if reuse_slurm_allocation
         else contextlib.nullcontext()
     )
