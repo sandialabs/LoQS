@@ -27,7 +27,7 @@ rather than reimplemented per tool.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import as_completed
+from concurrent.futures import as_completed, wait, FIRST_COMPLETED
 import contextlib
 from dataclasses import dataclass, field
 import functools
@@ -386,25 +386,43 @@ def run_chunks_with_submit_executor(
     worker_fn: Callable[[list[T]], R],
     chunks: Sequence[list[T]],
     desc: str = "Processing chunks",
+    on_poll: Callable[[], None] | None = None,
+    poll_interval: float = 1.0,
 ) -> list[R]:
     """Dispatch `worker_fn` over each of `chunks` via any `SubmitExecutor`
     (e.g. `loky` or `mpi4py.futures.MPIPoolExecutor`), returning one result
     per chunk in the same order as `chunks` (not completion order).
 
-    Progress is reported per completed chunk via
-    `tqdm(as_completed(...))`, matching this codebase's existing shot-level
-    executor pattern -- `as_completed` blocks efficiently on the futures'
-    own wait primitives rather than polling, so the bar advances as chunks
-    actually finish.
+    Progress is reported per completed chunk via `wait()` with
+    `FIRST_COMPLETED`, allowing an optional `on_poll()` callback to be
+    invoked periodically (every `poll_interval` seconds) even before chunks
+    complete. If `on_poll` is `None`, uses the original `as_completed`
+    pattern for efficient blocking (no polling overhead).
     """
     futures_to_index = {
         executor.submit(worker_fn, chunk): i for i, chunk in enumerate(chunks)
     }
     results: list[Any] = [None] * len(chunks)
-    for future in tqdm(
-        as_completed(futures_to_index), desc=desc, total=len(chunks)
-    ):
-        results[futures_to_index[future]] = future.result()
+
+    # If no on_poll callback, use the original efficient as_completed pattern
+    if on_poll is None:
+        for future in tqdm(
+            as_completed(futures_to_index), desc=desc, total=len(chunks)
+        ):
+            results[futures_to_index[future]] = future.result()
+        return results
+
+    # With on_poll callback, use polling-based wait loop
+    pending = set(futures_to_index.keys())
+    with tqdm(total=len(chunks), desc=desc) as bar:
+        while pending:
+            done, pending = wait(
+                pending, timeout=poll_interval, return_when=FIRST_COMPLETED
+            )
+            for future in done:
+                results[futures_to_index[future]] = future.result()
+            bar.update(len(done))
+            on_poll()
     return results
 
 
@@ -414,6 +432,7 @@ def run_chunks_with_map_array_executor(
     chunks: Sequence[list[T]],
     desc: str = "Processing chunks",
     poll_interval: float = 1.0,
+    on_poll: Callable[[], None] | None = None,
 ) -> list[R]:
     """Dispatch `worker_fn` over `chunks` via a single `MapArrayExecutor.
     map_array` call (e.g. one `sbatch` submission covering every chunk for
@@ -425,7 +444,8 @@ def run_chunks_with_map_array_executor(
     use `as_completed`; instead this polls each job's cheap `.done()`
     check (which only occasionally falls back to an actual cluster status
     call, throttled internally by `submitit` itself) every `poll_interval`
-    seconds.
+    seconds. An optional `on_poll()` callback is invoked once per iteration
+    of the polling loop (whether or not any jobs completed that iteration).
     """
     jobs = executor.map_array(worker_fn, chunks)
     pending = set(range(len(jobs)))
@@ -434,6 +454,8 @@ def run_chunks_with_map_array_executor(
             newly_done = {i for i in pending if jobs[i].done()}
             pending -= newly_done
             bar.update(len(newly_done))
+            if on_poll is not None:
+                on_poll()
             if pending:
                 time.sleep(poll_interval)
     return [job.result() for job in jobs]
@@ -582,6 +604,8 @@ class ParallelStrategy:
         worker_fn: Callable[[list[T]], R],
         chunks: Sequence[list[T]],
         desc: str = "Processing chunks",
+        on_poll: Callable[[], None] | None = None,
+        poll_interval: float = 1.0,
     ) -> list[R]:
         """Dispatch `worker_fn` over `chunks` via `program_executor`,
         picking the dispatch mechanism (`.submit()`-per-chunk vs. a bulk
@@ -595,6 +619,14 @@ class ParallelStrategy:
         result per chunk, in `chunks` order) is unaffected either way;
         collected stats are appended to `_resource_stats`, retrievable
         via `pop_resource_stats()`.
+
+        Parameters
+        ----------
+        on_poll : Callable[[], None] | None
+            Optional callback invoked during dispatch polling (only relevant
+            for certain executors/strategies).
+        poll_interval : float
+            Polling interval in seconds (default 1.0).
         """
         assert self.program_executor is not None, (
             "dispatch() requires program_executor to be set; check "
@@ -613,11 +645,21 @@ class ParallelStrategy:
         # efficient path it's chosen for.
         if isinstance(executor, MapArrayExecutor):
             raw = run_chunks_with_map_array_executor(
-                executor, dispatched_fn, chunks, desc=desc
+                executor,
+                dispatched_fn,
+                chunks,
+                desc=desc,
+                poll_interval=poll_interval,
+                on_poll=on_poll,
             )
         else:
             raw = run_chunks_with_submit_executor(
-                executor, dispatched_fn, chunks, desc=desc
+                executor,
+                dispatched_fn,
+                chunks,
+                desc=desc,
+                on_poll=on_poll,
+                poll_interval=poll_interval,
             )
         if not self.collect_resource_stats:
             return raw
