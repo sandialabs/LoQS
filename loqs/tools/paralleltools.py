@@ -295,7 +295,7 @@ class _ResourceSampler:
             return
         current = {self._process.pid: self._process}
         for child in children:
-            current[child.pid] = child
+            current[child.pid] = self._known_procs.get(child.pid, child)
 
         # psutil.Process.children() constructs a brand-new Process object
         # for every child on every call, so cpu_percent(interval=None)'s

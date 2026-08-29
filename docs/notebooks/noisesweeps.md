@@ -144,7 +144,10 @@ runner = NoiseSweepRunner(
     default_noise_model=build_noise_model,
     serialized_callables={"default_noise_model": noise_model_source},
     seed_stride=200,  # comfortably larger than num_shots below, so per-point seed ranges never overlap
-    name="Steane Z-basis QEC sweep",
+    name="Steane Z-basis QEC sweep (demonstration)",
+    num_shots=1,  # minimal for demonstration
+    collect_shot_data_args=[("logical_measurement", -1)],
+    expected_outcomes=[0],
 )
 ```
 
@@ -169,12 +172,20 @@ pair from each using the same per-shot pass/fail convention as `fttools.test_pro
 the whole sweep.
 
 ```{code-cell} ipython3
-result_z = runner.run(
+runner = NoiseSweepRunner(
+    strengths,
+    instruction_stack=stack_z,
+    initial_history=init_history,
+    default_noise_model=build_noise_model,
+    serialized_callables={"default_noise_model": noise_model_source},
+    seed_stride=200,
+    name="Steane Z-basis QEC sweep",
     num_shots=40,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
 )
 
+result_z = runner.run()
 result_z.failure_rates
 ```
 
@@ -214,13 +225,12 @@ runner_x = NoiseSweepRunner(
     serialized_callables={"default_noise_model": noise_model_source},
     seed_stride=200,
     name="Steane X-basis QEC sweep",
-)
-
-result_x = runner_x.run(
     num_shots=40,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
 )
+
+result_x = runner_x.run()
 
 results = compare_noise_sweeps({"Z basis": result_z, "X basis": result_x})
 plot_noise_sweep(results, reference_slope=2)
@@ -275,6 +285,9 @@ try:
         instruction_stack=stack_z,
         default_noise_model=env["rebuilt_noise_model"],
         seed_stride=10,
+        num_shots=1,
+        collect_shot_data_args=[("logical_measurement", -1)],
+        expected_outcomes=[0],
     )
 except OSError as e:
     print(f"Failed as expected: {e}")
@@ -292,6 +305,9 @@ runner_with_override = NoiseSweepRunner(
         "default_noise_model": "def rebuilt_noise_model(strength):\n    return build_noise_model(strength)\n"
     },
     seed_stride=10,
+    num_shots=1,
+    collect_shot_data_args=[("logical_measurement", -1)],
+    expected_outcomes=[0],
 )
 ```
 
@@ -304,7 +320,14 @@ re-running anything), pass `keep_program_results=True` along with `program_resul
 stem that gets a `_sweep_<index>` suffix inserted for each point.
 
 ```{code-cell} ipython3
-result_kept = runner.run(
+runner_kept = NoiseSweepRunner(
+    strengths,
+    instruction_stack=stack_z,
+    initial_history=init_history,
+    default_noise_model=build_noise_model,
+    serialized_callables={"default_noise_model": noise_model_source},
+    seed_stride=200,
+    name="Steane Z-basis QEC sweep (keeping shots)",
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
@@ -312,6 +335,7 @@ result_kept = runner.run(
     program_results_dir="steane_zsweep_shots.json",
 )
 
+result_kept = runner_kept.run()
 result_kept.program_results_paths
 ```
 
@@ -327,11 +351,11 @@ Counter(raw_results.collect_shot_data("logical_measurement", -1))
 ## Resuming an interrupted sweep
 
 Large sweeps (many strengths, many shots each) can take a while, and it would be a shame to lose
-all progress if the process is interrupted partway through. Passing `resume=True` together with
-`item_checkpoint_dir` writes the in-progress `NoiseSweepResult` out after *every* completed point, not just
-at the end. If you call `run` again with the same `item_checkpoint_dir`, already-completed points are
-recognized and skipped entirely -- at most one point's worth of shots is ever repeated, no matter
-how large the sweep is.
+all progress if the process is interrupted partway through. Passing `item_checkpoint_dir` to the
+constructor writes the in-progress `NoiseSweepResult` out after *every* completed point, not just
+at the end. If you construct a fresh `NoiseSweepRunner` with the same `item_checkpoint_dir` that
+already contains progress, already-completed points are recognized and skipped entirely -- at most one
+point's worth of shots is ever repeated, no matter how large the sweep is.
 
 ```{code-cell} ipython3
 resumable_runner = NoiseSweepRunner(
@@ -342,29 +366,23 @@ resumable_runner = NoiseSweepRunner(
     serialized_callables={"default_noise_model": noise_model_source},
     seed_stride=200,
     name="Resumable sweep",
-)
-
-result_first_pass = resumable_runner.run(
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
-    resume=True,
     item_checkpoint_dir="steane_zsweep_progress",
 )
+
+result_first_pass = resumable_runner.run()
 result_first_pass.failure_rates
 ```
 
-Calling `run` again with the exact same arguments finds every point already recorded as complete in
-`steane_zsweep_progress`, so it returns instantly without simulating anything:
+Resuming from the checkpoint directory is done by constructing a second `NoiseSweepRunner` via
+`from_noise_sweep_runner` (or by constructing a fresh runner with the same config), pointing to
+the same `item_checkpoint_dir`. Every point already recorded as complete in `steane_zsweep_progress`
+is recognized and skipped entirely, returning instantly without simulating anything:
 
 ```{code-cell} ipython3
-result_second_pass = resumable_runner.run(
-    num_shots=20,
-    collect_shot_data_args=[("logical_measurement", -1)],
-    expected_outcomes=[0],
-    resume=True,
-    item_checkpoint_dir="steane_zsweep_progress",
-)
+result_second_pass = NoiseSweepRunner.from_noise_sweep_runner(resumable_runner).run()
 result_second_pass.failure_rates == result_first_pass.failure_rates
 ```
 

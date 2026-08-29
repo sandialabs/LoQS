@@ -925,22 +925,36 @@ class TestResourceSampler:
         """A child appearing after self is already known gets primed and
         excluded on its own first sample, while the already-known self
         process still contributes normally in that same round -- the
-        child then contributes starting the next sample."""
+        child then contributes starting the next sample. The fake children()
+        returns a different _FakeProcess object (same pid, same cpu_value)
+        on each call, mimicking real psutil.Process.children() behavior,
+        to verify the cached object is reused rather than the fresh one."""
         pytest.importorskip("psutil")
         sampler = self._bare_sampler()
         self_proc = _FakeProcess(pid=1, cpu_value=10.0)
-        child = _FakeProcess(pid=2, cpu_value=99.0)
-        self_proc.children = lambda recursive=True: [child]
+        # Two distinct _FakeProcess objects, both pid=2, both cpu_value=99.0
+        first_child = _FakeProcess(pid=2, cpu_value=99.0)
+        second_child = _FakeProcess(pid=2, cpu_value=99.0)
+        # Alternate between the two on successive calls to children()
+        children_list = [first_child, second_child]
+        children_iter = iter(children_list)
+        self_proc.children = lambda recursive=True: [next(children_iter)]
         sampler._process = self_proc
         sampler._known_procs = {1: self_proc}
 
         sampler._sample()
         assert sampler._cpu_samples == [10.0]
-        assert child.cpu_percent_calls == 1
+        assert first_child.cpu_percent_calls == 1
         assert 2 in sampler._known_procs
+        # Verify the cached object is the first child
+        assert sampler._known_procs[2] is first_child
 
         sampler._sample()
         assert sampler._cpu_samples == [10.0, 10.0 + 99.0]
+        # The first child object should have been reused and queried again
+        assert first_child.cpu_percent_calls == 2
+        # The second child object should never have been used
+        assert second_child.cpu_percent_calls == 0
 
     def test_real_child_process_is_measured_across_multiple_samples(self):
         """End-to-end check against a real OS process tree (not a

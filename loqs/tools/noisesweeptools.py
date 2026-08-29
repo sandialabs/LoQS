@@ -19,6 +19,7 @@ noise model and instruction stack entirely up to the caller.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+import copy
 import functools
 import math
 from pathlib import Path
@@ -46,7 +47,7 @@ from loqs.tools.paralleltools import (
     pin_worker_threads,
     resolve_shot_executor,
 )
-from loqs.tools.programrunner import run_checkpointed_items
+from loqs.tools.programrunner import ProgramRunner, run_checkpointed_items
 
 # Every QuantumProgram.__init__ parameter except `default_base_seed`, which NoiseSweepRunner
 # controls exclusively. Kept as a single source of truth for both __init__'s explicit parameter
@@ -116,28 +117,6 @@ def _sweep_point_checkpoint_subdir(
     point's index is already short, unique, and stable -- no hashing needed.
     """
     return Path(shot_checkpoint_dir) / f"point_{index}"
-
-
-def _validate_checkpoint_kwargs(
-    checkpoint_batch_size: int | None,
-    shot_checkpoint_dir: str | Path | None,
-    run_kwargs: dict,
-) -> None:
-    """Validate checkpoint-related keyword arguments for NoiseSweepRunner.run.
-
-    Raises ValueError if checkpoint_batch_size is set without shot_checkpoint_dir,
-    or if checkpoint_dir is passed in run_kwargs while shot_checkpoint_dir is also set
-    (the two mechanisms conflict).
-    """
-    if checkpoint_batch_size is not None and shot_checkpoint_dir is None:
-        raise ValueError(
-            "checkpoint_batch_size requires shot_checkpoint_dir to be set."
-        )
-    if "checkpoint_dir" in run_kwargs and shot_checkpoint_dir is not None:
-        raise ValueError(
-            "checkpoint_dir in **run_kwargs conflicts with shot_checkpoint_dir; "
-            "use only one of the two (or leave both unset)."
-        )
 
 
 def _resolve_program_results_path(
@@ -254,27 +233,43 @@ def _run_one_sweep_point(
     return failure_rate, stderr, path
 
 
-class NoiseSweepRunner(Displayable):
+class NoiseSweepRunner(ProgramRunner):
     """Builds and runs one `QuantumProgram` per value in a range of noise-parameter values.
 
     RNG seeding is controlled entirely here (`base_seed + index * seed_stride`), never touched by
     any of the QuantumProgram-forwarding parameters below -- this class is the sole owner of
     `QuantumProgram` construction, so a sweep is deterministic regardless of what those parameters
     (fixed or callable) do internally.
+
+    Encapsulates all configuration needed to run a sweep, including parallel/checkpoint settings,
+    in a serializable object that can be recovered after a crash via
+    `NoiseSweepRunner.read(runner_path).run()`. Whether a call resumes a prior run is inferred
+    entirely from `item_checkpoint_dir`'s own on-disk state -- see `ProgramRunner.run`.
     """
 
     _CACHE_ON_SERIALIZE = True
-    _SERIALIZE_ATTRS = [
+    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
         "strengths",
         "base_seed",
         "seed_stride",
         "_quantum_program_values",
         "_quantum_program_serialized_callables",
+        "num_shots",
+        "collect_shot_data_args",
+        "expected_outcomes",
+        "keep_program_results",
+        "program_results_dir",
+        "verbose",
+        "metadata",
+        "run_kwargs",
     ]
 
     def __init__(
         self,
         strengths: Sequence[Any],
+        num_shots: int,
+        collect_shot_data_args: Sequence[HistoryDataCollectorLike],
+        expected_outcomes: Sequence,
         base_seed: int = 0,
         seed_stride: int | None = None,
         instruction_stack: (
@@ -303,6 +298,19 @@ class NoiseSweepRunner(Displayable):
         override_global_instructions: bool | Callable[[Any], bool] = False,
         name: str | Callable[[Any], str] = "(Unnamed quantum program)",
         serialized_callables: Mapping[str, str] | None = None,
+        keep_program_results: bool = False,
+        program_results_dir: (
+            str | Path | Callable[[Any], str | Path] | None
+        ) = None,
+        verbose: bool = True,
+        metadata: dict | None = None,
+        run_kwargs: dict | None = None,
+        item_checkpoint_dir: str | Path | None = None,
+        force_resume: bool = False,
+        parallel_strategy: ParallelStrategy | None = None,
+        checkpoint_batch_size: int | None = None,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading_enabled: bool = True,
     ) -> None:
         """
         Parameters
@@ -317,9 +325,9 @@ class NoiseSweepRunner(Displayable):
 
         seed_stride:
             Spacing between sweep points' seed ranges. Defaults to `None`, meaning "use
-            `num_shots`" (resolved in `run`, since `num_shots` isn't known until then). This keeps
-            each point's seed range exactly as wide as the shots that will use it and no wider,
-            with no arbitrary constant.
+            `num_shots`" (resolved in `__init__` since `num_shots` is now always known upfront).
+            This keeps each point's seed range exactly as wide as the shots that will use it and
+            no wider, with no arbitrary constant.
             # TODO(#74): revisit once shot-level seeding itself is revisited; `seed_stride` still
             # assumes one seed per shot (`default_base_seed + shot index`, per QuantumProgram.run).
 
@@ -342,13 +350,53 @@ class NoiseSweepRunner(Displayable):
             exactly how `inspect` fails in a given context). Not intended to be set directly by
             most callers; used internally when reconstructing a `NoiseSweepRunner` from a decoded
             file.
+
+        num_shots:
+            Number of shots to run per sweep point. Required (no default).
+
+        collect_shot_data_args:
+            Specification(s) for extracting outcomes from each shot. Required (no default).
+
+        expected_outcomes:
+            Expected outcome value(s) for pass/fail determination. Required (no default).
+
+        keep_program_results:
+            If True, write each sweep point's `ProgramResults` to disk. Requires
+            `program_results_dir` to be set.
+
+        program_results_dir:
+            Directory for writing sweep points' `ProgramResults` dumps when
+            `keep_program_results=True`. Can be a fixed path or a callable taking strength.
+
+        verbose:
+            Whether to print per-point progress messages (default True).
+
+        metadata:
+            Free-form metadata dict stored with the final `NoiseSweepResult`.
+
+        run_kwargs:
+            Additional keyword arguments to forward to `QuantumProgram.run()`, as a dict
+            rather than `**kwargs`. Replaces the old `**run_kwargs` catch-all.
+
+        item_checkpoint_dir, force_resume, parallel_strategy, checkpoint_batch_size,
+        shot_checkpoint_dir, lazy_loading_enabled:
+            See `ProgramRunner.__init__` for these inherited configuration fields.
         """
+        super().__init__(
+            parallel_strategy=parallel_strategy,
+            item_checkpoint_dir=item_checkpoint_dir,
+            force_resume=force_resume,
+            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading_enabled=lazy_loading_enabled,
+        )
         self.strengths = list(strengths)
         self.base_seed = base_seed
         self.seed_stride = seed_stride
-        # Resolved lazily in `run` (defaults to num_shots); `build_program` requires this to
-        # already be set, either here (if seed_stride was given explicitly) or by a prior `run`.
-        self._resolved_seed_stride: int | None = seed_stride
+        # Resolved immediately since num_shots is now always known upfront
+        self._resolved_seed_stride: int | None = (
+            seed_stride if seed_stride is not None else num_shots
+        )
 
         self.instruction_stack = instruction_stack
         self.initial_history = initial_history
@@ -360,14 +408,42 @@ class NoiseSweepRunner(Displayable):
         self.override_global_instructions = override_global_instructions
         self.name = name
 
+        self.num_shots = num_shots
+        self.collect_shot_data_args = collect_shot_data_args
+        self.expected_outcomes = expected_outcomes
+        self.keep_program_results = keep_program_results
+        self.program_results_dir = program_results_dir
+        self.verbose = verbose
+        self.metadata = metadata or {}
+        self.run_kwargs = run_kwargs
+
+        # Validation: moved from run() to __init__
+        if self.num_shots > self._resolved_seed_stride:
+            raise ValueError(
+                f"num_shots ({self.num_shots}) must be <= seed_stride "
+                f"({self._resolved_seed_stride}), or seed ranges from adjacent sweep "
+                "points would overlap."
+            )
+
+        if self.keep_program_results and self.program_results_dir is None:
+            raise ValueError(
+                "program_results_dir is required when keep_program_results=True."
+            )
+
+        if self.run_kwargs is not None and "checkpoint_dir" in self.run_kwargs:
+            if self.shot_checkpoint_dir is not None:
+                raise ValueError(
+                    "checkpoint_dir in run_kwargs conflicts with shot_checkpoint_dir; "
+                    "use only one of the two (or leave both unset)."
+                )
+
         serialized_callables = (
             dict(serialized_callables) if serialized_callables else {}
         )
 
         # Split the QuantumProgram-forwarding parameters into "fixed value" vs. "callable"
         # buckets, since `_SERIALIZE_ATTRS` is a fixed, class-level list and can't conditionally
-        # include/exclude an attribute name based on a particular instance's runtime type (unlike
-        # `Instruction.apply_fn`, which is *always* a callable and so never has this ambiguity).
+        # include/exclude an attribute name based on a particular instance's runtime type.
         self._quantum_program_values: dict[str, Any] = {}
         self._quantum_program_serialized_callables: dict[str, str] = {}
         for param_name in _QUANTUM_PROGRAM_PARAM_NAMES:
@@ -410,25 +486,192 @@ class NoiseSweepRunner(Displayable):
             base_seed=attr_dict["base_seed"],
             seed_stride=attr_dict["seed_stride"],
             serialized_callables=serialized_callables,
+            num_shots=attr_dict["num_shots"],
+            collect_shot_data_args=attr_dict["collect_shot_data_args"],
+            expected_outcomes=attr_dict["expected_outcomes"],
+            keep_program_results=attr_dict["keep_program_results"],
+            program_results_dir=attr_dict["program_results_dir"],
+            verbose=attr_dict["verbose"],
+            metadata=attr_dict["metadata"],
+            run_kwargs=attr_dict["run_kwargs"],
+            parallel_strategy=attr_dict["parallel_strategy"],
+            item_checkpoint_dir=attr_dict["item_checkpoint_dir"],
+            force_resume=attr_dict["force_resume"],
+            checkpoint_batch_size=attr_dict["checkpoint_batch_size"],
+            shot_checkpoint_dir=attr_dict["shot_checkpoint_dir"],
+            lazy_loading_enabled=attr_dict["lazy_loading_enabled"],
             **resolved,
+        )
+
+    @classmethod
+    def from_noise_sweep_runner(
+        cls,
+        other: "NoiseSweepRunner",
+        strengths: Sequence[Any] | None = None,
+        base_seed: int | None = None,
+        seed_stride: int | None = None,
+        instruction_stack: (
+            InstructionStackLike | Callable[[Any], InstructionStackLike] | None
+        ) = None,
+        initial_history: (
+            HistoryLike | Callable[[Any], HistoryLike] | None
+        ) = None,
+        default_noise_model: (
+            BaseNoiseModel | str | Callable[[Any], BaseNoiseModel | str] | None
+        ) = None,
+        expiring_state: bool | Callable[[Any], bool] | None = None,
+        global_instructions: (
+            Mapping[str, Instruction]
+            | Callable[[Any], Mapping[str, Instruction]]
+            | None
+        ) = None,
+        state_type: (
+            type[BaseQuantumState]
+            | Callable[[Any], type[BaseQuantumState]]
+            | None
+        ) = None,
+        patch_types: (
+            Mapping[str, QECCode]
+            | Callable[[Any], Mapping[str, QECCode]]
+            | None
+        ) = None,
+        override_global_instructions: (
+            bool | Callable[[Any], bool] | None
+        ) = None,
+        name: str | Callable[[Any], str] | None = None,
+        num_shots: int | None = None,
+        collect_shot_data_args: (
+            Sequence[HistoryDataCollectorLike] | None
+        ) = None,
+        expected_outcomes: Sequence | None = None,
+        keep_program_results: bool | None = None,
+        program_results_dir: (
+            str | Path | Callable[[Any], str | Path] | None
+        ) = None,
+        verbose: bool | None = None,
+        metadata: dict | None = None,
+        run_kwargs: dict | None = None,
+        item_checkpoint_dir: str | Path | None = None,
+        force_resume: bool | None = None,
+        parallel_strategy: ParallelStrategy | None = None,
+        checkpoint_batch_size: int | None = None,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading_enabled: bool | None = None,
+    ) -> "NoiseSweepRunner":
+        """Create a new NoiseSweepRunner from an existing one with optional overrides.
+
+        Mirrors `QuantumProgram.from_quantum_program`'s copy-with-overrides convention:
+        `None` for any override parameter means "keep `other`'s value," covering every
+        constructor field. Replaces the "call `.run()` twice on one instance with different
+        kwargs" pattern with building a second runner via this method and calling `.run()`
+        on each independently.
+        """
+        return cls(
+            strengths=strengths if strengths is not None else other.strengths,
+            base_seed=base_seed if base_seed is not None else other.base_seed,
+            seed_stride=(
+                seed_stride if seed_stride is not None else other.seed_stride
+            ),
+            instruction_stack=(
+                instruction_stack
+                if instruction_stack is not None
+                else other.instruction_stack
+            ),
+            initial_history=(
+                initial_history
+                if initial_history is not None
+                else other.initial_history
+            ),
+            default_noise_model=(
+                default_noise_model
+                if default_noise_model is not None
+                else other.default_noise_model
+            ),
+            expiring_state=(
+                expiring_state
+                if expiring_state is not None
+                else other.expiring_state
+            ),
+            global_instructions=(
+                global_instructions
+                if global_instructions is not None
+                else other.global_instructions
+            ),
+            state_type=(
+                state_type if state_type is not None else other.state_type
+            ),
+            patch_types=(
+                patch_types if patch_types is not None else other.patch_types
+            ),
+            override_global_instructions=(
+                override_global_instructions
+                if override_global_instructions is not None
+                else other.override_global_instructions
+            ),
+            name=name if name is not None else other.name,
+            num_shots=num_shots if num_shots is not None else other.num_shots,
+            collect_shot_data_args=(
+                collect_shot_data_args
+                if collect_shot_data_args is not None
+                else other.collect_shot_data_args
+            ),
+            expected_outcomes=(
+                expected_outcomes
+                if expected_outcomes is not None
+                else other.expected_outcomes
+            ),
+            keep_program_results=(
+                keep_program_results
+                if keep_program_results is not None
+                else other.keep_program_results
+            ),
+            program_results_dir=(
+                program_results_dir
+                if program_results_dir is not None
+                else other.program_results_dir
+            ),
+            verbose=verbose if verbose is not None else other.verbose,
+            metadata=metadata if metadata is not None else other.metadata,
+            run_kwargs=(
+                run_kwargs if run_kwargs is not None else other.run_kwargs
+            ),
+            item_checkpoint_dir=(
+                item_checkpoint_dir
+                if item_checkpoint_dir is not None
+                else other.item_checkpoint_dir
+            ),
+            force_resume=(
+                force_resume
+                if force_resume is not None
+                else other.force_resume
+            ),
+            parallel_strategy=(
+                parallel_strategy
+                if parallel_strategy is not None
+                else other.parallel_strategy
+            ),
+            checkpoint_batch_size=(
+                checkpoint_batch_size
+                if checkpoint_batch_size is not None
+                else other.checkpoint_batch_size
+            ),
+            shot_checkpoint_dir=(
+                shot_checkpoint_dir
+                if shot_checkpoint_dir is not None
+                else other.shot_checkpoint_dir
+            ),
+            lazy_loading_enabled=(
+                lazy_loading_enabled
+                if lazy_loading_enabled is not None
+                else other.lazy_loading_enabled
+            ),
         )
 
     def build_program(self, index: int) -> QuantumProgram:
         """Resolve each QuantumProgram-forwarding parameter at `self.strengths[index]` (calling it
         if it's a per-point callable, using it as-is otherwise) and construct the QuantumProgram
         for that sweep point, using seed `self.base_seed + index * self._resolved_seed_stride`.
-
-        Requires `self._resolved_seed_stride` to already be set: either an explicit `seed_stride`
-        was given at construction, or `run` has been called at least once (which resolves it to
-        `num_shots` when `seed_stride` was left `None`).
         """
-        if self._resolved_seed_stride is None:
-            raise RuntimeError(
-                "Cannot build a program: seed_stride was not given explicitly and has not "
-                "yet been resolved by run() (which defaults it to num_shots). Either pass an "
-                "explicit seed_stride at construction, or call run() first."
-            )
-
         strength = self.strengths[index]
         resolved = {
             param_name: _resolve_value(getattr(self, param_name), strength)
@@ -437,215 +680,96 @@ class NoiseSweepRunner(Displayable):
         seed = self.base_seed + index * self._resolved_seed_stride
         return QuantumProgram(default_base_seed=seed, **resolved)
 
-    def run(
+    def _get_items(self) -> Sequence:
+        """Return sweep point indices."""
+        return list(range(len(self.strengths)))
+
+    def _item_key_fn(self) -> Callable[[int], str] | None:
+        """Use position as item identity (sweep points have no better natural key)."""
+        return None
+
+    def _process_item_fn(self) -> Callable:
+        """Return the _run_one_sweep_point function."""
+        return _run_one_sweep_point
+
+    def _static_kwargs(self) -> dict[str, Any]:
+        """Return static kwargs for _run_one_sweep_point."""
+        runner_snapshot = copy.copy(self)
+        runner_snapshot.parallel_strategy = None
+        return {
+            "runner": runner_snapshot,
+            "num_shots": self.num_shots,
+            "collect_shot_data_args": self.collect_shot_data_args,
+            "expected_outcomes": self.expected_outcomes,
+            "run_kwargs": {
+                **(self.run_kwargs or {}),
+                "verbose": self.verbose,
+            },
+            "keep_program_results": self.keep_program_results,
+            "program_results_dir": self.program_results_dir,
+            "shot_checkpoint_dir": self.shot_checkpoint_dir,
+            "checkpoint_batch_size": self.checkpoint_batch_size,
+            "lazy_loading_enabled": self.lazy_loading_enabled,
+        }
+
+    def _make_on_item_done(
         self,
-        num_shots: int,
-        collect_shot_data_args: Sequence[HistoryDataCollectorLike],
-        expected_outcomes: Sequence,
-        keep_program_results: bool = False,
-        program_results_dir: (
-            str | Path | Callable[[Any], str | Path] | None
-        ) = None,
-        resume: bool = False,
-        item_checkpoint_dir: str | Path | None = None,
-        force_resume: bool = False,
-        verbose: bool = True,
-        metadata: dict | None = None,
-        parallel: ParallelStrategy | None = None,
-        *,
-        checkpoint_batch_size: int | None = None,
-        shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
-        **run_kwargs,
-    ) -> "NoiseSweepResult":
-        """Run the full sweep.
-
-        Resolves `seed_stride` to `self.seed_stride or num_shots` and asserts
-        `num_shots <= seed_stride` (hard failure, since a violation would mean seed ranges from
-        adjacent points overlap); for each point, builds the QuantumProgram (`build_program`), runs
-        it for `num_shots` shots (a single, ordinary `QuantumProgram.run(num_shots=num_shots,
-        **run_kwargs)` call -- `run_kwargs` is forwarded as-is, entirely orthogonal to this
-        method's own point-level `resume` support), extracts `(failure_rate, stderr)` via
-        `collect_shot_data_args`/`expected_outcomes` (same per-shot pass/fail convention as
-        `fttools.test_program_output`), then immediately disposes of that point's `ProgramResults`
-        -- discarding it if `keep_program_results` is False, or writing it to `program_results_dir`
-        (a single self-contained `ProgramResults.write(...)` dump, not the incremental checkpoint
-        mechanism) if True. Returns one `NoiseSweepResult` covering every point.
-
-        By default (`parallel` `None`, or given with `program_executor` unset), sweep points
-        are processed strictly sequentially in a plain Python loop. This is what makes point-level
-        resume tractable at its finest granularity: at any moment, every point before the current
-        one is either fully complete or not yet started, never partially interleaved with another
-        point, and the persisted `NoiseSweepResult` is rewritten after every single completed
-        point.
-
-        Passing `parallel` (a [](api:ParallelStrategy) with `program_executor` set) instead
-        parallelizes across the still-remaining sweep points, using the same
-        `loqs.tools.paralleltools` chunking/dispatch machinery [](api:EdesignRunner)
-        uses: remaining points are split into `parallel.n_program_chunks` round-robin chunks,
-        and each chunk's points are run as a unit by a worker that pins its own thread pools to one
-        thread before doing any real numerical work. The whole dispatched batch is treated as one
-        atomic unit for resume purposes: the persisted `NoiseSweepResult` is only extended and
-        rewritten once the *entire* batch of remaining points has returned, not once per point --
-        a crash mid-dispatch loses the whole batch, not just whichever point was in progress, the
-        real trade-off for running points concurrently at all. The `index < len(failure_rates)`-
-        is-complete resume invariant itself is never violated either way: every point ever recorded
-        is genuinely complete, and results are always written back in strict index order
-        regardless of which chunk (or completion order) actually produced them.
-
-        For hybrid parallelism (shots within a point *and* points across a chunk, both at once),
-        `parallel.shot_executor` is forwarded as `QuantumProgram.run`'s own `shot_executor`
-        argument for every point -- see [](api:ParallelStrategy) for why it must be a factory
-        callable (not a live executor) whenever `program_executor` is also set, and for what
-        happens when it's given without any `program_executor` (resolved once up front and reused
-        across every point, since no process boundary is crossed in that case).
-
-        If `keep_program_results` is True, `program_results_dir` must be given (a fixed value or
-        callable), or this raises `ValueError`.
-
-        Shot-level checkpointing via [](api:QuantumProgram.run) can be enabled by setting
-        `shot_checkpoint_dir` and `checkpoint_batch_size` together. When `shot_checkpoint_dir`
-        is set, each sweep point gets its own isolated subdirectory under it (named `point_{index}`),
-        preventing collisions when multiple points process under the same worker (whether in the
-        serial loop or within one parallel chunk). `lazy_loading_enabled` controls whether
-        checkpointed shots are evicted from memory once written (see
-        [](api:QuantumProgram.run) for details). If `checkpoint_batch_size` is given without
-        `shot_checkpoint_dir`, raises `ValueError`. Passing `checkpoint_dir` directly via
-        `**run_kwargs` while `shot_checkpoint_dir` is also set raises `ValueError` (the two
-        mechanisms conflict).
-
-        Resume (`resume=True`, requires `item_checkpoint_dir`): `item_checkpoint_dir` is a
-        directory where this method maintains a journal (`journal_*.jsonl`) and stores the
-        in-progress `NoiseSweepResult` as `result.h5`. On start, if the directory already
-        exists, `result.h5` is read back and validated against this call's `strengths`/`num_shots`
-        (raises `ValueError` on mismatch unless `force_resume=True`); only indices with `None` in
-        the loaded `failure_rates` are run again. Completed indices may appear in any order and
-        are not necessarily contiguous (per the new sparse `NoiseSweepResult` data model).
-        `resume=True` without `item_checkpoint_dir` raises `ValueError`. `item_checkpoint_dir` may
-        also be given with `resume=False`, purely to record incremental progress for external
-        monitoring; it just won't be consulted on the next call.
-
-        `force_resume` (only relevant when `resume=True`) bypasses a mismatch between the
-        loaded `strengths`/`num_shots` and this call's own, trusting the journal entries anyway.
-        """
-        self._resolved_seed_stride = (
-            self.seed_stride if self.seed_stride is not None else num_shots
-        )
-        if num_shots > self._resolved_seed_stride:
-            raise ValueError(
-                f"num_shots ({num_shots}) must be <= seed_stride "
-                f"({self._resolved_seed_stride}), or seed ranges from adjacent sweep "
-                "points would overlap."
-            )
-
-        if keep_program_results and program_results_dir is None:
-            raise ValueError(
-                "program_results_dir is required when keep_program_results=True."
-            )
-        if resume and item_checkpoint_dir is None:
-            raise ValueError(
-                "item_checkpoint_dir is required when resume=True."
-            )
-
-        _validate_checkpoint_kwargs(
-            checkpoint_batch_size, shot_checkpoint_dir, run_kwargs
+    ) -> Callable[[int, int, tuple], None]:
+        """Initialize result arrays and return the on_item_done callback."""
+        self._failure_rates: list[float | None] = [None] * len(self.strengths)
+        self._stderrs: list[float | None] = [None] * len(self.strengths)
+        self._program_results_paths: list[str | Path | None] | None = (
+            [None] * len(self.strengths) if self.keep_program_results else None
         )
 
-        # Initialize full-length arrays with None placeholders
-        failure_rates: list[float | None] = [None] * len(self.strengths)
-        stderrs: list[float | None] = [None] * len(self.strengths)
-        program_results_paths: list[str | Path | None] | None = (
-            [None] * len(self.strengths) if keep_program_results else None
-        )
-
-        # Convert checkpoint directory to Path if given
-        if item_checkpoint_dir is not None:
-            item_checkpoint_dir = Path(item_checkpoint_dir)
-            result_file = item_checkpoint_dir / "result.h5"
-        else:
-            result_file = None
-
-        # Resume loading if requested
-        if (
-            resume
-            and item_checkpoint_dir is not None
-            and item_checkpoint_dir.exists()
-        ):
-            prior = NoiseSweepResult.read(result_file)
-            if (
-                list(prior.strengths) != list(self.strengths)
-                or prior.num_shots != num_shots
-            ):
-                if not force_resume:
-                    raise ValueError(
-                        "Cannot resume: the NoiseSweepResult at `item_checkpoint_dir` was run "
-                        "with different `strengths`/`num_shots` than this call. "
-                        "Pass force_resume=True to resume anyway."
-                    )
-            # Copy over the sparse results (not the full arrays, just copy the values)
-            failure_rates = list(prior.failure_rates)
-            stderrs = list(prior.stderrs)
-            if keep_program_results:
-                if prior.program_results_paths is None:
-                    raise ValueError(
-                        "Cannot resume with keep_program_results=True: the existing "
-                        "result at `item_checkpoint_dir` was not run with "
-                        "keep_program_results=True."
-                    )
-                program_results_paths = list(prior.program_results_paths)
-
-        # Define the on_item_done callback to update results and write checkpoint
         def on_item_done(index: int, item: int, result: tuple) -> None:
+            """Update result arrays and write checkpoint when items complete."""
             failure_rate, stderr, path = result
-            failure_rates[index] = failure_rate
-            stderrs[index] = stderr
-            if keep_program_results and program_results_paths is not None:
-                program_results_paths[index] = path
+            self._failure_rates[index] = failure_rate
+            self._stderrs[index] = stderr
+            if (
+                self.keep_program_results
+                and self._program_results_paths is not None
+            ):
+                self._program_results_paths[index] = path
             # Write the updated result back to disk
-            if result_file is not None:
+            if self.item_checkpoint_dir is not None:
+                result_file = self.item_checkpoint_dir / "result.h5"
                 NoiseSweepResult(
                     strengths=self.strengths,
-                    failure_rates=failure_rates,
-                    stderrs=stderrs,
-                    num_shots=num_shots,
-                    metadata=metadata,
-                    program_results_paths=program_results_paths,
+                    failure_rates=self._failure_rates,
+                    stderrs=self._stderrs,
+                    num_shots=self.num_shots,
+                    metadata=self.metadata,
+                    program_results_paths=self._program_results_paths,
                 ).write(result_file)
 
-        # Add verbose to run_kwargs so it flows through to _run_one_sweep_point
-        run_kwargs_with_verbose = {**run_kwargs, "verbose": verbose}
+        return on_item_done
 
-        # Run via run_checkpointed_items
-        run_checkpointed_items(
-            items=list(range(len(self.strengths))),
-            process_item=_run_one_sweep_point,
-            parallel=parallel,
-            desc="Running sweep points",
-            static_kwargs={
-                "runner": self,
-                "num_shots": num_shots,
-                "collect_shot_data_args": collect_shot_data_args,
-                "expected_outcomes": expected_outcomes,
-                "run_kwargs": run_kwargs_with_verbose,
-                "keep_program_results": keep_program_results,
-                "program_results_dir": program_results_dir,
-                "shot_checkpoint_dir": shot_checkpoint_dir,
-                "checkpoint_batch_size": checkpoint_batch_size,
-                "lazy_loading_enabled": lazy_loading_enabled,
-            },
-            item_checkpoint_dir=item_checkpoint_dir,
-            resume=resume,
-            on_item_done=on_item_done,
-        )
-
+    def _finalize(self, result_list: list) -> "NoiseSweepResult":
+        """Return the final NoiseSweepResult."""
         return NoiseSweepResult(
             strengths=self.strengths,
-            failure_rates=failure_rates,
-            stderrs=stderrs,
-            num_shots=num_shots,
-            metadata=metadata,
-            program_results_paths=program_results_paths,
+            failure_rates=self._failure_rates,
+            stderrs=self._stderrs,
+            num_shots=self.num_shots,
+            metadata=self.metadata,
+            program_results_paths=self._program_results_paths,
         )
+
+    def _desc(self) -> str:
+        """Return progress bar description."""
+        return "Running sweep points"
+
+    def _mismatch_check_fields(self) -> list[str]:
+        """Return fields to check for resume mismatch."""
+        return [
+            "strengths",
+            "num_shots",
+            "collect_shot_data_args",
+            "expected_outcomes",
+            "keep_program_results",
+        ]
 
 
 class NoiseSweepResult(Displayable):
@@ -654,11 +778,12 @@ class NoiseSweepResult(Displayable):
     Holds one `(failure_rate, stderr)` pair per swept value, plus optional on-disk
     `ProgramResults` dump paths and free-form metadata. Displayable/serializable (via
     `.write()`/`.read()`, inherited from Serializable) so a sweep can be saved and reloaded without
-    a bespoke schema -- including *while still in progress*, to support
-    `NoiseSweepRunner.run(..., resume=True)`: a partial instance with `failure_rates` and `stderrs`
-    always full-length (len == len(strengths)), but with `None` as placeholders for
+    a bespoke schema -- including *while still in progress*. A partial instance has `failure_rates`
+    and `stderrs` always full-length (len == len(strengths)), but with `None` as placeholders for
     not-yet-completed indices. An arbitrary subset of indices may be completed, not necessarily
-    contiguous -- use `completed_indices` to find which ones are done.
+    contiguous -- use `completed_indices` to find which ones are done. Resuming an interrupted
+    sweep is done by constructing a new `NoiseSweepRunner` with the same `item_checkpoint_dir`
+    and calling `.run()` again.
     """
 
     _CACHE_ON_SERIALIZE = True
@@ -772,11 +897,11 @@ def compare_noise_sweeps(
     Always raises `ValueError` if the named results don't all share the same `strengths` and
     `num_shots` (mismatched series can never be fairly compared; `strict` doesn't affect this).
 
-    Separately, checks each result's `is_complete` (a result can be legitimately
-    partial/in-progress if produced by an interrupted `NoiseSweepRunner.run(..., resume=True)`
-    sweep): if `strict` is False (default), an incomplete result only emits a `UserWarning` naming
-    which series are incomplete and how many of their points are missing, and is still returned
-    like any other; if `strict` is True, the same condition raises `ValueError` instead.
+    Separately, checks each result's `is_complete` (a result can be legitimately partial/in-progress
+    from an interrupted sweep resumed by constructing a new runner with the same `item_checkpoint_dir`):
+    if `strict` is False (default), an incomplete result only emits a `UserWarning` naming which
+    series are incomplete and how many of their points are missing, and is still returned like any
+    other; if `strict` is True, the same condition raises `ValueError` instead.
     """
     names = list(results)
     if len(names) < 2:
