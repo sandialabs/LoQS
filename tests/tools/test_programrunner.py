@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.programrunner import run_checkpointed_items
+from loqs.tools.programrunner import ProgramRunner, run_checkpointed_items
 
 
 # Module-level worker functions for parallel/multiprocessing tests
@@ -83,7 +83,7 @@ class TestRunCheckpointedItemsSerial:
         results = run_checkpointed_items(
             items,
             _double_item,
-            parallel=None,
+            parallel_strategy=None,
             item_checkpoint_dir=None,
         )
         assert results == [0, 2, 4, 6, 8]
@@ -202,7 +202,7 @@ class TestRunCheckpointedItemsParallel:
         results = run_checkpointed_items(
             items,
             _double_item,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=checkpoint_dir,
             on_item_done=track_on_item_done,
         )
@@ -239,7 +239,7 @@ class TestRunCheckpointedItemsParallel:
         results = run_checkpointed_items(
             items,
             _sleep_and_double,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=checkpoint_dir,
             on_item_done=track_on_item_done,
             poll_interval=0.1,
@@ -277,7 +277,7 @@ class TestRunCheckpointedItemsParallel:
         results = run_checkpointed_items(
             items,
             _double_item,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=checkpoint_dir,
             resume=True,
         )
@@ -509,7 +509,7 @@ class TestBugRegressions:
         results = run_checkpointed_items(
             list(range(5)),
             _double_item,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=None,
         )
         assert results == [0, 2, 4, 6, 8]
@@ -530,7 +530,7 @@ class TestBugRegressions:
         run_checkpointed_items(
             [1, 2, 3],
             track_shot_executor,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=None,
         )
         # All calls should receive the sentinel value, not None
@@ -563,7 +563,7 @@ class TestBugRegressions:
         run_checkpointed_items(
             list(range(6)),
             _double_item,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=checkpoint_dir,
             resume=True,
             on_item_done=track_calls,
@@ -597,7 +597,7 @@ class TestBugRegressions:
         run_checkpointed_items(
             list(range(4)),
             _double_item,
-            parallel=strategy,
+            parallel_strategy=strategy,
             item_checkpoint_dir=None,  # No checkpoint directory
             on_item_done=track_calls,
         )
@@ -613,3 +613,163 @@ class TestBugRegressions:
         for call_index, call_item, call_result in calls:
             assert call_item == call_index, f"Item mismatch for index {call_index}"
             assert call_result == call_index * 2, f"Result mismatch for index {call_index}"
+
+
+def _multiply_item(item, index, *, shot_executor, multiplier):
+    return item * multiplier
+
+
+class _CountingRunner(ProgramRunner):
+    """Minimal concrete `ProgramRunner` for testing the base class's own
+    `run()`/mismatch-check/`force_resume`/crash-recovery behavior in
+    isolation from any real tool's domain logic."""
+
+    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "multiplier",
+    ]
+
+    def __init__(self, items, multiplier=2, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.multiplier = multiplier
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _multiply_item
+
+    def _static_kwargs(self):
+        return {"multiplier": self.multiplier}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self, result_list):
+        return result_list
+
+    def _mismatch_check_fields(self):
+        return ["multiplier"]
+
+
+# Module-level (not test-local) state/function/class for
+# test_crash_recovery_via_read_and_run: Serializable.read() resolves a
+# decoded object's class by dotted import path, which a test-function-local
+# class definition doesn't have.
+_FLAKY_CALL_COUNT = {"n": 0}
+
+
+def _flaky_multiply(item, index, *, shot_executor, multiplier):
+    _FLAKY_CALL_COUNT["n"] += 1
+    if _FLAKY_CALL_COUNT["n"] == 2:
+        raise RuntimeError("simulated crash mid-dispatch")
+    return item * multiplier
+
+
+class _FlakyRunner(_CountingRunner):
+    def _process_item_fn(self):
+        return _flaky_multiply
+
+
+class TestProgramRunnerRunAndCrashRecovery:
+    """Tests for `ProgramRunner.run()`'s own generic checkpoint/resume/
+    mismatch-check/crash-recovery behavior, via `_CountingRunner`."""
+
+    def test_run_without_checkpoint_dir(self):
+        runner = _CountingRunner([1, 2, 3], multiplier=2)
+        assert runner.run() == [2, 4, 6]
+
+    def test_run_writes_runner_json_before_dispatch_completes(
+        self, tmp_path
+    ):
+        """The runner.json snapshot must exist as soon as run() starts
+        dispatching, not only after it successfully finishes -- otherwise
+        a crash mid-dispatch would leave nothing to recover from."""
+        checkpoint_dir = tmp_path / "ckpt"
+
+        def _process_and_check(item, index, *, shot_executor, multiplier):
+            assert (checkpoint_dir / "runner.json").exists()
+            return item * multiplier
+
+        class _CheckingRunner(_CountingRunner):
+            def _process_item_fn(self):
+                return _process_and_check
+
+        runner = _CheckingRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        assert runner.run() == [2, 4, 6]
+
+    def test_existing_content_without_runner_json_raises(self, tmp_path):
+        checkpoint_dir = tmp_path / "ckpt"
+        checkpoint_dir.mkdir()
+        (checkpoint_dir / "unrelated.txt").write_text("not a runner.json")
+
+        with pytest.raises(FileExistsError):
+            _CountingRunner(
+                [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+            ).run()
+
+    def test_matching_config_auto_resumes(self, tmp_path):
+        """Whether a call continues a prior run is inferred purely from
+        item_checkpoint_dir's own on-disk state and a config match --
+        there's no separate flag a caller needs to pass."""
+        checkpoint_dir = tmp_path / "ckpt"
+        first = _CountingRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        assert first.run() == [2, 4, 6]
+
+        resumed = _CountingRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        assert resumed.run() == [2, 4, 6]
+
+    def test_mismatched_config_raises(self, tmp_path):
+        checkpoint_dir = tmp_path / "ckpt"
+        _CountingRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        ).run()
+
+        mismatched = _CountingRunner(
+            [1, 2, 3], multiplier=3, item_checkpoint_dir=checkpoint_dir
+        )
+        with pytest.raises(ValueError, match="multiplier"):
+            mismatched.run()
+
+    def test_force_resume_bypasses_mismatch(self, tmp_path):
+        checkpoint_dir = tmp_path / "ckpt"
+        _CountingRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        ).run()
+
+        mismatched = _CountingRunner(
+            [1, 2, 3],
+            multiplier=3,
+            item_checkpoint_dir=checkpoint_dir,
+            force_resume=True,
+        )
+        # Already-done items are trusted as-is (their original,
+        # multiplier=2 results), not recomputed under the new multiplier.
+        assert mismatched.run() == [2, 4, 6]
+
+    def test_crash_recovery_via_read_and_run(self, tmp_path):
+        """A process interrupted partway through dispatch can be fully
+        recovered from just the on-disk runner.json -- no need for the
+        original script's own in-memory object."""
+        checkpoint_dir = tmp_path / "ckpt"
+        _FLAKY_CALL_COUNT["n"] = 0
+
+        interrupted = _FlakyRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            interrupted.run()
+
+        assert (checkpoint_dir / "runner.json").exists()
+
+        # Recover using nothing but the on-disk snapshot -- no reference
+        # to `interrupted` itself.
+        recovered = ProgramRunner.read(checkpoint_dir / "runner.json")
+        assert recovered.run() == [2, 4, 6]

@@ -50,6 +50,7 @@ except ImportError:
 from tqdm import tqdm
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
+from loqs.internal.serializable import Serializable
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -93,7 +94,7 @@ def _executor_worker_count(executor: Any) -> int | None:
 
 
 @dataclass
-class ExecutorSpec:
+class ExecutorSpec(Serializable):
     """Picklable recipe for building a fresh executor of a given backend,
     extracted from a live executor's own construction parameters.
 
@@ -107,16 +108,18 @@ class ExecutorSpec:
     require an explicit factory.
     """
 
-    backend: str
+    _SERIALIZE_ATTRS = ["exec_backend", "kwargs"]
+
+    exec_backend: str
     kwargs: dict[str, Any]
 
     def __call__(self) -> SubmitExecutor:
-        if self.backend == "loky":
+        if self.exec_backend == "loky":
             import loky
 
             return loky.get_reusable_executor(**self.kwargs)
         raise ValueError(
-            f"ExecutorSpec has no builder for backend {self.backend!r}."
+            f"ExecutorSpec has no builder for backend {self.exec_backend!r}."
         )
 
     def describe(self) -> str:
@@ -124,7 +127,7 @@ class ExecutorSpec:
         params = ", ".join(
             f"{key}={value}" for key, value in sorted(self.kwargs.items())
         )
-        return f"{self.backend}({params})"
+        return f"{self.exec_backend}({params})"
 
 
 def _introspect_executor_spec(executor: SubmitExecutor) -> ExecutorSpec | None:
@@ -134,13 +137,13 @@ def _introspect_executor_spec(executor: SubmitExecutor) -> ExecutorSpec | None:
 
     Only `loky` (identified by its executor class's top-level module
     name, so this doesn't need to import `loky` itself) is currently
-    supported, extracting `max_workers` via the same `_max_workers`
-    attribute `_executor_worker_count` reads.
+    supported, extracting `max_workers` via the same `_executor_worker_count`
+    reads.
     """
     if type(executor).__module__.split(".")[0] == "loky":
         max_workers = _executor_worker_count(executor)
         kwargs = {} if max_workers is None else {"max_workers": max_workers}
-        return ExecutorSpec("loky", kwargs)
+        return ExecutorSpec(exec_backend="loky", kwargs=kwargs)
     return None
 
 
@@ -462,7 +465,7 @@ def run_chunks_with_map_array_executor(
 
 
 @dataclass
-class ParallelStrategy:
+class ParallelStrategy(Serializable):
     """Bundles program-level chunk dispatch together with optional nested
     shot-level parallelism, reused identically by every
     `loqs.tools` call site that parallelizes "one `QuantumProgram` per
@@ -523,6 +526,14 @@ class ParallelStrategy:
         is `True`.
     """
 
+    _SERIALIZE_ATTRS = [
+        "program_executor",
+        "n_program_chunks",
+        "shot_executor",
+        "collect_resource_stats",
+        "resource_sample_interval",
+    ]
+
     program_executor: (
         SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
     ) = None
@@ -567,6 +578,45 @@ class ParallelStrategy:
                     "factory callable instead."
                 )
             self.shot_executor = spec
+
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        """Handle encoding of program_executor and shot_executor, which may be
+        live executors, ExecutorSpecs, callables, or None."""
+        if attr == "program_executor":
+            executor = self.program_executor
+            if executor is None or isinstance(executor, ExecutorSpec):
+                return executor
+            if callable(executor):
+                return executor
+            # Live executor: attempt to introspect, else raise
+            spec = _introspect_executor_spec(executor)
+            if spec is not None:
+                return spec
+            raise ValueError(
+                f"Cannot serialize live {type(executor).__name__} executor for "
+                f"program_executor: it either needs to be recognized by "
+                f"_introspect_executor_spec or passed as a plain zero-argument "
+                f"factory callable instead."
+            )
+        elif attr == "shot_executor":
+            executor = self.shot_executor
+            if executor is None or isinstance(executor, ExecutorSpec):
+                return executor
+            if callable(executor):
+                return executor
+            # Live executor: attempt to introspect, else raise
+            spec = _introspect_executor_spec(executor)
+            if spec is not None:
+                return spec
+            raise ValueError(
+                f"Cannot serialize live {type(executor).__name__} executor for "
+                f"shot_executor: it either needs to be recognized by "
+                f"_introspect_executor_spec or passed as a plain zero-argument "
+                f"factory callable instead."
+            )
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @property
     def is_chunked(self) -> bool:

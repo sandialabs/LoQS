@@ -25,7 +25,7 @@ from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.pygstitools import (
     convert_edesign_to_programs,
     convert_run_programs_to_dataset,
-    simulate_dataset_for_edesign,
+    EdesignRunner,
 )
 
 
@@ -41,7 +41,7 @@ def _build_shot_executor():
 class _TrivialCounterSetup:
     """A minimal single-qubit edesign (an empty circuit and a one-`Gxpi2`
     circuit) plus a `physical_to_logical` mapping onto the trivial-counter
-    codepack, shared by every `simulate_dataset_for_edesign` test below.
+    codepack, shared by every `EdesignRunner` test below.
     The empty circuit never increments the counter (outcome `"0"`); the
     one-gate circuit increments it once (outcome `"1"`).
     """
@@ -80,7 +80,7 @@ class _TrivialCounterSetup:
         )
 
     def simulate(self, ckpt=None, **overrides):
-        """Call `simulate_dataset_for_edesign` with this setup's edesign/model/
+        """Construct and run an `EdesignRunner` with this setup's edesign/model/
         physical_to_logical/`collect_shot_data_args=("counter", -1)` and
         `num_shots=1` as defaults, overridable via `overrides`."""
         kwargs = dict(
@@ -90,10 +90,10 @@ class _TrivialCounterSetup:
             num_shots=1,
             collect_shot_data_args=("counter", -1),
             item_checkpoint_dir=ckpt,
+            program_kwargs=self.program_kwargs,
         )
         kwargs.update(overrides)
-        kwargs.update(self.program_kwargs)
-        return simulate_dataset_for_edesign(**kwargs)
+        return EdesignRunner(**kwargs).run()
 
 
 @pytest.fixture
@@ -223,13 +223,13 @@ class TestConvertRunProgramsToDataset:
 
     def test_warns_deprecation(self):
         """Calling convert_run_programs_to_dataset warns DeprecationWarning,
-        pointing at simulate_dataset_for_edesign as its replacement."""
+        pointing at EdesignRunner as its replacement."""
         circ = Circuit([("Gh", "Q0")], line_labels=["Q0"])
         program = _fake_program(
             repr(circ), [[Frame({"logical_measurement": 0})]]
         )
         with pytest.warns(
-            DeprecationWarning, match="simulate_dataset_for_edesign"
+            DeprecationWarning, match="EdesignRunner"
         ):
             convert_run_programs_to_dataset([program])
 
@@ -291,10 +291,10 @@ class TestConvertEdesignToPrograms:
 
     def test_warns_deprecation(self, trivial_counter_setup):
         """Calling convert_edesign_to_programs warns DeprecationWarning,
-        pointing at simulate_dataset_for_edesign as its replacement."""
+        pointing at EdesignRunner as its replacement."""
         s = trivial_counter_setup
         with pytest.warns(
-            DeprecationWarning, match="simulate_dataset_for_edesign"
+            DeprecationWarning, match="EdesignRunner"
         ):
             convert_edesign_to_programs(
                 s.edesign, s.model, s.physical_to_logical, **s.program_kwargs
@@ -379,13 +379,6 @@ class TestSimulateDatasetForEdesign:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_resume_without_item_checkpoint_dir_raises(self, trivial_counter_setup):
-        """resume=True with no item_checkpoint_dir is a configuration error,
-        not something that's silently ignored."""
-        s = trivial_counter_setup
-        with pytest.raises(ValueError, match="item_checkpoint_dir"):
-            s.simulate(resume=True)
-
     def test_max_frame_limit_defaults_to_100(self, trivial_counter_setup):
         """With no override, each circuit's program.run still sees
         QuantumProgram.run's own default of 100, unchanged."""
@@ -444,14 +437,30 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ckpt.exists()
         assert ckpt.is_dir()
 
-    def test_resume_false_with_existing_checkpoint_raises(
+    def test_existing_checkpoint_with_matching_config_auto_resumes(
         self, trivial_counter_setup, tmp_path
     ):
-        """A checkpoint that already exists is never silently overwritten
-        or ignored -- resume=True must be passed explicitly."""
+        """Whether a call continues a prior checkpoint is inferred purely
+        from item_checkpoint_dir's own on-disk state and a config match --
+        there's no separate flag a caller needs to pass."""
         s = trivial_counter_setup
         ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
+
+        ds = s.simulate(ckpt=ckpt)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_existing_content_without_runner_json_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Content that isn't a recognized EdesignRunner checkpoint (no
+        runner.json) is never silently overwritten or continued."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        ckpt.mkdir()
+        (ckpt / "unrelated.txt").write_text("not a checkpoint")
 
         with pytest.raises(FileExistsError, match=re.escape(str(ckpt))):
             s.simulate(ckpt=ckpt)
@@ -468,7 +477,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         partial_edesign = ExperimentDesign([s.circs[0]])
         s.simulate(ckpt=ckpt, edesign=partial_edesign)
 
-        ds = s.simulate(ckpt=ckpt, resume=True)
+        ds = s.simulate(ckpt=ckpt)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -493,7 +502,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
             shutil.rmtree(item_1_dir)
 
         # Resume should re-run the missing circuit
-        ds = s.simulate(ckpt=ckpt, resume=True)
+        ds = s.simulate(ckpt=ckpt)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -508,7 +517,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(ValueError, match="num_shots"):
-            s.simulate(ckpt=ckpt, resume=True, num_shots=2)
+            s.simulate(ckpt=ckpt, num_shots=2)
 
     def test_resume_mismatched_collect_shot_data_args_raises(
         self, trivial_counter_setup, tmp_path
@@ -520,9 +529,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(ValueError, match="collect_shot_data_args"):
-            s.simulate(
-                ckpt=ckpt, resume=True, collect_shot_data_args=("counter", -2)
-            )
+            s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
 
     def test_resume_mismatched_physical_to_logical_raises(
         self, trivial_counter_setup, tmp_path
@@ -538,7 +545,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         changed_p2l["rho0"][1]["initial_value"] = 1
 
         with pytest.raises(ValueError, match="physical_to_logical"):
-            s.simulate(ckpt=ckpt, resume=True, physical_to_logical=changed_p2l)
+            s.simulate(ckpt=ckpt, physical_to_logical=changed_p2l)
 
     def test_force_resume_bypasses_config_mismatch(
         self, trivial_counter_setup, tmp_path
@@ -549,7 +556,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
-        ds = s.simulate(ckpt=ckpt, resume=True, force_resume=True, num_shots=2)
+        ds = s.simulate(ckpt=ckpt, force_resume=True, num_shots=2)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -566,7 +573,7 @@ def _checkpointed_circuits(checkpoint_path) -> set:
 
 
 class TestSimulateDatasetForEdesignParallel:
-    """`simulate_dataset_for_edesign`'s `parallel` (a
+    """`EdesignRunner`'s `parallel_strategy` (a
     [](api:ParallelStrategy)) path, against real `loky` and `submitit`
     executors -- both must produce the same `DataSet` a serial run does,
     including through checkpoint/resume and hybrid shot-/program-level
@@ -582,7 +589,7 @@ class TestSimulateDatasetForEdesignParallel:
             n_program_chunks=2,
         )
 
-        ds = s.simulate(parallel=strategy)
+        ds = s.simulate(parallel_strategy=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -610,7 +617,7 @@ class TestSimulateDatasetForEdesignParallel:
             n_program_chunks=2,
         )
 
-        ds = s.simulate(parallel=strategy)
+        ds = s.simulate(parallel_strategy=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -630,7 +637,7 @@ class TestSimulateDatasetForEdesignParallel:
             shot_executor=_build_shot_executor,
         )
 
-        ds = s.simulate(parallel=strategy, num_shots=3)
+        ds = s.simulate(parallel_strategy=strategy, num_shots=3)
 
         assert ds[s.circs[0]].counts[("0",)] == 3
         assert ds[s.circs[1]].counts[("1",)] == 3
@@ -651,7 +658,7 @@ class TestSimulateDatasetForEdesignParallel:
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
         )
-        ds = s.simulate(ckpt=ckpt, resume=True, parallel=strategy)
+        ds = s.simulate(ckpt=ckpt, parallel_strategy=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -705,7 +712,7 @@ class TestSimulateDatasetForEdesignMemoryBound:
 
 class TestSimulateDatasetForEdesignShotCheckpointing:
     """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
-    checkpointing, threaded through `simulate_dataset_for_edesign` via the
+    checkpointing, threaded through `EdesignRunner` via the
     `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading_enabled`
     parameters."""
 
@@ -779,7 +786,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         )
 
         ds = s.simulate(
-            parallel=strategy,
+            parallel_strategy=strategy,
             checkpoint_batch_size=1,
             shot_checkpoint_dir=shot_ckpt_dir,
             lazy_loading_enabled=False,  # Keep shots in memory for collection

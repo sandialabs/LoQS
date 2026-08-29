@@ -37,14 +37,14 @@ both, or neither can be active at once:
   shots of that one program are dispatched across the executor's workers instead
   of running one at a time in the calling process.
 - **Programs**, across a whole batch. Every program-level call site --
-  [simulate_dataset_for_edesign](api:simulate_dataset_for_edesign) (one
-  `QuantumProgram` per edesign circuit),
+  [EdesignRunner](api:EdesignRunner) (one `QuantumProgram` per edesign circuit,
+  configured via its own `parallel_strategy` field),
   [run_discrete_error_injected_programs](api:run_discrete_error_injected_programs)
   (one per error-injected variant), and
   [NoiseSweepRunner.run](api:NoiseSweepRunner.run) (one per sweep point) --
-  accepts a `parallel` argument (a [ParallelStrategy](api:ParallelStrategy))
-  instead of a single executor. The batch is split into chunks, and each chunk (a
-  sub-list of programs) is built/run/collected as a unit by one worker.
+  accepts a [ParallelStrategy](api:ParallelStrategy) instead of a single
+  executor. The batch is split into chunks, and each chunk (a sub-list of
+  programs) is built/run/collected as a unit by one worker.
 
 These compose: a [ParallelStrategy](api:ParallelStrategy) can dispatch chunks
 of programs to *outer* workers (e.g. one per node), each of which then runs its
@@ -440,12 +440,10 @@ pass `lazy_loading_enabled=False` to keep every shot in memory regardless,
 or reload the full set from disk via `load_checkpoint()` as above.
 
 This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
-shot-level checkpointing; the program-level call sites above don't gain a
-new checkpoint capability from it.
-[simulate_dataset_for_edesign](api:simulate_dataset_for_edesign) keeps its
-own separate, pyGSTi-text-format, one-row-per-circuit checkpoint mechanism,
-and [NoiseSweepRunner.run](api:NoiseSweepRunner.run) keeps its own
-point-level resume -- neither shares a format or mechanism with this one.
+shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),
+[run_discrete_error_injected_programs](api:run_discrete_error_injected_programs), and
+[NoiseSweepRunner.run](api:NoiseSweepRunner.run)) use a separate, unified item-level
+checkpoint mechanism with per-worker journals, crash recovery, and per-item completion tracking.
 
 ## Performance profiling
 

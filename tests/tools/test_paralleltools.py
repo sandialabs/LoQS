@@ -276,7 +276,7 @@ class TestParallelStrategy:
             shot_executor=loky.get_reusable_executor(max_workers=3),
         )
         assert isinstance(strategy.shot_executor, ExecutorSpec)
-        assert strategy.shot_executor.backend == "loky"
+        assert strategy.shot_executor.exec_backend == "loky"
         assert strategy.shot_executor.kwargs == {"max_workers": 3}
 
     def test_live_unrecognized_shot_executor_with_program_executor_raises(
@@ -388,6 +388,78 @@ class TestParallelStrategy:
                 6,
                 8,
             ]
+
+
+class TestExecutorSpecAndParallelStrategySerialization:
+    """`ExecutorSpec`/`ParallelStrategy` are `Serializable`, needed so a
+    `ProgramRunner` holding either can survive a `.write()`/`.read()`
+    round-trip (e.g. as part of its own crash-recovery snapshot)."""
+
+    def test_executor_spec_round_trips(self, tmp_path):
+        spec = ExecutorSpec(exec_backend="loky", kwargs={"max_workers": 3})
+        path = tmp_path / "spec.json"
+        spec.write(path)
+        loaded = ExecutorSpec.read(path)
+        assert loaded.exec_backend == "loky"
+        assert loaded.kwargs == {"max_workers": 3}
+
+    def test_parallel_strategy_round_trips_with_none_executors(
+        self, tmp_path
+    ):
+        strategy = ParallelStrategy(n_program_chunks=2)
+        path = tmp_path / "strategy.json"
+        strategy.write(path)
+        loaded = ParallelStrategy.read(path)
+        assert loaded.program_executor is None
+        assert loaded.shot_executor is None
+        assert loaded.n_program_chunks == 2
+
+    def test_parallel_strategy_round_trips_with_executor_spec(
+        self, tmp_path
+    ):
+        strategy = ParallelStrategy(
+            program_executor=ExecutorSpec(
+                exec_backend="loky", kwargs={"max_workers": 2}
+            ),
+            n_program_chunks=2,
+            shot_executor=ExecutorSpec(
+                exec_backend="loky", kwargs={"max_workers": 1}
+            ),
+        )
+        path = tmp_path / "strategy.json"
+        strategy.write(path)
+        loaded = ParallelStrategy.read(path)
+        assert isinstance(loaded.program_executor, ExecutorSpec)
+        assert loaded.program_executor.exec_backend == "loky"
+        assert loaded.program_executor.kwargs == {"max_workers": 2}
+        assert isinstance(loaded.shot_executor, ExecutorSpec)
+        assert loaded.shot_executor.kwargs == {"max_workers": 1}
+
+    def test_parallel_strategy_round_trips_live_recognized_executor(
+        self, tmp_path
+    ):
+        """A live, loky-backed program_executor is transparently converted
+        to an ExecutorSpec on encode, the same conversion already applied
+        to a live shot_executor at construction time."""
+        loky = pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+        path = tmp_path / "strategy.json"
+        strategy.write(path)
+        loaded = ParallelStrategy.read(path)
+        assert isinstance(loaded.program_executor, ExecutorSpec)
+        assert loaded.program_executor.exec_backend == "loky"
+
+    def test_encoding_live_unrecognized_program_executor_raises(
+        self, tmp_path
+    ):
+        strategy = ParallelStrategy(
+            program_executor=_FakeMapArrayExecutor(), n_program_chunks=1
+        )
+        with pytest.raises(ValueError, match="program_executor"):
+            strategy.write(tmp_path / "strategy.json")
 
 
 class TestParallelStrategyDescribe:

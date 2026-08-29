@@ -481,7 +481,7 @@ class NoiseSweepRunner(Displayable):
 
         Passing `parallel` (a [](api:ParallelStrategy) with `program_executor` set) instead
         parallelizes across the still-remaining sweep points, using the same
-        `loqs.tools.paralleltools` chunking/dispatch machinery [](api:simulate_dataset_for_edesign)
+        `loqs.tools.paralleltools` chunking/dispatch machinery [](api:EdesignRunner)
         uses: remaining points are split into `parallel.n_program_chunks` round-robin chunks,
         and each chunk's points are run as a unit by a worker that pins its own thread pools to one
         thread before doing any real numerical work. The whole dispatched batch is treated as one

@@ -418,12 +418,12 @@ def run_discrete_error_injected_programs(
     Runs serially over `errored_programs` by default. Passing `parallel`
     (a [](api:ParallelStrategy)) instead parallelizes across programs,
     using the same `loqs.tools.paralleltools` chunking/dispatch machinery
-    [](api:simulate_dataset_for_edesign) uses: programs are split into
+    [](api:EdesignRunner) uses: programs are split into
     `parallel.n_program_chunks` round-robin chunks, and each chunk is
     tested as a unit by a worker that pins its own thread pools to one
     thread before doing any real numerical work. Since each
     `errored_programs` entry is already a fully built `QuantumProgram`
-    (unlike [](api:simulate_dataset_for_edesign), which builds its
+    (unlike [](api:EdesignRunner), which builds its
     programs inside the worker), a program containing closures needs
     `parallel.program_executor`'s `cloudpickle` fallback (e.g. `loky`) to
     cross a process boundary -- the same requirement

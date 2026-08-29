@@ -11,9 +11,8 @@
 
 from __future__ import annotations
 
-import ast
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 import functools
 import hashlib
@@ -34,12 +33,13 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
 from loqs.internal.legacy import deprecated
+from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
     ParallelStrategy,
     pin_worker_threads,
     resolve_shot_executor,
 )
-from loqs.tools.programrunner import run_checkpointed_items
+from loqs.tools.programrunner import ProgramRunner
 
 try:
     import pygsti  # noqa: F401
@@ -158,7 +158,7 @@ def _run_one_circuit(
     return count_dict
 
 
-@deprecated("simulate_dataset_for_edesign")
+@deprecated("EdesignRunner")
 def convert_edesign_to_programs(
     edesign: ExperimentDesign,
     model: ExplicitOpModel,
@@ -199,7 +199,7 @@ def convert_edesign_to_programs(
     ]
 
 
-@deprecated("simulate_dataset_for_edesign")
+@deprecated("EdesignRunner")
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
     collect_shot_data_args: (
@@ -276,11 +276,11 @@ def _checkpoint_provenance_comment(
     ),
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> str:
-    """Build the `#`-prefixed comment header for a `simulate_dataset_for_edesign`
-    checkpoint's on-disk `DataSet`, serving both as a human-readable provenance
-    record and as the exact text a later resumed call's config is checked
-    against (`_checkpoint_config_mismatches`). `num_shots` is stored as a plain
-    `repr()` string; `collect_shot_data_args` is first normalized via
+    """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
+    on-disk `DataSet`, a human-readable provenance record (config-mismatch
+    detection on resume happens separately, via `ProgramRunner`'s own
+    `runner.json` snapshot). `num_shots` is stored as a plain `repr()` string;
+    `collect_shot_data_args` is first normalized via
     `_normalize_collect_shot_data_args` so its repr is canonical regardless of
     spelling; `physical_to_logical`'s own top-level key order is incidental, so
     its leaves are repr'd individually into a literal-evaluable `dict[str, str]`
@@ -290,54 +290,12 @@ def _checkpoint_provenance_comment(
     p2l_repr_map = {repr(k): repr(v) for k, v in physical_to_logical.items()}
     return "\n".join(
         [
-            "Checkpoint written by loqs.tools.pygstitools.simulate_dataset_for_edesign.",
+            "Checkpoint written by loqs.tools.pygstitools.EdesignRunner.",
             f"num_shots = {num_shots!r}",
             f"collect_shot_data_args = {normalized_args!r}",
             f"physical_to_logical = {p2l_repr_map!r}",
         ]
     )
-
-
-def _checkpoint_config_mismatches(
-    comment: str,
-    num_shots: int,
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ),
-    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
-) -> list[str]:
-    """Compare a checkpoint's stored provenance comment against the current
-    call's config, returning the names of any mismatched fields (empty if
-    everything matches). A field missing from `comment` entirely (e.g. an
-    older or hand-edited checkpoint) also counts as a mismatch, rather than
-    being silently skipped.
-    """
-    stored: dict[str, str] = {}
-    for line in comment.split("\n"):
-        key, sep, value = line.partition(" = ")
-        if sep:
-            stored[key.strip()] = value
-
-    mismatches = []
-    if stored.get("num_shots") != repr(num_shots):
-        mismatches.append("num_shots")
-    normalized_args = _normalize_collect_shot_data_args(collect_shot_data_args)
-    if stored.get("collect_shot_data_args") != repr(normalized_args):
-        mismatches.append("collect_shot_data_args")
-
-    current_p2l_repr_map = {
-        repr(k): repr(v) for k, v in physical_to_logical.items()
-    }
-    try:
-        stored_p2l_repr_map = ast.literal_eval(
-            stored.get("physical_to_logical", "")
-        )
-    except (ValueError, SyntaxError):
-        stored_p2l_repr_map = None
-    if stored_p2l_repr_map != current_p2l_repr_map:
-        mismatches.append("physical_to_logical")
-
-    return mismatches
 
 
 def _outcome_label_to_str(outcome_label: str | tuple) -> str:
@@ -387,307 +345,224 @@ def _drop_incomplete_checkpoint_row(checkpoint_path: Path) -> None:
         checkpoint_path.write_text(text.rsplit("\n", 1)[0] + "\n")
 
 
-def simulate_dataset_for_edesign(
-    edesign: ExperimentDesign,
-    physical_model: ExplicitOpModel,
-    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
-    num_shots: int,
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ) = (
-        "logical_measurement",
-        -1,
-    ),
-    item_checkpoint_dir: str | Path | None = None,
-    resume: bool = False,
-    force_resume: bool = False,
-    max_frame_limit: int = 100,
-    parallel: ParallelStrategy | None = None,
-    *,
-    checkpoint_batch_size: int | None = None,
-    shot_checkpoint_dir: str | Path | None = None,
-    lazy_loading_enabled: bool = True,
-    **program_kwargs,
-) -> DataSet:
-    """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
+class EdesignRunner(ProgramRunner):
+    """Runner for simulating edesign circuits into a DataSet with crash recovery.
 
-    Fuses `convert_edesign_to_programs`, [](api:QuantumProgram.run), and
-    `convert_run_programs_to_dataset`'s collection step into a single pass
-    over `edesign.all_circuits_needing_data`: each circuit's program is
-    built, run, and reduced to a row of counts in turn, with the program
-    and its results dropped before the next circuit starts. This bounds
-    peak memory to roughly one circuit's worth of shots, rather than
-    every circuit's `QuantumProgram`/`ProgramResults` at once. Progress is
-    reported with one bar over circuits rather than [](api:QuantumProgram.run)'s
-    own per-shot bar, which would otherwise print once per circuit.
-
-    Passing `parallel` (a [](api:ParallelStrategy)) instead parallelizes
-    across circuits: circuits still needing data are split into
-    `parallel.n_program_chunks` round-robin chunks (so cost drift across
-    the circuit list, e.g. later GST circuits typically being deeper,
-    doesn't concentrate onto a few chunks), and each chunk is
-    built/run/collected as a unit by a worker that pins its own thread
-    pools to one thread before doing any real numerical work.
-    `parallel.program_executor` accepts either a `SubmitExecutor` (e.g.
-    `loky.get_reusable_executor()` or `mpi4py.futures.MPIPoolExecutor`,
-    dispatched with per-chunk progress via `tqdm(as_completed(...))`) or a
-    `MapArrayExecutor` (e.g. a `submitit.Executor`, dispatched via a single
-    bulk `map_array` call with progress reported by polling each job's
-    `.done()`) -- see [](api:ParallelStrategy) for the full field
-    reference, including `parallel.shot_executor` for nested shot-level
-    parallelism within each chunk's own programs. Checkpointing via
-    `item_checkpoint_dir` still happens from this driving process, once per
-    circuit, as results are computed -- not from inside the workers
-    themselves; `checkpoint_batch_size`/`shot_checkpoint_dir` below are the
-    real per-worker mechanism.
-
-    If `item_checkpoint_dir` is given (a directory, not a file), each circuit's
-    row is also appended to `item_checkpoint_dir/dataset.txt` as soon as it's
-    computed, so a crash partway through doesn't lose already-completed
-    circuits. `resume` and `force_resume` are two independent gates: `resume=True`
-    is required to continue from an existing checkpoint at all (with
-    `item_checkpoint_dir` present but `resume=False`, this raises rather than
-    silently overwriting or ignoring it); `force_resume=True` additionally
-    bypasses a mismatch between the checkpoint's stored `num_shots`/
-    `collect_shot_data_args`/`physical_to_logical` and this call's own, which is
-    otherwise a hard error. A circuit already present in the checkpoint is
-    trusted as complete and never redone; one left incomplete by a crash
-    mid-write (a truncated last line) is dropped and redone from scratch, never
-    resumed partway through its own shots.
-
-    `checkpoint_batch_size`/`shot_checkpoint_dir`/`lazy_loading_enabled` are a
-    separate, independent mechanism: they enable [](api:QuantumProgram.run)'s
-    own per-worker shot-level HDF5 checkpointing for each circuit's own
-    program, not the plain-text per-circuit checkpoint above. Each circuit
-    gets its own isolated subdirectory under `shot_checkpoint_dir` (keyed by
-    a hash of the circuit itself), so multiple circuits -- potentially
-    running concurrently in different chunk workers -- never collide on the
-    same per-worker file. [](api:QuantumProgram.run) always starts counting
-    shots from 0 and has no built-in resume-from-checkpoint capability of its
-    own, so an interrupted circuit's on-disk shot files only support forensic
-    recovery via [](api:ProgramResults.load_checkpoint) -- a crash or cancel
-    partway through one circuit means that circuit's shots are redone from
-    scratch on the next call, exactly like an incomplete `item_checkpoint_dir`
-    row above.
-
-    Parameters
-    ----------
-    edesign : ExperimentDesign
-        pyGSTi `ExperimentDesign` to simulate.
-
-    physical_model : ExplicitOpModel
-        pyGSTi model for the edesign. Currently only used
-        for `physical_model.complete_circuit`, to be removed soon.
-
-    physical_to_logical : Mapping[str | tuple, list[InstructionLabelLike]]
-        A mapping from pyGSTi physical circuit labels to
-        [](api:InstructionStackLike) to build up
-        the [](api:InstructionStack) for each circuit's program.
-
-    num_shots : int
-        Number of shots to run for each circuit.
-
-    collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
-        The [](api:HistoryDataCollector) recipe(s) used to extract outcomes
-        from each shot. See `convert_run_programs_to_dataset` for the
-        single-recipe vs. multi-recipe list behavior, by default
-        `("logical_measurement", -1)`.
-
-    item_checkpoint_dir : str | Path | None, optional
-        Directory for checkpointing results. When set, maintains a journal
-        (`journal_*.jsonl`) and `dataset.txt` for crash recovery and resume.
-        If `None` (default), no checkpoint is written and `resume`/`force_resume`
-        are unused.
-
-    resume : bool, optional
-        Whether to continue from an existing checkpoint at `item_checkpoint_dir`,
-        by default `False`. If `item_checkpoint_dir` exists and `resume` is
-        `False`, this raises `FileExistsError` rather than overwriting or
-        ignoring it. Has no effect if `item_checkpoint_dir` doesn't exist yet.
-
-    force_resume : bool, optional
-        Whether to proceed despite a config mismatch between the checkpoint
-        being resumed and this call's own `num_shots`/`collect_shot_data_args`/
-        `physical_to_logical`, by default `False`. Only relevant when `resume`
-        is `True` and `item_checkpoint_dir` already exists.
-
-    max_frame_limit : int, optional
-        Forwarded to each circuit's [](api:QuantumProgram.run). Defaults to
-        `QuantumProgram.run`'s own default (100); circuits deep enough to need
-        more frames than that should raise this explicitly, or they will be
-        silently truncated and then fail during outcome collection.
-
-    parallel : ParallelStrategy | None, optional
-        Parallelizes across circuits when given -- see
-        [](api:ParallelStrategy) for its `program_executor`/
-        `n_program_chunks`/`shot_executor` fields. Defaults to `None`,
-        which runs circuits serially (still honoring
-        `parallel.shot_executor` if a `ParallelStrategy` with only that
-        field set is passed, for shot-level-only parallelism).
-
-    checkpoint_batch_size : int | None, optional
-        Forwarded to each circuit's [](api:QuantumProgram.run) as its own
-        `checkpoint_batch_size`, by default `None` (no shot-level
-        checkpointing). Requires `shot_checkpoint_dir` to also be given.
-
-    shot_checkpoint_dir : str | Path | None, optional
-        Base directory for [](api:QuantumProgram.run)'s per-worker shot-level
-        checkpoint files, by default `None`. Each circuit is given its own
-        subdirectory under this path (see above); required if
-        `checkpoint_batch_size` is set, otherwise raises `ValueError`.
-
-    lazy_loading_enabled : bool, optional
-        Forwarded to each circuit's [](api:QuantumProgram.run), by default
-        `True`. Only relevant when `checkpoint_batch_size` is set.
-
-    **program_kwargs : Any
-        Any additional kwargs that should be passed to each circuit's
-        [](api:QuantumProgram).
-
-    Returns
-    -------
-    DataSet
-        A pyGSTi `DataSet` with one row of counts per circuit in
-        `edesign.all_circuits_needing_data`.
+    Encapsulates all configuration needed to simulate an edesign, including
+    parallel/checkpoint settings, in a serializable object that can be
+    recovered after a crash via `EdesignRunner.read(runner_path).run()`.
+    Whether a call resumes a prior run is inferred entirely from
+    `item_checkpoint_dir`'s own on-disk state -- see `ProgramRunner.run`.
     """
-    # Validation
-    if checkpoint_batch_size is not None and shot_checkpoint_dir is None:
-        raise ValueError(
-            "shot_checkpoint_dir is required when checkpoint_batch_size is set."
+
+    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+        "edesign",
+        "physical_model",
+        "physical_to_logical",
+        "num_shots",
+        "collect_shot_data_args",
+        "max_frame_limit",
+        "program_kwargs",
+    ]
+
+    def __init__(
+        self,
+        edesign: ExperimentDesign,
+        physical_model: ExplicitOpModel,
+        physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
+        num_shots: int,
+        collect_shot_data_args: (
+            HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+        ) = ("logical_measurement", -1),
+        item_checkpoint_dir: str | Path | None = None,
+        force_resume: bool = False,
+        max_frame_limit: int = 100,
+        parallel_strategy: ParallelStrategy | None = None,
+        checkpoint_batch_size: int | None = None,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading_enabled: bool = True,
+        program_kwargs: dict | None = None,
+    ):
+        super().__init__(
+            parallel_strategy=parallel_strategy,
+            item_checkpoint_dir=item_checkpoint_dir,
+            force_resume=force_resume,
+            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading_enabled=lazy_loading_enabled,
         )
+        self.edesign = edesign
+        self.physical_model = physical_model
+        self.physical_to_logical = physical_to_logical
+        self.num_shots = num_shots
+        self.collect_shot_data_args = collect_shot_data_args
+        self.max_frame_limit = max_frame_limit
+        self.program_kwargs = program_kwargs or {}
 
-    # Pre-dispatch setup for checkpointing
-    dataset_path = None
-    already_persisted: set[str] = set()
-    initial_dataset_comment = None  # To be written on first item completion
-    dataset_file_exists = False
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        """Handle encoding of physical_model and edesign."""
+        if attr == "physical_model":
+            # Use pyGSTi's dumps()/loads() pattern
+            return self.physical_model.dumps()
+        elif attr == "edesign":
+            # Use pyGSTi's directory-based write/from_dir pattern
+            # Store just the path string; actual writing happens on-demand
+            if self.item_checkpoint_dir is None:
+                return None
+            edesign_subdir = self.item_checkpoint_dir / "edesign"
+            if not edesign_subdir.exists():
+                edesign_subdir.mkdir(parents=True, exist_ok=True)
+                self.edesign.write(str(edesign_subdir))
+            return str(edesign_subdir)
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
-    if item_checkpoint_dir is not None:
-        item_checkpoint_dir = Path(item_checkpoint_dir)
-        # Check for existing content
-        has_content = item_checkpoint_dir.exists() and any(
-            item_checkpoint_dir.iterdir()
-        )
-        if has_content and not resume:
-            raise FileExistsError(
-                f"Checkpoint {item_checkpoint_dir} already exists. Either remove "
-                "or move it, or pass resume=True to continue from it."
+    @classmethod
+    def _from_decoded_attrs(
+        cls, attr_dict: Mapping[str, Any]
+    ) -> "EdesignRunner":
+        """Reconstruct from decoded attributes."""
+        # Decode physical_model from string
+        if isinstance(attr_dict["physical_model"], str):
+            from pygsti.models import Model
+
+            attr_dict["physical_model"] = Model.loads(
+                attr_dict["physical_model"]
             )
 
-        dataset_path = item_checkpoint_dir / "dataset.txt"
+        # Decode edesign from directory path
+        if attr_dict.get("edesign") is not None:
+            edesign_path = attr_dict["edesign"]
+            attr_dict["edesign"] = ExperimentDesign.from_dir(edesign_path)
 
-        if has_content and resume:
-            # Resume from existing checkpoint
-            _drop_incomplete_checkpoint_row(dataset_path)
-            loaded_ds = read_dataset(str(dataset_path), verbosity=0)
+        return super()._from_decoded_attrs(attr_dict)
 
-            mismatches = _checkpoint_config_mismatches(
-                loaded_ds.comment,
-                num_shots,
-                collect_shot_data_args,
-                physical_to_logical,
-            )
-            if mismatches and not force_resume:
-                raise ValueError(
-                    f"Cannot resume: the checkpoint at {item_checkpoint_dir} was "
-                    f"written with a different {', '.join(mismatches)} than this "
-                    "call. Pass force_resume=True to resume anyway."
-                )
+    def _get_items(self) -> Sequence:
+        """Return circuits needing data."""
+        return self.edesign.all_circuits_needing_data
 
-            # Build fresh dataset with loaded comment, but don't copy rows yet
-            n_keys = (
-                len(collect_shot_data_args)
-                if isinstance(collect_shot_data_args, list)
-                else 1
-            )
-            ds = DataSet()
-            ds.add_std_nqubit_outcome_labels(n_keys)
-            ds.comment = loaded_ds.comment
+    def _item_key_fn(self) -> Callable[[Circuit], str] | None:
+        """Use circuit string representation as stable identity when checkpointing."""
+        if self.item_checkpoint_dir is not None:
+            return lambda c: c.str
+        return None
 
-            # Track already-persisted circuits
-            already_persisted = {c.str for c in loaded_ds}
-            dataset_file_exists = True
-        else:
-            # Fresh start - prepare comment but don't write yet
-            # (run_checkpointed_items will create the directory and validate it)
-            n_keys = (
-                len(collect_shot_data_args)
-                if isinstance(collect_shot_data_args, list)
-                else 1
-            )
-            ds = DataSet()
-            ds.add_std_nqubit_outcome_labels(n_keys)
-            initial_dataset_comment = _checkpoint_provenance_comment(
-                num_shots, collect_shot_data_args, physical_to_logical
-            )
-            ds.comment = initial_dataset_comment
-            dataset_file_exists = False
-    else:
-        n_keys = (
-            len(collect_shot_data_args)
-            if isinstance(collect_shot_data_args, list)
-            else 1
-        )
-        ds = DataSet()
-        ds.add_std_nqubit_outcome_labels(n_keys)
+    def _process_item_fn(self) -> Callable:
+        """Return the _run_one_circuit function."""
+        return _run_one_circuit
 
-    label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
-    circuits = edesign.all_circuits_needing_data
-
-    # Define on_item_done callback. `dataset_file_created` starts True when
-    # resuming from an already-existing dataset.txt (never re-initialized,
-    # only ever appended to) and False for a genuinely fresh start (the file
-    # itself doesn't exist yet and needs its header/comment written first).
-    dataset_file_created = [dataset_file_exists]
-
-    def on_item_done(index: int, circ: Circuit, count_dict: dict) -> None:
-        ds.add_count_dict(circ, count_dict)
-        if dataset_path is not None and circ.str not in already_persisted:
-            if not dataset_file_created[0]:
-                # Write an empty dataset (header/comment only) before this
-                # row's own append, so the row is never written twice.
-                dataset_path.parent.mkdir(parents=True, exist_ok=True)
-                empty_ds = DataSet()
-                empty_ds.add_std_nqubit_outcome_labels(n_keys)
-                empty_ds.comment = ds.comment
-                write_dataset(
-                    str(dataset_path),
-                    empty_ds,
-                    fixed_column_mode=False,
-                    with_times=False,
-                )
-                dataset_file_created[0] = True
-            # Append this (and every subsequent) row directly.
-            _append_checkpoint_row(dataset_path, circ, count_dict)
-
-    # Run via run_checkpointed_items
-    # Build kwargs for run_checkpointed_items, conditionally including item_key_fn
-    rci_kwargs = dict(
-        items=circuits,
-        process_item=_run_one_circuit,
-        parallel=parallel,
-        desc="Simulating edesign circuits",
-        static_kwargs={
-            "physical_model": physical_model,
+    def _static_kwargs(self) -> dict[str, Any]:
+        """Return static kwargs for _run_one_circuit."""
+        label_to_logical = {
+            Label(k): v for k, v in self.physical_to_logical.items()
+        }
+        return {
+            "physical_model": self.physical_model,
             "label_to_logical": label_to_logical,
-            "num_shots": num_shots,
-            "collect_shot_data_args": collect_shot_data_args,
-            "max_frame_limit": max_frame_limit,
-            "program_kwargs": program_kwargs,
-            "shot_checkpoint_dir": shot_checkpoint_dir,
-            "checkpoint_batch_size": checkpoint_batch_size,
-            "lazy_loading_enabled": lazy_loading_enabled,
-        },
-        item_checkpoint_dir=item_checkpoint_dir,
-        resume=resume,
-        on_item_done=on_item_done,
-    )
-    if item_checkpoint_dir is not None:
-        rci_kwargs["item_key_fn"] = lambda c: c.str
+            "num_shots": self.num_shots,
+            "collect_shot_data_args": self.collect_shot_data_args,
+            "max_frame_limit": self.max_frame_limit,
+            "program_kwargs": self.program_kwargs,
+            "shot_checkpoint_dir": self.shot_checkpoint_dir,
+            "checkpoint_batch_size": self.checkpoint_batch_size,
+            "lazy_loading_enabled": self.lazy_loading_enabled,
+        }
 
-    run_checkpointed_items(**rci_kwargs)
+    def _make_on_item_done(self) -> Callable[[int, Circuit, dict], None]:
+        """Build the per-circuit `DataSet`/checkpoint accumulator and return
+        the `on_item_done` callback that populates it.
 
-    return ds
+        `item_checkpoint_dir`, if set, is a directory holding a plain-text
+        `dataset.txt` appended one row per circuit as results complete; an
+        incomplete trailing row from a prior crash is dropped and that
+        circuit redone from scratch, never resumed partway through its own
+        shots.
+        """
+        dataset_path = None
+        self._already_persisted: set[str] = set()
+        dataset_file_created = [False]
+
+        if self.item_checkpoint_dir is not None:
+            dataset_path = self.item_checkpoint_dir / "dataset.txt"
+
+            if dataset_path.exists():
+                _drop_incomplete_checkpoint_row(dataset_path)
+                loaded_ds = read_dataset(str(dataset_path), verbosity=0)
+                self._already_persisted = {c.str for c in loaded_ds}
+                dataset_file_created[0] = True
+                n_keys = (
+                    len(self.collect_shot_data_args)
+                    if isinstance(self.collect_shot_data_args, list)
+                    else 1
+                )
+                self._edesign_runner_ds = DataSet()
+                self._edesign_runner_ds.add_std_nqubit_outcome_labels(n_keys)
+                self._edesign_runner_ds.comment = loaded_ds.comment
+            else:
+                # Fresh start.
+                n_keys = (
+                    len(self.collect_shot_data_args)
+                    if isinstance(self.collect_shot_data_args, list)
+                    else 1
+                )
+                self._edesign_runner_ds = DataSet()
+                self._edesign_runner_ds.add_std_nqubit_outcome_labels(n_keys)
+                self._edesign_runner_ds.comment = (
+                    _checkpoint_provenance_comment(
+                        self.num_shots,
+                        self.collect_shot_data_args,
+                        self.physical_to_logical,
+                    )
+                )
+        else:
+            # No checkpointing.
+            n_keys = (
+                len(self.collect_shot_data_args)
+                if isinstance(self.collect_shot_data_args, list)
+                else 1
+            )
+            self._edesign_runner_ds = DataSet()
+            self._edesign_runner_ds.add_std_nqubit_outcome_labels(n_keys)
+
+        # Define and return the on_item_done callback.
+        def on_item_done(index: int, circ: Circuit, count_dict: dict) -> None:
+            self._edesign_runner_ds.add_count_dict(circ, count_dict)
+            if (
+                dataset_path is not None
+                and circ.str not in self._already_persisted
+            ):
+                if not dataset_file_created[0]:
+                    # Write empty dataset (header/comment only) before first
+                    # row, so the row is never written twice.
+                    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+                    empty_ds = DataSet()
+                    empty_ds.add_std_nqubit_outcome_labels(n_keys)
+                    empty_ds.comment = self._edesign_runner_ds.comment
+                    write_dataset(
+                        str(dataset_path),
+                        empty_ds,
+                        fixed_column_mode=False,
+                        with_times=False,
+                    )
+                    dataset_file_created[0] = True
+                # Append this (and every subsequent) row directly.
+                _append_checkpoint_row(dataset_path, circ, count_dict)
+
+        return on_item_done
+
+    def _finalize(self, result_list: list) -> Any:
+        """Return the accumulated DataSet."""
+        return self._edesign_runner_ds
+
+    def _mismatch_check_fields(self) -> list[str]:
+        """Return fields to check for resume mismatch."""
+        return [
+            "num_shots",
+            "collect_shot_data_args",
+            "physical_to_logical",
+            "max_frame_limit",
+        ]
 
 
 ## BEGIN VISUALIZATION TOOLS

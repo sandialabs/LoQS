@@ -24,6 +24,7 @@ from typing import Any, TypeVar
 
 from tqdm import tqdm
 
+from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
     ParallelStrategy,
     resolve_shot_executor,
@@ -37,7 +38,7 @@ R = TypeVar("R")
 def run_checkpointed_items(
     items: Sequence[T],
     process_item: Callable[..., R],
-    parallel: ParallelStrategy | None = None,
+    parallel_strategy: ParallelStrategy | None = None,
     desc: str = "Processing items",
     static_kwargs: dict | None = None,
     item_checkpoint_dir: str | Path | None = None,
@@ -55,7 +56,7 @@ def run_checkpointed_items(
         Items to process.
     process_item : Callable[..., R]
         Function to process each item. Signature: (item, index, *, shot_executor, **static_kwargs) -> R
-    parallel : ParallelStrategy | None
+    parallel_strategy : ParallelStrategy | None
         Parallelization strategy. None means serial execution.
     desc : str
         Progress bar description.
@@ -93,7 +94,7 @@ def run_checkpointed_items(
         item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Item indexing/identity
-    if item_key_fn is not None:
+    if item_key_fn is not None and item_checkpoint_dir is not None:
         index_map = _load_or_init_index_map(item_checkpoint_dir)
         items_with_index = _assign_indices_with_keys(
             items, item_key_fn, index_map
@@ -130,7 +131,7 @@ def run_checkpointed_items(
         if not remaining:
             # Nothing to do, skip dispatch
             pass
-        elif parallel is None or not parallel.is_chunked:
+        elif parallel_strategy is None or not parallel_strategy.is_chunked:
             # Serial execution
             newly_computed = _run_serial(
                 remaining,
@@ -138,7 +139,7 @@ def run_checkpointed_items(
                 static_kwargs or {},
                 item_checkpoint_dir,
                 on_item_done,
-                parallel,
+                parallel_strategy,
                 pbar,
             )
         else:
@@ -150,7 +151,7 @@ def run_checkpointed_items(
                 item_checkpoint_dir,
                 on_item_done,
                 items_with_index,
-                parallel,
+                parallel_strategy,
                 pbar,
                 poll_interval,
                 done.keys(),
@@ -178,6 +179,179 @@ def run_checkpointed_items(
     finally:
         if pbar is not None:
             pbar.close()
+
+
+class ProgramRunner(Serializable):
+    """Base class for crash-recoverable program runners bundling config fields
+    and a template-method `run()` for checkpoint/resume/progress.
+
+    Subclasses implement hook methods to define their specific work logic.
+    Whether a call resumes a prior run is inferred entirely from
+    `item_checkpoint_dir`'s own on-disk state (see `run()`) -- there is no
+    separate `resume` flag to pass.
+    """
+
+    _SERIALIZE_ATTRS = [
+        "parallel_strategy",
+        "item_checkpoint_dir",
+        "force_resume",
+        "checkpoint_batch_size",
+        "shot_checkpoint_dir",
+        "lazy_loading_enabled",
+    ]
+
+    def __init__(
+        self,
+        parallel_strategy: ParallelStrategy | None = None,
+        item_checkpoint_dir: str | Path | None = None,
+        force_resume: bool = False,
+        checkpoint_batch_size: int | None = None,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading_enabled: bool = True,
+    ):
+        self.parallel_strategy = parallel_strategy
+        self.item_checkpoint_dir = (
+            Path(item_checkpoint_dir)
+            if item_checkpoint_dir is not None
+            else None
+        )
+        self.force_resume = force_resume
+        self.checkpoint_batch_size = checkpoint_batch_size
+        self.shot_checkpoint_dir = (
+            Path(shot_checkpoint_dir)
+            if shot_checkpoint_dir is not None
+            else None
+        )
+        self.lazy_loading_enabled = lazy_loading_enabled
+        self._validate_checkpoint_kwargs()
+
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        """Convert Path objects to strings for serialization."""
+        if attr in ("item_checkpoint_dir", "shot_checkpoint_dir"):
+            val = getattr(self, attr)
+            return str(val) if val is not None else None
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    @classmethod
+    def _from_decoded_attrs(cls, attr_dict: dict[str, Any]) -> "ProgramRunner":
+        """Reconstruct from decoded attributes, converting strings back to Paths."""
+        # Convert path strings back to Path objects
+        if attr_dict.get("item_checkpoint_dir") is not None:
+            attr_dict["item_checkpoint_dir"] = Path(
+                attr_dict["item_checkpoint_dir"]
+            )
+        if attr_dict.get("shot_checkpoint_dir") is not None:
+            attr_dict["shot_checkpoint_dir"] = Path(
+                attr_dict["shot_checkpoint_dir"]
+            )
+        return super()._from_decoded_attrs(attr_dict)
+
+    def _validate_checkpoint_kwargs(self) -> None:
+        """Validate that checkpoint_batch_size requires shot_checkpoint_dir."""
+        if (
+            self.checkpoint_batch_size is not None
+            and self.shot_checkpoint_dir is None
+        ):
+            raise ValueError(
+                "checkpoint_batch_size requires shot_checkpoint_dir to be set"
+            )
+
+    def run(self) -> Any:
+        """Run the program with checkpoint/resume support.
+
+        Whether to resume is always inferred from `item_checkpoint_dir`'s
+        own on-disk state, never from a caller-supplied flag: no content
+        means a fresh run; a `runner.json` (this method's own crash-
+        recovery snapshot, written here at call-start, before any work is
+        dispatched) means continuing that prior run, subject to a mismatch
+        check against the stored config (`force_resume` bypasses a real
+        mismatch); unrelated content with no `runner.json` always raises,
+        since there's nothing to safely continue from. A crash mid-run can
+        be recovered from via
+        `type(self).read(item_checkpoint_dir / "runner.json").run()`.
+        """
+        resuming = False
+        if self.item_checkpoint_dir is not None:
+            has_content = self.item_checkpoint_dir.exists() and any(
+                self.item_checkpoint_dir.iterdir()
+            )
+            runner_path = self.item_checkpoint_dir / "runner.json"
+            if has_content:
+                if not runner_path.exists():
+                    raise FileExistsError(
+                        f"{self.item_checkpoint_dir} exists with content "
+                        "that isn't a recognized checkpoint (no runner.json)."
+                    )
+                stored = type(self).read(runner_path)
+                mismatches = [
+                    f
+                    for f in self._mismatch_check_fields()
+                    if getattr(self, f) != getattr(stored, f)
+                ]
+                if mismatches and not self.force_resume:
+                    raise ValueError(
+                        f"Cannot resume: stored config differs in "
+                        f"{', '.join(mismatches)}. Pass force_resume=True to resume anyway."
+                    )
+                resuming = True
+            self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            self.write(runner_path)
+            # The directory now always has at least runner.json in it
+            # (just written above, or already present from a prior/
+            # recovered run) -- the checks above already establish it's
+            # safe to proceed, so tell run_checkpointed_items to trust
+            # this directory's own journal state unconditionally, rather
+            # than tripping its own pre-existing-content guard on the
+            # runner.json file this method itself just wrote.
+            resuming = True
+
+        result_list = run_checkpointed_items(
+            items=self._get_items(),
+            process_item=self._process_item_fn(),
+            parallel_strategy=self.parallel_strategy,
+            desc=self._desc(),
+            static_kwargs=self._static_kwargs(),
+            item_checkpoint_dir=self.item_checkpoint_dir,
+            resume=resuming,
+            item_key_fn=self._item_key_fn(),
+            on_item_done=self._make_on_item_done(),
+        )
+        return self._finalize(result_list)
+
+    # Hook methods -- subclasses implement these
+    def _get_items(self) -> Sequence:
+        """Return list of items to process."""
+        raise NotImplementedError
+
+    def _process_item_fn(self) -> Callable:
+        """Return a plain top-level function reference for process_item."""
+        raise NotImplementedError
+
+    def _static_kwargs(self) -> dict[str, Any]:
+        """Return dict of static kwargs to pass to process_item."""
+        raise NotImplementedError
+
+    def _make_on_item_done(self) -> Callable[[int, Any, Any], None] | None:
+        """Return a closure for on_item_done callback, or None."""
+        raise NotImplementedError
+
+    def _finalize(self, result_list: list) -> Any:
+        """Return final result from result_list."""
+        raise NotImplementedError
+
+    def _item_key_fn(self) -> Callable[[Any], str] | None:
+        """Return item_key_fn or None (uses plain position if None)."""
+        return None
+
+    def _desc(self) -> str:
+        """Return description string for progress bar."""
+        return "Processing items"
+
+    def _mismatch_check_fields(self) -> list[str]:
+        """Return list of field names to compare for resume mismatch check."""
+        return []
 
 
 def _load_or_init_index_map(
@@ -261,12 +435,14 @@ def _run_serial(
     static_kwargs: dict[str, Any],
     item_checkpoint_dir: Path | None,
     on_item_done: Callable[[int, T, Any], None] | None,
-    parallel: ParallelStrategy | None,
+    parallel_strategy: ParallelStrategy | None,
     pbar: Any,
 ) -> dict[int, Any]:
     """Execute remaining items serially. Returns {index: result} for in-memory results."""
     shot_executor = resolve_shot_executor(
-        parallel.shot_executor if parallel is not None else None
+        parallel_strategy.shot_executor
+        if parallel_strategy is not None
+        else None
     )
     results_dict: dict[int, Any] = {}
 
@@ -314,7 +490,7 @@ def _run_parallel(
     item_checkpoint_dir: Path | None,
     on_item_done: Callable[[int, T, Any], None] | None,
     items_with_index: list[tuple[int, T]],
-    parallel: ParallelStrategy,
+    parallel_strategy: ParallelStrategy,
     pbar: Any,
     poll_interval: float,
     already_done_indices: Iterable[int] | None = None,
@@ -347,10 +523,14 @@ def _run_parallel(
                         pbar.update(1)
 
     # Each chunk worker resolves this itself; only the raw value is forwarded here.
-    shot_executor = parallel.shot_executor if parallel is not None else None
+    shot_executor = (
+        parallel_strategy.shot_executor
+        if parallel_strategy is not None
+        else None
+    )
 
     # Make chunks and dispatch
-    chunks = parallel.make_chunks(remaining)
+    chunks = parallel_strategy.make_chunks(remaining)
     worker = functools.partial(
         _generic_chunk_worker,
         process_item=process_item,
@@ -368,7 +548,7 @@ def _run_parallel(
     ):
         on_poll_callback = on_poll
 
-    chunk_results_list = parallel.dispatch(
+    chunk_results_list = parallel_strategy.dispatch(
         worker,
         chunks,
         desc="Processing chunks",
