@@ -1917,8 +1917,8 @@ def profile_strategies(
     times each), returning one `ProfileResult` per entry in a `dict`
     keyed by the same labels -- `work_fn` is entirely the caller's, e.g.
     a closure like
-    `lambda strategy: run_discrete_error_injected_programs(programs, ...,
-    parallel=strategy)`, so this function never needs any
+    `lambda strategy: FaultInjectionRunner(programs, ...,
+    parallel_strategy=strategy).run()`, so this function never needs any
     GST/fault-injection/noise-sweep-specific knowledge of what it's
     actually timing.
 

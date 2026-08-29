@@ -39,7 +39,7 @@ both, or neither can be active at once:
 - **Programs**, across a whole batch. Every program-level call site --
   [EdesignRunner](api:EdesignRunner) (one `QuantumProgram` per edesign circuit,
   configured via its own `parallel_strategy` field),
-  [run_discrete_error_injected_programs](api:run_discrete_error_injected_programs)
+  [FaultInjectionRunner](api:FaultInjectionRunner)
   (one per error-injected variant), and
   [NoiseSweepRunner.run](api:NoiseSweepRunner.run) (one per sweep point) --
   accepts a [ParallelStrategy](api:ParallelStrategy) instead of a single
@@ -169,13 +169,13 @@ strategy = ParallelStrategy(
 print(strategy.describe(programs, num_shots=1))
 strategy.plot(programs)
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     programs,
     collect_shot_data_args=[("counter", -1)],
     expected_outcomes=[1],
     num_shots=1,
-    parallel=strategy,
-)
+    parallel_strategy=strategy,
+).run()
 len(failed)
 ```
 
@@ -196,13 +196,13 @@ strategy = ParallelStrategy(
 print(strategy.describe(programs, num_shots=20))
 strategy.plot(programs)
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     programs,
     collect_shot_data_args=[("counter", -1)],
     expected_outcomes=[1],
     num_shots=20,
-    parallel=strategy,
-)
+    parallel_strategy=strategy,
+).run()
 len(failed)
 ```
 
@@ -253,13 +253,13 @@ strategy = ParallelStrategy(
 if sys.platform == "win32":
     print("submitit does not support Windows -- skipping dispatch.")
 else:
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=1,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
     print(f"{len(failed)} failed")
 ```
 
@@ -286,13 +286,13 @@ strategy.plot(programs, program_workers=2)
 if sys.platform == "win32":
     print("submitit does not support Windows -- skipping dispatch.")
 else:
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=20,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
     print(f"{len(failed)} failed")
 ```
 
@@ -339,13 +339,13 @@ with MPIPoolExecutor() as executor:
     # from the executor object alone ahead of time.
     strategy.plot(programs, program_workers=3)
 
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=1,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
 ```
 
 `MPIPoolExecutor` is typically launched as one atomic multi-node allocation
@@ -370,13 +370,13 @@ with MPIPoolExecutor() as executor:
     print(strategy.describe(programs, num_shots=20))
     strategy.plot(programs, program_workers=3)
 
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=20,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
 ```
 
 ## Thread-oversubscription safety
@@ -441,7 +441,7 @@ or reload the full set from disk via `load_checkpoint()` as above.
 
 This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
 shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),
-[run_discrete_error_injected_programs](api:run_discrete_error_injected_programs), and
+[FaultInjectionRunner](api:FaultInjectionRunner), and
 [NoiseSweepRunner.run](api:NoiseSweepRunner.run)) use a separate, unified item-level
 checkpoint mechanism with per-worker journals, crash recovery, and per-item completion tracking.
 
@@ -547,13 +547,13 @@ from loqs.tools.paralleltools import (
 
 
 def profile_work(strategy):
-    return fttools.run_discrete_error_injected_programs(
+    return fttools.FaultInjectionRunner(
         ft_programs,
         collect_shot_data_args=[("logical_measurement", -1)],
         expected_outcomes=[1],
         num_shots=20,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
 
 
 strategies = {

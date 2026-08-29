@@ -206,32 +206,34 @@ class TestRunDiscreteErrorInjectedPrograms:
 
     def test_all_succeed_returns_empty_failed_list(self, capsys):
         program = _build_counter_program()
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
         )
+        failed = runner.run()
         assert failed == []
         assert "All programs succeeded!" in capsys.readouterr().out
 
     def test_some_fail_are_collected_and_reported(self, capsys):
         program = _build_counter_program()
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[999],
             num_shots=1,
         )
+        failed = runner.run()
         assert failed == [program, program]
         assert "Failed 2 programs!" in capsys.readouterr().out
 
 
 class TestRunDiscreteErrorInjectedProgramsParallel:
-    """`run_discrete_error_injected_programs`'s `parallel` (a
+    """[](api:FaultInjectionRunner)'s `parallel_strategy` (a
     [](api:ParallelStrategy)) path, against real `loky` and `submitit`
     executors -- both must return the driver's own original program
-    objects in the failed list (per the function's own contract), not
+    objects in the failed list (per the runner's own contract), not
     copies that crossed a process boundary. `ParallelStrategy`'s own
     construction-time validation (mutual exclusion, `n_program_chunks`
     requirements) is covered directly in test_paralleltools.py, not
@@ -247,13 +249,14 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             n_program_chunks=2,
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=strategy,
+            parallel_strategy=strategy,
         )
+        failed = runner.run()
 
         assert failed == []
         assert "All programs succeeded!" in capsys.readouterr().out
@@ -268,13 +271,14 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             n_program_chunks=2,
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[999],
             num_shots=1,
-            parallel=strategy,
+            parallel_strategy=strategy,
         )
+        failed = runner.run()
 
         assert failed == [program, program]
         assert all(p is program for p in failed)
@@ -302,13 +306,14 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             n_program_chunks=2,
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=strategy,
+            parallel_strategy=strategy,
         )
+        failed = runner.run()
 
         assert failed == []
 
@@ -324,13 +329,14 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             shot_executor=_build_shot_executor,
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=strategy,
+            parallel_strategy=strategy,
         )
+        failed = runner.run()
 
         assert failed == []
 
@@ -349,15 +355,322 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             shot_executor=loky.get_reusable_executor(max_workers=2),
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            [program, program],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            parallel=strategy,
+            parallel_strategy=strategy,
         )
+        failed = runner.run()
 
         assert failed == []
+
+
+class TestFaultInjectionRunnerCheckpointing:
+    """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""
+
+    def _read_journal_indices(self, ckpt):
+        """Return set of indices journaled as complete in checkpoint dir."""
+        import json
+        journal_files = list(ckpt.glob("journal_*.jsonl"))
+        indices = set()
+        for jfile in journal_files:
+            with open(jfile) as f:
+                for line in f:
+                    entry = json.loads(line)
+                    indices.add(entry["index"])
+        return indices
+
+    def test_checkpoint_run_matches_non_checkpointed_result(self, tmp_path):
+        """Checkpointing doesn't change the result; leaves checkpoint dir."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed = runner.run()
+
+        assert failed == []
+        assert ckpt.exists()
+        assert ckpt.is_dir()
+        assert (ckpt / "runner.json").exists()
+        assert self._read_journal_indices(ckpt) == {0, 1}
+
+    def test_existing_checkpoint_with_matching_config_auto_resumes(self, tmp_path):
+        """Resumed call with matching config continues from checkpoint."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        # First run
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed1 = runner1.run()
+        assert failed1 == []
+
+        # Second run with same config: should auto-resume
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed2 = runner2.run()
+        assert failed2 == []
+
+    def test_existing_content_without_runner_json_raises(self, tmp_path):
+        """Content that isn't a recognized checkpoint (no runner.json) raises."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        ckpt.mkdir()
+        (ckpt / "unrelated.txt").write_text("not a checkpoint")
+
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        with pytest.raises(FileExistsError):
+            runner.run()
+
+    def test_resume_skips_already_checkpointed_programs(self, tmp_path):
+        """Resuming skips programs recorded in journal; only re-runs missing."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        # First: checkpoint only the first program
+        partial_programs = [program]
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=partial_programs,
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed1 = runner1.run()
+        assert failed1 == []
+        assert self._read_journal_indices(ckpt) == {0}
+
+        # Second: resume with all programs, verify only index 1 runs
+        built_indices = []
+        original_run_one_program = fttools._run_one_program
+
+        def spy_run_one_program(program, index, **kwargs):
+            built_indices.append(index)
+            return original_run_one_program(program, index, **kwargs)
+
+        fttools._run_one_program = spy_run_one_program
+        try:
+            runner2 = fttools.FaultInjectionRunner(
+                errored_programs=[program, program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                num_shots=1,
+                item_checkpoint_dir=ckpt,
+            )
+            failed2 = runner2.run()
+            assert failed2 == []
+            # Only index 1 should have been built (index 0 already done)
+            assert built_indices == [1]
+            assert self._read_journal_indices(ckpt) == {0, 1}
+        finally:
+            fttools._run_one_program = original_run_one_program
+
+    def test_crash_truncated_last_program_is_redone_on_resume(self, tmp_path):
+        """A program incomplete in journal after crash is redone on resume."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        # First run: complete both programs
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed1 = runner1.run()
+        assert failed1 == []
+        assert self._read_journal_indices(ckpt) == {0, 1}
+
+        # Simulate a crash by deleting the second program's journal entry
+        # (as if it crashed before being journaled)
+        import json
+        journal_files = list(ckpt.glob("journal_*.jsonl"))
+        for jfile in journal_files:
+            lines = jfile.read_text().strip().split("\n")
+            # Keep only first entry (index 0)
+            with open(jfile, "w") as f:
+                if lines:
+                    f.write(lines[0] + "\n")
+
+        assert self._read_journal_indices(ckpt) == {0}
+
+        # Resume should re-run the missing program
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed2 = runner2.run()
+        assert failed2 == []
+        assert self._read_journal_indices(ckpt) == {0, 1}
+
+    def test_genuine_crash_recovery_via_read_and_run(self, tmp_path):
+        """Simulate crash partway, recover via FaultInjectionRunner.read().run()."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        # Set up a runner that will crash partway
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+
+        # Patch _run_one_program to crash at index 1
+        original_run_one_program = fttools._run_one_program
+        crash_triggered = []
+
+        def crashing_run_one_program(program, index, **kwargs):
+            if index == 1 and not crash_triggered:
+                crash_triggered.append(True)
+                raise RuntimeError("simulated crash")
+            return original_run_one_program(program, index, **kwargs)
+
+        fttools._run_one_program = crashing_run_one_program
+        try:
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                runner1.run()
+        finally:
+            fttools._run_one_program = original_run_one_program
+
+        # Verify partial completion: only index 0 journaled
+        assert self._read_journal_indices(ckpt) == {0}
+
+        # Recover via .read().run()
+        runner2 = fttools.FaultInjectionRunner.read(ckpt / "runner.json")
+        failed2 = runner2.run()
+        assert failed2 == []
+
+        # All items should now be journaled
+        assert self._read_journal_indices(ckpt) == {0, 1, 2}
+
+    def test_resume_mismatched_num_shots_raises(self, tmp_path):
+        """Mismatched num_shots on resume raises ValueError naming the field."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        runner1.run()
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=2,  # Different!
+            item_checkpoint_dir=ckpt,
+        )
+        with pytest.raises(ValueError, match="num_shots"):
+            runner2.run()
+
+    def test_resume_mismatched_collect_shot_data_args_raises(self, tmp_path):
+        """Mismatched collect_shot_data_args on resume raises ValueError."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        runner1.run()
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", 0)],  # Different!
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        with pytest.raises(ValueError, match="collect_shot_data_args"):
+            runner2.run()
+
+    def test_resume_mismatched_expected_outcomes_raises(self, tmp_path):
+        """Mismatched expected_outcomes on resume raises ValueError."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        runner1.run()
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[999],  # Different!
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        with pytest.raises(ValueError, match="expected_outcomes"):
+            runner2.run()
+
+    def test_force_resume_bypasses_config_mismatch(self, tmp_path):
+        """force_resume=True proceeds despite config mismatch."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            item_checkpoint_dir=ckpt,
+        )
+        failed1 = runner1.run()
+        assert failed1 == []
+
+        # Resume with different num_shots but force_resume=True
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=2,  # Different, but forced
+            item_checkpoint_dir=ckpt,
+            force_resume=True,
+        )
+        failed2 = runner2.run()
+        assert failed2 == []
 
 
 class TestProgramOutput:
