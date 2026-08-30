@@ -378,6 +378,148 @@ class QuantumProgram(Displayable):
             new_program.patch_types = patch_types
         return new_program
 
+    def _check_resume_and_resolve_checkpoint_dir(
+        self,
+        checkpoint_dir: str | Path | None,
+        num_shots: int,
+        max_frame_limit: int,
+        force_resume: bool,
+    ) -> Path:
+        """Resolve `checkpoint_dir` and, if it already holds a prior call's
+        state, validate that this call's own config still matches before
+        resuming.
+
+        Raises `FileExistsError` if `checkpoint_dir` has content that isn't
+        a recognized checkpoint (no `results.h5`), or `ValueError` if the
+        stored `num_shots`/`max_frame_limit`/`default_base_seed` differ from
+        this call's own and `force_resume` is `False`.
+        """
+        resolved_checkpoint_dir = (
+            Path(checkpoint_dir)
+            if checkpoint_dir is not None
+            else Path("./checkpoints")
+        )
+        results_path = resolved_checkpoint_dir / "results.h5"
+        has_content = resolved_checkpoint_dir.exists() and any(
+            resolved_checkpoint_dir.iterdir()
+        )
+        if not has_content:
+            return resolved_checkpoint_dir
+
+        if not results_path.exists():
+            raise FileExistsError(
+                f"{resolved_checkpoint_dir} exists with content that isn't "
+                "a recognized checkpoint (no results.h5)."
+            )
+        stored = ProgramResults.read(results_path)
+        mismatches = []
+        if stored.num_shots != num_shots:
+            mismatches.append("num_shots")
+        if stored.max_frame_limit != max_frame_limit:
+            mismatches.append("max_frame_limit")
+        if (
+            stored.parent_program is not None
+            and stored.parent_program.default_base_seed
+            != self.default_base_seed
+        ):
+            mismatches.append("default_base_seed")
+        if mismatches and not force_resume:
+            raise ValueError(
+                f"Cannot resume: stored config differs in "
+                f"{', '.join(mismatches)}. Pass force_resume=True to "
+                "resume anyway."
+            )
+        return resolved_checkpoint_dir
+
+    @staticmethod
+    def _load_remaining_shots(
+        checkpoint_dir: Path, num_shots: int
+    ) -> tuple[list[int], dict]:
+        """Scan `checkpoint_dir` for every already-checkpointed shot (across
+        `checkpoint.h5` and any `worker_*_checkpoint.h5`) and return the
+        still-missing shot indices, plus the recovered `{index: History}`
+        data itself for the caller's own use (e.g. re-populating an
+        in-memory result when lazy loading is disabled)."""
+        done = ProgramResults._load_done_shots(checkpoint_dir)
+        remaining = sorted(set(range(num_shots)) - done.keys())
+        return remaining, done
+
+    def _run_serial_checkpointed(
+        self,
+        remaining: list[int],
+        max_frame_limit: int,
+        checkpoint_batch_size: int,
+        checkpoint_dir: str | Path | None,
+        program_results: ProgramResults,
+        pbar,
+    ) -> None:
+        """Serially compute every shot in `remaining`, flushing to the
+        canonical checkpoint file once `checkpoint_batch_size` shots have
+        accumulated unwritten (plus a final flush for any undersized tail
+        batch)."""
+        for i in remaining:
+            seed = (
+                None
+                if self.default_base_seed is None
+                else self.default_base_seed + i
+            )
+            result = QuantumProgram._run_shot(self, max_frame_limit, seed, i)
+            program_results.add_shot(i, result)
+            pbar.update(1)
+            if (
+                len(program_results.get_unwritten_shots())
+                >= checkpoint_batch_size
+            ):
+                program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+        program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+    def _run_parallel_checkpointed(
+        self,
+        remaining: list[int],
+        max_frame_limit: int,
+        checkpoint_batch_size: int,
+        checkpoint_dir: str | Path | None,
+        shot_executor: SubmitExecutor,
+        program_results: ProgramResults,
+        pbar,
+    ) -> None:
+        """Dispatch `remaining` to `shot_executor` in `checkpoint_batch_size`-
+        sized chunks; each batch is computed and checkpointed inside its own
+        worker process (see `_run_shot_batch_worker`) before returning. A
+        no-op if `remaining` is empty."""
+        if not remaining:
+            return
+        batches = [
+            remaining[batch_start : batch_start + checkpoint_batch_size]
+            for batch_start in range(0, len(remaining), checkpoint_batch_size)
+        ]
+        futures_to_batch = {
+            shot_executor.submit(
+                QuantumProgram._run_shot_batch_worker,
+                self,
+                max_frame_limit,
+                [
+                    (
+                        (
+                            None
+                            if self.default_base_seed is None
+                            else self.default_base_seed + i
+                        ),
+                        i,
+                    )
+                    for i in batch_indices
+                ],
+                checkpoint_dir,
+            ): batch_indices
+            for batch_indices in batches
+        }
+        for future in as_completed(futures_to_batch):
+            batch_shots = future.result()
+            for shot_index, history in batch_shots.items():
+                program_results.add_shot(shot_index, history)
+            program_results.mark_shots_checkpointed(list(batch_shots.keys()))
+            pbar.update(len(batch_shots))
+
     def run(
         self,
         num_shots: int = 1,
@@ -387,6 +529,7 @@ class QuantumProgram(Displayable):
         checkpoint_batch_size: int | None = None,
         checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
+        force_resume: bool = False,
     ) -> ProgramResults:
         """Execute some shots of this [](api:QuantumProgram).
 
@@ -451,6 +594,15 @@ class QuantumProgram(Displayable):
             every shot in memory regardless of checkpointing. Has no effect
             when `checkpoint_batch_size` is `None`.
 
+        force_resume:
+            When resuming a checkpoint-enabled call (rerunning against a
+            `checkpoint_dir` with prior partial results), if this is `False`
+            (default) and the stored `num_shots`/`max_frame_limit`/
+            `default_base_seed` differ from this call's own, raise
+            `ValueError` naming the mismatches. Set to `True` to resume
+            anyway, trusting the already-checkpointed data as-is. Has no
+            effect when `checkpoint_batch_size` is `None`.
+
         Returns
         -------
         ProgramResults
@@ -461,28 +613,34 @@ class QuantumProgram(Displayable):
         if checkpoint_enabled and checkpoint_batch_size < 1:
             raise ValueError("checkpoint_batch_size must be >= 1")
 
+        resolved_checkpoint_dir = None
+        if checkpoint_enabled:
+            resolved_checkpoint_dir = (
+                self._check_resume_and_resolve_checkpoint_dir(
+                    checkpoint_dir, num_shots, max_frame_limit, force_resume
+                )
+            )
+
         program_results = ProgramResults(
             name=f"Results for {self.name}",
             parent_program=self,
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_dir=checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            num_shots=num_shots,
+            max_frame_limit=max_frame_limit,
         )
 
-        start = 0  # Always start from 0 for new ProgramResults
-        if start > 0 and verbose:
-            print(f"Detecting {start} already completed shots")
-
         def _seed_for_shot(shot_index: int) -> int | None:
-            # For RNG seeding, increment the base seed +1 for every shot (if seeded)
+            # For RNG seeding, use the shot's own absolute index directly.
             if self.default_base_seed is None:
                 return None
-            return self.default_base_seed + start + shot_index
+            return self.default_base_seed + shot_index
 
         if not checkpoint_enabled:
             tasks = [
                 (self, max_frame_limit, _seed_for_shot(i), i)
-                for i in range(start, num_shots)
+                for i in range(num_shots)
             ]
 
             if shot_executor is None:
@@ -491,7 +649,6 @@ class QuantumProgram(Displayable):
                     tasks,
                     f"Program {self.name}",
                     disable=not verbose,
-                    initial=start,
                     total=num_shots,
                 ):
                     result = QuantumProgram._run_shot(*task)
@@ -523,71 +680,52 @@ class QuantumProgram(Displayable):
         # needed. With a `shot_executor`, each dispatched batch of
         # `checkpoint_batch_size` shots computes and checkpoints itself
         # inside its own worker process before returning (see
-        # `_run_shot_batch_worker`), and a single, race-free consolidation
-        # pass merges every worker's file into that same `checkpoint.h5`
-        # only once every batch is confirmed done.
+        # `_run_shot_batch_worker`), and a race-free consolidation pass
+        # merges every worker's file into that same `checkpoint.h5`.
+        # `remaining` (rather than the full shot range) is what actually
+        # gets dispatched below, so a resuming call only redoes whatever a
+        # prior interrupted call hadn't already durably checkpointed.
+        remaining, done = self._load_remaining_shots(
+            resolved_checkpoint_dir, num_shots
+        )
+        if not lazy_loading_enabled:
+            program_results.shot_histories.update(done)
+
         with tqdm(
             total=num_shots, desc=f"Program {self.name}", disable=not verbose
         ) as pbar:
+            if done:
+                pbar.update(len(done))
             if shot_executor is None:
-                for i in range(start, num_shots):
-                    result = QuantumProgram._run_shot(
-                        self, max_frame_limit, _seed_for_shot(i), i
-                    )
-                    program_results.add_shot(i, result)
-                    pbar.update(1)
-                    if (
-                        len(program_results.get_unwritten_shots())
-                        >= checkpoint_batch_size
-                    ):
-                        program_results.checkpoint(
-                            checkpoint_dir=checkpoint_dir
-                        )
-                # Flush whatever's left of a final, possibly-undersized
-                # batch -- a no-op if num_shots happened to be an exact
-                # multiple of checkpoint_batch_size.
-                program_results.checkpoint(checkpoint_dir=checkpoint_dir)
-            else:
-                batches = [
-                    list(
-                        range(
-                            batch_start,
-                            min(
-                                batch_start + checkpoint_batch_size, num_shots
-                            ),
-                        )
-                    )
-                    for batch_start in range(
-                        start, num_shots, checkpoint_batch_size
-                    )
-                ]
-                futures_to_batch = {
-                    shot_executor.submit(
-                        QuantumProgram._run_shot_batch_worker,
-                        self,
-                        max_frame_limit,
-                        [(_seed_for_shot(i), i) for i in batch_indices],
-                        checkpoint_dir,
-                    ): batch_indices
-                    for batch_indices in batches
-                }
-                for future in as_completed(futures_to_batch):
-                    batch_shots = future.result()
-                    for shot_index, history in batch_shots.items():
-                        program_results.add_shot(shot_index, history)
-                    program_results.mark_shots_checkpointed(
-                        list(batch_shots.keys())
-                    )
-                    pbar.update(len(batch_shots))
-
-                # One race-free, driver-side, streaming (bounded-memory)
-                # consolidation pass, run only now that every dispatched
-                # future is confirmed complete -- never two writers racing
-                # to consolidate at once.
-                program_results.consolidate_checkpoints(
-                    checkpoint_dir=checkpoint_dir
+                self._run_serial_checkpointed(
+                    remaining,
+                    max_frame_limit,
+                    checkpoint_batch_size,
+                    checkpoint_dir,
+                    program_results,
+                    pbar,
                 )
-                program_results._checkpoint_dir = Path(checkpoint_dir)
+            else:
+                self._run_parallel_checkpointed(
+                    remaining,
+                    max_frame_limit,
+                    checkpoint_batch_size,
+                    checkpoint_dir,
+                    shot_executor,
+                    program_results,
+                    pbar,
+                )
+
+            # A race-free, driver-side, streaming (bounded-memory)
+            # consolidation pass -- runs whenever any worker file is left
+            # to merge, regardless of whether *this* call itself dispatched
+            # anything in parallel, so a crashed parallel run resumed via a
+            # serial call still gets its leftover worker files cleaned up.
+            if any(resolved_checkpoint_dir.glob("worker_*_checkpoint.h5")):
+                program_results.consolidate_checkpoints(
+                    checkpoint_dir=resolved_checkpoint_dir
+                )
+                program_results._checkpoint_dir = resolved_checkpoint_dir
                 program_results._worker_id = None
 
         return program_results

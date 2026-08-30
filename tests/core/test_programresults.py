@@ -819,8 +819,8 @@ class TestParentProgramFileWriting:
         os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
     )
     def test_parent_program_writes_to_specified_checkpoint_dir(self, tmp_path):
-        """Regression test: parent program file should be written to the
-        explicit checkpoint_dir, not a default ./checkpoints relative to cwd."""
+        """Regression test: results.h5 (containing the whole ProgramResults)
+        should be written to the explicit checkpoint_dir."""
         # Import here to avoid import errors when dependencies are missing
         pytest.importorskip("quantumsim")
         pytest.importorskip("stim")
@@ -856,21 +856,19 @@ class TestParentProgramFileWriting:
             checkpoint_dir=checkpoint_dir,
         )
 
-        # Verify the parent_program path exists and is under checkpoint_dir
+        # Verify the results.h5 file exists and is under checkpoint_dir
         assert isinstance(results.parent_program, str)
-        parent_file = Path(results.parent_program)
-        assert parent_file.exists()
-        assert parent_file.parent == checkpoint_dir
-        assert "parent_program_" in parent_file.name
-        # Check that UUID suffix is present (8 hex chars after timestamp)
-        assert parent_file.name.count("_") >= 2  # timestamp, uuid, and file ext
+        results_file = Path(results.parent_program)
+        assert results_file.exists()
+        assert results_file.parent == checkpoint_dir
+        assert results_file.name == "results.h5"
 
     @pytest.mark.skipif(
         os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
     )
-    def test_parent_program_uuid_prevents_collision(self, tmp_path):
-        """Regression test: two concurrent ProgramResults constructions should
-        not collide, even if within the same second, due to UUID suffix."""
+    def test_parent_program_reuses_existing_results_h5(self, tmp_path):
+        """When results.h5 already exists, a second ProgramResults construction
+        should reuse the same file (no duplicate writes)."""
         pytest.importorskip("quantumsim")
         pytest.importorskip("stim")
         from loqs.backends import QSimQuantumState
@@ -893,30 +891,112 @@ class TestParentProgramFileWriting:
             default_noise_model=ideal_model,
             state_type=QSimQuantumState,
             patch_types={"Trivial": trivial_code},
-            name="Test program for uuid collision"
+            name="Test program for results.h5 reuse"
         )
 
         checkpoint_dir = tmp_path / "collide_test"
 
-        # Create two ProgramResults with the same parent program in the same dir
+        # Create first ProgramResults
         results1 = ProgramResults(
             name="Results 1",
             parent_program=program,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
         )
+        file1 = Path(results1.parent_program)
+        mtime1 = file1.stat().st_mtime
+
+        # Create second ProgramResults in the same directory
         results2 = ProgramResults(
             name="Results 2",
             parent_program=program,
             checkpoint_enabled=True,
             checkpoint_dir=checkpoint_dir,
         )
-
-        # Verify they got different files (no collision)
-        file1 = Path(results1.parent_program)
         file2 = Path(results2.parent_program)
-        assert file1 != file2
+
+        # Both should point to the same results.h5 file (no duplicate writes)
+        assert file1 == file2
         assert file1.exists()
-        assert file2.exists()
         assert file1.parent == checkpoint_dir
-        assert file2.parent == checkpoint_dir
+        assert file1.name == "results.h5"
+        # Modification time should be the same (same file, not rewritten)
+        mtime2 = file2.stat().st_mtime
+        assert mtime1 == mtime2
+
+
+class TestResumeCheckpointing:
+    """Test resume functionality for checkpoint-enabled runs."""
+
+    def test_consolidate_checkpoints_merges_existing_output(self):
+        """consolidate_checkpoints() called twice must preserve shots from
+        the first consolidation, not drop them when creating the second."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+            checkpoint_dir.mkdir()
+
+            # First consolidation: write some worker files and consolidate
+            results1 = ProgramResults(name="Worker 1", lazy_loading_enabled=False)
+            for i in range(2):
+                history = History()
+                history.append(Frame({"batch": 1, "shot": i}))
+                results1.add_shot(i, history)
+            results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
+
+            consolidated = ProgramResults()
+            consolidated.consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir, delete_originals=False
+            )
+            final_results = ProgramResults()
+            final_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert len(final_results.shot_histories) == 2
+
+            # Second consolidation: add a new worker file and consolidate again
+            results2 = ProgramResults(name="Worker 2", lazy_loading_enabled=False)
+            for i in range(2, 4):
+                history = History()
+                history.append(Frame({"batch": 2, "shot": i}))
+                results2.add_shot(i, history)
+            results2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w2")
+
+            consolidated2 = ProgramResults()
+            consolidated2.consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir, delete_originals=False
+            )
+            final_results2 = ProgramResults()
+            final_results2.load_checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # All 4 shots should be present - not just the 2 from the second batch
+            assert len(final_results2.shot_histories) == 4
+            for i in range(4):
+                assert i in final_results2.shot_histories
+
+    def test_load_done_shots_returns_union_from_checkpoint_and_workers(self):
+        """_load_done_shots returns the union of shots from checkpoint.h5
+        and all worker_*_checkpoint.h5 files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+            checkpoint_dir.mkdir()
+
+            # Write to checkpoint.h5
+            results_main = ProgramResults(lazy_loading_enabled=False)
+            for i in range(3):
+                history = History()
+                history.append(Frame({"source": "main", "idx": i}))
+                results_main.add_shot(i, history)
+            results_main.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Write to worker files
+            for w in range(2):
+                results_w = ProgramResults(lazy_loading_enabled=False)
+                for i in range(3, 6):
+                    history = History()
+                    history.append(Frame({"source": f"worker{w}", "idx": i}))
+                    results_w.add_shot(i, history)
+                results_w.checkpoint(checkpoint_dir=checkpoint_dir, worker_id=f"w{w}")
+
+            # Load done shots
+            done = ProgramResults._load_done_shots(checkpoint_dir)
+            assert len(done) == 6
+            for i in range(6):
+                assert i in done

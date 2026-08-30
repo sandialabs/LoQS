@@ -52,6 +52,8 @@ class ProgramResults(Displayable):
         "_unwritten_shots",
         "name",
         "parent_program",
+        "num_shots",
+        "max_frame_limit",
     ]
 
     # `_merge_into_existing_checkpoint`/`_merge_iterable` navigate directly
@@ -61,7 +63,9 @@ class ProgramResults(Displayable):
     # silently break that navigation whenever a batch of shots happens to
     # have no array anywhere in it (e.g. an all-classical program with no
     # quantum state), so this attr is exempted from collapse.
-    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset({"shot_histories"})
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
+        {"shot_histories"}
+    )
 
     def __init__(
         self,
@@ -72,6 +76,8 @@ class ProgramResults(Displayable):
         checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
         max_memory_shots: int = 100,
+        num_shots: int | None = None,
+        max_frame_limit: int | None = None,
     ) -> None:
         """
         Parameters
@@ -94,6 +100,12 @@ class ProgramResults(Displayable):
             Directory where checkpoint files (including the parent program file,
             if written) are stored. If None, a default of `./checkpoints` is
             used when a write is actually needed.
+
+        num_shots:
+            The total number of shots for this run (for resume detection).
+
+        max_frame_limit:
+            The maximum frame limit used in this run (for resume detection).
         """
         self.shot_histories = (
             shot_histories if shot_histories is not None else {}
@@ -117,6 +129,12 @@ class ProgramResults(Displayable):
         self.name = name
         """Name for logging"""
 
+        self.num_shots = num_shots
+        """Total number of shots for this run (for resume detection)."""
+
+        self.max_frame_limit = max_frame_limit
+        """Maximum frame limit for this run (for resume detection)."""
+
         self.parent_program = parent_program
         """Reference to the parent QuantumProgram that generated these results."""
 
@@ -138,59 +156,64 @@ class ProgramResults(Displayable):
         once and cheaply referenced afterward, instead of re-expanded every time."""
 
         # If checkpointing is enabled and parent_program is a QuantumProgram object,
-        # we need to write it to file and store the filename instead
+        # write results.h5 (this whole ProgramResults object) if it doesn't already
+        # exist, then use it instead of parent_program for cache building
         from loqs.core import QuantumProgram
 
         if checkpoint_enabled and isinstance(parent_program, QuantumProgram):
-            self._write_parent_program_to_file(parent_program)
-            # Build encode_cache by decoding the written program and reversing cache mapping
+            self._write_results_snapshot_if_fresh(parent_program)
+            # Build encode_cache by decoding the written results and reversing cache mapping
             self._build_encode_cache_from_parent_program()
 
-    def _write_parent_program_to_file(self, program) -> None:
-        """Write the parent QuantumProgram to file and store the filename.
+    def _write_results_snapshot_if_fresh(self, program) -> None:
+        """Write the entire ProgramResults (including nested parent_program) to
+        results.h5 only if that file doesn't already exist. Then update
+        self.parent_program to point to results.h5 (as a string path).
 
         Parameters
         ----------
         program:
-            The QuantumProgram object to write to file.
+            The QuantumProgram object currently stored in self.parent_program.
         """
-        # Create a temporary directory for the program file if checkpoint_dir is not set
+        # Set default checkpoint_dir if needed
         if self._checkpoint_dir is None:
             self._checkpoint_dir = Path("./checkpoints")
 
         # Ensure checkpoint directory exists
         self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create a unique filename for the program
-        program_filename = (
-            self._checkpoint_dir
-            / f"parent_program_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.h5"
-        )
+        results_path = self._checkpoint_dir / "results.h5"
 
-        # Write the program to file
-        program.write(program_filename, format="hdf5")
+        # Write only if results.h5 doesn't exist yet (this is what makes
+        # a resuming call not re-derive a fresh config from a possibly-different self)
+        if not results_path.exists():
+            from loqs.internal.serializable import Serializable
 
-        # Store the filename instead of the program object
-        self.parent_program = str(program_filename)
+            Serializable.write(self, results_path, format="hdf5")
+
+        # Always reassign parent_program to the results.h5 path (whether or not
+        # we just wrote it), so _build_encode_cache_from_parent_program works
+        # identically on both fresh and resuming calls
+        self.parent_program = str(results_path)
 
     def _build_encode_cache_from_parent_program(self) -> None:
-        """Build an encode_cache by decoding the written parent program and reversing cache mapping."""
+        """Build an encode_cache by decoding results.h5 as a ProgramResults
+        (the nested QuantumProgram decodes normally underneath) and
+        reversing its own cache mapping."""
         if not isinstance(self.parent_program, (str, Path)):
             return
 
         try:
-            # Import QuantumProgram here to avoid circular imports
-            from loqs.core.quantumprogram import QuantumProgram
+            from loqs.internal.serializable import Serializable
 
-            # Read the parent program from file just to build the decode cache
             decode_cache = {}
-            QuantumProgram.read(self.parent_program, decode_cache=decode_cache)
+            ProgramResults.read(self.parent_program, decode_cache=decode_cache)
 
             # Decode cache is cache_id to object
             # Encode cache is id(object) to cache_id
             self._encode_cache = {id(v): k for k, v in decode_cache.items()}
         except Exception:
-            # If there's any error reading the program or building the cache,
+            # If there's any error reading the results or building the cache,
             # just continue without the cache - it's not critical for functionality
             pass
 
@@ -288,6 +311,8 @@ class ProgramResults(Displayable):
             shot_histories=shot_histories,
             name=attr_dict["name"],
             parent_program=attr_dict["parent_program"],
+            num_shots=attr_dict.get("num_shots"),
+            max_frame_limit=attr_dict.get("max_frame_limit"),
         )
 
         # Set internal attributes that aren't in the constructor
@@ -490,7 +515,7 @@ class ProgramResults(Displayable):
         def _merge_iterable(group, new_data):
             if group.attrs["storage_format"] == "dataset":
                 ds = group["data"]
-                if ds.maxshape[0] == None:
+                if ds.maxshape[0] is None:
                     # This is an extendable dataset, slice in new data
                     current_length = len(ds)
 
@@ -559,6 +584,59 @@ class ProgramResults(Displayable):
             h5_group=h5_file,
             encode_cache=self._checkpoint_encode_cache,
         )
+
+    @staticmethod
+    def _load_done_shots(checkpoint_dir: Path) -> dict[int, HistoryLike]:
+        """Scan checkpoint_dir for checkpoint.h5 and every worker_*_checkpoint.h5,
+        decode each, and return the union of their shot_histories.
+        Explicitly skips *.tmp files (stale leftovers from a crash).
+
+        Parameters
+        ----------
+        checkpoint_dir:
+            Directory to scan for checkpoint files.
+
+        Returns
+        -------
+        dict[int, HistoryLike]
+            Union of all shot_histories found, mapping shot index to History.
+            Returns empty dict if no checkpoints exist yet.
+        """
+        done = {}
+
+        # First, read checkpoint.h5 if it exists
+        checkpoint_file = checkpoint_dir / "checkpoint.h5"
+        if checkpoint_file.exists():
+            try:
+                with h5py.File(checkpoint_file, "r") as f:
+                    loaded = Serializable.decode(f, format="hdf5")
+                    if (
+                        isinstance(loaded, ProgramResults)
+                        and loaded.shot_histories
+                    ):
+                        done.update(loaded.shot_histories)
+            except Exception:
+                pass  # Skip if we can't read this file
+
+        # Then, read every worker_*_checkpoint.h5 (sorted, no .tmp files)
+        worker_files = sorted(
+            f
+            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
+            if not f.name.endswith(".tmp")
+        )
+        for worker_file in worker_files:
+            try:
+                with h5py.File(worker_file, "r") as f:
+                    loaded = Serializable.decode(f, format="hdf5")
+                    if (
+                        isinstance(loaded, ProgramResults)
+                        and loaded.shot_histories
+                    ):
+                        done.update(loaded.shot_histories)
+            except Exception:
+                pass  # Skip if we can't read this file
+
+        return done
 
     def load_checkpoint(
         self,
@@ -687,6 +765,10 @@ class ProgramResults(Displayable):
             tmp_output_file.unlink()
 
         with h5py.File(tmp_output_file, "a") as out_f:
+            # If output_file already exists, read its content first so a second
+            # consolidation call doesn't drop previously-consolidated shots
+            if output_file.exists():
+                self._stream_checkpoint_file_into(output_file, out_f)
             for worker_file in worker_files:
                 self._stream_checkpoint_file_into(worker_file, out_f)
             if len(out_f.keys()) == 0:
