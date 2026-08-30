@@ -217,6 +217,12 @@ def _stream_into_new_dict_attr(
     values_iterable_group = values_group.create_group(
         "iterable", track_order=True
     )
+    # A dict's keys/values are always encoded as a "list" regardless of the
+    # original container type; `HDF5Encoder.decode_iterable` requires this
+    # attr, so a structure built here stays decodable via the normal
+    # recursive `Serializable.decode` path, not just `iter_dict_attr_entries`.
+    keys_iterable_group.attrs["iterable_type"] = "list"
+    values_iterable_group.attrs["iterable_type"] = "list"
 
     # Track whether datasets have been created for dataset-format sides
     keys_dataset_created = False

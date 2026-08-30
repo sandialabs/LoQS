@@ -29,9 +29,13 @@ from loqs.core.history import (
 from loqs.core import Frame
 
 # Import QuantumProgram to avoid circular imports - we'll use it in type hints
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.streamingmerge import (
+    merge_dict_attr,
+    iter_dict_attr_entries,
+)
 
 if TYPE_CHECKING:
     from loqs.core.quantumprogram import QuantumProgram
@@ -56,13 +60,13 @@ class ProgramResults(Displayable):
         "max_frame_limit",
     ]
 
-    # `_merge_into_existing_checkpoint`/`_merge_iterable` navigate directly
-    # into this attr's raw HDF5 structure (dict -> keys/values -> iterable,
-    # one group per shot) to append new shots cheaply, bypassing the normal
-    # recursive decode entirely -- HDF5's array-free-subtree collapse would
-    # silently break that navigation whenever a batch of shots happens to
-    # have no array anywhere in it (e.g. an all-classical program with no
-    # quantum state), so this attr is exempted from collapse.
+    # `_write_shot_entries`/`merge_dict_attr` navigate directly into this
+    # attr's raw HDF5 structure (dict -> keys/values -> iterable, one group
+    # per shot) to append new shots cheaply, bypassing the normal recursive
+    # decode entirely -- HDF5's array-free-subtree collapse would silently
+    # break that navigation whenever a batch of shots happens to have no
+    # array anywhere in it (e.g. an all-classical program with no quantum
+    # state), so this attr is exempted from collapse.
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
         {"shot_histories"}
     )
@@ -422,167 +426,51 @@ class ProgramResults(Displayable):
         with h5py.File(
             filename, "a"
         ) as f:  # 'a' mode allows appending to existing files
-            self._update_single_file_checkpoint(f, unwritten_shot_histories)
+            self._write_shot_entries(f, unwritten_shot_histories.items())
 
-    def _update_single_file_checkpoint(
-        self, h5_file, unwritten_shot_histories: dict[int, History]
+    def _write_shot_entries(
+        self, h5_file: h5py.File, entries: Iterable[tuple[int, History]]
     ) -> None:
-        """Update a single-file checkpoint by merging new shots into existing HDF5 structure.
-
-        This method navigates to the correct HDF5 groups and adds new item_groups
-        for the unwritten shots using Serializable.encode().
+        """Stream shot entries into an HDF5 file's shot_histories dict
+        attribute, creating it fresh or extending it, without ever
+        materializing more than one entry in memory at a time.
 
         Parameters
         ----------
         h5_file:
-            Open HDF5 file object.
-        unwritten_shot_histories:
-            Dictionary mapping shot indices to History objects to be written.
+            Open HDF5 file object in 'a' mode.
+        entries:
+            An iterable of (shot_index: int, history: History) pairs to append.
         """
-        # Check if this is a new file or existing checkpoint
         if len(h5_file.keys()) == 0:
-            # New file - write the full ProgramResults structure
-            self._write_full_checkpoint_structure(
-                h5_file, unwritten_shot_histories
+            # Bootstrap an empty ProgramResults shell, then drop the empty
+            # shot_histories skeleton it leaves behind -- the generic
+            # encoder always writes an empty dict attribute in "groups"
+            # format, which would otherwise prevent the merge_dict_attr
+            # call below from picking "dataset" format for shot-index keys.
+            Serializable.encode(
+                ProgramResults(shot_histories={}),
+                format="hdf5",
+                h5_group=h5_file,
+                encode_cache=self._checkpoint_encode_cache,
             )
-        else:
-            # Existing file - find the shot_histories group and add new entries
-            self._merge_into_existing_checkpoint(
-                h5_file, unwritten_shot_histories
-            )
+            root_group = h5_file[next(iter(h5_file.keys()))]
+            if "shot_histories" in root_group:
+                del root_group["shot_histories"]
 
-    def _merge_into_existing_checkpoint(
-        self, h5_file, unwritten_shot_histories: dict[int, History]
-    ) -> None:
-        """Merge new shots into an existing checkpoint file.
+        # Single root group, matching every other checkpoint method's
+        # assumption about this file's structure (e.g. `_load_done_shots`).
+        root_group = h5_file[next(iter(h5_file.keys()))]
 
-        This method handles both dataset-based and group-based storage formats:
-        - If iterable contains datasets, extend the datasets
-        - If iterable contains groups, add individual entries
-
-        Parameters
-        ----------
-        h5_file:
-            Open HDF5 file object.
-        unwritten_shot_histories:
-            Dictionary mapping shot indices to History objects to be written.
-        """
-        from loqs.internal.serializable import Serializable
-
-        # Find the root group (should be the only one at root level)
-        if len(h5_file.keys()) != 1:
-            raise ValueError(
-                "Invalid checkpoint file structure - expected single root group"
-            )
-
-        root_group_name = list(h5_file.keys())[0]
-        root_group = h5_file[root_group_name]
-
-        # Navigate to shot_histories group
-        if "shot_histories" not in root_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing shot_histories group"
-            )
-
-        shot_histories_group = root_group["shot_histories"]
-
-        # Navigate to the dict group
-        if "dict" not in shot_histories_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing dict group in shot_histories"
-            )
-
-        dict_group = shot_histories_group["dict"]
-
-        # Navigate to keys and values iterable groups
-        if "keys" not in dict_group or "values" not in dict_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing keys/values groups in dict"
-            )
-
-        keys_group = dict_group["keys"]
-        values_group = dict_group["values"]
-
-        # Navigate to the iterable groups within keys and values
-        if "iterable" not in keys_group or "iterable" not in values_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing iterable groups"
-            )
-
-        keys_iterable_group = keys_group["iterable"]
-        values_iterable_group = values_group["iterable"]
-
-        def _merge_iterable(group, new_data):
-            if group.attrs["storage_format"] == "dataset":
-                ds = group["data"]
-                if ds.maxshape[0] is None:
-                    # This is an extendable dataset, slice in new data
-                    current_length = len(ds)
-
-                    # Check if we need to resize the dataset first
-                    new_size = current_length + len(new_data)
-                    if new_size > len(ds):
-                        ds.resize((new_size,))
-
-                    ds[current_length : current_length + len(new_data)] = (
-                        new_data[:]
-                    )
-                else:
-                    # Not extendable, do a full load and rewrite as extendable
-                    all_data = list(ds) + new_data
-                    del group["data"]
-                    HDF5Encoder._encode_iterable_dataset(
-                        group, all_data, extendable_dataset=True
-                    )
-            else:
-                # This is groups format, just add groups
-                next_index = len(group.keys())
-
-                for i in new_data:
-                    # track_order=True for consistent group storage; encode_cache
-                    # reuses this object's persistent cache so a shared object is a
-                    # cheap reference here, not re-expanded from scratch.
-                    item_group = group.create_group(
-                        str(next_index), track_order=True
-                    )
-                    Serializable.encode(
-                        i,
-                        format="hdf5",
-                        h5_group=item_group,
-                        encode_cache=self._checkpoint_encode_cache,
-                    )
-                    next_index += 1
-
-        _merge_iterable(
-            keys_iterable_group, list(unwritten_shot_histories.keys())
-        )
-        _merge_iterable(
-            values_iterable_group, list(unwritten_shot_histories.values())
-        )
-
-    def _write_full_checkpoint_structure(
-        self, h5_file, shot_histories: dict[int, History]
-    ) -> None:
-        """Write a complete ProgramResults structure to HDF5 using standard encoding.
-
-        Parameters
-        ----------
-        h5_file:
-            Open HDF5 file object.
-        shot_histories:
-            Dictionary mapping shot indices to History objects.
-        """
-        # Create a temporary ProgramResults object with just the shot_histories
-        # This will use the standard Serializable encoding
-        temp_results = ProgramResults(shot_histories=shot_histories)
-
-        # Reuses this object's own persistent encode_cache (no reset_encode_id),
-        # so a shared object stays cheaply referenced across checkpoint() calls.
-        Serializable.encode(
-            temp_results,
-            format="hdf5",
-            h5_group=h5_file,
+        # Shot-index keys stay a compact dataset (plain ints); History
+        # values are never native scalars, so always end up as groups.
+        merge_dict_attr(
+            root_group,
+            "shot_histories",
+            entries,
             encode_cache=self._checkpoint_encode_cache,
+            key_use_dataset=True,
+            value_use_dataset=False,
         )
 
     @staticmethod
@@ -775,7 +663,7 @@ class ProgramResults(Displayable):
                 # No worker files (or all were empty) -- still leave behind
                 # a validly-decodable, if empty, ProgramResults structure
                 # rather than a bare, structure-less HDF5 file.
-                self._write_full_checkpoint_structure(out_f, {})
+                self._write_shot_entries(out_f, iter(()))
 
         tmp_output_file.replace(output_file)
 
@@ -788,11 +676,9 @@ class ProgramResults(Displayable):
     def _stream_checkpoint_file_into(
         self, filename: Path, out_h5_file
     ) -> None:
-        """Read one worker's checkpoint file into a throwaway `ProgramResults`,
-        merge just its shots into `out_h5_file`, then let it be garbage
-        collected -- the actual "streaming" step `consolidate_checkpoints`
-        relies on to keep peak memory bounded to one worker's share of the
-        total result at a time.
+        """Stream one worker's checkpoint file into the output file, decoding
+        and writing its shots one at a time so peak memory stays bounded to
+        a single shot rather than the whole file's shot_histories dict.
 
         Parameters
         ----------
@@ -803,12 +689,17 @@ class ProgramResults(Displayable):
             shots into.
         """
         with h5py.File(filename, "r") as in_f:
-            loaded = Serializable.decode(in_f, format="hdf5")
-        assert isinstance(loaded, ProgramResults)
-        if loaded.shot_histories:
-            self._update_single_file_checkpoint(
-                out_h5_file, loaded.shot_histories
+            if len(in_f.keys()) == 0:
+                return
+
+            in_root_group = in_f[next(iter(in_f.keys()))]
+            # Fresh decode_cache per file, matching this file's own scope --
+            # not a cache shared across separate worker files.
+            entries = iter_dict_attr_entries(
+                in_root_group, "shot_histories", decode_cache={}
             )
+            # Consumed fully here, while `in_f` is still open.
+            self._write_shot_entries(out_h5_file, entries)
 
     def get_shot_history(self, shot_index: int) -> History | None:
         """Get a shot history, potentially loading from checkpoint if lazy loading is enabled.

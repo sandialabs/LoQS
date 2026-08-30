@@ -3,6 +3,7 @@
 import multiprocessing as mp
 import os
 import tempfile
+import unittest.mock
 
 from pathlib import Path
 import pytest
@@ -766,6 +767,68 @@ class TestProgramResults:
         test_file_io_format("json", "json")
         test_file_io_format("json.gz", "json.gz")
         test_file_io_format("hdf5", "h5")
+
+    def test_consolidate_checkpoints_memory_bounded_decode(self):
+        """Consolidating a worker file must decode its shots one at a time
+        via `Serializable.decode`, never once for the whole worker file's
+        `shot_histories` dict -- i.e. no single decode call may return a
+        `ProgramResults` holding more than one shot."""
+        num_shots = 55
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+            results = ProgramResults(
+                name="Memory Test", lazy_loading_enabled=False
+            )
+            for i in range(num_shots):
+                history = History()
+                history.append(
+                    Frame({"shot_id": i, "array": np.array([i, i + 1])})
+                )
+                results.add_shot(i, history)
+            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+            real_decode = Serializable.decode
+            decoded_shot_counts = []
+
+            def spy_decode(encoded, format="hdf5", decode_cache=None):
+                result = real_decode(
+                    encoded, format=format, decode_cache=decode_cache
+                )
+                if isinstance(result, History):
+                    decoded_shot_counts.append(1)
+                elif isinstance(result, ProgramResults):
+                    decoded_shot_counts.append(len(result.shot_histories))
+                return result
+
+            consolidator = ProgramResults()
+            with unittest.mock.patch.object(
+                Serializable, "decode", side_effect=spy_decode
+            ):
+                consolidator.consolidate_checkpoints(
+                    checkpoint_dir=checkpoint_dir, delete_originals=False
+                )
+
+            # Every decode call that produced a shot's worth of data did so
+            # one shot at a time -- never a single call materializing more
+            # than one shot's History (the old whole-file-decode behavior
+            # would show up here as one call reporting num_shots at once).
+            assert decoded_shot_counts, "Serializable.decode was never spied on"
+            assert max(decoded_shot_counts) == 1, (
+                f"Expected every decode call to materialize at most one "
+                f"shot at a time, but saw counts {decoded_shot_counts} -- "
+                f"consolidation is not entry-level memory-bounded."
+            )
+            assert decoded_shot_counts.count(1) >= num_shots, (
+                f"Expected at least {num_shots} single-shot decode calls, "
+                f"got {decoded_shot_counts.count(1)}"
+            )
+
+            reloaded = ProgramResults()
+            reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert set(reloaded.shot_histories.keys()) == set(
+                range(num_shots)
+            )
 
 
 class TestConcurrentCheckpointing:
