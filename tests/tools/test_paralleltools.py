@@ -392,7 +392,7 @@ class TestParallelStrategy:
 
 class TestExecutorSpecAndParallelStrategySerialization:
     """`ExecutorSpec`/`ParallelStrategy` are `Serializable`, needed so a
-    `ProgramRunner` holding either can survive a `.write()`/`.read()`
+    `MultiProgramRunner` holding either can survive a `.write()`/`.read()`
     round-trip (e.g. as part of its own crash-recovery snapshot)."""
 
     def test_executor_spec_round_trips(self, tmp_path):

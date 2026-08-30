@@ -39,7 +39,7 @@ from loqs.tools.paralleltools import (
     pin_worker_threads,
     resolve_shot_executor,
 )
-from loqs.tools.programrunner import ProgramRunner
+from loqs.tools.multiprogramrunner import MultiProgramRunner
 
 try:
     import pygsti  # noqa: F401
@@ -129,7 +129,7 @@ def _run_one_circuit(
     """Build, run, and reduce one circuit to a count dict.
 
     Returns the count_dict for this circuit. The circuit itself is passed
-    separately by `run_checkpointed_items` and available to `on_item_done`
+    separately by `MultiProgramRunner._run_dispatch` and available to `on_item_done`
     via its `item` parameter, so it's not included in the return value.
     """
     program = _build_program_for_circuit(
@@ -278,7 +278,7 @@ def _checkpoint_provenance_comment(
 ) -> str:
     """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
     on-disk `DataSet`, a human-readable provenance record (config-mismatch
-    detection on resume happens separately, via `ProgramRunner`'s own
+    detection on resume happens separately, via `MultiProgramRunner`'s own
     `runner.h5` snapshot). `num_shots` is stored as a plain `repr()` string;
     `collect_shot_data_args` is first normalized via
     `_normalize_collect_shot_data_args` so its repr is canonical regardless of
@@ -345,17 +345,17 @@ def _drop_incomplete_checkpoint_row(checkpoint_path: Path) -> None:
         checkpoint_path.write_text(text.rsplit("\n", 1)[0] + "\n")
 
 
-class EdesignRunner(ProgramRunner):
+class EdesignRunner(MultiProgramRunner):
     """Runner for simulating edesign circuits into a DataSet with crash recovery.
 
     Encapsulates all configuration needed to simulate an edesign, including
     parallel/checkpoint settings, in a serializable object that can be
     recovered after a crash via `EdesignRunner.read(runner_path).run()`.
     Whether a call resumes a prior run is inferred entirely from
-    `item_checkpoint_dir`'s own on-disk state -- see `ProgramRunner.run`.
+    `item_checkpoint_dir`'s own on-disk state -- see `MultiProgramRunner.run`.
     """
 
-    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "edesign",
         "physical_model",
         "physical_to_logical",
@@ -382,6 +382,8 @@ class EdesignRunner(ProgramRunner):
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
         program_kwargs: dict | None = None,
+        poll_interval: float = 1.0,
+        show_progress: bool = True,
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -390,6 +392,8 @@ class EdesignRunner(ProgramRunner):
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
         )
         self.edesign = edesign
         self.physical_model = physical_model

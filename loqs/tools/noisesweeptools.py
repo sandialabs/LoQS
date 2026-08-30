@@ -47,7 +47,7 @@ from loqs.tools.paralleltools import (
     pin_worker_threads,
     resolve_shot_executor,
 )
-from loqs.tools.programrunner import ProgramRunner, run_checkpointed_items
+from loqs.tools.multiprogramrunner import MultiProgramRunner
 
 # Every QuantumProgram.__init__ parameter except `default_base_seed`, which NoiseSweepRunner
 # controls exclusively. Kept as a single source of truth for both __init__'s explicit parameter
@@ -187,7 +187,7 @@ def _run_one_sweep_point(
     stderr, program_results_path)`. `program_results_path` is `None` unless
     `keep_program_results` is True. This replaces the old `_run_sweep_point`,
     `_run_sweep_point_chunk`, and `_run_sweep_point_chunk_worker` functions.
-    The `item` and `index` parameters are both passed by `run_checkpointed_items`
+    The `item` and `index` parameters are both passed by `MultiProgramRunner._run_dispatch`
     and are always equal here (a sweep point's identity is its index).
     """
     strength = runner.strengths[index]
@@ -233,7 +233,7 @@ def _run_one_sweep_point(
     return failure_rate, stderr, path
 
 
-class NoiseSweepRunner(ProgramRunner):
+class NoiseSweepRunner(MultiProgramRunner):
     """Builds and runs one `QuantumProgram` per value in a range of noise-parameter values.
 
     RNG seeding is controlled entirely here (`base_seed + index * seed_stride`), never touched by
@@ -244,11 +244,11 @@ class NoiseSweepRunner(ProgramRunner):
     Encapsulates all configuration needed to run a sweep, including parallel/checkpoint settings,
     in a serializable object that can be recovered after a crash via
     `NoiseSweepRunner.read(runner_path).run()`. Whether a call resumes a prior run is inferred
-    entirely from `item_checkpoint_dir`'s own on-disk state -- see `ProgramRunner.run`.
+    entirely from `item_checkpoint_dir`'s own on-disk state -- see `MultiProgramRunner.run`.
     """
 
     _CACHE_ON_SERIALIZE = True
-    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "strengths",
         "base_seed",
         "seed_stride",
@@ -311,6 +311,8 @@ class NoiseSweepRunner(ProgramRunner):
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
+        poll_interval: float = 1.0,
+        show_progress: bool = True,
     ) -> None:
         """
         Parameters
@@ -380,7 +382,7 @@ class NoiseSweepRunner(ProgramRunner):
 
         item_checkpoint_dir, force_resume, parallel_strategy, checkpoint_batch_size,
         shot_checkpoint_dir, lazy_loading_enabled:
-            See `ProgramRunner.__init__` for these inherited configuration fields.
+            See `MultiProgramRunner.__init__` for these inherited configuration fields.
         """
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -389,6 +391,8 @@ class NoiseSweepRunner(ProgramRunner):
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
         )
         self.strengths = list(strengths)
         self.base_seed = base_seed

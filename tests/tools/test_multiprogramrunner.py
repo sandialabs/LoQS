@@ -1,4 +1,4 @@
-"""Tester for loqs.tools.programrunner"""
+"""Tester for loqs.tools.multiprogramrunner"""
 
 import h5py
 import multiprocessing as mp
@@ -12,7 +12,7 @@ import pytest
 from loqs.internal import worker_id
 from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.programrunner import ProgramRunner, run_checkpointed_items
+from loqs.tools.multiprogramrunner import MultiProgramRunner
 
 
 # Module-level worker functions for parallel/multiprocessing tests
@@ -81,54 +81,152 @@ def _write_worker_file(args):
             )
 
 
-class TestRunCheckpointedItemsSerial:
-    """Tests for serial execution without checkpointing."""
+# Test runner helpers for checkpoint/resume/parallel tests
 
-    def test_serial_no_checkpoint_basic(self):
-        """Basic serial execution without checkpointing."""
-        items = list(range(5))
-        results = run_checkpointed_items(
-            items,
-            _double_item,
-            parallel_strategy=None,
-            item_checkpoint_dir=None,
-        )
-        assert results == [0, 2, 4, 6, 8]
-
-    def test_serial_no_checkpoint_preserves_order(self):
-        """Verify results are in original items order."""
-        items = [10, 20, 30]
-        results = run_checkpointed_items(
-            items,
-            _double_item,
-            item_checkpoint_dir=None,
-        )
-        assert results == [20, 40, 60]
+def _track_shot_executor(item, index, *, shot_executor, **kwargs):
+    """Helper function to track shot_executor values."""
+    _track_shot_executor.calls.append(shot_executor)
+    return item * 2
 
 
-class TestRunCheckpointedItemsSerialWithCheckpoint:
+_track_shot_executor.calls = []
+
+
+class _SimpleDoubleRunner(MultiProgramRunner):
+    """Simple runner that doubles items, for checkpoint tests."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
+
+    def __init__(self, items, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _double_item
+
+    def _static_kwargs(self):
+        return {}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self, result_list):
+        return result_list
+
+
+class _RaisingRunner(MultiProgramRunner):
+    """Runner that raises after N items (crash simulation)."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
+
+    def __init__(self, items, process_fn=_raise_after_n, max_count=999, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.process_fn = process_fn
+        self.call_count = [0]
+        self.max_count = max_count
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return self.process_fn
+
+    def _static_kwargs(self):
+        return {"call_count": self.call_count, "max_count": self.max_count}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self, result_list):
+        return result_list
+
+
+class _TrackingRunner(MultiProgramRunner):
+    """Runner that tracks on_item_done calls."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "max_count",
+    ]
+
+    def __init__(self, items, process_fn=_double_item, max_count=999, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.process_fn = process_fn
+        self.call_count = [0]
+        self.max_count = max_count
+        self.on_item_done_calls = []
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return self.process_fn
+
+    def _static_kwargs(self):
+        return {"call_count": self.call_count, "max_count": self.max_count}
+
+    def _make_on_item_done(self):
+        def track(index, item, result):
+            self.on_item_done_calls.append((index, item, result))
+        return track
+
+    def _finalize(self, result_list):
+        return result_list
+
+
+class _SleepingRunner(MultiProgramRunner):
+    """Runner that sleeps before returning results, for timing tests."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "sleep_time"]
+
+    def __init__(self, items, sleep_time=0.01, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.sleep_time = sleep_time
+        self.timestamps = []
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _sleep_and_double
+
+    def _static_kwargs(self):
+        return {"sleep_time": self.sleep_time}
+
+    def _make_on_item_done(self):
+        def track(index, item, result):
+            self.timestamps.append(time.time())
+        return track
+
+    def _finalize(self, result_list):
+        return result_list
+
+
+class TestMultiProgramRunnerSerialWithCheckpoint:
     """Tests for serial execution with checkpointing."""
 
     def test_serial_with_checkpoint_full_run(self, tmp_path):
         """Full serial run with checkpointing."""
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(5))
-        on_item_done_calls = []
 
-        def track_on_item_done(index, item, result):
-            on_item_done_calls.append((index, item, result))
-
-        results = run_checkpointed_items(
+        runner = _TrackingRunner(
             items,
-            _double_item,
+            process_fn=_double_item,
             item_checkpoint_dir=checkpoint_dir,
-            on_item_done=track_on_item_done,
         )
+        results = runner.run()
 
         assert results == [0, 2, 4, 6, 8]
         # Verify on_item_done was called for each item
-        assert len(on_item_done_calls) == 5
-        for i, (index, item, result) in enumerate(on_item_done_calls):
+        assert len(runner.on_item_done_calls) == 5
+        for i, (index, item, result) in enumerate(runner.on_item_done_calls):
             assert index == i
             assert item == i
             assert result == i * 2
@@ -146,16 +244,15 @@ class TestRunCheckpointedItemsSerialWithCheckpoint:
         items = list(range(10))
 
         # First run: crash after 3 items
-        call_count = [0]
-        static_kwargs = {"call_count": call_count, "max_count": 3}
+        runner1 = _RaisingRunner(
+            items,
+            process_fn=_raise_after_n,
+            item_checkpoint_dir=checkpoint_dir,
+            max_count=3,
+        )
 
         with pytest.raises(RuntimeError, match="Simulated crash"):
-            run_checkpointed_items(
-                items,
-                _raise_after_n,
-                item_checkpoint_dir=checkpoint_dir,
-                static_kwargs=static_kwargs,
-            )
+            runner1.run()
 
         # Verify worker file has 3 entries
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
@@ -164,31 +261,22 @@ class TestRunCheckpointedItemsSerialWithCheckpoint:
             entries = list(iter_dict_attr_entries(f, "results"))
         assert len(entries) == 3
 
-        # Second run: resume with normal function
-        call_count2 = [0]
-        static_kwargs2 = {"call_count": call_count2}
-        on_item_done_calls = []
-
-        def track_on_item_done(index, item, result):
-            on_item_done_calls.append((index, item, result))
-
-        results = run_checkpointed_items(
+        # Second run: resume with normal function on same checkpoint dir
+        runner2 = _TrackingRunner(
             items,
-            _count_and_double,
+            process_fn=_count_and_double,
             item_checkpoint_dir=checkpoint_dir,
-            resume=True,
-            static_kwargs=static_kwargs2,
-            on_item_done=track_on_item_done,
         )
+        results = runner2.run()
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
         # Only 7 items should have been processed (10 - 3 already done)
-        assert call_count2[0] == 7
+        assert runner2.call_count[0] == 7
         # on_item_done should have been called for all 10 items (3 replayed + 7 new)
-        assert len(on_item_done_calls) == 10
+        assert len(runner2.on_item_done_calls) == 10
 
 
-class TestRunCheckpointedItemsParallel:
+class TestMultiProgramRunnerParallel:
     """Tests for parallel execution with checkpointing."""
 
     def test_parallel_with_checkpoint_full_run(self, tmp_path):
@@ -196,23 +284,19 @@ class TestRunCheckpointedItemsParallel:
         loky = pytest.importorskip("loky")
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(10))
-        on_item_done_calls = []
-
-        def track_on_item_done(index, item, result):
-            on_item_done_calls.append((index, item, result))
 
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=4,
         )
 
-        results = run_checkpointed_items(
+        runner = _TrackingRunner(
             items,
-            _double_item,
-            parallel_strategy=strategy,
+            process_fn=_double_item,
             item_checkpoint_dir=checkpoint_dir,
-            on_item_done=track_on_item_done,
+            parallel_strategy=strategy,
         )
+        results = runner.run()
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
         # Should have multiple worker files (one per worker)
@@ -227,44 +311,35 @@ class TestRunCheckpointedItemsParallel:
                 )
         assert total_entries == 10
         # on_item_done should have been called for all items
-        assert len(on_item_done_calls) == 10
+        assert len(runner.on_item_done_calls) == 10
 
     def test_parallel_with_polling_updates_during_dispatch(self, tmp_path):
         """Verify on_item_done is called during dispatch, not just after."""
         loky = pytest.importorskip("loky")
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(8))
-        timestamps = []
-
-        def track_on_item_done(index, item, result):
-            timestamps.append(time.time())
 
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=4,
         )
 
-        start = time.time()
-        results = run_checkpointed_items(
+        runner = _SleepingRunner(
             items,
-            _sleep_and_double,
-            parallel_strategy=strategy,
+            sleep_time=0.05,
             item_checkpoint_dir=checkpoint_dir,
-            on_item_done=track_on_item_done,
+            parallel_strategy=strategy,
             poll_interval=0.1,
-            static_kwargs={"sleep_time": 0.05},
         )
-        end = time.time()
+        results = runner.run()
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14]
         # Verify all callbacks were made
-        assert len(timestamps) == 8
+        assert len(runner.timestamps) == 8
         # Verify timestamps are spread out (not all clustered at end)
         # This is a weak test but good enough to verify polling happened
-        total_time = end - start  # noqa: F841  # Used for time reference
-        # If polling worked, we should see some spread across the time window
-        if len(timestamps) > 1:
-            time_span = timestamps[-1] - timestamps[0]
+        if len(runner.timestamps) > 1:
+            time_span = runner.timestamps[-1] - runner.timestamps[0]
             # Allow some tolerance but polling should give spread > just a few ms
             assert time_span > 0.01  # At least spread across updates
 
@@ -274,82 +349,42 @@ class TestRunCheckpointedItemsParallel:
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(10))
 
-        # Manually seed checkpoint with partial results (simulating prior run)
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
-
+        # First run: do a partial run that completes some items
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=3,
         )
 
-        results = run_checkpointed_items(
+        runner1 = _SimpleDoubleRunner(
             items,
-            _double_item,
-            parallel_strategy=strategy,
             item_checkpoint_dir=checkpoint_dir,
-            resume=True,
+            parallel_strategy=strategy,
         )
 
+        # Manually create a partial completion scenario by manually seeding
+        # the worker files after creating runner.h5
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        runner1_path = checkpoint_dir / "runner.h5"
+        runner1.write(runner1_path)
+        # Now add partial results
+        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
+
+        # Second run: continue from checkpoint
+        runner2 = _SimpleDoubleRunner(
+            items,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
+        )
+        results = runner2.run()
+
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        # Verify that only 7 items were written to worker file (already had 3)
-        from loqs.tools.programrunner import _read_worker_files
+        # Verify that all 10 items are now done
+        from loqs.tools.multiprogramrunner import _read_worker_files
 
         done = _read_worker_files(checkpoint_dir)
         assert len(done) == 10  # All 10 should be done now
-        # Find worker files created during this run (new ones)
-        worker_files = sorted(checkpoint_dir.glob("worker_*_runner.h5"))
-        # The initial one should have 3 entries, new ones should have the rest
-        if len(worker_files) > 1:
-            # Multiple worker files means multiple workers
-            pass  # Just verify the final results are correct
         # The important test is that the final results are correct
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-
-
-class TestCheckpointValidation:
-    """Tests for validation logic."""
-
-    def test_resume_without_checkpoint_dir_raises(self, tmp_path):
-        """resume=True without item_checkpoint_dir raises ValueError."""
-        items = [1, 2, 3]
-        with pytest.raises(
-            ValueError, match="resume=True requires item_checkpoint_dir"
-        ):
-            run_checkpointed_items(
-                items,
-                _double_item,
-                item_checkpoint_dir=None,
-                resume=True,
-            )
-
-    def test_existing_content_without_resume_raises(self, tmp_path):
-        """FileExistsError if checkpoint_dir has content and resume=False."""
-        checkpoint_dir = tmp_path / "checkpoints"
-        checkpoint_dir.mkdir()
-        (checkpoint_dir / "existing_file.txt").write_text("content")
-
-        items = [1, 2, 3]
-        with pytest.raises(FileExistsError):
-            run_checkpointed_items(
-                items,
-                _double_item,
-                item_checkpoint_dir=checkpoint_dir,
-                resume=False,
-            )
-
-    def test_empty_checkpoint_dir_ok_even_on_resume(self, tmp_path):
-        """Empty checkpoint_dir is OK with resume=True."""
-        checkpoint_dir = tmp_path / "empty_checkpoints"
-        # Dir doesn't exist yet
-        items = [1, 2, 3]
-        results = run_checkpointed_items(
-            items,
-            _double_item,
-            item_checkpoint_dir=checkpoint_dir,
-            resume=True,
-        )
-        assert results == [2, 4, 6]
 
 
 class TestConcurrentWorkerWrites:
@@ -375,7 +410,7 @@ class TestConcurrentWorkerWrites:
             )
 
         # Verify every entry was written
-        from loqs.tools.programrunner import _read_worker_files
+        from loqs.tools.multiprogramrunner import _read_worker_files
 
         done = _read_worker_files(checkpoint_dir)
         assert len(done) == num_workers * entries_per_worker
@@ -457,12 +492,12 @@ class TestBugRegressions:
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
-        results = run_checkpointed_items(
+        runner = _SimpleDoubleRunner(
             list(range(5)),
-            _double_item,
             parallel_strategy=strategy,
             item_checkpoint_dir=None,
         )
+        results = runner.run()
         assert results == [0, 2, 4, 6, 8]
 
     def test_bug2_serial_respects_parallel_shot_executor(self):
@@ -471,21 +506,38 @@ class TestBugRegressions:
         Root cause: _run_serial hardcoded shot_executor=None instead of
         resolving from the ParallelStrategy.
         """
-        calls = []
+        class _ShotExecutorTracker(MultiProgramRunner):
+            _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
 
-        def track_shot_executor(item, index, *, shot_executor, **kwargs):
-            calls.append(shot_executor)
-            return item * 2
+            def __init__(self, items, **kwargs):
+                super().__init__(**kwargs)
+                self.items = items
 
+            def _get_items(self):
+                return self.items
+
+            def _process_item_fn(self):
+                return _track_shot_executor
+
+            def _static_kwargs(self):
+                return {}
+
+            def _make_on_item_done(self):
+                return None
+
+            def _finalize(self, result_list):
+                return result_list
+
+        _track_shot_executor.calls = []
         strategy = ParallelStrategy(shot_executor="SENTINEL_EXECUTOR")
-        run_checkpointed_items(
+        runner = _ShotExecutorTracker(
             [1, 2, 3],
-            track_shot_executor,
             parallel_strategy=strategy,
             item_checkpoint_dir=None,
         )
+        runner.run()
         # All calls should receive the sentinel value, not None
-        assert calls == ["SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR"]
+        assert _track_shot_executor.calls == ["SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR"]
 
     def test_bug3_parallel_resume_no_double_on_item_done(self, tmp_path):
         """Bug 3: Parallel resume with on_item_done double-invoked for replayed items.
@@ -498,31 +550,34 @@ class TestBugRegressions:
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
 
-        # Seed with 2 already-done items
-        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 1])
-
-        calls = []
-
-        def track_calls(index, item, result):
-            calls.append((index, item, result))
-
+        # Set up runner.h5 first, then seed with partial results
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
-
-        run_checkpointed_items(
+        runner_init = _TrackingRunner(
             list(range(6)),
-            _double_item,
-            parallel_strategy=strategy,
+            process_fn=_double_item,
             item_checkpoint_dir=checkpoint_dir,
-            resume=True,
-            on_item_done=track_calls,
+            parallel_strategy=strategy,
         )
+        runner_init.write(checkpoint_dir / "runner.h5")
+
+        # Seed with 2 already-done items
+        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 1])
+
+        # Now resume from the checkpoint
+        runner = _TrackingRunner(
+            list(range(6)),
+            process_fn=_double_item,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
+        )
+        runner.run()
 
         # Count invocations per index
         index_counts = {}
-        for idx, item, result in calls:
+        for idx, item, result in runner.on_item_done_calls:
             index_counts[idx] = index_counts.get(idx, 0) + 1
 
         # Each index should appear exactly once, not twice
@@ -535,33 +590,28 @@ class TestBugRegressions:
         observed through checkpoint-directory polling."""
         loky = pytest.importorskip("loky")
 
-        calls = []
-
-        def track_calls(index, item, result):
-            calls.append((index, item, result))
-
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
 
-        run_checkpointed_items(
+        runner = _TrackingRunner(
             list(range(4)),
-            _double_item,
+            process_fn=_double_item,
             parallel_strategy=strategy,
-            item_checkpoint_dir=None,  # No checkpoint directory
-            on_item_done=track_calls,
+            item_checkpoint_dir=None,
         )
+        runner.run()
 
         # on_item_done should have been called once for each item
-        assert len(calls) == 4, f"Expected 4 calls to on_item_done, got {len(calls)}"
+        assert len(runner.on_item_done_calls) == 4, f"Expected 4 calls to on_item_done, got {len(runner.on_item_done_calls)}"
 
         # Verify all expected indices were called (order not guaranteed in parallel)
-        called_indices = {call_index for call_index, _, _ in calls}
+        called_indices = {call_index for call_index, _, _ in runner.on_item_done_calls}
         assert called_indices == {0, 1, 2, 3}, f"Not all indices called: {called_indices}"
 
         # Verify results are correct for each item
-        for call_index, call_item, call_result in calls:
+        for call_index, call_item, call_result in runner.on_item_done_calls:
             assert call_item == call_index, f"Item mismatch for index {call_index}"
             assert call_result == call_index * 2, f"Result mismatch for index {call_index}"
 
@@ -570,12 +620,12 @@ def _multiply_item(item, index, *, shot_executor, multiplier):
     return item * multiplier
 
 
-class _CountingRunner(ProgramRunner):
-    """Minimal concrete `ProgramRunner` for testing the base class's own
+class _CountingRunner(MultiProgramRunner):
+    """Minimal concrete `MultiProgramRunner` for testing the base class's own
     `run()`/mismatch-check/`force_resume`/crash-recovery behavior in
     isolation from any real tool's domain logic."""
 
-    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
         "multiplier",
     ]
@@ -631,8 +681,8 @@ class _KeyedRunner(_CountingRunner):
         return lambda item: f"item_{item}"
 
 
-class _KeyedRunnerFixedSignature(ProgramRunner):
-    """A `ProgramRunner` subclass with an explicit, fixed `__init__`
+class _KeyedRunnerFixedSignature(MultiProgramRunner):
+    """A `MultiProgramRunner` subclass with an explicit, fixed `__init__`
     parameter list -- no `**kwargs` passthrough to `super().__init__`,
     matching real tools like `EdesignRunner`. Proves `index_map`/
     `_reduced_results` survive deserialization even when the subclass's own
@@ -641,7 +691,7 @@ class _KeyedRunnerFixedSignature(ProgramRunner):
     constructor regardless of whether `_from_decoded_attrs` actually
     restores them, hiding a real regression."""
 
-    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
         "multiplier",
     ]
@@ -656,6 +706,8 @@ class _KeyedRunnerFixedSignature(ProgramRunner):
         checkpoint_batch_size=None,
         shot_checkpoint_dir=None,
         lazy_loading_enabled=True,
+        poll_interval=1.0,
+        show_progress=True,
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -664,6 +716,8 @@ class _KeyedRunnerFixedSignature(ProgramRunner):
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
         )
         self.items = items
         self.multiplier = multiplier
@@ -688,7 +742,7 @@ class _KeyedRunnerFixedSignature(ProgramRunner):
 
 
 class TestProgramRunnerRunAndCrashRecovery:
-    """Tests for `ProgramRunner.run()`'s own generic checkpoint/resume/
+    """Tests for `MultiProgramRunner.run()`'s own generic checkpoint/resume/
     mismatch-check/crash-recovery behavior, via `_CountingRunner`."""
 
     def test_run_without_checkpoint_dir(self):
@@ -786,12 +840,12 @@ class TestProgramRunnerRunAndCrashRecovery:
 
         # Recover using nothing but the on-disk snapshot -- no reference
         # to `interrupted` itself.
-        recovered = ProgramRunner.read(checkpoint_dir / "runner.h5")
+        recovered = MultiProgramRunner.read(checkpoint_dir / "runner.h5")
         assert recovered.run() == [2, 4, 6]
 
 
 class TestMergeReducedResult:
-    """Tests for ProgramRunner._merge_reduced_result method."""
+    """Tests for MultiProgramRunner._merge_reduced_result method."""
 
     def test_merge_reduced_result_persists_to_runner_h5(self, tmp_path):
         """_merge_reduced_result appends to _reduced_results in runner.h5."""
@@ -820,7 +874,7 @@ class TestIndexMapPersistence:
 
     def test_index_map_stable_across_reordered_resume(self, tmp_path):
         """Items keep their originally-assigned index across a resumed
-        `ProgramRunner.run()` call even when passed in a different order
+        `MultiProgramRunner.run()` call even when passed in a different order
         or as a subset."""
         checkpoint_dir = tmp_path / "ckpt"
 
@@ -853,7 +907,7 @@ class TestIndexMapPersistence:
 
         # Deserialize via .read() (the critical test: does index_map survive?)
         runner_path = checkpoint_dir / "runner.h5"
-        runner2 = ProgramRunner.read(runner_path)
+        runner2 = MultiProgramRunner.read(runner_path)
 
         # The deserialized runner must have the exact same index_map
         # (this is the core assertion that proves the fix works)

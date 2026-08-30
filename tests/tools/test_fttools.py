@@ -372,7 +372,7 @@ class TestFaultInjectionRunnerCheckpointing:
 
     def _read_completed_indices(self, ckpt):
         """Return set of indices completed in checkpoint dir's worker files."""
-        from loqs.tools.programrunner import _read_worker_files
+        from loqs.tools.multiprogramrunner import _read_worker_files
 
         return set(_read_worker_files(ckpt).keys())
 

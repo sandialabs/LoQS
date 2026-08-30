@@ -25,7 +25,7 @@ from loqs.core.historydatacollector import (
 )
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.programrunner import ProgramRunner
+from loqs.tools.multiprogramrunner import MultiProgramRunner
 
 
 def build_discrete_error_injection_program_for_combo(
@@ -440,17 +440,17 @@ def _run_one_program(
     )
 
 
-class FaultInjectionRunner(ProgramRunner):
+class FaultInjectionRunner(MultiProgramRunner):
     """Runner for testing discrete-error-injected programs with checkpoint/resume.
 
     Encapsulates all configuration needed to test error-injected programs,
     including parallel/checkpoint settings, in a serializable object that can
     be recovered after a crash via `FaultInjectionRunner.read(runner_path).run()`.
     Whether a call resumes a prior run is inferred entirely from
-    `item_checkpoint_dir`'s own on-disk state -- see `ProgramRunner.run`.
+    `item_checkpoint_dir`'s own on-disk state -- see `MultiProgramRunner.run`.
     """
 
-    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "errored_programs",
         "collect_shot_data_args",
         "expected_outcomes",
@@ -469,6 +469,8 @@ class FaultInjectionRunner(ProgramRunner):
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
+        poll_interval: float = 1.0,
+        show_progress: bool = True,
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -477,6 +479,8 @@ class FaultInjectionRunner(ProgramRunner):
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
         )
         self.errored_programs = errored_programs
         self.collect_shot_data_args = collect_shot_data_args

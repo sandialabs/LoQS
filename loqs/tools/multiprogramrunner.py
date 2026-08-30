@@ -40,154 +40,13 @@ def _resolve_items_with_index(
     precomputed_indices: Sequence[int] | None,
 ) -> list[tuple[int, T]]:
     """Pair each item with its index: caller-precomputed (a
-    `ProgramRunner`-driven call) if given, else plain position."""
+    `MultiProgramRunner`-driven call) if given, else plain position."""
     if precomputed_indices is not None:
         return list(zip(precomputed_indices, items))
     return [(i, item) for i, item in enumerate(items)]
 
 
-def run_checkpointed_items(
-    items: Sequence[T],
-    process_item: Callable[..., R],
-    parallel_strategy: ParallelStrategy | None = None,
-    desc: str = "Processing items",
-    static_kwargs: dict | None = None,
-    item_checkpoint_dir: str | Path | None = None,
-    resume: bool = False,
-    precomputed_indices: Sequence[int] | None = None,
-    on_item_done: Callable[[int, T, R], None] | None = None,
-    show_progress: bool = True,
-    poll_interval: float = 1.0,
-) -> list[R]:
-    """Run a list of items with checkpoint/resume/progress tracking.
-
-    Parameters
-    ----------
-    items : Sequence[T]
-        Items to process.
-    process_item : Callable[..., R]
-        Function to process each item. Signature: (item, index, *, shot_executor, **static_kwargs) -> R
-    parallel_strategy : ParallelStrategy | None
-        Parallelization strategy. None means serial execution.
-    desc : str
-        Progress bar description.
-    static_kwargs : dict | None
-        Static keyword arguments passed to process_item.
-    item_checkpoint_dir : str | Path | None
-        Directory for checkpointing item results. If set, enables resume capability.
-    resume : bool
-        If True, resume from prior checkpoint. Raises ValueError if item_checkpoint_dir is None.
-    precomputed_indices : Sequence[int] | None
-        Pre-assigned indices for items (positionally aligned), e.g. from a
-        `ProgramRunner`'s own `item_key_fn`-based assignment. If not given,
-        items are indexed by plain position.
-    on_item_done : Callable[[int, T, R], None] | None
-        Callback invoked when an item completes: on_item_done(index, item, result).
-    show_progress : bool
-        Whether to show a progress bar.
-    poll_interval : float
-        Polling interval (seconds) for reading worker files during parallel dispatch.
-
-    Returns
-    -------
-    list[R]
-        Results in the original items order.
-    """
-    # Validation
-    if resume and item_checkpoint_dir is None:
-        raise ValueError("resume=True requires item_checkpoint_dir to be set")
-
-    if item_checkpoint_dir is not None:
-        item_checkpoint_dir = Path(item_checkpoint_dir)
-        if not resume and item_checkpoint_dir.exists():
-            if any(item_checkpoint_dir.iterdir()):
-                raise FileExistsError(
-                    f"{item_checkpoint_dir} exists with content and resume=False"
-                )
-        item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    # Item indexing/identity
-    items_with_index = _resolve_items_with_index(items, precomputed_indices)
-
-    # Read prior progress
-    done: dict[int, R] = {}
-    if item_checkpoint_dir is not None:
-        done = _read_worker_files(item_checkpoint_dir)
-        if not resume:
-            done = {}
-
-    # Replay already-done items
-    for index, item in items_with_index:
-        if index in done and on_item_done is not None:
-            on_item_done(index, item, done[index])
-
-    # Determine remaining work
-    remaining = [
-        (index, item) for index, item in items_with_index if index not in done
-    ]
-
-    # Progress bar setup
-    pbar = None
-    if show_progress:
-        pbar = tqdm(total=len(items), initial=len(done), desc=desc)
-
-    try:
-        # Dispatch
-        newly_computed: dict[int, Any] = {}
-        if not remaining:
-            # Nothing to do, skip dispatch
-            pass
-        elif parallel_strategy is None or not parallel_strategy.is_chunked:
-            # Serial execution
-            newly_computed = _run_serial(
-                remaining,
-                process_item,
-                static_kwargs or {},
-                item_checkpoint_dir,
-                on_item_done,
-                parallel_strategy,
-                pbar,
-            )
-        else:
-            # Parallel execution
-            newly_computed = _run_parallel(
-                remaining,
-                process_item,
-                static_kwargs or {},
-                item_checkpoint_dir,
-                on_item_done,
-                items_with_index,
-                parallel_strategy,
-                pbar,
-                poll_interval,
-                done.keys(),
-            )
-
-        # Final assembly - read authoritative results from worker files if available
-        if item_checkpoint_dir is not None:
-            final_done = _read_worker_files(item_checkpoint_dir)
-        else:
-            # No checkpointing, combine prior done + newly computed
-            final_done = done.copy()
-            final_done.update(newly_computed)
-
-        # Build result list in original order
-        result_list = []
-        for index, _ in items_with_index:
-            if index not in final_done:
-                raise RuntimeError(
-                    f"Item {index} is missing from final results"
-                )
-            result_list.append(final_done[index])
-
-        return result_list
-
-    finally:
-        if pbar is not None:
-            pbar.close()
-
-
-class ProgramRunner(Serializable):
+class MultiProgramRunner(Serializable):
     """Base class for crash-recoverable program runners bundling config fields
     and a template-method `run()` for checkpoint/resume/progress.
 
@@ -206,6 +65,8 @@ class ProgramRunner(Serializable):
         "lazy_loading_enabled",
         "index_map",
         "_reduced_results",
+        "poll_interval",
+        "show_progress",
     ]
 
     def __init__(
@@ -217,6 +78,8 @@ class ProgramRunner(Serializable):
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
         index_map: dict[str, int] | None = None,
+        poll_interval: float = 1.0,
+        show_progress: bool = True,
     ):
         self.parallel_strategy = parallel_strategy
         self.item_checkpoint_dir = (
@@ -234,6 +97,8 @@ class ProgramRunner(Serializable):
         self.lazy_loading_enabled = lazy_loading_enabled
         self.index_map = index_map
         self._reduced_results: dict[int, Any] = {}
+        self.poll_interval = poll_interval
+        self.show_progress = show_progress
         self._validate_checkpoint_kwargs()
 
     def _get_encoding_attr(
@@ -246,7 +111,9 @@ class ProgramRunner(Serializable):
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
-    def _from_decoded_attrs(cls, attr_dict: dict[str, Any]) -> "ProgramRunner":
+    def _from_decoded_attrs(
+        cls, attr_dict: dict[str, Any]
+    ) -> "MultiProgramRunner":
         """Reconstruct from decoded attributes, converting strings back to Paths."""
         # Convert path strings back to Path objects
         if attr_dict.get("item_checkpoint_dir") is not None:
@@ -321,7 +188,7 @@ class ProgramRunner(Serializable):
                 resuming = True
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
-            # runner.h5 now always exists, so tell run_checkpointed_items
+            # runner.h5 now always exists, so tell _run_dispatch
             # to trust this directory's state rather than tripping its own
             # pre-existing-content guard on the file just written above.
             resuming = True
@@ -346,18 +213,111 @@ class ProgramRunner(Serializable):
             if self.item_checkpoint_dir is not None:
                 self.write(self.item_checkpoint_dir / "runner.h5")
 
-        result_list = run_checkpointed_items(
+        result_list = self._run_dispatch(
             items=self._get_items(),
-            process_item=self._process_item_fn(),
-            parallel_strategy=self.parallel_strategy,
-            desc=self._desc(),
-            static_kwargs=self._static_kwargs(),
-            item_checkpoint_dir=self.item_checkpoint_dir,
-            resume=resuming,
             precomputed_indices=precomputed_indices,
-            on_item_done=self._make_on_item_done(),
+            resuming=resuming,
         )
         return self._finalize(result_list)
+
+    def _run_dispatch(
+        self,
+        items: Sequence[T],
+        precomputed_indices: Sequence[int] | None,
+        resuming: bool,
+    ) -> list:
+        """Dispatch item processing with checkpoint/resume/progress tracking:
+        item indexing, prior-progress replay, serial/parallel dispatch, and
+        final result assembly in original item order."""
+        # Item indexing/identity
+        items_with_index = _resolve_items_with_index(
+            items, precomputed_indices
+        )
+
+        # Read prior progress
+        done: dict[int, Any] = {}
+        if self.item_checkpoint_dir is not None:
+            done = _read_worker_files(self.item_checkpoint_dir)
+            if not resuming:
+                done = {}
+
+        # Compute on_item_done callback once and reuse it throughout
+        on_item_done = self._make_on_item_done()
+
+        # Replay already-done items
+        for index, item in items_with_index:
+            if index in done and on_item_done is not None:
+                on_item_done(index, item, done[index])
+
+        # Determine remaining work
+        remaining = [
+            (index, item)
+            for index, item in items_with_index
+            if index not in done
+        ]
+
+        # Progress bar setup
+        pbar = None
+        if self.show_progress:
+            pbar = tqdm(total=len(items), initial=len(done), desc=self._desc())
+
+        try:
+            # Dispatch
+            newly_computed: dict[int, Any] = {}
+            if not remaining:
+                # Nothing to do, skip dispatch
+                pass
+            elif (
+                self.parallel_strategy is None
+                or not self.parallel_strategy.is_chunked
+            ):
+                # Serial execution
+                newly_computed = _run_serial(
+                    remaining,
+                    self._process_item_fn(),
+                    self._static_kwargs() or {},
+                    self.item_checkpoint_dir,
+                    on_item_done,
+                    self.parallel_strategy,
+                    pbar,
+                )
+            else:
+                # Parallel execution
+                newly_computed = _run_parallel(
+                    remaining,
+                    self._process_item_fn(),
+                    self._static_kwargs() or {},
+                    self.item_checkpoint_dir,
+                    on_item_done,
+                    items_with_index,
+                    self.parallel_strategy,
+                    pbar,
+                    self.poll_interval,
+                    done.keys(),
+                )
+
+            # Final assembly - read authoritative results from worker files if available
+            if self.item_checkpoint_dir is not None:
+                final_done = _read_worker_files(self.item_checkpoint_dir)
+            else:
+                # No checkpointing, combine prior done + newly computed
+                final_done = done.copy()
+                final_done.update(newly_computed)
+
+            # Build result list in original order
+            result_list = []
+            for index, _ in items_with_index:
+                if index not in final_done:
+                    raise RuntimeError(
+                        f"Item {index} is missing from final results"
+                    )
+                result_list.append(final_done[index])
+
+            return result_list
+
+        finally:
+            if pbar is not None:
+                pbar.close()
 
     def _merge_reduced_result(self, index: int, value: Any) -> None:
         """Merge one item's reduced result into `_reduced_results`, persisted
