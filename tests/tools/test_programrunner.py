@@ -680,16 +680,16 @@ class TestProgramRunnerRunAndCrashRecovery:
         runner = _CountingRunner([1, 2, 3], multiplier=2)
         assert runner.run() == [2, 4, 6]
 
-    def test_run_writes_runner_json_before_dispatch_completes(
+    def test_run_writes_runner_h5_before_dispatch_completes(
         self, tmp_path
     ):
-        """The runner.json snapshot must exist as soon as run() starts
+        """The runner.h5 snapshot must exist as soon as run() starts
         dispatching, not only after it successfully finishes -- otherwise
         a crash mid-dispatch would leave nothing to recover from."""
         checkpoint_dir = tmp_path / "ckpt"
 
         def _process_and_check(item, index, *, shot_executor, multiplier):
-            assert (checkpoint_dir / "runner.json").exists()
+            assert (checkpoint_dir / "runner.h5").exists()
             return item * multiplier
 
         class _CheckingRunner(_CountingRunner):
@@ -701,10 +701,10 @@ class TestProgramRunnerRunAndCrashRecovery:
         )
         assert runner.run() == [2, 4, 6]
 
-    def test_existing_content_without_runner_json_raises(self, tmp_path):
+    def test_existing_content_without_runner_h5_raises(self, tmp_path):
         checkpoint_dir = tmp_path / "ckpt"
         checkpoint_dir.mkdir()
-        (checkpoint_dir / "unrelated.txt").write_text("not a runner.json")
+        (checkpoint_dir / "unrelated.txt").write_text("not a runner.h5")
 
         with pytest.raises(FileExistsError):
             _CountingRunner(
@@ -756,7 +756,7 @@ class TestProgramRunnerRunAndCrashRecovery:
 
     def test_crash_recovery_via_read_and_run(self, tmp_path):
         """A process interrupted partway through dispatch can be fully
-        recovered from just the on-disk runner.json -- no need for the
+        recovered from just the on-disk runner.h5 -- no need for the
         original script's own in-memory object."""
         checkpoint_dir = tmp_path / "ckpt"
         _FLAKY_CALL_COUNT["n"] = 0
@@ -767,9 +767,9 @@ class TestProgramRunnerRunAndCrashRecovery:
         with pytest.raises(RuntimeError, match="simulated crash"):
             interrupted.run()
 
-        assert (checkpoint_dir / "runner.json").exists()
+        assert (checkpoint_dir / "runner.h5").exists()
 
         # Recover using nothing but the on-disk snapshot -- no reference
         # to `interrupted` itself.
-        recovered = ProgramRunner.read(checkpoint_dir / "runner.json")
+        recovered = ProgramRunner.read(checkpoint_dir / "runner.h5")
         assert recovered.run() == [2, 4, 6]

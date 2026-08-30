@@ -399,7 +399,7 @@ class TestFaultInjectionRunnerCheckpointing:
         assert failed == []
         assert ckpt.exists()
         assert ckpt.is_dir()
-        assert (ckpt / "runner.json").exists()
+        assert (ckpt / "runner.h5").exists()
         assert self._read_journal_indices(ckpt) == {0, 1}
 
     def test_existing_checkpoint_with_matching_config_auto_resumes(self, tmp_path):
@@ -429,8 +429,8 @@ class TestFaultInjectionRunnerCheckpointing:
         failed2 = runner2.run()
         assert failed2 == []
 
-    def test_existing_content_without_runner_json_raises(self, tmp_path):
-        """Content that isn't a recognized checkpoint (no runner.json) raises."""
+    def test_existing_content_without_runner_h5_raises(self, tmp_path):
+        """Content that isn't a recognized checkpoint (no runner.h5) raises."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
         ckpt.mkdir()
@@ -566,7 +566,7 @@ class TestFaultInjectionRunnerCheckpointing:
         assert self._read_journal_indices(ckpt) == {0}
 
         # Recover via .read().run()
-        runner2 = fttools.FaultInjectionRunner.read(ckpt / "runner.json")
+        runner2 = fttools.FaultInjectionRunner.read(ckpt / "runner.h5")
         failed2 = runner2.run()
         assert failed2 == []
 

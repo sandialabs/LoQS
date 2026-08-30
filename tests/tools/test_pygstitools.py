@@ -452,11 +452,11 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_existing_content_without_runner_json_raises(
+    def test_existing_content_without_runner_h5_raises(
         self, trivial_counter_setup, tmp_path
     ):
         """Content that isn't a recognized EdesignRunner checkpoint (no
-        runner.json) is never silently overwritten or continued."""
+        runner.h5) is never silently overwritten or continued."""
         s = trivial_counter_setup
         ckpt = tmp_path / "checkpoint"
         ckpt.mkdir()

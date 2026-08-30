@@ -279,7 +279,7 @@ def _checkpoint_provenance_comment(
     """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
     on-disk `DataSet`, a human-readable provenance record (config-mismatch
     detection on resume happens separately, via `ProgramRunner`'s own
-    `runner.json` snapshot). `num_shots` is stored as a plain `repr()` string;
+    `runner.h5` snapshot). `num_shots` is stored as a plain `repr()` string;
     `collect_shot_data_args` is first normalized via
     `_normalize_collect_shot_data_args` so its repr is canonical regardless of
     spelling; `physical_to_logical`'s own top-level key order is incidental, so

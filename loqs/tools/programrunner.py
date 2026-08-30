@@ -263,26 +263,26 @@ class ProgramRunner(Serializable):
 
         Whether to resume is always inferred from `item_checkpoint_dir`'s
         own on-disk state, never from a caller-supplied flag: no content
-        means a fresh run; a `runner.json` (this method's own crash-
+        means a fresh run; a `runner.h5` (this method's own crash-
         recovery snapshot, written here at call-start, before any work is
         dispatched) means continuing that prior run, subject to a mismatch
         check against the stored config (`force_resume` bypasses a real
-        mismatch); unrelated content with no `runner.json` always raises,
+        mismatch); unrelated content with no `runner.h5` always raises,
         since there's nothing to safely continue from. A crash mid-run can
         be recovered from via
-        `type(self).read(item_checkpoint_dir / "runner.json").run()`.
+        `type(self).read(item_checkpoint_dir / "runner.h5").run()`.
         """
         resuming = False
         if self.item_checkpoint_dir is not None:
             has_content = self.item_checkpoint_dir.exists() and any(
                 self.item_checkpoint_dir.iterdir()
             )
-            runner_path = self.item_checkpoint_dir / "runner.json"
+            runner_path = self.item_checkpoint_dir / "runner.h5"
             if has_content:
                 if not runner_path.exists():
                     raise FileExistsError(
                         f"{self.item_checkpoint_dir} exists with content "
-                        "that isn't a recognized checkpoint (no runner.json)."
+                        "that isn't a recognized checkpoint (no runner.h5)."
                     )
                 stored = type(self).read(runner_path)
                 mismatches = [
@@ -298,13 +298,13 @@ class ProgramRunner(Serializable):
                 resuming = True
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
-            # The directory now always has at least runner.json in it
+            # The directory now always has at least runner.h5 in it
             # (just written above, or already present from a prior/
             # recovered run) -- the checks above already establish it's
             # safe to proceed, so tell run_checkpointed_items to trust
             # this directory's own journal state unconditionally, rather
             # than tripping its own pre-existing-content guard on the
-            # runner.json file this method itself just wrote.
+            # runner.h5 file this method itself just wrote.
             resuming = True
 
         result_list = run_checkpointed_items(
