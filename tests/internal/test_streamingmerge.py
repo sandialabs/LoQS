@@ -443,3 +443,165 @@ class TestMergeDictAttr:
                 # Verify file wasn't corrupted
                 result = list(iter_dict_attr_entries(h5_file, "dict"))
                 assert len(result) == 1
+
+
+class TestIterDictAttrEntriesStartIndex:
+    """Tests for start_index parameter in iter_dict_attr_entries."""
+
+    def test_start_index_skips_entries_groups_format(self, make_temp_path):
+        """start_index parameter skips early entries in groups format, yielding
+        correct results starting from that index."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                # Create dict with 5 entries (groups format for values)
+                entries = [
+                    (i, MockSerializable(f"obj_{i}", i * 10))
+                    for i in range(5)
+                ]
+                merge_dict_attr(
+                    h5_file, "test_dict", entries, key_use_dataset=True
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                # Iterate from index 2 onward (should skip indices 0, 1)
+                result = list(
+                    iter_dict_attr_entries(h5_file, "test_dict", start_index=2)
+                )
+
+            # We should get entries 2, 3, 4 (3 entries total)
+            assert len(result) == 3
+            assert result[0][0] == 2
+            assert result[0][1].name == "obj_2"
+            assert result[0][1].value == 20
+            assert result[1][0] == 3
+            assert result[1][1].name == "obj_3"
+            assert result[1][1].value == 30
+            assert result[2][0] == 4
+            assert result[2][1].name == "obj_4"
+            assert result[2][1].value == 40
+
+    def test_start_index_skips_entries_dataset_format(self, make_temp_path):
+        """start_index parameter skips early entries in dataset format (via slicing)."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                # Create dict with native scalar values (dataset format)
+                entries = [(i, i * 100) for i in range(5)]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                # Iterate from index 2 onward
+                result = list(
+                    iter_dict_attr_entries(
+                        h5_file, "test_dict", start_index=2
+                    )
+                )
+
+            # We should get entries 2, 3, 4
+            assert len(result) == 3
+            assert [(k, v) for k, v in result] == [
+                (2, 200),
+                (3, 300),
+                (4, 400),
+            ]
+
+    def test_start_index_zero_reads_all(self, make_temp_path):
+        """start_index=0 (the default) reads all entries."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(i, i * 2) for i in range(3)]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                result = list(
+                    iter_dict_attr_entries(h5_file, "test_dict", start_index=0)
+                )
+                assert len(result) == 3
+
+    def test_start_index_trap_decoding_actually_skipped(self, make_temp_path):
+        """start_index actually skips decoding, not just slices results after.
+
+        This trap test proves that entries below start_index are never decoded.
+        A naive `list(...)[start_index:]`-style implementation would decode all
+        entries and then slice, which this test would catch."""
+        import unittest.mock
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                # Create dict with 5 entries (groups format for values)
+                entries = [
+                    (i, MockSerializable(f"obj_{i}", i * 10))
+                    for i in range(5)
+                ]
+                merge_dict_attr(
+                    h5_file, "test_dict", entries, key_use_dataset=True
+                )
+
+            # Spy on _decode_group_entry to count actual decode calls
+            from loqs.internal.streamingmerge import _decode_group_entry
+
+            real_decode_entry = _decode_group_entry
+            decode_call_indices = []
+
+            def spy_decode_entry(group, index, decode_cache):
+                decode_call_indices.append(index)
+                return real_decode_entry(group, index, decode_cache)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                with unittest.mock.patch(
+                    "loqs.internal.streamingmerge._decode_group_entry",
+                    side_effect=spy_decode_entry,
+                ):
+                    # Iterate from index 2 onward (should skip indices 0, 1)
+                    result = list(
+                        iter_dict_attr_entries(
+                            h5_file, "test_dict", start_index=2
+                        )
+                    )
+
+            # We should get entries 2, 3, 4 (3 entries total)
+            assert len(result) == 3
+            assert [k for k, _ in result] == [2, 3, 4]
+
+            # A naive list(...)[start_index:] implementation would decode
+            # indices [0, 1, 2, 3, 4] instead of just [2, 3, 4] -- this
+            # assertion catches that.
+            assert decode_call_indices == [
+                2,
+                3,
+                4,
+            ], (
+                f"Expected decode calls for indices [2, 3, 4] only, "
+                f"but got {decode_call_indices} -- start_index did not actually "
+                f"skip decoding for early entries."
+            )
+
+    def test_start_index_beyond_length_yields_nothing(self, make_temp_path):
+        """start_index beyond the number of entries yields nothing."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(i, i * 2) for i in range(3)]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                result = list(
+                    iter_dict_attr_entries(h5_file, "test_dict", start_index=10)
+                )
+                assert len(result) == 0

@@ -14,9 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from concurrent.futures import as_completed
 import copy
-import os
 from pathlib import Path
-import socket
 from typing import ClassVar, Literal, TypeVar
 import warnings
 
@@ -48,7 +46,7 @@ from loqs.core.instructions.instructionstack import (
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchLayout
 from loqs.core.programresults import ProgramResults
-from loqs.internal import Displayable
+from loqs.internal import Displayable, worker_id
 from loqs.internal.legacy import legacy_name_hint
 
 T = TypeVar("T", bound="QuantumProgram")
@@ -761,9 +759,8 @@ class QuantumProgram(Displayable):
             )
             batch_results.add_shot(shot_index, history)
 
-        worker_id = f"{socket.gethostname()}_{os.getpid()}"
         batch_results.checkpoint(
-            checkpoint_dir=checkpoint_dir, worker_id=worker_id
+            checkpoint_dir=checkpoint_dir, worker_id=worker_id()
         )
 
         return dict(batch_results.shot_histories)
@@ -1094,7 +1091,9 @@ class QuantumProgram(Displayable):
                 # Check instruction data dict
                 if key in instruction_data:
                     return instruction_data[key]
-            elif priority == "patch_data" or priority.startswith("patch_data["):
+            elif priority == "patch_data" or priority.startswith(
+                "patch_data["
+            ):
                 # Extract patch_label from program_data -- either a single
                 # patch label (str) or a "patch_labels"-style role mapping.
                 patch_label = program_data.get("patch_label", None)

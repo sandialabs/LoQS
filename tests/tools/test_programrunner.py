@@ -1,6 +1,6 @@
 """Tester for loqs.tools.programrunner"""
 
-import json
+import h5py
 import multiprocessing as mp
 import os
 import tempfile
@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from loqs.internal import worker_id
+from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.programrunner import ProgramRunner, run_checkpointed_items
 
@@ -55,23 +57,28 @@ def _raise_after_n(item, index, *, shot_executor, **kwargs):
     return item * 2
 
 
-def _write_worker_journal(args):
-    """Helper for concurrent write test: each process writes entries to its journal."""
-    checkpoint_dir, worker_id, num_entries = args
-    from loqs.tools.programrunner import _serialize_result, _worker_id
-    import json
+def _write_worker_file(args):
+    """Helper for concurrent write test: each process writes entries to its worker file."""
+    checkpoint_dir, worker_id_base, num_entries = args
+    from loqs.internal.streamingmerge import merge_dict_attr
 
     items_to_write = []
     for i in range(num_entries):
-        items_to_write.append((worker_id * 100 + i, worker_id * 1000 + i))
+        items_to_write.append((worker_id_base * 100 + i, worker_id_base * 1000 + i))
 
-    # Simulate parallel journal writes (like a real parallel run)
-    journal_path = Path(checkpoint_dir) / f"journal_{_worker_id()}.jsonl"
-    with open(journal_path, "a") as f:
+    # Simulate parallel worker file writes (like a real parallel run)
+    worker_file_path = (
+        Path(checkpoint_dir) / f"worker_{worker_id()}_runner.h5"
+    )
+    with h5py.File(worker_file_path, "a") as f:
         for index, result in items_to_write:
-            entry = {"index": index, "result": _serialize_result(result)}
-            f.write(json.dumps(entry) + "\n")
-            f.flush()
+            merge_dict_attr(
+                f,
+                "results",
+                [(index, result)],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
 
 
 class TestRunCheckpointedItemsSerial:
@@ -126,12 +133,12 @@ class TestRunCheckpointedItemsSerialWithCheckpoint:
             assert item == i
             assert result == i * 2
 
-        # Verify journal file exists with correct entries
-        journal_files = list(checkpoint_dir.glob("journal_*.jsonl"))
-        assert len(journal_files) == 1
-        with open(journal_files[0]) as f:
-            lines = f.readlines()
-        assert len(lines) == 5
+        # Verify worker file exists with correct entries
+        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
+        assert len(worker_files) == 1
+        with h5py.File(worker_files[0], "r") as f:
+            entries = list(iter_dict_attr_entries(f, "results"))
+        assert len(entries) == 5
 
     def test_serial_crash_simulation_and_resume(self, tmp_path):
         """Simulate a crash and verify resume capability."""
@@ -150,12 +157,12 @@ class TestRunCheckpointedItemsSerialWithCheckpoint:
                 static_kwargs=static_kwargs,
             )
 
-        # Verify journal has 3 entries
-        journal_files = list(checkpoint_dir.glob("journal_*.jsonl"))
-        assert len(journal_files) == 1
-        with open(journal_files[0]) as f:
-            lines = f.readlines()
-        assert len(lines) == 3
+        # Verify worker file has 3 entries
+        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
+        assert len(worker_files) == 1
+        with h5py.File(worker_files[0], "r") as f:
+            entries = list(iter_dict_attr_entries(f, "results"))
+        assert len(entries) == 3
 
         # Second run: resume with normal function
         call_count2 = [0]
@@ -208,14 +215,16 @@ class TestRunCheckpointedItemsParallel:
         )
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        # Should have multiple journal files (one per worker)
-        journal_files = list(checkpoint_dir.glob("journal_*.jsonl"))
-        assert len(journal_files) >= 1
-        # Verify all 10 items were written to journals
+        # Should have multiple worker files (one per worker)
+        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
+        assert len(worker_files) >= 1
+        # Verify all 10 items were written to worker files
         total_entries = 0
-        for journal_file in journal_files:
-            with open(journal_file) as f:
-                total_entries += len(f.readlines())
+        for worker_file in worker_files:
+            with h5py.File(worker_file, "r") as f:
+                total_entries += len(
+                    list(iter_dict_attr_entries(f, "results"))
+                )
         assert total_entries == 10
         # on_item_done should have been called for all items
         assert len(on_item_done_calls) == 10
@@ -267,7 +276,7 @@ class TestRunCheckpointedItemsParallel:
 
         # Manually seed checkpoint with partial results (simulating prior run)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        _seed_partial_journal(checkpoint_dir, done_indices=[0, 2, 4])
+        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
 
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
@@ -283,15 +292,16 @@ class TestRunCheckpointedItemsParallel:
         )
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        # Verify that only 7 items were written to journal (already had 3)
-        from loqs.tools.programrunner import _read_journal_files
-        done = _read_journal_files(checkpoint_dir)
+        # Verify that only 7 items were written to worker file (already had 3)
+        from loqs.tools.programrunner import _read_worker_files
+
+        done = _read_worker_files(checkpoint_dir)
         assert len(done) == 10  # All 10 should be done now
-        # Find journal files created during this run (new ones)
-        journal_files = sorted(checkpoint_dir.glob("journal_*.jsonl"))
+        # Find worker files created during this run (new ones)
+        worker_files = sorted(checkpoint_dir.glob("worker_*_runner.h5"))
         # The initial one should have 3 entries, new ones should have the rest
-        if len(journal_files) > 1:
-            # Multiple journal files means multiple workers
+        if len(worker_files) > 1:
+            # Multiple worker files means multiple workers
             pass  # Just verify the final results are correct
         # The important test is that the final results are correct
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
@@ -342,76 +352,13 @@ class TestCheckpointValidation:
         assert results == [2, 4, 6]
 
 
-class TestItemKeyFunction:
-    """Tests for item_key_fn parameter."""
-
-    def test_item_key_fn_creates_index_map(self, tmp_path):
-        """item_key_fn creates and maintains index_map.json."""
-        checkpoint_dir = tmp_path / "checkpoints"
-
-        def key_fn(item):
-            return f"item_{item}"
-
-        items = [10, 20, 30]
-        results = run_checkpointed_items(
-            items,
-            _double_item,
-            item_checkpoint_dir=checkpoint_dir,
-            item_key_fn=key_fn,
-        )
-
-        assert results == [20, 40, 60]
-
-        # Verify index_map.json was created
-        index_map_path = checkpoint_dir / "index_map.json"
-        assert index_map_path.exists()
-        with open(index_map_path) as f:
-            index_map = json.load(f)
-        assert index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
-
-    def test_item_key_fn_stability_across_calls(self, tmp_path):
-        """Items retain same index across calls with item_key_fn."""
-        checkpoint_dir = tmp_path / "checkpoints"
-
-        def key_fn(item):
-            return f"item_{item}"
-
-        # First call: full list
-        items1 = [10, 20, 30]
-        results1 = run_checkpointed_items(
-            items1,
-            _double_item,
-            item_checkpoint_dir=checkpoint_dir,
-            item_key_fn=key_fn,
-        )
-        assert results1 == [20, 40, 60]
-
-        # Second call: different order and subset, resume=True
-        items2 = [30, 10]  # Different order and only 2 items
-        results2 = run_checkpointed_items(
-            items2,
-            _double_item,
-            item_checkpoint_dir=checkpoint_dir,
-            item_key_fn=key_fn,
-            resume=True,
-        )
-        # Both are already done from first run
-        assert results2 == [60, 20]
-
-        # Verify index_map is unchanged (30 and 10 kept their original indices)
-        index_map_path = checkpoint_dir / "index_map.json"
-        with open(index_map_path) as f:
-            index_map = json.load(f)
-        assert index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
-
-
-class TestConcurrentJournalWrites:
-    """Tests for concurrent writing to journal files."""
+class TestConcurrentWorkerWrites:
+    """Tests for concurrent writing to worker files."""
 
     def test_concurrent_workers_writing_simultaneously_lose_no_entries(
         self, tmp_path
     ):
-        """Several processes writing journals concurrently must not corrupt."""
+        """Several processes writing worker files concurrently must not corrupt."""
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
         num_workers = 4
@@ -420,23 +367,23 @@ class TestConcurrentJournalWrites:
         # Spawn multiple processes to write to the same checkpoint_dir
         with mp.Pool(num_workers) as pool:
             pool.map(
-                _write_worker_journal,
+                _write_worker_file,
                 [
-                    (str(checkpoint_dir), worker_id, entries_per_worker)
-                    for worker_id in range(num_workers)
+                    (str(checkpoint_dir), worker_id_base, entries_per_worker)
+                    for worker_id_base in range(num_workers)
                 ],
             )
 
         # Verify every entry was written
-        from loqs.tools.programrunner import _read_journal_files
+        from loqs.tools.programrunner import _read_worker_files
 
-        done = _read_journal_files(checkpoint_dir)
+        done = _read_worker_files(checkpoint_dir)
         assert len(done) == num_workers * entries_per_worker
-        for worker_id in range(num_workers):
+        for worker_id_base in range(num_workers):
             for i in range(entries_per_worker):
-                index = worker_id * 100 + i
+                index = worker_id_base * 100 + i
                 assert index in done
-                assert done[index] == worker_id * 1000 + i
+                assert done[index] == worker_id_base * 1000 + i
 
 
 class TestParallelToolsOnPollCallback:
@@ -475,18 +422,22 @@ class TestParallelToolsOnPollCallback:
 # Helper functions
 
 
-def _seed_partial_journal(checkpoint_dir: Path, done_indices: list[int]):
-    """Seed a checkpoint directory with partial journal results."""
-    import socket
+def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
+    """Seed a checkpoint directory with partial worker file results."""
+    worker_file_path = (
+        checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+    )
+    from loqs.internal.streamingmerge import merge_dict_attr
 
-    from loqs.tools.programrunner import _serialize_result
-
-    journal_path = checkpoint_dir / f"journal_{socket.gethostname()}_{os.getpid()}.jsonl"
-    with open(journal_path, "w") as f:
+    with h5py.File(worker_file_path, "a") as f:
         for index in done_indices:
-            entry = {"index": index, "result": _serialize_result(index * 2)}
-            f.write(json.dumps(entry) + "\n")
-            f.flush()
+            merge_dict_attr(
+                f,
+                "results",
+                [(index, index * 2)],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
 
 
 # Regression tests for bugs fixed
@@ -548,7 +499,7 @@ class TestBugRegressions:
         checkpoint_dir.mkdir()
 
         # Seed with 2 already-done items
-        _seed_partial_journal(checkpoint_dir, done_indices=[0, 1])
+        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 1])
 
         calls = []
 
@@ -672,6 +623,70 @@ class _FlakyRunner(_CountingRunner):
         return _flaky_multiply
 
 
+class _KeyedRunner(_CountingRunner):
+    """_CountingRunner that uses item-based keys for index_map persistence."""
+
+    def _item_key_fn(self):
+        # Key items by their string representation (like EdesignRunner does)
+        return lambda item: f"item_{item}"
+
+
+class _KeyedRunnerFixedSignature(ProgramRunner):
+    """A `ProgramRunner` subclass with an explicit, fixed `__init__`
+    parameter list -- no `**kwargs` passthrough to `super().__init__`,
+    matching real tools like `EdesignRunner`. Proves `index_map`/
+    `_reduced_results` survive deserialization even when the subclass's own
+    constructor can't accept them directly; a `**kwargs`-forwarding
+    subclass like `_CountingRunner` would pass both straight through its
+    constructor regardless of whether `_from_decoded_attrs` actually
+    restores them, hiding a real regression."""
+
+    _SERIALIZE_ATTRS = ProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "multiplier",
+    ]
+
+    def __init__(
+        self,
+        items,
+        multiplier=2,
+        item_checkpoint_dir=None,
+        force_resume=False,
+        parallel_strategy=None,
+        checkpoint_batch_size=None,
+        shot_checkpoint_dir=None,
+        lazy_loading_enabled=True,
+    ):
+        super().__init__(
+            parallel_strategy=parallel_strategy,
+            item_checkpoint_dir=item_checkpoint_dir,
+            force_resume=force_resume,
+            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading_enabled=lazy_loading_enabled,
+        )
+        self.items = items
+        self.multiplier = multiplier
+
+    def _get_items(self):
+        return self.items
+
+    def _item_key_fn(self):
+        return lambda item: f"item_{item}"
+
+    def _process_item_fn(self):
+        return _multiply_item
+
+    def _static_kwargs(self):
+        return {"multiplier": self.multiplier}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self, result_list):
+        return result_list
+
+
 class TestProgramRunnerRunAndCrashRecovery:
     """Tests for `ProgramRunner.run()`'s own generic checkpoint/resume/
     mismatch-check/crash-recovery behavior, via `_CountingRunner`."""
@@ -773,3 +788,99 @@ class TestProgramRunnerRunAndCrashRecovery:
         # to `interrupted` itself.
         recovered = ProgramRunner.read(checkpoint_dir / "runner.h5")
         assert recovered.run() == [2, 4, 6]
+
+
+class TestMergeReducedResult:
+    """Tests for ProgramRunner._merge_reduced_result method."""
+
+    def test_merge_reduced_result_persists_to_runner_h5(self, tmp_path):
+        """_merge_reduced_result appends to _reduced_results in runner.h5."""
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _CountingRunner(
+            [1, 2, 3], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        runner.run()
+
+        # Now merge in some reduced results
+        runner._merge_reduced_result(0, "reduced_0")
+        runner._merge_reduced_result(1, "reduced_1")
+
+        # Verify they were written to runner.h5
+        runner_path = checkpoint_dir / "runner.h5"
+        from loqs.internal.streamingmerge import iter_dict_attr_entries
+
+        with h5py.File(runner_path, "r") as f:
+            reduced = dict(iter_dict_attr_entries(f, "_reduced_results"))
+
+        assert reduced == {0: "reduced_0", 1: "reduced_1"}
+
+
+class TestIndexMapPersistence:
+    """Tests for index_map persistence through deserialization."""
+
+    def test_index_map_stable_across_reordered_resume(self, tmp_path):
+        """Items keep their originally-assigned index across a resumed
+        `ProgramRunner.run()` call even when passed in a different order
+        or as a subset."""
+        checkpoint_dir = tmp_path / "ckpt"
+
+        runner1 = _KeyedRunner(
+            [10, 20, 30], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        assert runner1.run() == [20, 40, 60]
+        assert runner1.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
+
+        # Resume with a different order and only a subset -- both items
+        # are already done, so this only exercises index stability.
+        runner2 = _KeyedRunner(
+            [30, 10], multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        assert runner2.run() == [60, 20]
+        assert runner2.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
+
+    def test_index_map_survives_deserialization_via_read(self, tmp_path):
+        """index_map is correctly restored when deserializing via .read()."""
+        checkpoint_dir = tmp_path / "ckpt"
+        items = [10, 20, 30]
+
+        # First run: populate index_map with real data
+        runner1 = _KeyedRunner(
+            items, multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        result1 = runner1.run()
+        assert result1 == [20, 40, 60]
+        assert runner1.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
+
+        # Deserialize via .read() (the critical test: does index_map survive?)
+        runner_path = checkpoint_dir / "runner.h5"
+        runner2 = ProgramRunner.read(runner_path)
+
+        # The deserialized runner must have the exact same index_map
+        # (this is the core assertion that proves the fix works)
+        assert runner2.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
+
+    def test_index_map_survives_deserialization_with_fixed_signature_subclass(
+        self, tmp_path
+    ):
+        """index_map/_reduced_results survive `.read()` even for a subclass
+        whose own `__init__` has a fixed parameter list and never forwards
+        arbitrary `**kwargs` to `super().__init__` -- matching real tools
+        like `EdesignRunner`. This is the actual shape the original bug
+        occurred against: a `**kwargs`-forwarding test double (like
+        `_KeyedRunner` above) would pass `index_map` straight through its
+        own constructor regardless of whether `_from_decoded_attrs` pops/
+        restores it correctly, so it can't catch this on its own."""
+        checkpoint_dir = tmp_path / "ckpt"
+        items = [10, 20, 30]
+
+        runner1 = _KeyedRunnerFixedSignature(
+            items, multiplier=2, item_checkpoint_dir=checkpoint_dir
+        )
+        result1 = runner1.run()
+        assert result1 == [20, 40, 60]
+        assert runner1.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
+
+        runner_path = checkpoint_dir / "runner.h5"
+        runner2 = _KeyedRunnerFixedSignature.read(runner_path)
+
+        assert runner2.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}

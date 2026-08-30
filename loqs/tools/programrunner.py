@@ -11,20 +11,20 @@
 
 from __future__ import annotations
 
-import base64
 import functools
-import json
-import os
-import pickle
-import socket
-import tempfile
+import h5py
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
 from tqdm import tqdm
 
+from loqs.internal import worker_id
 from loqs.internal.serializable import Serializable
+from loqs.internal.streamingmerge import (
+    merge_dict_attr,
+    iter_dict_attr_entries,
+)
 from loqs.tools.paralleltools import (
     ParallelStrategy,
     resolve_shot_executor,
@@ -35,6 +35,17 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
+def _resolve_items_with_index(
+    items: Sequence[T],
+    precomputed_indices: Sequence[int] | None,
+) -> list[tuple[int, T]]:
+    """Pair each item with its index: caller-precomputed (a
+    `ProgramRunner`-driven call) if given, else plain position."""
+    if precomputed_indices is not None:
+        return list(zip(precomputed_indices, items))
+    return [(i, item) for i, item in enumerate(items)]
+
+
 def run_checkpointed_items(
     items: Sequence[T],
     process_item: Callable[..., R],
@@ -43,7 +54,7 @@ def run_checkpointed_items(
     static_kwargs: dict | None = None,
     item_checkpoint_dir: str | Path | None = None,
     resume: bool = False,
-    item_key_fn: Callable[[T], str] | None = None,
+    precomputed_indices: Sequence[int] | None = None,
     on_item_done: Callable[[int, T, R], None] | None = None,
     show_progress: bool = True,
     poll_interval: float = 1.0,
@@ -66,14 +77,16 @@ def run_checkpointed_items(
         Directory for checkpointing item results. If set, enables resume capability.
     resume : bool
         If True, resume from prior checkpoint. Raises ValueError if item_checkpoint_dir is None.
-    item_key_fn : Callable[[T], str] | None
-        Function to get a string key for each item. If provided, maintains an index_map.json.
+    precomputed_indices : Sequence[int] | None
+        Pre-assigned indices for items (positionally aligned), e.g. from a
+        `ProgramRunner`'s own `item_key_fn`-based assignment. If not given,
+        items are indexed by plain position.
     on_item_done : Callable[[int, T, R], None] | None
         Callback invoked when an item completes: on_item_done(index, item, result).
     show_progress : bool
         Whether to show a progress bar.
     poll_interval : float
-        Polling interval (seconds) for reading journal files during parallel dispatch.
+        Polling interval (seconds) for reading worker files during parallel dispatch.
 
     Returns
     -------
@@ -94,19 +107,12 @@ def run_checkpointed_items(
         item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Item indexing/identity
-    if item_key_fn is not None and item_checkpoint_dir is not None:
-        index_map = _load_or_init_index_map(item_checkpoint_dir)
-        items_with_index = _assign_indices_with_keys(
-            items, item_key_fn, index_map
-        )
-        _save_index_map_atomic(item_checkpoint_dir, index_map)
-    else:
-        items_with_index = [(i, item) for i, item in enumerate(items)]
+    items_with_index = _resolve_items_with_index(items, precomputed_indices)
 
     # Read prior progress
     done: dict[int, R] = {}
     if item_checkpoint_dir is not None:
-        done = _read_journal_files(item_checkpoint_dir)
+        done = _read_worker_files(item_checkpoint_dir)
         if not resume:
             done = {}
 
@@ -157,9 +163,9 @@ def run_checkpointed_items(
                 done.keys(),
             )
 
-        # Final assembly - read authoritative results from journal if available
+        # Final assembly - read authoritative results from worker files if available
         if item_checkpoint_dir is not None:
-            final_done = _read_journal_files(item_checkpoint_dir)
+            final_done = _read_worker_files(item_checkpoint_dir)
         else:
             # No checkpointing, combine prior done + newly computed
             final_done = done.copy()
@@ -198,6 +204,8 @@ class ProgramRunner(Serializable):
         "checkpoint_batch_size",
         "shot_checkpoint_dir",
         "lazy_loading_enabled",
+        "index_map",
+        "_reduced_results",
     ]
 
     def __init__(
@@ -208,6 +216,7 @@ class ProgramRunner(Serializable):
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
+        index_map: dict[str, int] | None = None,
     ):
         self.parallel_strategy = parallel_strategy
         self.item_checkpoint_dir = (
@@ -223,6 +232,8 @@ class ProgramRunner(Serializable):
             else None
         )
         self.lazy_loading_enabled = lazy_loading_enabled
+        self.index_map = index_map
+        self._reduced_results: dict[int, Any] = {}
         self._validate_checkpoint_kwargs()
 
     def _get_encoding_attr(
@@ -246,7 +257,18 @@ class ProgramRunner(Serializable):
             attr_dict["shot_checkpoint_dir"] = Path(
                 attr_dict["shot_checkpoint_dir"]
             )
-        return super()._from_decoded_attrs(attr_dict)
+        # Extract internal fields that are not constructor parameters
+        # (must be set directly on the instance, not passed to __init__)
+        index_map = attr_dict.pop("index_map", None)
+        reduced_results = attr_dict.pop("_reduced_results", None)
+        # Reconstruct with constructor parameters only
+        obj = super()._from_decoded_attrs(attr_dict)
+        # Restore internal state directly on the instance
+        obj.index_map = index_map
+        obj._reduced_results = (
+            reduced_results if reduced_results is not None else {}
+        )
+        return obj
 
     def _validate_checkpoint_kwargs(self) -> None:
         """Validate that checkpoint_batch_size requires shot_checkpoint_dir."""
@@ -273,6 +295,7 @@ class ProgramRunner(Serializable):
         `type(self).read(item_checkpoint_dir / "runner.h5").run()`.
         """
         resuming = False
+        stored = None
         if self.item_checkpoint_dir is not None:
             has_content = self.item_checkpoint_dir.exists() and any(
                 self.item_checkpoint_dir.iterdir()
@@ -298,14 +321,30 @@ class ProgramRunner(Serializable):
                 resuming = True
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
-            # The directory now always has at least runner.h5 in it
-            # (just written above, or already present from a prior/
-            # recovered run) -- the checks above already establish it's
-            # safe to proceed, so tell run_checkpointed_items to trust
-            # this directory's own journal state unconditionally, rather
-            # than tripping its own pre-existing-content guard on the
-            # runner.h5 file this method itself just wrote.
+            # runner.h5 now always exists, so tell run_checkpointed_items
+            # to trust this directory's state rather than tripping its own
+            # pre-existing-content guard on the file just written above.
             resuming = True
+
+        # Pre-assign indices via item_key_fn, adopting the persisted map
+        # from `stored` first so a fresh resumed instance doesn't reassign
+        # indices out from under already-checkpointed work.
+        precomputed_indices = None
+        if self._item_key_fn() is not None:
+            key_fn = self._item_key_fn()
+            if self.index_map is None:
+                self.index_map = (
+                    dict(stored.index_map)
+                    if stored is not None and stored.index_map is not None
+                    else {}
+                )
+            items_with_index = _assign_indices_with_keys(
+                self._get_items(), key_fn, self.index_map
+            )
+            precomputed_indices = [idx for idx, _ in items_with_index]
+            # Update runner.h5 with the now-populated index_map
+            if self.item_checkpoint_dir is not None:
+                self.write(self.item_checkpoint_dir / "runner.h5")
 
         result_list = run_checkpointed_items(
             items=self._get_items(),
@@ -315,10 +354,26 @@ class ProgramRunner(Serializable):
             static_kwargs=self._static_kwargs(),
             item_checkpoint_dir=self.item_checkpoint_dir,
             resume=resuming,
-            item_key_fn=self._item_key_fn(),
+            precomputed_indices=precomputed_indices,
             on_item_done=self._make_on_item_done(),
         )
         return self._finalize(result_list)
+
+    def _merge_reduced_result(self, index: int, value: Any) -> None:
+        """Merge one item's reduced result into `_reduced_results`, persisted
+        incrementally into `runner.h5` via the streaming-merge primitives."""
+        if self.item_checkpoint_dir is None:
+            return
+
+        runner_path = self.item_checkpoint_dir / "runner.h5"
+        with h5py.File(runner_path, "a") as f:
+            merge_dict_attr(
+                f,
+                "_reduced_results",
+                [(index, value)],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
 
     # Hook methods -- subclasses implement these
     def _get_items(self) -> Sequence:
@@ -354,17 +409,6 @@ class ProgramRunner(Serializable):
         return []
 
 
-def _load_or_init_index_map(
-    checkpoint_dir: Path,
-) -> dict[str, int]:
-    """Load index_map.json if it exists, else return empty dict."""
-    index_map_path = checkpoint_dir / "index_map.json"
-    if index_map_path.exists():
-        with open(index_map_path) as f:
-            return json.load(f)
-    return {}
-
-
 def _assign_indices_with_keys(
     items: Sequence[T],
     item_key_fn: Callable[[T], str],
@@ -381,52 +425,23 @@ def _assign_indices_with_keys(
     return items_with_index
 
 
-def _save_index_map_atomic(
-    checkpoint_dir: Path, index_map: dict[str, int]
-) -> None:
-    """Atomically save index_map to checkpoint_dir/index_map.json."""
-    index_map_path = checkpoint_dir / "index_map.json"
-    # Write to a temp file in the same directory, then rename atomically
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        dir=checkpoint_dir,
-        delete=False,
-        suffix=".tmp",
-    ) as f:
-        json.dump(index_map, f)
-        temp_path = f.name
+def _read_worker_files(checkpoint_dir: Path) -> dict[int, Any]:
+    """Read all worker_*_runner.h5 files and return {index: result} dict.
 
-    try:
-        os.replace(temp_path, index_map_path)
-    except Exception:
-        os.unlink(temp_path)
-        raise
-
-
-def _read_journal_files(checkpoint_dir: Path) -> dict[int, Any]:
-    """Read all journal_*.jsonl files and return {index: result} dict."""
+    Transient HDF5 lock conflicts are silently skipped (those worker files
+    will be retried on the next poll tick or final assembly pass).
+    """
     done: dict[int, Any] = {}
-    for journal_file in sorted(checkpoint_dir.glob("journal_*.jsonl")):
-        with open(journal_file) as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                entry = json.loads(line)
-                index = entry["index"]
-                result_b64 = entry["result"]
-                result = pickle.loads(base64.b64decode(result_b64))
-                done[index] = result
+    for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
+        try:
+            with h5py.File(worker_file, "r") as f:
+                for key, value in iter_dict_attr_entries(f, "results"):
+                    done[key] = value
+        except (BlockingIOError, OSError):
+            # Transient lock conflict (e.g., concurrent writer opening/closing
+            # the file) -- skip this file for now, it will be retried
+            continue
     return done
-
-
-def _worker_id() -> str:
-    """Get hostname_pid worker identifier."""
-    return f"{socket.gethostname()}_{os.getpid()}"
-
-
-def _serialize_result(result: Any) -> str:
-    """Serialize result to base64-encoded pickle string."""
-    return base64.b64encode(pickle.dumps(result)).decode("ascii")
 
 
 def _run_serial(
@@ -439,18 +454,14 @@ def _run_serial(
     pbar: Any,
 ) -> dict[int, Any]:
     """Execute remaining items serially. Returns {index: result} for in-memory results."""
+    import time
+
     shot_executor = resolve_shot_executor(
         parallel_strategy.shot_executor
         if parallel_strategy is not None
         else None
     )
     results_dict: dict[int, Any] = {}
-
-    # Open journal file for serial execution (self-journaling)
-    journal_file = None
-    if item_checkpoint_dir is not None:
-        journal_path = item_checkpoint_dir / f"journal_{_worker_id()}.jsonl"
-        journal_file = open(journal_path, "a")
 
     try:
         for index, item in remaining:
@@ -463,13 +474,32 @@ def _run_serial(
 
             results_dict[index] = result
 
-            if journal_file is not None:
-                entry = {
-                    "index": index,
-                    "result": _serialize_result(result),
-                }
-                journal_file.write(json.dumps(entry) + "\n")
-                journal_file.flush()
+            # Checkpoint result to worker file
+            if item_checkpoint_dir is not None:
+                worker_file_path = (
+                    item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+                )
+                # Retry mechanism for transient HDF5 file locking issues
+                # in parallel dispatch (max ~0.15s total delay)
+                max_retries = 5
+                for attempt in range(max_retries):
+                    try:
+                        with h5py.File(worker_file_path, "a") as f:
+                            merge_dict_attr(
+                                f,
+                                "results",
+                                [(index, result)],
+                                key_use_dataset=True,
+                                value_use_dataset=False,
+                            )
+                        break
+                    except (BlockingIOError, OSError):
+                        if attempt < max_retries - 1:
+                            time.sleep(
+                                0.01 * (2**attempt)
+                            )  # Exponential backoff: 0.01, 0.02, 0.04, 0.08
+                        else:
+                            raise
 
             if on_item_done is not None:
                 on_item_done(index, item, result)
@@ -477,10 +507,61 @@ def _run_serial(
             if pbar is not None:
                 pbar.update(1)
     finally:
-        if journal_file is not None:
-            journal_file.close()
+        pass
 
     return results_dict
+
+
+def _mark_observed_and_notify(
+    index: int,
+    result: Any,
+    observed_indices: set[int],
+    items_map: dict[int, Any],
+    on_item_done: Callable[[int, Any, Any], None] | None,
+    pbar: Any,
+) -> None:
+    """Record `index` as observed and fire `on_item_done`/`pbar` exactly
+    once for it -- shared between live polling and the post-dispatch
+    fallback pass, so an index is never double-notified regardless of
+    which path first sees it."""
+    if index in observed_indices:
+        return
+    observed_indices.add(index)
+    if index in items_map:
+        item = items_map[index]
+        if on_item_done is not None:
+            on_item_done(index, item, result)
+        if pbar is not None:
+            pbar.update(1)
+
+
+def _poll_one_worker_file(
+    worker_file: Path,
+    consumed_count: int,
+    observed_indices: set[int],
+    items_map: dict[int, Any],
+    on_item_done: Callable[[int, Any, Any], None] | None,
+    pbar: Any,
+) -> int:
+    """Read this worker file's entries past `consumed_count`, notifying for
+    each one, and return the file's updated consumed count.
+
+    A transient HDF5 lock conflict (e.g. the worker itself mid-write) is
+    silently tolerated -- the file is simply retried on the next poll tick,
+    at whichever consumed count it last reached here.
+    """
+    try:
+        with h5py.File(worker_file, "r") as f:
+            for key, value in iter_dict_attr_entries(
+                f, "results", start_index=consumed_count
+            ):
+                consumed_count += 1
+                _mark_observed_and_notify(
+                    key, value, observed_indices, items_map, on_item_done, pbar
+                )
+    except (BlockingIOError, OSError):
+        pass
+    return consumed_count
 
 
 def _run_parallel(
@@ -505,22 +586,26 @@ def _run_parallel(
     # Track observed indices to avoid double-counting, seeding with already-done indices
     observed_indices: set[int] = set(already_done_indices or [])
 
+    # Track consumed count per worker file for efficient polling
+    consumed_counts: dict[str, int] = {}
+
     def on_poll() -> None:
-        """Poll journal files and call on_item_done for new results."""
+        """Poll every worker file and notify for any newly-completed items."""
         if item_checkpoint_dir is None:
             return
 
-        done = _read_journal_files(item_checkpoint_dir)
-        for index in sorted(done.keys()):
-            if index not in observed_indices:
-                observed_indices.add(index)
-                result = done[index]
-                if index in items_map:
-                    item = items_map[index]
-                    if on_item_done is not None:
-                        on_item_done(index, item, result)
-                    if pbar is not None:
-                        pbar.update(1)
+        for worker_file in sorted(
+            item_checkpoint_dir.glob("worker_*_runner.h5")
+        ):
+            key = str(worker_file)
+            consumed_counts[key] = _poll_one_worker_file(
+                worker_file,
+                consumed_counts.get(key, 0),
+                observed_indices,
+                items_map,
+                on_item_done,
+                pbar,
+            )
 
     # Each chunk worker resolves this itself; only the raw value is forwarded here.
     shot_executor = (
@@ -566,17 +651,12 @@ def _run_parallel(
         for index, result in chunk_results:
             newly_computed[index] = result
 
-    # For any items not already observed via journal polling (i.e., when item_checkpoint_dir
+    # For any items not already observed via worker file polling (i.e., when item_checkpoint_dir
     # is None), invoke on_item_done now so callers can collect results via the callback
     for index, result in newly_computed.items():
-        if index not in observed_indices:
-            observed_indices.add(index)
-            if index in items_map:
-                item = items_map[index]
-                if on_item_done is not None:
-                    on_item_done(index, item, result)
-                if pbar is not None:
-                    pbar.update(1)
+        _mark_observed_and_notify(
+            index, result, observed_indices, items_map, on_item_done, pbar
+        )
 
     return newly_computed
 
@@ -592,14 +672,10 @@ def _generic_chunk_worker(
 
     Returns list of (index, result) tuples.
     """
+    import time
+
     pin_worker_threads()
     shot_executor = resolve_shot_executor(shot_executor)
-
-    # Open journal file for this worker
-    journal_file = None
-    if item_checkpoint_dir is not None:
-        journal_path = item_checkpoint_dir / f"journal_{_worker_id()}.jsonl"
-        journal_file = open(journal_path, "a")
 
     results = []
     try:
@@ -611,17 +687,35 @@ def _generic_chunk_worker(
                 **static_kwargs,
             )
 
-            if journal_file is not None:
-                entry = {
-                    "index": index,
-                    "result": _serialize_result(result),
-                }
-                journal_file.write(json.dumps(entry) + "\n")
-                journal_file.flush()
+            # Checkpoint result to worker file
+            if item_checkpoint_dir is not None:
+                worker_file_path = (
+                    item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+                )
+                # Retry mechanism for transient HDF5 file locking issues
+                # in parallel dispatch (max ~0.15s total delay)
+                max_retries = 5
+                for attempt in range(max_retries):
+                    try:
+                        with h5py.File(worker_file_path, "a") as f:
+                            merge_dict_attr(
+                                f,
+                                "results",
+                                [(index, result)],
+                                key_use_dataset=True,
+                                value_use_dataset=False,
+                            )
+                        break
+                    except (BlockingIOError, OSError):
+                        if attempt < max_retries - 1:
+                            time.sleep(
+                                0.01 * (2**attempt)
+                            )  # Exponential backoff: 0.01, 0.02, 0.04, 0.08
+                        else:
+                            raise
 
             results.append((index, result))
     finally:
-        if journal_file is not None:
-            journal_file.close()
+        pass
 
     return results

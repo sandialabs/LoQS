@@ -117,6 +117,7 @@ def iter_dict_attr_entries(
     parent_group: h5py.Group,
     attr_name: str,
     decode_cache: dict | None = None,
+    start_index: int = 0,
 ) -> Iterator[tuple[Any, Any]]:
     """Lazily iterate over (key, value) pairs from a dict-shaped HDF5 attribute.
 
@@ -140,11 +141,16 @@ def iter_dict_attr_entries(
     decode_cache : dict | None, optional
         Cache for decoding operations (passed to `Serializable.decode`).
         Enables reference tracking across multiple entries.
+    start_index : int, optional
+        Starting position for iteration (0-based). For groups-format sides,
+        entries below start_index are skipped without decoding. For dataset-
+        format sides, entries are sliced from start_index to the end.
+        Default is 0 (start from the beginning).
 
     Yields
     ------
     tuple[Any, Any]
-        (key, value) pairs in insertion order.
+        (key, value) pairs in insertion order, starting from start_index.
     """
     if attr_name not in parent_group:
         return
@@ -185,11 +191,14 @@ def iter_dict_attr_entries(
         values = _read_iterable_side(
             values_iterable_group, values_storage_format, decode_cache=None
         )
-        for k, v in zip(keys, values):
+        # Slice from start_index onward
+        for k, v in zip(keys[start_index:], values[start_index:]):
             yield k, v
     else:
-        # Decode one value at a time for groups format
+        # Decode one value at a time for groups format, skipping indices below start_index
         for i, key in enumerate(keys):
+            if i < start_index:
+                continue
             value = _decode_group_entry(values_iterable_group, i, decode_cache)
             yield key, value
 

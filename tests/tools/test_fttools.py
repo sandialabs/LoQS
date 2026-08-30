@@ -370,17 +370,11 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
 class TestFaultInjectionRunnerCheckpointing:
     """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""
 
-    def _read_journal_indices(self, ckpt):
-        """Return set of indices journaled as complete in checkpoint dir."""
-        import json
-        journal_files = list(ckpt.glob("journal_*.jsonl"))
-        indices = set()
-        for jfile in journal_files:
-            with open(jfile) as f:
-                for line in f:
-                    entry = json.loads(line)
-                    indices.add(entry["index"])
-        return indices
+    def _read_completed_indices(self, ckpt):
+        """Return set of indices completed in checkpoint dir's worker files."""
+        from loqs.tools.programrunner import _read_worker_files
+
+        return set(_read_worker_files(ckpt).keys())
 
     def test_checkpoint_run_matches_non_checkpointed_result(self, tmp_path):
         """Checkpointing doesn't change the result; leaves checkpoint dir."""
@@ -400,7 +394,7 @@ class TestFaultInjectionRunnerCheckpointing:
         assert ckpt.exists()
         assert ckpt.is_dir()
         assert (ckpt / "runner.h5").exists()
-        assert self._read_journal_indices(ckpt) == {0, 1}
+        assert self._read_completed_indices(ckpt) == {0, 1}
 
     def test_existing_checkpoint_with_matching_config_auto_resumes(self, tmp_path):
         """Resumed call with matching config continues from checkpoint."""
@@ -462,7 +456,7 @@ class TestFaultInjectionRunnerCheckpointing:
         )
         failed1 = runner1.run()
         assert failed1 == []
-        assert self._read_journal_indices(ckpt) == {0}
+        assert self._read_completed_indices(ckpt) == {0}
 
         # Second: resume with all programs, verify only index 1 runs
         built_indices = []
@@ -485,7 +479,7 @@ class TestFaultInjectionRunnerCheckpointing:
             assert failed2 == []
             # Only index 1 should have been built (index 0 already done)
             assert built_indices == [1]
-            assert self._read_journal_indices(ckpt) == {0, 1}
+            assert self._read_completed_indices(ckpt) == {0, 1}
         finally:
             fttools._run_one_program = original_run_one_program
 
@@ -504,20 +498,35 @@ class TestFaultInjectionRunnerCheckpointing:
         )
         failed1 = runner1.run()
         assert failed1 == []
-        assert self._read_journal_indices(ckpt) == {0, 1}
+        assert self._read_completed_indices(ckpt) == {0, 1}
 
-        # Simulate a crash by deleting the second program's journal entry
-        # (as if it crashed before being journaled)
-        import json
-        journal_files = list(ckpt.glob("journal_*.jsonl"))
-        for jfile in journal_files:
-            lines = jfile.read_text().strip().split("\n")
-            # Keep only first entry (index 0)
-            with open(jfile, "w") as f:
-                if lines:
-                    f.write(lines[0] + "\n")
+        # Simulate a crash by rewriting each worker file to keep only
+        # index 0 (as if the second program's entry was never durably
+        # checkpointed).
+        import h5py
+        from loqs.internal.streamingmerge import (
+            iter_dict_attr_entries,
+            merge_dict_attr,
+        )
 
-        assert self._read_journal_indices(ckpt) == {0}
+        for wfile in ckpt.glob("worker_*_runner.h5"):
+            with h5py.File(wfile, "r") as f:
+                kept = [
+                    (k, v)
+                    for k, v in iter_dict_attr_entries(f, "results")
+                    if k == 0
+                ]
+            wfile.unlink()
+            with h5py.File(wfile, "a") as f:
+                merge_dict_attr(
+                    f,
+                    "results",
+                    kept,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+        assert self._read_completed_indices(ckpt) == {0}
 
         # Resume should re-run the missing program
         runner2 = fttools.FaultInjectionRunner(
@@ -529,7 +538,7 @@ class TestFaultInjectionRunnerCheckpointing:
         )
         failed2 = runner2.run()
         assert failed2 == []
-        assert self._read_journal_indices(ckpt) == {0, 1}
+        assert self._read_completed_indices(ckpt) == {0, 1}
 
     def test_genuine_crash_recovery_via_read_and_run(self, tmp_path):
         """Simulate crash partway, recover via FaultInjectionRunner.read().run()."""
@@ -563,7 +572,7 @@ class TestFaultInjectionRunnerCheckpointing:
             fttools._run_one_program = original_run_one_program
 
         # Verify partial completion: only index 0 journaled
-        assert self._read_journal_indices(ckpt) == {0}
+        assert self._read_completed_indices(ckpt) == {0}
 
         # Recover via .read().run()
         runner2 = fttools.FaultInjectionRunner.read(ckpt / "runner.h5")
@@ -571,7 +580,7 @@ class TestFaultInjectionRunnerCheckpointing:
         assert failed2 == []
 
         # All items should now be journaled
-        assert self._read_journal_indices(ckpt) == {0, 1, 2}
+        assert self._read_completed_indices(ckpt) == {0, 1, 2}
 
     def test_resume_mismatched_num_shots_raises(self, tmp_path):
         """Mismatched num_shots on resume raises ValueError naming the field."""

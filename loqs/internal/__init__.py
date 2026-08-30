@@ -9,6 +9,9 @@
 
 """Utility classes and functions for LoQS."""
 
+import os
+import socket
+
 from .serializable import (
     Serializable,
     SERIALIZATION_VERSION,
@@ -18,3 +21,10 @@ from .serializable import (
 
 # Must be after Serializable
 from .displayable import Displayable
+
+
+def worker_id() -> str:
+    """Return this process's `hostname_pid` worker identity string, used to
+    key per-writer checkpoint files across LoQS's parallel dispatch
+    mechanisms."""
+    return f"{socket.gethostname()}_{os.getpid()}"
