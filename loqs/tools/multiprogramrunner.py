@@ -16,7 +16,7 @@ import functools
 import h5py
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from tqdm import tqdm
 
@@ -71,6 +71,10 @@ class MultiProgramRunner(Serializable):
         "poll_interval",
         "show_progress",
     ]
+
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
+        {"_reduced_results", "_program_results"}
+    )
 
     def __init__(
         self,
@@ -148,13 +152,24 @@ class MultiProgramRunner(Serializable):
         return obj
 
     def _validate_checkpoint_kwargs(self) -> None:
-        """Validate that checkpoint_batch_size requires shot_checkpoint_dir."""
+        """Validate checkpoint-related configuration constraints."""
         if (
             self.checkpoint_batch_size is not None
             and self.shot_checkpoint_dir is None
         ):
             raise ValueError(
                 "checkpoint_batch_size requires shot_checkpoint_dir to be set"
+            )
+        if self.keep_shot_results and self.item_checkpoint_dir is None:
+            raise ValueError(
+                "keep_shot_results requires item_checkpoint_dir to be set"
+            )
+        if self.keep_shot_results and self.checkpoint_batch_size is None:
+            raise ValueError(
+                "keep_shot_results requires checkpoint_batch_size (and "
+                "shot_checkpoint_dir) to be set, so kept results are read "
+                "back from each item's own on-disk shot checkpoint rather "
+                "than held fully in memory for every item at once"
             )
 
     def run(self) -> Any:
@@ -202,6 +217,11 @@ class MultiProgramRunner(Serializable):
             # to trust this directory's state rather than tripping its own
             # pre-existing-content guard on the file just written above.
             resuming = True
+
+        # Seed _reduced_results from prior run if resuming, to avoid duplicates
+        # when replaying already-done items (merge_dict_attr is append-only)
+        if stored is not None:
+            self._reduced_results = dict(stored._reduced_results)
 
         # Pre-assign indices via item_key_fn, adopting the persisted map
         # from `stored` first so a fresh resumed instance doesn't reassign
@@ -320,20 +340,20 @@ class MultiProgramRunner(Serializable):
                 )
                 # Consolidate _program_results if keep_shot_results is enabled
                 if self.keep_shot_results:
-                    self._program_results = _read_worker_files(
-                        self.item_checkpoint_dir, attr_name="_program_results"
-                    )
-                    # Convert to lazy-loaded ProgramResults if enabled
+                    _consolidate_program_results(self.item_checkpoint_dir)
                     if self.lazy_loading_enabled:
-                        from loqs.core.programresults import ProgramResults
-
                         runner_path = self.item_checkpoint_dir / "runner.h5"
                         self._program_results = {
                             index: self._make_lazy_program_results(
                                 runner_path, index
                             )
-                            for index in self._program_results.keys()
+                            for index in final_done.keys()
                         }
+                    else:
+                        self._program_results = _read_worker_files(
+                            self.item_checkpoint_dir,
+                            attr_name="_program_results",
+                        )
             else:
                 # No checkpointing, combine prior done + newly computed
                 final_done = done.copy()
@@ -384,14 +404,29 @@ class MultiProgramRunner(Serializable):
 
     def _merge_reduced_result(self, index: int, value: Any) -> None:
         """Merge one item's reduced result into `_reduced_results`, persisted
-        incrementally into `runner.h5` via the streaming-merge primitives."""
+        incrementally into `runner.h5` via the streaming-merge primitives.
+
+        If the index is already present in `self._reduced_results`, returns
+        immediately without writing to disk (avoids duplicate entries when
+        replaying already-done items on resume, since merge_dict_attr is
+        append-only). Otherwise, updates in memory and persists to disk.
+        """
+        # Check if already present to avoid duplicates on resume
+        if index in self._reduced_results:
+            return
+
+        # Update in-memory dict first
+        self._reduced_results[index] = value
+
+        # Persist to disk if checkpointing is enabled
         if self.item_checkpoint_dir is None:
             return
 
         runner_path = self.item_checkpoint_dir / "runner.h5"
         with h5py.File(runner_path, "a") as f:
+            obj_grp = _get_runner_object_group(f)
             merge_dict_attr(
-                f,
+                obj_grp,
                 "_reduced_results",
                 [(index, value)],
                 key_use_dataset=True,
@@ -501,6 +536,76 @@ def _read_worker_files(
     return done
 
 
+def _get_runner_object_group(f: h5py.File) -> h5py.Group:
+    """Navigate to the MultiProgramRunner object group inside runner.h5."""
+    root = f[next(iter(f.keys()))]
+    if len(root.keys()) > 0:
+        first_child = root[next(iter(root.keys()))]
+        if (
+            isinstance(first_child, h5py.Group)
+            and first_child.attrs.get("encode_type") == "Serializable"
+        ):
+            return first_child
+    return root
+
+
+def _consolidate_program_results(checkpoint_dir: Path) -> None:
+    """Consolidate _program_results from all worker files into runner.h5.
+
+    Streams one item at a time from worker files into runner.h5's object group,
+    keeping memory bounded. Skips indices already present in runner.h5's
+    _program_results attribute to avoid duplicate entries on resume.
+    """
+    runner_path = checkpoint_dir / "runner.h5"
+    if not runner_path.exists():
+        return
+
+    with h5py.File(runner_path, "a") as out_f:
+        if len(out_f.keys()) == 0:
+            return
+        out_root = _get_runner_object_group(out_f)
+        existing_keys: set[int] = set()
+        if "_program_results" in out_root:
+            pr_grp = out_root["_program_results"]
+            if (
+                "dict" in pr_grp
+                and "keys" in pr_grp["dict"]
+                and "iterable" in pr_grp["dict/keys"]
+            ):
+                keys_iterable = pr_grp["dict/keys/iterable"]
+                storage_format = keys_iterable.attrs.get(
+                    "storage_format", "groups"
+                )
+                from loqs.internal.streamingmerge import _read_iterable_side
+
+                existing_keys = set(
+                    _read_iterable_side(
+                        keys_iterable, storage_format, decode_cache=None
+                    )
+                )
+
+        for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
+            try:
+                with h5py.File(worker_file, "r") as in_f:
+                    if "_program_results" in in_f:
+                        for key, pr in iter_dict_attr_entries(
+                            in_f, "_program_results"
+                        ):
+                            if key in existing_keys:
+                                continue
+                            merge_dict_attr(
+                                out_root,
+                                "_program_results",
+                                [(key, pr)],
+                                encode_cache={},
+                                key_use_dataset=True,
+                                value_use_dataset=False,
+                            )
+                            existing_keys.add(key)
+            except (BlockingIOError, OSError):
+                continue
+
+
 def _write_dict_entry_with_retry(
     worker_file_path: Path,
     attr_name: str,
@@ -534,6 +639,7 @@ def _write_dict_entry_with_retry(
                     f,
                     attr_name,
                     [(index, value)],
+                    encode_cache={},
                     key_use_dataset=True,
                     value_use_dataset=False,
                 )

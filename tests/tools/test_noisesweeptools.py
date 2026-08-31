@@ -277,52 +277,6 @@ class TestRun:
         with pytest.raises(ValueError):
             make_runner([0.0, 0.1], seed_stride=3, num_shots=5)
 
-    def test_keep_program_results_requires_dir(self):
-        with pytest.raises(ValueError):
-            make_runner(
-                [0.0, 0.1],
-                seed_stride=5,
-                num_shots=5,
-                keep_program_results=True,
-                verbose=False,
-            )
-
-    def test_keep_program_results_fixed_dir(self, tmp_path):
-        base = tmp_path / "results.json"
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            keep_program_results=True,
-            program_results_dir=base,
-            verbose=False,
-        )
-        result = runner.run()
-        assert result.program_results_paths is not None
-        assert len(result.program_results_paths) == 2
-        for index, path in enumerate(result.program_results_paths):
-            assert path == str(tmp_path / f"results_sweep_{index}.json")
-            loaded = result.load_program_results(index)
-            assert isinstance(loaded, ProgramResults)
-
-    def test_keep_program_results_callable_dir_no_suffix(self, tmp_path):
-        def dir_for(strength):
-            return str(tmp_path / f"custom_{strength}.json")
-
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            keep_program_results=True,
-            program_results_dir=dir_for,
-            verbose=False,
-        )
-        result = runner.run()
-        assert result.program_results_paths == [
-            str(tmp_path / "custom_0.0.json"),
-            str(tmp_path / "custom_0.1.json"),
-        ]
-
     def test_run_kwargs_forwarded_and_resolved(self):
         seen_names = []
 
@@ -573,14 +527,16 @@ class TestRunParallel:
             NoiseSweepRunner.build_program = real_build_program
 
         # After the crash, only indices 0 and 1 completed; verify the
-        # partial result has the new sparse array model: full-length with
-        # None placeholders for incomplete indices.
-        partial_result = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
-        assert len(partial_result.failure_rates) == 4  # Full-length array
-        assert partial_result.failure_rates[0] is not None
-        assert partial_result.failure_rates[1] is not None
-        assert partial_result.failure_rates[2] is None  # Crashed at index 2
-        assert partial_result.failure_rates[3] is None  # Never dispatched
+        # partial state via worker files. result.h5 is never written on a
+        # crash (only in _finalize), so read the completed work from the
+        # worker_*_runner.h5 files via _read_worker_files instead.
+        from loqs.tools.multiprogramrunner import _read_worker_files
+        completed = _read_worker_files(item_checkpoint_dir)
+        assert len(completed) == 2  # Only 0 and 1 completed
+        assert 0 in completed
+        assert 1 in completed
+        assert 2 not in completed
+        assert 3 not in completed
 
         # ParallelStrategy.make_chunks (in loqs.tools.paralleltools, not
         # noisesweeptools) is what actually calls chunk_round_robin now.
@@ -763,19 +719,6 @@ class TestResume:
         loaded = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
         assert loaded.is_complete
 
-    def test_keep_program_results_and_resume_are_independent(self, tmp_path):
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
-            keep_program_results=False,
-        )
-        result = runner.run()
-        assert result.program_results_paths is None
-
 
 class TestFromNoiseSweepRunner:
     def test_from_noise_sweep_runner_with_single_override(self, tmp_path):
@@ -861,28 +804,14 @@ class TestNoiseSweepResult:
         loaded = NoiseSweepResult.read(path)
         assert not loaded.is_complete
         assert len(loaded.failure_rates) == 3  # Always full-length
-        assert loaded.completed_indices == [0, 2]
-
-    def test_load_program_results(self, tmp_path):
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            keep_program_results=True,
-            program_results_dir=tmp_path / "pr.json",
-            verbose=False,
-        )
-        result = runner.run()
-        pr = result.load_program_results(0)
-        assert isinstance(pr, ProgramResults)
-        assert len(pr.shot_histories) == 5
-
-    def test_load_program_results_raises_without_paths(self):
-        result = NoiseSweepResult(
-            strengths=[0.0], failure_rates=[0.0], stderrs=[0.0], num_shots=5
-        )
-        with pytest.raises(ValueError):
-            result.load_program_results(0)
+        # Check sparse array model directly: completed indices have values,
+        # incomplete indices have None
+        assert loaded.failure_rates[0] is not None
+        assert loaded.failure_rates[1] is None
+        assert loaded.failure_rates[2] is not None
+        assert loaded.stderrs[0] is not None
+        assert loaded.stderrs[1] is None
+        assert loaded.stderrs[2] is not None
 
     def test_mismatched_lengths_raise(self):
         with pytest.raises(ValueError):
@@ -1110,3 +1039,37 @@ class TestNoiseSweepRunnerShotCheckpointing:
                 shot_checkpoint_dir="/tmp/dummy",
                 run_kwargs={"checkpoint_dir": "/tmp/also_dummy"},
             )
+
+    def test_keep_shot_results_end_to_end(self, tmp_path):
+        """NoiseSweepRunner with keep_shot_results=True retains full
+        ProgramResults objects for each sweep point in runner._program_results,
+        accessible after the run completes."""
+        item_checkpoint_dir = tmp_path / "checkpoint"
+
+        runner = make_runner(
+            [0.0, 0.1],
+            seed_stride=10,
+            num_shots=5,
+            verbose=False,
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=tmp_path / "shot_checkpoint",
+            checkpoint_batch_size=2,
+            keep_shot_results=True,
+            lazy_loading_enabled=False,  # Disable lazy loading for now
+        )
+        result = runner.run()
+
+        # After run completes, runner._program_results should be populated
+        assert len(runner._program_results) == 2
+        assert 0 in runner._program_results
+        assert 1 in runner._program_results
+
+        # Each retained ProgramResults should have the expected shot data
+        for index in [0, 1]:
+            pr = runner._program_results[index]
+            assert isinstance(pr, ProgramResults)
+            assert len(pr.shot_histories) == 5
+
+        # The returned result itself should be complete (independent of keep_shot_results)
+        assert result.is_complete
+        assert len(result.failure_rates) == 2

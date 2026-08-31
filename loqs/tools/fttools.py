@@ -415,8 +415,12 @@ def _run_one_program(
     shot_checkpoint_dir: str | Path | None,
     checkpoint_batch_size: int | None,
     lazy_loading_enabled: bool,
-) -> bool:
+    keep_shot_results: bool = False,
+) -> bool | tuple[bool, Any]:
     """Run one program via test_program_output, returning success flag.
+
+    When `keep_shot_results=False` (default), returns the bare bool.
+    When `keep_shot_results=True`, returns (success, program_results).
 
     Matches _run_one_circuit's shape: (item, index, *, shot_executor,
     **static_kwargs) -> result_bool. Each program gets its own isolated
@@ -437,6 +441,7 @@ def _run_one_program(
         checkpoint_batch_size=checkpoint_batch_size,
         checkpoint_dir=item_shot_checkpoint_dir,
         lazy_loading_enabled=lazy_loading_enabled,
+        return_program_results=keep_shot_results,
     )
 
 
@@ -488,7 +493,6 @@ class FaultInjectionRunner(MultiProgramRunner):
         self.collect_shot_data_args = collect_shot_data_args
         self.expected_outcomes = expected_outcomes
         self.num_shots = num_shots
-        self._failed_indices: list[int] = []
 
     def _get_items(self) -> Sequence:
         """Return programs to test."""
@@ -516,22 +520,26 @@ class FaultInjectionRunner(MultiProgramRunner):
     def _make_on_item_done(
         self,
     ) -> Callable[[int, QuantumProgram, bool], None]:
-        """Build callback to track failed program indices."""
-        failed_indices = []
+        """Return a closure that merges each program's success bool into the
+        shared `_reduced_results` accumulator."""
 
         def on_item_done(
             index: int, program: QuantumProgram, success: bool
         ) -> None:
-            if not success:
-                failed_indices.append(index)
+            self._merge_reduced_result(index, success)
 
-        self._failed_indices = failed_indices
         return on_item_done
 
     def _finalize(self, result_list: list[bool]) -> list[QuantumProgram]:
-        """Return failed programs (same objects from input, matched by index)."""
+        """Return failed programs (same objects from input, matched by index).
+
+        Builds the failed list from `_reduced_results`, which holds success
+        bools indexed by program position.
+        """
         failed = [
-            self.errored_programs[i] for i in sorted(set(self._failed_indices))
+            self.errored_programs[i]
+            for i, success in self._reduced_results.items()
+            if not success
         ]
 
         if len(failed):
@@ -553,6 +561,19 @@ class FaultInjectionRunner(MultiProgramRunner):
             "expected_outcomes",
         ]
 
+    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
+        """Return the checkpoint directory for a specific program's shots.
+
+        Returns a per-program subdirectory under shot_checkpoint_dir keyed by
+        the program index, or None if shot-level checkpointing is not enabled.
+        """
+        if (
+            self.shot_checkpoint_dir is not None
+            and self.checkpoint_batch_size is not None
+        ):
+            return _item_checkpoint_subdir(self.shot_checkpoint_dir, index)
+        return None
+
 
 def test_program_output(
     test_program: QuantumProgram,
@@ -564,7 +585,8 @@ def test_program_output(
     checkpoint_batch_size: int | None = None,
     checkpoint_dir: str | Path | None = None,
     lazy_loading_enabled: bool = True,
-) -> bool:
+    return_program_results: bool = False,
+) -> bool | tuple[bool, Any]:
     """Test a program against expected output.
 
     Parameters
@@ -603,10 +625,17 @@ def test_program_output(
         Forwarded to [](api:QuantumProgram.run) for lazy loading.
         Defaults to `True`.
 
+    return_program_results : bool, optional
+        If `True`, return `(success, program_results)` instead of the bare bool.
+        Defaults to `False`.
+
     Returns
     -------
-    bool
-        `True` if all outputs match expected, `False` on failure
+    bool | tuple[bool, ProgramResults]
+        When `return_program_results=False` (default): `True` if all outputs
+        match expected, `False` on failure.
+        When `return_program_results=True`: `(success, program_results)` tuple
+        with the same success boolean and the full `ProgramResults` object.
     """
     run_kwargs = {
         "num_shots": num_shots,
@@ -621,6 +650,7 @@ def test_program_output(
 
     program_results = test_program.run(**run_kwargs)
 
+    success = True
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
         outs = HistoryDataCollector.from_raw(args).collect(program_results)
@@ -629,5 +659,11 @@ def test_program_output(
                 if verbose:
                     print(f"Output:   {out}")
                     print(f"Expected: {expected}")
-                return False
-    return True
+                success = False
+                break
+        if not success:
+            break
+
+    if return_program_results:
+        return success, program_results
+    return success

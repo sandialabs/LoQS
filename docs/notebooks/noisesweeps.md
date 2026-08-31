@@ -311,13 +311,17 @@ runner_with_override = NoiseSweepRunner(
 )
 ```
 
-## Keeping raw shot data with `keep_program_results`
+## Keeping raw shot data with `keep_shot_results`
 
 By default, each sweep point's raw `ProgramResults` (the full per-shot histories) is discarded as
 soon as its failure rate has been extracted -- only the summary `NoiseSweepResult` is kept. If you
 want to dig into the raw shot data later (e.g. to try a different pass/fail criterion without
-re-running anything), pass `keep_program_results=True` along with `program_results_dir`, a path
-stem that gets a `_sweep_<index>` suffix inserted for each point.
+re-running anything), construct the `NoiseSweepRunner` with `keep_shot_results=True`, an
+`item_checkpoint_dir`, and shot-level checkpointing (`checkpoint_batch_size`/
+`shot_checkpoint_dir`) -- the last of these is required specifically so kept results are read back
+from each point's own on-disk shot checkpoint on demand rather than held fully in memory for every
+point at once. The kept results are accessible via the retained runner instance's
+`_program_results` dict, indexed by point number.
 
 ```{code-cell} ipython3
 runner_kept = NoiseSweepRunner(
@@ -331,20 +335,23 @@ runner_kept = NoiseSweepRunner(
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
-    keep_program_results=True,
-    program_results_dir="steane_zsweep_shots.json",
+    item_checkpoint_dir="steane_zsweep_kept_shots",
+    checkpoint_batch_size=5,
+    shot_checkpoint_dir="steane_zsweep_kept_shots_data",
+    keep_shot_results=True,
 )
 
 result_kept = runner_kept.run()
-result_kept.program_results_paths
+# Access the raw ProgramResults for each sweep point via the runner instance
+print(list(runner_kept._program_results.keys()))
 ```
 
 ```{code-cell} ipython3
 from collections import Counter
 
-# Re-load the raw ProgramResults for the strength=0.12 point (index 3, the noisiest one we
-# swept) and look at the distribution of raw outcomes, rather than just the pass/fail rate.
-raw_results = result_kept.load_program_results(3)
+# Look at the raw ProgramResults for the strength=0.12 point (index 3, the noisiest one we
+# swept) and examine the distribution of raw outcomes, rather than just the pass/fail rate.
+raw_results = runner_kept._program_results[3]
 Counter(raw_results.collect_shot_data("logical_measurement", -1))
 ```
 

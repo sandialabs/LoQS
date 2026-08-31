@@ -681,6 +681,41 @@ class TestFaultInjectionRunnerCheckpointing:
         failed2 = runner2.run()
         assert failed2 == []
 
+    def test_keep_shot_results_end_to_end(self, tmp_path):
+        """FaultInjectionRunner with keep_shot_results=True retains full
+        ProgramResults objects for each program in runner._program_results,
+        accessible after the run completes."""
+        program = _build_counter_program()
+        item_checkpoint_dir = tmp_path / "checkpoint"
+
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=5,
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=tmp_path / "shot_checkpoint",
+            checkpoint_batch_size=2,
+            keep_shot_results=True,
+            lazy_loading_enabled=False,  # Disable lazy loading for now
+        )
+        failed = runner.run()
+
+        # After run completes, runner._program_results should be populated
+        assert len(runner._program_results) == 2
+        assert 0 in runner._program_results
+        assert 1 in runner._program_results
+
+        # Each retained ProgramResults should have the expected shot data
+        from loqs.core import ProgramResults
+        for index in [0, 1]:
+            pr = runner._program_results[index]
+            assert isinstance(pr, ProgramResults)
+            assert len(pr.shot_histories) == 5
+
+        # Both programs should have succeeded (not in failed list)
+        assert failed == []
+
 
 class TestProgramOutput:
 

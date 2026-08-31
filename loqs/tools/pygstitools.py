@@ -46,7 +46,7 @@ try:
     from pygsti.baseobjs import Label
     from pygsti.circuits import Circuit
     from pygsti.data import DataSet
-    from pygsti.io import read_dataset, write_dataset
+    from pygsti.io import write_dataset
     from pygsti.protocols import ExperimentDesign
     from pygsti.models import ExplicitOpModel
 except ImportError as e:
@@ -125,12 +125,15 @@ def _run_one_circuit(
     shot_checkpoint_dir: str | Path | None,
     checkpoint_batch_size: int | None,
     lazy_loading_enabled: bool,
-) -> dict[tuple, int]:
+    keep_shot_results: bool = False,
+) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
     """Build, run, and reduce one circuit to a count dict.
 
-    Returns the count_dict for this circuit. The circuit itself is passed
-    separately by `MultiProgramRunner._run_dispatch` and available to `on_item_done`
-    via its `item` parameter, so it's not included in the return value.
+    When `keep_shot_results=False` (default), returns the count_dict for this
+    circuit. The circuit itself is passed separately by `MultiProgramRunner._run_dispatch`
+    and available to `on_item_done` via its `item` parameter.
+
+    When `keep_shot_results=True`, returns (count_dict, program_results) instead.
     """
     program = _build_program_for_circuit(
         circ, physical_model, label_to_logical, **program_kwargs
@@ -154,6 +157,10 @@ def _run_one_circuit(
     )
     counts = Counter(outcomes)
     count_dict = {(str(k),): v for k, v in counts.items()}
+
+    if keep_shot_results:
+        return count_dict, program_results
+
     del program, program_results
     return count_dict
 
@@ -298,53 +305,6 @@ def _checkpoint_provenance_comment(
     )
 
 
-def _outcome_label_to_str(outcome_label: str | tuple) -> str:
-    """Render an outcome label the same way pyGSTi's own text `DataSet` writer
-    does (`pygsti.io.writers.write_dataset`'s private `_outcome_to_str`), so a
-    hand-appended checkpoint row matches what `write_dataset` would have
-    produced for that row.
-    """
-    if isinstance(outcome_label, str):
-        return outcome_label
-    return ":".join(str(part) for part in outcome_label)
-
-
-def _append_checkpoint_row(
-    checkpoint_path: Path,
-    circ: Circuit,
-    count_dict: Mapping[tuple, int],
-) -> None:
-    """Append one circuit's counts as a single self-describing row to an
-    existing checkpoint file, matching pyGSTi's own expanded
-    (`fixed_column_mode=False`, trivial-time) text `DataSet` row format so
-    `pygsti.io.read_dataset` can read it back unchanged. This touches no
-    prior row -- unlike calling `pygsti.io.write_dataset` again, which
-    rewrites the whole file from scratch.
-    """
-    row = (
-        circ.str
-        + "  "
-        + "  ".join(
-            f"{_outcome_label_to_str(ol)}:{count:g}"
-            for ol, count in count_dict.items()
-        )
-    )
-    with open(checkpoint_path, "a") as f:
-        f.write(row + "\n")
-
-
-def _drop_incomplete_checkpoint_row(checkpoint_path: Path) -> None:
-    """Drop a trailing incomplete line left by a crash mid-write, so the
-    checkpoint file parses as a valid pyGSTi `DataSet` again. Every complete
-    row is written by a single call ending in a newline, so a file that
-    doesn't end in one has a final row that was never finished; that row's
-    circuit is simply absent afterward and gets redone from scratch.
-    """
-    text = checkpoint_path.read_text()
-    if text and not text.endswith("\n"):
-        checkpoint_path.write_text(text.rsplit("\n", 1)[0] + "\n")
-
-
 class EdesignRunner(MultiProgramRunner):
     """Runner for simulating edesign circuits into a DataSet with crash recovery.
 
@@ -476,90 +436,65 @@ class EdesignRunner(MultiProgramRunner):
         }
 
     def _make_on_item_done(self) -> Callable[[int, Circuit, dict], None]:
-        """Build the per-circuit `DataSet`/checkpoint accumulator and return
-        the `on_item_done` callback that populates it.
-
-        `item_checkpoint_dir`, if set, is a directory holding a plain-text
-        `dataset.txt` appended one row per circuit as results complete; an
-        incomplete trailing row from a prior crash is dropped and that
-        circuit redone from scratch, never resumed partway through its own
-        shots.
+        """Return a closure that merges each circuit's count_dict into the
+        shared `_reduced_results` accumulator via `_merge_reduced_result`.
         """
-        dataset_path = None
-        self._already_persisted: set[str] = set()
-        dataset_file_created = [False]
 
-        if self.item_checkpoint_dir is not None:
-            dataset_path = self.item_checkpoint_dir / "dataset.txt"
-
-            if dataset_path.exists():
-                _drop_incomplete_checkpoint_row(dataset_path)
-                loaded_ds = read_dataset(str(dataset_path), verbosity=0)
-                self._already_persisted = {c.str for c in loaded_ds}
-                dataset_file_created[0] = True
-                n_keys = (
-                    len(self.collect_shot_data_args)
-                    if isinstance(self.collect_shot_data_args, list)
-                    else 1
-                )
-                self._edesign_runner_ds = DataSet()
-                self._edesign_runner_ds.add_std_nqubit_outcome_labels(n_keys)
-                self._edesign_runner_ds.comment = loaded_ds.comment
-            else:
-                # Fresh start.
-                n_keys = (
-                    len(self.collect_shot_data_args)
-                    if isinstance(self.collect_shot_data_args, list)
-                    else 1
-                )
-                self._edesign_runner_ds = DataSet()
-                self._edesign_runner_ds.add_std_nqubit_outcome_labels(n_keys)
-                self._edesign_runner_ds.comment = (
-                    _checkpoint_provenance_comment(
-                        self.num_shots,
-                        self.collect_shot_data_args,
-                        self.physical_to_logical,
-                    )
-                )
-        else:
-            # No checkpointing.
-            n_keys = (
-                len(self.collect_shot_data_args)
-                if isinstance(self.collect_shot_data_args, list)
-                else 1
-            )
-            self._edesign_runner_ds = DataSet()
-            self._edesign_runner_ds.add_std_nqubit_outcome_labels(n_keys)
-
-        # Define and return the on_item_done callback.
         def on_item_done(index: int, circ: Circuit, count_dict: dict) -> None:
-            self._edesign_runner_ds.add_count_dict(circ, count_dict)
-            if (
-                dataset_path is not None
-                and circ.str not in self._already_persisted
-            ):
-                if not dataset_file_created[0]:
-                    # Write empty dataset (header/comment only) before first
-                    # row, so the row is never written twice.
-                    dataset_path.parent.mkdir(parents=True, exist_ok=True)
-                    empty_ds = DataSet()
-                    empty_ds.add_std_nqubit_outcome_labels(n_keys)
-                    empty_ds.comment = self._edesign_runner_ds.comment
-                    write_dataset(
-                        str(dataset_path),
-                        empty_ds,
-                        fixed_column_mode=False,
-                        with_times=False,
-                    )
-                    dataset_file_created[0] = True
-                # Append this (and every subsequent) row directly.
-                _append_checkpoint_row(dataset_path, circ, count_dict)
+            self._merge_reduced_result(index, count_dict)
 
         return on_item_done
 
     def _finalize(self, result_list: list) -> Any:
-        """Return the accumulated DataSet."""
-        return self._edesign_runner_ds
+        """Build and return the final DataSet from `_reduced_results`.
+
+        Iterates through circuits in original order, mapping each to its
+        index via `index_map` (if set), looks up its count_dict in
+        `_reduced_results`, and adds it to a fresh DataSet. Sets the
+        DataSet's comment via `_checkpoint_provenance_comment` if
+        checkpointing is enabled, and writes it once to disk if
+        `item_checkpoint_dir` is set.
+        """
+        # Build the final DataSet
+        n_keys = (
+            len(self.collect_shot_data_args)
+            if isinstance(self.collect_shot_data_args, list)
+            else 1
+        )
+        ds = DataSet()
+        ds.add_std_nqubit_outcome_labels(n_keys)
+
+        # Iterate through circuits in original order
+        for pos, circ in enumerate(self._get_items()):
+            # Determine index: use index_map if set, else plain position
+            if self.index_map is not None:
+                index = self.index_map[circ.str]
+            else:
+                index = pos
+
+            # Get count_dict from _reduced_results
+            if index in self._reduced_results:
+                count_dict = self._reduced_results[index]
+                ds.add_count_dict(circ, count_dict)
+
+        # Set comment if checkpointing is enabled
+        if self.item_checkpoint_dir is not None:
+            ds.comment = _checkpoint_provenance_comment(
+                self.num_shots,
+                self.collect_shot_data_args,
+                self.physical_to_logical,
+            )
+            # Write dataset once to disk
+            dataset_path = self.item_checkpoint_dir / "dataset.txt"
+            dataset_path.parent.mkdir(parents=True, exist_ok=True)
+            write_dataset(
+                str(dataset_path),
+                ds,
+                fixed_column_mode=False,
+                with_times=False,
+            )
+
+        return ds
 
     def _mismatch_check_fields(self) -> list[str]:
         """Return fields to check for resume mismatch."""
@@ -569,6 +504,19 @@ class EdesignRunner(MultiProgramRunner):
             "physical_to_logical",
             "max_frame_limit",
         ]
+
+    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
+        """Return the checkpoint directory for a specific circuit's shots.
+
+        Returns a per-circuit subdirectory under shot_checkpoint_dir keyed by
+        the circuit index, or None if shot-level checkpointing is not enabled.
+        """
+        if (
+            self.shot_checkpoint_dir is not None
+            and self.checkpoint_batch_size is not None
+        ):
+            return self.shot_checkpoint_dir / f"item_{index}"
+        return None
 
 
 ## BEGIN VISUALIZATION TOOLS

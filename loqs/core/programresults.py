@@ -170,6 +170,10 @@ class ProgramResults(Displayable):
         call for this object's lifetime, so an object reused across shots is written
         once and cheaply referenced afterward, instead of re-expanded every time."""
 
+        self._checkpoint_decode_cache: dict = {}
+        """Persistent `Serializable.decode` cache shared across lazy shot loading
+        calls for this object's lifetime, so object references across shots resolve."""
+
         # If checkpointing is enabled and parent_program is a QuantumProgram object,
         # write results.h5 (this whole ProgramResults object) if it doesn't already
         # exist, then use it instead of parent_program for cache building
@@ -296,6 +300,18 @@ class ProgramResults(Displayable):
         list
             List of [](api:History.collect_data) outputs per shot
         """
+        if self.shot_histories:
+            histories = list(self.shot_histories.values())
+        elif (
+            hasattr(self, "_lazy_loading_enabled")
+            and self._lazy_loading_enabled
+        ):
+            shot_indices = self._get_available_shot_indices()
+            loaded = [self.get_shot_history(idx) for idx in shot_indices]
+            histories = [h for h in loaded if h is not None]
+        else:
+            histories = []
+
         data = [
             h.collect_data(
                 key,
@@ -303,9 +319,49 @@ class ProgramResults(Displayable):
                 strip_none_entries=strip_none_entries,
                 frame_filter=frame_filter,
             )
-            for h in self.shot_histories.values()
+            for h in histories
         ]
         return Counter(data) if return_counter else data
+
+    def _get_available_shot_indices(self) -> list[int]:
+        """Return the available shot indices for lazy loading: checked first
+        against a nested `runner.h5` shot source, then a standalone
+        checkpoint directory, falling back to `range(num_shots)` (or
+        whatever's already in the in-memory cache) if neither is present.
+        """
+        from loqs.internal.streamingmerge import get_dict_attr_keys
+
+        if (
+            self._nested_source_file is not None
+            and self._nested_source_file.exists()
+        ):
+            try:
+                with h5py.File(self._nested_source_file, "r") as f:
+                    source_group = self._resolve_shot_source_group(f)
+                    if source_group is not None:
+                        keys = get_dict_attr_keys(
+                            source_group, "shot_histories"
+                        )
+                        if keys:
+                            return keys
+            except (KeyError, OSError):
+                pass
+
+        if self._checkpoint_dir is not None and self._checkpoint_dir.exists():
+            checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
+            if checkpoint_file.exists():
+                try:
+                    with h5py.File(checkpoint_file, "r") as f:
+                        keys = get_dict_attr_keys(f, "shot_histories")
+                        if keys:
+                            return keys
+                except (KeyError, OSError):
+                    pass
+
+        if hasattr(self, "num_shots") and self.num_shots is not None:
+            return list(range(self.num_shots))
+
+        return sorted(self._memory_cache.keys())
 
     def mark_shots_as_written(self, shot_indices: list[int]) -> None:
         """Mark shots as having been written to checkpoint files.
@@ -808,15 +864,14 @@ class ProgramResults(Displayable):
             self._nested_source_file is not None
             and self._nested_source_index is not None
         ):
-            # Navigate to the nested source: the file should contain a _program_results
-            # dict attribute at the root group level
-            if len(f.keys()) == 0:
-                return None
-
-            root_group = f[next(iter(f.keys()))]
+            # get_dict_attr_group already navigates past any wrapper levels
+            # (a plain worker scratch file's _program_results sits directly
+            # at file root; a consolidated runner.h5's sits nested under its
+            # own Serializable-encoded object group) via its own internal
+            # `_resolve_dict_target_group` call, so no manual descent here.
             try:
                 source_group = get_dict_attr_group(
-                    root_group, "_program_results", self._nested_source_index
+                    f, "_program_results", self._nested_source_index
                 )
                 return source_group
             except (KeyError, TypeError):
@@ -913,11 +968,14 @@ class ProgramResults(Displayable):
                 # Use get_dict_attr_value to fetch only this one shot
                 # without decoding all others
                 try:
+                    decode_cache = getattr(
+                        self, "_checkpoint_decode_cache", {}
+                    )
                     history = get_dict_attr_value(
                         actual_group,
                         "shot_histories",
                         shot_index,
-                        decode_cache={},
+                        decode_cache=decode_cache,
                     )
                 except KeyError:
                     return False

@@ -113,6 +113,24 @@ def merge_dict_attr(
         )
 
 
+def _resolve_dict_target_group(
+    parent_group: h5py.Group, attr_name: str
+) -> h5py.Group:
+    """Find the group containing attr_name, navigating single-child root wrappers if needed."""
+    if attr_name in parent_group:
+        return parent_group
+    current = parent_group
+    while len(current.keys()) == 1:
+        first_child = current[next(iter(current.keys()))]
+        if isinstance(first_child, h5py.Group):
+            if attr_name in first_child:
+                return first_child
+            current = first_child
+        else:
+            break
+    return parent_group
+
+
 def iter_dict_attr_entries(
     parent_group: h5py.Group,
     attr_name: str,
@@ -152,6 +170,7 @@ def iter_dict_attr_entries(
     tuple[Any, Any]
         (key, value) pairs in insertion order, starting from start_index.
     """
+    parent_group = _resolve_dict_target_group(parent_group, attr_name)
     if attr_name not in parent_group:
         return
 
@@ -201,6 +220,29 @@ def iter_dict_attr_entries(
                 continue
             value = _decode_group_entry(values_iterable_group, i, decode_cache)
             yield key, value
+
+
+def get_dict_attr_keys(parent_group: h5py.Group, attr_name: str) -> list:
+    """Return just the keys of a dict-shaped HDF5 attribute, without decoding
+    any values -- cheaper than `iter_dict_attr_entries` when only the set of
+    present keys is needed (e.g. checking which shot indices exist), since
+    that function always decodes each groups-format value eagerly before
+    yielding its paired key. Returns `[]` if the attribute doesn't exist.
+    """
+    parent_group = _resolve_dict_target_group(parent_group, attr_name)
+    if attr_name not in parent_group:
+        return []
+    dict_group = parent_group[attr_name]
+    if "dict" not in dict_group:
+        return []
+    dict_subgroup = dict_group["dict"]
+    if "keys" not in dict_subgroup or "iterable" not in dict_subgroup["keys"]:
+        return []
+    keys_iterable_group = dict_subgroup["keys"]["iterable"]
+    storage_format = keys_iterable_group.attrs.get("storage_format", "groups")
+    return _read_iterable_side(
+        keys_iterable_group, storage_format, decode_cache=None
+    )
 
 
 def _stream_into_new_dict_attr(
@@ -487,6 +529,16 @@ def _append_to_iterable_side(
         # Validate item type and check for truncation
         _validate_item_for_dataset(item, dtype, iterable_group)
 
+        # If dataset was created non-chunked (e.g. by generic encoder), convert to extendable
+        if dataset.chunks is None:
+            existing_data = dataset[()]
+            del iterable_group["data"]
+            HDF5Encoder._encode_iterable_dataset(
+                iterable_group, list(existing_data), extendable_dataset=True
+            )
+            dataset = iterable_group["data"]
+            current_length = len(dataset)
+
         # Resize and append
         new_size = current_length + 1
         dataset.resize((new_size,))
@@ -599,6 +651,7 @@ def _find_group_index_for_key(
         If `attr_name` doesn't exist on `parent_group`, or if no entry's key
         matches the provided key.
     """
+    parent_group = _resolve_dict_target_group(parent_group, attr_name)
     if attr_name not in parent_group:
         raise KeyError(f"Attribute {attr_name} not found in group")
 
@@ -668,6 +721,7 @@ def get_dict_attr_value(
     KeyError
         If `attr_name` doesn't exist or if the key is not found.
     """
+    parent_group = _resolve_dict_target_group(parent_group, attr_name)
     index = _find_group_index_for_key(parent_group, attr_name, key)
 
     dict_group = parent_group[attr_name]
@@ -741,6 +795,7 @@ def get_dict_attr_group(
         If the values side for `attr_name` is dataset-format (there is no
         group to return in that case).
     """
+    parent_group = _resolve_dict_target_group(parent_group, attr_name)
     index = _find_group_index_for_key(parent_group, attr_name, key)
 
     dict_group = parent_group[attr_name]

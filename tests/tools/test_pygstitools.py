@@ -482,30 +482,28 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_crash_truncated_last_row_is_redone_on_resume(
+    def test_incomplete_item_is_redone_on_resume(
         self, trivial_counter_setup, tmp_path
     ):
-        """A circuit left incomplete by a simulated crash (missing its item
-        checkpoint subdirectory) is redone from scratch on resume, rather
-        than failing or being treated as complete."""
+        """A partial run can be resumed, completing only the missing circuit,
+        and the final DataSet covers all circuits."""
         s = trivial_counter_setup
         ckpt = tmp_path / "checkpoint"
 
-        # First run: complete both circuits
-        s.simulate(ckpt=ckpt)
+        # First partial run: complete only the first circuit
+        partial_edesign = ExperimentDesign([s.circs[0]])
+        s.simulate(ckpt=ckpt, edesign=partial_edesign)
 
-        # Simulate a crash by deleting the second circuit's checkpoint subdir
-        # (indicating it was never completed)
-        item_1_dir = ckpt / "item_1"
-        if item_1_dir.exists():
-            import shutil
-            shutil.rmtree(item_1_dir)
-
-        # Resume should re-run the missing circuit
+        # Resume with full edesign: should run only the missing circuit
         ds = s.simulate(ckpt=ckpt)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
+        # Verify dataset.txt contains both circuits
+        assert (ckpt / "dataset.txt").exists()
+        from pygsti.io import read_dataset
+        persisted_ds = read_dataset(str(ckpt / "dataset.txt"), verbosity=0)
+        assert len(persisted_ds) == 2
 
     def test_resume_mismatched_num_shots_raises(
         self, trivial_counter_setup, tmp_path
