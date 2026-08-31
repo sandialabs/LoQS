@@ -5,6 +5,8 @@ import h5py
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
+    get_dict_attr_value,
+    get_dict_attr_group,
 )
 from loqs.internal.serializable import Serializable
 
@@ -605,3 +607,217 @@ class TestIterDictAttrEntriesStartIndex:
                     iter_dict_attr_entries(h5_file, "test_dict", start_index=10)
                 )
                 assert len(result) == 0
+
+
+class TestGetDictAttrValue:
+    """Tests for get_dict_attr_value function."""
+
+    def test_get_value_by_key_groups_format(self, make_temp_path):
+        """Test retrieving a single value from groups-format dict by key."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [
+                    (1, MockSerializable("obj_1", 100)),
+                    (2, MockSerializable("obj_2", 200)),
+                    (3, MockSerializable("obj_3", 300)),
+                ]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                # Retrieve by key
+                value = get_dict_attr_value(h5_file, "test_dict", 2)
+                assert isinstance(value, MockSerializable)
+                assert value.name == "obj_2"
+                assert value.value == 200
+
+    def test_get_value_by_key_dataset_format(self, make_temp_path):
+        """Test retrieving a single value from dataset-format dict by key."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(1, 100.5), (2, 200.5), (3, 300.5)]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                value = get_dict_attr_value(h5_file, "test_dict", 2)
+                assert value == 200.5
+
+    def test_get_value_key_not_found(self, make_temp_path):
+        """Test that KeyError is raised when key is not found."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(1, "a"), (2, "b")]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                with pytest.raises(KeyError):
+                    get_dict_attr_value(h5_file, "test_dict", 999)
+
+    def test_get_value_attr_not_found(self, make_temp_path):
+        """Test that KeyError is raised when attribute doesn't exist."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                with pytest.raises(KeyError):
+                    get_dict_attr_value(h5_file, "nonexistent", 1)
+
+    def test_get_value_does_not_decode_all_entries(self, make_temp_path):
+        """Test that getting one value doesn't decode all other entries."""
+        import unittest.mock
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [
+                    (i, MockSerializable(f"obj_{i}", i * 10))
+                    for i in range(10)
+                ]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Spy on _decode_group_entry to count actual decode calls
+            from loqs.internal.streamingmerge import _decode_group_entry
+
+            real_decode_entry = _decode_group_entry
+            decode_call_indices = []
+
+            def spy_decode_entry(group, index, decode_cache):
+                decode_call_indices.append(index)
+                return real_decode_entry(group, index, decode_cache)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                with unittest.mock.patch(
+                    "loqs.internal.streamingmerge._decode_group_entry",
+                    side_effect=spy_decode_entry,
+                ):
+                    value = get_dict_attr_value(h5_file, "test_dict", 5)
+
+            # Should have decoded only one entry (index 5)
+            assert len(decode_call_indices) == 1
+            assert decode_call_indices[0] == 5
+            assert value.name == "obj_5"
+            assert value.value == 50
+
+
+class TestGetDictAttrGroup:
+    """Tests for get_dict_attr_group function."""
+
+    def test_get_group_by_key(self, make_temp_path):
+        """Test retrieving the raw HDF5 Group for a dict entry."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [
+                    (1, MockSerializable("obj_1", 100)),
+                    (2, MockSerializable("obj_2", 200)),
+                    (3, MockSerializable("obj_3", 300)),
+                ]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                # Get raw group
+                group = get_dict_attr_group(h5_file, "test_dict", 2)
+                assert isinstance(group, h5py.Group)
+                # Verify it's a valid group by checking its contents
+                assert len(group) > 0
+
+    def test_get_group_dataset_format_raises_typeerror(self, make_temp_path):
+        """Test that TypeError is raised for dataset-format values."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(1, 100), (2, 200)]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                with pytest.raises(TypeError) as exc_info:
+                    get_dict_attr_group(h5_file, "test_dict", 1)
+                assert "dataset-format" in str(exc_info.value)
+
+    def test_get_group_key_not_found(self, make_temp_path):
+        """Test that KeyError is raised when key is not found."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [
+                    (1, MockSerializable("obj_1", 100)),
+                    (2, MockSerializable("obj_2", 200)),
+                ]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                with pytest.raises(KeyError):
+                    get_dict_attr_group(h5_file, "test_dict", 999)
+
+    def test_get_group_does_not_decode(self, make_temp_path):
+        """Test that getting a group does not decode the entry."""
+        import unittest.mock
+
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [
+                    (i, MockSerializable(f"obj_{i}", i * 10))
+                    for i in range(5)
+                ]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Spy on Serializable.decode to verify it's never called
+            from loqs.internal.serializable import Serializable
+
+            decode_call_count = [0]
+            original_decode = Serializable.decode
+
+            def spy_decode(*args, **kwargs):
+                decode_call_count[0] += 1
+                return original_decode(*args, **kwargs)
+
+            with h5py.File(temp_file, "r") as h5_file:
+                with unittest.mock.patch.object(
+                    Serializable, "decode", side_effect=spy_decode
+                ):
+                    group = get_dict_attr_group(h5_file, "test_dict", 2)
+
+            # Should not have called Serializable.decode
+            assert decode_call_count[0] == 0
+            assert isinstance(group, h5py.Group)

@@ -565,3 +565,199 @@ def _decode_group_entry(
     return Serializable.decode(
         item_group, format="hdf5", decode_cache=decode_cache
     )
+
+
+def _find_group_index_for_key(
+    parent_group: h5py.Group,
+    attr_name: str,
+    key: Any,
+) -> int:
+    """Find the physical index of an entry by its key in a dict attribute.
+
+    Reads a dict attribute's keys side (either a dataset of native scalars,
+    or for groups-format, the subgroup names) and returns the insertion index
+    (physical position) whose key equals `key`. Uses the cheap side of the dict
+    structure, never decoding the values.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The HDF5 group holding the dict attribute.
+    attr_name : str
+        Name of the dict attribute to search.
+    key : Any
+        The key to find.
+
+    Returns
+    -------
+    int
+        The physical/insertion index of the matching entry.
+
+    Raises
+    ------
+    KeyError
+        If `attr_name` doesn't exist on `parent_group`, or if no entry's key
+        matches the provided key.
+    """
+    if attr_name not in parent_group:
+        raise KeyError(f"Attribute {attr_name} not found in group")
+
+    dict_group = parent_group[attr_name]
+    if "dict" not in dict_group:
+        raise KeyError(f"Attribute {attr_name} is not a valid dict structure")
+
+    dict_subgroup = dict_group["dict"]
+    if "keys" not in dict_subgroup:
+        raise KeyError(f"Attribute {attr_name} has no keys subgroup")
+
+    keys_group = dict_subgroup["keys"]
+    if "iterable" not in keys_group:
+        raise KeyError(f"Attribute {attr_name} has no keys iterable")
+
+    keys_iterable_group = keys_group["iterable"]
+    keys_storage_format = keys_iterable_group.attrs.get(
+        "storage_format", "groups"
+    )
+
+    # Read all keys (cheap side)
+    keys = _read_iterable_side(
+        keys_iterable_group, keys_storage_format, decode_cache=None
+    )
+
+    # Find the index of the matching key
+    for i, k in enumerate(keys):
+        if k == key:
+            return i
+
+    raise KeyError(f"Key {key} not found in {attr_name}")
+
+
+def get_dict_attr_value(
+    parent_group: h5py.Group,
+    attr_name: str,
+    key: Any,
+    decode_cache: dict | None = None,
+) -> Any:
+    """Get a single value from a dict attribute without materializing others.
+
+    Uses `_find_group_index_for_key` to locate the entry, then decodes and
+    returns only that one value, without touching any other entries.
+
+    For dataset-format values, reads only the indexed entry from the dataset.
+    For groups-format values, decodes only the indexed subgroup.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The HDF5 group holding the dict attribute.
+    attr_name : str
+        Name of the dict attribute.
+    key : Any
+        The key to retrieve.
+    decode_cache : dict | None, optional
+        Cache for decoding operations (passed to `Serializable.decode`).
+        Default is None.
+
+    Returns
+    -------
+    Any
+        The decoded value associated with the key.
+
+    Raises
+    ------
+    KeyError
+        If `attr_name` doesn't exist or if the key is not found.
+    """
+    index = _find_group_index_for_key(parent_group, attr_name, key)
+
+    dict_group = parent_group[attr_name]
+    dict_subgroup = dict_group["dict"]
+    values_group = dict_subgroup["values"]
+    values_iterable_group = values_group["iterable"]
+
+    values_storage_format = values_iterable_group.attrs.get(
+        "storage_format", "groups"
+    )
+
+    if values_storage_format == "dataset":
+        # Read a single entry from the dataset
+        dataset = values_iterable_group["data"]
+        value = dataset[index]
+        # Convert numpy scalar back to Python type
+        if dataset.dtype.kind in ["i", "u"]:
+            return int(value)
+        elif dataset.dtype.kind == "f":
+            return float(value)
+        elif dataset.dtype.kind == "b":
+            return bool(value)
+        elif dataset.dtype.kind in ["U", "S"]:
+            if values_iterable_group.attrs.get("original_type") == "bytes":
+                return (
+                    value.encode("utf-8") if isinstance(value, str) else value
+                )
+            else:
+                return (
+                    str(value, "utf-8")
+                    if isinstance(value, bytes)
+                    else str(value)
+                )
+        else:
+            return value
+    else:
+        # Decode a single group entry
+        return _decode_group_entry(values_iterable_group, index, decode_cache)
+
+
+def get_dict_attr_group(
+    parent_group: h5py.Group,
+    attr_name: str,
+    key: Any,
+) -> h5py.Group:
+    """Get the raw HDF5 Group for a dict entry (groups-format values only).
+
+    Uses `_find_group_index_for_key` to locate the entry, then returns the
+    raw (undecoded) `h5py.Group` for that entry's value subgroup, without
+    calling `Serializable.decode` on it.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The HDF5 group holding the dict attribute.
+    attr_name : str
+        Name of the dict attribute.
+    key : Any
+        The key to retrieve.
+
+    Returns
+    -------
+    h5py.Group
+        The raw HDF5 Group for the value's indexed subgroup.
+
+    Raises
+    ------
+    KeyError
+        If `attr_name` doesn't exist or if the key is not found.
+    TypeError
+        If the values side for `attr_name` is dataset-format (there is no
+        group to return in that case).
+    """
+    index = _find_group_index_for_key(parent_group, attr_name, key)
+
+    dict_group = parent_group[attr_name]
+    dict_subgroup = dict_group["dict"]
+    values_group = dict_subgroup["values"]
+    values_iterable_group = values_group["iterable"]
+
+    values_storage_format = values_iterable_group.attrs.get(
+        "storage_format", "groups"
+    )
+
+    if values_storage_format == "dataset":
+        raise TypeError(
+            f"Cannot get group for dict attribute '{attr_name}' with "
+            f"dataset-format values; only groups-format entries have "
+            f"raw HDF5 Groups to return"
+        )
+
+    # Return the raw group for the indexed entry
+    return values_iterable_group[str(index)]

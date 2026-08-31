@@ -469,6 +469,7 @@ class FaultInjectionRunner(MultiProgramRunner):
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
+        keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
     ):
@@ -479,6 +480,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
         )

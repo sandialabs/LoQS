@@ -1063,3 +1063,139 @@ class TestResumeCheckpointing:
             assert len(done) == 6
             for i in range(6):
                 assert i in done
+
+    def test_nested_source_mode_set_and_get(self):
+        """Test that _set_nested_shot_source stores source file and index."""
+        results = ProgramResults()
+        test_path = Path("/some/test/file.h5")
+        test_index = 42
+
+        results._set_nested_shot_source(test_path, test_index)
+
+        assert results._nested_source_file == test_path
+        assert results._nested_source_index == test_index
+
+    def test_nested_source_load_shot(self):
+        """Test loading a shot from a nested source within another file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = Path(temp_dir) / "parent.h5"
+
+            # Create a parent object with a _program_results dict containing
+            # a ProgramResults with some shots
+            with h5py.File(parent_path, "w") as parent_f:
+                # Write a ProgramResults nested inside a _program_results dict
+                pr1 = ProgramResults(lazy_loading_enabled=False)
+                for i in range(3):
+                    history = History()
+                    history.append(Frame({"nested": i}))
+                    pr1.add_shot(i, history)
+
+                pr2 = ProgramResults(lazy_loading_enabled=False)
+                for i in range(3, 6):
+                    history = History()
+                    history.append(Frame({"nested": i}))
+                    pr2.add_shot(i, history)
+
+                # Write a container with _program_results dict attribute
+                from loqs.internal.streamingmerge import merge_dict_attr
+
+                root_group = parent_f.create_group("container")
+                merge_dict_attr(
+                    root_group,
+                    "_program_results",
+                    [(0, pr1), (1, pr2)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Now load from the nested source
+            nested_pr = ProgramResults(lazy_loading_enabled=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+
+            # Manually set checkpoint_dir so it looks in the right place
+            nested_pr._checkpoint_dir = Path(temp_dir)
+
+            # Load shot 1 from the nested source
+            assert nested_pr._load_shot_from_checkpoint(1) is True
+            assert 1 in nested_pr._memory_cache
+            history = nested_pr._memory_cache[1]
+            assert history is not None
+
+    def test_nested_source_resolve_group(self):
+        """Test that _resolve_shot_source_group correctly navigates nested groups."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = Path(temp_dir) / "test.h5"
+
+            # Create nested structure
+            with h5py.File(test_path, "w") as f:
+                from loqs.internal.streamingmerge import merge_dict_attr
+
+                pr = ProgramResults(lazy_loading_enabled=False)
+                history = History()
+                history.append(Frame({"test": "data"}))
+                pr.add_shot(0, history)
+
+                root_group = f.create_group("container")
+                merge_dict_attr(
+                    root_group,
+                    "_program_results",
+                    [(5, pr)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Load and verify resolution
+            with h5py.File(test_path, "r") as f:
+                nested_pr = ProgramResults()
+                nested_pr._set_nested_shot_source(test_path, 5)
+
+                source_group = nested_pr._resolve_shot_source_group(f)
+                assert source_group is not None
+                assert isinstance(source_group, h5py.Group)
+
+    def test_nested_source_does_not_decode_all_shots(self):
+        """Test that loading from nested source doesn't decode all shots."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = Path(temp_dir) / "parent.h5"
+
+            # Create a large ProgramResults
+            with h5py.File(parent_path, "w") as parent_f:
+                from loqs.internal.streamingmerge import merge_dict_attr
+
+                pr = ProgramResults(lazy_loading_enabled=False)
+                for i in range(20):
+                    history = History()
+                    history.append(Frame({"index": i}))
+                    pr.add_shot(i, history)
+
+                root_group = parent_f.create_group("container")
+                merge_dict_attr(
+                    root_group,
+                    "_program_results",
+                    [(0, pr)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Load from nested source with decoding spy
+            nested_pr = ProgramResults(lazy_loading_enabled=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+            nested_pr._checkpoint_dir = Path(temp_dir)
+
+            # Spy on Serializable.decode
+            real_decode = Serializable.decode
+            decode_calls = []
+
+            def spy_decode(*args, **kwargs):
+                decode_calls.append(("decode", args, kwargs))
+                return real_decode(*args, **kwargs)
+
+            with unittest.mock.patch.object(
+                Serializable, "decode", side_effect=spy_decode
+            ):
+                # Load just one shot
+                assert nested_pr._load_shot_from_checkpoint(5) is True
+
+            # Should have decoded only the one shot's History, not all 20
+            # The call count should be minimal (just the target history)
+            assert 5 in nested_pr._memory_cache

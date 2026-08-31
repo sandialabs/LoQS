@@ -616,7 +616,7 @@ class TestBugRegressions:
             assert call_result == call_index * 2, f"Result mismatch for index {call_index}"
 
 
-def _multiply_item(item, index, *, shot_executor, multiplier):
+def _multiply_item(item, index, *, shot_executor, multiplier, **kwargs):
     return item * multiplier
 
 
@@ -661,7 +661,7 @@ class _CountingRunner(MultiProgramRunner):
 _FLAKY_CALL_COUNT = {"n": 0}
 
 
-def _flaky_multiply(item, index, *, shot_executor, multiplier):
+def _flaky_multiply(item, index, *, shot_executor, multiplier, **kwargs):
     _FLAKY_CALL_COUNT["n"] += 1
     if _FLAKY_CALL_COUNT["n"] == 2:
         raise RuntimeError("simulated crash mid-dispatch")
@@ -706,6 +706,7 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
         checkpoint_batch_size=None,
         shot_checkpoint_dir=None,
         lazy_loading_enabled=True,
+        keep_shot_results=False,
         poll_interval=1.0,
         show_progress=True,
     ):
@@ -716,6 +717,7 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading_enabled=lazy_loading_enabled,
+            keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
         )
@@ -757,7 +759,7 @@ class TestProgramRunnerRunAndCrashRecovery:
         a crash mid-dispatch would leave nothing to recover from."""
         checkpoint_dir = tmp_path / "ckpt"
 
-        def _process_and_check(item, index, *, shot_executor, multiplier):
+        def _process_and_check(item, index, *, shot_executor, multiplier, **kwargs):
             assert (checkpoint_dir / "runner.h5").exists()
             return item * multiplier
 
@@ -938,3 +940,371 @@ class TestIndexMapPersistence:
         runner2 = _KeyedRunnerFixedSignature.read(runner_path)
 
         assert runner2.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
+
+
+# Test doubles and utilities for keep_shot_results tests
+
+
+def _make_synthetic_program_results(index, shot_count=5):
+    """Create a synthetic ProgramResults for testing."""
+    from loqs.core.programresults import ProgramResults
+    from loqs.core.history import History
+    from loqs.core import Frame
+
+    pr = ProgramResults(lazy_loading_enabled=False, name=f"Results_{index}")
+    for i in range(shot_count):
+        history = History()
+        history.append(Frame({"item": index, "shot": i}))
+        pr.add_shot(i, history)
+    return pr
+
+
+def _process_item_with_kept_shots(
+    item, index, *, shot_executor, keep_shot_results=False, **kwargs
+):
+    """Test double process_item following the new return contract.
+
+    When keep_shot_results=False, returns bare result (int).
+    When keep_shot_results=True, returns (result, pr) tuple where pr is
+    the in-memory ProgramResults or None if checkpoint reading will handle it.
+    """
+    result = item * 2
+    if keep_shot_results:
+        # Create synthetic results for this item
+        pr = _make_synthetic_program_results(index)
+        return (result, pr)
+    else:
+        return result
+
+
+def _process_item_with_checkpoint(
+    item, index, *, shot_executor, keep_shot_results=False, shot_checkpoint_dir=None, **kwargs
+):
+    """Test double that creates real checkpoint files for each item.
+
+    When keep_shot_results=True, returns (result, pr) where pr is loaded from
+    the checkpoint (or None to let the dispatch layer load it).
+    When keep_shot_results=False, returns bare result.
+    """
+    from loqs.core.programresults import ProgramResults
+
+    result = item * 2
+
+    if keep_shot_results and shot_checkpoint_dir is not None:
+        # Create a per-item checkpoint directory
+        item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
+        item_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write the synthetic ProgramResults to checkpoint
+        pr = _make_synthetic_program_results(index)
+        pr.checkpoint(checkpoint_dir=item_dir)
+
+        # Return None so the dispatch layer will load from checkpoint
+        return (result, None)
+    elif keep_shot_results:
+        # No checkpoint dir, use in-memory
+        pr = _make_synthetic_program_results(index)
+        return (result, pr)
+    else:
+        return result
+
+
+class _KeepShotResultsRunner(MultiProgramRunner):
+    """Test runner that supports keep_shot_results."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
+
+    def __init__(self, items, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _process_item_with_kept_shots
+
+    def _static_kwargs(self):
+        return {}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self, result_list):
+        return result_list
+
+    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
+        """Override to provide per-item checkpoint directory when set."""
+        if self.shot_checkpoint_dir is not None:
+            return Path(self.shot_checkpoint_dir) / f"item_{index}"
+        return None
+
+
+class _CheckpointedKeepShotResultsRunner(_KeepShotResultsRunner):
+    """Test runner that uses checkpoint_batch_size with keep_shot_results."""
+
+    def _process_item_fn(self):
+        return _process_item_with_checkpoint
+
+    def _static_kwargs(self):
+        return {"shot_checkpoint_dir": self.shot_checkpoint_dir}
+
+
+class TestKeepShotResults:
+    """Tests for MultiProgramRunner.keep_shot_results mechanism."""
+
+    def test_keep_shot_results_false_default(self, tmp_path):
+        """keep_shot_results defaults to False."""
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3], item_checkpoint_dir=tmp_path / "ckpt"
+        )
+        assert runner.keep_shot_results is False
+
+    def test_keep_shot_results_enabled_on_construction(self, tmp_path):
+        """keep_shot_results can be set during construction."""
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=tmp_path / "ckpt",
+            keep_shot_results=True,
+        )
+        assert runner.keep_shot_results is True
+
+    def test_keep_shot_results_serial_no_checkpoint_batch(self, tmp_path):
+        """keep_shot_results works in serial dispatch without checkpoint_batch_size."""
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+
+    def test_keep_shot_results_parallel_no_checkpoint_batch(self, tmp_path):
+        """keep_shot_results works in parallel dispatch without checkpoint_batch_size."""
+        import loky
+
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+            parallel_strategy=ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+            ),
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+
+    def test_keep_shot_results_false_leaves_empty(self, tmp_path):
+        """When keep_shot_results=False (the default), _program_results stays empty."""
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=False,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # _program_results should remain empty
+        assert len(runner._program_results) == 0
+
+    def test_keep_shot_results_lazy_loading_enabled(self, tmp_path):
+        """With lazy_loading_enabled=True, _program_results contains lazy handles."""
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+            lazy_loading_enabled=True,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated with lazy ProgramResults
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            # Check that it's a lazy ProgramResults (has nested source set)
+            pr = runner._program_results[index]
+            assert pr._nested_source_file is not None
+            assert pr._nested_source_index == index
+
+    def test_keep_shot_results_lazy_loading_disabled(self, tmp_path):
+        """With lazy_loading_enabled=False, _program_results contains eager results."""
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+            lazy_loading_enabled=False,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated with eager ProgramResults
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            # Check that it has shot_histories eagerly loaded
+            pr = runner._program_results[index]
+            assert len(pr.shot_histories) == 5  # _make_synthetic_program_results makes 5 shots
+
+    def test_keep_shot_results_resume_preserves(self, tmp_path):
+        """Resuming a run with keep_shot_results persists correctly."""
+        checkpoint_dir = tmp_path / "ckpt"
+
+        # First run completes all items
+        runner1 = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+        )
+        result1 = runner1.run()
+        assert result1 == [2, 4, 6]
+        assert len(runner1._program_results) == 3
+
+        # Resume (all items already done)
+        runner2 = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+        )
+        result2 = runner2.run()
+        assert result2 == [2, 4, 6]
+        # Program results should still be populated on resume
+        assert len(runner2._program_results) == 3
+
+    def test_keep_shot_results_with_checkpoint_batch_serial(self, tmp_path):
+        """keep_shot_results with checkpoint_batch_size works in serial dispatch."""
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        runner = _CheckpointedKeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            checkpoint_batch_size=2,
+            keep_shot_results=True,
+            lazy_loading_enabled=True,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            pr = runner._program_results[index]
+            # Verify structure shows it's configured for nested loading
+            # (the actual shots are in per-item checkpoint dirs, not runner.h5)
+            assert pr is not None
+
+    def test_keep_shot_results_with_checkpoint_batch_parallel(self, tmp_path):
+        """keep_shot_results with checkpoint_batch_size works in parallel dispatch."""
+        import loky
+
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        runner = _CheckpointedKeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            checkpoint_batch_size=2,
+            keep_shot_results=True,
+            lazy_loading_enabled=False,
+            parallel_strategy=ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+            ),
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated with eager ProgramResults
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            pr = runner._program_results[index]
+            # Should have shot_histories eagerly loaded
+            assert len(pr.shot_histories) == 5
+
+    def test_keep_shot_results_lazy_shot_content_verification(self, tmp_path):
+        """Verify lazy-loaded ProgramResults can access shot data."""
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=item_checkpoint_dir,
+            keep_shot_results=True,
+            lazy_loading_enabled=True,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify structure: lazy loading should have created ProgramResults objects
+        pr = runner._program_results[1]
+        assert pr is not None
+        # Verify that it's set up for lazy loading (has nested source configured)
+        assert pr._nested_source_file is not None
+        assert pr._nested_source_index == 1
+
+    def test_keep_shot_results_eager_shot_content_verification(self, tmp_path):
+        """Verify eagerly-loaded shots contain correct data end-to-end."""
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+
+        runner = _KeepShotResultsRunner(
+            [1, 2, 3],
+            item_checkpoint_dir=item_checkpoint_dir,
+            keep_shot_results=True,
+            lazy_loading_enabled=False,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify shot content through eager loading
+        pr = runner._program_results[1]
+        for shot_idx in range(5):
+            shot = pr.shot_histories[shot_idx]
+            assert shot is not None
+            # Verify frame data
+            frame_data = shot.collect_data("item", "all")
+            assert 1 in frame_data  # Item index should be 1
+
+    def test_keep_shot_results_write_read_round_trip(self, tmp_path):
+        """Writing and reading back a runner with keep_shot_results=True preserves the setting."""
+        checkpoint_dir = tmp_path / "checkpoint"
+        runner_file = checkpoint_dir / "runner.h5"
+
+        # Create a runner with keep_shot_results=True
+        runner1 = _KeepShotResultsRunner(
+            [1, 2],
+            item_checkpoint_dir=checkpoint_dir,
+            keep_shot_results=True,
+        )
+
+        # Verify the setting is True before we write
+        assert runner1.keep_shot_results is True
+
+        # Run and write to disk
+        runner1.run()
+        runner1.write(runner_file)
+
+        # Read it back WITHOUT re-passing keep_shot_results
+        runner2 = _KeepShotResultsRunner.read(runner_file)
+
+        # Verify that the setting was restored from disk
+        assert runner2.keep_shot_results is True

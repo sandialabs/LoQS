@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import h5py
 from collections.abc import Callable, Iterable, Sequence
@@ -65,6 +66,8 @@ class MultiProgramRunner(Serializable):
         "lazy_loading_enabled",
         "index_map",
         "_reduced_results",
+        "keep_shot_results",
+        "_program_results",
         "poll_interval",
         "show_progress",
     ]
@@ -78,6 +81,7 @@ class MultiProgramRunner(Serializable):
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading_enabled: bool = True,
         index_map: dict[str, int] | None = None,
+        keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
     ):
@@ -97,6 +101,8 @@ class MultiProgramRunner(Serializable):
         self.lazy_loading_enabled = lazy_loading_enabled
         self.index_map = index_map
         self._reduced_results: dict[int, Any] = {}
+        self.keep_shot_results = keep_shot_results
+        self._program_results: dict[int, Any] = {}
         self.poll_interval = poll_interval
         self.show_progress = show_progress
         self._validate_checkpoint_kwargs()
@@ -128,12 +134,16 @@ class MultiProgramRunner(Serializable):
         # (must be set directly on the instance, not passed to __init__)
         index_map = attr_dict.pop("index_map", None)
         reduced_results = attr_dict.pop("_reduced_results", None)
+        program_results = attr_dict.pop("_program_results", None)
         # Reconstruct with constructor parameters only
         obj = super()._from_decoded_attrs(attr_dict)
         # Restore internal state directly on the instance
         obj.index_map = index_map
         obj._reduced_results = (
             reduced_results if reduced_results is not None else {}
+        )
+        obj._program_results = (
+            program_results if program_results is not None else {}
         )
         return obj
 
@@ -280,9 +290,14 @@ class MultiProgramRunner(Serializable):
                     on_item_done,
                     self.parallel_strategy,
                     pbar,
+                    self.keep_shot_results,
+                    self._shot_checkpoint_subdir,
                 )
             else:
-                # Parallel execution
+                # Parallel execution: create a snapshot for pickling
+                # (same pattern as NoiseSweepRunner._static_kwargs)
+                runner_snapshot = copy.copy(self)
+                runner_snapshot.parallel_strategy = None
                 newly_computed = _run_parallel(
                     remaining,
                     self._process_item_fn(),
@@ -294,11 +309,31 @@ class MultiProgramRunner(Serializable):
                     pbar,
                     self.poll_interval,
                     done.keys(),
+                    self.keep_shot_results,
+                    runner_snapshot._shot_checkpoint_subdir,
                 )
 
             # Final assembly - read authoritative results from worker files if available
             if self.item_checkpoint_dir is not None:
-                final_done = _read_worker_files(self.item_checkpoint_dir)
+                final_done = _read_worker_files(
+                    self.item_checkpoint_dir, attr_name="results"
+                )
+                # Consolidate _program_results if keep_shot_results is enabled
+                if self.keep_shot_results:
+                    self._program_results = _read_worker_files(
+                        self.item_checkpoint_dir, attr_name="_program_results"
+                    )
+                    # Convert to lazy-loaded ProgramResults if enabled
+                    if self.lazy_loading_enabled:
+                        from loqs.core.programresults import ProgramResults
+
+                        runner_path = self.item_checkpoint_dir / "runner.h5"
+                        self._program_results = {
+                            index: self._make_lazy_program_results(
+                                runner_path, index
+                            )
+                            for index in self._program_results.keys()
+                        }
             else:
                 # No checkpointing, combine prior done + newly computed
                 final_done = done.copy()
@@ -318,6 +353,34 @@ class MultiProgramRunner(Serializable):
         finally:
             if pbar is not None:
                 pbar.close()
+
+    def _make_lazy_program_results(self, runner_file: Path, index: int) -> Any:
+        """Construct a lazy-loading ProgramResults for a nested entry.
+
+        Creates a ProgramResults configured to load shots from the runner.h5's
+        own `_program_results` dict attribute at the given index, with
+        lazy_loading_enabled=True.
+
+        Parameters
+        ----------
+        runner_file : Path
+            Path to the runner.h5 file.
+        index : int
+            Integer key in runner.h5's `_program_results` dict attribute.
+
+        Returns
+        -------
+        ProgramResults
+            A new ProgramResults configured for nested lazy loading.
+        """
+        from loqs.core.programresults import ProgramResults
+
+        pr = ProgramResults(lazy_loading_enabled=True)
+        pr._set_nested_shot_source(runner_file, index)
+        # Set checkpoint_dir so nested loading works
+        if self.item_checkpoint_dir is not None:
+            pr._checkpoint_dir = self.item_checkpoint_dir
+        return pr
 
     def _merge_reduced_result(self, index: int, value: Any) -> None:
         """Merge one item's reduced result into `_reduced_results`, persisted
@@ -368,6 +431,24 @@ class MultiProgramRunner(Serializable):
         """Return list of field names to compare for resume mismatch check."""
         return []
 
+    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
+        """Return the checkpoint directory for a specific item's shots, or None.
+
+        Default implementation returns None (no per-item shot subdirectories).
+        Subclasses can override to provide item-specific checkpoint paths.
+
+        Parameters
+        ----------
+        index : int
+            The item index being processed.
+
+        Returns
+        -------
+        Path | None
+            A checkpoint directory for this item's shots, or None.
+        """
+        return None
+
 
 def _assign_indices_with_keys(
     items: Sequence[T],
@@ -385,23 +466,123 @@ def _assign_indices_with_keys(
     return items_with_index
 
 
-def _read_worker_files(checkpoint_dir: Path) -> dict[int, Any]:
+def _read_worker_files(
+    checkpoint_dir: Path, attr_name: str = "results"
+) -> dict[int, Any]:
     """Read all worker_*_runner.h5 files and return {index: result} dict.
 
-    Transient HDF5 lock conflicts are silently skipped (those worker files
-    will be retried on the next poll tick or final assembly pass).
+    Reads the specified attribute from each worker file and merges them into
+    a single dict. Transient HDF5 lock conflicts are silently skipped (those
+    worker files will be retried on the next poll tick or final assembly pass).
+
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory containing worker_*_runner.h5 files.
+    attr_name : str, optional
+        Name of the dict attribute to read from each worker file.
+        Default is "results".
+
+    Returns
+    -------
+    dict[int, Any]
+        Merged {index: result} dict from all worker files.
     """
     done: dict[int, Any] = {}
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
         try:
             with h5py.File(worker_file, "r") as f:
-                for key, value in iter_dict_attr_entries(f, "results"):
+                for key, value in iter_dict_attr_entries(f, attr_name):
                     done[key] = value
         except (BlockingIOError, OSError):
             # Transient lock conflict (e.g., concurrent writer opening/closing
             # the file) -- skip this file for now, it will be retried
             continue
     return done
+
+
+def _write_dict_entry_with_retry(
+    worker_file_path: Path,
+    attr_name: str,
+    index: int,
+    value: Any,
+    max_retries: int = 5,
+) -> None:
+    """Write a single entry to a dict attribute in a worker file with retry logic.
+
+    Handles transient HDF5 locking issues via exponential backoff.
+
+    Parameters
+    ----------
+    worker_file_path : Path
+        Path to the worker_*_runner.h5 file.
+    attr_name : str
+        Name of the dict attribute (e.g., "results", "_program_results").
+    index : int
+        The key for the entry.
+    value : Any
+        The value to store.
+    max_retries : int, optional
+        Maximum number of retry attempts (default 5, ~0.15s total delay).
+    """
+    import time
+
+    for attempt in range(max_retries):
+        try:
+            with h5py.File(worker_file_path, "a") as f:
+                merge_dict_attr(
+                    f,
+                    attr_name,
+                    [(index, value)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+            break
+        except (BlockingIOError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep(0.01 * (2**attempt))  # Exponential backoff
+            else:
+                raise
+
+
+def _resolve_kept_program_results(
+    index: int,
+    shot_checkpoint_subdir: Callable[[int], Path | None] | None,
+    in_memory_pr: Any,
+) -> Any:
+    """Resolve ProgramResults from checkpoint or in-memory source.
+
+    Tries to load from checkpoint first (if a subdir path is available),
+    falls back to the in-memory value from process_item, returns None
+    if neither is available.
+
+    Parameters
+    ----------
+    index : int
+        The item index.
+    shot_checkpoint_subdir : Callable[[int], Path | None] | None
+        Hook method returning per-item checkpoint directory, or None.
+    in_memory_pr : Any
+        The in-memory ProgramResults from process_item, or None.
+
+    Returns
+    -------
+    Any
+        The resolved ProgramResults, or None.
+    """
+    pr = None
+    # First try to load from checkpoint if a path is available
+    if shot_checkpoint_subdir is not None:
+        shot_dir = shot_checkpoint_subdir(index)
+        if shot_dir is not None:
+            from loqs.core.programresults import ProgramResults
+
+            pr = ProgramResults()
+            pr.load_checkpoint(checkpoint_dir=shot_dir)
+    # Otherwise use the in-memory one from process_item
+    if pr is None:
+        pr = in_memory_pr
+    return pr
 
 
 def _run_serial(
@@ -412,10 +593,10 @@ def _run_serial(
     on_item_done: Callable[[int, T, Any], None] | None,
     parallel_strategy: ParallelStrategy | None,
     pbar: Any,
+    keep_shot_results: bool = False,
+    shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
 ) -> dict[int, Any]:
     """Execute remaining items serially. Returns {index: result} for in-memory results."""
-    import time
-
     shot_executor = resolve_shot_executor(
         parallel_strategy.shot_executor
         if parallel_strategy is not None
@@ -425,12 +606,23 @@ def _run_serial(
 
     try:
         for index, item in remaining:
-            result = process_item(
+            # Call process_item with keep_shot_results kwarg only if enabled
+            extra_kwargs = static_kwargs.copy()
+            if keep_shot_results:
+                extra_kwargs["keep_shot_results"] = True
+
+            raw_return = process_item(
                 item,
                 index,
                 shot_executor=shot_executor,
-                **static_kwargs,
+                **extra_kwargs,
             )
+
+            # Unpack result and optional ProgramResults based on keep_shot_results
+            if keep_shot_results:
+                result, in_memory_pr = raw_return
+            else:
+                result = raw_return
 
             results_dict[index] = result
 
@@ -439,27 +631,19 @@ def _run_serial(
                 worker_file_path = (
                     item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
                 )
-                # Retry mechanism for transient HDF5 file locking issues
-                # in parallel dispatch (max ~0.15s total delay)
-                max_retries = 5
-                for attempt in range(max_retries):
-                    try:
-                        with h5py.File(worker_file_path, "a") as f:
-                            merge_dict_attr(
-                                f,
-                                "results",
-                                [(index, result)],
-                                key_use_dataset=True,
-                                value_use_dataset=False,
-                            )
-                        break
-                    except (BlockingIOError, OSError):
-                        if attempt < max_retries - 1:
-                            time.sleep(
-                                0.01 * (2**attempt)
-                            )  # Exponential backoff: 0.01, 0.02, 0.04, 0.08
-                        else:
-                            raise
+                _write_dict_entry_with_retry(
+                    worker_file_path, "results", index, result
+                )
+
+                # If keep_shot_results is enabled, retrieve and write ProgramResults
+                if keep_shot_results:
+                    pr = _resolve_kept_program_results(
+                        index, shot_checkpoint_subdir, in_memory_pr
+                    )
+                    if pr is not None:
+                        _write_dict_entry_with_retry(
+                            worker_file_path, "_program_results", index, pr
+                        )
 
             if on_item_done is not None:
                 on_item_done(index, item, result)
@@ -535,6 +719,8 @@ def _run_parallel(
     pbar: Any,
     poll_interval: float,
     already_done_indices: Iterable[int] | None = None,
+    keep_shot_results: bool = False,
+    shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
 ) -> dict[int, Any]:
     """Execute remaining items in parallel with checkpointing and polling.
 
@@ -582,6 +768,8 @@ def _run_parallel(
         static_kwargs=static_kwargs,
         item_checkpoint_dir=item_checkpoint_dir,
         shot_executor=shot_executor,
+        keep_shot_results=keep_shot_results,
+        shot_checkpoint_subdir=shot_checkpoint_subdir,
     )
 
     # Dispatch with on_poll callback
@@ -627,52 +815,55 @@ def _generic_chunk_worker(
     static_kwargs: dict[str, Any],
     item_checkpoint_dir: Path | None,
     shot_executor: Any,
+    keep_shot_results: bool = False,
+    shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
 ) -> list[tuple[int, Any]]:
     """Worker function for parallel execution of a chunk.
 
     Returns list of (index, result) tuples.
     """
-    import time
-
     pin_worker_threads()
     shot_executor = resolve_shot_executor(shot_executor)
 
     results = []
     try:
         for index, item in chunk:
-            result = process_item(
+            # Call process_item with keep_shot_results kwarg only if enabled
+            extra_kwargs = static_kwargs.copy()
+            if keep_shot_results:
+                extra_kwargs["keep_shot_results"] = True
+
+            raw_return = process_item(
                 item,
                 index,
                 shot_executor=shot_executor,
-                **static_kwargs,
+                **extra_kwargs,
             )
+
+            # Unpack result and optional ProgramResults based on keep_shot_results
+            if keep_shot_results:
+                result, in_memory_pr = raw_return
+            else:
+                result = raw_return
 
             # Checkpoint result to worker file
             if item_checkpoint_dir is not None:
                 worker_file_path = (
                     item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
                 )
-                # Retry mechanism for transient HDF5 file locking issues
-                # in parallel dispatch (max ~0.15s total delay)
-                max_retries = 5
-                for attempt in range(max_retries):
-                    try:
-                        with h5py.File(worker_file_path, "a") as f:
-                            merge_dict_attr(
-                                f,
-                                "results",
-                                [(index, result)],
-                                key_use_dataset=True,
-                                value_use_dataset=False,
-                            )
-                        break
-                    except (BlockingIOError, OSError):
-                        if attempt < max_retries - 1:
-                            time.sleep(
-                                0.01 * (2**attempt)
-                            )  # Exponential backoff: 0.01, 0.02, 0.04, 0.08
-                        else:
-                            raise
+                _write_dict_entry_with_retry(
+                    worker_file_path, "results", index, result
+                )
+
+                # If keep_shot_results is enabled, retrieve and write ProgramResults
+                if keep_shot_results:
+                    pr = _resolve_kept_program_results(
+                        index, shot_checkpoint_subdir, in_memory_pr
+                    )
+                    if pr is not None:
+                        _write_dict_entry_with_retry(
+                            worker_file_path, "_program_results", index, pr
+                        )
 
             results.append((index, result))
     finally:

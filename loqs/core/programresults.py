@@ -35,6 +35,8 @@ from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
+    get_dict_attr_value,
+    get_dict_attr_group,
 )
 
 if TYPE_CHECKING:
@@ -130,6 +132,15 @@ class ProgramResults(Displayable):
         `consolidate_checkpoints` itself writes), or a `hostname_pid`-style
         string identifying one specific writer's own file."""
 
+        self._nested_source_file: Path | None = None
+        """File path containing a nested group source (an entry inside
+        another object's _program_results dict attribute), if this
+        ProgramResults was constructed to load shots from a nested source."""
+
+        self._nested_source_index: int | None = None
+        """Integer key of this ProgramResults inside a parent's _program_results
+        dict attribute, if loaded from a nested source."""
+
         self.name = name
         """Name for logging"""
 
@@ -168,6 +179,24 @@ class ProgramResults(Displayable):
             self._write_results_snapshot_if_fresh(parent_program)
             # Build encode_cache by decoding the written results and reversing cache mapping
             self._build_encode_cache_from_parent_program()
+
+    def _set_nested_shot_source(self, source_file: Path, index: int) -> None:
+        """Configure this ProgramResults to load shots from a nested source.
+
+        Sets up internal fields to point to an entry inside another object's
+        own `_program_results` dict attribute, rather than a standalone
+        checkpoint file.
+
+        Parameters
+        ----------
+        source_file : Path
+            Path to the HDF5 file containing the parent object.
+        index : int
+            Integer key of this ProgramResults inside the parent's
+            `_program_results` dict attribute.
+        """
+        self._nested_source_file = Path(source_file)
+        self._nested_source_index = index
 
     def _write_results_snapshot_if_fresh(self, program) -> None:
         """Write the entire ProgramResults (including nested parent_program) to
@@ -757,6 +786,47 @@ class ProgramResults(Displayable):
 
             return None
 
+    def _resolve_shot_source_group(self, f: h5py.File) -> h5py.Group | None:
+        """Resolve the source group for shot loading (nested or standalone).
+
+        If this ProgramResults was configured with a nested source via
+        `_set_nested_shot_source`, navigates to and returns the nested group.
+        Otherwise, returns the file's own top-level root group.
+
+        Parameters
+        ----------
+        f : h5py.File
+            An open HDF5 file (the caller already has it open).
+
+        Returns
+        -------
+        h5py.Group | None
+            The appropriate source group, or None if nested source is not
+            properly configured.
+        """
+        if (
+            self._nested_source_file is not None
+            and self._nested_source_index is not None
+        ):
+            # Navigate to the nested source: the file should contain a _program_results
+            # dict attribute at the root group level
+            if len(f.keys()) == 0:
+                return None
+
+            root_group = f[next(iter(f.keys()))]
+            try:
+                source_group = get_dict_attr_group(
+                    root_group, "_program_results", self._nested_source_index
+                )
+                return source_group
+            except (KeyError, TypeError):
+                return None
+        else:
+            # Return the file's own top-level root group
+            if len(f.keys()) == 0:
+                return None
+            return f[next(iter(f.keys()))]
+
     def _load_shot_from_checkpoint(self, shot_index: int) -> bool:
         """Load a specific shot from checkpoint files.
 
@@ -770,27 +840,44 @@ class ProgramResults(Displayable):
         bool
             True if shot was successfully loaded, False otherwise.
         """
-        if self._checkpoint_dir is None or not self._checkpoint_dir.exists():
-            return False
+        if self._nested_source_file is None:
+            # Standalone file mode
+            if (
+                self._checkpoint_dir is None
+                or not self._checkpoint_dir.exists()
+            ):
+                return False
 
-        # Try to find the shot in this writer's own checkpoint file
-        if self._worker_id is not None:
-            checkpoint_file = (
-                self._checkpoint_dir
-                / f"worker_{self._worker_id}_checkpoint.h5"
+            # Try to find the shot in this writer's own checkpoint file
+            if self._worker_id is not None:
+                checkpoint_file = (
+                    self._checkpoint_dir
+                    / f"worker_{self._worker_id}_checkpoint.h5"
+                )
+            else:
+                checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
+
+            if not checkpoint_file.exists():
+                return False
+
+            return self._load_shot_from_single_file(
+                checkpoint_file, shot_index
             )
         else:
-            checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
-
-        if not checkpoint_file.exists():
-            return False
-
-        return self._load_shot_from_single_file(checkpoint_file, shot_index)
+            # Nested source mode
+            return self._load_shot_from_single_file(
+                self._nested_source_file, shot_index
+            )
 
     def _load_shot_from_single_file(
         self, filename: Path, shot_index: int
     ) -> bool:
-        """Load a shot from a checkpoint file using standard Serializable decoding.
+        """Load a shot from a checkpoint file without materializing the full object.
+
+        Supports both nested and standalone sources. Opens the file, resolves
+        the appropriate source group, then uses get_dict_attr_value to fetch
+        only the requested shot's History from the shot_histories dict attribute,
+        without decoding any other shots.
 
         Parameters
         ----------
@@ -806,24 +893,45 @@ class ProgramResults(Displayable):
         """
         try:
             with h5py.File(filename, "r") as f:
-                # Load the full ProgramResults from the checkpoint
-                loaded_results = Serializable.decode(f, format="hdf5")
-                assert isinstance(loaded_results, ProgramResults)
+                source_group = self._resolve_shot_source_group(f)
+                if source_group is None:
+                    return False
 
-                # Check if the shot exists in the loaded results
-                if shot_index in loaded_results.shot_histories:
-                    history = loaded_results.shot_histories[shot_index]
+                # If source_group is from a nested dict entry, it contains
+                # the raw Serializable-encoded wrapper, so we need to unwrap it
+                # to get to the actual ProgramResults attributes
+                if self._nested_source_file is not None:
+                    # Unwrap the Serializable wrapper group
+                    if len(source_group) == 0:
+                        return False
+                    actual_group = source_group[
+                        next(iter(source_group.keys()))
+                    ]
+                else:
+                    actual_group = source_group
 
-                    if self._lazy_loading_enabled:
-                        self._memory_cache[shot_index] = history
-                    else:
-                        self.shot_histories[shot_index] = history
-                        # Remove from unwritten_shots since it's already checkpointed
-                        if shot_index in self._unwritten_shots:
-                            self._unwritten_shots.remove(shot_index)
+                # Use get_dict_attr_value to fetch only this one shot
+                # without decoding all others
+                try:
+                    history = get_dict_attr_value(
+                        actual_group,
+                        "shot_histories",
+                        shot_index,
+                        decode_cache={},
+                    )
+                except KeyError:
+                    return False
 
-                    return True
-        except (KeyError, OSError, ValueError):
+                if self._lazy_loading_enabled:
+                    self._memory_cache[shot_index] = history
+                else:
+                    self.shot_histories[shot_index] = history
+                    # Remove from unwritten_shots since it's already checkpointed
+                    if shot_index in self._unwritten_shots:
+                        self._unwritten_shots.remove(shot_index)
+
+                return True
+        except (OSError, ValueError):
             return False
 
         return False
