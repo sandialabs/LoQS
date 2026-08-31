@@ -1,5 +1,6 @@
 """Tester for loqs.tools.multiprogramrunner"""
 
+import contextlib
 import h5py
 import multiprocessing as mp
 import os
@@ -1304,3 +1305,375 @@ class TestKeepShotResults:
 
         # Verify that the setting was restored from disk
         assert runner2.keep_shot_results is True
+
+
+def _shot_progress_item_processor(
+    item, index, *, shot_executor, num_shots=5, keep_shot_results=False, **kwargs
+):
+    """Process an item for shot progress testing."""
+    from loqs.core.programresults import ProgramResults
+    from loqs.core.history import History
+    from loqs.core import Frame
+
+    # Create a ProgramResults with some shots
+    pr = ProgramResults()
+    for i in range(num_shots):
+        history = History()
+        history.append(Frame({"item": item, "shot": i}))
+        pr.add_shot(i, history)
+
+    # Checkpoint if enabled
+    checkpoint_dir = kwargs.get("shot_checkpoint_dir")
+    if checkpoint_dir is not None:
+        pr.checkpoint(checkpoint_dir=checkpoint_dir)
+
+    if keep_shot_results:
+        return item * 2, pr
+    else:
+        return item * 2
+
+
+class TestShotProgressBar:
+    """Tests for shot-level progress bar (Stage 17.7)."""
+
+    class _ShotProgressTestRunner(MultiProgramRunner):
+        """Runner that supports shot-level progress testing."""
+
+        _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
+
+        def __init__(self, items, num_shots=5, **kwargs):
+            super().__init__(**kwargs)
+            self.items = items
+            self.num_shots = num_shots
+
+        def _get_items(self):
+            return self.items
+
+        def _process_item_fn(self):
+            import functools
+
+            return functools.partial(
+                _shot_progress_item_processor, num_shots=self.num_shots
+            )
+
+        def _static_kwargs(self):
+            return {}
+
+        def _make_on_item_done(self):
+            return None
+
+        def _finalize(self, result_list):
+            return result_list
+
+        def _shot_checkpoint_subdir(self, index: int) -> Path | None:
+            """Return per-item shot checkpoint subdirectory."""
+            if (
+                self.shot_checkpoint_dir is not None
+                and self.checkpoint_batch_size is not None
+            ):
+                return self.shot_checkpoint_dir / f"item_{index}"
+            return None
+
+    def test_num_shots_for_progress_hook_returns_num_shots(self):
+        """Verify _num_shots_for_progress returns self.num_shots."""
+        runner = self._ShotProgressTestRunner(
+            [1, 2, 3], num_shots=10, show_progress=False
+        )
+        assert runner._num_shots_for_progress() == 10
+
+    def test_current_item_index_round_trip(self, tmp_path):
+        """Verify current_item_index attribute round-trips correctly."""
+        from loqs.tools.multiprogramrunner import (
+            _write_current_item_index_with_retry,
+        )
+
+        worker_file = tmp_path / "worker_test_runner.h5"
+
+        # Write current_item_index
+        _write_current_item_index_with_retry(worker_file, 42)
+
+        # Read it back
+        with h5py.File(worker_file, "r") as f:
+            assert f.attrs["current_item_index"] == 42
+
+        # Overwrite with new value
+        _write_current_item_index_with_retry(worker_file, 99)
+
+        # Verify it was overwritten
+        with h5py.File(worker_file, "r") as f:
+            assert f.attrs["current_item_index"] == 99
+
+    def test_read_worker_current_indices_tolerates_missing_files(self, tmp_path):
+        """Verify _read_worker_current_indices handles missing/unreadable files."""
+        from loqs.tools.multiprogramrunner import _read_worker_current_indices
+
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir()
+
+        # No workers yet, should return empty set
+        indices = _read_worker_current_indices(checkpoint_dir)
+        assert indices == set()
+
+        # Create a worker file with current_item_index
+        worker_file = checkpoint_dir / "worker_test_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            f.attrs["current_item_index"] = 5
+
+        indices = _read_worker_current_indices(checkpoint_dir)
+        assert indices == {5}
+
+        # Create another worker file
+        worker_file2 = checkpoint_dir / "worker_test2_runner.h5"
+        with h5py.File(worker_file2, "a") as f:
+            f.attrs["current_item_index"] = 7
+
+        indices = _read_worker_current_indices(checkpoint_dir)
+        assert indices == {5, 7}
+
+    def test_shot_progress_prints_once_per_run_parallel(
+        self, tmp_path, capsys
+    ):
+        """Verify shot progress message is printed once when hook is non-None
+        but checkpointing isn't configured (parallel dispatch)."""
+        loky = pytest.importorskip("loky")
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=2,
+        )
+
+        # Parallel dispatch WITHOUT shot checkpointing
+        runner = self._ShotProgressTestRunner(
+            [1, 2, 3],
+            num_shots=5,
+            parallel_strategy=strategy,
+            show_progress=True,
+            # checkpoint_batch_size and shot_checkpoint_dir are NOT set
+        )
+        runner.run()
+
+        captured = capsys.readouterr()
+        assert "Shot-level progress reporting requires" in captured.out
+        assert "checkpoint_batch_size" in captured.out
+        assert "shot_checkpoint_dir" in captured.out
+
+    def test_shot_progress_silent_when_show_progress_false(
+        self, tmp_path, capsys
+    ):
+        """Verify no message when show_progress=False, even though every
+        other condition for it would otherwise be met."""
+        loky = pytest.importorskip("loky")
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=2,
+        )
+
+        runner = self._ShotProgressTestRunner(
+            [1, 2, 3],
+            num_shots=5,
+            parallel_strategy=strategy,
+            show_progress=False,
+            # checkpoint_batch_size and shot_checkpoint_dir are NOT set
+        )
+        runner.run()
+
+        captured = capsys.readouterr()
+        assert "Shot-level progress reporting requires" not in captured.out
+
+    def test_shot_progress_silent_for_serial_dispatch(
+        self, tmp_path, capsys
+    ):
+        """Verify no message is printed for serial dispatch even if hook is non-None."""
+        # Serial dispatch (no parallel_strategy)
+        runner = self._ShotProgressTestRunner(
+            [1, 2, 3],
+            num_shots=5,
+            parallel_strategy=None,
+            show_progress=True,
+        )
+        runner.run()
+
+        captured = capsys.readouterr()
+        # Should NOT print the message for serial dispatch
+        assert "Shot-level progress reporting requires" not in captured.out
+
+    def test_shot_progress_silent_when_hook_returns_none(
+        self, tmp_path, capsys
+    ):
+        """Verify no message when _num_shots_for_progress returns None."""
+
+        class _NoShotsRunner(self._ShotProgressTestRunner):
+            def _num_shots_for_progress(self):
+                return None
+
+        loky = pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=2,
+        )
+
+        runner = _NoShotsRunner(
+            [1, 2, 3],
+            num_shots=5,
+            parallel_strategy=strategy,
+            show_progress=True,
+            # checkpointing not configured
+        )
+        runner.run()
+
+        captured = capsys.readouterr()
+        # Should NOT print the message when hook returns None
+        assert "Shot-level progress reporting requires" not in captured.out
+
+    def test_shots_bar_suppressed_when_show_progress_false(
+        self, tmp_path, capsys
+    ):
+        """No shots bar (and no misconfiguration print) when show_progress=False,
+        even with parallel dispatch and checkpointing fully configured -- the
+        shots bar must respect the same opt-out as the plain items bar."""
+        loky = pytest.importorskip("loky")
+
+        from unittest.mock import patch
+        from tqdm import tqdm as orig_tqdm
+
+        tqdm_calls = []
+
+        def tqdm_spy(*args, **kwargs):
+            tqdm_calls.append(kwargs.get("desc", ""))
+            return orig_tqdm(*args, **kwargs)
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=2,
+        )
+        runner = self._ShotProgressTestRunner(
+            [1, 2, 3],
+            num_shots=5,
+            parallel_strategy=strategy,
+            item_checkpoint_dir=tmp_path / "item_ckpt",
+            shot_checkpoint_dir=tmp_path / "shot_ckpt",
+            checkpoint_batch_size=2,
+            show_progress=False,
+        )
+        with patch(
+            "loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy
+        ):
+            runner.run()
+
+        assert "Shots" not in tqdm_calls
+        captured = capsys.readouterr()
+        assert "Shot-level progress reporting requires" not in captured.out
+
+    def test_shots_bar_total_correct_on_resumed_run(self, tmp_path):
+        """Regression test: shots bar total is sized correctly even on resumed run.
+
+        Bug: if shots bar was sized as total=len(remaining) * num_shots instead of
+        len(items) * num_shots, then on a resumed run (where remaining < items),
+        the initial value would be too small and .n could exceed total.
+
+        This test directly verifies the bar initialization parameters when some
+        items are pre-marked as done (simulating a prior interrupted run).
+        """
+        loky = pytest.importorskip("loky")
+
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+        item_checkpoint_dir.mkdir()
+        shot_checkpoint_dir.mkdir()
+
+        from unittest.mock import patch
+        from tqdm import tqdm as orig_tqdm
+
+        tqdm_events = []
+
+        class TqdmSpy:
+            def __init__(self, *args, **kwargs):
+                self.tqdm_obj = orig_tqdm(*args, **kwargs)
+                tqdm_events.append(
+                    {
+                        "event": "init",
+                        "total": self.tqdm_obj.total,
+                        "initial": self.tqdm_obj.n,
+                        "desc": kwargs.get("desc", ""),
+                    }
+                )
+
+            def __getattr__(self, name):
+                return getattr(self.tqdm_obj, name)
+
+            def __setattr__(self, name, value):
+                if name == "tqdm_obj":
+                    super().__setattr__(name, value)
+                else:
+                    setattr(self.tqdm_obj, name, value)
+                    if name == "n":
+                        tqdm_events.append(
+                            {
+                                "event": "set_n",
+                                "n": value,
+                                "total": self.tqdm_obj.total,
+                                "desc": getattr(self.tqdm_obj, "desc", ""),
+                            }
+                        )
+
+            def refresh(self):
+                return self.tqdm_obj.refresh()
+
+            def close(self):
+                return self.tqdm_obj.close()
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=2,
+        )
+
+        from loqs.tools import multiprogramrunner as mpr_module
+
+        # Simulates 2 already-done items (a prior interrupted run). Only the
+        # tqdm init params computed before dispatch matter here, so a raise
+        # from the mismatched later dispatch/assembly logic is swallowed below.
+        def read_with_preseeded_done(checkpoint_dir, *args, **kwargs):
+            return {0: 0, 2: 4}
+
+        with patch("loqs.tools.multiprogramrunner.tqdm", side_effect=TqdmSpy):
+            with patch.object(
+                mpr_module,
+                "_read_worker_files",
+                side_effect=read_with_preseeded_done,
+            ):
+                runner = self._ShotProgressTestRunner(
+                    [1, 2, 3],
+                    num_shots=5,
+                    item_checkpoint_dir=item_checkpoint_dir,
+                    parallel_strategy=strategy,
+                    shot_checkpoint_dir=shot_checkpoint_dir,
+                    checkpoint_batch_size=2,
+                    show_progress=True,
+                )
+                with contextlib.suppress(Exception):
+                    runner.run()
+
+        # Find shots bar initialization event
+        shots_inits = [
+            e
+            for e in tqdm_events
+            if e["event"] == "init" and e["desc"] == "Shots"
+        ]
+        assert shots_inits, "Shots bar was never created"
+        shots_init = shots_inits[0]
+
+        # total must be len(items)*num_shots=15, not len(remaining)*num_shots=5
+        # (items=[1,2,3], done=[0,2], remaining=[1,3]) -- it has to stay fixed
+        # across a resume rather than shrinking as items complete.
+        assert shots_init["total"] == 15, (
+            f"Expected shots_pbar.total=15 (len(items)=3 * num_shots=5), "
+            f"got {shots_init['total']}"
+        )
+
+        # initial should be len(done) * num_shots = 2 * 5 = 10
+        # (indices 0 and 2 were pre-done)
+        assert shots_init["initial"] == 10, (
+            f"Expected shots_pbar.initial=10 (len(done)=2 * num_shots=5), "
+            f"got {shots_init['initial']}"
+        )

@@ -37,6 +37,7 @@ from loqs.internal.streamingmerge import (
     iter_dict_attr_entries,
     get_dict_attr_value,
     get_dict_attr_group,
+    get_dict_attr_keys,
 )
 
 if TYPE_CHECKING:
@@ -610,6 +611,57 @@ class ProgramResults(Displayable):
                 pass  # Skip if we can't read this file
 
         return done
+
+    @staticmethod
+    def _count_done_shots(checkpoint_dir: Path) -> int:
+        """Count the number of unique shot indices in checkpoint files.
+
+        Scans checkpoint_dir for checkpoint.h5 and every worker_*_checkpoint.h5,
+        counts the union of their shot_histories keys, and returns the total count.
+        Explicitly skips *.tmp files (stale leftovers from a crash).
+
+        Uses get_dict_attr_keys to read only the keys without decoding any
+        History values, making this cheap even for workers with many shots.
+
+        Parameters
+        ----------
+        checkpoint_dir : Path
+            Directory to scan for checkpoint files.
+
+        Returns
+        -------
+        int
+            Number of unique shot indices found across all checkpoint files.
+            Returns 0 if no checkpoints exist yet.
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+        done_indices: set[int] = set()
+
+        # First, count indices from checkpoint.h5 if it exists
+        checkpoint_file = checkpoint_dir / "checkpoint.h5"
+        if checkpoint_file.exists():
+            try:
+                with h5py.File(checkpoint_file, "r") as f:
+                    keys = get_dict_attr_keys(f, "shot_histories")
+                    done_indices.update(keys)
+            except Exception:
+                pass  # Skip if we can't read this file
+
+        # Then, count indices from every worker_*_checkpoint.h5 (sorted, no .tmp)
+        worker_files = sorted(
+            f
+            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
+            if not f.name.endswith(".tmp")
+        )
+        for worker_file in worker_files:
+            try:
+                with h5py.File(worker_file, "r") as f:
+                    keys = get_dict_attr_keys(f, "shot_histories")
+                    done_indices.update(keys)
+            except Exception:
+                pass  # Skip if we can't read this file
+
+        return len(done_indices)
 
     def load_checkpoint(
         self,

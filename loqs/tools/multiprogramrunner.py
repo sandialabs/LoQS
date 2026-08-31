@@ -288,8 +288,49 @@ class MultiProgramRunner(Serializable):
 
         # Progress bar setup
         pbar = None
+        shots_pbar = None
         if self.show_progress:
             pbar = tqdm(total=len(items), initial=len(done), desc=self._desc())
+
+        # Shots bar: parallel dispatch + checkpointing only, gated on
+        # self.show_progress like the items pbar above.
+        num_shots_for_progress = self._num_shots_for_progress()
+        is_parallel_dispatch = (
+            self.parallel_strategy is not None
+            and self.parallel_strategy.is_chunked
+        )
+        show_shots_bar = (
+            self.show_progress
+            and is_parallel_dispatch
+            and self.checkpoint_batch_size is not None
+            and self.shot_checkpoint_dir is not None
+            and num_shots_for_progress is not None
+        )
+
+        if show_shots_bar:
+            shots_pbar = tqdm(
+                total=len(items) * num_shots_for_progress,
+                initial=len(done) * num_shots_for_progress,
+                desc="Shots",
+            )
+
+        # One-time notice if shot progress can't be shown, gated on
+        # self.show_progress like the bar itself above.
+        if (
+            self.show_progress
+            and num_shots_for_progress is not None
+            and not show_shots_bar
+            and is_parallel_dispatch
+            and (
+                self.checkpoint_batch_size is None
+                or self.shot_checkpoint_dir is None
+            )
+        ):
+            print(
+                "Shot-level progress reporting requires checkpoint_batch_size"
+                " and shot_checkpoint_dir to be set; showing item-level"
+                " progress only."
+            )
 
         try:
             # Dispatch
@@ -331,6 +372,8 @@ class MultiProgramRunner(Serializable):
                     done.keys(),
                     self.keep_shot_results,
                     runner_snapshot._shot_checkpoint_subdir,
+                    shots_pbar,
+                    num_shots_for_progress,
                 )
 
             # Final assembly - read authoritative results from worker files if available
@@ -373,6 +416,8 @@ class MultiProgramRunner(Serializable):
         finally:
             if pbar is not None:
                 pbar.close()
+            if shots_pbar is not None:
+                shots_pbar.close()
 
     def _make_lazy_program_results(self, runner_file: Path, index: int) -> Any:
         """Construct a lazy-loading ProgramResults for a nested entry.
@@ -483,6 +528,21 @@ class MultiProgramRunner(Serializable):
             A checkpoint directory for this item's shots, or None.
         """
         return None
+
+    def _num_shots_for_progress(self) -> int | None:
+        """Return the number of shots per item for progress reporting, or None.
+
+        Default implementation returns `self.num_shots` if it exists, None
+        otherwise. This supports fine-grained shot-level progress tracking
+        in the dispatch progress bar when parallel dispatch with checkpointing
+        is enabled.
+
+        Returns
+        -------
+        int | None
+            The number of shots per item, or None if not applicable.
+        """
+        return getattr(self, "num_shots", None)
 
 
 def _assign_indices_with_keys(
@@ -643,6 +703,39 @@ def _write_dict_entry_with_retry(
                     key_use_dataset=True,
                     value_use_dataset=False,
                 )
+            break
+        except (BlockingIOError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep(0.01 * (2**attempt))  # Exponential backoff
+            else:
+                raise
+
+
+def _write_current_item_index_with_retry(
+    worker_file_path: Path,
+    index: int,
+    max_retries: int = 5,
+) -> None:
+    """Write current_item_index attribute to a worker file with retry logic.
+
+    Handles transient HDF5 locking issues via exponential backoff.
+    Overwrites any prior value.
+
+    Parameters
+    ----------
+    worker_file_path : Path
+        Path to the worker_*_runner.h5 file.
+    index : int
+        The current item index being processed.
+    max_retries : int, optional
+        Maximum number of retry attempts (default 5, ~0.15s total delay).
+    """
+    import time
+
+    for attempt in range(max_retries):
+        try:
+            with h5py.File(worker_file_path, "a") as f:
+                f.attrs["current_item_index"] = index
             break
         except (BlockingIOError, OSError):
             if attempt < max_retries - 1:
@@ -814,6 +907,35 @@ def _poll_one_worker_file(
     return consumed_count
 
 
+def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
+    """Read current_item_index attributes from all worker_*_runner.h5 files.
+
+    Returns the set of item indices currently being processed by any worker.
+    Silently tolerates missing files or transient HDF5 lock conflicts, which
+    is appropriate since the set of workers can change mid-dispatch.
+
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory containing worker_*_runner.h5 files.
+
+    Returns
+    -------
+    set[int]
+        Set of item indices currently being processed.
+    """
+    in_flight: set[int] = set()
+    for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
+        try:
+            with h5py.File(worker_file, "r") as f:
+                if "current_item_index" in f.attrs:
+                    in_flight.add(int(f.attrs["current_item_index"]))
+        except (BlockingIOError, OSError):
+            # Transient lock conflict -- skip this file for now
+            continue
+    return in_flight
+
+
 def _run_parallel(
     remaining: list[tuple[int, T]],
     process_item: Callable[..., Any],
@@ -827,10 +949,22 @@ def _run_parallel(
     already_done_indices: Iterable[int] | None = None,
     keep_shot_results: bool = False,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
+    shots_pbar: Any = None,
+    num_shots_for_progress: int | None = None,
 ) -> dict[int, Any]:
     """Execute remaining items in parallel with checkpointing and polling.
 
     Returns {index: result} for in-memory results (when no checkpointing).
+
+    Parameters
+    ----------
+    shots_pbar : Any, optional
+        A tqdm progress bar for shot-level progress (only when parallel dispatch
+        with checkpointing is enabled). If provided, it is updated during each
+        poll tick with the total shots completed so far.
+    num_shots_for_progress : int | None, optional
+        Number of shots per item (for computing absolute shot totals). Only used
+        if shots_pbar is provided.
     """
     # Build a mapping of index -> item for use in on_poll callback
     items_map = {index: item for index, item in items_with_index}
@@ -842,7 +976,10 @@ def _run_parallel(
     consumed_counts: dict[str, int] = {}
 
     def on_poll() -> None:
-        """Poll every worker file and notify for any newly-completed items."""
+        """Poll every worker file and notify for any newly-completed items.
+
+        Also updates the shots progress bar if one is provided.
+        """
         if item_checkpoint_dir is None:
             return
 
@@ -858,6 +995,28 @@ def _run_parallel(
                 on_item_done,
                 pbar,
             )
+
+        # Update shots progress bar if enabled
+        if shots_pbar is not None and num_shots_for_progress is not None:
+            from loqs.core.programresults import ProgramResults
+
+            # Count items already fully done
+            done_items = len(observed_indices)
+            total_shots_from_done = done_items * num_shots_for_progress
+
+            # Count shots from in-flight items via their checkpoint directories
+            in_flight_items = _read_worker_current_indices(item_checkpoint_dir)
+            total_shots_from_inflight = 0
+            for item_index in in_flight_items:
+                shot_subdir = shot_checkpoint_subdir(item_index)
+                if shot_subdir is not None:
+                    shots_done = ProgramResults._count_done_shots(shot_subdir)
+                    total_shots_from_inflight += shots_done
+
+            # Set absolute total and refresh
+            total_shots = total_shots_from_done + total_shots_from_inflight
+            shots_pbar.n = total_shots
+            shots_pbar.refresh()
 
     # Each chunk worker resolves this itself; only the raw value is forwarded here.
     shot_executor = (
@@ -884,6 +1043,7 @@ def _run_parallel(
         item_checkpoint_dir is not None
         or on_item_done is not None
         or pbar is not None
+        or shots_pbar is not None
     ):
         on_poll_callback = on_poll
 
@@ -934,6 +1094,13 @@ def _generic_chunk_worker(
     results = []
     try:
         for index, item in chunk:
+            # Write current_item_index to worker file if checkpointing is enabled
+            if item_checkpoint_dir is not None:
+                worker_file_path = (
+                    item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+                )
+                _write_current_item_index_with_retry(worker_file_path, index)
+
             # Call process_item with keep_shot_results kwarg only if enabled
             extra_kwargs = static_kwargs.copy()
             if keep_shot_results:
