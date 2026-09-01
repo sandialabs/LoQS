@@ -540,12 +540,12 @@ class FaultInjectionRunner(MultiProgramRunner):
         """Return failed programs (same objects from input, matched by index).
 
         Builds the failed list from `_reduced_results`, which holds success
-        bools indexed by program position.
+        bools indexed by program position, in original program order.
         """
         failed = [
-            self.errored_programs[i]
-            for i, success in self._reduced_results.items()
-            if not success
+            prog
+            for i, prog in enumerate(self.errored_programs)
+            if not self._reduced_results.get(i, True)
         ]
 
         if len(failed):

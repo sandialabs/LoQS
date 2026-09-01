@@ -230,7 +230,7 @@ class ProgramResults(Displayable):
         from loqs.core import QuantumProgram
 
         if checkpoint_enabled and isinstance(parent_program, QuantumProgram):
-            self._write_results_snapshot_if_fresh(parent_program)
+            self._write_results_snapshot_if_fresh()
             # Build encode_cache by decoding the written results and reversing cache mapping
             self._build_encode_cache_from_parent_program()
 
@@ -252,17 +252,12 @@ class ProgramResults(Displayable):
         self._nested_source_file = Path(source_file)
         self._nested_source_index = index
 
-    def _write_results_snapshot_if_fresh(self, program) -> None:
+    def _write_results_snapshot_if_fresh(self) -> None:
         """Write the entire ProgramResults (including nested parent_program) to
         results.h5 only if that file doesn't already exist. The written
         shot_histories attribute (empty dict initially) is already in the state
         needed for merge_dict_attr to extend it later. Then update
         self.parent_program to point to results.h5 (as a string path).
-
-        Parameters
-        ----------
-        program:
-            The QuantumProgram object currently stored in self.parent_program.
         """
         # Set default checkpoint_dir if needed
         if self._checkpoint_dir is None:
@@ -300,7 +295,9 @@ class ProgramResults(Displayable):
 
             # Decode cache is cache_id to object
             # Encode cache is id(object) to cache_id
-            self._encode_cache = {id(v): k for k, v in decode_cache.items()}
+            self._checkpoint_encode_cache = {
+                id(v): k for k, v in decode_cache.items()
+            }
         except Exception:
             # If there's any error reading the results or building the cache,
             # just continue without the cache - it's not critical for functionality
@@ -988,19 +985,10 @@ class ProgramResults(Displayable):
             return None
         else:
             # Normal mode: check if shot is in memory
-            if shot_index in self.shot_histories:
-                return self.shot_histories[shot_index]
+            if shot_index not in self.shot_histories:
+                return None
 
-            # If not in memory and we have checkpoint files, try to load
-            if (
-                self._checkpoint_dir is not None
-                and shot_index in self._unwritten_shots
-            ):
-                # Load from checkpoint and add to shot_histories
-                if self._load_shot_from_checkpoint(shot_index):
-                    return self.shot_histories[shot_index]
-
-            return None
+            return self.shot_histories[shot_index]
 
     def _resolve_shot_source_group(self, f: h5py.File) -> h5py.Group | None:
         """Resolve the source group for shot loading (nested or standalone).

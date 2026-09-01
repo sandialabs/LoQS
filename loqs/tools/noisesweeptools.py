@@ -450,27 +450,17 @@ class NoiseSweepRunner(MultiProgramRunner):
             else:
                 resolved[param_name] = values[param_name]
 
-        return cls(
-            strengths=attr_dict["strengths"],
-            base_seed=attr_dict["base_seed"],
-            seed_stride=attr_dict["seed_stride"],
-            serialized_callables=serialized_callables,
-            num_shots=attr_dict["num_shots"],
-            collect_shot_data_args=attr_dict["collect_shot_data_args"],
-            expected_outcomes=attr_dict["expected_outcomes"],
-            verbose=attr_dict["verbose"],
-            metadata=attr_dict["metadata"],
-            run_kwargs=attr_dict["run_kwargs"],
-            checkpoint=attr_dict["checkpoint"],
-            resume=attr_dict["resume"],
-            parallel_strategy=attr_dict["parallel_strategy"],
-            item_checkpoint_dir=attr_dict["item_checkpoint_dir"],
-            force_resume=attr_dict["force_resume"],
-            checkpoint_batch_size=attr_dict["checkpoint_batch_size"],
-            shot_checkpoint_dir=attr_dict["shot_checkpoint_dir"],
-            lazy_loading=attr_dict["lazy_loading"],
-            **resolved,
-        )
+        # Update attr_dict with resolved QuantumProgram parameters to delegate
+        attr_dict.update(resolved)
+
+        # Pass the serialized callables as the serialized_callables parameter so
+        # __init__ can reuse them directly without trying to re-serialize the
+        # decoded functions. Remove the internal storage fields.
+        attr_dict["serialized_callables"] = serialized_callables
+        attr_dict.pop("_quantum_program_values", None)
+        attr_dict.pop("_quantum_program_serialized_callables", None)
+
+        return super()._from_decoded_attrs(attr_dict)
 
     @classmethod
     def from_noise_sweep_runner(
@@ -524,6 +514,9 @@ class NoiseSweepRunner(MultiProgramRunner):
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading: bool | None = None,
+        keep_shot_results: bool | None = None,
+        poll_interval: float | None = None,
+        show_progress: bool | None = None,
     ) -> "NoiseSweepRunner":
         """Create a new NoiseSweepRunner from an existing one with optional overrides.
 
@@ -626,6 +619,21 @@ class NoiseSweepRunner(MultiProgramRunner):
                 if lazy_loading is not None
                 else other.lazy_loading
             ),
+            keep_shot_results=(
+                keep_shot_results
+                if keep_shot_results is not None
+                else other.keep_shot_results
+            ),
+            poll_interval=(
+                poll_interval
+                if poll_interval is not None
+                else other.poll_interval
+            ),
+            show_progress=(
+                show_progress
+                if show_progress is not None
+                else other.show_progress
+            ),
         )
 
     def build_program(self, index: int) -> QuantumProgram:
@@ -719,6 +727,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         """Return fields to check for resume mismatch."""
         return [
             "strengths",
+            "base_seed",
             "num_shots",
             "collect_shot_data_args",
             "expected_outcomes",

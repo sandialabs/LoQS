@@ -218,10 +218,8 @@ class MultiProgramRunner(Serializable):
 
         Once a valid case lands (a or c), the existing downstream behavior
         is preserved: `runner.h5` is updated (after `index_map` assignment),
-        `_reduced_results` is seeded from stored state only in case (c), and
-        `_run_dispatch` is called with `resuming=True` for both cases.
+        and `_reduced_results` is seeded from stored state only in case (c).
         """
-        resuming = False
         stored = None
         if self.checkpoint:
             assert (
@@ -273,7 +271,6 @@ class MultiProgramRunner(Serializable):
             # Both cases (a) and (c): write/update runner.h5
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
-            resuming = True
 
         # Seed _reduced_results from prior run if resuming, to avoid duplicates
         # when replaying already-done items (merge_dict_attr is append-only)
@@ -303,7 +300,6 @@ class MultiProgramRunner(Serializable):
         result_list = self._run_dispatch(
             items=self._get_items(),
             precomputed_indices=precomputed_indices,
-            resuming=resuming,
         )
         return self._finalize(result_list)
 
@@ -311,7 +307,6 @@ class MultiProgramRunner(Serializable):
         self,
         items: Sequence[T],
         precomputed_indices: Sequence[int] | None,
-        resuming: bool,
     ) -> list:
         """Dispatch item processing with checkpoint/resume/progress tracking:
         item indexing, prior-progress replay, serial/parallel dispatch, and
@@ -325,8 +320,6 @@ class MultiProgramRunner(Serializable):
         done: dict[int, Any] = {}
         if self.item_checkpoint_dir is not None:
             done = _read_worker_files(self.item_checkpoint_dir)
-            if not resuming:
-                done = {}
 
         # Compute on_item_done callback once and reuse it throughout
         on_item_done = self._make_on_item_done()

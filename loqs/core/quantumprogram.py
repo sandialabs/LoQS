@@ -772,7 +772,7 @@ class QuantumProgram(Displayable):
             name=f"Results for {self.name}",
             parent_program=self,
             checkpoint_enabled=checkpoint_enabled,
-            checkpoint_dir=checkpoint_dir,
+            checkpoint_dir=resolved_checkpoint_dir,
             lazy_loading=lazy_loading,
             num_shots=num_shots,
             max_frame_limit=max_frame_limit,
@@ -867,7 +867,7 @@ class QuantumProgram(Displayable):
                     remaining,
                     max_frame_limit,
                     checkpoint_batch_size,
-                    checkpoint_dir,
+                    resolved_checkpoint_dir,
                     program_results,
                     pbar,
                 )
@@ -876,7 +876,7 @@ class QuantumProgram(Displayable):
                     remaining,
                     max_frame_limit,
                     checkpoint_batch_size,
-                    checkpoint_dir,
+                    resolved_checkpoint_dir,
                     shot_executor,
                     program_results,
                     pbar,
@@ -891,7 +891,6 @@ class QuantumProgram(Displayable):
                 program_results.consolidate_checkpoints(
                     checkpoint_dir=resolved_checkpoint_dir
                 )
-                program_results._checkpoint_dir = resolved_checkpoint_dir
                 program_results._worker_id = None
 
         return program_results

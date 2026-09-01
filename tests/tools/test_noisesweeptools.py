@@ -1248,3 +1248,87 @@ class TestNoiseSweepRunnerShotCheckpointing:
         point1_results_after = ProgramResults()
         point1_results_after.load_checkpoint(point1_shot_ckpt)
         assert len(point1_results_after.shot_histories) == 9
+
+    def test_decode_based_crash_recovery_with_keep_shot_results(
+        self, monkeypatch, tmp_path
+    ):
+        """Test genuine decode-based crash recovery with keep_shot_results=True.
+
+        Exercises the actual decode path (`NoiseSweepRunner.read(...).run()`),
+        not just a freshly-constructed runner, since `keep_shot_results` and
+        other fields must survive a real round-trip through
+        `_from_decoded_attrs` for a resumed run to work correctly.
+
+        This test:
+        1. Creates a runner with keep_shot_results=True and checkpointing
+        2. Runs it and crashes mid-way through
+        3. Loads the runner from runner.h5 via NoiseSweepRunner.read()
+        4. Resumes the run
+        5. Verifies the results are complete and program_results are retained
+        """
+        from loqs.core.quantumprogram import QuantumProgram
+
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: complete point 0, then crash on point 1's first shot
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash at shot 10 (point 1's first shot, after point 0's 9)
+            if compute_count["n"] >= 10:
+                raise RuntimeError("Simulated crash for keep_shot_results test")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="keep_shot_results test"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            runner = make_runner(
+                [0.0, 0.1],
+                num_shots=9,
+                checkpoint=True,
+                item_checkpoint_dir=item_ckpt,
+                checkpoint_batch_size=9,
+                shot_checkpoint_dir=shot_ckpt,
+                keep_shot_results=True,
+                lazy_loading=False,
+                verbose=False,
+            )
+            runner.run()
+
+        monkeypatch.undo()
+
+        # Now the critical test: load the runner from runner.h5 and resume
+        # This exercises the bug fix: _from_decoded_attrs must properly restore
+        # keep_shot_results so the mismatch check doesn't raise
+        runner_path = item_ckpt / runner.runner_filename
+        assert runner_path.exists(), "runner.h5 should have been created"
+
+        stored_runner = NoiseSweepRunner.read(runner_path)
+
+        # Verify that keep_shot_results was correctly restored via decode
+        assert stored_runner.keep_shot_results is True, (
+            "Bug #1: keep_shot_results should be True after decode, "
+            "but was reset to False by hand-built cls() constructor"
+        )
+
+        # Resume the run with the decoded runner
+        stored_runner.resume = True
+        result = stored_runner.run()
+
+        # Verify: the results are fully correct (both points complete)
+        assert result.is_complete
+        assert len(result.failure_rates) == 2
+
+        # Verify: _program_results are actually retained in runner.h5
+        # (this was also affected by bug #1 and the related bugs #2)
+        stored_runner2 = NoiseSweepRunner.read(runner_path)
+        assert len(stored_runner2._program_results) == 2, (
+            "Bug #1: _program_results should have 2 items, but was reset to {} "
+            "by hand-built cls() constructor"
+        )
