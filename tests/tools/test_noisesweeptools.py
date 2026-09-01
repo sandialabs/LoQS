@@ -565,6 +565,48 @@ class TestRunParallel:
         assert final_result.is_complete
         assert None not in final_result.failure_rates  # Final result has no None
 
+    def test_keep_shot_results_parallel(self, tmp_path):
+        """NoiseSweepRunner with keep_shot_results=True works under parallel dispatch."""
+        loky = pytest.importorskip("loky")
+
+        strengths = [0.0, 0.1, 0.2]
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+
+        runner = make_runner(
+            strengths,
+            seed_stride=20,
+            base_seed=7,
+            num_shots=10,
+            verbose=False,
+            parallel_strategy=strategy,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            checkpoint_batch_size=5,
+            keep_shot_results=True,
+            lazy_loading=False,
+        )
+        result = runner.run()
+
+        # Verify the sweep result is correct/complete
+        assert result.is_complete
+        assert len(result.failure_rates) == len(strengths)
+        assert all(fr is not None for fr in result.failure_rates)
+
+        # Verify _program_results has one entry per sweep point
+        assert len(runner._program_results) == len(strengths)
+        for sweep_index in range(len(strengths)):
+            assert sweep_index in runner._program_results
+            pr = runner._program_results[sweep_index]
+            # Verify correct shot count
+            assert len(pr.shot_histories) == 10
+
 
 class TestResume:
     def test_skips_completed_points_and_matches_uninterrupted_run(self, tmp_path):

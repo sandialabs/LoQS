@@ -790,17 +790,12 @@ class ProgramResults(Displayable):
         """Merge every per-worker checkpoint file in `checkpoint_dir` directly
         into the output file via streaming-safe, entry-by-entry merging.
 
-        Streams one worker's file in at a time -- decoding it, merging just
-        its shots into the output via merge_dict_attr, then letting it be
-        garbage collected before moving to the next -- rather than loading
-        every worker's shots into `self.shot_histories` up front and writing
-        once at the end. This bounds peak memory to roughly one worker's own
-        share of the total result, not the whole result, regardless of how
-        many workers or shots are involved. Deletes each worker file only
-        once its own entries are confirmed merged, so a crash mid-consolidation
+        Decodes and writes shots one at a time via `iter_dict_attr_entries`,
+        so peak memory stays bounded to a single shot regardless of how many
+        workers or shots are involved. Deletes each worker file only once its
+        own entries are confirmed merged, so a crash mid-consolidation
         self-heals on retry (the worker file is still present, gets re-merged,
-        and merge_dict_attr's append-only behavior with deduplication safety
-        ensures no duplicates).
+        and deduplication against already-merged keys ensures no duplicates).
 
         Parameters
         ----------

@@ -111,8 +111,7 @@ def _sweep_point_checkpoint_subdir(
     """A sweep point's own isolated subdirectory under `shot_checkpoint_dir`,
     keyed by the point's integer index so multiple points processed by the
     same worker (sharing one `hostname_pid` identity) never collide on the
-    same [](api:QuantumProgram.run) checkpoint file. A sweep point's index is
-    short, unique, and stable, unlike circuit identities which need hashing.
+    same [](api:QuantumProgram.run) checkpoint file.
     """
     return Path(shot_checkpoint_dir) / f"point_{index}"
 
@@ -734,20 +733,9 @@ class NoiseSweepRunner(MultiProgramRunner):
             "keep_shot_results",
         ]
 
-    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
-        """Return the checkpoint directory for a specific sweep point's shots.
-
-        Returns a per-point subdirectory under shot_checkpoint_dir keyed by
-        the point index, or None if shot-level checkpointing is not enabled.
-        """
-        if (
-            self.shot_checkpoint_dir is not None
-            and self.checkpoint_batch_size is not None
-        ):
-            return _sweep_point_checkpoint_subdir(
-                self.shot_checkpoint_dir, index
-            )
-        return None
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """point_{index}"""
+        return "point"
 
 
 class NoiseSweepResult(Displayable):

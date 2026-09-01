@@ -981,3 +981,38 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         circ1_results_after = ProgramResults()
         circ1_results_after.load_checkpoint(circ1_shot_ckpt)
         assert len(circ1_results_after.shot_histories) == 3
+
+    def test_keep_shot_results_end_to_end(self, trivial_counter_setup, tmp_path):
+        """EdesignRunner with keep_shot_results=True consolidates per-circuit ProgramResults."""
+        s = trivial_counter_setup
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        # Create and run the runner directly
+        runner = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=True,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            checkpoint_batch_size=1,
+            keep_shot_results=True,
+            lazy_loading=False,
+            program_kwargs=s.program_kwargs,
+        )
+        ds = runner.run()
+
+        # Verify the dataset is correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        # Verify runner has _program_results populated with ProgramResults
+        assert len(runner._program_results) == len(s.circs)
+        for circ_index in range(len(s.circs)):
+            assert circ_index in runner._program_results
+            pr = runner._program_results[circ_index]
+            # Verify the per-circuit ProgramResults has the correct number of shots
+            assert len(pr.shot_histories) == 1

@@ -11,6 +11,12 @@
 
 import os
 import socket
+import warnings
+
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:
+    threadpool_limits = None  # type: ignore
 
 from .serializable import (
     Serializable,
@@ -28,3 +34,28 @@ def worker_id() -> str:
     key per-writer checkpoint files across LoQS's parallel dispatch
     mechanisms."""
     return f"{socket.gethostname()}_{os.getpid()}"
+
+
+def pin_worker_threads() -> None:
+    """Pin this process's numerical-library thread pools to one thread.
+
+    The primary, always-correct layer of the thread-oversubscription
+    discipline every chunk-processing worker entry point must apply as
+    its first action, regardless of which executor backend runs it:
+    environment variables (`OMP_NUM_THREADS`, etc.) only help if set
+    before the relevant library first initializes its own thread pool,
+    which isn't guaranteed for a worker process that already imported
+    `numpy`/`pygsti`-adjacent code before reaching this call. Meant to be
+    called directly inside a plain, module-level worker function -- not
+    built via a decorator, since a decorator would return a closure that
+    plain `pickle` (needed for `mpi4py.futures.MPIPoolExecutor`) can't
+    resolve by dotted import path.
+    """
+    if threadpool_limits is not None:
+        threadpool_limits(1)
+    else:
+        warnings.warn(
+            "threadpoolctl is not installed, so worker thread pools "
+            "cannot be limited to avoid oversubscription. Install "
+            "loqs[parallel] or loqs[mpi]."
+        )

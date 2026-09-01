@@ -153,9 +153,7 @@ class TestPinWorkerThreads:
         assert all(n == 1 for n in after)
 
     def test_warns_when_threadpoolctl_not_installed(self, monkeypatch):
-        monkeypatch.setattr(
-            "loqs.tools.paralleltools.threadpool_limits", None
-        )
+        monkeypatch.setattr("loqs.internal.threadpool_limits", None)
         with pytest.warns(UserWarning, match="threadpoolctl"):
             pin_worker_threads()
 

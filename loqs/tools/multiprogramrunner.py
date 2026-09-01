@@ -20,7 +20,7 @@ from typing import Any, ClassVar, TypeVar
 
 from tqdm import tqdm
 
-from loqs.internal import worker_id
+from loqs.internal import pin_worker_threads, worker_id
 from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
@@ -29,7 +29,6 @@ from loqs.internal.streamingmerge import (
 from loqs.tools.paralleltools import (
     ParallelStrategy,
     resolve_shot_executor,
-    pin_worker_threads,
 )
 
 T = TypeVar("T")
@@ -216,9 +215,10 @@ class MultiProgramRunner(Serializable):
         (d) `checkpoint=True`, `resume=True`, no on-disk state: raise
             `ValueError` (nothing to resume from).
 
-        Once a valid case lands (a or c), the existing downstream behavior
-        is preserved: `runner.h5` is updated (after `index_map` assignment),
-        and `_reduced_results` is seeded from stored state only in case (c).
+        For both cases (a) and (c), `_reduced_results`, `_program_results`, and
+        `index_map` are seeded from stored state before `runner.h5` is written,
+        then `runner.h5` is updated with the full prior state. Progress and
+        done-detection is driven by `_read_done_union` on subsequent work.
         """
         stored = None
         if self.checkpoint:
@@ -271,12 +271,8 @@ class MultiProgramRunner(Serializable):
             # Seed internal state from stored before writing runner.h5, so the
             # first write reflects the full prior state, not a later one.
             if stored is not None:
-                # Seed _reduced_results to avoid duplicates when merge_dict_attr
-                # replays already-done items (merge_dict_attr is append-only)
                 self._reduced_results = dict(stored._reduced_results)
-                # Seed _program_results (parallel to _reduced_results)
                 self._program_results = dict(stored._program_results)
-                # Seed index_map (if item_key_fn will be used later)
                 if self.index_map is None:
                     self.index_map = (
                         dict(stored.index_map)
@@ -586,23 +582,29 @@ class MultiProgramRunner(Serializable):
         """Return list of field names to compare for resume mismatch check."""
         return []
 
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """Return this subclass's per-item shot-checkpoint subdirectory name
+        prefix (e.g. "circ", "point", "fault"), or None if this subclass
+        doesn't support per-item shot-level checkpointing at all. Base default
+        is None, preserving `_shot_checkpoint_subdir`'s own no-op default.
+        """
+        return None
+
     def _shot_checkpoint_subdir(self, index: int) -> Path | None:
         """Return the checkpoint directory for a specific item's shots, or None.
 
-        Default implementation returns None (no per-item shot subdirectories).
-        Subclasses can override to provide item-specific checkpoint paths.
-
-        Parameters
-        ----------
-        index : int
-            The item index being processed.
-
-        Returns
-        -------
-        Path | None
-            A checkpoint directory for this item's shots, or None.
+        Guards on `shot_checkpoint_dir`/`checkpoint_batch_size` both being set
+        and this subclass having a real `_shot_checkpoint_subdir_prefix()`;
+        otherwise returns None (no per-item shot subdirectories).
         """
-        return None
+        prefix = self._shot_checkpoint_subdir_prefix()
+        if (
+            prefix is None
+            or self.shot_checkpoint_dir is None
+            or self.checkpoint_batch_size is None
+        ):
+            return None
+        return self.shot_checkpoint_dir / f"{prefix}_{index}"
 
     def _num_shots_for_progress(self) -> int | None:
         """Return the number of shots per item for progress reporting, or None.
@@ -662,7 +664,15 @@ def _read_worker_files(
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
         try:
             with h5py.File(worker_file, "r") as f:
-                for key, value in iter_dict_attr_entries(f, attr_name):
+                # A shared decode_cache is required across this loop so that
+                # a Serializable value referenced by more than one entry (a
+                # ProgramResults sharing a parent QuantumProgram, say) decodes
+                # to the same real object everywhere, rather than an
+                # unresolved DeferredRef past its first occurrence.
+                decode_cache: dict = {}
+                for key, value in iter_dict_attr_entries(
+                    f, attr_name, decode_cache=decode_cache
+                ):
                     done[key] = value
         except (BlockingIOError, OSError):
             # Transient lock conflict (e.g., concurrent writer opening/closing
@@ -823,11 +833,17 @@ def _consolidate_worker_files(
                 out_root = _get_runner_object_group(out_f)
 
                 with h5py.File(worker_file, "r") as in_f:
+                    # A shared decode_cache is required across both branches
+                    # below so that Serializable values referenced by entries
+                    # in either "results" or "_program_results" decode to the
+                    # same real object everywhere, rather than unresolved
+                    # DeferredRefs past their first occurrence.
+                    decode_cache: dict = {}
                     # Merge "results" (stored as "_reduced_results" in runner.h5)
                     if "results" in in_f:
                         entries_to_merge = []
                         for key, result in iter_dict_attr_entries(
-                            in_f, "results"
+                            in_f, "results", decode_cache=decode_cache
                         ):
                             if key not in existing_reduced_results_keys:
                                 entries_to_merge.append((key, result))
@@ -846,7 +862,7 @@ def _consolidate_worker_files(
                     if "_program_results" in in_f:
                         entries_to_merge = []
                         for key, pr in iter_dict_attr_entries(
-                            in_f, "_program_results"
+                            in_f, "_program_results", decode_cache=decode_cache
                         ):
                             if key not in existing_program_results_keys:
                                 entries_to_merge.append((key, pr))
@@ -1030,55 +1046,52 @@ def _run_serial(
     )
     results_dict: dict[int, Any] = {}
 
-    try:
-        for index, item in remaining:
-            # Call process_item with keep_shot_results kwarg only if enabled
-            extra_kwargs = static_kwargs.copy()
-            if keep_shot_results:
-                extra_kwargs["keep_shot_results"] = True
+    for index, item in remaining:
+        # Call process_item with keep_shot_results kwarg only if enabled
+        extra_kwargs = static_kwargs.copy()
+        if keep_shot_results:
+            extra_kwargs["keep_shot_results"] = True
 
-            raw_return = process_item(
-                item,
-                index,
-                shot_executor=shot_executor,
-                n_shot_batches=n_shot_batches,
-                **extra_kwargs,
+        raw_return = process_item(
+            item,
+            index,
+            shot_executor=shot_executor,
+            n_shot_batches=n_shot_batches,
+            **extra_kwargs,
+        )
+
+        # Unpack result and optional ProgramResults based on keep_shot_results
+        if keep_shot_results:
+            result, in_memory_pr = raw_return
+        else:
+            result = raw_return
+
+        results_dict[index] = result
+
+        # Checkpoint result to worker file
+        if item_checkpoint_dir is not None:
+            worker_file_path = (
+                item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+            )
+            _write_dict_entry_with_retry(
+                worker_file_path, "results", index, result
             )
 
-            # Unpack result and optional ProgramResults based on keep_shot_results
+            # If keep_shot_results is enabled, retrieve and write ProgramResults
             if keep_shot_results:
-                result, in_memory_pr = raw_return
-            else:
-                result = raw_return
-
-            results_dict[index] = result
-
-            # Checkpoint result to worker file
-            if item_checkpoint_dir is not None:
-                worker_file_path = (
-                    item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+                pr = _resolve_kept_program_results(
+                    index, shot_checkpoint_subdir, in_memory_pr
                 )
-                _write_dict_entry_with_retry(
-                    worker_file_path, "results", index, result
-                )
-
-                # If keep_shot_results is enabled, retrieve and write ProgramResults
-                if keep_shot_results:
-                    pr = _resolve_kept_program_results(
-                        index, shot_checkpoint_subdir, in_memory_pr
+                if pr is not None:
+                    _write_dict_entry_with_retry(
+                        worker_file_path, "_program_results", index, pr
                     )
-                    if pr is not None:
-                        _write_dict_entry_with_retry(
-                            worker_file_path, "_program_results", index, pr
-                        )
 
-            if on_item_done is not None:
-                on_item_done(index, item, result)
+        if on_item_done is not None:
+            on_item_done(index, item, result)
 
-            if pbar is not None:
-                pbar.update(1)
-    finally:
-        pass
+        if pbar is not None:
+            pbar.update(1)
 
     return results_dict
 
@@ -1123,8 +1136,17 @@ def _poll_one_worker_file(
     """
     try:
         with h5py.File(worker_file, "r") as f:
+            # A shared decode_cache is required across this loop so that
+            # a Serializable value referenced by more than one entry (a
+            # ProgramResults sharing a parent QuantumProgram, say) decodes
+            # to the same real object everywhere, rather than an
+            # unresolved DeferredRef past its first occurrence.
+            decode_cache: dict = {}
             for key, value in iter_dict_attr_entries(
-                f, "results", start_index=consumed_count
+                f,
+                "results",
+                start_index=consumed_count,
+                decode_cache=decode_cache,
             ):
                 consumed_count += 1
                 _mark_observed_and_notify(
@@ -1327,55 +1349,52 @@ def _generic_chunk_worker(
     shot_executor = resolve_shot_executor(shot_executor)
 
     results = []
-    try:
-        for index, item in chunk:
-            # Write current_item_index to worker file if checkpointing is enabled
-            if item_checkpoint_dir is not None:
-                worker_file_path = (
-                    item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-                )
-                _write_current_item_index_with_retry(worker_file_path, index)
+    for index, item in chunk:
+        # Write current_item_index to worker file if checkpointing is enabled
+        if item_checkpoint_dir is not None:
+            worker_file_path = (
+                item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+            )
+            _write_current_item_index_with_retry(worker_file_path, index)
 
-            # Call process_item with keep_shot_results kwarg only if enabled
-            extra_kwargs = static_kwargs.copy()
-            if keep_shot_results:
-                extra_kwargs["keep_shot_results"] = True
+        # Call process_item with keep_shot_results kwarg only if enabled
+        extra_kwargs = static_kwargs.copy()
+        if keep_shot_results:
+            extra_kwargs["keep_shot_results"] = True
 
-            raw_return = process_item(
-                item,
-                index,
-                shot_executor=shot_executor,
-                n_shot_batches=n_shot_batches,
-                **extra_kwargs,
+        raw_return = process_item(
+            item,
+            index,
+            shot_executor=shot_executor,
+            n_shot_batches=n_shot_batches,
+            **extra_kwargs,
+        )
+
+        # Unpack result and optional ProgramResults based on keep_shot_results
+        if keep_shot_results:
+            result, in_memory_pr = raw_return
+        else:
+            result = raw_return
+
+        # Checkpoint result to worker file
+        if item_checkpoint_dir is not None:
+            worker_file_path = (
+                item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+            )
+            _write_dict_entry_with_retry(
+                worker_file_path, "results", index, result
             )
 
-            # Unpack result and optional ProgramResults based on keep_shot_results
+            # If keep_shot_results is enabled, retrieve and write ProgramResults
             if keep_shot_results:
-                result, in_memory_pr = raw_return
-            else:
-                result = raw_return
-
-            # Checkpoint result to worker file
-            if item_checkpoint_dir is not None:
-                worker_file_path = (
-                    item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+                pr = _resolve_kept_program_results(
+                    index, shot_checkpoint_subdir, in_memory_pr
                 )
-                _write_dict_entry_with_retry(
-                    worker_file_path, "results", index, result
-                )
-
-                # If keep_shot_results is enabled, retrieve and write ProgramResults
-                if keep_shot_results:
-                    pr = _resolve_kept_program_results(
-                        index, shot_checkpoint_subdir, in_memory_pr
+                if pr is not None:
+                    _write_dict_entry_with_retry(
+                        worker_file_path, "_program_results", index, pr
                     )
-                    if pr is not None:
-                        _write_dict_entry_with_retry(
-                            worker_file_path, "_program_results", index, pr
-                        )
 
-            results.append((index, result))
-    finally:
-        pass
+        results.append((index, result))
 
     return results

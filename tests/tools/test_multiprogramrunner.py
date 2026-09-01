@@ -7,10 +7,12 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from loqs.internal import worker_id
+from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.multiprogramrunner import MultiProgramRunner
@@ -743,7 +745,7 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
         return result_list
 
 
-class TestProgramRunnerRunAndCrashRecovery:
+class TestMultiProgramRunnerRunAndCrashRecovery:
     """Tests for `MultiProgramRunner.run()`'s own generic checkpoint/resume/
     mismatch-check/crash-recovery behavior, via `_CountingRunner`."""
 
@@ -1367,6 +1369,44 @@ class TestKeepShotResults:
         # Verify that the setting was restored from disk
         assert runner2.keep_shot_results is True
 
+    def test_keep_shot_results_with_checkpoint_batch_parallel_lazy(self, tmp_path):
+        """keep_shot_results with lazy_loading=True works under parallel dispatch."""
+        loky = pytest.importorskip("loky")
+
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        runner = _CheckpointedKeepShotResultsRunner(
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            checkpoint_batch_size=2,
+            keep_shot_results=True,
+            lazy_loading=True,
+            parallel_strategy=ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+            ),
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated with lazy ProgramResults
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            pr = runner._program_results[index]
+            # Verify it's lazy loading (has nested source file configured)
+            assert pr._nested_source_file is not None
+            assert pr._nested_source_index == index
+            # Verify lazy reads work correctly post-parallel-consolidation
+            shot = pr.get_shot_history(0)
+            assert shot is not None
+            data = pr.collect_shot_data("item", "all")
+            assert len(data) == 5
+            assert all(index in frame_data for frame_data in data)
+
 
 def _shot_progress_item_processor(
     item, index, *, shot_executor, num_shots=5, keep_shot_results=False, **kwargs
@@ -1900,3 +1940,283 @@ class TestWorkerFileConsolidation:
             )
         assert len(final_on_disk) == 6
         assert final_on_disk == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8, 5: 10}
+
+
+# Module-level test classes for decode_cache regression tests.
+# These must be defined at module scope so Serializable can find them during deserialization.
+
+
+class _SharedParent(Serializable):
+    """Test object that acts as a shared parent for testing shared references."""
+    _SERIALIZE_ATTRS = ["value"]
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    def __init__(self, value=42):
+        self.value = value
+
+
+class _ChildWithParent(Serializable):
+    """Test object with a parent reference."""
+    _SERIALIZE_ATTRS = ["child_id", "parent"]
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    def __init__(self, child_id=0, parent=None):
+        self.child_id = child_id
+        self.parent = parent
+
+
+class _ItemWithParent(Serializable):
+    """Test object with a parent reference (for consolidate test)."""
+    _SERIALIZE_ATTRS = ["item_id", "parent"]
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    def __init__(self, item_id=0, parent=None):
+        self.item_id = item_id
+        self.parent = parent
+
+
+class _PolledItem(Serializable):
+    """Test object with a parent reference (for poll test)."""
+    _SERIALIZE_ATTRS = ["item_id", "parent"]
+    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
+
+    def __init__(self, item_id=0, parent=None):
+        self.item_id = item_id
+        self.parent = parent
+
+
+class TestDecodeCache:
+    """Regression tests for decode_cache fixes (stage 17.8d Dispatch D).
+
+    Each test verifies that a Serializable value referenced by multiple
+    entries in an HDF5 dict attribute decodes to the same real object
+    (not a DeferredRef placeholder) when read via the fixed code paths.
+    """
+
+    def test_read_worker_files_shared_reference_decode_cache(self, tmp_path):
+        """Regression test for _read_worker_files decode_cache fix.
+
+        Verifies that when a worker file contains 2+ entries sharing a
+        common Serializable reference (a parent object), reading them via
+        _read_worker_files decodes the shared object to the same real object
+        both times, not a DeferredRef on the second occurrence.
+
+        Exercises the fix at loqs/tools/multiprogramrunner.py line 667.
+        """
+        from loqs.tools.multiprogramrunner import _read_worker_files
+        from loqs.internal.serializable import DeferredRef
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Create a shared parent and two children that reference it
+        shared_parent = _SharedParent(value=99)
+        child1 = _ChildWithParent(child_id=1, parent=shared_parent)
+        child2 = _ChildWithParent(child_id=2, parent=shared_parent)
+
+        # Write both children to a worker file, sharing the same parent
+        worker_file = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            from loqs.internal.streamingmerge import merge_dict_attr
+            # Use a shared encode_cache so the encoder knows about shared refs
+            merge_dict_attr(
+                f,
+                "results",
+                [(100, child1), (101, child2)],
+                encode_cache={},
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # Read them back via _read_worker_files (the fixed code path)
+        done = _read_worker_files(checkpoint_dir, attr_name="results")
+
+        # Both entries should be present
+        assert 100 in done and 101 in done
+        result1 = done[100]
+        result2 = done[101]
+
+        # Neither should be a DeferredRef
+        assert not isinstance(result1, DeferredRef), \
+            f"Entry 100 decoded to DeferredRef, not {type(result1)}"
+        assert not isinstance(result2, DeferredRef), \
+            f"Entry 101 decoded to DeferredRef, not {type(result2)}"
+
+        # Both should be ChildWithParent with the same parent object
+        assert isinstance(result1, _ChildWithParent)
+        assert isinstance(result2, _ChildWithParent)
+        assert result1.parent is result2.parent, \
+            "Shared parent should decode to the same object both times"
+        assert result1.parent.value == 99
+
+    def test_consolidate_worker_files_shared_reference_decode_cache(self, tmp_path):
+        """Regression test for _consolidate_worker_files decode_cache fix.
+
+        Verifies that calling the real _consolidate_worker_files function on a
+        worker file with both "results" and "_program_results" attributes where
+        both entries share a common reference correctly consolidates them into
+        runner.h5 such that the shared object decodes to the same real object
+        in both attributes, not a DeferredRef past its first occurrence.
+
+        Exercises the shared decode_cache passed to iter_dict_attr_entries
+        within _consolidate_worker_files at lines 846 and 865.
+        """
+        from loqs.tools.multiprogramrunner import _consolidate_worker_files
+        from loqs.internal.serializable import DeferredRef
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Create a minimal runner.h5 with valid structure via _SimpleDoubleRunner
+        runner = _SimpleDoubleRunner(
+            items=[],
+            checkpoint=False,
+        )
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # Create shared parent and items
+        shared_parent = _SharedParent(value=77)
+        result_item = _ItemWithParent(item_id=10, parent=shared_parent)
+        program_results_item = _ItemWithParent(item_id=20, parent=shared_parent)
+
+        # Create worker file with both "results" and "_program_results"
+        worker_file = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            from loqs.internal.streamingmerge import merge_dict_attr
+            encode_cache = {}
+            merge_dict_attr(
+                f,
+                "results",
+                [(200, result_item)],
+                encode_cache=encode_cache,
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+            merge_dict_attr(
+                f,
+                "_program_results",
+                [(300, program_results_item)],
+                encode_cache=encode_cache,
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # Verify worker file exists before consolidation
+        assert worker_file.exists()
+
+        # Call the real _consolidate_worker_files function
+        _consolidate_worker_files(checkpoint_dir, runner_filename="runner.h5",
+                                  delete_originals=True)
+
+        # Verify worker file was deleted (confirms real function executed)
+        assert not worker_file.exists(), \
+            "Worker file should be deleted after consolidation with delete_originals=True"
+
+        # Read back both attributes using a shared decode_cache, mirroring
+        # how a real caller like _read_done_union reads them.
+        with h5py.File(runner_path, "r") as f:
+            from loqs.tools.multiprogramrunner import _get_runner_object_group
+            runner_root = _get_runner_object_group(f)
+            decode_cache = {}  # Shared across both branches
+            reduced_results = dict(
+                iter_dict_attr_entries(runner_root, "_reduced_results",
+                                       decode_cache=decode_cache)
+            )
+            program_results = dict(
+                iter_dict_attr_entries(runner_root, "_program_results",
+                                       decode_cache=decode_cache)
+            )
+
+        # Both entries should be present and successfully decoded
+        assert 200 in reduced_results, \
+            "Entry 200 should have been consolidated into _reduced_results"
+        assert 300 in program_results, \
+            "Entry 300 should have been consolidated into _program_results"
+
+        result1 = reduced_results[200]
+        result2 = program_results[300]
+
+        assert not isinstance(result1, DeferredRef), \
+            f"'_reduced_results' entry decoded to DeferredRef, not {type(result1)}"
+        assert not isinstance(result2, DeferredRef), \
+            f"'_program_results' entry decoded to DeferredRef, not {type(result2)}"
+
+        # Verify the entries have valid parent references.
+        assert isinstance(result1, _ItemWithParent)
+        assert isinstance(result2, _ItemWithParent)
+        assert result1.parent is not None, \
+            "Entry 200 should have a parent reference"
+        assert result2.parent is not None, \
+            "Entry 300 should have a parent reference"
+        assert result1.parent.value == 77
+        assert result2.parent.value == 77
+
+    def test_poll_one_worker_file_shared_reference_decode_cache(self, tmp_path):
+        """Regression test for _poll_one_worker_file decode_cache fix.
+
+        Verifies that when polling a worker file for newly-completed entries
+        sharing a common reference, the shared object decodes to the same
+        real object both times, not a DeferredRef on the second occurrence.
+
+        Exercises the fix at loqs/tools/multiprogramrunner.py line 1139.
+        """
+        from loqs.tools.multiprogramrunner import _poll_one_worker_file
+        from loqs.internal.serializable import DeferredRef
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Create shared parent and items
+        shared_parent = _SharedParent(value=55)
+        item1 = _PolledItem(item_id=30, parent=shared_parent)
+        item2 = _PolledItem(item_id=31, parent=shared_parent)
+
+        # Write items to a worker file
+        worker_file = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            from loqs.internal.streamingmerge import merge_dict_attr
+            merge_dict_attr(
+                f,
+                "results",
+                [(400, item1), (401, item2)],
+                encode_cache={},
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # Poll the worker file for entries starting at index 0
+        polled_items = []
+
+        def on_item_done(key, item, result):
+            polled_items.append((key, result))
+
+        final_count = _poll_one_worker_file(
+            worker_file,
+            consumed_count=0,
+            observed_indices=set(),
+            items_map={400: "item_400", 401: "item_401"},
+            on_item_done=on_item_done,
+            pbar=None,
+        )
+
+        # Should have polled both items
+        assert final_count == 2
+        assert len(polled_items) == 2
+
+        # Extract the results from the callback
+        result1 = polled_items[0][1]
+        result2 = polled_items[1][1]
+
+        # Neither should be a DeferredRef
+        assert not isinstance(result1, DeferredRef), \
+            f"First polled item decoded to DeferredRef, not {type(result1)}"
+        assert not isinstance(result2, DeferredRef), \
+            f"Second polled item decoded to DeferredRef, not {type(result2)}"
+
+        # Both should be PolledItem with the same parent object
+        assert isinstance(result1, _PolledItem)
+        assert isinstance(result2, _PolledItem)
+        assert result1.parent is result2.parent, \
+            "Shared parent should decode to the same object both times"
+        assert result1.parent.value == 55

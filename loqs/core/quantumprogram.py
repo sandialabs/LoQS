@@ -19,11 +19,6 @@ from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
 import warnings
 
-try:
-    from threadpoolctl import threadpool_limits
-except ImportError:
-    threadpool_limits = None  # type: ignore
-
 from tqdm import tqdm
 
 from loqs.backends.model import BaseNoiseModel
@@ -47,7 +42,7 @@ from loqs.core.instructions.instructionstack import (
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchLayout
 from loqs.core.programresults import ProgramResults
-from loqs.internal import Displayable, worker_id
+from loqs.internal import Displayable, pin_worker_threads, worker_id
 from loqs.internal.legacy import legacy_name_hint
 
 T = TypeVar("T", bound="QuantumProgram")
@@ -696,8 +691,8 @@ class QuantumProgram(Displayable):
 
         checkpoint_dir:
             Directory to store checkpoint files. If None (default), checkpoints
-            are stored in a temporary directory. Only relevant when
-            `checkpoint=True`; ignored otherwise.
+            are stored in a `./checkpoints` directory in the current working
+            directory. Only relevant when `checkpoint=True`; ignored otherwise.
 
         lazy_loading:
              Whether checkpointed shots are evicted from the returned
@@ -906,14 +901,7 @@ class QuantumProgram(Displayable):
         shot_specs: list[tuple[int | None, int]],
         checkpoint_dir: str | Path | None,
     ) -> dict[int, HistoryLike]:
-        if threadpool_limits is not None:
-            threadpool_limits(1)
-        else:
-            warnings.warn(
-                "threadpoolctl is not installed, so worker thread pools "
-                "cannot be limited to avoid oversubscription. Install "
-                "loqs[parallel] or loqs[mpi]."
-            )
+        pin_worker_threads()
 
         # A throwaway ProgramResults scoped to just this batch -- lazy
         # loading is disabled so checkpoint() doesn't evict the shots we're
@@ -940,14 +928,7 @@ class QuantumProgram(Displayable):
     # has already initialized its own thread pool.
     @staticmethod
     def _run_shot_worker(*args, **kwargs):
-        if threadpool_limits is not None:
-            threadpool_limits(1)
-        else:
-            warnings.warn(
-                "threadpoolctl is not installed, so worker thread pools "
-                "cannot be limited to avoid oversubscription. Install "
-                "loqs[parallel] or loqs[mpi]."
-            )
+        pin_worker_threads()
         return QuantumProgram._run_shot(*args, **kwargs)
 
     # Static for more efficient parallel data movement

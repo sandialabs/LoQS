@@ -366,6 +366,47 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
 
         assert failed == []
 
+    def test_keep_shot_results_parallel(self, tmp_path):
+        """FaultInjectionRunner with keep_shot_results=True works under parallel dispatch."""
+        loky = pytest.importorskip("loky")
+
+        program1 = _build_counter_program()
+        program2 = _build_counter_program()
+
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program1, program2],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            parallel_strategy=strategy,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            checkpoint_batch_size=1,
+            keep_shot_results=True,
+            lazy_loading=False,
+        )
+        failed = runner.run()
+
+        # Verify it completes with no failures
+        assert failed == []
+
+        # Verify _program_results has one entry per program
+        assert len(runner._program_results) == 2
+        for prog_index in range(2):
+            assert prog_index in runner._program_results
+            pr = runner._program_results[prog_index]
+            # Verify correct shot count
+            assert len(pr.shot_histories) == 1
+
 
 class TestFaultInjectionRunnerCheckpointing:
     """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""

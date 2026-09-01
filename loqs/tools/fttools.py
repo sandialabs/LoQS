@@ -567,18 +567,9 @@ class FaultInjectionRunner(MultiProgramRunner):
             "expected_outcomes",
         ]
 
-    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
-        """Return the checkpoint directory for a specific program's shots.
-
-        Returns a per-program subdirectory under shot_checkpoint_dir keyed by
-        the program index, or None if shot-level checkpointing is not enabled.
-        """
-        if (
-            self.shot_checkpoint_dir is not None
-            and self.checkpoint_batch_size is not None
-        ):
-            return _fault_checkpoint_subdir(self.shot_checkpoint_dir, index)
-        return None
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """fault_{index}"""
+        return "fault"
 
 
 def test_program_output(

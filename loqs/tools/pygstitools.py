@@ -22,7 +22,6 @@ import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any
-from tqdm import tqdm
 
 from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.historydatacollector import (
@@ -517,18 +516,9 @@ class EdesignRunner(MultiProgramRunner):
             "max_frame_limit",
         ]
 
-    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
-        """Return the checkpoint directory for a specific circuit's shots.
-
-        Returns a per-circuit subdirectory under shot_checkpoint_dir keyed by
-        the circuit index, or None if shot-level checkpointing is not enabled.
-        """
-        if (
-            self.shot_checkpoint_dir is not None
-            and self.checkpoint_batch_size is not None
-        ):
-            return self.shot_checkpoint_dir / f"circ_{index}"
-        return None
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """circ_{index}"""
+        return "circ"
 
 
 ## BEGIN VISUALIZATION TOOLS
