@@ -231,11 +231,15 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
             assert item == i
             assert result == i * 2
 
-        # Verify worker file exists with correct entries
+        # After a completed run, worker files should be consolidated into
+        # runner.h5 and deleted (verify consolidation occurred by checking
+        # runner.h5 has all results)
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 1
-        with h5py.File(worker_files[0], "r") as f:
-            entries = list(iter_dict_attr_entries(f, "results"))
+        assert len(worker_files) == 0  # Worker files deleted after consolidation
+        runner_path = checkpoint_dir / "runner.h5"
+        assert runner_path.exists()
+        with h5py.File(runner_path, "r") as f:
+            entries = list(iter_dict_attr_entries(f, "_reduced_results"))
         assert len(entries) == 5
 
     def test_serial_crash_simulation_and_resume(self, tmp_path):
@@ -253,7 +257,9 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         with pytest.raises(RuntimeError, match="Simulated crash"):
             runner1.run()
 
-        # Verify worker file has 3 entries
+        # After a crash, the worker file with partial results should still exist
+        # (consolidation only happens on successful completion).
+        # Verify the partial results are in the worker file.
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
         assert len(worker_files) == 1
         with h5py.File(worker_files[0], "r") as f:
@@ -296,17 +302,16 @@ class TestMultiProgramRunnerParallel:
         results = runner.run()
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        # Should have multiple worker files (one per worker)
+        # After a completed parallel run, worker files should be consolidated
+        # into runner.h5 and deleted
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) >= 1
-        # Verify all 10 items were written to worker files
-        total_entries = 0
-        for worker_file in worker_files:
-            with h5py.File(worker_file, "r") as f:
-                total_entries += len(
-                    list(iter_dict_attr_entries(f, "results"))
-                )
-        assert total_entries == 10
+        assert len(worker_files) == 0  # Worker files deleted after consolidation
+        # Verify all 10 items are now in runner.h5
+        runner_path = checkpoint_dir / "runner.h5"
+        assert runner_path.exists()
+        with h5py.File(runner_path, "r") as f:
+            entries = list(iter_dict_attr_entries(f, "_reduced_results"))
+        assert len(entries) == 10
         # on_item_done should have been called for all items
         assert len(runner.on_item_done_calls) == 10
 
@@ -372,10 +377,11 @@ class TestMultiProgramRunnerParallel:
         results = runner2.run()
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        # Verify that all 10 items are now done
-        from loqs.tools.multiprogramrunner import _read_worker_files
+        # Verify that all 10 items are now done (reading from consolidated
+        # runner.h5, since worker files are deleted after consolidation)
+        from loqs.tools.multiprogramrunner import _read_done_union
 
-        done = _read_worker_files(checkpoint_dir)
+        done = _read_done_union(checkpoint_dir, attr_name="results")
         assert len(done) == 10  # All 10 should be done now
         # The important test is that the final results are correct
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
@@ -908,18 +914,23 @@ class TestMergeReducedResult:
         )
         runner.run()
 
-        # Now merge in some reduced results
-        runner._merge_reduced_result(0, "reduced_0")
-        runner._merge_reduced_result(1, "reduced_1")
+        # Now merge in some reduced results for indices not yet in runner.h5
+        runner._merge_reduced_result(10, "reduced_10")
+        runner._merge_reduced_result(11, "reduced_11")
 
-        # Verify they were written to runner.h5
+        # Verify they were written to runner.h5 alongside the run results
         runner_path = checkpoint_dir / "runner.h5"
         from loqs.internal.streamingmerge import iter_dict_attr_entries
 
         with h5py.File(runner_path, "r") as f:
             reduced = dict(iter_dict_attr_entries(f, "_reduced_results"))
 
-        assert reduced == {0: "reduced_0", 1: "reduced_1"}
+        # Should contain the run results (0=2, 1=4, 2=6) plus the merged ones
+        assert reduced[10] == "reduced_10"
+        assert reduced[11] == "reduced_11"
+        assert 0 in reduced  # From the run
+        assert 1 in reduced  # From the run
+        assert 2 in reduced  # From the run
 
 
 class TestIndexMapPersistence:
@@ -1247,7 +1258,7 @@ class TestKeepShotResults:
 
     def test_keep_shot_results_with_checkpoint_batch_parallel(self, tmp_path):
         """keep_shot_results with checkpoint_batch_size works in parallel dispatch."""
-        import loky
+        loky = pytest.importorskip("loky")
 
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
@@ -1727,3 +1738,165 @@ class TestShotProgressBar:
             f"Expected shots_pbar.initial=10 (len(done)=2 * num_shots=5), "
             f"got {shots_init['initial']}"
         )
+
+
+class TestWorkerFileConsolidation:
+    """Tests for worker file consolidation and deletion behavior."""
+
+    def test_completed_run_consolidates_and_deletes_worker_files(
+        self, tmp_path
+    ):
+        """A completed run should consolidate all worker files into runner.h5
+        and delete the worker files afterward."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(5))
+
+        runner = _TrackingRunner(
+            items,
+            process_fn=_double_item,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+        results = runner.run()
+
+        assert results == [0, 2, 4, 6, 8]
+
+        # After completion, worker files should be deleted
+        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
+        assert len(worker_files) == 0, "Worker files should be deleted after consolidation"
+
+        # All results should be consolidated into runner.h5
+        runner_path = checkpoint_dir / "runner.h5"
+        assert runner_path.exists()
+        with h5py.File(runner_path, "r") as f:
+            from loqs.internal.streamingmerge import iter_dict_attr_entries
+
+            entries = dict(iter_dict_attr_entries(f, "_reduced_results"))
+        assert len(entries) == 5
+        assert entries == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8}
+
+    def test_resume_with_deleted_worker_files_reads_from_runner_h5(
+        self, tmp_path
+    ):
+        """A resume where all worker files have already been consolidated
+        and deleted should correctly detect done items purely from runner.h5,
+        execute only remaining items, and produce correct final results."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(6))
+
+        # First run: complete the run (consolidates and deletes worker files)
+        runner1 = _TrackingRunner(
+            items,
+            process_fn=_double_item,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+        results1 = runner1.run()
+        assert results1 == [0, 2, 4, 6, 8, 10]
+
+        # Verify worker files are gone
+        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
+        assert len(worker_files) == 0
+
+        # Second run: resume from checkpoint where only runner.h5 exists
+        # (no worker files). This tests that done-detection reads from
+        # runner.h5's _reduced_results correctly.
+        runner2 = _TrackingRunner(
+            items,
+            process_fn=_double_item,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+        results2 = runner2.run()
+
+        # All items should be skipped (already done)
+        assert runner2.call_count[0] == 0
+        assert results2 == [0, 2, 4, 6, 8, 10]
+
+        # Verify runner.h5 still contains all results
+        runner_path = checkpoint_dir / "runner.h5"
+        with h5py.File(runner_path, "r") as f:
+            from loqs.internal.streamingmerge import iter_dict_attr_entries
+
+            entries = dict(iter_dict_attr_entries(f, "_reduced_results"))
+        assert len(entries) == 6
+
+    def test_resume_of_resume_with_interruption(self, tmp_path):
+        """Regression test for Bug A/B: a resume-of-resume where each
+        resume is itself interrupted before completion. Verify that:
+        1. The final result includes every item's correct value
+        2. runner.h5's on-disk _reduced_results (decoded fresh, not in-memory)
+           contains every already-done item at each intermediate stage.
+
+        This test locks in the fix that seeds _reduced_results/_program_results
+        before the first write() in run(), not after.
+        """
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(6))
+
+        # First partial run: complete items 0-1 only
+        runner1 = _RaisingRunner(
+            items,
+            process_fn=_raise_after_n,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            max_count=2,
+        )
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            runner1.run()
+
+        # Verify partial results are persisted (either in worker file or
+        # runner.h5 via the union reader)
+        from loqs.tools.multiprogramrunner import _read_done_union
+
+        on_disk_after_crash1 = _read_done_union(
+            checkpoint_dir, attr_name="results"
+        )
+        assert len(on_disk_after_crash1) == 2
+        assert on_disk_after_crash1 == {0: 0, 1: 2}
+
+        # Second run: resume and complete items 2-3 before crashing again.
+        # Items 0-1 are already done, so only 2-5 will be processed (4 items).
+        # To process items 2-3 then crash on item 4, we need max_count=2.
+        runner2 = _RaisingRunner(
+            items,
+            process_fn=_raise_after_n,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+            max_count=2,  # Will process items 2,3 then crash on item 4
+        )
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            runner2.run()
+
+        # Verify results 0-3 are persisted (Bug A fix ensures the original
+        # 0-1 weren't lost and blanked when runner.h5 was seeded before write)
+        on_disk_after_crash2 = _read_done_union(
+            checkpoint_dir, attr_name="results"
+        )
+        assert len(on_disk_after_crash2) == 4
+        assert on_disk_after_crash2 == {0: 0, 1: 2, 2: 4, 3: 6}
+
+        # Third run: resume and complete the remaining items (4-5)
+        runner3 = _TrackingRunner(
+            items,
+            process_fn=_count_and_double,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+        results3 = runner3.run()
+
+        # Final result should have all items with correct values
+        assert results3 == [0, 2, 4, 6, 8, 10]
+
+        # Verify runner.h5 now has all 6 items consolidated
+        with h5py.File(checkpoint_dir / "runner.h5", "r") as f:
+            from loqs.internal.streamingmerge import iter_dict_attr_entries
+
+            final_on_disk = dict(
+                iter_dict_attr_entries(f, "_reduced_results")
+            )
+        assert len(final_on_disk) == 6
+        assert final_on_disk == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8, 5: 10}

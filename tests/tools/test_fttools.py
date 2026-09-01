@@ -371,10 +371,12 @@ class TestFaultInjectionRunnerCheckpointing:
     """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""
 
     def _read_completed_indices(self, ckpt):
-        """Return set of indices completed in checkpoint dir's worker files."""
-        from loqs.tools.multiprogramrunner import _read_worker_files
+        """Return set of indices completed so far, reading the union of
+        runner.h5's own consolidated state and any remaining worker files
+        (covers both a still-in-progress run and one already consolidated)."""
+        from loqs.tools.multiprogramrunner import _read_done_union
 
-        return set(_read_worker_files(ckpt).keys())
+        return set(_read_done_union(ckpt).keys())
 
     def test_checkpoint_run_matches_non_checkpointed_result(self, tmp_path):
         """Checkpointing doesn't change the result; leaves checkpoint dir."""
@@ -493,30 +495,14 @@ class TestFaultInjectionRunnerCheckpointing:
         assert failed1 == []
         assert self._read_completed_indices(ckpt) == {0, 1}
 
-        # Simulate a crash: rewrite each worker file to keep only index 0
-        # (as if the second program's entry was never durably checkpointed).
-        import h5py
-        from loqs.internal.streamingmerge import (
-            iter_dict_attr_entries,
-            merge_dict_attr,
-        )
-
-        for wfile in ckpt.glob("worker_*_runner.h5"):
-            with h5py.File(wfile, "r") as f:
-                kept = [
-                    (k, v)
-                    for k, v in iter_dict_attr_entries(f, "results")
-                    if k == 0
-                ]
-            wfile.unlink()
-            with h5py.File(wfile, "a") as f:
-                merge_dict_attr(
-                    f,
-                    "results",
-                    kept,
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
+        # Simulate a crash: worker files are already consolidated and
+        # deleted after a successful run, so simulate the second program's
+        # entry never having been durably checkpointed by removing it
+        # directly from runner.h5 (now the canonical durable store) via a
+        # read-mutate-write round trip.
+        stored = fttools.FaultInjectionRunner.read(ckpt / "runner.h5")
+        del stored._reduced_results[1]
+        stored.write(ckpt / "runner.h5")
 
         assert self._read_completed_indices(ckpt) == {0}
 
@@ -748,14 +734,14 @@ class TestFaultInjectionRunnerCheckpointing:
 
         # Verify: program 0's shot checkpoint should be complete (6 shots)
         from loqs.core import ProgramResults
-        prog0_shot_ckpt = shot_ckpt / "item_0"
+        prog0_shot_ckpt = shot_ckpt / "fault_0"
         assert prog0_shot_ckpt.exists()
         prog0_results = ProgramResults()
         prog0_results.load_checkpoint(prog0_shot_ckpt)
         assert len(prog0_results.shot_histories) == 6
 
         # Verify: program 1's shot checkpoint should be partial (2 of 6 shots)
-        prog1_shot_ckpt = shot_ckpt / "item_1"
+        prog1_shot_ckpt = shot_ckpt / "fault_1"
         assert prog1_shot_ckpt.exists()
         prog1_results_partial = ProgramResults()
         prog1_results_partial.load_checkpoint(prog1_shot_ckpt)
@@ -852,7 +838,7 @@ class TestFaultInjectionRunnerCheckpointing:
         # Manually verify/set up the precondition: program 0 complete,
         # program 1 subdirectory exists but may or may not have results.h5
         from loqs.core import ProgramResults
-        prog0_shot_ckpt = shot_ckpt / "item_0"
+        prog0_shot_ckpt = shot_ckpt / "fault_0"
         assert prog0_shot_ckpt.exists()
         prog0_results = ProgramResults()
         prog0_results.load_checkpoint(prog0_shot_ckpt)
@@ -860,7 +846,7 @@ class TestFaultInjectionRunnerCheckpointing:
 
         # If program 1's results.h5 exists, remove it to simulate the case where
         # program 1's batch didn't complete before the crash
-        prog1_shot_ckpt = shot_ckpt / "item_1"
+        prog1_shot_ckpt = shot_ckpt / "fault_1"
         prog1_results_file = prog1_shot_ckpt / "results.h5"
         if prog1_results_file.exists():
             prog1_results_file.unlink()

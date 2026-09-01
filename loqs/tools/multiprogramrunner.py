@@ -268,27 +268,34 @@ class MultiProgramRunner(Serializable):
                         f"{', '.join(mismatches)}. Pass force_resume=True to resume anyway."
                     )
 
-            # Both cases (a) and (c): write/update runner.h5
+            # Seed internal state from stored before writing runner.h5, so the
+            # first write reflects the full prior state, not a later one.
+            if stored is not None:
+                # Seed _reduced_results to avoid duplicates when merge_dict_attr
+                # replays already-done items (merge_dict_attr is append-only)
+                self._reduced_results = dict(stored._reduced_results)
+                # Seed _program_results (parallel to _reduced_results)
+                self._program_results = dict(stored._program_results)
+                # Seed index_map (if item_key_fn will be used later)
+                if self.index_map is None:
+                    self.index_map = (
+                        dict(stored.index_map)
+                        if stored.index_map is not None
+                        else {}
+                    )
+
+            # Both cases (a) and (c): write/update runner.h5 with seeded state
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
 
-        # Seed _reduced_results from prior run if resuming, to avoid duplicates
-        # when replaying already-done items (merge_dict_attr is append-only)
-        if stored is not None:
-            self._reduced_results = dict(stored._reduced_results)
-
         # Pre-assign indices via item_key_fn, adopting the persisted map
-        # from `stored` first so a fresh resumed instance doesn't reassign
+        # (or the now-seeded map) so a fresh resumed instance doesn't reassign
         # indices out from under already-checkpointed work.
         precomputed_indices = None
         if self._item_key_fn() is not None:
             key_fn = self._item_key_fn()
             if self.index_map is None:
-                self.index_map = (
-                    dict(stored.index_map)
-                    if stored is not None and stored.index_map is not None
-                    else {}
-                )
+                self.index_map = {}
             items_with_index = _assign_indices_with_keys(
                 self._get_items(), key_fn, self.index_map
             )
@@ -316,10 +323,14 @@ class MultiProgramRunner(Serializable):
             items, precomputed_indices
         )
 
-        # Read prior progress
+        # Read prior progress (union of runner.h5 and worker files)
         done: dict[int, Any] = {}
         if self.item_checkpoint_dir is not None:
-            done = _read_worker_files(self.item_checkpoint_dir)
+            done = _read_done_union(
+                self.item_checkpoint_dir,
+                runner_filename=self.runner_filename,
+                attr_name="results",
+            )
 
         # Compute on_item_done callback once and reuse it throughout
         on_item_done = self._make_on_item_done()
@@ -426,16 +437,25 @@ class MultiProgramRunner(Serializable):
                     num_shots_for_progress,
                 )
 
-            # Final assembly - read authoritative results from worker files if available
+            # Final assembly - consolidate worker files and read union of
+            # runner.h5 and any remaining worker files
             if self.item_checkpoint_dir is not None:
-                final_done = _read_worker_files(
-                    self.item_checkpoint_dir, attr_name="results"
+                # Always consolidate worker files (both "results" and
+                # "_program_results"), then delete them once merged
+                _consolidate_worker_files(
+                    self.item_checkpoint_dir,
+                    runner_filename=self.runner_filename,
+                    delete_originals=True,
                 )
-                # Consolidate _program_results if keep_shot_results is enabled
+                # Read final results from the union of runner.h5 and any
+                # remaining worker files (edge cases past consolidation above)
+                final_done = _read_done_union(
+                    self.item_checkpoint_dir,
+                    runner_filename=self.runner_filename,
+                    attr_name="results",
+                )
+                # Handle _program_results if keep_shot_results is enabled
                 if self.keep_shot_results:
-                    _consolidate_program_results(
-                        self.item_checkpoint_dir, self.runner_filename
-                    )
                     if self.lazy_loading:
                         runner_path = (
                             self.item_checkpoint_dir / self.runner_filename
@@ -447,8 +467,9 @@ class MultiProgramRunner(Serializable):
                             for index in final_done.keys()
                         }
                     else:
-                        self._program_results = _read_worker_files(
+                        self._program_results = _read_done_union(
                             self.item_checkpoint_dir,
+                            runner_filename=self.runner_filename,
                             attr_name="_program_results",
                         )
             else:
@@ -650,6 +671,74 @@ def _read_worker_files(
     return done
 
 
+def _read_done_union(
+    checkpoint_dir: Path,
+    runner_filename: str = "runner.h5",
+    attr_name: str = "results",
+) -> dict[int, Any]:
+    """Compute the union of runner.h5's consolidated dict attribute and all
+    worker_*_runner.h5 files' matching attributes, mirroring the pattern of
+    ProgramResults._load_done_shots.
+
+    Reads from runner.h5's own state first (if it exists), then merges in any
+    entries from worker files, with worker file entries taking precedence on
+    key collision (same merge semantics as merge_dict_attr).
+
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory containing runner.h5 and/or worker_*_runner.h5 files.
+    runner_filename : str, optional
+        Name of the runner checkpoint file (default "runner.h5").
+    attr_name : str, optional
+        Name of the dict attribute to read. Maps "results" to "_reduced_results"
+        in runner.h5's actual attribute name; other names used as-is.
+        Default is "results".
+
+    Returns
+    -------
+    dict[int, Any]
+        Union of all entries from runner.h5 and all worker files.
+        Returns empty dict if no checkpoints exist.
+    """
+    done: dict[int, Any] = {}
+
+    # First, read runner.h5's consolidated state if it exists
+    runner_path = checkpoint_dir / runner_filename
+    if runner_path.exists():
+        try:
+            with h5py.File(runner_path, "r") as f:
+                # Map "results" (the dict attribute name) to "_reduced_results"
+                # (the internal attribute name in runner.h5)
+                runner_attr_name = (
+                    "_reduced_results" if attr_name == "results" else attr_name
+                )
+                # A shared decode_cache is required across this loop so that
+                # a Serializable value referenced by more than one entry (a
+                # ProgramResults sharing a parent QuantumProgram, say) decodes
+                # to the same real object everywhere, rather than an
+                # unresolved DeferredRef past its first occurrence.
+                decode_cache: dict = {}
+                for key, value in iter_dict_attr_entries(
+                    f, runner_attr_name, decode_cache=decode_cache
+                ):
+                    done[key] = value
+        except (BlockingIOError, OSError, KeyError):
+            # Transient lock, missing attribute, or file corruption;
+            # fall back to worker files
+            pass
+
+    # Then, read every worker_*_runner.h5 (worker entries override runner.h5 if
+    # there's a key collision, which shouldn't happen normally but ensures
+    # freshest data if both exist)
+    for key, value in _read_worker_files(
+        checkpoint_dir, attr_name=attr_name
+    ).items():
+        done[key] = value
+
+    return done
+
+
 def _get_runner_object_group(f: h5py.File) -> h5py.Group:
     """Navigate to the MultiProgramRunner object group inside runner.h5."""
     root = f[next(iter(f.keys()))]
@@ -663,63 +752,140 @@ def _get_runner_object_group(f: h5py.File) -> h5py.Group:
     return root
 
 
-def _consolidate_program_results(
-    checkpoint_dir: Path, runner_filename: str = "runner.h5"
+def _get_existing_dict_keys(obj_grp: h5py.Group, attr_name: str) -> set[int]:
+    """Extract existing keys from a dict attribute in an HDF5 object group."""
+    if attr_name not in obj_grp:
+        return set()
+    grp = obj_grp[attr_name]
+    if not (
+        "dict" in grp
+        and "keys" in grp["dict"]
+        and "iterable" in grp["dict/keys"]
+    ):
+        return set()
+    keys_iterable = grp["dict/keys/iterable"]
+    storage_format = keys_iterable.attrs.get("storage_format", "groups")
+    from loqs.internal.streamingmerge import _read_iterable_side
+
+    return set(
+        _read_iterable_side(keys_iterable, storage_format, decode_cache=None)
+    )
+
+
+def _consolidate_worker_files(
+    checkpoint_dir: Path,
+    runner_filename: str = "runner.h5",
+    delete_originals: bool = True,
 ) -> None:
-    """Consolidate _program_results from all worker files into runner.h5.
+    """Consolidate all worker_*_runner.h5 files into runner.h5 and optionally
+    delete worker files once merged.
 
     Streams one item at a time from worker files into runner.h5's object group,
-    keeping memory bounded. Skips indices already present in runner.h5's
-    _program_results attribute to avoid duplicate entries on resume.
+    keeping memory bounded. Merges both "results" (stored as "_reduced_results")
+    and "_program_results" attributes. Skips indices already present in
+    runner.h5 to avoid duplicate entries on resume. Deletes each worker file
+    only once its entries are confirmed merged (crash-safe: a crashed merge
+    self-heals on retry since the worker file is still present).
+
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory containing worker_*_runner.h5 files.
+    runner_filename : str, optional
+        Name of the runner.h5 file (default "runner.h5").
+    delete_originals : bool, optional
+        If True, delete worker files after they are successfully merged
+        (default True). If False, leave worker files in place.
     """
     runner_path = checkpoint_dir / runner_filename
     if not runner_path.exists():
         return
 
+    # Track existing keys in runner.h5 to avoid duplicates
+    existing_reduced_results_keys: set[int] = set()
+    existing_program_results_keys: set[int] = set()
+
     with h5py.File(runner_path, "a") as out_f:
         if len(out_f.keys()) == 0:
             return
         out_root = _get_runner_object_group(out_f)
-        existing_keys: set[int] = set()
-        if "_program_results" in out_root:
-            pr_grp = out_root["_program_results"]
-            if (
-                "dict" in pr_grp
-                and "keys" in pr_grp["dict"]
-                and "iterable" in pr_grp["dict/keys"]
-            ):
-                keys_iterable = pr_grp["dict/keys/iterable"]
-                storage_format = keys_iterable.attrs.get(
-                    "storage_format", "groups"
-                )
-                from loqs.internal.streamingmerge import _read_iterable_side
+        existing_reduced_results_keys = _get_existing_dict_keys(
+            out_root, "_reduced_results"
+        )
+        existing_program_results_keys = _get_existing_dict_keys(
+            out_root, "_program_results"
+        )
 
-                existing_keys = set(
-                    _read_iterable_side(
-                        keys_iterable, storage_format, decode_cache=None
-                    )
-                )
+    # Consolidate each worker file and delete it once merged
+    for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
+        try:
+            with h5py.File(runner_path, "a") as out_f:
+                out_root = _get_runner_object_group(out_f)
 
-        for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
-            try:
                 with h5py.File(worker_file, "r") as in_f:
-                    if "_program_results" in in_f:
-                        for key, pr in iter_dict_attr_entries(
-                            in_f, "_program_results"
+                    # Merge "results" (stored as "_reduced_results" in runner.h5)
+                    if "results" in in_f:
+                        entries_to_merge = []
+                        for key, result in iter_dict_attr_entries(
+                            in_f, "results"
                         ):
-                            if key in existing_keys:
-                                continue
+                            if key not in existing_reduced_results_keys:
+                                entries_to_merge.append((key, result))
+                                existing_reduced_results_keys.add(key)
+                        if entries_to_merge:
                             merge_dict_attr(
                                 out_root,
-                                "_program_results",
-                                [(key, pr)],
+                                "_reduced_results",
+                                entries_to_merge,
                                 encode_cache={},
                                 key_use_dataset=True,
                                 value_use_dataset=False,
                             )
-                            existing_keys.add(key)
-            except (BlockingIOError, OSError):
-                continue
+
+                    # Merge "_program_results" if present
+                    if "_program_results" in in_f:
+                        entries_to_merge = []
+                        for key, pr in iter_dict_attr_entries(
+                            in_f, "_program_results"
+                        ):
+                            if key not in existing_program_results_keys:
+                                entries_to_merge.append((key, pr))
+                                existing_program_results_keys.add(key)
+                        if entries_to_merge:
+                            merge_dict_attr(
+                                out_root,
+                                "_program_results",
+                                entries_to_merge,
+                                encode_cache={},
+                                key_use_dataset=True,
+                                value_use_dataset=False,
+                            )
+
+            # Delete worker file once its contents are confirmed merged
+            if delete_originals:
+                try:
+                    worker_file.unlink()
+                except OSError:
+                    # File already deleted or inaccessible; ignore
+                    pass
+
+        except (BlockingIOError, OSError):
+            # Transient lock conflict; skip this file for now
+            # (will be retried on next consolidation call)
+            continue
+
+
+def _consolidate_program_results(
+    checkpoint_dir: Path, runner_filename: str = "runner.h5"
+) -> None:
+    """Deprecated: use _consolidate_worker_files instead.
+
+    Kept for backward compatibility. Consolidates _program_results from all
+    worker files into runner.h5 without deleting worker files.
+    """
+    _consolidate_worker_files(
+        checkpoint_dir, runner_filename, delete_originals=False
+    )
 
 
 def _write_dict_entry_with_retry(

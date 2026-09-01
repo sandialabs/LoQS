@@ -140,7 +140,7 @@ def _run_one_circuit(
         circ, physical_model, label_to_logical, **program_kwargs
     )
     checkpoint_dir = (
-        Path(shot_checkpoint_dir) / f"item_{index}"
+        Path(shot_checkpoint_dir) / f"circ_{index}"
         if shot_checkpoint_dir is not None
         else None
     )
@@ -527,7 +527,7 @@ class EdesignRunner(MultiProgramRunner):
             self.shot_checkpoint_dir is not None
             and self.checkpoint_batch_size is not None
         ):
-            return self.shot_checkpoint_dir / f"item_{index}"
+            return self.shot_checkpoint_dir / f"circ_{index}"
         return None
 
 

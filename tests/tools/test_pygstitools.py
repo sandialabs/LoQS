@@ -746,16 +746,16 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         assert ds[s.circs[1]].counts[("1",)] == 1
 
         # Confirm per-circuit subdirs exist and contain checkpoints using the
-        # new item_{index} naming scheme
+        # new circ_{index} naming scheme
         subdirs = list(shot_ckpt_dir.iterdir())
         assert len(subdirs) == 2, (
             f"Expected 2 circuit subdirs, got {len(subdirs)}: {subdirs}"
         )
-        assert set(d.name for d in subdirs) == {"item_0", "item_1"}
+        assert set(d.name for d in subdirs) == {"circ_0", "circ_1"}
 
         # Verify each circuit's checkpoint subdirectory by index
         for circuit_index in range(len(s.circs)):
-            circ_subdir = shot_ckpt_dir / f"item_{circuit_index}"
+            circ_subdir = shot_ckpt_dir / f"circ_{circuit_index}"
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
 
             # Confirm the checkpoint file exists and can load the right number of shots
@@ -796,14 +796,14 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         assert ds[s.circs[1]].counts[("1",)] == 1
 
         # Confirm both circuit subdirs exist independently using the new
-        # item_{index} naming scheme where index is the circuit's position
+        # circ_{index} naming scheme where index is the circuit's position
         subdirs = list(shot_ckpt_dir.iterdir())
         assert len(subdirs) == 2
-        assert set(d.name for d in subdirs) == {"item_0", "item_1"}
+        assert set(d.name for d in subdirs) == {"circ_0", "circ_1"}
 
         # Verify each circuit's checkpoint subdirectory by index
         for circuit_index in range(len(s.circs)):
-            circ_subdir = shot_ckpt_dir / f"item_{circuit_index}"
+            circ_subdir = shot_ckpt_dir / f"circ_{circuit_index}"
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
             checkpoint_file = circ_subdir / "results.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
@@ -855,14 +855,14 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             )
 
         # Verify: circuit 0's shot checkpoint should be complete (2 shots)
-        circ0_shot_ckpt = shot_ckpt / "item_0"
+        circ0_shot_ckpt = shot_ckpt / "circ_0"
         assert circ0_shot_ckpt.exists()
         circ0_results = ProgramResults()
         circ0_results.load_checkpoint(circ0_shot_ckpt)
         assert len(circ0_results.shot_histories) == 2
 
         # Verify: circuit 1's shot checkpoint should be partial (1 of 2 shots)
-        circ1_shot_ckpt = shot_ckpt / "item_1"
+        circ1_shot_ckpt = shot_ckpt / "circ_1"
         assert circ1_shot_ckpt.exists()
         circ1_results_partial = ProgramResults()
         circ1_results_partial.load_checkpoint(circ1_shot_ckpt)
@@ -943,7 +943,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
         # Manually verify/set up the precondition: circuit 0 complete,
         # circuit 1 subdirectory exists but may or may not have results.h5
-        circ0_shot_ckpt = shot_ckpt / "item_0"
+        circ0_shot_ckpt = shot_ckpt / "circ_0"
         assert circ0_shot_ckpt.exists()
         circ0_results = ProgramResults()
         circ0_results.load_checkpoint(circ0_shot_ckpt)
@@ -951,7 +951,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
         # If circuit 1's results.h5 exists, remove it to simulate the case where
         # circuit 1's batch didn't complete before the crash
-        circ1_shot_ckpt = shot_ckpt / "item_1"
+        circ1_shot_ckpt = shot_ckpt / "circ_1"
         circ1_results_file = circ1_shot_ckpt / "results.h5"
         if circ1_results_file.exists():
             circ1_results_file.unlink()

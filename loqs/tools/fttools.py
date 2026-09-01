@@ -397,11 +397,11 @@ def build_discrete_error_injection_programs(
     return errored_programs
 
 
-def _item_checkpoint_subdir(
+def _fault_checkpoint_subdir(
     shot_checkpoint_dir: str | Path, index: int
 ) -> Path:
     """Isolated subdirectory for one program's shots, keyed by index."""
-    return Path(shot_checkpoint_dir) / f"item_{index}"
+    return Path(shot_checkpoint_dir) / f"fault_{index}"
 
 
 def _run_one_program(
@@ -429,7 +429,7 @@ def _run_one_program(
     """
     item_shot_checkpoint_dir = None
     if shot_checkpoint_dir is not None:
-        item_shot_checkpoint_dir = _item_checkpoint_subdir(
+        item_shot_checkpoint_dir = _fault_checkpoint_subdir(
             shot_checkpoint_dir, index
         )
 
@@ -577,7 +577,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             self.shot_checkpoint_dir is not None
             and self.checkpoint_batch_size is not None
         ):
-            return _item_checkpoint_subdir(self.shot_checkpoint_dir, index)
+            return _fault_checkpoint_subdir(self.shot_checkpoint_dir, index)
         return None
 
 
