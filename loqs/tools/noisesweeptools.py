@@ -146,6 +146,7 @@ def _run_one_sweep_point(
     index: int,
     *,
     shot_executor: Any | None,
+    n_shot_batches: int | None,
     runner: "NoiseSweepRunner",
     num_shots: int,
     collect_shot_data_args: Sequence[HistoryDataCollectorLike],
@@ -153,7 +154,7 @@ def _run_one_sweep_point(
     run_kwargs: dict,
     shot_checkpoint_dir: str | Path | None,
     checkpoint_batch_size: int | None,
-    lazy_loading_enabled: bool,
+    lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> tuple[float, float] | tuple[tuple[float, float], Any]:
     """Build, run, and reduce one sweep point, returning `(failure_rate, stderr)`.
@@ -179,18 +180,26 @@ def _run_one_sweep_point(
         )
 
     if checkpoint_batch_size is not None:
+        resolved_run_kwargs["checkpoint"] = True
         resolved_run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
     if shot_checkpoint_dir is not None:
         checkpoint_dir = _sweep_point_checkpoint_subdir(
             shot_checkpoint_dir, index
         )
         resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
-    resolved_run_kwargs["lazy_loading_enabled"] = lazy_loading_enabled
+        # Cascade resume: only True if this specific point has prior shot state
+        if checkpoint_batch_size is not None:
+            resolved_run_kwargs["resume"] = (
+                checkpoint_dir / "results.h5"
+            ).exists()
+    resolved_run_kwargs["lazy_loading"] = lazy_loading
 
     # Resolve shot_executor
     resolved_shot_executor = resolve_shot_executor(shot_executor)
     if resolved_shot_executor is not None:
         resolved_run_kwargs["shot_executor"] = resolved_shot_executor
+
+    resolved_run_kwargs["n_shot_batches"] = n_shot_batches
 
     program_results = program.run(num_shots=num_shots, **resolved_run_kwargs)
     failure_rate, stderr = _compute_failure_rate(
@@ -271,11 +280,13 @@ class NoiseSweepRunner(MultiProgramRunner):
         metadata: dict | None = None,
         run_kwargs: dict | None = None,
         item_checkpoint_dir: str | Path | None = None,
+        checkpoint: bool = False,
+        resume: bool = False,
         force_resume: bool = False,
         parallel_strategy: ParallelStrategy | None = None,
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
+        lazy_loading: bool = True,
         keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
@@ -338,17 +349,19 @@ class NoiseSweepRunner(MultiProgramRunner):
             Additional keyword arguments to forward to `QuantumProgram.run()`, as a dict
             rather than `**kwargs`. Replaces the old `**run_kwargs` catch-all.
 
-        item_checkpoint_dir, force_resume, parallel_strategy, checkpoint_batch_size,
-        shot_checkpoint_dir, lazy_loading_enabled, keep_shot_results:
+        item_checkpoint_dir, checkpoint, resume, force_resume, parallel_strategy,
+        checkpoint_batch_size, shot_checkpoint_dir, lazy_loading, keep_shot_results:
             See `MultiProgramRunner.__init__` for these inherited configuration fields.
         """
         super().__init__(
             parallel_strategy=parallel_strategy,
             item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=checkpoint,
+            resume=resume,
             force_resume=force_resume,
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading_enabled=lazy_loading_enabled,
+            lazy_loading=lazy_loading,
             keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
@@ -448,12 +461,14 @@ class NoiseSweepRunner(MultiProgramRunner):
             verbose=attr_dict["verbose"],
             metadata=attr_dict["metadata"],
             run_kwargs=attr_dict["run_kwargs"],
+            checkpoint=attr_dict["checkpoint"],
+            resume=attr_dict["resume"],
             parallel_strategy=attr_dict["parallel_strategy"],
             item_checkpoint_dir=attr_dict["item_checkpoint_dir"],
             force_resume=attr_dict["force_resume"],
             checkpoint_batch_size=attr_dict["checkpoint_batch_size"],
             shot_checkpoint_dir=attr_dict["shot_checkpoint_dir"],
-            lazy_loading_enabled=attr_dict["lazy_loading_enabled"],
+            lazy_loading=attr_dict["lazy_loading"],
             **resolved,
         )
 
@@ -501,12 +516,14 @@ class NoiseSweepRunner(MultiProgramRunner):
         verbose: bool | None = None,
         metadata: dict | None = None,
         run_kwargs: dict | None = None,
+        checkpoint: bool | None = None,
+        resume: bool | None = None,
         item_checkpoint_dir: str | Path | None = None,
         force_resume: bool | None = None,
         parallel_strategy: ParallelStrategy | None = None,
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool | None = None,
+        lazy_loading: bool | None = None,
     ) -> "NoiseSweepRunner":
         """Create a new NoiseSweepRunner from an existing one with optional overrides.
 
@@ -575,6 +592,10 @@ class NoiseSweepRunner(MultiProgramRunner):
             run_kwargs=(
                 run_kwargs if run_kwargs is not None else other.run_kwargs
             ),
+            checkpoint=(
+                checkpoint if checkpoint is not None else other.checkpoint
+            ),
+            resume=resume if resume is not None else other.resume,
             item_checkpoint_dir=(
                 item_checkpoint_dir
                 if item_checkpoint_dir is not None
@@ -600,10 +621,10 @@ class NoiseSweepRunner(MultiProgramRunner):
                 if shot_checkpoint_dir is not None
                 else other.shot_checkpoint_dir
             ),
-            lazy_loading_enabled=(
-                lazy_loading_enabled
-                if lazy_loading_enabled is not None
-                else other.lazy_loading_enabled
+            lazy_loading=(
+                lazy_loading
+                if lazy_loading is not None
+                else other.lazy_loading
             ),
         )
 
@@ -647,7 +668,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             },
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
             "checkpoint_batch_size": self.checkpoint_batch_size,
-            "lazy_loading_enabled": self.lazy_loading_enabled,
+            "lazy_loading": self.lazy_loading,
         }
 
     def _make_on_item_done(self) -> Callable[[int, int, tuple], None]:

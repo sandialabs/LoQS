@@ -317,16 +317,17 @@ class TestResolveInstructionLegacyNameHint:
             # Create a separate directory for checkpoints
             checkpoint_dir = Path(tmpdir) / "my_checkpoints"
 
-            # Run with checkpoint_batch_size (which triggers checkpointing)
+            # Run with checkpoint=True and checkpoint_batch_size to enable checkpointing
             program.run(
                 num_shots=2,
+                checkpoint=True,
                 checkpoint_batch_size=1,
                 checkpoint_dir=checkpoint_dir,
             )
 
             # Verify that checkpoint_dir was used
             assert checkpoint_dir.exists()
-            assert (checkpoint_dir / "checkpoint.h5").exists()
+            assert (checkpoint_dir / "results.h5").exists()
 
             # Verify that no ./checkpoints dir was created relative to cwd
             cwd_checkpoints = Path("./checkpoints")
@@ -389,34 +390,52 @@ class TestResumeFromCheckpoint:
                 monkeypatch.setattr(QuantumProgram, "_run_shot", _run_shot_with_interrupt)
                 program.run(
                     num_shots=4,
+                    checkpoint=True,
                     checkpoint_batch_size=2,
                     checkpoint_dir=checkpoint_dir,
-                    lazy_loading_enabled=False,
+                    lazy_loading=False,
                     verbose=False,
                 )
 
             # Verify partial checkpoint exists
-            assert (checkpoint_dir / "checkpoint.h5").exists()
+            assert (checkpoint_dir / "results.h5").exists()
 
-            # Second run: resume and compute remaining 2 shots
+            # Second run: resume and compute remaining 2 shots, tracking compute calls
             computed_count["n"] = 0
             monkeypatch.undo()
+            compute_calls_on_resume = {"n": 0}
+
+            original_run_shot_2 = QuantumProgram._run_shot
+
+            def _count_compute_calls(self, max_frame_limit, seed, shot_index):
+                compute_calls_on_resume["n"] += 1
+                return original_run_shot_2(self, max_frame_limit, seed, shot_index)
+
+            monkeypatch.setattr(QuantumProgram, "_run_shot", _count_compute_calls)
             results_resumed = program.run(
                 num_shots=4,
+                checkpoint=True,
+                resume=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
                 verbose=False,
             )
+            monkeypatch.undo()
+
+            # Verify that only 2 shots were computed on resume (shots 2-3),
+            # proving the first 2 shots were genuinely retrieved from checkpoint
+            assert compute_calls_on_resume["n"] == 2
 
             # Run uninterrupted for comparison
             with tempfile.TemporaryDirectory() as tmpdir2:
                 checkpoint_dir2 = Path(tmpdir2) / "checkpoints"
                 results_uninterrupted = program.run(
                     num_shots=4,
+                    checkpoint=True,
                     checkpoint_batch_size=2,
                     checkpoint_dir=checkpoint_dir2,
-                    lazy_loading_enabled=False,
+                    lazy_loading=False,
                     verbose=False,
                 )
 
@@ -432,60 +451,59 @@ class TestResumeFromCheckpoint:
                 assert counter_resumed == expected_counter
                 assert counter_uninterrupted == expected_counter
 
-    def test_resume_with_different_batch_size(self):
+    def test_resume_with_different_batch_size(self, monkeypatch):
         """A resuming call with a different checkpoint_batch_size than the
-        original call still resumes correctly."""
+        original call still resumes correctly. Verifies genuine resume by
+        tracking compute calls."""
         import tempfile
 
-        trivial_code = trivial_codepack.create_qec_code()
-        qubits = ["Q0"]
-        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        program = self._build_seeded_counter_program()
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-        ]
+        compute_count_1 = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
 
-        program = QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            state_type=QSimQuantumState,
-            patch_types={"Trivial": trivial_code},
-            name="Resume batch size test",
-        )
+        def _count_compute_calls_1(self, max_frame_limit, seed, shot_index):
+            compute_count_1["n"] += 1
+            if compute_count_1["n"] > 2:
+                raise RuntimeError("Simulated crash during first run")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = Path(tmpdir) / "checkpoints"
 
-            # First run with batch_size=1
-            results1 = program.run(
-                num_shots=4,
-                checkpoint_batch_size=1,
-                checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
-            )
-            assert len(results1.shot_histories) == 4
+            # First run with batch_size=1, interrupt after 2 shots
+            monkeypatch.setattr(QuantumProgram, "_run_shot", _count_compute_calls_1)
+            with pytest.raises(RuntimeError, match="Simulated crash"):
+                program.run(
+                    num_shots=4,
+                    checkpoint=True,
+                    checkpoint_batch_size=1,
+                    checkpoint_dir=checkpoint_dir,
+                    lazy_loading=False,
+                    verbose=False,
+                )
+            monkeypatch.undo()
 
-            # Resume with batch_size=2
+            # Resume with different batch_size=2, track compute calls
+            compute_count_2 = {"n": 0}
+
+            def _count_compute_calls_2(self, max_frame_limit, seed, shot_index):
+                compute_count_2["n"] += 1
+                return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+            monkeypatch.setattr(QuantumProgram, "_run_shot", _count_compute_calls_2)
             results2 = program.run(
                 num_shots=4,
+                checkpoint=True,
+                resume=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
+                verbose=False,
             )
+            monkeypatch.undo()
+            # Verify only 2 shots (the missing ones) were recomputed
+            assert compute_count_2["n"] == 2
             assert len(results2.shot_histories) == 4
 
     def test_mismatch_detection_num_shots(self):
@@ -528,27 +546,32 @@ class TestResumeFromCheckpoint:
             # First run with num_shots=4
             program.run(
                 num_shots=4,
+                checkpoint=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
             )
 
             # Resume with different num_shots should raise
             with pytest.raises(ValueError, match="Cannot resume"):
                 program.run(
                     num_shots=6,
+                    checkpoint=True,
+                    resume=True,
                     checkpoint_batch_size=2,
                     checkpoint_dir=checkpoint_dir,
-                    lazy_loading_enabled=False,
+                    lazy_loading=False,
                 )
 
             # But with force_resume=True it should work
             results = program.run(
                 num_shots=6,
+                checkpoint=True,
+                resume=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
                 force_resume=True,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
             )
             assert len(results.shot_histories) == 6
 
@@ -593,9 +616,10 @@ class TestResumeFromCheckpoint:
             program.run(
                 num_shots=2,
                 max_frame_limit=100,
+                checkpoint=True,
                 checkpoint_batch_size=1,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
             )
 
             # Resume with different max_frame_limit should raise
@@ -603,9 +627,11 @@ class TestResumeFromCheckpoint:
                 program.run(
                     num_shots=2,
                     max_frame_limit=200,
+                    checkpoint=True,
+                    resume=True,
                     checkpoint_batch_size=1,
                     checkpoint_dir=checkpoint_dir,
-                    lazy_loading_enabled=False,
+                    lazy_loading=False,
                 )
 
     def test_mismatch_detection_default_base_seed(self):
@@ -658,22 +684,26 @@ class TestResumeFromCheckpoint:
             # First run with seed=42
             program1.run(
                 num_shots=2,
+                checkpoint=True,
                 checkpoint_batch_size=1,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
             )
 
             # Resume with different seed should raise
             with pytest.raises(ValueError, match="Cannot resume"):
                 program2.run(
                     num_shots=2,
+                    checkpoint=True,
+                    resume=True,
                     checkpoint_batch_size=1,
                     checkpoint_dir=checkpoint_dir,
-                    lazy_loading_enabled=False,
+                    lazy_loading=False,
                 )
 
     def test_no_content_in_checkpoint_dir_raises_file_exists_error(self):
-        """Content in checkpoint_dir with no results.h5 raises FileExistsError."""
+        """Content in checkpoint_dir with no results.h5 raises FileExistsError
+        when attempting to resume."""
         import tempfile
 
         trivial_code = trivial_codepack.create_qec_code()
@@ -708,70 +738,73 @@ class TestResumeFromCheckpoint:
             # Create an unrelated file in the directory
             (checkpoint_dir / "unrelated.txt").write_text("some content")
 
-            # Try to run with checkpointing - should raise FileExistsError
+            # Try to resume with checkpointing but no valid checkpoint file
+            # should raise FileExistsError
             with pytest.raises(FileExistsError, match="isn't a recognized checkpoint"):
                 program.run(
                     num_shots=2,
+                    checkpoint=True,
+                    resume=True,
                     checkpoint_batch_size=1,
                     checkpoint_dir=checkpoint_dir,
                 )
 
-    def test_resume_with_lazy_loading_disabled(self):
-        """A resuming call with lazy_loading_enabled=False loads all shots
-        (both previously-checkpointed and newly-computed) into memory."""
+    def test_resume_with_lazy_loading_disabled(self, monkeypatch):
+        """A resuming call with lazy_loading=False loads all shots
+        (both previously-checkpointed and newly-computed) into memory.
+        Verifies genuine resume by tracking which shots are loaded from
+        checkpoint vs. recomputed due to missing work."""
         import tempfile
 
-        trivial_code = trivial_codepack.create_qec_code()
-        qubits = ["Q0"]
-        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        program = self._build_seeded_counter_program()
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-        ]
+        compute_count_1 = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
 
-        program = QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            state_type=QSimQuantumState,
-            patch_types={"Trivial": trivial_code},
-            name="Lazy loading test",
-        )
+        def _count_compute_calls_1(self, max_frame_limit, seed, shot_index):
+            compute_count_1["n"] += 1
+            if compute_count_1["n"] > 2:
+                raise RuntimeError("Simulated crash during first run")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = Path(tmpdir) / "checkpoints"
 
-            # First run: compute 2 shots with lazy loading enabled (they'll be evicted)
-            results1 = program.run(
-                num_shots=4,
-                checkpoint_batch_size=2,
-                checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=True,
-            )
-            # With lazy loading, shots are evicted after checkpointing
-            # so we won't have all of them in memory
-            assert len(results1.shot_histories) <= 2
+            # First run: compute 4 shots with lazy loading, but interrupt after 2
+            monkeypatch.setattr(QuantumProgram, "_run_shot", _count_compute_calls_1)
+            with pytest.raises(RuntimeError, match="Simulated crash"):
+                program.run(
+                    num_shots=4,
+                    checkpoint=True,
+                    checkpoint_batch_size=2,
+                    checkpoint_dir=checkpoint_dir,
+                    lazy_loading=True,
+                    verbose=False,
+                )
+            monkeypatch.undo()
 
-            # Resume with lazy loading disabled: all shots should be in memory
+            # Resume with lazy loading disabled: first 2 shots loaded from checkpoint,
+            # remaining 2 need computation
+            compute_count_2 = {"n": 0}
+
+            def _count_compute_calls_2(self, max_frame_limit, seed, shot_index):
+                compute_count_2["n"] += 1
+                return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+            monkeypatch.setattr(QuantumProgram, "_run_shot", _count_compute_calls_2)
             results2 = program.run(
                 num_shots=4,
+                checkpoint=True,
+                resume=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
+                verbose=False,
             )
+            monkeypatch.undo()
+            # Verify only 2 shots (the missing ones after crash) were computed
+            assert compute_count_2["n"] == 2
+            # All shots should now be in memory with lazy_loading=False
             assert len(results2.shot_histories) == 4
 
     def test_resume_with_loky_executor_and_non_contiguous_gaps(self):
@@ -794,7 +827,7 @@ class TestResumeFromCheckpoint:
                 max_frame_limit=100,
                 checkpoint_enabled=True,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
             )
 
             # Manually stage partial checkpoint state: shots {0,1} and {4,5} done,
@@ -802,7 +835,7 @@ class TestResumeFromCheckpoint:
             for shot_idx in [0, 1, 4, 5]:
                 results_worker = ProgramResults(
                     name=f"Worker {shot_idx}",
-                    lazy_loading_enabled=False
+                    lazy_loading=False
                 )
                 history = History()
                 history.append(Frame({"counter": shot_idx + 1}))
@@ -813,14 +846,17 @@ class TestResumeFromCheckpoint:
                 )
 
             # Now run with shot_executor to compute remaining shots
+            # Use n_shot_batches=3 to derive checkpoint_batch_size=ceil(6/3)=2
             executor = loky.get_reusable_executor(max_workers=2)
             try:
                 results = program.run(
                     num_shots=6,
-                    checkpoint_batch_size=2,
+                    checkpoint=True,
+                    resume=True,
+                    n_shot_batches=3,
                     checkpoint_dir=checkpoint_dir,
                     shot_executor=executor,
-                    lazy_loading_enabled=False,
+                    lazy_loading=False,
                     verbose=False,
                 )
 
@@ -836,13 +872,13 @@ class TestResumeFromCheckpoint:
                 worker_files = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
                 assert len(worker_files) == 0
 
-                # Verify consolidated checkpoint.h5 exists
-                assert (checkpoint_dir / "checkpoint.h5").exists()
+                # Verify consolidated results.h5 exists
+                assert (checkpoint_dir / "results.h5").exists()
             finally:
                 executor.shutdown(wait=True)
 
     def test_resume_scattered_workers_no_checkpoint_consolidates(self):
-        """Resume when checkpoint.h5 doesn't exist but every shot is covered by
+        """Resume when results.h5 exists but no consolidated shots yet, only
         scattered worker files: verify consolidation occurs without recomputing."""
         import tempfile
 
@@ -860,12 +896,12 @@ class TestResumeFromCheckpoint:
                 max_frame_limit=100,
                 checkpoint_enabled=True,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
             )
             # The ProgramResults.__init__ already writes results.h5
 
             # Worker 0: shots {0, 1}
-            results_w0 = ProgramResults(lazy_loading_enabled=False)
+            results_w0 = ProgramResults(lazy_loading=False)
             for shot_idx in [0, 1]:
                 history = History()
                 history.append(Frame({"counter": shot_idx + 1}))
@@ -873,33 +909,36 @@ class TestResumeFromCheckpoint:
             results_w0.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
 
             # Worker 1: shots {2, 3}
-            results_w1 = ProgramResults(lazy_loading_enabled=False)
+            results_w1 = ProgramResults(lazy_loading=False)
             for shot_idx in [2, 3]:
                 history = History()
                 history.append(Frame({"counter": shot_idx + 1}))
                 results_w1.add_shot(shot_idx, history)
             results_w1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
 
-            # Verify pre-condition: no checkpoint.h5 yet, only worker files
-            assert not (checkpoint_dir / "checkpoint.h5").exists()
+            # Verify pre-condition: results.h5 exists but no consolidated data yet,
+            # only worker files
+            assert (checkpoint_dir / "results.h5").exists()
             worker_files_before = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
             assert len(worker_files_before) == 2
 
-            # Run with checkpoint_batch_size: should detect all shots done,
+            # Run with checkpoint=True, resume=True: should detect all shots done,
             # consolidate without recomputing
             results = program.run(
                 num_shots=4,
+                checkpoint=True,
+                resume=True,
                 checkpoint_batch_size=2,
                 checkpoint_dir=checkpoint_dir,
-                lazy_loading_enabled=False,
+                lazy_loading=False,
                 verbose=False,
             )
 
-            # Verify final state: all 4 shots, no worker files, consolidated checkpoint.h5
+            # Verify final state: all 4 shots, no worker files, consolidated results.h5
             assert len(results.shot_histories) == 4
             for shot_idx in range(4):
                 counter = results.shot_histories[shot_idx][-1]["counter"]
                 assert counter == shot_idx + 1
-            assert (checkpoint_dir / "checkpoint.h5").exists()
+            assert (checkpoint_dir / "results.h5").exists()
             worker_files_after = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
             assert len(worker_files_after) == 0

@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from concurrent.futures import as_completed
 import copy
+import math
 from pathlib import Path
 from typing import ClassVar, Literal, TypeVar
 import warnings
@@ -381,34 +382,63 @@ class QuantumProgram(Displayable):
         checkpoint_dir: str | Path | None,
         num_shots: int,
         max_frame_limit: int,
+        resume: bool,
         force_resume: bool,
+        results_filename: str = "results.h5",
     ) -> Path:
-        """Resolve `checkpoint_dir` and, if it already holds a prior call's
-        state, validate that this call's own config still matches before
-        resuming.
+        """Resolve `checkpoint_dir` and implement the checkpoint/resume state
+        machine based on explicit `resume` flag and on-disk state.
 
-        Raises `FileExistsError` if `checkpoint_dir` has content that isn't
-        a recognized checkpoint (no `results.h5`), or `ValueError` if the
-        stored `num_shots`/`max_frame_limit`/`default_base_seed` differ from
-        this call's own and `force_resume` is `False`.
+        State machine (cases a-d):
+        - (a) no on-disk state, resume=False -> free to create and start
+        - (b) on-disk state exists, resume=False -> error (never silently
+          overwrite)
+        - (c) on-disk state and resume=True -> resume, subject to mismatch
+          check (force_resume bypasses)
+        - (d) resume=True but no on-disk state -> error (nothing to resume
+          from; covers the case of a caller pointing resume=True at a filename
+          the original run never used)
+
+        Also raises `FileExistsError` if `checkpoint_dir` has content that
+        isn't a recognized checkpoint (no matching `results_filename`).
         """
         resolved_checkpoint_dir = (
             Path(checkpoint_dir)
             if checkpoint_dir is not None
             else Path("./checkpoints")
         )
-        results_path = resolved_checkpoint_dir / "results.h5"
+        results_path = resolved_checkpoint_dir / results_filename
         has_content = resolved_checkpoint_dir.exists() and any(
             resolved_checkpoint_dir.iterdir()
         )
+
+        # Case (a): no on-disk state, resume=False -> free to create and start
         if not has_content:
+            if resume:
+                # Case (d): resume=True but nothing to resume from -> error
+                raise ValueError(
+                    f"No existing checkpoint found at {resolved_checkpoint_dir} "
+                    "to resume from. Pass resume=False to start a fresh run, or "
+                    "use a different checkpoint_dir with existing state."
+                )
             return resolved_checkpoint_dir
 
+        # Case (b): on-disk state exists without resume=True -> error
+        if not resume:
+            raise ValueError(
+                f"On-disk state exists at {resolved_checkpoint_dir} but "
+                "resume=True was not passed. To resume from prior state, "
+                "pass resume=True; to start fresh, use a different "
+                "checkpoint_dir."
+            )
+
+        # From here on: on-disk state exists AND resume=True (case c)
         if not results_path.exists():
             raise FileExistsError(
                 f"{resolved_checkpoint_dir} exists with content that isn't "
-                "a recognized checkpoint (no results.h5)."
+                f"a recognized checkpoint (no {results_filename})."
             )
+
         stored = ProgramResults.read(results_path)
         mismatches = []
         if stored.num_shots != num_shots:
@@ -431,14 +461,18 @@ class QuantumProgram(Displayable):
 
     @staticmethod
     def _load_remaining_shots(
-        checkpoint_dir: Path, num_shots: int
+        checkpoint_dir: Path,
+        num_shots: int,
+        results_filename: str = "results.h5",
     ) -> tuple[list[int], dict]:
         """Scan `checkpoint_dir` for every already-checkpointed shot (across
-        `checkpoint.h5` and any `worker_*_checkpoint.h5`) and return the
+        results file and any `worker_*_checkpoint.h5`) and return the
         still-missing shot indices, plus the recovered `{index: History}`
         data itself for the caller's own use (e.g. re-populating an
         in-memory result when lazy loading is disabled)."""
-        done = ProgramResults._load_done_shots(checkpoint_dir)
+        done = ProgramResults._load_done_shots(
+            checkpoint_dir, results_filename
+        )
         remaining = sorted(set(range(num_shots)) - done.keys())
         return remaining, done
 
@@ -518,16 +552,72 @@ class QuantumProgram(Displayable):
             program_results.mark_shots_checkpointed(list(batch_shots.keys()))
             pbar.update(len(batch_shots))
 
+    def _resolve_shot_batching(
+        self,
+        num_shots: int,
+        shot_executor: SubmitExecutor | None,
+        n_shot_batches: int | None,
+        checkpoint_enabled: bool,
+        checkpoint_batch_size: int | None,
+    ) -> tuple[int | None, int | None]:
+        """Resolve `n_shot_batches` auto-default and derive/validate
+        `checkpoint_batch_size` against it.
+
+        Returns `(resolved_n_shot_batches, resolved_checkpoint_batch_size)`.
+        Raises `ValueError` if explicit `checkpoint_batch_size` doesn't match
+        the derived value when both `shot_executor` and `n_shot_batches` are
+        in play."""
+        # Resolve n_shot_batches (auto-default when shot_executor is set)
+        resolved_n_shot_batches = None
+        if shot_executor is not None:
+            resolved_n_shot_batches = (
+                n_shot_batches
+                if n_shot_batches is not None
+                else max(1, math.ceil(num_shots / 20))
+            )
+
+        # Validate/derive checkpoint_batch_size based on n_shot_batches
+        resolved_checkpoint_batch_size = checkpoint_batch_size
+        if checkpoint_enabled:
+            if shot_executor is not None:
+                expected_batch_size = math.ceil(
+                    num_shots / resolved_n_shot_batches
+                )
+                if checkpoint_batch_size is not None:
+                    if checkpoint_batch_size != expected_batch_size:
+                        raise ValueError(
+                            f"checkpoint_batch_size ({checkpoint_batch_size}) must equal "
+                            f"ceil(num_shots / n_shot_batches) ({expected_batch_size}) "
+                            "when both shot_executor and an explicit checkpoint_batch_size "
+                            "are given; omit checkpoint_batch_size to derive it "
+                            "automatically from n_shot_batches instead."
+                        )
+                else:
+                    resolved_checkpoint_batch_size = expected_batch_size
+            else:
+                if checkpoint_batch_size is None:
+                    resolved_checkpoint_batch_size = max(
+                        1, math.ceil(num_shots / 20)
+                    )
+        if checkpoint_enabled and resolved_checkpoint_batch_size < 1:
+            raise ValueError("checkpoint_batch_size must be >= 1")
+
+        return resolved_n_shot_batches, resolved_checkpoint_batch_size
+
     def run(
         self,
         num_shots: int = 1,
         max_frame_limit: int = 100,
         shot_executor: SubmitExecutor | None = None,
         verbose: bool = True,
+        checkpoint: bool = False,
+        resume: bool = False,
         checkpoint_batch_size: int | None = None,
         checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
+        lazy_loading: bool = True,
         force_resume: bool = False,
+        n_shot_batches: int | None = None,
+        results_filename: str = "results.h5",
     ) -> ProgramResults:
         """Execute some shots of this [](api:QuantumProgram).
 
@@ -557,19 +647,47 @@ class QuantumProgram(Displayable):
             Whether to write a progress bar (`True`, default) or not (`False`)
             when running shots.
 
+        checkpoint:
+            Whether to durably checkpoint shots to disk as they complete
+            (`False`, default -- no checkpointing at all, `checkpoint_dir`/
+            `checkpoint_batch_size`/`resume`/`force_resume` are all ignored).
+            The sole gate for whether any checkpoint file gets read or
+            written -- `checkpoint_batch_size`/`checkpoint_dir` being set
+            alone does not enable checkpointing.
+
+        resume:
+            Whether this call continues a prior checkpoint-enabled call
+            against the same `checkpoint_dir`, rather than starting fresh.
+            Requires `checkpoint=True` (raises `ValueError` otherwise).
+            Explicit by design, not inferred from on-disk state alone: with
+            `checkpoint=True`, on-disk state already present at
+            `checkpoint_dir` and `resume=False` raises `ValueError` (never
+            silently overwrite or silently resume); `resume=True` with
+            nothing on disk to resume from also raises `ValueError`
+            (nothing to resume from -- also catches a caller pointing
+            `resume=True` at the wrong `checkpoint_dir`). Only a genuine
+            on-disk match with `resume=True` actually resumes, subject to
+            the mismatch check below.
+
         checkpoint_batch_size:
             Number of shots to accumulate, per writer, before durably
-            flushing them to that writer's own checkpoint file. If `None`
-            (default), no checkpointing is performed. If `shot_executor` is
-            given, each dispatched batch of this many shots is computed and
+            flushing them to that writer's own checkpoint file. Only
+            meaningful when `checkpoint=True`; ignored otherwise. If `None`
+            (default) and `checkpoint=True`, defaults to `max(1,
+            ceil(num_shots / 20))` -- unless `shot_executor` is also given,
+            in which case it's instead derived from `n_shot_batches` as
+            `ceil(num_shots / n_shot_batches)` (an explicit
+            `checkpoint_batch_size` that disagrees with that derived value
+            raises `ValueError`). If `shot_executor` is given, each
+            dispatched batch of this many shots is computed and
             checkpointed together inside its own worker process, keyed by
             that worker's own `hostname_pid` identity, so multiple workers
             never contend for the same file; once every batch has returned,
             `run()` merges every worker's file into one final,
-            bounded-memory-streamed `checkpoint.h5` (see
+            bounded-memory-streamed `results.h5` (see
             [](api:ProgramResults.consolidate_checkpoints)). With no
             `shot_executor` (serial), there is only ever one writer, so
-            shots are checkpointed directly to that same `checkpoint.h5`
+            shots are checkpointed directly to that same `results.h5`
             with no separate merge step needed. Set to `1` to checkpoint
             every single shot as soon as it completes (the finest possible
             granularity -- a crash loses at most one in-flight shot per
@@ -578,19 +696,19 @@ class QuantumProgram(Displayable):
 
         checkpoint_dir:
             Directory to store checkpoint files. If None (default), checkpoints
-            are stored in a temporary directory. Required if checkpoint_batch_size
-            is set.
+            are stored in a temporary directory. Only relevant when
+            `checkpoint=True`; ignored otherwise.
 
-        lazy_loading_enabled:
-            Whether checkpointed shots are evicted from the returned
-            [](api:ProgramResults)'s own in-memory `shot_histories` as soon
-            as they're durably checkpointed (`True`, default -- bounds this
-            process's own memory use, at the cost of the returned object no
-            longer holding every shot in memory; evicted shots can still be
-            read back via [](api:ProgramResults.load_checkpoint) or
-            [](api:ProgramResults.get_shot_history)). Set to `False` to keep
-            every shot in memory regardless of checkpointing. Has no effect
-            when `checkpoint_batch_size` is `None`.
+        lazy_loading:
+             Whether checkpointed shots are evicted from the returned
+             [](api:ProgramResults)'s own in-memory `shot_histories` as soon
+             as they're durably checkpointed (`True`, default -- bounds this
+             process's own memory use, at the cost of the returned object no
+             longer holding every shot in memory; evicted shots can still be
+             read back via [](api:ProgramResults.load_checkpoint) or
+             [](api:ProgramResults.get_shot_history)). Set to `False` to keep
+             every shot in memory regardless of checkpointing. Has no effect
+             when `checkpoint` is `False`.
 
         force_resume:
             When resuming a checkpoint-enabled call (rerunning against a
@@ -599,34 +717,66 @@ class QuantumProgram(Displayable):
             `default_base_seed` differ from this call's own, raise
             `ValueError` naming the mismatches. Set to `True` to resume
             anyway, trusting the already-checkpointed data as-is. Has no
-            effect when `checkpoint_batch_size` is `None`.
+            effect when `checkpoint` is `False`.
 
-        Returns
-        -------
-        ProgramResults
-             A [](api:ProgramResults) object containing the shot histories.
+         n_shot_batches:
+             Number of batches to split shots into for parallel dispatch when
+             `shot_executor` is given. A batch *count*, not a size (e.g.
+             `n_shot_batches=5` with `num_shots=100` produces 5 batches of 20
+             shots each). `None` (default) means "auto": `max(1, ceil(num_shots
+             / 20))` batches whenever `shot_executor` is set. Ignored when
+             `shot_executor` is `None` (serial dispatch).
+
+         results_filename:
+             Filename to use for the canonical results checkpoint file.
+             Defaults to "results.h5". Only relevant when `checkpoint=True`.
+
+         Returns
+         -------
+         ProgramResults
+              A [](api:ProgramResults) object containing the shot histories.
         """
 
-        checkpoint_enabled = checkpoint_batch_size is not None
-        if checkpoint_enabled and checkpoint_batch_size < 1:
-            raise ValueError("checkpoint_batch_size must be >= 1")
+        # State machine validation: explicit checkpoint/resume flags
+        if resume and not checkpoint:
+            raise ValueError("resume=True requires checkpoint=True")
+
+        checkpoint_enabled = checkpoint
 
         resolved_checkpoint_dir = None
         if checkpoint_enabled:
             resolved_checkpoint_dir = (
                 self._check_resume_and_resolve_checkpoint_dir(
-                    checkpoint_dir, num_shots, max_frame_limit, force_resume
+                    checkpoint_dir,
+                    num_shots,
+                    max_frame_limit,
+                    resume,
+                    force_resume,
+                    results_filename,
                 )
             )
+
+        # Resolve n_shot_batches (auto-default when shot_executor is set)
+        # and derive/validate checkpoint_batch_size against it.
+        resolved_n_shot_batches, checkpoint_batch_size = (
+            self._resolve_shot_batching(
+                num_shots,
+                shot_executor,
+                n_shot_batches,
+                checkpoint_enabled,
+                checkpoint_batch_size,
+            )
+        )
 
         program_results = ProgramResults(
             name=f"Results for {self.name}",
             parent_program=self,
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_dir=checkpoint_dir,
-            lazy_loading_enabled=lazy_loading_enabled,
+            lazy_loading=lazy_loading,
             num_shots=num_shots,
             max_frame_limit=max_frame_limit,
+            results_filename=results_filename,
         )
 
         def _seed_for_shot(shot_index: int) -> int | None:
@@ -636,13 +786,12 @@ class QuantumProgram(Displayable):
             return self.default_base_seed + shot_index
 
         if not checkpoint_enabled:
-            tasks = [
-                (self, max_frame_limit, _seed_for_shot(i), i)
-                for i in range(num_shots)
-            ]
-
             if shot_executor is None:
                 # Execute serially
+                tasks = [
+                    (self, max_frame_limit, _seed_for_shot(i), i)
+                    for i in range(num_shots)
+                ]
                 for task in tqdm(
                     tasks,
                     f"Program {self.name}",
@@ -654,39 +803,58 @@ class QuantumProgram(Displayable):
                         task[3], result
                     )  # task[3] is shot index
             else:
-                futures_to_shot = {
-                    shot_executor.submit(
-                        QuantumProgram._run_shot_worker, *task
-                    ): task[3]
-                    for task in tasks
-                }
-                completed = as_completed(futures_to_shot)
-                if verbose:
-                    completed = tqdm(
-                        completed, f"Program {self.name}", total=num_shots
+                # Dispatch shots in batches (resolved_n_shot_batches is
+                # non-None whenever shot_executor is set); checkpoint_dir is
+                # always None here since checkpointing is off for this path.
+                batch_size = math.ceil(num_shots / resolved_n_shot_batches)
+                batches = [
+                    list(
+                        range(
+                            batch_start,
+                            min(batch_start + batch_size, num_shots),
+                        )
                     )
-                for future in completed:
-                    shot_index = futures_to_shot[future]
-                    program_results.add_shot(shot_index, future.result())
+                    for batch_start in range(0, num_shots, batch_size)
+                ]
+                futures_to_batch = {
+                    shot_executor.submit(
+                        QuantumProgram._run_shot_batch_worker,
+                        self,
+                        max_frame_limit,
+                        [(_seed_for_shot(i), i) for i in batch_indices],
+                        None,
+                    ): batch_indices
+                    for batch_indices in batches
+                }
+                with tqdm(
+                    total=num_shots,
+                    desc=f"Program {self.name}",
+                    disable=not verbose,
+                ) as pbar:
+                    for future in as_completed(futures_to_batch):
+                        batch_shots = future.result()
+                        for shot_index, history in batch_shots.items():
+                            program_results.add_shot(shot_index, history)
+                        pbar.update(len(batch_shots))
 
             return program_results
 
         # Checkpointing enabled: every shot ends up durably on disk before
         # this call returns, one writer at a time. With no `shot_executor`,
         # this process is the only writer, so shots are checkpointed
-        # straight to the canonical `checkpoint.h5` with no merge step
+        # straight to the canonical `results.h5` with no merge step
         # needed. With a `shot_executor`, each dispatched batch of
         # `checkpoint_batch_size` shots computes and checkpoints itself
         # inside its own worker process before returning (see
         # `_run_shot_batch_worker`), and a race-free consolidation pass
-        # merges every worker's file into that same `checkpoint.h5`.
+        # merges every worker's file into that same `results.h5`.
         # `remaining` (rather than the full shot range) is what actually
         # gets dispatched below, so a resuming call only redoes whatever a
         # prior interrupted call hadn't already durably checkpointed.
         remaining, done = self._load_remaining_shots(
-            resolved_checkpoint_dir, num_shots
+            resolved_checkpoint_dir, num_shots, results_filename
         )
-        if not lazy_loading_enabled:
+        if not lazy_loading:
             program_results.shot_histories.update(done)
 
         with tqdm(
@@ -728,11 +896,10 @@ class QuantumProgram(Displayable):
 
         return program_results
 
-    # Entry point submitted to a parallel executor when checkpointing is
-    # enabled: computes a whole batch of shots, checkpoints all of them to
-    # this worker's own `hostname_pid`-keyed file in one grouped write, then
-    # returns the computed shots so the driver can still build its own
-    # in-memory `ProgramResults` too.
+    # Entry point submitted to a parallel executor: computes a whole batch
+    # of shots and returns them, checkpointing to this worker's own
+    # `hostname_pid`-keyed file first if `checkpoint_dir` is given (skipped
+    # entirely for the non-checkpointed parallel path).
     @staticmethod
     def _run_shot_batch_worker(
         program: "QuantumProgram",
@@ -752,16 +919,19 @@ class QuantumProgram(Displayable):
         # A throwaway ProgramResults scoped to just this batch -- lazy
         # loading is disabled so checkpoint() doesn't evict the shots we're
         # about to return to the driver.
-        batch_results = ProgramResults(lazy_loading_enabled=False)
+        batch_results = ProgramResults(lazy_loading=False)
         for seed, shot_index in shot_specs:
             history = QuantumProgram._run_shot(
                 program, max_frame_limit, seed, shot_index
             )
             batch_results.add_shot(shot_index, history)
 
-        batch_results.checkpoint(
-            checkpoint_dir=checkpoint_dir, worker_id=worker_id()
-        )
+        # Only checkpoint if a checkpoint_dir was provided; when None, this
+        # is the non-checkpointed parallel path and no disk I/O happens.
+        if checkpoint_dir is not None:
+            batch_results.checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id=worker_id()
+            )
 
         return dict(batch_results.shot_histories)
 

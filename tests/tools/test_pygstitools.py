@@ -79,10 +79,28 @@ class _TrivialCounterSetup:
             patch_types={"Trivial": trivial_code},
         )
 
-    def simulate(self, ckpt=None, **overrides):
+    def simulate(self, ckpt=None, resume=None, **overrides):
         """Construct and run an `EdesignRunner` with this setup's edesign/model/
         physical_to_logical/`collect_shot_data_args=("counter", -1)` and
-        `num_shots=1` as defaults, overridable via `overrides`."""
+        `num_shots=1` as defaults, overridable via `overrides`.
+        
+        Parameters
+        ----------
+        ckpt : Path, optional
+            Checkpoint directory. If provided, enables checkpointing.
+        resume : bool, optional
+            Whether to resume from existing checkpoint. If not specified,
+            defaults to True if checkpoint dir already exists with content,
+            False otherwise.
+        **overrides
+            Keyword arguments to override defaults.
+        """
+        # Infer resume if not explicitly provided
+        if resume is None:
+            resume = False
+            if ckpt is not None and ckpt.exists() and any(ckpt.iterdir()):
+                resume = True
+        
         kwargs = dict(
             edesign=self.edesign,
             physical_model=self.model,
@@ -90,6 +108,8 @@ class _TrivialCounterSetup:
             num_shots=1,
             collect_shot_data_args=("counter", -1),
             item_checkpoint_dir=ckpt,
+            checkpoint=ckpt is not None,
+            resume=resume,
             program_kwargs=self.program_kwargs,
         )
         kwargs.update(overrides)
@@ -711,7 +731,7 @@ class TestSimulateDatasetForEdesignMemoryBound:
 class TestSimulateDatasetForEdesignShotCheckpointing:
     """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
     checkpointing, threaded through `EdesignRunner` via the
-    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading_enabled`
+    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading`
     parameters."""
 
     def test_checkpoint_batch_size_without_shot_checkpoint_dir_raises(
@@ -737,7 +757,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         ds = s.simulate(
             checkpoint_batch_size=1,
             shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading_enabled=False,  # Keep shots in memory for collection
+            lazy_loading=False,  # Keep shots in memory for collection
         )
 
         # Confirm the data is correct
@@ -758,7 +778,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
 
             # Confirm the checkpoint file exists and can load the right number of shots
-            checkpoint_file = circ_subdir / "checkpoint.h5"
+            checkpoint_file = circ_subdir / "results.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
 
             loaded_results = ProgramResults()
@@ -787,7 +807,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             parallel_strategy=strategy,
             checkpoint_batch_size=1,
             shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading_enabled=False,  # Keep shots in memory for collection
+            lazy_loading=False,  # Keep shots in memory for collection
         )
 
         # Confirm the data is correct
@@ -804,7 +824,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         for circuit_index in range(len(s.circs)):
             circ_subdir = shot_ckpt_dir / f"item_{circuit_index}"
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
-            checkpoint_file = circ_subdir / "checkpoint.h5"
+            checkpoint_file = circ_subdir / "results.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
 
             # Confirm the checkpoint can be loaded with the right number of shots

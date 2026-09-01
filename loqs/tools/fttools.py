@@ -409,12 +409,13 @@ def _run_one_program(
     index: int,
     *,
     shot_executor: SubmitExecutor | None,
+    n_shot_batches: int | None,
     collect_shot_data_args: Sequence[HistoryDataCollectorLike],
     expected_outcomes: Sequence,
     num_shots: int,
     shot_checkpoint_dir: str | Path | None,
     checkpoint_batch_size: int | None,
-    lazy_loading_enabled: bool,
+    lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Run one program via test_program_output, returning success flag.
@@ -438,9 +439,10 @@ def _run_one_program(
         expected_outcomes,
         num_shots=num_shots,
         shot_executor=shot_executor,
+        n_shot_batches=n_shot_batches,
         checkpoint_batch_size=checkpoint_batch_size,
         checkpoint_dir=item_shot_checkpoint_dir,
-        lazy_loading_enabled=lazy_loading_enabled,
+        lazy_loading=lazy_loading,
         return_program_results=keep_shot_results,
     )
 
@@ -451,8 +453,8 @@ class FaultInjectionRunner(MultiProgramRunner):
     Encapsulates all configuration needed to test error-injected programs,
     including parallel/checkpoint settings, in a serializable object that can
     be recovered after a crash via `FaultInjectionRunner.read(runner_path).run()`.
-    Whether a call resumes a prior run is inferred entirely from
-    `item_checkpoint_dir`'s own on-disk state -- see `MultiProgramRunner.run`.
+    Checkpoint/resume behavior is controlled by explicit `checkpoint`/`resume`
+    flags applied against on-disk state -- see `MultiProgramRunner.run`.
     """
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
@@ -470,10 +472,12 @@ class FaultInjectionRunner(MultiProgramRunner):
         num_shots: int = 1,
         parallel_strategy: ParallelStrategy | None = None,
         item_checkpoint_dir: str | Path | None = None,
+        checkpoint: bool = False,
+        resume: bool = False,
         force_resume: bool = False,
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
+        lazy_loading: bool = True,
         keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
@@ -481,10 +485,12 @@ class FaultInjectionRunner(MultiProgramRunner):
         super().__init__(
             parallel_strategy=parallel_strategy,
             item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=checkpoint,
+            resume=resume,
             force_resume=force_resume,
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading_enabled=lazy_loading_enabled,
+            lazy_loading=lazy_loading,
             keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
@@ -514,7 +520,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             "num_shots": self.num_shots,
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
             "checkpoint_batch_size": self.checkpoint_batch_size,
-            "lazy_loading_enabled": self.lazy_loading_enabled,
+            "lazy_loading": self.lazy_loading,
         }
 
     def _make_on_item_done(
@@ -582,9 +588,10 @@ def test_program_output(
     num_shots: int = 1,
     verbose: bool = False,
     shot_executor: SubmitExecutor | None = None,
+    n_shot_batches: int | None = None,
     checkpoint_batch_size: int | None = None,
     checkpoint_dir: str | Path | None = None,
-    lazy_loading_enabled: bool = True,
+    lazy_loading: bool = True,
     return_program_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Test a program against expected output.
@@ -613,6 +620,10 @@ def test_program_output(
         Forwarded to [](api:QuantumProgram.run) for shot-level
         parallelism. Defaults to `None`, which runs shots serially.
 
+    n_shot_batches : int | None, optional
+        Forwarded to [](api:QuantumProgram.run) for shot-level
+        parallel dispatch batching. Defaults to `None`.
+
     checkpoint_batch_size : int | None, optional
         Forwarded to [](api:QuantumProgram.run) for shot checkpointing.
         Defaults to `None`, which disables batch checkpointing.
@@ -621,7 +632,7 @@ def test_program_output(
         Forwarded to [](api:QuantumProgram.run) for shot checkpointing.
         Defaults to `None`, which disables checkpointing.
 
-    lazy_loading_enabled : bool, optional
+    lazy_loading : bool, optional
         Forwarded to [](api:QuantumProgram.run) for lazy loading.
         Defaults to `True`.
 
@@ -640,13 +651,20 @@ def test_program_output(
     run_kwargs = {
         "num_shots": num_shots,
         "shot_executor": shot_executor,
+        "n_shot_batches": n_shot_batches,
         "verbose": False,
-        "lazy_loading_enabled": lazy_loading_enabled,
+        "lazy_loading": lazy_loading,
     }
     if checkpoint_batch_size is not None:
+        run_kwargs["checkpoint"] = True
         run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
     if checkpoint_dir is not None:
         run_kwargs["checkpoint_dir"] = checkpoint_dir
+        # Cascade resume: only True if this specific item has prior shot state
+        if checkpoint_batch_size is not None:
+            run_kwargs["resume"] = (
+                Path(checkpoint_dir) / "results.h5"
+            ).exists()
 
     program_results = test_program.run(**run_kwargs)
 

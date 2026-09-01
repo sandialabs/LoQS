@@ -385,8 +385,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         failed = runner.run()
 
@@ -406,8 +405,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -417,8 +415,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
         )
         failed2 = runner2.run()
         assert failed2 == []
@@ -434,8 +431,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         with pytest.raises(FileExistsError):
             runner.run()
@@ -451,8 +447,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=partial_programs,
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -472,8 +467,7 @@ class TestFaultInjectionRunnerCheckpointing:
                 errored_programs=[program, program],
                 collect_shot_data_args=[("counter", -1)],
                 expected_outcomes=[1],
-                num_shots=1,
-                item_checkpoint_dir=ckpt,
+                num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
             )
             failed2 = runner2.run()
             assert failed2 == []
@@ -493,8 +487,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -533,8 +526,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
         )
         failed2 = runner2.run()
         assert failed2 == []
@@ -550,8 +542,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
 
         # Patch _run_one_program to crash at index 1
@@ -591,8 +582,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         runner1.run()
 
@@ -601,7 +591,7 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=2,  # Different!
-            item_checkpoint_dir=ckpt,
+            checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
         )
         with pytest.raises(ValueError, match="num_shots"):
             runner2.run()
@@ -615,8 +605,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         runner1.run()
 
@@ -624,8 +613,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", 0)],  # Different!
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
         )
         with pytest.raises(ValueError, match="collect_shot_data_args"):
             runner2.run()
@@ -639,8 +627,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         runner1.run()
 
@@ -648,8 +635,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[999],  # Different!
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
         )
         with pytest.raises(ValueError, match="expected_outcomes"):
             runner2.run()
@@ -663,8 +649,7 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1,
-            item_checkpoint_dir=ckpt,
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -675,7 +660,7 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=2,  # Different, but forced
-            item_checkpoint_dir=ckpt,
+            checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
             force_resume=True,
         )
         failed2 = runner2.run()
@@ -692,12 +677,11 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=5,
-            item_checkpoint_dir=item_checkpoint_dir,
+            num_shots=5, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_checkpoint",
             checkpoint_batch_size=2,
             keep_shot_results=True,
-            lazy_loading_enabled=False,  # Disable lazy loading for now
+            lazy_loading=False,  # Disable lazy loading for now
         )
         failed = runner.run()
 

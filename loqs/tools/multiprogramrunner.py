@@ -52,24 +52,27 @@ class MultiProgramRunner(Serializable):
     and a template-method `run()` for checkpoint/resume/progress.
 
     Subclasses implement hook methods to define their specific work logic.
-    Whether a call resumes a prior run is inferred entirely from
-    `item_checkpoint_dir`'s own on-disk state (see `run()`) -- there is no
-    separate `resume` flag to pass.
+    Checkpoint/resume behavior is controlled by explicit `checkpoint` and
+    `resume` flags, applied against `item_checkpoint_dir`'s own on-disk state
+    according to a 4-case state machine (see `run()`).
     """
 
     _SERIALIZE_ATTRS = [
         "parallel_strategy",
         "item_checkpoint_dir",
+        "checkpoint",
+        "resume",
         "force_resume",
         "checkpoint_batch_size",
         "shot_checkpoint_dir",
-        "lazy_loading_enabled",
+        "lazy_loading",
         "index_map",
         "_reduced_results",
         "keep_shot_results",
         "_program_results",
         "poll_interval",
         "show_progress",
+        "runner_filename",
     ]
 
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
@@ -80,14 +83,17 @@ class MultiProgramRunner(Serializable):
         self,
         parallel_strategy: ParallelStrategy | None = None,
         item_checkpoint_dir: str | Path | None = None,
+        checkpoint: bool = False,
+        resume: bool = False,
         force_resume: bool = False,
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
+        lazy_loading: bool = True,
         index_map: dict[str, int] | None = None,
         keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
+        runner_filename: str = "runner.h5",
     ):
         self.parallel_strategy = parallel_strategy
         self.item_checkpoint_dir = (
@@ -95,6 +101,8 @@ class MultiProgramRunner(Serializable):
             if item_checkpoint_dir is not None
             else None
         )
+        self.checkpoint = checkpoint
+        self.resume = resume
         self.force_resume = force_resume
         self.checkpoint_batch_size = checkpoint_batch_size
         self.shot_checkpoint_dir = (
@@ -102,13 +110,14 @@ class MultiProgramRunner(Serializable):
             if shot_checkpoint_dir is not None
             else None
         )
-        self.lazy_loading_enabled = lazy_loading_enabled
+        self.lazy_loading = lazy_loading
         self.index_map = index_map
         self._reduced_results: dict[int, Any] = {}
         self.keep_shot_results = keep_shot_results
         self._program_results: dict[int, Any] = {}
         self.poll_interval = poll_interval
         self.show_progress = show_progress
+        self.runner_filename = runner_filename
         self._validate_checkpoint_kwargs()
 
     def _get_encoding_attr(
@@ -139,6 +148,7 @@ class MultiProgramRunner(Serializable):
         index_map = attr_dict.pop("index_map", None)
         reduced_results = attr_dict.pop("_reduced_results", None)
         program_results = attr_dict.pop("_program_results", None)
+        runner_filename = attr_dict.pop("runner_filename", "runner.h5")
         # Reconstruct with constructor parameters only
         obj = super()._from_decoded_attrs(attr_dict)
         # Restore internal state directly on the instance
@@ -149,10 +159,29 @@ class MultiProgramRunner(Serializable):
         obj._program_results = (
             program_results if program_results is not None else {}
         )
+        obj.runner_filename = runner_filename
+        # Auto-set resume=True when deserializing a checkpoint-enabled runner:
+        # if checkpoint=True and item_checkpoint_dir exists, we're implicitly resuming
+        if obj.checkpoint and obj.item_checkpoint_dir is not None:
+            obj.resume = True
         return obj
 
     def _validate_checkpoint_kwargs(self) -> None:
         """Validate checkpoint-related configuration constraints."""
+        # Bijection: checkpoint and item_checkpoint_dir must agree
+        if self.checkpoint and self.item_checkpoint_dir is None:
+            raise ValueError(
+                "checkpoint=True requires item_checkpoint_dir to be set"
+            )
+        if self.item_checkpoint_dir is not None and not self.checkpoint:
+            raise ValueError(
+                "item_checkpoint_dir is not None requires checkpoint=True"
+            )
+
+        # resume=True requires checkpoint=True
+        if self.resume and not self.checkpoint:
+            raise ValueError("resume=True requires checkpoint=True")
+
         if (
             self.checkpoint_batch_size is not None
             and self.shot_checkpoint_dir is None
@@ -175,30 +204,60 @@ class MultiProgramRunner(Serializable):
     def run(self) -> Any:
         """Run the program with checkpoint/resume support.
 
-        Whether to resume is always inferred from `item_checkpoint_dir`'s
-        own on-disk state, never from a caller-supplied flag: no content
-        means a fresh run; a `runner.h5` (this method's own crash-
-        recovery snapshot, written here at call-start, before any work is
-        dispatched) means continuing that prior run, subject to a mismatch
-        check against the stored config (`force_resume` bypasses a real
-        mismatch); unrelated content with no `runner.h5` always raises,
-        since there's nothing to safely continue from. A crash mid-run can
-        be recovered from via
-        `type(self).read(item_checkpoint_dir / "runner.h5").run()`.
+        Implements a 4-case state machine based on `checkpoint` and `resume`
+        flags and on-disk state (`runner.h5` presence in `item_checkpoint_dir`):
+
+        (a) `checkpoint=True`, `resume=False`, no on-disk state: free to create
+            and start; write `runner.h5`.
+        (b) `checkpoint=True`, `resume=False`, on-disk state exists: raise
+            `ValueError` (never silently overwrite/resume).
+        (c) `checkpoint=True`, `resume=True`, on-disk state exists: resume,
+            subject to the existing mismatch check (`force_resume` bypasses).
+        (d) `checkpoint=True`, `resume=True`, no on-disk state: raise
+            `ValueError` (nothing to resume from).
+
+        Once a valid case lands (a or c), the existing downstream behavior
+        is preserved: `runner.h5` is updated (after `index_map` assignment),
+        `_reduced_results` is seeded from stored state only in case (c), and
+        `_run_dispatch` is called with `resuming=True` for both cases.
         """
         resuming = False
         stored = None
-        if self.item_checkpoint_dir is not None:
+        if self.checkpoint:
+            assert (
+                self.item_checkpoint_dir is not None
+            )  # Validated in _validate_checkpoint_kwargs
+            runner_path = self.item_checkpoint_dir / self.runner_filename
             has_content = self.item_checkpoint_dir.exists() and any(
                 self.item_checkpoint_dir.iterdir()
             )
-            runner_path = self.item_checkpoint_dir / "runner.h5"
+
+            if has_content and not runner_path.exists():
+                # Unrelated foreign content, ambiguous state
+                raise FileExistsError(
+                    f"{self.item_checkpoint_dir} exists with content "
+                    f"that isn't a recognized checkpoint (no {self.runner_filename})."
+                )
+
+            # Case (b): checkpoint=True, resume=False, but on-disk state exists
+            if has_content and not self.resume:
+                raise ValueError(
+                    f"{self.item_checkpoint_dir} contains an existing checkpoint "
+                    f"({self.runner_filename} present). Pass resume=True to continue that run, "
+                    "or use a different item_checkpoint_dir for a fresh run."
+                )
+
+            # Case (d): checkpoint=True, resume=True, but no on-disk state
+            if self.resume and not has_content:
+                raise ValueError(
+                    f"{self.item_checkpoint_dir} is empty or nonexistent; "
+                    "nothing to resume from. Pass resume=False for a fresh run, "
+                    "or use a directory containing a prior checkpoint."
+                )
+
+            # Cases (a) and (c): valid cases
             if has_content:
-                if not runner_path.exists():
-                    raise FileExistsError(
-                        f"{self.item_checkpoint_dir} exists with content "
-                        "that isn't a recognized checkpoint (no runner.h5)."
-                    )
+                # Case (c): on-disk state exists, resuming
                 stored = type(self).read(runner_path)
                 mismatches = [
                     f
@@ -210,12 +269,10 @@ class MultiProgramRunner(Serializable):
                         f"Cannot resume: stored config differs in "
                         f"{', '.join(mismatches)}. Pass force_resume=True to resume anyway."
                     )
-                resuming = True
+
+            # Both cases (a) and (c): write/update runner.h5
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
-            # runner.h5 now always exists, so tell _run_dispatch
-            # to trust this directory's state rather than tripping its own
-            # pre-existing-content guard on the file just written above.
             resuming = True
 
         # Seed _reduced_results from prior run if resuming, to avoid duplicates
@@ -241,7 +298,7 @@ class MultiProgramRunner(Serializable):
             precomputed_indices = [idx for idx, _ in items_with_index]
             # Update runner.h5 with the now-populated index_map
             if self.item_checkpoint_dir is not None:
-                self.write(self.item_checkpoint_dir / "runner.h5")
+                self.write(self.item_checkpoint_dir / self.runner_filename)
 
         result_list = self._run_dispatch(
             items=self._get_items(),
@@ -383,9 +440,13 @@ class MultiProgramRunner(Serializable):
                 )
                 # Consolidate _program_results if keep_shot_results is enabled
                 if self.keep_shot_results:
-                    _consolidate_program_results(self.item_checkpoint_dir)
-                    if self.lazy_loading_enabled:
-                        runner_path = self.item_checkpoint_dir / "runner.h5"
+                    _consolidate_program_results(
+                        self.item_checkpoint_dir, self.runner_filename
+                    )
+                    if self.lazy_loading:
+                        runner_path = (
+                            self.item_checkpoint_dir / self.runner_filename
+                        )
                         self._program_results = {
                             index: self._make_lazy_program_results(
                                 runner_path, index
@@ -424,7 +485,7 @@ class MultiProgramRunner(Serializable):
 
         Creates a ProgramResults configured to load shots from the runner.h5's
         own `_program_results` dict attribute at the given index, with
-        lazy_loading_enabled=True.
+        lazy_loading=True.
 
         Parameters
         ----------
@@ -440,7 +501,7 @@ class MultiProgramRunner(Serializable):
         """
         from loqs.core.programresults import ProgramResults
 
-        pr = ProgramResults(lazy_loading_enabled=True)
+        pr = ProgramResults(lazy_loading=True)
         pr._set_nested_shot_source(runner_file, index)
         # Set checkpoint_dir so nested loading works
         if self.item_checkpoint_dir is not None:
@@ -467,7 +528,7 @@ class MultiProgramRunner(Serializable):
         if self.item_checkpoint_dir is None:
             return
 
-        runner_path = self.item_checkpoint_dir / "runner.h5"
+        runner_path = self.item_checkpoint_dir / self.runner_filename
         with h5py.File(runner_path, "a") as f:
             obj_grp = _get_runner_object_group(f)
             merge_dict_attr(
@@ -609,14 +670,16 @@ def _get_runner_object_group(f: h5py.File) -> h5py.Group:
     return root
 
 
-def _consolidate_program_results(checkpoint_dir: Path) -> None:
+def _consolidate_program_results(
+    checkpoint_dir: Path, runner_filename: str = "runner.h5"
+) -> None:
     """Consolidate _program_results from all worker files into runner.h5.
 
     Streams one item at a time from worker files into runner.h5's object group,
     keeping memory bounded. Skips indices already present in runner.h5's
     _program_results attribute to avoid duplicate entries on resume.
     """
-    runner_path = checkpoint_dir / "runner.h5"
+    runner_path = checkpoint_dir / runner_filename
     if not runner_path.exists():
         return
 
@@ -801,6 +864,11 @@ def _run_serial(
         if parallel_strategy is not None
         else None
     )
+    n_shot_batches = (
+        parallel_strategy.n_shot_batches
+        if parallel_strategy is not None
+        else None
+    )
     results_dict: dict[int, Any] = {}
 
     try:
@@ -814,6 +882,7 @@ def _run_serial(
                 item,
                 index,
                 shot_executor=shot_executor,
+                n_shot_batches=n_shot_batches,
                 **extra_kwargs,
             )
 
@@ -1024,6 +1093,11 @@ def _run_parallel(
         if parallel_strategy is not None
         else None
     )
+    n_shot_batches = (
+        parallel_strategy.n_shot_batches
+        if parallel_strategy is not None
+        else None
+    )
 
     # Make chunks and dispatch
     chunks = parallel_strategy.make_chunks(remaining)
@@ -1033,6 +1107,7 @@ def _run_parallel(
         static_kwargs=static_kwargs,
         item_checkpoint_dir=item_checkpoint_dir,
         shot_executor=shot_executor,
+        n_shot_batches=n_shot_batches,
         keep_shot_results=keep_shot_results,
         shot_checkpoint_subdir=shot_checkpoint_subdir,
     )
@@ -1081,6 +1156,7 @@ def _generic_chunk_worker(
     static_kwargs: dict[str, Any],
     item_checkpoint_dir: Path | None,
     shot_executor: Any,
+    n_shot_batches: int | None = None,
     keep_shot_results: bool = False,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
 ) -> list[tuple[int, Any]]:
@@ -1110,6 +1186,7 @@ def _generic_chunk_worker(
                 item,
                 index,
                 shot_executor=shot_executor,
+                n_shot_batches=n_shot_batches,
                 **extra_kwargs,
             )
 

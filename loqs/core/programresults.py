@@ -44,6 +44,46 @@ if TYPE_CHECKING:
     from loqs.core.quantumprogram import QuantumProgram
 
 
+def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
+    """Navigate from a checkpoint file (or subgroup) to its actual object's encoded group.
+
+    Handles both file layouts:
+    - Bootstrap path (_write_shot_entries): Top-level is directly the object group
+      (Serializable_1 with encode_type).
+    - Fresh envelope path (_write_results_snapshot_if_fresh): Top-level is a
+      wrapper (/root with version attr), contains the object group.
+
+    Starting from parent_group, descends through single-child wrapper groups
+    (those with no encode_type attribute and only a "version" attribute) until
+    reaching a group that either has encode_type or has more than one child.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The file or subgroup to resolve.
+
+    Returns
+    -------
+    h5py.Group
+        The actual object's encoded group (should have encode_type attribute).
+    """
+    current = parent_group
+    while len(current.keys()) == 1:
+        # Only descend if current has no encode_type (not an actual object yet)
+        if "encode_type" in current.attrs:
+            return current
+        # Descend to the single child
+        first_child_name = next(iter(current.keys()))
+        first_child = current[first_child_name]
+        if isinstance(first_child, h5py.Group):
+            current = first_child
+        else:
+            # Child is a dataset, stop here
+            return current
+    # Stop if we have multiple children or if encode_type is present
+    return current
+
+
 class ProgramResults(Displayable):
     """A container for the results of a quantum program execution.
 
@@ -61,6 +101,7 @@ class ProgramResults(Displayable):
         "parent_program",
         "num_shots",
         "max_frame_limit",
+        "_results_filename",
     ]
 
     # `_write_shot_entries`/`merge_dict_attr` navigate directly into this
@@ -81,10 +122,11 @@ class ProgramResults(Displayable):
         parent_program: "QuantumProgram | str | Path | None" = None,
         checkpoint_enabled: bool = False,
         checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
+        lazy_loading: bool = True,
         max_memory_shots: int = 100,
         num_shots: int | None = None,
         max_frame_limit: int | None = None,
+        results_filename: str = "results.h5",
     ) -> None:
         """
         Parameters
@@ -113,6 +155,10 @@ class ProgramResults(Displayable):
 
         max_frame_limit:
             The maximum frame limit used in this run (for resume detection).
+
+        results_filename:
+            Filename to use for the canonical results checkpoint file.
+            Defaults to "results.h5".
         """
         self.shot_histories = (
             shot_histories if shot_histories is not None else {}
@@ -129,7 +175,7 @@ class ProgramResults(Displayable):
 
         self._worker_id = None
         """Which writer's checkpoint file this object last read/wrote --
-        `None` for the un-suffixed `checkpoint.h5` (also what
+        `None` for the un-suffixed `results.h5` (also what
         `consolidate_checkpoints` itself writes), or a `hostname_pid`-style
         string identifying one specific writer's own file."""
 
@@ -157,8 +203,11 @@ class ProgramResults(Displayable):
         self._checkpoint_enabled = checkpoint_enabled
         """Whether checkpointing is enabled."""
 
-        self._lazy_loading_enabled = lazy_loading_enabled
+        self._lazy_loading = lazy_loading
         """Whether lazy loading is enabled"""
+
+        self._results_filename = results_filename
+        """Filename for the canonical results checkpoint file."""
 
         self._max_memory_shots = max_memory_shots
         """Maximum number of shots to keep loaded."""
@@ -205,7 +254,9 @@ class ProgramResults(Displayable):
 
     def _write_results_snapshot_if_fresh(self, program) -> None:
         """Write the entire ProgramResults (including nested parent_program) to
-        results.h5 only if that file doesn't already exist. Then update
+        results.h5 only if that file doesn't already exist. The written
+        shot_histories attribute (empty dict initially) is already in the state
+        needed for merge_dict_attr to extend it later. Then update
         self.parent_program to point to results.h5 (as a string path).
 
         Parameters
@@ -220,7 +271,7 @@ class ProgramResults(Displayable):
         # Ensure checkpoint directory exists
         self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        results_path = self._checkpoint_dir / "results.h5"
+        results_path = self._checkpoint_dir / self._results_filename
 
         # Write only if results.h5 doesn't exist yet (this is what makes
         # a resuming call not re-derive a fresh config from a possibly-different self)
@@ -303,10 +354,7 @@ class ProgramResults(Displayable):
         """
         if self.shot_histories:
             histories = list(self.shot_histories.values())
-        elif (
-            hasattr(self, "_lazy_loading_enabled")
-            and self._lazy_loading_enabled
-        ):
+        elif hasattr(self, "_lazy_loading") and self._lazy_loading:
             shot_indices = self._get_available_shot_indices()
             loaded = [self.get_shot_history(idx) for idx in shot_indices]
             histories = [h for h in loaded if h is not None]
@@ -349,10 +397,10 @@ class ProgramResults(Displayable):
                 pass
 
         if self._checkpoint_dir is not None and self._checkpoint_dir.exists():
-            checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
-            if checkpoint_file.exists():
+            results_file = self._checkpoint_dir / self._results_filename
+            if results_file.exists():
                 try:
-                    with h5py.File(checkpoint_file, "r") as f:
+                    with h5py.File(results_file, "r") as f:
                         keys = get_dict_attr_keys(f, "shot_histories")
                         if keys:
                             return keys
@@ -433,7 +481,7 @@ class ProgramResults(Displayable):
             A string identifying which physical writer this file belongs to
             (e.g. `f"{socket.gethostname()}_{os.getpid()}"`), so multiple
             concurrent writers never open the same file. If None, writes
-            directly to the un-suffixed `checkpoint.h5` -- the same filename
+            directly to the un-suffixed `results.h5` -- the same filename
             `consolidate_checkpoints` writes its own merged output under, so
             a single-writer caller can skip both worker identification and
             consolidation entirely.
@@ -454,13 +502,13 @@ class ProgramResults(Displayable):
         if worker_id is not None:
             filename = checkpoint_dir / f"worker_{worker_id}_checkpoint.h5"
         else:
-            filename = checkpoint_dir / "checkpoint.h5"
+            filename = checkpoint_dir / self._results_filename
 
         self._write_checkpoint_file(filename, shots_to_checkpoint)
         self.mark_shots_as_written(shots_to_checkpoint)
 
         # Implement lazy loading: remove written shots from memory
-        if self._lazy_loading_enabled:
+        if self._lazy_loading:
             for shot_index in shots_to_checkpoint:
                 if shot_index in self.shot_histories:
                     del self.shot_histories[shot_index]
@@ -469,7 +517,7 @@ class ProgramResults(Displayable):
         """Record that the given shots are already durably checkpointed
         somewhere else (e.g. by the worker that computed them), without
         writing anything here. Lets a driver's own `ProgramResults` still
-        honor `lazy_loading_enabled` (bounding its own memory) for shots it
+        honor `lazy_loading` (bounding its own memory) for shots it
         received from a worker rather than checkpointing itself.
 
         Parameters
@@ -478,7 +526,7 @@ class ProgramResults(Displayable):
             Shot indices to mark as already-checkpointed.
         """
         self.mark_shots_as_written(list(shot_indices))
-        if self._lazy_loading_enabled:
+        if self._lazy_loading:
             for shot_index in shot_indices:
                 if shot_index in self.shot_histories:
                     del self.shot_histories[shot_index]
@@ -540,13 +588,13 @@ class ProgramResults(Displayable):
                 h5_group=h5_file,
                 encode_cache=self._checkpoint_encode_cache,
             )
-            root_group = h5_file[next(iter(h5_file.keys()))]
+            root_group = _resolve_checkpoint_object_group(h5_file)
             if "shot_histories" in root_group:
                 del root_group["shot_histories"]
 
-        # Single root group, matching every other checkpoint method's
-        # assumption about this file's structure (e.g. `_load_done_shots`).
-        root_group = h5_file[next(iter(h5_file.keys()))]
+        # Resolve to the actual object group, handling both fresh-envelope
+        # and bootstrap-created file layouts.
+        root_group = _resolve_checkpoint_object_group(h5_file)
 
         # Shot-index keys stay a compact dataset (plain ints); History
         # values are never native scalars, so always end up as groups.
@@ -560,8 +608,10 @@ class ProgramResults(Displayable):
         )
 
     @staticmethod
-    def _load_done_shots(checkpoint_dir: Path) -> dict[int, HistoryLike]:
-        """Scan checkpoint_dir for checkpoint.h5 and every worker_*_checkpoint.h5,
+    def _load_done_shots(
+        checkpoint_dir: Path, results_filename: str = "results.h5"
+    ) -> dict[int, HistoryLike]:
+        """Scan checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
         decode each, and return the union of their shot_histories.
         Explicitly skips *.tmp files (stale leftovers from a crash).
 
@@ -569,6 +619,9 @@ class ProgramResults(Displayable):
         ----------
         checkpoint_dir:
             Directory to scan for checkpoint files.
+        results_filename:
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
 
         Returns
         -------
@@ -578,11 +631,11 @@ class ProgramResults(Displayable):
         """
         done = {}
 
-        # First, read checkpoint.h5 if it exists
-        checkpoint_file = checkpoint_dir / "checkpoint.h5"
-        if checkpoint_file.exists():
+        # First, read results.h5 if it exists
+        results_file = checkpoint_dir / results_filename
+        if results_file.exists():
             try:
-                with h5py.File(checkpoint_file, "r") as f:
+                with h5py.File(results_file, "r") as f:
                     loaded = Serializable.decode(f, format="hdf5")
                     if (
                         isinstance(loaded, ProgramResults)
@@ -613,10 +666,12 @@ class ProgramResults(Displayable):
         return done
 
     @staticmethod
-    def _count_done_shots(checkpoint_dir: Path) -> int:
+    def _count_done_shots(
+        checkpoint_dir: Path, results_filename: str = "results.h5"
+    ) -> int:
         """Count the number of unique shot indices in checkpoint files.
 
-        Scans checkpoint_dir for checkpoint.h5 and every worker_*_checkpoint.h5,
+        Scans checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
         counts the union of their shot_histories keys, and returns the total count.
         Explicitly skips *.tmp files (stale leftovers from a crash).
 
@@ -627,6 +682,9 @@ class ProgramResults(Displayable):
         ----------
         checkpoint_dir : Path
             Directory to scan for checkpoint files.
+        results_filename:
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
 
         Returns
         -------
@@ -637,11 +695,11 @@ class ProgramResults(Displayable):
         checkpoint_dir = Path(checkpoint_dir)
         done_indices: set[int] = set()
 
-        # First, count indices from checkpoint.h5 if it exists
-        checkpoint_file = checkpoint_dir / "checkpoint.h5"
-        if checkpoint_file.exists():
+        # First, count indices from results.h5 if it exists
+        results_file = checkpoint_dir / results_filename
+        if results_file.exists():
             try:
-                with h5py.File(checkpoint_file, "r") as f:
+                with h5py.File(results_file, "r") as f:
                     keys = get_dict_attr_keys(f, "shot_histories")
                     done_indices.update(keys)
             except Exception:
@@ -677,7 +735,7 @@ class ProgramResults(Displayable):
         worker_id:
             Which writer's checkpoint file to load. If None (the common
             case -- also what `consolidate_checkpoints` writes its own
-            merged output under), loads the un-suffixed `checkpoint.h5`.
+            merged output under), loads the un-suffixed `results.h5`.
         """
         if checkpoint_dir is None:
             if self._checkpoint_dir is None:
@@ -693,7 +751,7 @@ class ProgramResults(Displayable):
         if worker_id is not None:
             pattern = f"worker_{worker_id}_checkpoint.h5"
         else:
-            pattern = "checkpoint.h5"
+            pattern = self._results_filename
 
         checkpoint_file = checkpoint_dir / pattern
         if checkpoint_file.exists():
@@ -732,28 +790,31 @@ class ProgramResults(Displayable):
         output_file: str | Path | None = None,
         delete_originals: bool = True,
     ) -> Path:
-        """Merge every per-worker checkpoint file in `checkpoint_dir` into one file.
+        """Merge every per-worker checkpoint file in `checkpoint_dir` directly
+        into the output file via streaming-safe, entry-by-entry merging.
 
         Streams one worker's file in at a time -- decoding it, merging just
-        its shots into the output, then letting it be garbage collected
-        before moving to the next -- rather than loading every worker's
-        shots into `self.shot_histories` up front and writing once at the
-        end. This bounds peak memory to roughly one worker's own share of
-        the total result, not the whole result, regardless of how many
-        workers or shots are involved. Writes to a temporary file first and
-        renames it into place only once complete, so a crash partway
-        through never leaves a corrupt or partial `output_file` behind.
+        its shots into the output via merge_dict_attr, then letting it be
+        garbage collected before moving to the next -- rather than loading
+        every worker's shots into `self.shot_histories` up front and writing
+        once at the end. This bounds peak memory to roughly one worker's own
+        share of the total result, not the whole result, regardless of how
+        many workers or shots are involved. Deletes each worker file only
+        once its own entries are confirmed merged, so a crash mid-consolidation
+        self-heals on retry (the worker file is still present, gets re-merged,
+        and merge_dict_attr's append-only behavior with deduplication safety
+        ensures no duplicates).
 
         Parameters
         ----------
         checkpoint_dir:
             Directory containing checkpoint files to consolidate.
         output_file:
-            Path for the consolidated output file. If None, writes to the
-            un-suffixed `checkpoint_dir / "checkpoint.h5"` -- the same
-            filename `checkpoint(worker_id=None)` itself writes to, so a
-            single-writer run and a many-writer run both end up readable
-            via `load_checkpoint(worker_id=None)`.
+            Path for the consolidated output file. If None, writes to
+            `checkpoint_dir / "results.h5"` -- the same filename
+            `checkpoint(worker_id=None)` itself writes to, so a single-writer
+            run and a many-writer run both end up readable via
+            `load_checkpoint(worker_id=None)`.
         delete_originals:
             Whether to delete the original per-worker checkpoint files
             after consolidation.
@@ -774,41 +835,91 @@ class ProgramResults(Displayable):
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         if output_file is None:
-            output_file = checkpoint_dir / "checkpoint.h5"
+            output_file = checkpoint_dir / self._results_filename
         else:
             output_file = Path(output_file)
 
         worker_files = sorted(checkpoint_dir.glob("worker_*_checkpoint.h5"))
 
-        # Write to a fresh temp file, not `output_file` directly -- avoids
-        # ever reading and writing the same file at once (possible if a
-        # caller passes an `output_file` that coincides with one of the
-        # globbed worker files) and keeps `output_file` atomic: it only
-        # ever appears once fully written.
-        tmp_output_file = output_file.with_name(output_file.name + ".tmp")
-        if tmp_output_file.exists():
-            tmp_output_file.unlink()
-
-        with h5py.File(tmp_output_file, "a") as out_f:
-            # If output_file already exists, read its content first so a second
-            # consolidation call doesn't drop previously-consolidated shots
-            if output_file.exists():
-                self._stream_checkpoint_file_into(output_file, out_f)
+        # Merge each worker file directly into output_file (created if
+        # missing), deduplicating against already-merged keys so a retry
+        # never double-counts.
+        with h5py.File(output_file, "a") as out_f:
             for worker_file in worker_files:
-                self._stream_checkpoint_file_into(worker_file, out_f)
-            if len(out_f.keys()) == 0:
-                # No worker files (or all were empty) -- still leave behind
-                # a validly-decodable, if empty, ProgramResults structure
-                # rather than a bare, structure-less HDF5 file.
-                self._write_shot_entries(out_f, iter(()))
+                # Read already-merged keys from output_file so we can skip
+                # duplicates and avoid corrupt entries on a retry
+                already_merged = set()
+                try:
+                    keys = get_dict_attr_keys(out_f, "shot_histories")
+                    already_merged.update(keys)
+                except (KeyError, Exception):
+                    # output_file might not have shot_histories yet on first call
+                    pass
 
-        tmp_output_file.replace(output_file)
+                # Stream only new entries from this worker file
+                self._merge_worker_into_output(
+                    worker_file, out_f, already_merged
+                )
 
-        if delete_originals:
-            for worker_file in worker_files:
-                worker_file.unlink()
+                # Only delete the worker file once its entries are confirmed
+                # merged and present in output_file
+                if delete_originals:
+                    worker_file.unlink()
+
+        # Ensure output_file has valid structure even if no workers were present
+        if (
+            not output_file.exists()
+            or len(h5py.File(output_file, "r").keys()) == 0
+        ):
+            with h5py.File(output_file, "a") as out_f:
+                if len(out_f.keys()) == 0:
+                    self._write_shot_entries(out_f, iter(()))
 
         return output_file
+
+    def _merge_worker_into_output(
+        self,
+        worker_file: Path,
+        out_h5_file: h5py.File,
+        already_merged: set[int],
+    ) -> None:
+        """Merge one worker's checkpoint file into the output file, skipping
+        any shot indices already present in the output (deduplication safety
+        for crash-recovery retries).
+
+        Streams one shot at a time via iter_dict_attr_entries, so peak
+        memory is bounded to a single shot.
+
+        Parameters
+        ----------
+        worker_file:
+            Path to the worker checkpoint file to read.
+        out_h5_file:
+            Already-open, writable HDF5 file to merge this worker's shots into.
+        already_merged:
+            Set of shot indices already present in out_h5_file's
+            shot_histories. Any entry from the worker file whose key is in
+            this set is skipped.
+        """
+        with h5py.File(worker_file, "r") as in_f:
+            if len(in_f.keys()) == 0:
+                return
+
+            in_root_group = _resolve_checkpoint_object_group(in_f)
+            # Fresh decode_cache per worker file, matching this file's own scope --
+            # not a cache shared across separate worker files.
+            # Use a generator expression (not a list comprehension) to filter lazily,
+            # so entries are decoded and written one at a time, with peak memory
+            # bounded to a single shot even when filtering duplicates.
+            entries = (
+                (key, value)
+                for key, value in iter_dict_attr_entries(
+                    in_root_group, "shot_histories", decode_cache={}
+                )
+                if key not in already_merged
+            )
+            # Consumed fully here, while `in_f` is still open.
+            self._write_shot_entries(out_h5_file, entries)
 
     def _stream_checkpoint_file_into(
         self, filename: Path, out_h5_file
@@ -829,7 +940,7 @@ class ProgramResults(Displayable):
             if len(in_f.keys()) == 0:
                 return
 
-            in_root_group = in_f[next(iter(in_f.keys()))]
+            in_root_group = _resolve_checkpoint_object_group(in_f)
             # Fresh decode_cache per file, matching this file's own scope --
             # not a cache shared across separate worker files.
             entries = iter_dict_attr_entries(
@@ -852,10 +963,7 @@ class ProgramResults(Displayable):
             The requested History object, or None if not found.
         """
         # Check if shot is in memory cache first
-        if (
-            hasattr(self, "_lazy_loading_enabled")
-            and self._lazy_loading_enabled
-        ):
+        if hasattr(self, "_lazy_loading") and self._lazy_loading:
             if shot_index in self._memory_cache:
                 # Move to end of cache order (most recently used)
                 self._cache_order.remove(shot_index)
@@ -929,10 +1037,11 @@ class ProgramResults(Displayable):
             except (KeyError, TypeError):
                 return None
         else:
-            # Return the file's own top-level root group
+            # Return the file's own top-level root group, handling both
+            # fresh-envelope and bootstrap-created file layouts.
             if len(f.keys()) == 0:
                 return None
-            return f[next(iter(f.keys()))]
+            return _resolve_checkpoint_object_group(f)
 
     def _load_shot_from_checkpoint(self, shot_index: int) -> bool:
         """Load a specific shot from checkpoint files.
@@ -962,7 +1071,7 @@ class ProgramResults(Displayable):
                     / f"worker_{self._worker_id}_checkpoint.h5"
                 )
             else:
-                checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
+                checkpoint_file = self._checkpoint_dir / self._results_filename
 
             if not checkpoint_file.exists():
                 return False
@@ -1032,7 +1141,7 @@ class ProgramResults(Displayable):
                 except KeyError:
                     return False
 
-                if self._lazy_loading_enabled:
+                if self._lazy_loading:
                     self._memory_cache[shot_index] = history
                 else:
                     self.shot_histories[shot_index] = history

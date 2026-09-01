@@ -1488,3 +1488,38 @@ class TestReusedSlurmAllocation:
                 break
             time.sleep(0.1)
         assert marker.read_text() == "ran\n"
+
+
+class TestParallelStrategyNShotBatches:
+    """Test the new n_shot_batches field on ParallelStrategy."""
+
+    def test_n_shot_batches_field_in_serialize_attrs(self):
+        """Verify n_shot_batches is included in _SERIALIZE_ATTRS."""
+        from loqs.tools.paralleltools import ParallelStrategy
+        assert "n_shot_batches" in ParallelStrategy._SERIALIZE_ATTRS
+
+    def test_n_shot_batches_field_default_none(self):
+        """Verify n_shot_batches defaults to None."""
+        from loqs.tools.paralleltools import ParallelStrategy
+        strategy = ParallelStrategy()
+        assert strategy.n_shot_batches is None
+
+    def test_n_shot_batches_field_explicit_value(self):
+        """Verify n_shot_batches can be set explicitly."""
+        from loqs.tools.paralleltools import ParallelStrategy
+        strategy = ParallelStrategy(n_shot_batches=5)
+        assert strategy.n_shot_batches == 5
+
+    def test_n_shot_batches_serialization(self):
+        """Verify n_shot_batches round-trips through serialization."""
+        import tempfile
+        from pathlib import Path
+        from loqs.tools.paralleltools import ParallelStrategy
+
+        strategy_orig = ParallelStrategy(n_shot_batches=7)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "strategy.json"
+            strategy_orig.write(path)
+            strategy_decoded = ParallelStrategy.read(path)
+            assert strategy_decoded.n_shot_batches == 7

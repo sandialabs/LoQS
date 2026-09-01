@@ -22,7 +22,7 @@ def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
     work, run via `multiprocessing.Pool` so several of these genuinely
     execute at the same time."""
     checkpoint_dir, worker_id, shots_per_worker = args
-    results = ProgramResults(lazy_loading_enabled=False)
+    results = ProgramResults(lazy_loading=False)
     for i in range(shots_per_worker):
         history = History()
         history.append(Frame({"worker_id": worker_id, "local_shot": i}))
@@ -207,10 +207,8 @@ class TestProgramResults:
 
     def test_checkpoint_with_no_worker_id_uses_canonical_filename(self):
         """`worker_id=None` (the single-writer case) writes/reads the
-        un-suffixed `checkpoint.h5` -- the same filename
-        `consolidate_checkpoints` itself writes its own merged output
-        under, so a single-writer run needs no separate consolidation
-        step at all."""
+        un-suffixed `results.h5` -- the canonical checkpoint filename
+        for single-writer runs."""
         with tempfile.TemporaryDirectory() as temp_dir:
             results = ProgramResults(name="No Worker ID Test")
             history = History()
@@ -220,7 +218,7 @@ class TestProgramResults:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             results.checkpoint(checkpoint_dir=checkpoint_dir)
 
-            assert (checkpoint_dir / "checkpoint.h5").exists()
+            assert (checkpoint_dir / "results.h5").exists()
 
             new_results = ProgramResults()
             new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
@@ -232,7 +230,7 @@ class TestProgramResults:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             checkpoint_dir.mkdir()
 
-            results1 = ProgramResults(name="Worker 1", lazy_loading_enabled=False)
+            results1 = ProgramResults(name="Worker 1", lazy_loading=False)
             for i in range(3):
                 history = History()
                 frame = Frame({"worker": 1, "shot": i})
@@ -240,7 +238,7 @@ class TestProgramResults:
                 results1.add_shot(i, history)
             results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
 
-            results2 = ProgramResults(name="Worker 2", lazy_loading_enabled=False)
+            results2 = ProgramResults(name="Worker 2", lazy_loading=False)
             for i in range(3, 6):
                 history = History()
                 frame = Frame({"worker": 2, "shot": i})
@@ -778,7 +776,7 @@ class TestProgramResults:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
 
             results = ProgramResults(
-                name="Memory Test", lazy_loading_enabled=False
+                name="Memory Test", lazy_loading=False
             )
             for i in range(num_shots):
                 history = History()
@@ -824,6 +822,85 @@ class TestProgramResults:
                 f"got {decoded_shot_counts.count(1)}"
             )
 
+            reloaded = ProgramResults()
+            reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert set(reloaded.shot_histories.keys()) == set(
+                range(num_shots)
+            )
+
+    def test_consolidate_checkpoints_with_dedup_lazily_pulls_entries(self):
+        """Consolidation with deduplication (crash-recovery retry case) must
+        lazily pull entries from iter_dict_attr_entries as merge_dict_attr
+        consumes them, not materialize the entire filtered list beforehand.
+
+        This test patches _write_shot_entries to track how many calls it receives
+        during the iteration of its entries argument: with lazy evaluation, it
+        will yield-and-write one entry at a time; with eager (buggy) list
+        evaluation, all entries are ready before _write_shot_entries starts.
+        """
+        num_shots = 25
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+            # Create a worker file with many shots
+            results_w0 = ProgramResults(
+                name="Worker 0", lazy_loading=False
+            )
+            for i in range(num_shots):
+                history = History()
+                history.append(Frame({"shot_id": i}))
+                results_w0.add_shot(i, history)
+            results_w0.checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id="w0"
+            )
+
+            # First consolidation: worker file -> results.h5
+            consolidator = ProgramResults()
+            consolidator.consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir, delete_originals=False
+            )
+
+            # Simulate crash-recovery: consolidate again with same worker file
+            # still present. The deduplication path must pull entries lazily.
+            real_write_shot_entries = ProgramResults._write_shot_entries
+
+            # Track how many calls to _write_shot_entries happen and with what argument
+            write_shot_entries_calls = []
+
+            def spy_write_shot_entries(self, h5_file, entries):
+                """Spy on _write_shot_entries to see if entries is a generator or list."""
+                entries_type = type(entries).__name__
+                write_shot_entries_calls.append(entries_type)
+                # Call the real function
+                return real_write_shot_entries(self, h5_file, entries)
+
+            with unittest.mock.patch.object(
+                ProgramResults,
+                "_write_shot_entries",
+                spy_write_shot_entries,
+            ):
+                consolidator2 = ProgramResults()
+                consolidator2.consolidate_checkpoints(
+                    checkpoint_dir=checkpoint_dir, delete_originals=True
+                )
+
+            # Verify _write_shot_entries was called with a generator (or list_iterator from a lazy approach)
+            # not with a list_iterator that came from wrapping an eager list in iter()
+            assert (
+                write_shot_entries_calls
+            ), "_write_shot_entries was never invoked during dedup consolidation"
+
+            # With lazy evaluation using a generator expression, entries should be a generator
+            # With eager evaluation using list + iter(), entries would be a list_iterator,
+            # but the generator expression should be passed through as a generator
+            for entries_type in write_shot_entries_calls:
+                assert entries_type == "generator", (
+                    f"_write_shot_entries received {entries_type} instead of generator. "
+                    f"This indicates the deduplication is materializing eagerly. "
+                    f"The deduplication filtering must use a generator expression, not a list comprehension."
+                )
+
+            # Verify the consolidation actually worked (all shots present)
             reloaded = ProgramResults()
             reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert set(reloaded.shot_histories.keys()) == set(
@@ -999,7 +1076,7 @@ class TestResumeCheckpointing:
             checkpoint_dir.mkdir()
 
             # First consolidation: write some worker files and consolidate
-            results1 = ProgramResults(name="Worker 1", lazy_loading_enabled=False)
+            results1 = ProgramResults(name="Worker 1", lazy_loading=False)
             for i in range(2):
                 history = History()
                 history.append(Frame({"batch": 1, "shot": i}))
@@ -1015,7 +1092,7 @@ class TestResumeCheckpointing:
             assert len(final_results.shot_histories) == 2
 
             # Second consolidation: add a new worker file and consolidate again
-            results2 = ProgramResults(name="Worker 2", lazy_loading_enabled=False)
+            results2 = ProgramResults(name="Worker 2", lazy_loading=False)
             for i in range(2, 4):
                 history = History()
                 history.append(Frame({"batch": 2, "shot": i}))
@@ -1035,14 +1112,14 @@ class TestResumeCheckpointing:
                 assert i in final_results2.shot_histories
 
     def test_load_done_shots_returns_union_from_checkpoint_and_workers(self):
-        """_load_done_shots returns the union of shots from checkpoint.h5
+        """_load_done_shots returns the union of shots from results.h5
         and all worker_*_checkpoint.h5 files."""
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             checkpoint_dir.mkdir()
 
-            # Write to checkpoint.h5
-            results_main = ProgramResults(lazy_loading_enabled=False)
+            # Write to results.h5
+            results_main = ProgramResults(lazy_loading=False)
             for i in range(3):
                 history = History()
                 history.append(Frame({"source": "main", "idx": i}))
@@ -1051,7 +1128,7 @@ class TestResumeCheckpointing:
 
             # Write to worker files
             for w in range(2):
-                results_w = ProgramResults(lazy_loading_enabled=False)
+                results_w = ProgramResults(lazy_loading=False)
                 for i in range(3, 6):
                     history = History()
                     history.append(Frame({"source": f"worker{w}", "idx": i}))
@@ -1084,13 +1161,13 @@ class TestResumeCheckpointing:
             # a ProgramResults with some shots
             with h5py.File(parent_path, "w") as parent_f:
                 # Write a ProgramResults nested inside a _program_results dict
-                pr1 = ProgramResults(lazy_loading_enabled=False)
+                pr1 = ProgramResults(lazy_loading=False)
                 for i in range(3):
                     history = History()
                     history.append(Frame({"nested": i}))
                     pr1.add_shot(i, history)
 
-                pr2 = ProgramResults(lazy_loading_enabled=False)
+                pr2 = ProgramResults(lazy_loading=False)
                 for i in range(3, 6):
                     history = History()
                     history.append(Frame({"nested": i}))
@@ -1109,7 +1186,7 @@ class TestResumeCheckpointing:
                 )
 
             # Now load from the nested source
-            nested_pr = ProgramResults(lazy_loading_enabled=True)
+            nested_pr = ProgramResults(lazy_loading=True)
             nested_pr._set_nested_shot_source(parent_path, 0)
 
             # Manually set checkpoint_dir so it looks in the right place
@@ -1130,7 +1207,7 @@ class TestResumeCheckpointing:
             with h5py.File(test_path, "w") as f:
                 from loqs.internal.streamingmerge import merge_dict_attr
 
-                pr = ProgramResults(lazy_loading_enabled=False)
+                pr = ProgramResults(lazy_loading=False)
                 history = History()
                 history.append(Frame({"test": "data"}))
                 pr.add_shot(0, history)
@@ -1162,7 +1239,7 @@ class TestResumeCheckpointing:
             with h5py.File(parent_path, "w") as parent_f:
                 from loqs.internal.streamingmerge import merge_dict_attr
 
-                pr = ProgramResults(lazy_loading_enabled=False)
+                pr = ProgramResults(lazy_loading=False)
                 for i in range(20):
                     history = History()
                     history.append(Frame({"index": i}))
@@ -1178,7 +1255,7 @@ class TestResumeCheckpointing:
                 )
 
             # Load from nested source with decoding spy
-            nested_pr = ProgramResults(lazy_loading_enabled=True)
+            nested_pr = ProgramResults(lazy_loading=True)
             nested_pr._set_nested_shot_source(parent_path, 0)
             nested_pr._checkpoint_dir = Path(temp_dir)
 
@@ -1205,7 +1282,7 @@ class TestResumeCheckpointing:
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir)
 
-            # Create checkpoint.h5 with some shots
+            # Create results.h5 with some shots
             pr1 = ProgramResults()
             for i in range(3):
                 history = History()
@@ -1312,3 +1389,111 @@ class TestResumeCheckpointing:
             # Count should still be 3 (ignoring the .tmp file)
             count = ProgramResults._count_done_shots(checkpoint_dir)
             assert count == 3
+
+    def test_checkpoint_fresh_envelope_read_and_decode(self):
+        """Regression test for bug #105: decode fresh-envelope checkpoints.
+
+        Tests that a checkpoint file created via _write_results_snapshot_if_fresh
+        (which wraps the object in a /root version wrapper) can be decoded and
+        read without error, and that the shot_histories are correctly placed.
+        This was failing with IncorrectDecodableTypeError before the fix.
+        """
+        from loqs.core.quantumprogram import QuantumProgram
+        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            # Create and run a simple program with checkpointing enabled.
+            # This triggers _write_results_snapshot_if_fresh on first run.
+            trivial_code = trivial_codepack.create_qec_code()
+            ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+            stack = [
+                {
+                    "instruction": "Init Patch Trivial",
+                    "new_patch_label": "L0",
+                    "qubits": ["Q0"],
+                }
+            ]
+            program = QuantumProgram(
+                stack,
+                default_noise_model=ideal_model,
+                patch_types={"Trivial": trivial_code},
+                default_base_seed=0,
+                name="simple",
+            )
+
+            # Run with checkpointing: this creates a fresh results.h5 via
+            # _write_results_snapshot_if_fresh, then adds shots via checkpoint()
+            program.run(
+                num_shots=2,
+                checkpoint=True,
+                checkpoint_dir=checkpoint_dir,
+                lazy_loading=False,
+                verbose=False,
+            )
+
+            # The critical test: decode the fresh-envelope checkpoint file.
+            # Before the fix, this would raise IncorrectDecodableTypeError.
+            results_file = checkpoint_dir / "results.h5"
+            assert results_file.exists()
+
+            stored = ProgramResults.read(results_file)
+            assert isinstance(stored, ProgramResults)
+            assert len(stored.shot_histories) == 2
+            # Verify shots are actually present
+            for i in range(2):
+                assert i in stored.shot_histories
+                assert isinstance(stored.shot_histories[i], History)
+
+    def test_load_done_shots_fresh_envelope_no_silent_failure(self):
+        """Regression test for bug #105: _load_done_shots finds fresh-envelope shots.
+
+        Tests that _load_done_shots correctly reports already-checkpointed shots
+        from a fresh-envelope file (created via _write_results_snapshot_if_fresh),
+        not silently returning an empty dict due to a swallowed exception.
+        """
+        from loqs.core.quantumprogram import QuantumProgram
+        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            # Create and run a simple program with checkpointing enabled.
+            trivial_code = trivial_codepack.create_qec_code()
+            ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+            stack = [
+                {
+                    "instruction": "Init Patch Trivial",
+                    "new_patch_label": "L0",
+                    "qubits": ["Q0"],
+                }
+            ]
+            program = QuantumProgram(
+                stack,
+                default_noise_model=ideal_model,
+                patch_types={"Trivial": trivial_code},
+                default_base_seed=0,
+                name="simple",
+            )
+
+            # Run with checkpointing
+            program.run(
+                num_shots=3,
+                checkpoint=True,
+                checkpoint_dir=checkpoint_dir,
+                lazy_loading=False,
+                verbose=False,
+            )
+
+            # Call _load_done_shots on the fresh-envelope checkpoint.
+            # Before the fix, the exception would be silently swallowed and
+            # this would return an empty dict, incorrectly reporting no shots
+            # as done (defeating resume).
+            done_shots = ProgramResults._load_done_shots(checkpoint_dir)
+
+            # Verify that _load_done_shots actually found the shots
+            assert len(done_shots) == 3
+            for i in range(3):
+                assert i in done_shots
+                assert isinstance(done_shots[i], History)

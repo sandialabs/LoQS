@@ -501,6 +501,16 @@ class ParallelStrategy(Serializable):
         typical LoQS workloads); defaults to one chunk per item when
         `program_executor` is a plain `SubmitExecutor`; ignored when
         `program_executor` is `None`.
+    n_shot_batches : int | None
+        Number of batches to split shots into when `shot_executor` is set,
+        governing shot-level parallel dispatch chunking independent of
+        whether checkpointing is on. A batch *count*, not a size (e.g.
+        `n_shot_batches=5` with `num_shots=100` produces 5 batches of 20
+        shots each). `None` (default) means "auto": `max(1, ceil(num_shots /
+        20))` batches whenever `shot_executor` is set, resolved by
+        `QuantumProgram.run()` itself once `num_shots` is known. Only
+        applies when `shot_executor` is given; ignored when `shot_executor`
+        is `None`.
     shot_executor : SubmitExecutor | Callable[[], SubmitExecutor] | None
         Nested shot-level parallelism, forwarded as
         `QuantumProgram.run(shot_executor=...)` for every program built
@@ -529,6 +539,7 @@ class ParallelStrategy(Serializable):
     _SERIALIZE_ATTRS = [
         "program_executor",
         "n_program_chunks",
+        "n_shot_batches",
         "shot_executor",
         "collect_resource_stats",
         "resource_sample_interval",
@@ -538,6 +549,7 @@ class ParallelStrategy(Serializable):
         SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
     ) = None
     n_program_chunks: int | None = None
+    n_shot_batches: int | None = None
     shot_executor: SubmitExecutor | Callable[[], SubmitExecutor] | None = None
     collect_resource_stats: bool = False
     resource_sample_interval: float = 0.2

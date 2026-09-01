@@ -479,8 +479,7 @@ class TestRunParallel:
             [0.0, 0.1, 0.2, 0.3],
             seed_stride=5,
             num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
             parallel_strategy=strategy,
         )
 
@@ -510,7 +509,7 @@ class TestRunParallel:
 
         runner = make_runner(
             strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir
+            checkpoint=True, item_checkpoint_dir=item_checkpoint_dir
         )
         real_build_program = NoiseSweepRunner.build_program
 
@@ -554,7 +553,7 @@ class TestRunParallel:
         )
         # Create a new runner with parallel strategy for the retry
         runner2 = NoiseSweepRunner.from_noise_sweep_runner(
-            runner, parallel_strategy=strategy
+            runner, parallel_strategy=strategy, resume=True
         )
         try:
             final_result = runner2.run()
@@ -587,7 +586,7 @@ class TestResume:
         crash_triggered = []
         runner1 = make_runner(
             strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir
+            checkpoint=True, item_checkpoint_dir=item_checkpoint_dir
         )
         real_build_program = NoiseSweepRunner.build_program
 
@@ -610,7 +609,7 @@ class TestResume:
         # Resume with a fresh runner instance built from the same config
         runner2 = make_runner(
             strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir
+            checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir
         )
         built_indices.clear()
         NoiseSweepRunner.build_program = spy_build_program
@@ -637,8 +636,7 @@ class TestResume:
             [0.0, 0.1],
             seed_stride=5,
             num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         runner1.run()
 
@@ -650,8 +648,7 @@ class TestResume:
             seed_stride=5,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         with pytest.raises(ValueError):
             runner2.run()
@@ -662,8 +659,7 @@ class TestResume:
             [0.0, 0.1],
             seed_stride=5,
             num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         runner1.run()
 
@@ -675,8 +671,7 @@ class TestResume:
             seed_stride=5,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         with pytest.raises(ValueError):
             runner2.run()
@@ -687,8 +682,7 @@ class TestResume:
             [0.0, 0.1],
             seed_stride=5,
             num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         runner1.run()
 
@@ -700,8 +694,7 @@ class TestResume:
             seed_stride=5,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         with pytest.raises(ValueError):
             runner2.run()
@@ -712,8 +705,7 @@ class TestResume:
             [0.0, 0.1, 0.2],
             seed_stride=5,
             num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
         )
         runner.run()
         loaded = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
@@ -932,7 +924,7 @@ class TestPlotNoiseSweep:
 class TestNoiseSweepRunnerShotCheckpointing:
     """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
     checkpointing, threaded through `NoiseSweepRunner.run` via the
-    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading_enabled`
+    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading`
     parameters."""
 
     def test_checkpoint_batch_size_without_shot_checkpoint_dir_raises(self):
@@ -958,7 +950,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             num_shots=10,
             checkpoint_batch_size=1,
             shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading_enabled=False,
+            lazy_loading=False,
         )
 
         result = runner.run()
@@ -976,7 +968,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
 
             # Confirm the checkpoint file exists and can load the right number of shots
-            checkpoint_file = point_subdir / "checkpoint.h5"
+            checkpoint_file = point_subdir / "results.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
 
             loaded_results = ProgramResults()
@@ -996,6 +988,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             program_executor=loky.get_reusable_executor(max_workers=1),
             n_program_chunks=1,
             shot_executor=_build_shot_executor,
+            n_shot_batches=10,
         )
 
         runner = make_runner(
@@ -1004,7 +997,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             parallel_strategy=strategy,
             checkpoint_batch_size=1,
             shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading_enabled=False,
+            lazy_loading=False,
         )
 
         result = runner.run()
@@ -1020,7 +1013,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
         for index in range(len(runner.strengths)):
             point_subdir = _sweep_point_checkpoint_subdir(shot_ckpt_dir, index)
             assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
-            checkpoint_file = point_subdir / "checkpoint.h5"
+            checkpoint_file = point_subdir / "results.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
 
             # Confirm the checkpoint can be loaded with the right number of shots
@@ -1050,12 +1043,11 @@ class TestNoiseSweepRunnerShotCheckpointing:
             [0.0, 0.1],
             seed_stride=10,
             num_shots=5,
-            verbose=False,
-            item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_checkpoint",
             checkpoint_batch_size=2,
             keep_shot_results=True,
-            lazy_loading_enabled=False,  # Disable lazy loading for now
+            lazy_loading=False,  # Disable lazy loading for now
         )
         result = runner.run()
 

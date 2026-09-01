@@ -114,6 +114,7 @@ def _run_one_circuit(
     index: int,
     *,
     shot_executor: Any | None,
+    n_shot_batches: int | None,
     physical_model: ExplicitOpModel,
     label_to_logical: Mapping[Label, list[InstructionLabelLike]],
     num_shots: int,
@@ -124,7 +125,7 @@ def _run_one_circuit(
     program_kwargs: dict,
     shot_checkpoint_dir: str | Path | None,
     checkpoint_batch_size: int | None,
-    lazy_loading_enabled: bool,
+    lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
     """Build, run, and reduce one circuit to a count dict.
@@ -143,15 +144,22 @@ def _run_one_circuit(
         if shot_checkpoint_dir is not None
         else None
     )
-    program_results = program.run(
-        num_shots,
-        max_frame_limit=max_frame_limit,
-        shot_executor=shot_executor,
-        verbose=False,
-        checkpoint_batch_size=checkpoint_batch_size,
-        checkpoint_dir=checkpoint_dir,
-        lazy_loading_enabled=lazy_loading_enabled,
-    )
+    run_kwargs = {
+        "max_frame_limit": max_frame_limit,
+        "shot_executor": shot_executor,
+        "n_shot_batches": n_shot_batches,
+        "verbose": False,
+        "lazy_loading": lazy_loading,
+    }
+    if checkpoint_batch_size is not None:
+        run_kwargs["checkpoint"] = True
+        run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
+        run_kwargs["resume"] = (
+            checkpoint_dir is not None
+            and (checkpoint_dir / "results.h5").exists()
+        )
+        run_kwargs["checkpoint_dir"] = checkpoint_dir
+    program_results = program.run(num_shots, **run_kwargs)
     outcomes = _collect_program_outcomes(
         program_results, collect_shot_data_args
     )
@@ -311,8 +319,8 @@ class EdesignRunner(MultiProgramRunner):
     Encapsulates all configuration needed to simulate an edesign, including
     parallel/checkpoint settings, in a serializable object that can be
     recovered after a crash via `EdesignRunner.read(runner_path).run()`.
-    Whether a call resumes a prior run is inferred entirely from
-    `item_checkpoint_dir`'s own on-disk state -- see `MultiProgramRunner.run`.
+    Checkpoint/resume behavior is controlled by explicit `checkpoint`/`resume`
+    flags applied against on-disk state -- see `MultiProgramRunner.run`.
     """
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
@@ -335,12 +343,14 @@ class EdesignRunner(MultiProgramRunner):
             HistoryDataCollectorLike | list[HistoryDataCollectorLike]
         ) = ("logical_measurement", -1),
         item_checkpoint_dir: str | Path | None = None,
+        checkpoint: bool = False,
+        resume: bool = False,
         force_resume: bool = False,
         max_frame_limit: int = 100,
         parallel_strategy: ParallelStrategy | None = None,
         checkpoint_batch_size: int | None = None,
         shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading_enabled: bool = True,
+        lazy_loading: bool = True,
         keep_shot_results: bool = False,
         program_kwargs: dict | None = None,
         poll_interval: float = 1.0,
@@ -349,10 +359,12 @@ class EdesignRunner(MultiProgramRunner):
         super().__init__(
             parallel_strategy=parallel_strategy,
             item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=checkpoint,
+            resume=resume,
             force_resume=force_resume,
             checkpoint_batch_size=checkpoint_batch_size,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading_enabled=lazy_loading_enabled,
+            lazy_loading=lazy_loading,
             keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
@@ -410,7 +422,7 @@ class EdesignRunner(MultiProgramRunner):
 
     def _item_key_fn(self) -> Callable[[Circuit], str] | None:
         """Use circuit string representation as stable identity when checkpointing."""
-        if self.item_checkpoint_dir is not None:
+        if self.checkpoint:
             return lambda c: c.str
         return None
 
@@ -432,7 +444,7 @@ class EdesignRunner(MultiProgramRunner):
             "program_kwargs": self.program_kwargs,
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
             "checkpoint_batch_size": self.checkpoint_batch_size,
-            "lazy_loading_enabled": self.lazy_loading_enabled,
+            "lazy_loading": self.lazy_loading,
         }
 
     def _make_on_item_done(self) -> Callable[[int, Circuit, dict], None]:

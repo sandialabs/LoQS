@@ -432,11 +432,11 @@ crash loses at most one worker's own in-flight batch (up to
 set it to `1` to checkpoint every shot as soon as it's computed, trading
 batching efficiency for the finest possible durability.
 
-The `0` above isn't a bug: `lazy_loading_enabled` (default `True`) evicts a
+The `0` above isn't a bug: `lazy_loading` (default `True`) evicts a
 shot from the returned [ProgramResults](api:ProgramResults)'s own in-memory
 `shot_histories` as soon as it's durably checkpointed, so `run()`'s return
 value holds only the yet-unwritten tail once checkpointing is active --
-pass `lazy_loading_enabled=False` to keep every shot in memory regardless,
+pass `lazy_loading=False` to keep every shot in memory regardless,
 or reload the full set from disk via `load_checkpoint()` as above.
 
 This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
