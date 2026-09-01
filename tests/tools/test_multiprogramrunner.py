@@ -646,10 +646,8 @@ class _CountingRunner(MultiProgramRunner):
         return ["multiplier"]
 
 
-# Module-level (not test-local) state/function/class for
-# test_crash_recovery_via_read_and_run: Serializable.read() resolves a
-# decoded object's class by dotted import path, which a test-function-local
-# class definition doesn't have.
+# Module-level (not test-local): Serializable.read() resolves a decoded
+# object's class by dotted import path, unavailable to a local class.
 _FLAKY_CALL_COUNT = {"n": 0}
 
 
@@ -837,6 +835,66 @@ class TestProgramRunnerRunAndCrashRecovery:
         # to `interrupted` itself.
         recovered = MultiProgramRunner.read(checkpoint_dir / "runner.h5")
         assert recovered.run() == [2, 4, 6]
+
+    def test_resume_true_without_checkpoint_raises(self):
+        """resume=True requires checkpoint=True, raises ValueError."""
+        with pytest.raises(
+            ValueError, match="resume=True requires checkpoint=True"
+        ):
+            _CountingRunner(
+                [1, 2, 3], multiplier=2, resume=True, checkpoint=False
+            )
+
+    def test_checkpoint_without_resume_raises_when_content_exists(self, tmp_path):
+        """State machine case (b): checkpoint=True, resume=False, but
+        on-disk state already exists raises ValueError."""
+        checkpoint_dir = tmp_path / "ckpt"
+
+        # First run: create a genuine checkpoint
+        first = _CountingRunner(
+            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+        )
+        first.run()
+
+        # Verify runner.h5 exists
+        assert (checkpoint_dir / "runner.h5").exists()
+
+        # Second run: attempt to run again with checkpoint=True but
+        # resume=False should raise
+        second = _CountingRunner(
+            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir, resume=False
+        )
+        with pytest.raises(
+            ValueError,
+            match="contains an existing checkpoint.*Pass resume=True",
+        ):
+            second.run()
+
+    def test_resume_true_with_empty_checkpoint_dir_raises(self, tmp_path):
+        """State machine case (d): resume=True with checkpoint=True but
+        no on-disk state raises ValueError (nothing to resume from)."""
+        checkpoint_dir = tmp_path / "nonexistent_dir"
+
+        # Attempt to resume from a nonexistent dir
+        runner = _CountingRunner(
+            [1, 2, 3], multiplier=2, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+        )
+        with pytest.raises(
+            ValueError,
+            match="is empty or nonexistent.*nothing to resume from",
+        ):
+            runner.run()
+
+        # Also test with an empty-but-existent dir
+        checkpoint_dir.mkdir(parents=True)
+        runner2 = _CountingRunner(
+            [1, 2, 3], multiplier=2, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+        )
+        with pytest.raises(
+            ValueError,
+            match="is empty or nonexistent.*nothing to resume from",
+        ):
+            runner2.run()
 
 
 class TestMergeReducedResult:
@@ -1623,9 +1681,8 @@ class TestShotProgressBar:
 
         from loqs.tools import multiprogramrunner as mpr_module
 
-        # Simulates 2 already-done items (a prior interrupted run). Only the
-        # tqdm init params computed before dispatch matter here, so a raise
-        # from the mismatched later dispatch/assembly logic is swallowed below.
+        # Simulates 2 already-done items (a prior interrupted run) -- only
+        # the tqdm init params computed before dispatch matter here.
         def read_with_preseeded_done(checkpoint_dir, *args, **kwargs):
             return {0: 0, 2: 4}
 
@@ -1657,9 +1714,8 @@ class TestShotProgressBar:
         assert shots_inits, "Shots bar was never created"
         shots_init = shots_inits[0]
 
-        # total must be len(items)*num_shots=15, not len(remaining)*num_shots=5
-        # (items=[1,2,3], done=[0,2], remaining=[1,3]) -- it has to stay fixed
-        # across a resume rather than shrinking as items complete.
+        # total = len(items)*num_shots = 15, fixed across a resume rather
+        # than shrinking to len(remaining)*num_shots as items complete.
         assert shots_init["total"] == 15, (
             f"Expected shots_pbar.total=15 (len(items)=3 * num_shots=5), "
             f"got {shots_init['total']}"

@@ -487,9 +487,8 @@ class TestProgramResults:
                 assert values_iterable.attrs["storage_format"] == "groups"
                 assert {"0", "1", "2"} <= set(values_iterable.keys())
 
-            # Append a second, also entirely array-free batch and confirm
-            # the fast append path still works end to end, not just that
-            # the structure looks right after the first checkpoint.
+            # Append a second, also array-free batch to confirm the fast
+            # append path works end to end, not just on the first checkpoint.
             for i in range(3, 6):
                 history = History()
                 history.append(Frame({"shot": i}))
@@ -807,10 +806,8 @@ class TestProgramResults:
                     checkpoint_dir=checkpoint_dir, delete_originals=False
                 )
 
-            # Every decode call that produced a shot's worth of data did so
-            # one shot at a time -- never a single call materializing more
-            # than one shot's History (the old whole-file-decode behavior
-            # would show up here as one call reporting num_shots at once).
+            # Every decode call must materialize at most one shot's History
+            # at a time, never the whole file's shot_histories dict at once.
             assert decoded_shot_counts, "Serializable.decode was never spied on"
             assert max(decoded_shot_counts) == 1, (
                 f"Expected every decode call to materialize at most one "
@@ -884,15 +881,12 @@ class TestProgramResults:
                     checkpoint_dir=checkpoint_dir, delete_originals=True
                 )
 
-            # Verify _write_shot_entries was called with a generator (or list_iterator from a lazy approach)
-            # not with a list_iterator that came from wrapping an eager list in iter()
+            # _write_shot_entries must receive a generator, not a list --
+            # a list means the deduplication filtered eagerly.
             assert (
                 write_shot_entries_calls
             ), "_write_shot_entries was never invoked during dedup consolidation"
 
-            # With lazy evaluation using a generator expression, entries should be a generator
-            # With eager evaluation using list + iter(), entries would be a list_iterator,
-            # but the generator expression should be passed through as a generator
             for entries_type in write_shot_entries_calls:
                 assert entries_type == "generator", (
                     f"_write_shot_entries received {entries_type} instead of generator. "
@@ -1333,9 +1327,8 @@ class TestResumeCheckpointing:
             original_decode = Serializable.decode
 
             def decode_trap(*args, **kwargs):
-                # Raise only on a recursive decode (a History value nested
-                # inside shot_histories), detected via stack depth -- not a
-                # bare top-level decode call.
+                # Raise only on a recursive decode (a History nested inside
+                # shot_histories), detected via stack depth -- not a top-level call.
                 import traceback
 
                 stack = traceback.extract_stack()
@@ -1433,8 +1426,7 @@ class TestResumeCheckpointing:
                 verbose=False,
             )
 
-            # The critical test: decode the fresh-envelope checkpoint file.
-            # Before the fix, this would raise IncorrectDecodableTypeError.
+            # Decode the fresh-envelope checkpoint file directly.
             results_file = checkpoint_dir / "results.h5"
             assert results_file.exists()
 
@@ -1486,14 +1478,98 @@ class TestResumeCheckpointing:
                 verbose=False,
             )
 
-            # Call _load_done_shots on the fresh-envelope checkpoint.
-            # Before the fix, the exception would be silently swallowed and
-            # this would return an empty dict, incorrectly reporting no shots
-            # as done (defeating resume).
+            # A fresh-envelope checkpoint must report its shots as done, not
+            # an empty dict (which would defeat resume).
             done_shots = ProgramResults._load_done_shots(checkpoint_dir)
-
-            # Verify that _load_done_shots actually found the shots
             assert len(done_shots) == 3
             for i in range(3):
                 assert i in done_shots
                 assert isinstance(done_shots[i], History)
+
+    def test_consolidate_into_already_populated_results_h5_is_memory_bounded(self):
+        """Consolidating a worker file into an already-populated results.h5
+        must decode shots one at a time, even with prior content to read
+        past -- combining the fresh-empty-output and already-populated-
+        output scenarios into one test that proves both are memory-bounded."""
+        num_shots_batch1 = 15
+        num_shots_batch2 = 20
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+            # First consolidation: create initial results.h5 with some shots
+            results1 = ProgramResults(
+                name="Batch 1", lazy_loading=False
+            )
+            for i in range(num_shots_batch1):
+                history = History()
+                history.append(
+                    Frame({"shot_id": i, "array": np.array([i, i + 1])})
+                )
+                results1.add_shot(i, history)
+            results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+            # Consolidate to results.h5
+            consolidator1 = ProgramResults()
+            consolidator1.consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir, delete_originals=True
+            )
+
+            # Verify results.h5 now has the first batch
+            assert (checkpoint_dir / "results.h5").exists()
+            reloaded1 = ProgramResults()
+            reloaded1.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert set(reloaded1.shot_histories.keys()) == set(
+                range(num_shots_batch1)
+            )
+
+            # Second consolidation: create a second worker file with more shots
+            results2 = ProgramResults(
+                name="Batch 2", lazy_loading=False
+            )
+            for i in range(num_shots_batch1, num_shots_batch1 + num_shots_batch2):
+                history = History()
+                history.append(
+                    Frame({"shot_id": i, "array": np.array([i, i + 1])})
+                )
+                results2.add_shot(i, history)
+            results2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
+
+            # Consolidate the second worker file into the already-populated
+            # results.h5 -- the scenario this test targets.
+            real_decode = Serializable.decode
+            decoded_shot_counts = []
+
+            def spy_decode(encoded, format="hdf5", decode_cache=None):
+                result = real_decode(
+                    encoded, format=format, decode_cache=decode_cache
+                )
+                if isinstance(result, History):
+                    decoded_shot_counts.append(1)
+                elif isinstance(result, ProgramResults):
+                    decoded_shot_counts.append(len(result.shot_histories))
+                return result
+
+            consolidator2 = ProgramResults()
+            with unittest.mock.patch.object(
+                Serializable, "decode", side_effect=spy_decode
+            ):
+                consolidator2.consolidate_checkpoints(
+                    checkpoint_dir=checkpoint_dir, delete_originals=False
+                )
+
+            # Memory-boundedness: every decode call in this second pass must
+            # materialize at most one shot, despite results.h5's prior content.
+            assert decoded_shot_counts, "Serializable.decode was never spied on"
+            assert max(decoded_shot_counts) == 1, (
+                f"Expected every decode call to materialize at most one "
+                f"shot at a time, but saw counts {decoded_shot_counts} -- "
+                f"consolidation into already-populated results.h5 is not "
+                f"entry-level memory-bounded."
+            )
+
+            # Verify the consolidation actually worked (all shots present)
+            reloaded2 = ProgramResults()
+            reloaded2.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert set(reloaded2.shot_histories.keys()) == set(
+                range(num_shots_batch1 + num_shots_batch2)
+            )

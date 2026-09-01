@@ -194,11 +194,8 @@ class TestSerialization:
         }
 
     def test_non_file_backed_callable_raises_without_override(self):
-        # Simulate a notebook/interactively-defined function: no real source file
-        # backing it, so inspect.getsource (and thus our serialization) fails.
-        # The exact subclass (OSError vs. its FileNotFoundError subclass) depends on
-        # inspect's exact internal path in a given context, so we check the common
-        # OSError base to be robust to that.
+        # A notebook-defined function has no real source file, so
+        # inspect.getsource fails with OSError or a subclass of it.
         env = {}
         exec("def interactive_fn(strength):\n    return strength\n", env)
         interactive_fn = env["interactive_fn"]
@@ -525,10 +522,8 @@ class TestRunParallel:
         finally:
             NoiseSweepRunner.build_program = real_build_program
 
-        # After the crash, only indices 0 and 1 completed; verify the
-        # partial state via worker files. result.h5 is never written on a
-        # crash (only in _finalize), so read the completed work from the
-        # worker_*_runner.h5 files via _read_worker_files instead.
+        # result.h5 is only written in _finalize, so read the partial state
+        # (indices 0 and 1) from the worker_*_runner.h5 files directly.
         from loqs.tools.multiprogramrunner import _read_worker_files
         completed = _read_worker_files(item_checkpoint_dir)
         assert len(completed) == 2  # Only 0 and 1 completed
@@ -1065,3 +1060,191 @@ class TestNoiseSweepRunnerShotCheckpointing:
         # The returned result itself should be complete (independent of keep_shot_results)
         assert result.is_complete
         assert len(result.failure_rates) == 2
+
+    def test_resume_cascades_into_point_partial_shot_checkpoint(
+        self, monkeypatch, tmp_path
+    ):
+        """When a sweep point crashes partway through its own shot-level
+        checkpoint, a runner-level resume must cascade the resume flag down to
+        that point's own QuantumProgram.run() call, causing it to resume from its
+        partial shot checkpoint rather than recomputing all shots from scratch.
+        This differs from tests that only cover points that hadn't started
+        shot-level work at all."""
+        from loqs.core.quantumprogram import QuantumProgram
+
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: simulate a crash partway through the second point's own
+        # shot work (2 points, 6 shots each, so we'll interrupt at shot 9)
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash after 9 shots total (completing all of point 0's 6 shots,
+            # and 3 of point 1's 6 shots)
+            if compute_count["n"] > 9:
+                raise RuntimeError("Simulated crash mid-dispatch")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            runner = make_runner(
+                [0.0, 0.1],
+                num_shots=6,
+                checkpoint=True,
+                item_checkpoint_dir=item_ckpt,
+                checkpoint_batch_size=2,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+                verbose=False,
+            )
+            runner.run()
+
+        # Verify: point 0's shot checkpoint should be complete (6 shots)
+        point0_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 0)
+        assert point0_shot_ckpt.exists()
+        point0_results = ProgramResults()
+        point0_results.load_checkpoint(point0_shot_ckpt)
+        assert len(point0_results.shot_histories) == 6
+
+        # Verify: point 1's shot checkpoint should be partial (2 of 6 shots)
+        point1_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 1)
+        assert point1_shot_ckpt.exists()
+        point1_results_partial = ProgramResults()
+        point1_results_partial.load_checkpoint(point1_shot_ckpt)
+        assert len(point1_results_partial.shot_histories) == 2
+
+        # Second run: item-level resume should cascade down to point 1's
+        # own QuantumProgram.run() call, resuming its partial checkpoint.
+        monkeypatch.undo()
+        compute_count_on_resume = {"n": 0}
+
+        original_run_shot_2 = QuantumProgram._run_shot
+
+        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+            compute_count_on_resume["n"] += 1
+            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
+
+        monkeypatch.setattr(
+            QuantumProgram, "_run_shot", _count_compute_calls_resume
+        )
+
+        runner2 = make_runner(
+            [0.0, 0.1],
+            num_shots=6,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_ckpt,
+            checkpoint_batch_size=2,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+            verbose=False,
+        )
+        result = runner2.run()
+
+        monkeypatch.undo()
+
+        # Verify: the results are fully correct (both points complete)
+        assert result.is_complete
+        assert len(result.failure_rates) == 2
+
+        # Only point 1's 4 missing shots should be recomputed, not all 6
+        # (which would mean it was redone from scratch instead of resumed).
+        assert compute_count_on_resume["n"] == 4
+
+    def test_resume_does_not_cascade_raise_for_point_with_no_shot_checkpoint(
+        self, monkeypatch, tmp_path
+    ):
+        """When a sweep point has no shot-level checkpoint results.h5,
+        a runner-level resume must not cascade resume=True down to that point's
+        QuantumProgram.run() call, avoiding the case (d) ValueError
+        ("resume=True with no on-disk state"). Instead, resume=False is passed,
+        and the point is redone from scratch and completes successfully."""
+        from loqs.core.quantumprogram import QuantumProgram
+
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: complete point 0, then crash on point 1's first shot
+        # before its checkpoint batch can flush.
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash at shot 10 (point 1's first shot, after point 0's 9)
+            if compute_count["n"] >= 10:
+                raise RuntimeError("Simulated crash mid-point-1")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="mid-point-1"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            runner = make_runner(
+                [0.0, 0.1],
+                num_shots=9,
+                checkpoint=True,
+                item_checkpoint_dir=item_ckpt,
+                checkpoint_batch_size=9,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+                verbose=False,
+            )
+            runner.run()
+
+        monkeypatch.undo()
+
+        # Manually verify/set up the precondition: point 0 complete,
+        # point 1 subdirectory exists but may or may not have results.h5
+        point0_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 0)
+        assert point0_shot_ckpt.exists()
+        point0_results = ProgramResults()
+        point0_results.load_checkpoint(point0_shot_ckpt)
+        assert len(point0_results.shot_histories) == 9
+
+        # If point 1's results.h5 exists, remove it to simulate the case where
+        # point 1's batch didn't complete before the crash
+        point1_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 1)
+        point1_results_file = point1_shot_ckpt / "results.h5"
+        if point1_results_file.exists():
+            point1_results_file.unlink()
+
+        # Ensure the precondition is met: point 1 has no results.h5
+        assert not point1_results_file.exists(), (
+            "Precondition setup failed: point 1 results.h5 should be removed"
+        )
+
+        # Second run: resume should complete successfully without raising case (d).
+        # The cascading logic checks for results.h5; since it doesn't exist,
+        # resume=False is passed to point 1's QuantumProgram.run().
+        runner2 = make_runner(
+            [0.0, 0.1],
+            num_shots=9,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_ckpt,
+            checkpoint_batch_size=9,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+            verbose=False,
+        )
+        result = runner2.run()
+
+        # Verify: the results are fully correct (both points complete)
+        assert result.is_complete
+        assert len(result.failure_rates) == 2
+
+        # Verify: point 1's shot checkpoint now has results.h5 and is complete
+        assert point1_results_file.exists()
+        point1_results_after = ProgramResults()
+        point1_results_after.load_checkpoint(point1_shot_ckpt)
+        assert len(point1_results_after.shot_histories) == 9

@@ -80,27 +80,17 @@ class _TrivialCounterSetup:
         )
 
     def simulate(self, ckpt=None, resume=None, **overrides):
-        """Construct and run an `EdesignRunner` with this setup's edesign/model/
-        physical_to_logical/`collect_shot_data_args=("counter", -1)` and
-        `num_shots=1` as defaults, overridable via `overrides`.
-        
-        Parameters
-        ----------
-        ckpt : Path, optional
-            Checkpoint directory. If provided, enables checkpointing.
-        resume : bool, optional
-            Whether to resume from existing checkpoint. If not specified,
-            defaults to True if checkpoint dir already exists with content,
-            False otherwise.
-        **overrides
-            Keyword arguments to override defaults.
-        """
-        # Infer resume if not explicitly provided
+        """Construct and run an `EdesignRunner` with this setup's edesign/
+        model/physical_to_logical/`collect_shot_data_args=("counter", -1)`/
+        `num_shots=1` as defaults, overridable via `overrides`. `ckpt`, if
+        given, both sets `item_checkpoint_dir` and enables checkpointing;
+        `resume`, if not given explicitly, is inferred as `True` iff `ckpt`
+        already exists with content."""
         if resume is None:
             resume = False
             if ckpt is not None and ckpt.exists() and any(ckpt.iterdir()):
                 resume = True
-        
+
         kwargs = dict(
             edesign=self.edesign,
             physical_model=self.model,
@@ -124,17 +114,10 @@ def trivial_counter_setup():
 def _fake_program(circuit_repr, shot_frames):
     """A minimal stand-in for a QuantumProgram: only the surface
     `convert_run_programs_to_dataset` actually touches (`.name` plus a
-    `.run()` returning canned results), skipping a full
-    QuantumProgram/codepack setup entirely.
-
-    Parameters
-    ----------
-    circuit_repr : str
-        `repr()` of the pyGSTi `Circuit` this program corresponds to.
-    shot_frames : list[list[Frame]]
-        One list of `Frame` objects per shot, appended in order to that
-        shot's `History`.
-    """
+    `.run()` returning canned results), skipping a full QuantumProgram/
+    codepack setup entirely. `circuit_repr` is the pyGSTi `Circuit`'s own
+    `repr()`; `shot_frames` is one list of `Frame` objects per shot, each
+    appended in order to that shot's `History`."""
 
     class _FakeProgram:
         def run(self, *args, **kwargs):
@@ -372,9 +355,7 @@ class TestPipelineWithMultiplePatches:
         )
 
         # convert_run_programs_to_dataset always runs each program itself
-        # now (at its own default num_shots=1) rather than reusing a
-        # separately pre-run result, so there is no need to run() this
-        # program beforehand.
+        # (at its own default num_shots=1), so no need to run() it first.
         ds = convert_run_programs_to_dataset(
             [program],
             collect_shot_data_args=[
@@ -831,3 +812,172 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             loaded_results = ProgramResults()
             loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
             assert len(loaded_results.shot_histories) == 1
+
+    def test_resume_cascades_into_item_partial_shot_checkpoint(
+        self, trivial_counter_setup, tmp_path, monkeypatch
+    ):
+
+        """When an item (circuit) crashes partway through its own shot-level
+        checkpoint, a runner-level resume must cascade the resume flag down to
+        that item's own QuantumProgram.run() call, causing it to resume from its
+        partial shot checkpoint rather than recomputing all shots from scratch.
+        This differs from test_incomplete_item_is_redone_on_resume, which only
+        covers items that hadn't started shot-level work at all."""
+        s = trivial_counter_setup
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: simulate a crash partway through the second circuit's
+        # own shot work (3 shots total, so we'll interrupt at shot 2)
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash after 3 shots total (completing all of circuit 0's 1 shot,
+            # and 2 of circuit 1's 2 shots)
+            if compute_count["n"] > 3:
+                raise RuntimeError("Simulated crash mid-dispatch")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            s.simulate(
+                ckpt=item_ckpt,
+                checkpoint_batch_size=1,
+                shot_checkpoint_dir=shot_ckpt,
+                num_shots=2,  # 2 shots per circuit
+                lazy_loading=False,
+            )
+
+        # Verify: circuit 0's shot checkpoint should be complete (2 shots)
+        circ0_shot_ckpt = shot_ckpt / "item_0"
+        assert circ0_shot_ckpt.exists()
+        circ0_results = ProgramResults()
+        circ0_results.load_checkpoint(circ0_shot_ckpt)
+        assert len(circ0_results.shot_histories) == 2
+
+        # Verify: circuit 1's shot checkpoint should be partial (1 of 2 shots)
+        circ1_shot_ckpt = shot_ckpt / "item_1"
+        assert circ1_shot_ckpt.exists()
+        circ1_results_partial = ProgramResults()
+        circ1_results_partial.load_checkpoint(circ1_shot_ckpt)
+        assert len(circ1_results_partial.shot_histories) == 1
+
+        # Second run: item-level resume should cascade down to circuit 1's
+        # own QuantumProgram.run() call, resuming its partial checkpoint.
+        monkeypatch.undo()
+        compute_count_on_resume = {"n": 0}
+
+        original_run_shot_2 = QuantumProgram._run_shot
+
+        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+            compute_count_on_resume["n"] += 1
+            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
+
+        monkeypatch.setattr(
+            QuantumProgram, "_run_shot", _count_compute_calls_resume
+        )
+
+        ds = s.simulate(
+            ckpt=item_ckpt,
+            checkpoint_batch_size=1,
+            shot_checkpoint_dir=shot_ckpt,
+            num_shots=2,
+            lazy_loading=False,
+        )
+
+        monkeypatch.undo()
+
+        # Verify: the results are fully correct (all 2 shots for both circuits)
+        assert ds[s.circs[0]].counts[("0",)] == 2
+        assert ds[s.circs[1]].counts[("1",)] == 2
+
+        # Only circuit 1's 1 missing shot should be recomputed, not both
+        # (which would mean it was redone from scratch instead of resumed).
+        assert compute_count_on_resume["n"] == 1
+
+    def test_resume_does_not_cascade_raise_for_item_with_no_shot_checkpoint(
+        self, trivial_counter_setup, tmp_path, monkeypatch
+    ):
+        """When an item (circuit) has no shot-level checkpoint results.h5,
+        a runner-level resume must not cascade resume=True down to that item's
+        QuantumProgram.run() call, avoiding the case (d) ValueError
+        ("resume=True with no on-disk state"). Instead, resume=False is passed,
+        and the item is redone from scratch and completes successfully."""
+        s = trivial_counter_setup
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: complete circuit 0, then crash on circuit 1's first shot
+        # before its checkpoint batch can flush.
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash at shot 4 (circuit 1's first shot, after circuit 0's 3)
+            if compute_count["n"] >= 4:
+                raise RuntimeError("Simulated crash mid-circuit-1")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="mid-circuit-1"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            s.simulate(
+                ckpt=item_ckpt,
+                checkpoint_batch_size=3,
+                shot_checkpoint_dir=shot_ckpt,
+                num_shots=3,
+                lazy_loading=False,
+            )
+
+        monkeypatch.undo()
+
+        # Manually verify/set up the precondition: circuit 0 complete,
+        # circuit 1 subdirectory exists but may or may not have results.h5
+        circ0_shot_ckpt = shot_ckpt / "item_0"
+        assert circ0_shot_ckpt.exists()
+        circ0_results = ProgramResults()
+        circ0_results.load_checkpoint(circ0_shot_ckpt)
+        assert len(circ0_results.shot_histories) == 3
+
+        # If circuit 1's results.h5 exists, remove it to simulate the case where
+        # circuit 1's batch didn't complete before the crash
+        circ1_shot_ckpt = shot_ckpt / "item_1"
+        circ1_results_file = circ1_shot_ckpt / "results.h5"
+        if circ1_results_file.exists():
+            circ1_results_file.unlink()
+
+        # Ensure the precondition is met: circuit 1 has no results.h5
+        assert not circ1_results_file.exists(), (
+            "Precondition setup failed: circuit 1 results.h5 should be removed"
+        )
+
+        # Second run: resume should complete successfully without raising case (d).
+        # The cascading logic checks for results.h5; since it doesn't exist,
+        # resume=False is passed to circuit 1's QuantumProgram.run().
+        ds = s.simulate(
+            ckpt=item_ckpt,
+            checkpoint_batch_size=3,
+            shot_checkpoint_dir=shot_ckpt,
+            num_shots=3,
+            lazy_loading=False,
+        )
+
+        # Verify: the results are fully correct (all 3 shots for both circuits)
+        assert ds[s.circs[0]].counts[("0",)] == 3
+        assert ds[s.circs[1]].counts[("1",)] == 3
+
+        # Verify: circuit 1's shot checkpoint now has results.h5 and is complete
+        assert circ1_results_file.exists()
+        circ1_results_after = ProgramResults()
+        circ1_results_after.load_checkpoint(circ1_shot_ckpt)
+        assert len(circ1_results_after.shot_histories) == 3

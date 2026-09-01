@@ -493,9 +493,8 @@ class TestFaultInjectionRunnerCheckpointing:
         assert failed1 == []
         assert self._read_completed_indices(ckpt) == {0, 1}
 
-        # Simulate a crash by rewriting each worker file to keep only
-        # index 0 (as if the second program's entry was never durably
-        # checkpointed).
+        # Simulate a crash: rewrite each worker file to keep only index 0
+        # (as if the second program's entry was never durably checkpointed).
         import h5py
         from loqs.internal.streamingmerge import (
             iter_dict_attr_entries,
@@ -699,6 +698,204 @@ class TestFaultInjectionRunnerCheckpointing:
 
         # Both programs should have succeeded (not in failed list)
         assert failed == []
+
+    def test_resume_cascades_into_program_partial_shot_checkpoint(self, tmp_path, monkeypatch):
+        """When a program crashes partway through its own shot-level
+        checkpoint, a runner-level resume must cascade the resume flag down to
+        that program's own QuantumProgram.run() call, causing it to resume from
+        its partial shot checkpoint rather than recomputing all shots from
+        scratch. This differs from tests that only cover programs that hadn't
+        started shot-level work at all."""
+        from loqs.core.quantumprogram import QuantumProgram
+
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        program = _build_counter_program()
+
+        # First run: simulate a crash partway through the second program's
+        # own shot work (2 programs, 6 shots each, so we'll interrupt at shot 9)
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash after 9 shots total (completing all of program 0's 6 shots,
+            # and 2 of program 1's 6 shots)
+            if compute_count["n"] > 9:
+                raise RuntimeError("Simulated crash mid-dispatch")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            runner = fttools.FaultInjectionRunner(
+                errored_programs=[program, program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                num_shots=6,
+                checkpoint=True,
+                item_checkpoint_dir=item_ckpt,
+                checkpoint_batch_size=2,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+                show_progress=False,
+            )
+            runner.run()
+
+        # Verify: program 0's shot checkpoint should be complete (6 shots)
+        from loqs.core import ProgramResults
+        prog0_shot_ckpt = shot_ckpt / "item_0"
+        assert prog0_shot_ckpt.exists()
+        prog0_results = ProgramResults()
+        prog0_results.load_checkpoint(prog0_shot_ckpt)
+        assert len(prog0_results.shot_histories) == 6
+
+        # Verify: program 1's shot checkpoint should be partial (2 of 6 shots)
+        prog1_shot_ckpt = shot_ckpt / "item_1"
+        assert prog1_shot_ckpt.exists()
+        prog1_results_partial = ProgramResults()
+        prog1_results_partial.load_checkpoint(prog1_shot_ckpt)
+        assert len(prog1_results_partial.shot_histories) == 2
+
+        # Second run: item-level resume should cascade down to program 1's
+        # own QuantumProgram.run() call, resuming its partial checkpoint.
+        monkeypatch.undo()
+        compute_count_on_resume = {"n": 0}
+
+        original_run_shot_2 = QuantumProgram._run_shot
+
+        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+            compute_count_on_resume["n"] += 1
+            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
+
+        monkeypatch.setattr(
+            QuantumProgram, "_run_shot", _count_compute_calls_resume
+        )
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=6,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_ckpt,
+            checkpoint_batch_size=2,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+            show_progress=False,
+        )
+        failed = runner2.run()
+
+        monkeypatch.undo()
+
+        # Verify: the results are fully correct (both programs complete)
+        assert failed == []
+
+        # Only program 1's 4 missing shots should be recomputed, not all 6
+        # (which would mean it was redone from scratch instead of resumed).
+        assert compute_count_on_resume["n"] == 4
+
+    def test_resume_does_not_cascade_raise_for_program_with_no_shot_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
+        """When a program has no shot-level checkpoint results.h5, a runner-level
+        resume must not cascade resume=True down to that program's QuantumProgram.run()
+        call, avoiding the case (d) ValueError ("resume=True with no on-disk state").
+        Instead, resume=False is passed, and the program is redone from scratch and
+        completes successfully."""
+        from loqs.core.quantumprogram import QuantumProgram
+
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        program = _build_counter_program()
+
+        # First run: complete program 0, then crash on program 1's first shot
+        # before its checkpoint batch can flush.
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash at shot 10 (program 1's first shot, after program 0's 9)
+            if compute_count["n"] >= 10:
+                raise RuntimeError("Simulated crash mid-program-1")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="mid-program-1"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            runner = fttools.FaultInjectionRunner(
+                errored_programs=[program, program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                num_shots=9,
+                checkpoint=True,
+                item_checkpoint_dir=item_ckpt,
+                checkpoint_batch_size=9,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+                show_progress=False,
+            )
+            runner.run()
+
+        monkeypatch.undo()
+
+        # Manually verify/set up the precondition: program 0 complete,
+        # program 1 subdirectory exists but may or may not have results.h5
+        from loqs.core import ProgramResults
+        prog0_shot_ckpt = shot_ckpt / "item_0"
+        assert prog0_shot_ckpt.exists()
+        prog0_results = ProgramResults()
+        prog0_results.load_checkpoint(prog0_shot_ckpt)
+        assert len(prog0_results.shot_histories) == 9
+
+        # If program 1's results.h5 exists, remove it to simulate the case where
+        # program 1's batch didn't complete before the crash
+        prog1_shot_ckpt = shot_ckpt / "item_1"
+        prog1_results_file = prog1_shot_ckpt / "results.h5"
+        if prog1_results_file.exists():
+            prog1_results_file.unlink()
+
+        # Ensure the precondition is met: program 1 has no results.h5
+        assert not prog1_results_file.exists(), (
+            "Precondition setup failed: program 1 results.h5 should be removed"
+        )
+
+        # Second run: resume should complete successfully without raising case (d).
+        # The cascading logic checks for results.h5; since it doesn't exist,
+        # resume=False is passed to program 1's QuantumProgram.run().
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=9,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_ckpt,
+            checkpoint_batch_size=9,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+            show_progress=False,
+        )
+        failed = runner2.run()
+
+        # Verify: the results are fully correct (both programs complete)
+        assert failed == []
+
+        # Verify: program 1's shot checkpoint now has results.h5 and is complete
+        assert prog1_results_file.exists()
+        prog1_results_after = ProgramResults()
+        prog1_results_after.load_checkpoint(prog1_shot_ckpt)
+        assert len(prog1_results_after.shot_histories) == 9
 
 
 class TestProgramOutput:
