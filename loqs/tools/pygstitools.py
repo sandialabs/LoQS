@@ -123,7 +123,7 @@ def _run_one_circuit(
     max_frame_limit: int,
     program_kwargs: dict,
     shot_checkpoint_dir: str | Path | None,
-    checkpoint_batch_size: int | None,
+    checkpoint: bool,
     lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
@@ -150,9 +150,8 @@ def _run_one_circuit(
         "verbose": False,
         "lazy_loading": lazy_loading,
     }
-    if checkpoint_batch_size is not None:
+    if checkpoint:
         run_kwargs["checkpoint"] = True
-        run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
         run_kwargs["resume"] = (
             checkpoint_dir is not None
             and (checkpoint_dir / "results.h5").exists()
@@ -347,7 +346,7 @@ class EdesignRunner(MultiProgramRunner):
         force_resume: bool = False,
         max_frame_limit: int = 100,
         parallel_strategy: ParallelStrategy | None = None,
-        checkpoint_batch_size: int | None = None,
+        shot_checkpoint: bool = False,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading: bool = True,
         keep_shot_results: bool = False,
@@ -361,7 +360,7 @@ class EdesignRunner(MultiProgramRunner):
             checkpoint=checkpoint,
             resume=resume,
             force_resume=force_resume,
-            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint=shot_checkpoint,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading=lazy_loading,
             keep_shot_results=keep_shot_results,
@@ -442,7 +441,7 @@ class EdesignRunner(MultiProgramRunner):
             "max_frame_limit": self.max_frame_limit,
             "program_kwargs": self.program_kwargs,
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "checkpoint_batch_size": self.checkpoint_batch_size,
+            "checkpoint": self.shot_checkpoint,
             "lazy_loading": self.lazy_loading,
         }
 

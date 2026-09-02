@@ -703,28 +703,28 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
         item_checkpoint_dir=None,
         force_resume=False,
         parallel_strategy=None,
-        checkpoint_batch_size=None,
+        shot_checkpoint=False,
         shot_checkpoint_dir=None,
         lazy_loading=True,
         keep_shot_results=False,
         poll_interval=1.0,
         show_progress=True,
-    ):
-        super().__init__(
-            checkpoint=checkpoint,
-            resume=resume,
-            parallel_strategy=parallel_strategy,
-            item_checkpoint_dir=item_checkpoint_dir,
-            force_resume=force_resume,
-            checkpoint_batch_size=checkpoint_batch_size,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading=lazy_loading,
-            keep_shot_results=keep_shot_results,
-            poll_interval=poll_interval,
-            show_progress=show_progress,
-        )
-        self.items = items
-        self.multiplier = multiplier
+     ):
+         super().__init__(
+             checkpoint=checkpoint,
+             resume=resume,
+             parallel_strategy=parallel_strategy,
+             item_checkpoint_dir=item_checkpoint_dir,
+             force_resume=force_resume,
+             shot_checkpoint=shot_checkpoint,
+             shot_checkpoint_dir=shot_checkpoint_dir,
+             lazy_loading=lazy_loading,
+             keep_shot_results=keep_shot_results,
+             poll_interval=poll_interval,
+             show_progress=show_progress,
+         )
+         self.items = items
+         self.multiplier = multiplier
 
     def _get_items(self):
         return self.items
@@ -1130,17 +1130,17 @@ class TestKeepShotResults:
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=tmp_path / "ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             keep_shot_results=True,
         )
         assert runner.keep_shot_results is True
 
     def test_keep_shot_results_without_checkpoint_batch_raises(self, tmp_path):
-        """keep_shot_results requires checkpoint_batch_size, so kept results are
+        """keep_shot_results requires shot_checkpoint=True, so kept results are
         always read back from an item's own on-disk shot checkpoint rather than
         held fully in memory for every item at once."""
-        with pytest.raises(ValueError, match="checkpoint_batch_size"):
+        with pytest.raises(ValueError, match="shot_checkpoint"):
             _KeepShotResultsRunner(
                 [1, 2, 3],
                 checkpoint=True,
@@ -1167,7 +1167,7 @@ class TestKeepShotResults:
         runner = _CheckpointedKeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=True,
         )
@@ -1189,7 +1189,7 @@ class TestKeepShotResults:
         runner = _CheckpointedKeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
         )
@@ -1213,7 +1213,7 @@ class TestKeepShotResults:
         runner1 = _CheckpointedKeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
         )
         result1 = runner1.run()
@@ -1224,7 +1224,7 @@ class TestKeepShotResults:
         runner2 = _CheckpointedKeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
         )
         result2 = runner2.run()
@@ -1242,7 +1242,7 @@ class TestKeepShotResults:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=True,
         )
@@ -1270,7 +1270,7 @@ class TestKeepShotResults:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
             parallel_strategy=ParallelStrategy(
@@ -1298,7 +1298,7 @@ class TestKeepShotResults:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=True,
         )
@@ -1327,7 +1327,7 @@ class TestKeepShotResults:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
         )
@@ -1352,7 +1352,7 @@ class TestKeepShotResults:
         runner1 = _CheckpointedKeepShotResultsRunner(
             [1, 2], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
         )
 
@@ -1381,7 +1381,7 @@ class TestKeepShotResults:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=True,
             parallel_strategy=ParallelStrategy(
@@ -1467,13 +1467,13 @@ class TestShotProgressBar:
             return result_list
 
         def _shot_checkpoint_subdir(self, index: int) -> Path | None:
-            """Return per-item shot checkpoint subdirectory."""
-            if (
-                self.shot_checkpoint_dir is not None
-                and self.checkpoint_batch_size is not None
-            ):
-                return self.shot_checkpoint_dir / f"item_{index}"
-            return None
+             """Return per-item shot checkpoint subdirectory."""
+             if (
+                 self.shot_checkpoint_dir is not None
+                 and self.shot_checkpoint
+             ):
+                 return self.shot_checkpoint_dir / f"item_{index}"
+             return None
 
     def test_num_shots_for_progress_hook_returns_num_shots(self):
         """Verify _num_shots_for_progress returns self.num_shots."""
@@ -1549,13 +1549,13 @@ class TestShotProgressBar:
             num_shots=5,
             parallel_strategy=strategy,
             show_progress=True,
-            # checkpoint_batch_size and shot_checkpoint_dir are NOT set
+            # shot_checkpoint and shot_checkpoint_dir are NOT set
         )
         runner.run()
 
         captured = capsys.readouterr()
         assert "Shot-level progress reporting requires" in captured.out
-        assert "checkpoint_batch_size" in captured.out
+        assert "shot_checkpoint=True" in captured.out
         assert "shot_checkpoint_dir" in captured.out
 
     def test_shot_progress_silent_when_show_progress_false(
@@ -1567,15 +1567,15 @@ class TestShotProgressBar:
 
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=1),
-            n_program_chunks=2,
-        )
+             n_program_chunks=2,
+         )
 
         runner = self._ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
             show_progress=False,
-            # checkpoint_batch_size and shot_checkpoint_dir are NOT set
+            # shot_checkpoint and shot_checkpoint_dir are NOT set
         )
         runner.run()
 
@@ -1655,7 +1655,7 @@ class TestShotProgressBar:
             checkpoint=True,
             item_checkpoint_dir=tmp_path / "item_ckpt",
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             show_progress=False,
         )
         with patch(
@@ -1750,7 +1750,7 @@ class TestShotProgressBar:
                     item_checkpoint_dir=item_checkpoint_dir,
                     parallel_strategy=strategy,
                     shot_checkpoint_dir=shot_checkpoint_dir,
-                    checkpoint_batch_size=2,
+                    shot_checkpoint=True,
                     show_progress=True,
                 )
                 with contextlib.suppress(Exception):

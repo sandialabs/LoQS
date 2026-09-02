@@ -555,47 +555,60 @@ class QuantumProgram(Displayable):
         checkpoint_enabled: bool,
         checkpoint_batch_size: int | None,
     ) -> tuple[int | None, int | None]:
-        """Resolve `n_shot_batches` auto-default and derive/validate
-        `checkpoint_batch_size` against it.
+        """Resolve the batch count used for shot-level parallel dispatch
+        chunking and the batch size used for checkpoint-flush granularity.
+
+        `checkpoint_batch_size` (a size) and `n_shot_batches` (a count) are two
+        equivalent ways to specify the same underlying batching, valid
+        regardless of whether `shot_executor` is set -- at most one may be
+        given explicitly; raises `ValueError` if both are. Whichever one is
+        given (if any) is used as-is; the other side is derived from it, never
+        the reverse (deriving a count then re-deriving a size from that count
+        can silently disagree with an explicitly-given size, due to integer
+        ceiling division). If neither is given, both resolve independently
+        from the same `max(1, ceil(num_shots / 20))` auto-default formula
+        applied to whichever one is actually needed for this call's mode --
+        this preserves today's exact existing numeric defaults in both modes,
+        which are not simply cross-derivable from one another.
 
         Returns `(resolved_n_shot_batches, resolved_checkpoint_batch_size)`.
-        Raises `ValueError` if explicit `checkpoint_batch_size` doesn't match
-        the derived value when both `shot_executor` and `n_shot_batches` are
-        in play."""
-        # Resolve n_shot_batches (auto-default when shot_executor is set)
-        resolved_n_shot_batches = None
-        if shot_executor is not None:
-            resolved_n_shot_batches = (
-                n_shot_batches
-                if n_shot_batches is not None
-                else max(1, math.ceil(num_shots / 20))
+        `resolved_n_shot_batches` is `None` unless `shot_executor` is given;
+        `resolved_checkpoint_batch_size` is `None` unless `checkpoint_enabled`.
+        """
+        if n_shot_batches is not None and checkpoint_batch_size is not None:
+            raise ValueError(
+                "Provide at most one of n_shot_batches or checkpoint_batch_size, not both."
             )
 
-        # Validate/derive checkpoint_batch_size based on n_shot_batches
-        resolved_checkpoint_batch_size = checkpoint_batch_size
+        resolved_n_shot_batches = None
+        if shot_executor is not None:
+            if n_shot_batches is not None:
+                resolved_n_shot_batches = n_shot_batches
+            elif checkpoint_batch_size is not None:
+                resolved_n_shot_batches = math.ceil(
+                    num_shots / checkpoint_batch_size
+                )
+            else:
+                resolved_n_shot_batches = max(1, math.ceil(num_shots / 20))
+
+        resolved_checkpoint_batch_size = None
         if checkpoint_enabled:
-            if shot_executor is not None:
-                expected_batch_size = math.ceil(
+            if checkpoint_batch_size is not None:
+                resolved_checkpoint_batch_size = checkpoint_batch_size
+            elif n_shot_batches is not None:
+                resolved_checkpoint_batch_size = math.ceil(
+                    num_shots / n_shot_batches
+                )
+            elif shot_executor is not None:
+                resolved_checkpoint_batch_size = math.ceil(
                     num_shots / resolved_n_shot_batches
                 )
-                if checkpoint_batch_size is not None:
-                    if checkpoint_batch_size != expected_batch_size:
-                        raise ValueError(
-                            f"checkpoint_batch_size ({checkpoint_batch_size}) must equal "
-                            f"ceil(num_shots / n_shot_batches) ({expected_batch_size}) "
-                            "when both shot_executor and an explicit checkpoint_batch_size "
-                            "are given; omit checkpoint_batch_size to derive it "
-                            "automatically from n_shot_batches instead."
-                        )
-                else:
-                    resolved_checkpoint_batch_size = expected_batch_size
             else:
-                if checkpoint_batch_size is None:
-                    resolved_checkpoint_batch_size = max(
-                        1, math.ceil(num_shots / 20)
-                    )
-        if checkpoint_enabled and resolved_checkpoint_batch_size < 1:
-            raise ValueError("checkpoint_batch_size must be >= 1")
+                resolved_checkpoint_batch_size = max(
+                    1, math.ceil(num_shots / 20)
+                )
+            if resolved_checkpoint_batch_size < 1:
+                raise ValueError("checkpoint_batch_size must be >= 1")
 
         return resolved_n_shot_batches, resolved_checkpoint_batch_size
 
@@ -665,29 +678,26 @@ class QuantumProgram(Displayable):
             the mismatch check below.
 
         checkpoint_batch_size:
-            Number of shots to accumulate, per writer, before durably
-            flushing them to that writer's own checkpoint file. Only
-            meaningful when `checkpoint=True`; ignored otherwise. If `None`
-            (default) and `checkpoint=True`, defaults to `max(1,
-            ceil(num_shots / 20))` -- unless `shot_executor` is also given,
-            in which case it's instead derived from `n_shot_batches` as
-            `ceil(num_shots / n_shot_batches)` (an explicit
-            `checkpoint_batch_size` that disagrees with that derived value
-            raises `ValueError`). If `shot_executor` is given, each
-            dispatched batch of this many shots is computed and
-            checkpointed together inside its own worker process, keyed by
-            that worker's own `hostname_pid` identity, so multiple workers
-            never contend for the same file; once every batch has returned,
-            `run()` merges every worker's file into one final,
-            bounded-memory-streamed `results.h5` (see
-            [](api:ProgramResults.consolidate_checkpoints)). With no
-            `shot_executor` (serial), there is only ever one writer, so
-            shots are checkpointed directly to that same `results.h5`
-            with no separate merge step needed. Set to `1` to checkpoint
-            every single shot as soon as it completes (the finest possible
-            granularity -- a crash loses at most one in-flight shot per
-            writer); a larger value trades that granularity for fewer,
-            larger writes.
+             Number of shots to accumulate, per writer, before durably
+             flushing them to that writer's own checkpoint file. Only
+             meaningful when `checkpoint=True`; ignored otherwise. Mutually
+             exclusive with `n_shot_batches` (providing both raises `ValueError`).
+             If both `n_shot_batches` and `checkpoint_batch_size` are `None`, both
+             default to `max(1, ceil(num_shots / 20))`. If `shot_executor` is
+             given, each dispatched batch of this many shots is computed and
+             checkpointed together inside its own worker process, keyed by
+             that worker's own `hostname_pid` identity, so multiple workers
+             never contend for the same file; once every batch has returned,
+             `run()` merges every worker's file into one final,
+             bounded-memory-streamed `results.h5` (see
+             [](api:ProgramResults.consolidate_checkpoints)). With no
+             `shot_executor` (serial), there is only ever one writer, so
+             shots are checkpointed directly to that same `results.h5`
+             with no separate merge step needed. Set to `1` to checkpoint
+             every single shot as soon as it completes (the finest possible
+             granularity -- a crash loses at most one in-flight shot per
+             writer); a larger value trades that granularity for fewer,
+             larger writes.
 
         checkpoint_dir:
             Directory to store checkpoint files. If None (default), checkpoints
@@ -715,12 +725,14 @@ class QuantumProgram(Displayable):
             effect when `checkpoint` is `False`.
 
          n_shot_batches:
-             Number of batches to split shots into for parallel dispatch when
-             `shot_executor` is given. A batch *count*, not a size (e.g.
-             `n_shot_batches=5` with `num_shots=100` produces 5 batches of 20
-             shots each). `None` (default) means "auto": `max(1, ceil(num_shots
-             / 20))` batches whenever `shot_executor` is set. Ignored when
-             `shot_executor` is `None` (serial dispatch).
+             Number of batches to split shots into. A batch *count*, not a size
+             (e.g. `n_shot_batches=5` with `num_shots=100` produces 5 batches of
+             20 shots each). Mutually exclusive with `checkpoint_batch_size`
+             (providing both raises `ValueError`). `None` (default) means "auto":
+             `max(1, ceil(num_shots / 20))` when needed. If given explicitly, used
+             as-is regardless of dispatch mode; if neither `n_shot_batches` nor
+             `checkpoint_batch_size` is given, both default to the same auto
+             formula applied independently to their own modes.
 
          results_filename:
              Filename to use for the canonical results checkpoint file.

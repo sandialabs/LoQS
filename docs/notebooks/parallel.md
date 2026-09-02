@@ -401,7 +401,7 @@ it to its own private file (keyed by that worker's own hostname/PID, so
 concurrent workers never open the same file), and only then returns. Once
 every dispatched batch is confirmed done, `run()` runs one race-free,
 driver-side pass that streams every worker's file into the same canonical
-`checkpoint.h5` a serial run would have written directly -- callers never
+`results.h5` a serial run would have written directly -- callers never
 need to touch the per-worker files themselves.
 
 ```{code-cell} ipython3
@@ -413,6 +413,7 @@ with tempfile.TemporaryDirectory() as checkpoint_dir:
     results = program.run(
         num_shots=20,
         shot_executor=executor,
+        checkpoint=True,
         checkpoint_batch_size=5,
         checkpoint_dir=checkpoint_dir,
         verbose=False,
@@ -438,6 +439,43 @@ shot from the returned [ProgramResults](api:ProgramResults)'s own in-memory
 value holds only the yet-unwritten tail once checkpointing is active --
 pass `lazy_loading=False` to keep every shot in memory regardless,
 or reload the full set from disk via `load_checkpoint()` as above.
+
+### Resuming after a crash
+
+A checkpointing-enabled `run()` also supports genuine resume, regardless of whether the original call used a `shot_executor`: calling `run()` again with `checkpoint=True, resume=True` against the same `checkpoint_dir` only computes whatever wasn't already durably checkpointed, rather than starting over from shot 0. `run()` never returns leaving stray `worker_*_checkpoint.h5` files behind either -- a race-free consolidation pass into `results.h5` runs whenever any exist, even if the resuming call itself dispatches serially, so a parallel run that crashed mid-batch can always be finished off with a plain serial call.
+
+```{code-cell} ipython3
+with tempfile.TemporaryDirectory() as resume_checkpoint_dir:
+    partial = program.run(
+        num_shots=10,
+        shot_executor=executor,
+        checkpoint=True,
+        checkpoint_batch_size=5,
+        checkpoint_dir=resume_checkpoint_dir,
+        lazy_loading=False,
+        verbose=False,
+    )
+    print(f"shots after first call: {len(partial.shot_histories)}")
+
+    # Finishing off with more shots than originally planned: num_shots
+    # differs from the original call, so force_resume=True is needed to
+    # bypass the mismatch check -- the 10 already-checkpointed shots are
+    # kept as-is, and only the remaining 10 are actually computed.
+    finished = program.run(
+        num_shots=20,
+        shot_executor=executor,
+        checkpoint=True,
+        resume=True,
+        force_resume=True,
+        checkpoint_batch_size=5,
+        checkpoint_dir=resume_checkpoint_dir,
+        lazy_loading=False,
+        verbose=False,
+    )
+    print(f"shots after resuming call: {len(finished.shot_histories)}")
+```
+
+If a resuming call's own `num_shots`/`max_frame_limit`/RNG seed happen to exactly match the original call, no mismatch is detected and `force_resume` isn't needed at all.
 
 This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
 shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),

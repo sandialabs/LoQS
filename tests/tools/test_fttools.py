@@ -390,7 +390,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
         )
@@ -705,7 +705,7 @@ class TestFaultInjectionRunnerCheckpointing:
             expected_outcomes=[1],
             num_shots=5, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_checkpoint",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,  # Disable lazy loading for now
         )
@@ -766,8 +766,11 @@ class TestFaultInjectionRunnerCheckpointing:
                 num_shots=6,
                 checkpoint=True,
                 item_checkpoint_dir=item_ckpt,
-                checkpoint_batch_size=2,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
+                # n_shot_batches=3 -> checkpoint_batch_size=2, so a crash
+                # mid-batch drops the incomplete batch, not just the shot.
+                parallel_strategy=ParallelStrategy(n_shot_batches=3),
                 lazy_loading=False,
                 show_progress=False,
             )
@@ -811,8 +814,9 @@ class TestFaultInjectionRunnerCheckpointing:
             checkpoint=True,
             resume=True,
             item_checkpoint_dir=item_ckpt,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
+            parallel_strategy=ParallelStrategy(n_shot_batches=3),
             lazy_loading=False,
             show_progress=False,
         )
@@ -867,7 +871,7 @@ class TestFaultInjectionRunnerCheckpointing:
                 num_shots=9,
                 checkpoint=True,
                 item_checkpoint_dir=item_ckpt,
-                checkpoint_batch_size=9,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
                 lazy_loading=False,
                 show_progress=False,
@@ -908,7 +912,7 @@ class TestFaultInjectionRunnerCheckpointing:
             checkpoint=True,
             resume=True,
             item_checkpoint_dir=item_ckpt,
-            checkpoint_batch_size=9,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
             lazy_loading=False,
             show_progress=False,

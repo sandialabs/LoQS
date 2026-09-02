@@ -316,8 +316,8 @@ runner_with_override = NoiseSweepRunner(
 By default, each sweep point's raw `ProgramResults` (the full per-shot histories) is discarded as
 soon as its failure rate has been extracted -- only the summary `NoiseSweepResult` is kept. If you
 want to dig into the raw shot data later (e.g. to try a different pass/fail criterion without
-re-running anything), construct the `NoiseSweepRunner` with `keep_shot_results=True`, an
-`item_checkpoint_dir`, and shot-level checkpointing (`checkpoint_batch_size`/
+re-running anything), construct the `NoiseSweepRunner` with `checkpoint=True`, `keep_shot_results=True`, an
+`item_checkpoint_dir`, and shot-level checkpointing (`shot_checkpoint`/
 `shot_checkpoint_dir`) -- the last of these is required specifically so kept results are read back
 from each point's own on-disk shot checkpoint on demand rather than held fully in memory for every
 point at once. The kept results are accessible via the retained runner instance's
@@ -335,8 +335,9 @@ runner_kept = NoiseSweepRunner(
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
+    checkpoint=True,
     item_checkpoint_dir="steane_zsweep_kept_shots",
-    checkpoint_batch_size=5,
+    shot_checkpoint=True,
     shot_checkpoint_dir="steane_zsweep_kept_shots_data",
     keep_shot_results=True,
 )
@@ -358,11 +359,12 @@ Counter(raw_results.collect_shot_data("logical_measurement", -1))
 ## Resuming an interrupted sweep
 
 Large sweeps (many strengths, many shots each) can take a while, and it would be a shame to lose
-all progress if the process is interrupted partway through. Passing `item_checkpoint_dir` to the
-constructor writes the in-progress `NoiseSweepResult` out after *every* completed point, not just
-at the end. If you construct a fresh `NoiseSweepRunner` with the same `item_checkpoint_dir` that
-already contains progress, already-completed points are recognized and skipped entirely -- at most one
-point's worth of shots is ever repeated, no matter how large the sweep is.
+all progress if the process is interrupted partway through. Passing `checkpoint=True` and
+`item_checkpoint_dir` to the constructor writes the in-progress `NoiseSweepResult` out after
+*every* completed point, not just at the end. To resume from a checkpoint, construct a new
+`NoiseSweepRunner` via `from_noise_sweep_runner` (or with the same config) with `resume=True`,
+pointing to the same `item_checkpoint_dir` -- already-completed points are recognized and skipped
+entirely, with at most one point's worth of shots repeated even if interrupted mid-point.
 
 ```{code-cell} ipython3
 resumable_runner = NoiseSweepRunner(
@@ -376,6 +378,7 @@ resumable_runner = NoiseSweepRunner(
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
+    checkpoint=True,
     item_checkpoint_dir="steane_zsweep_progress",
 )
 
@@ -384,12 +387,13 @@ result_first_pass.failure_rates
 ```
 
 Resuming from the checkpoint directory is done by constructing a second `NoiseSweepRunner` via
-`from_noise_sweep_runner` (or by constructing a fresh runner with the same config), pointing to
-the same `item_checkpoint_dir`. Every point already recorded as complete in `steane_zsweep_progress`
-is recognized and skipped entirely, returning instantly without simulating anything:
+`from_noise_sweep_runner` with `resume=True` (or by constructing a fresh runner with the same
+config plus `checkpoint=True, resume=True`), pointing to the same `item_checkpoint_dir`. Every
+point already recorded as complete in `steane_zsweep_progress` is recognized and skipped entirely,
+returning instantly without simulating anything:
 
 ```{code-cell} ipython3
-result_second_pass = NoiseSweepRunner.from_noise_sweep_runner(resumable_runner).run()
+result_second_pass = NoiseSweepRunner.from_noise_sweep_runner(resumable_runner, resume=True).run()
 result_second_pass.failure_rates == result_first_pass.failure_rates
 ```
 

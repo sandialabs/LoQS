@@ -62,7 +62,7 @@ class MultiProgramRunner(Serializable):
         "checkpoint",
         "resume",
         "force_resume",
-        "checkpoint_batch_size",
+        "shot_checkpoint",
         "shot_checkpoint_dir",
         "lazy_loading",
         "index_map",
@@ -85,7 +85,7 @@ class MultiProgramRunner(Serializable):
         checkpoint: bool = False,
         resume: bool = False,
         force_resume: bool = False,
-        checkpoint_batch_size: int | None = None,
+        shot_checkpoint: bool = False,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading: bool = True,
         index_map: dict[str, int] | None = None,
@@ -103,7 +103,7 @@ class MultiProgramRunner(Serializable):
         self.checkpoint = checkpoint
         self.resume = resume
         self.force_resume = force_resume
-        self.checkpoint_batch_size = checkpoint_batch_size
+        self.shot_checkpoint = shot_checkpoint
         self.shot_checkpoint_dir = (
             Path(shot_checkpoint_dir)
             if shot_checkpoint_dir is not None
@@ -181,20 +181,23 @@ class MultiProgramRunner(Serializable):
         if self.resume and not self.checkpoint:
             raise ValueError("resume=True requires checkpoint=True")
 
-        if (
-            self.checkpoint_batch_size is not None
-            and self.shot_checkpoint_dir is None
-        ):
+        # Bijection: shot_checkpoint and shot_checkpoint_dir must agree
+        if self.shot_checkpoint and self.shot_checkpoint_dir is None:
             raise ValueError(
-                "checkpoint_batch_size requires shot_checkpoint_dir to be set"
+                "shot_checkpoint=True requires shot_checkpoint_dir to be set"
             )
+        if self.shot_checkpoint_dir is not None and not self.shot_checkpoint:
+            raise ValueError(
+                "shot_checkpoint_dir is not None requires shot_checkpoint=True"
+            )
+
         if self.keep_shot_results and self.item_checkpoint_dir is None:
             raise ValueError(
                 "keep_shot_results requires item_checkpoint_dir to be set"
             )
-        if self.keep_shot_results and self.checkpoint_batch_size is None:
+        if self.keep_shot_results and not self.shot_checkpoint:
             raise ValueError(
-                "keep_shot_results requires checkpoint_batch_size (and "
+                "keep_shot_results requires shot_checkpoint=True (and "
                 "shot_checkpoint_dir) to be set, so kept results are read "
                 "back from each item's own on-disk shot checkpoint rather "
                 "than held fully in memory for every item at once"
@@ -359,8 +362,7 @@ class MultiProgramRunner(Serializable):
         show_shots_bar = (
             self.show_progress
             and is_parallel_dispatch
-            and self.checkpoint_batch_size is not None
-            and self.shot_checkpoint_dir is not None
+            and self.shot_checkpoint
             and num_shots_for_progress is not None
         )
 
@@ -378,14 +380,11 @@ class MultiProgramRunner(Serializable):
             and num_shots_for_progress is not None
             and not show_shots_bar
             and is_parallel_dispatch
-            and (
-                self.checkpoint_batch_size is None
-                or self.shot_checkpoint_dir is None
-            )
+            and not self.shot_checkpoint
         ):
             print(
-                "Shot-level progress reporting requires checkpoint_batch_size"
-                " and shot_checkpoint_dir to be set; showing item-level"
+                "Shot-level progress reporting requires shot_checkpoint=True"
+                " (and shot_checkpoint_dir) to be set; showing item-level"
                 " progress only."
             )
 
@@ -593,16 +592,13 @@ class MultiProgramRunner(Serializable):
     def _shot_checkpoint_subdir(self, index: int) -> Path | None:
         """Return the checkpoint directory for a specific item's shots, or None.
 
-        Guards on `shot_checkpoint_dir`/`checkpoint_batch_size` both being set
-        and this subclass having a real `_shot_checkpoint_subdir_prefix()`;
-        otherwise returns None (no per-item shot subdirectories).
+        Guards on `shot_checkpoint` being True and this subclass having a real
+        `_shot_checkpoint_subdir_prefix()`; otherwise returns None (no per-item
+        shot subdirectories). The bijection validates that shot_checkpoint_dir is
+        set whenever shot_checkpoint is True.
         """
         prefix = self._shot_checkpoint_subdir_prefix()
-        if (
-            prefix is None
-            or self.shot_checkpoint_dir is None
-            or self.checkpoint_batch_size is None
-        ):
+        if prefix is None or not self.shot_checkpoint:
             return None
         return self.shot_checkpoint_dir / f"{prefix}_{index}"
 

@@ -1205,17 +1205,16 @@ class TestResolveShotBatching:
         )
         assert batch_size == 34, f"Expected batch size 34, got {batch_size}"
 
-    def test_resolve_shot_batching_explicit_mismatch_raises(self):
-        """An explicit checkpoint_batch_size that disagrees with the value
-        derived from n_shot_batches raises ValueError."""
+    def test_resolve_shot_batching_both_given_raises(self):
+        """Providing both n_shot_batches and checkpoint_batch_size raises
+        ValueError, regardless of whether they would agree or disagree."""
         program = self._build_simple_program()
         shot_executor = object()
 
-        # num_shots=100, n_shot_batches=5 -> expected batch_size=20
-        # But pass checkpoint_batch_size=15 (mismatch)
+        # Providing both parameters should raise, even if values would agree
         with pytest.raises(
             ValueError,
-            match="checkpoint_batch_size.*must equal.*ceil.*n_shot_batches",
+            match="at most one of n_shot_batches or checkpoint_batch_size",
         ):
             program._resolve_shot_batching(
                 num_shots=100,
@@ -1224,3 +1223,48 @@ class TestResolveShotBatching:
                 checkpoint_enabled=True,
                 checkpoint_batch_size=15,
             )
+
+    def test_resolve_shot_batching_n_shot_batches_with_serial_dispatch(self):
+        """n_shot_batches now works with shot_executor=None (serial dispatch):
+        splits into n_shot_batches sequential batches for checkpointing."""
+        program = self._build_simple_program()
+
+        # num_shots=20, n_shot_batches=4, serial (shot_executor=None)
+        # checkpoint_batch_size should be derived as ceil(20/4) = 5
+        # resolved_n_shot_batches should be None (no executor)
+        n_resolved, batch_size = program._resolve_shot_batching(
+            num_shots=20,
+            shot_executor=None,
+            n_shot_batches=4,
+            checkpoint_enabled=True,
+            checkpoint_batch_size=None,
+        )
+        assert (
+            n_resolved is None
+        ), f"Expected n_resolved=None for serial dispatch, got {n_resolved}"
+        assert (
+            batch_size == 5
+        ), f"Expected batch_size=ceil(20/4)=5, got {batch_size}"
+
+    def test_resolve_shot_batching_checkpoint_batch_size_with_shot_executor(self):
+        """checkpoint_batch_size works alongside shot_executor without
+        n_shot_batches: n_shot_batches is derived as ceil(num_shots / checkpoint_batch_size)."""
+        program = self._build_simple_program()
+        shot_executor = object()
+
+        # num_shots=20, checkpoint_batch_size=5 (explicit), shot_executor given
+        # n_shot_batches should be derived as ceil(20/5) = 4
+        # checkpoint_batch_size should remain 5 (not re-derived)
+        n_resolved, batch_size = program._resolve_shot_batching(
+            num_shots=20,
+            shot_executor=shot_executor,
+            n_shot_batches=None,
+            checkpoint_enabled=True,
+            checkpoint_batch_size=5,
+        )
+        assert (
+            n_resolved == 4
+        ), f"Expected n_resolved=ceil(20/5)=4, got {n_resolved}"
+        assert (
+            batch_size == 5
+        ), f"Expected batch_size=5 (unchanged, authoritative), got {batch_size}"

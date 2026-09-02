@@ -152,7 +152,7 @@ def _run_one_sweep_point(
     expected_outcomes: Sequence,
     run_kwargs: dict,
     shot_checkpoint_dir: str | Path | None,
-    checkpoint_batch_size: int | None,
+    checkpoint: bool,
     lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> tuple[float, float] | tuple[tuple[float, float], Any]:
@@ -178,16 +178,15 @@ def _run_one_sweep_point(
             f"(strength={strength!r})"
         )
 
-    if checkpoint_batch_size is not None:
+    if checkpoint:
         resolved_run_kwargs["checkpoint"] = True
-        resolved_run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
     if shot_checkpoint_dir is not None:
         checkpoint_dir = _sweep_point_checkpoint_subdir(
             shot_checkpoint_dir, index
         )
         resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
         # Cascade resume: only True if this specific point has prior shot state
-        if checkpoint_batch_size is not None:
+        if checkpoint:
             resolved_run_kwargs["resume"] = (
                 checkpoint_dir / "results.h5"
             ).exists()
@@ -283,7 +282,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         resume: bool = False,
         force_resume: bool = False,
         parallel_strategy: ParallelStrategy | None = None,
-        checkpoint_batch_size: int | None = None,
+        shot_checkpoint: bool = False,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading: bool = True,
         keep_shot_results: bool = False,
@@ -349,7 +348,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             rather than `**kwargs`. Replaces the old `**run_kwargs` catch-all.
 
         item_checkpoint_dir, checkpoint, resume, force_resume, parallel_strategy,
-        checkpoint_batch_size, shot_checkpoint_dir, lazy_loading, keep_shot_results:
+        shot_checkpoint, shot_checkpoint_dir, lazy_loading, keep_shot_results:
             See `MultiProgramRunner.__init__` for these inherited configuration fields.
         """
         super().__init__(
@@ -358,7 +357,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             checkpoint=checkpoint,
             resume=resume,
             force_resume=force_resume,
-            checkpoint_batch_size=checkpoint_batch_size,
+            shot_checkpoint=shot_checkpoint,
             shot_checkpoint_dir=shot_checkpoint_dir,
             lazy_loading=lazy_loading,
             keep_shot_results=keep_shot_results,
@@ -510,7 +509,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         item_checkpoint_dir: str | Path | None = None,
         force_resume: bool | None = None,
         parallel_strategy: ParallelStrategy | None = None,
-        checkpoint_batch_size: int | None = None,
+        shot_checkpoint: bool | None = None,
         shot_checkpoint_dir: str | Path | None = None,
         lazy_loading: bool | None = None,
         keep_shot_results: bool | None = None,
@@ -603,10 +602,10 @@ class NoiseSweepRunner(MultiProgramRunner):
                 if parallel_strategy is not None
                 else other.parallel_strategy
             ),
-            checkpoint_batch_size=(
-                checkpoint_batch_size
-                if checkpoint_batch_size is not None
-                else other.checkpoint_batch_size
+            shot_checkpoint=(
+                shot_checkpoint
+                if shot_checkpoint is not None
+                else other.shot_checkpoint
             ),
             shot_checkpoint_dir=(
                 shot_checkpoint_dir
@@ -674,7 +673,7 @@ class NoiseSweepRunner(MultiProgramRunner):
                 "verbose": self.verbose,
             },
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "checkpoint_batch_size": self.checkpoint_batch_size,
+            "checkpoint": self.shot_checkpoint,
             "lazy_loading": self.lazy_loading,
         }
 

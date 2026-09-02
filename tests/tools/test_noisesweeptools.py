@@ -588,7 +588,7 @@ class TestRunParallel:
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=5,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
         )
@@ -961,21 +961,21 @@ class TestPlotNoiseSweep:
 class TestNoiseSweepRunnerShotCheckpointing:
     """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
     checkpointing, threaded through `NoiseSweepRunner.run` via the
-    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading`
+    `shot_checkpoint`, `shot_checkpoint_dir`, and `lazy_loading`
     parameters."""
 
-    def test_checkpoint_batch_size_without_shot_checkpoint_dir_raises(self):
-        """checkpoint_batch_size given without shot_checkpoint_dir is a
+    def test_shot_checkpoint_without_shot_checkpoint_dir_raises(self):
+        """shot_checkpoint=True given without shot_checkpoint_dir is a
         configuration error, not something that's silently ignored."""
         with pytest.raises(ValueError, match="shot_checkpoint_dir"):
             make_runner(
                 [0.0, 0.1],
                 num_shots=10,
-                checkpoint_batch_size=1,
+                shot_checkpoint=True,
             )
 
     def test_serial_shot_checkpoint_creates_per_point_subdirs(self, tmp_path):
-        """A serial (no parallel) run with checkpoint_batch_size=1 and a real
+        """A serial (no parallel) run with shot_checkpoint=True and a real
         shot_checkpoint_dir produces per-point subdirectories under it, one
         per sweep point, each containing checkpoint files that can be loaded
         via ProgramResults.load_checkpoint."""
@@ -985,7 +985,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
         runner = make_runner(
             [0.0, 0.1],
             num_shots=10,
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt_dir,
             lazy_loading=False,
         )
@@ -1032,7 +1032,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             [0.0, 0.1],
             num_shots=10,
             parallel_strategy=strategy,
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt_dir,
             lazy_loading=False,
         )
@@ -1082,7 +1082,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             num_shots=5,
             verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_checkpoint",
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,  # Disable lazy loading for now
         )
@@ -1127,7 +1127,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
         def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
             compute_count["n"] += 1
             # Crash after 9 shots total (completing all of point 0's 6 shots,
-            # and 3 of point 1's 6 shots)
+            # and 2 of point 1's 6 shots)
             if compute_count["n"] > 9:
                 raise RuntimeError("Simulated crash mid-dispatch")
             return original_run_shot(self, max_frame_limit, seed, shot_index)
@@ -1141,8 +1141,11 @@ class TestNoiseSweepRunnerShotCheckpointing:
                 num_shots=6,
                 checkpoint=True,
                 item_checkpoint_dir=item_ckpt,
-                checkpoint_batch_size=2,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
+                # n_shot_batches=3 -> checkpoint_batch_size=2, so a crash
+                # mid-batch drops the incomplete batch, not just the shot.
+                parallel_strategy=ParallelStrategy(n_shot_batches=3),
                 lazy_loading=False,
                 verbose=False,
             )
@@ -1183,8 +1186,9 @@ class TestNoiseSweepRunnerShotCheckpointing:
             checkpoint=True,
             resume=True,
             item_checkpoint_dir=item_ckpt,
-            checkpoint_batch_size=2,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
+            parallel_strategy=ParallelStrategy(n_shot_batches=3),
             lazy_loading=False,
             verbose=False,
         )
@@ -1236,7 +1240,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
                 num_shots=9,
                 checkpoint=True,
                 item_checkpoint_dir=item_ckpt,
-                checkpoint_batch_size=9,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
                 lazy_loading=False,
                 verbose=False,
@@ -1274,7 +1278,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
             checkpoint=True,
             resume=True,
             item_checkpoint_dir=item_ckpt,
-            checkpoint_batch_size=9,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
             lazy_loading=False,
             verbose=False,
@@ -1335,7 +1339,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
                 num_shots=9,
                 checkpoint=True,
                 item_checkpoint_dir=item_ckpt,
-                checkpoint_batch_size=9,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
                 keep_shot_results=True,
                 lazy_loading=False,

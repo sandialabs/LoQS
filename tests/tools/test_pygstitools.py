@@ -712,22 +712,22 @@ class TestSimulateDatasetForEdesignMemoryBound:
 class TestSimulateDatasetForEdesignShotCheckpointing:
     """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
     checkpointing, threaded through `EdesignRunner` via the
-    `checkpoint_batch_size`, `shot_checkpoint_dir`, and `lazy_loading`
+    `shot_checkpoint`, `shot_checkpoint_dir`, and `lazy_loading`
     parameters."""
 
-    def test_checkpoint_batch_size_without_shot_checkpoint_dir_raises(
+    def test_shot_checkpoint_without_shot_checkpoint_dir_raises(
         self, trivial_counter_setup
     ):
-        """checkpoint_batch_size given without shot_checkpoint_dir is a
+        """shot_checkpoint=True given without shot_checkpoint_dir is a
         configuration error, not something that's silently ignored."""
         s = trivial_counter_setup
         with pytest.raises(ValueError, match="shot_checkpoint_dir"):
-            s.simulate(checkpoint_batch_size=1)
+            s.simulate(shot_checkpoint=True)
 
     def test_serial_shot_checkpoint_creates_per_circuit_subdirs(
         self, trivial_counter_setup, tmp_path
     ):
-        """A serial (no parallel) run with checkpoint_batch_size=1 and a real
+        """A serial (no parallel) run with shot_checkpoint=True and a real
         shot_checkpoint_dir produces per-circuit subdirectories under it, one
         per distinct circuit in the edesign, each containing checkpoint files
         that can be loaded via ProgramResults.load_checkpoint."""
@@ -736,7 +736,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         shot_ckpt_dir.mkdir()
 
         ds = s.simulate(
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt_dir,
             lazy_loading=False,  # Keep shots in memory for collection
         )
@@ -786,7 +786,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
         ds = s.simulate(
             parallel_strategy=strategy,
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt_dir,
             lazy_loading=False,  # Keep shots in memory for collection
         )
@@ -848,7 +848,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             )
             s.simulate(
                 ckpt=item_ckpt,
-                checkpoint_batch_size=1,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
                 num_shots=2,  # 2 shots per circuit
                 lazy_loading=False,
@@ -885,7 +885,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
         ds = s.simulate(
             ckpt=item_ckpt,
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
             num_shots=2,
             lazy_loading=False,
@@ -933,7 +933,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             )
             s.simulate(
                 ckpt=item_ckpt,
-                checkpoint_batch_size=3,
+                shot_checkpoint=True,
                 shot_checkpoint_dir=shot_ckpt,
                 num_shots=3,
                 lazy_loading=False,
@@ -966,7 +966,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         # resume=False is passed to circuit 1's QuantumProgram.run().
         ds = s.simulate(
             ckpt=item_ckpt,
-            checkpoint_batch_size=3,
+            shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
             num_shots=3,
             lazy_loading=False,
@@ -998,7 +998,7 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             item_checkpoint_dir=item_checkpoint_dir,
             checkpoint=True,
             shot_checkpoint_dir=shot_checkpoint_dir,
-            checkpoint_batch_size=1,
+            shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
             program_kwargs=s.program_kwargs,
