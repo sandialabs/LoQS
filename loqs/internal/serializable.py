@@ -328,11 +328,12 @@ class ResolvingDecodeCache(dict):
             The matching source node, or None if not found.
         """
         if isinstance(node, h5py.Group):
-            # Check this node's attributes first
-            if (
-                node.attrs.get("cache_type") == "source"
-                and node.attrs.get("cache_id") == target_cache_id
-            ):
+            # Check this node's attributes first -- a plain "source" node
+            # matches by cache_id; a "copy" node also mints its own
+            # resolvable source_cache_id for the copy itself, so a later
+            # reference to that copy (rather than the original it copies
+            # from) must match on source_cache_id instead.
+            if self._node_is_cache_source(node.attrs, target_cache_id):
                 return node
 
             # Recurse into real children
@@ -354,14 +355,24 @@ class ResolvingDecodeCache(dict):
                     return result
 
         elif isinstance(node, h5py.Dataset):
-            # Check this dataset's attributes
-            if (
-                node.attrs.get("cache_type") == "source"
-                and node.attrs.get("cache_id") == target_cache_id
-            ):
+            if self._node_is_cache_source(node.attrs, target_cache_id):
                 return node
 
         return None
+
+    @staticmethod
+    def _node_is_cache_source(attrs, target_cache_id):
+        """Whether `attrs` (an HDF5 attrs mapping or a decoded JSON dict)
+        is resolvable as `target_cache_id`'s source -- either a plain
+        `cache_type="source"` node (`cache_id`), or a `cache_type="copy"`
+        node (`source_cache_id`, the new id the copy itself is resolvable
+        under)."""
+        cache_type = attrs.get("cache_type")
+        if cache_type == "source":
+            return attrs.get("cache_id") == target_cache_id
+        if cache_type == "copy":
+            return attrs.get("source_cache_id") == target_cache_id
+        return False
 
     def _find_source_in_collapsed_blob(self, blob_dataset, target_cache_id):
         """Search a collapsed blob for a cache_type="source" node.
@@ -403,11 +414,9 @@ class ResolvingDecodeCache(dict):
             The matching source node (as a JSON dict), or None if not found.
         """
         if isinstance(node, dict):
-            # Check this node first
-            if (
-                node.get("cache_type") == "source"
-                and node.get("cache_id") == target_cache_id
-            ):
+            # Check this node first (see _node_is_cache_source for why a
+            # "copy" node is also a valid match, keyed by source_cache_id).
+            if self._node_is_cache_source(node, target_cache_id):
                 return node
 
             # Recurse into all values

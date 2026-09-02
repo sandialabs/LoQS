@@ -1114,6 +1114,53 @@ class TestResolvingDecodeCache:
                 assert isinstance(decoded.data["obj"], MockSerializable)
                 assert decoded.data["obj"].name == "shared"
 
+    def test_resolve_finds_copy_node_not_just_source(self):
+        """A `cache_type="copy"` node mints its own resolvable
+        `source_cache_id` (for a later reference to the copy itself, not
+        the original object it copies from) -- `.resolve()` must match a
+        "copy" node by `source_cache_id`, not only a plain "source" node
+        by `cache_id`.
+
+        Two distinct `MockSerializable` instances with identical field
+        values share one `_serial_hash`: the first becomes `cache_type="source"`,
+        the second (a different instance, same content) becomes
+        `cache_type="copy"`. A third reference to that same second instance
+        is decoded directly, in isolation, forcing `.resolve()` to locate
+        the "copy" node -- there is no plain "source" node for its cache_id
+        anywhere in the structure.
+        """
+        first = MockSerializable(name="shared", value=1, data={})
+        second = MockSerializable(name="shared", value=1, data={})
+
+        encode_cache: dict = {}
+        first_encoded = Serializable.encode(
+            first, format="json", encode_cache=encode_cache
+        )
+        second_encoded = Serializable.encode(
+            second, format="json", encode_cache=encode_cache
+        )
+        third_encoded = Serializable.encode(
+            second, format="json", encode_cache=encode_cache
+        )
+
+        assert second_encoded["cache_type"] == "copy"
+        assert third_encoded["cache_type"] == "reference"
+        assert third_encoded["cache_id"] == second_encoded["source_cache_id"]
+
+        root = {
+            "first": first_encoded,
+            "second": second_encoded,
+            "third": third_encoded,
+        }
+        cache = ResolvingDecodeCache(root=root, format="json")
+        decoded_third = Serializable.decode(
+            third_encoded, format="json", decode_cache=cache
+        )
+
+        assert isinstance(decoded_third, MockSerializable)
+        assert decoded_third.name == "shared"
+        assert decoded_third.value == 1
+
     def test_missing_source_raises_error(self, make_temp_path):
         """Test that missing source raises RuntimeError."""
         # Create reference to non-existent source
