@@ -21,6 +21,7 @@ from datetime import datetime
 import uuid
 
 from loqs.internal import Displayable, Serializable
+from loqs.internal.serializable import ResolvingDecodeCache
 from loqs.core.history import (
     History,
     HistoryLike,
@@ -220,9 +221,11 @@ class ProgramResults(Displayable):
         call for this object's lifetime, so an object reused across shots is written
         once and cheaply referenced afterward, instead of re-expanded every time."""
 
-        self._checkpoint_decode_cache: dict = {}
+        self._checkpoint_decode_cache: ResolvingDecodeCache = ResolvingDecodeCache(
+            root=None, format="hdf5"
+        )
         """Persistent `Serializable.decode` cache shared across lazy shot loading
-        calls for this object's lifetime, so object references across shots resolve."""
+        calls; `_root` is re-pointed at each freshly-opened file handle."""
 
         # If checkpointing is enabled and parent_program is a QuantumProgram object,
         # write results.h5 (this whole ProgramResults object) if it doesn't already
@@ -1109,12 +1112,18 @@ class ProgramResults(Displayable):
                 else:
                     actual_group = source_group
 
+                # Re-point the persistent decode cache at this freshly-opened
+                # file handle (the previous one, if any, is already closed).
+                decode_cache = getattr(self, "_checkpoint_decode_cache", None)
+                if isinstance(decode_cache, ResolvingDecodeCache):
+                    decode_cache._root = f
+                else:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    self._checkpoint_decode_cache = decode_cache
+
                 # Use get_dict_attr_value to fetch only this one shot
                 # without decoding all others
                 try:
-                    decode_cache = getattr(
-                        self, "_checkpoint_decode_cache", {}
-                    )
                     history = get_dict_attr_value(
                         actual_group,
                         "shot_histories",

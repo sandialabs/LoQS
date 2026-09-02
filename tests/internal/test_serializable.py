@@ -3,9 +3,15 @@
 import pytest
 import numpy as np
 import h5py
+from unittest.mock import MagicMock
 
 from loqs.core import Frame
-from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
+from loqs.internal.serializable import (
+    Serializable,
+    SERIALIZATION_VERSION,
+    ResolvingDecodeCache,
+    DeferredRef,
+)
 from loqs.types import NDArray
 
 
@@ -1021,3 +1027,349 @@ class TestGetFunctionStr:
         result2 = Serializable._get_function_str(module2.apply_fn)
         assert "defaultdict" in result2
         assert "OrderedDict" not in result2
+
+
+class TestResolvingDecodeCache:
+    """Tests for ResolvingDecodeCache with reference-before-source ordering."""
+
+    def test_json_reference_before_source_resolution(self, make_temp_path):
+        """Test JSON format with reference decoded before source.
+
+        Constructs a JSON structure where a reference to an object is placed
+        and decoded before the source entry is encountered, verifying that
+        ResolvingDecodeCache.resolve() can find and decode the source on demand.
+        """
+        # Manually construct encoded structure with reference appearing first
+        # This represents a real case where traversal order doesn't match encoding order
+        source_encoded = {
+            "encode_type": "Serializable",
+            "module": "test_serializable",
+            "class": "MockSerializable",
+            "version": 2,
+            "cache_type": "source",
+            "cache_id": 100,
+            "name": "shared",
+            "value": 42,
+            "data": {"key": "val"},
+        }
+
+        reference_encoded = {
+            "encode_type": "Serializable",
+            "module": "test_serializable",
+            "class": "MockSerializable",
+            "version": 2,
+            "cache_type": "reference",
+            "cache_id": 100,
+        }
+
+        # Create root with reference first (forcing resolve on demand)
+        root = {
+            "outer": reference_encoded,  # Reference comes first
+            "inner": source_encoded,     # Source comes second
+        }
+
+        # Create cache and decode
+        cache = ResolvingDecodeCache(root=root, format="json")
+        decoded_ref = Serializable.decode(
+            reference_encoded, format="json", decode_cache=cache
+        )
+
+        # Should have resolved the source on demand
+        assert isinstance(decoded_ref, MockSerializable)
+        assert decoded_ref.name == "shared"
+        assert decoded_ref.value == 42
+        assert decoded_ref.data == {"key": "val"}
+
+        # Verify it's in cache now
+        assert 100 in cache
+        assert cache[100] is decoded_ref
+
+    def test_hdf5_reference_before_source_resolution(self, make_temp_path):
+        """Test HDF5 format with reference decoded before source."""
+
+        with make_temp_path(suffix=".h5") as temp_path:
+            # Create objects
+            shared_obj = MockSerializable(name="shared", value=42, data={"x": 1})
+            outer = MockSerializable(name="outer", value=1, data={"obj": shared_obj})
+
+            # Encode the structure normally
+            with h5py.File(temp_path, "w") as f:
+                outer.dump(f, format="hdf5")
+
+            # Now manually decode with a reference-before-source scenario
+            with h5py.File(temp_path, "r") as f:
+                root_group = f["root"]
+
+                # Create cache and attempt to resolve a reference
+                # even though the source hasn't been decoded yet
+                cache = ResolvingDecodeCache(root=root_group, format="hdf5")
+
+                # The cache should be able to scan and find sources
+                decoded = Serializable.decode(
+                    root_group, format="hdf5", decode_cache=cache
+                )
+
+                assert isinstance(decoded, MockSerializable)
+                assert decoded.name == "outer"
+                assert isinstance(decoded.data["obj"], MockSerializable)
+                assert decoded.data["obj"].name == "shared"
+
+    def test_missing_source_raises_error(self, make_temp_path):
+        """Test that missing source raises RuntimeError."""
+        # Create reference to non-existent source
+        reference_encoded = {
+            "encode_type": "Serializable",
+            "module": "test_serializable",
+            "class": "MockSerializable",
+            "version": 2,
+            "cache_type": "reference",
+            "cache_id": 999,  # Non-existent source
+        }
+
+        root = {"ref": reference_encoded}
+        cache = ResolvingDecodeCache(root=root, format="json")
+
+        # Should raise RuntimeError about missing source
+        with pytest.raises(RuntimeError, match="source object not available"):
+            Serializable.decode(
+                reference_encoded, format="json", decode_cache=cache
+            )
+
+    def test_collapsed_blob_source_resolution(self, make_temp_path):
+        """Test that a `cache_type="source"` entry nested inside a real HDF5
+        `"$collapsed"` blob dataset (not a real `h5py.Group`) can be resolved
+        on demand by `ResolvingDecodeCache`, exercising
+        `_find_source_in_collapsed_blob` specifically rather than the plain
+        real-group scan.
+
+        A shared, array-free `MockSerializable` referenced twice from one
+        small outer object collapses per `_contains_no_array`
+        (`loqs/internal/encoder/hdf5encoder.py`), so both its `"source"` and
+        `"reference"` cache entries land inside one `"$collapsed"` dataset
+        rather than real HDF5 groups. `.resolve()` is called directly against
+        a fresh, empty cache (never decoding anything first), so the only way
+        it can find the source is by actually scanning into that blob.
+        """
+        from loqs.internal.encoder.hdf5encoder import _COLLAPSED_BLOB_NAME
+        import json as jsonlib
+
+        with make_temp_path(suffix=".h5") as temp_path:
+            shared = MockSerializable(name="shared", value=7, data={"a": 1})
+            outer = MockSerializable(
+                name="outer", value=1, data={"x": shared, "y": shared}
+            )
+
+            with h5py.File(temp_path, "w") as f:
+                outer.dump(f, format="hdf5")
+
+            with h5py.File(temp_path, "r") as f:
+                outer_group = f["root"][next(iter(f["root"].keys()))]
+
+                # Confirm the test setup actually produced a collapsed blob
+                # (proves the scenario below, not incidental).
+                assert _COLLAPSED_BLOB_NAME in outer_group
+
+                # Read the shared object's real cache_id directly off the
+                # blob's own JSON content, rather than hardcoding it.
+                raw = outer_group[_COLLAPSED_BLOB_NAME][()].tobytes().decode(
+                    "utf-8"
+                )
+                blob = jsonlib.loads(raw)
+                items = blob["data"]["items"]
+                source_entries = [
+                    v
+                    for v in items.values()
+                    if isinstance(v, dict) and v.get("cache_type") == "source"
+                ]
+                assert len(source_entries) == 1
+                shared_cache_id = source_entries[0]["cache_id"]
+
+                # Fresh, empty cache -- nothing decoded through it yet.
+                cache = ResolvingDecodeCache(root=f["root"], format="hdf5")
+
+                call_count = [0]
+                original = cache._find_source_in_collapsed_blob
+
+                def spy(*args, **kwargs):
+                    call_count[0] += 1
+                    return original(*args, **kwargs)
+
+                cache._find_source_in_collapsed_blob = spy
+
+                resolved = cache.resolve(shared_cache_id)
+
+                assert call_count[0] > 0, (
+                    "_find_source_in_collapsed_blob was not called; the "
+                    "collapsed-blob scanning code path was not exercised"
+                )
+                assert isinstance(resolved, MockSerializable)
+                assert resolved.name == "shared"
+                assert resolved.value == 7
+                assert resolved.data == {"a": 1}
+
+    def test_programresults_decode_cache_repointing(self, make_temp_path):
+        """Regression: repeated lazy per-shot loads via `get_shot_history`
+        (`_load_shot_from_checkpoint` -> `_load_shot_from_single_file`) reuse
+        one persistent `_checkpoint_decode_cache` across separate calls, each
+        of which opens and closes its own fresh `h5py.File` handle -- this is
+        the exact scenario the original bug was found in (a shared object
+        referenced across two lazily-loaded shots).
+
+        Two shots share one cacheable `Frame` (`_CACHE_ON_SERIALIZE`), so
+        checkpointing produces one `"source"` + one `"reference"`/`"copy"`
+        entry across them. Loading shot 1 (whichever shot's own checkpoint
+        entry holds the reference, not the source) via a fresh
+        `ProgramResults` with `lazy_loading=True` (the default) must resolve
+        the shared `Frame` on demand through the re-pointed cache, not raise.
+        """
+        from loqs.core import ProgramResults
+        from loqs.core.history import History
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+            writer = ProgramResults(lazy_loading=False)
+            shared_frame = Frame({"shared_data": "common_value"})
+
+            history0 = History()
+            history0.append(shared_frame)
+            history0.append(Frame({"shot": 0}))
+            history1 = History()
+            history1.append(shared_frame)
+            history1.append(Frame({"shot": 1}))
+
+            writer.add_shot(0, history0)
+            writer.add_shot(1, history1)
+            writer.checkpoint(checkpoint_dir=checkpoint_dir)
+            assert (checkpoint_dir / "results.h5").exists()
+
+            # Lazy consumer: each get_shot_history call below opens and
+            # closes its own fresh h5py.File via _load_shot_from_single_file,
+            # reusing this instance's one persistent _checkpoint_decode_cache.
+            reader = ProgramResults(lazy_loading=True)
+            reader._checkpoint_dir = checkpoint_dir
+
+            shot0 = reader.get_shot_history(0)
+            shot1 = reader.get_shot_history(1)
+
+            assert shot0 is not None and shot1 is not None
+            assert shot0[0]["shared_data"] == "common_value"
+            assert shot1[0]["shared_data"] == "common_value"
+            assert shot0[1]["shot"] == 0
+            assert shot1[1]["shot"] == 1
+
+            # The persistent per-instance cache must actually have been used
+            # (and re-pointed across the two separate file opens above),
+            # not bypassed.
+            assert isinstance(reader._checkpoint_decode_cache, ResolvingDecodeCache)
+
+    def test_strict_validators_with_qeccodepatch(self, make_temp_path):
+        """Regression: QECCodePatch strict validators don't leak DeferredRef.
+
+        QECCodePatch._from_decoded_attrs has strict type checking that raises
+        ValueError if 'code' is not a real QECCode instance. This test verifies
+        that ResolvingDecodeCache resolves the code before passing it to the
+        validator, avoiding a DeferredRef reaching the constructor.
+
+        The test constructs a reference-before-source scenario where a shared
+        QECCode is referenced by two QECCodePatches, with the first reference
+        reaching the constructor before the code's source is decoded.
+        """
+        from loqs.core.qeccode import QECCode
+        from loqs.core.recordables.qeccodepatch import QECCodePatch
+        from loqs.core.instructions import Instruction
+
+        # Build a minimal QECCode fixture matching test_qeccode.py pattern
+        def apply_fn(state, qubits):
+            return Frame({"state": state + 1, "qubits": qubits})
+
+        def map_qubits_fn(qubit_mapping, qubits, **kwargs):
+            new_kwargs = kwargs.copy()
+            new_kwargs["qubits"] = [qubit_mapping[q] for q in qubits]
+            return new_kwargs
+
+        ins_data = {"qubits": ["Q0", "Q1"]}
+        ins = Instruction(apply_fn, ins_data, map_qubits_fn, name="test")
+        code = QECCode({"test_ins": ins}, ["Q0", "Q1"], ["Q0"], "Test code")
+
+        # Create a shared code and two patches that reference it
+        patch1 = QECCodePatch(code=code, qubits=["D0", "A0"], pauli_frame="II")
+        patch2 = QECCodePatch(code=code, qubits=["D1", "A1"], pauli_frame="II")
+
+        # Encode both patches to JSON (shared code becomes source+reference)
+        cache = {}
+        patch1_encoded = Serializable.encode(
+            patch1, format="json", encode_cache=cache, reset_encode_id=True
+        )
+        patch2_encoded = Serializable.encode(
+            patch2, format="json", encode_cache=cache
+        )
+
+        # Construct a root where patch2's reference appears first
+        # (forcing decode to resolve the code on-demand)
+        root = {"patch2": patch2_encoded, "patch1": patch1_encoded}
+
+        # Decode patch2 first through ResolvingDecodeCache
+        # (its code reference should trigger resolution of the code source)
+        decode_cache = ResolvingDecodeCache(root=root, format="json")
+        decoded_patch2 = Serializable.decode(
+            patch2_encoded, format="json", decode_cache=decode_cache
+        )
+
+        # Verify: patch2 was decoded successfully without DeferredRef leaking
+        assert isinstance(decoded_patch2, QECCodePatch)
+        assert not isinstance(decoded_patch2.code, DeferredRef)
+        assert isinstance(decoded_patch2.code, QECCode)
+        assert decoded_patch2.code.name == "Test code"
+        assert decoded_patch2.qubits == ["D1", "A1"]
+
+    def test_strict_validators_with_instructionlabel_and_instruction(self, make_temp_path):
+        """Regression: InstructionLabel doesn't leak unresolved Instruction refs.
+
+        InstructionLabel is not itself a Serializable, but can contain
+        Serializable Instruction objects. This test verifies that when an
+        Instruction is shared and referenced before its source is decoded,
+        the ResolvingDecodeCache correctly resolves it before it reaches
+        InstructionLabel's own constructor (which has runtime type checks).
+        """
+        from loqs.core.instructions import Instruction, InstructionLabel
+
+        # Build a minimal Instruction
+        def apply_fn():
+            return Frame({"result": "test"})
+
+        ins = Instruction(apply_fn, name="TestInstruction")
+
+        # Create two InstructionLabels that reference the same Instruction
+        label1 = InstructionLabel(ins, patch_label="L0")
+        label2 = InstructionLabel(ins, patch_label="L1")
+
+        # Encode both labels to JSON (shared instruction becomes source+reference)
+        cache = {}
+        label1_encoded = Serializable.encode(
+            label1, format="json", encode_cache=cache, reset_encode_id=True
+        )
+        label2_encoded = Serializable.encode(
+            label2, format="json", encode_cache=cache
+        )
+
+        # Construct a root where label2's reference appears first
+        root = {"label2": label2_encoded, "label1": label1_encoded}
+
+        # Decode label2 first through ResolvingDecodeCache
+        decode_cache = ResolvingDecodeCache(root=root, format="json")
+        decoded_label2 = Serializable.decode(
+            label2_encoded, format="json", decode_cache=decode_cache
+        )
+
+        # Verify: label2 was decoded as a dict (InstructionLabel is a dict subclass),
+        # and its instruction is not a DeferredRef
+        assert isinstance(decoded_label2, dict)
+        assert decoded_label2["patch_label"] == "L1"
+        # The instruction should be a real Instruction, not a DeferredRef
+        instruction = decoded_label2["instruction"]
+        assert isinstance(instruction, Instruction)
+        assert not isinstance(instruction, DeferredRef)
+        assert instruction.name == "TestInstruction"

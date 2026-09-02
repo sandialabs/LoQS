@@ -236,6 +236,213 @@ class DeferredRef:
     cache_id: int
 
 
+class ResolvingDecodeCache(dict):
+    """A decode cache that resolves a missing source object on demand by
+    scanning `_root` for it, rather than assuming top-down traversal has
+    already decoded it before a reference to it is reached.
+
+    Attributes
+    ----------
+    _root : h5py.File | h5py.Group | dict
+        The structure to search for a source node; mutable so it can be
+        re-pointed (e.g. to a fresh file handle) after construction.
+    _format : {'hdf5', 'json'}
+        The format of `_root`.
+    """
+
+    def __init__(self, root, format):
+        """Initialize the cache with a root structure to search.
+
+        Parameters
+        ----------
+        root : h5py.File | h5py.Group | dict
+            The root structure (HDF5 file/group or JSON dict) to search for sources.
+        format : {'hdf5', 'json'}
+            The format of the root structure.
+        """
+        super().__init__()
+        self._root = root
+        self._format = format
+
+    def resolve(self, cache_id):
+        """Return the cached object, or locate and decode its source if missing.
+
+        Parameters
+        ----------
+        cache_id : int
+            The cache ID to resolve.
+
+        Returns
+        -------
+        Serializable | DeferredRef
+            The decoded object (or a DeferredRef placeholder).
+
+        Raises
+        ------
+        RuntimeError
+            If no matching source node is found in the root structure.
+        """
+        if cache_id in self:
+            return self[cache_id]
+
+        # Search for the source node
+        if self._format == "hdf5":
+            source_node = self._find_source_node_hdf5(self._root, cache_id)
+        elif self._format == "json":
+            source_node = self._find_source_node_json(self._root, cache_id)
+        else:
+            raise ValueError(f"Unknown format: {self._format}")
+
+        if source_node is None:
+            raise RuntimeError(
+                "Object reference found but source object not available."
+            )
+
+        # A source found nested inside an HDF5 "$collapsed" blob is always
+        # plain JSON (that blob's own storage format), regardless of this
+        # cache's own top-level format -- only a source that's a real
+        # h5py.Group/Dataset should decode as "hdf5".
+        source_format = "json" if isinstance(source_node, dict) else "hdf5"
+
+        decoded = Serializable.decode(
+            source_node, format=source_format, decode_cache=self
+        )
+        self[cache_id] = decoded
+        return decoded
+
+    def _find_source_node_hdf5(self, node, target_cache_id):
+        """Recursively search an HDF5 structure for a cache_type="source" node.
+
+        Searches real h5py.Group children and their $collapsed siblings.
+
+        Parameters
+        ----------
+        node : h5py.File | h5py.Group | h5py.Dataset
+            The current node to examine.
+        target_cache_id : int
+            The cache_id to search for.
+
+        Returns
+        -------
+        h5py.Group | h5py.Dataset | None
+            The matching source node, or None if not found.
+        """
+        if isinstance(node, h5py.Group):
+            # Check this node's attributes first
+            if (
+                node.attrs.get("cache_type") == "source"
+                and node.attrs.get("cache_id") == target_cache_id
+            ):
+                return node
+
+            # Recurse into real children
+            for child_name in node.keys():
+                child = node[child_name]
+                result = self._find_source_node_hdf5(child, target_cache_id)
+                if result is not None:
+                    return result
+
+            # Also check the collapsed blob if present
+            from loqs.internal.encoder.hdf5encoder import _COLLAPSED_BLOB_NAME
+
+            if _COLLAPSED_BLOB_NAME in node:
+                blob_dataset = node[_COLLAPSED_BLOB_NAME]
+                result = self._find_source_in_collapsed_blob(
+                    blob_dataset, target_cache_id
+                )
+                if result is not None:
+                    return result
+
+        elif isinstance(node, h5py.Dataset):
+            # Check this dataset's attributes
+            if (
+                node.attrs.get("cache_type") == "source"
+                and node.attrs.get("cache_id") == target_cache_id
+            ):
+                return node
+
+        return None
+
+    def _find_source_in_collapsed_blob(self, blob_dataset, target_cache_id):
+        """Search a collapsed blob for a cache_type="source" node.
+
+        The blob is a JSON dict serialized into bytes, potentially containing
+        nested dicts/lists that may have source nodes at any depth.
+
+        Parameters
+        ----------
+        blob_dataset : h5py.Dataset
+            The collapsed blob dataset.
+        target_cache_id : int
+            The cache_id to search for.
+
+        Returns
+        -------
+        dict | None
+            The matching source node (as a JSON dict), or None if not found.
+        """
+        import json
+
+        raw = blob_dataset[()].tobytes().decode("utf-8")
+        blob = json.loads(raw)
+        return self._find_source_in_json_blob(blob, target_cache_id)
+
+    def _find_source_in_json_blob(self, node, target_cache_id):
+        """Recursively search a JSON dict/list for a cache_type="source" node.
+
+        Parameters
+        ----------
+        node : dict | list | Any
+            The JSON node to examine.
+        target_cache_id : int
+            The cache_id to search for.
+
+        Returns
+        -------
+        dict | None
+            The matching source node (as a JSON dict), or None if not found.
+        """
+        if isinstance(node, dict):
+            # Check this node first
+            if (
+                node.get("cache_type") == "source"
+                and node.get("cache_id") == target_cache_id
+            ):
+                return node
+
+            # Recurse into all values
+            for value in node.values():
+                result = self._find_source_in_json_blob(value, target_cache_id)
+                if result is not None:
+                    return result
+
+        elif isinstance(node, list):
+            # Recurse into all list elements
+            for item in node:
+                result = self._find_source_in_json_blob(item, target_cache_id)
+                if result is not None:
+                    return result
+
+        return None
+
+    def _find_source_node_json(self, node, target_cache_id):
+        """Recursively search a JSON structure for a cache_type="source" node.
+
+        Parameters
+        ----------
+        node : dict | list | Any
+            The JSON node to examine.
+        target_cache_id : int
+            The cache_id to search for.
+
+        Returns
+        -------
+        dict | None
+            The matching source node, or None if not found.
+        """
+        return self._find_source_in_json_blob(node, target_cache_id)
+
+
 # Encoding types
 EncodableArrays: TypeAlias = NDArray | SPSArray
 EncodableIterables: TypeAlias = list | tuple | set
@@ -607,10 +814,6 @@ class Serializable:
 
         assert format is not None
 
-        decode_cache = None
-        if use_caching:
-            decode_cache = decode_cache if decode_cache is not None else {}
-
         migrate_token = MIGRATE_LEGACY_FNS.set(migrate_legacy_fns)
         try:
             if format in ["json", "json.gz"]:
@@ -622,6 +825,15 @@ class Serializable:
                 state = json.load(f)
                 assert isinstance(state, dict)
 
+                # Create ResolvingDecodeCache after reading the JSON state
+                if use_caching:
+                    if decode_cache is None:
+                        decode_cache = ResolvingDecodeCache(
+                            root=state, format="json"
+                        )
+                else:
+                    decode_cache = None
+
                 decoded = Serializable.decode(
                     state, "json", decode_cache=decode_cache
                 )
@@ -630,6 +842,15 @@ class Serializable:
 
                 root_group = f["root"]
                 assert isinstance(root_group, h5py.Group)
+
+                # Create ResolvingDecodeCache after getting the root group
+                if use_caching:
+                    if decode_cache is None:
+                        decode_cache = ResolvingDecodeCache(
+                            root=root_group, format="hdf5"
+                        )
+                else:
+                    decode_cache = None
 
                 decoded = Serializable.decode(
                     root_group, "hdf5", decode_cache=decode_cache

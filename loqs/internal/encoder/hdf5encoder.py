@@ -734,7 +734,14 @@ class HDF5Encoder(BaseEncoder):
         try:
             if cache_type == "reference":
                 cache_id = int(encoded.attrs["cache_id"])  # type: ignore
-                cached_obj = decode_cache[cache_id]
+                # Try to get from cache; if missing, resolve on demand if supported
+                if cache_id not in decode_cache:
+                    if hasattr(decode_cache, "resolve"):
+                        cached_obj = decode_cache.resolve(cache_id)
+                    else:
+                        raise KeyError(cache_id)
+                else:
+                    cached_obj = decode_cache[cache_id]
                 return cached_obj
 
             # Get the reference object and create a copy
@@ -743,10 +750,19 @@ class HDF5Encoder(BaseEncoder):
 
             # Check if reference object is available
             if reference_cache_id not in decode_cache:
-                # Reference object not available yet, create a placeholder
-                copied_obj = DeferredRef(reference_cache_id)
+                # Try to resolve on demand if supported
+                if hasattr(decode_cache, "resolve"):
+                    reference_obj = decode_cache.resolve(reference_cache_id)
+                else:
+                    # Reference object not available yet, create a placeholder
+                    reference_obj = DeferredRef(reference_cache_id)
             else:
                 reference_obj = decode_cache[reference_cache_id]
+
+            if isinstance(reference_obj, DeferredRef):
+                # Reference object not available, create a placeholder
+                copied_obj = DeferredRef(reference_obj.cache_id)
+            else:
                 copied_obj = copy_cached_reference(reference_obj)
 
             # Add the copy to cache
