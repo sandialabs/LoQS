@@ -1355,3 +1355,48 @@ class TestResolveShotBatching:
         assert (
             batch_size == 5
         ), f"Expected batch_size=5 (unchanged, authoritative), got {batch_size}"
+
+
+class TestCheckResumeAndResolveCheckpointDir:
+    """Tests for QuantumProgram._check_resume_and_resolve_checkpoint_dir
+    and its defensive type-checking of stored.parent_program."""
+
+    def test_tolerates_non_quantumprogram_parent_program(self, tmp_path):
+        """A stored results.h5 whose parent_program decodes as something
+        other than a QuantumProgram (e.g. a bare string) is tolerated --
+        the default_base_seed mismatch check is skipped for it rather than
+        raising AttributeError, while num_shots/max_frame_limit are still
+        checked normally."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        pr = ProgramResults(
+            parent_program="this_is_a_string_not_a_quantumprogram",
+            num_shots=100,
+        )
+        results_path = checkpoint_dir / "results.h5"
+        pr.write(results_path)
+
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        stack = [
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
+        ]
+        program = QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            name="Test program",
+        )
+
+        # num_shots/max_frame_limit still match, and default_base_seed is
+        # skipped (not comparable), so this should resolve with no mismatch.
+        resolved_dir = program._check_resume_and_resolve_checkpoint_dir(
+            checkpoint_dir=checkpoint_dir,
+            num_shots=100,
+            max_frame_limit=None,
+            resume=True,
+            force_resume=False,
+        )
+        assert resolved_dir == checkpoint_dir, "Should resolve checkpoint_dir successfully"

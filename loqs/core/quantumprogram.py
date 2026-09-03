@@ -442,6 +442,7 @@ class QuantumProgram(Displayable):
             mismatches.append("max_frame_limit")
         if (
             stored.parent_program is not None
+            and isinstance(stored.parent_program, QuantumProgram)
             and stored.parent_program.default_base_seed
             != self.default_base_seed
         ):

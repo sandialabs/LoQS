@@ -671,9 +671,9 @@ def _read_worker_files(
                     f, attr_name, decode_cache=decode_cache
                 ):
                     done[key] = value
-        except (BlockingIOError, OSError):
-            # Transient lock conflict (e.g., concurrent writer opening/closing
-            # the file) -- skip this file for now, it will be retried
+        except (BlockingIOError, OSError, KeyError):
+            # Transient lock conflict, missing attribute, or file corruption;
+            # skip this file for now, it will be retried
             continue
     return done
 
@@ -902,9 +902,9 @@ def _consolidate_worker_files(
                     # File already deleted or inaccessible; ignore
                     pass
 
-        except (BlockingIOError, OSError):
-            # Transient lock conflict; skip this file for now
-            # (will be retried on next consolidation call)
+        except (BlockingIOError, OSError, KeyError):
+            # Transient lock conflict, missing attribute, or file corruption;
+            # skip this file for now (will be retried on next consolidation call)
             continue
 
 
@@ -1169,7 +1169,9 @@ def _poll_one_worker_file(
                 _mark_observed_and_notify(
                     key, value, observed_indices, items_map, on_item_done, pbar
                 )
-    except (BlockingIOError, OSError):
+    except (BlockingIOError, OSError, KeyError):
+        # Transient lock conflict, missing attribute, or file corruption;
+        # skip this file for now
         pass
     return consumed_count
 
@@ -1272,7 +1274,9 @@ def _run_parallel(
             total_shots_from_done = done_items * num_shots_for_progress
 
             # Count shots from in-flight items via their checkpoint directories
+            # Exclude items already in observed_indices to avoid double-counting
             in_flight_items = _read_worker_current_indices(item_checkpoint_dir)
+            in_flight_items = in_flight_items - observed_indices
             total_shots_from_inflight = 0
             for item_index in in_flight_items:
                 shot_subdir = shot_checkpoint_subdir(item_index)

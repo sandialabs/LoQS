@@ -565,6 +565,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             "num_shots",
             "collect_shot_data_args",
             "expected_outcomes",
+            "keep_shot_results",
         ]
 
     def _shot_checkpoint_subdir_prefix(self) -> str | None:

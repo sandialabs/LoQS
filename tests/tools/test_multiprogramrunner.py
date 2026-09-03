@@ -480,6 +480,74 @@ def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
 # Regression tests for bugs fixed
 
 
+def _double_count_probe_item_processor(
+    item,
+    index,
+    *,
+    shot_executor,
+    n_shot_batches,
+    shot_checkpoint_dir,
+    num_shots,
+    **kwargs,
+):
+    """Write a real, complete per-item shot checkpoint, mirroring a real
+    subclass's own _run_one_circuit-style worker function, so the finished
+    item's on-disk shot data is genuinely readable by _count_done_shots."""
+    from loqs.core.programresults import ProgramResults
+    from loqs.core.history import History
+    from loqs.core import Frame
+
+    pr = ProgramResults()
+    for i in range(num_shots):
+        history = History()
+        history.append(Frame({"item": item, "shot": i}))
+        pr.add_shot(i, history)
+
+    if shot_checkpoint_dir is not None:
+        item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
+        item_dir.mkdir(parents=True, exist_ok=True)
+        pr.checkpoint(checkpoint_dir=item_dir)
+
+    return item * 2
+
+
+class _DoubleCountProbeRunner(MultiProgramRunner):
+    """Minimal MultiProgramRunner subclass wiring shot_checkpoint_dir/
+    _shot_checkpoint_subdir consistently, matching real subclasses like
+    EdesignRunner, for real-dispatch shots-progress-bar testing."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "num_shots",
+    ]
+
+    def __init__(self, items, num_shots=5, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.num_shots = num_shots
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _double_count_probe_item_processor
+
+    def _static_kwargs(self):
+        return {
+            "shot_checkpoint_dir": self.shot_checkpoint_dir,
+            "num_shots": self.num_shots,
+        }
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self, result_list):
+        return result_list
+
+    def _shot_checkpoint_subdir_prefix(self):
+        return "item"
+
+
 class TestBugRegressions:
     """Regression tests for bugs that were fixed during implementation."""
 
@@ -614,6 +682,219 @@ class TestBugRegressions:
         for call_index, call_item, call_result in runner.on_item_done_calls:
             assert call_item == call_index, f"Item mismatch for index {call_index}"
             assert call_result == call_index * 2, f"Result mismatch for index {call_index}"
+
+    def test_bug4_shots_pbar_double_counts_stale_in_flight_item(
+        self, tmp_path
+    ):
+        """A worker's current_item_index is never cleared once it finishes
+        its one and only item, so a worker file can permanently show that
+        item as both done (in its own results dict) and in flight (its
+        stale current_item_index) at the same time -- the shots progress
+        bar must not double-count shots for such an item.
+
+        Drives real dispatch through _run_parallel via a real
+        MultiProgramRunner subclass, real per-item shot checkpoint files,
+        and two single-item loky workers (so current_item_index staleness
+        is guaranteed by construction, not timing), spying on the real
+        shots_pbar.n value on_poll() sets.
+        """
+        from unittest.mock import patch
+        from tqdm import tqdm as orig_tqdm
+        from loqs.tools import multiprogramrunner as mpr_module
+
+        loky = pytest.importorskip("loky")
+
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        shots_bar_values = []
+
+        class TqdmSpy:
+            def __init__(self, *args, **kwargs):
+                self.tqdm_obj = orig_tqdm(*args, **kwargs)
+                self._is_shots_bar = kwargs.get("desc") == "Shots"
+
+            def __getattr__(self, name):
+                return getattr(self.tqdm_obj, name)
+
+            def __setattr__(self, name, value):
+                if name in ("tqdm_obj", "_is_shots_bar"):
+                    super().__setattr__(name, value)
+                else:
+                    setattr(self.tqdm_obj, name, value)
+                    if name == "n" and self._is_shots_bar:
+                        shots_bar_values.append(value)
+
+            def refresh(self):
+                return self.tqdm_obj.refresh()
+
+            def close(self):
+                return self.tqdm_obj.close()
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+        with patch.object(mpr_module, "tqdm", side_effect=TqdmSpy):
+            runner = _DoubleCountProbeRunner(
+                [1, 2],
+                num_shots=5,
+                checkpoint=True,
+                item_checkpoint_dir=item_checkpoint_dir,
+                parallel_strategy=strategy,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                shot_checkpoint=True,
+                show_progress=True,
+            )
+            runner.run()
+
+        # True total is len(items) * num_shots = 2 * 5 = 10; the bar must
+        # never exceed it even once both workers' stale current_item_index
+        # still matches their own now-finished item.
+        assert shots_bar_values, "Shots bar was never updated"
+        assert max(shots_bar_values) <= 10, (
+            f"Shots bar overcounted: saw {max(shots_bar_values)} but only "
+            f"10 total shots exist (2 items * 5 shots) -- values: "
+            f"{shots_bar_values}"
+        )
+        assert shots_bar_values[-1] == 10, (
+            f"Final shots bar value should be exactly 10, got "
+            f"{shots_bar_values[-1]}"
+        )
+
+    def test_bug5_worker_file_reads_skip_keyerror_corruption(self, tmp_path):
+        """_read_worker_files, _consolidate_worker_files, and
+        _poll_one_worker_file each skip a worker file whose keys dataset
+        lists an entry (e.g. key "1") that has no corresponding value group
+        -- the shape a crash mid-append leaves behind -- rather than raising
+        KeyError, while still reading every healthy file normally."""
+        from loqs.tools.multiprogramrunner import (
+            _read_worker_files,
+            _poll_one_worker_file,
+            _consolidate_worker_files,
+        )
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Create a corrupted worker file: write normally, then delete a value group
+        worker_file_corrupted = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file_corrupted, "a") as f:
+            merge_dict_attr(
+                f,
+                "results",
+                [(0, "value_0"), (1, "value_1")],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # Corrupt: delete value group for key 1, simulating crash mid-append
+        with h5py.File(worker_file_corrupted, "a") as f:
+            del f["results/dict/values/iterable/1"]
+
+        # Create a healthy worker file for comparison
+        healthy_file = checkpoint_dir / "worker_1_runner.h5"
+        with h5py.File(healthy_file, "a") as f:
+            merge_dict_attr(
+                f,
+                "results",
+                [(2, "value_2")],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # _read_worker_files: the corrupted file's key 1 (missing value
+        # group) is skipped; the healthy file's key 2 is still read.
+        done = _read_worker_files(checkpoint_dir)
+        assert 2 in done, "Healthy file's result should be read"
+        assert 1 not in done, "Corrupted key 1 (missing value group) should not be in results"
+
+        # _poll_one_worker_file: doesn't crash on the same corruption,
+        # consuming what it can before stopping.
+        observed_indices = set()
+        items_map = {0: "item_0"}
+        consumed = _poll_one_worker_file(
+            worker_file_corrupted,
+            consumed_count=0,
+            observed_indices=observed_indices,
+            items_map=items_map,
+            on_item_done=None,
+            pbar=None,
+        )
+        # Should consume first entry before hitting corruption
+        assert consumed == 1, "Should consume first entry before hitting corruption"
+        assert 0 in observed_indices, "First entry should have been processed"
+
+        # _consolidate_worker_files: corrupted file skipped, healthy merged.
+        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # Should not raise; healthy file merged, corrupted skipped
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=False
+        )
+
+        # Verify healthy file was merged into runner.h5
+        done_after = _read_worker_files(checkpoint_dir)
+        assert 2 in done_after, "Healthy file should be merged after consolidation"
+
+    def test_consolidate_worker_files_skips_truncated_file(self, tmp_path):
+        """A truncated worker file (raw bytes cut off, so h5py itself
+        refuses to open it) alongside healthy worker files is skipped by
+        _consolidate_worker_files, which still completes successfully and
+        merges every healthy file."""
+        from loqs.tools.multiprogramrunner import _consolidate_worker_files
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Create a real worker file
+        worker_file_real = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file_real, "a") as f:
+            merge_dict_attr(
+                f,
+                "results",
+                [(0, "value_0")],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # Create a second healthy worker file
+        worker_file_good = checkpoint_dir / "worker_1_runner.h5"
+        with h5py.File(worker_file_good, "a") as f:
+            merge_dict_attr(
+                f,
+                "results",
+                [(1, "value_1")],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+
+        # Now truncate the first file (simulate incomplete write/crash)
+        # Truncate to ~70% of original size
+        file_size = worker_file_real.stat().st_size
+        truncate_size = int(file_size * 0.7)
+        with open(worker_file_real, "r+b") as f:
+            f.truncate(truncate_size)
+
+        # Create runner.h5 to consolidate into
+        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # Consolidation should complete without raising
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=False
+        )
+
+        # Verify the good file was merged (can read from runner.h5)
+        from loqs.tools.multiprogramrunner import _read_worker_files
+        done = _read_worker_files(checkpoint_dir)
+        assert 1 in done, "Healthy worker file should be merged into runner.h5"
+        assert done[1] == "value_1"
 
 
 def _multiply_item(item, index, *, shot_executor, multiplier, **kwargs):

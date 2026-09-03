@@ -560,6 +560,128 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
+    def test_edesign_roundtrip_without_checkpoint_dir(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Writing and reading an EdesignRunner with checkpoint=False
+        (item_checkpoint_dir=None) preserves edesign as bytes tar archive,
+        not just None. The round-tripped runner's edesign is equivalent to
+        the original, and calling .run() on it succeeds."""
+        s = trivial_counter_setup
+        h5_path = tmp_path / "runner.h5"
+
+        # Construct and write runner with checkpoint=False (no checkpoint dir)
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=None,
+            checkpoint=False,
+            program_kwargs=s.program_kwargs,
+        )
+        runner1.write(h5_path)
+
+        # Read it back
+        runner2 = EdesignRunner.read(h5_path)
+
+        # Assert edesign is not None and is equivalent
+        assert runner2.edesign is not None
+        assert (
+            set(runner2.edesign.all_circuits_needing_data)
+            == set(s.edesign.all_circuits_needing_data)
+        )
+
+        # Assert calling .run() on the round-tripped runner succeeds
+        ds = runner2.run()
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_edesign_roundtrip_with_checkpoint_dir_still_works(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Writing and reading an EdesignRunner with checkpoint=True and
+        item_checkpoint_dir set still works (uses directory path, not tar)."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        h5_path = tmp_path / "runner.h5"
+
+        # Construct and write runner with checkpoint=True and checkpoint dir
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            program_kwargs=s.program_kwargs,
+        )
+        runner1.write(h5_path)
+
+        # Read it back
+        runner2 = EdesignRunner.read(h5_path)
+
+        # Assert edesign is not None and is equivalent
+        assert runner2.edesign is not None
+        assert (
+            set(runner2.edesign.all_circuits_needing_data)
+            == set(s.edesign.all_circuits_needing_data)
+        )
+
+    def test_resume_mismatched_keep_shot_results_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed call with a different keep_shot_results than the
+        checkpoint was written with is a hard error naming that field."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run with keep_shot_results=False
+        s.simulate(
+            ckpt=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+
+        # Resume with keep_shot_results=True (and required shot_checkpoint)
+        with pytest.raises(ValueError, match="keep_shot_results"):
+            s.simulate(
+                ckpt=ckpt,
+                keep_shot_results=True,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+            )
+
+    def test_resume_mismatched_keep_shot_results_force_resume_works(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """force_resume=True bypasses a keep_shot_results mismatch."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run with keep_shot_results=False
+        s.simulate(
+            ckpt=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+
+        # Resume with keep_shot_results=True but force_resume=True
+        ds = s.simulate(
+            ckpt=ckpt,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+        )
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
 
 def _checkpointed_circuits(checkpoint_path) -> set:
     """Every circuit with a row in a checkpoint text file, parsed as

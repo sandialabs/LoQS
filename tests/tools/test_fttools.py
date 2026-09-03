@@ -692,6 +692,66 @@ class TestFaultInjectionRunnerCheckpointing:
         failed2 = runner2.run()
         assert failed2 == []
 
+    def test_resume_mismatched_keep_shot_results_raises(self, tmp_path):
+        """A resumed call with a different keep_shot_results than the
+        checkpoint was written with is a hard error naming that field."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+        runner1.run()
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+        )
+        with pytest.raises(ValueError, match="keep_shot_results"):
+            runner2.run()
+
+    def test_resume_mismatched_keep_shot_results_force_resume_works(
+        self, tmp_path
+    ):
+        """force_resume=True bypasses a keep_shot_results mismatch."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+        runner1.run()
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+        )
+        failed2 = runner2.run()
+        assert failed2 == []
+
     def test_keep_shot_results_end_to_end(self, tmp_path):
         """FaultInjectionRunner with keep_shot_results=True retains full
         ProgramResults objects for each program in runner._program_results,

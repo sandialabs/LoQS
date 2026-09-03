@@ -11,16 +11,19 @@
 
 from __future__ import annotations
 
+import base64
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 import functools
 import hashlib
+import io
 import numpy as np
 from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+import tarfile
 from typing import Any
 
 from loqs.core import ProgramResults, QuantumProgram
@@ -383,15 +386,24 @@ class EdesignRunner(MultiProgramRunner):
             # Use pyGSTi's dumps()/loads() pattern
             return self.physical_model.dumps()
         elif attr == "edesign":
-            # Use pyGSTi's directory-based write/from_dir pattern
-            # Store just the path string; actual writing happens on-demand
-            if self.item_checkpoint_dir is None:
-                return None
-            edesign_subdir = self.item_checkpoint_dir / "edesign"
-            if not edesign_subdir.exists():
-                edesign_subdir.mkdir(parents=True, exist_ok=True)
-                self.edesign.write(str(edesign_subdir))
-            return str(edesign_subdir)
+            # When checkpoint_dir is set, store path string; otherwise tar to base64 str.
+            if self.item_checkpoint_dir is not None:
+                edesign_subdir = self.item_checkpoint_dir / "edesign"
+                if not edesign_subdir.exists():
+                    edesign_subdir.mkdir(parents=True, exist_ok=True)
+                    self.edesign.write(str(edesign_subdir))
+                return str(edesign_subdir)
+            else:
+                # Write to temp directory, tar to bytes, then base64-encode for JSON
+                with TemporaryDirectory() as tmpdir:
+                    self.edesign.write(tmpdir)
+                    tar_bytes = io.BytesIO()
+                    with tarfile.open(fileobj=tar_bytes, mode="w:gz") as tar:
+                        tar.add(tmpdir, arcname="edesign")
+                    # Return as base64-encoded string (JSON-safe)
+                    return base64.b64encode(tar_bytes.getvalue()).decode(
+                        "ascii"
+                    )
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
     @classmethod
@@ -407,10 +419,29 @@ class EdesignRunner(MultiProgramRunner):
                 attr_dict["physical_model"]
             )
 
-        # Decode edesign from directory path
+        # Decode edesign: dispatch based on how it was encoded, which depended on
+        # item_checkpoint_dir at encode time. If item_checkpoint_dir was None,
+        # edesign was base64-tar-encoded; otherwise it's a directory path string.
         if attr_dict.get("edesign") is not None:
-            edesign_path = attr_dict["edesign"]
-            attr_dict["edesign"] = ExperimentDesign.from_dir(edesign_path)
+            edesign_value = attr_dict["edesign"]
+            # Check item_checkpoint_dir to determine encoding: mirrors the encode-time
+            # dispatch in _get_encoding_attr (which checks self.item_checkpoint_dir).
+            if attr_dict.get("item_checkpoint_dir") is None:
+                # Was encoded as base64-tar: decode, extract, and load
+                tar_bytes = base64.b64decode(edesign_value.encode("ascii"))
+                with TemporaryDirectory() as tmpdir:
+                    with tarfile.open(
+                        fileobj=io.BytesIO(tar_bytes), mode="r:gz"
+                    ) as tar:
+                        tar.extractall(tmpdir, filter="data")
+                    # The tar was created with arcname="edesign", so extract into that subdir
+                    edesign_dir = Path(tmpdir) / "edesign"
+                    attr_dict["edesign"] = ExperimentDesign.from_dir(
+                        str(edesign_dir)
+                    )
+            else:
+                # Was encoded as directory path; load directly
+                attr_dict["edesign"] = ExperimentDesign.from_dir(edesign_value)
 
         return super()._from_decoded_attrs(attr_dict)
 
@@ -513,6 +544,7 @@ class EdesignRunner(MultiProgramRunner):
             "collect_shot_data_args",
             "physical_to_logical",
             "max_frame_limit",
+            "keep_shot_results",
         ]
 
     def _shot_checkpoint_subdir_prefix(self) -> str | None:
