@@ -464,8 +464,10 @@ class TestRunParallel:
     def test_parallel_writes_result_once_per_batch_not_per_point(
         self, tmp_path
     ):
-        """Verify that parallel mode persists the result.h5 checkpoint
-        as items complete during dispatch, reflecting per-item completion."""
+        """Verifies that result.h5 is written exactly once, at the end of
+        the run in `_finalize()`, regardless of how many parallel batches
+        were dispatched -- never incrementally per item or per batch during
+        dispatch itself."""
         loky = pytest.importorskip("loky")
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
         strategy = ParallelStrategy(
@@ -480,7 +482,20 @@ class TestRunParallel:
             parallel_strategy=strategy,
         )
 
-        runner.run()
+        write_calls = []
+        real_write = NoiseSweepResult.write
+
+        def counting_write(self, path):
+            write_calls.append(path)
+            return real_write(self, path)
+
+        NoiseSweepResult.write = counting_write
+        try:
+            runner.run()
+        finally:
+            NoiseSweepResult.write = real_write
+
+        assert len(write_calls) == 1
 
         # Verify the final result is complete (all sweep points processed)
         final_result = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")

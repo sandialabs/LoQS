@@ -486,25 +486,90 @@ class TestSimulateDatasetForEdesignCheckpointing:
     def test_incomplete_item_is_redone_on_resume(
         self, trivial_counter_setup, tmp_path
     ):
-        """A partial run can be resumed, completing only the missing circuit,
-        and the final DataSet covers all circuits."""
+        """An index lost from runner.h5 (simulating a crash where a
+        completed item's own checkpoint entry never durably landed) is
+        redone on resume, not silently treated as already done."""
         s = trivial_counter_setup
         ckpt = tmp_path / "checkpoint"
 
-        # First partial run: complete only the first circuit
-        partial_edesign = ExperimentDesign([s.circs[0]])
-        s.simulate(ckpt=ckpt, edesign=partial_edesign)
+        # First run: complete both circuits.
+        ds1 = s.simulate(ckpt=ckpt)
+        assert ds1[s.circs[0]].counts[("0",)] == 1
+        assert ds1[s.circs[1]].counts[("1",)] == 1
 
-        # Resume with full edesign: should run only the missing circuit
-        ds = s.simulate(ckpt=ckpt)
+        # Simulate a crash by removing circuit 1's entry directly from
+        # runner.h5, the canonical durable store, via a read-mutate-write.
+        stored = EdesignRunner.read(ckpt / "runner.h5")
+        del stored._reduced_results[1]
+        stored.write(ckpt / "runner.h5")
 
-        assert ds[s.circs[0]].counts[("0",)] == 1
-        assert ds[s.circs[1]].counts[("1",)] == 1
-        # Verify dataset.txt contains both circuits
+        from loqs.tools.multiprogramrunner import _read_done_union
+
+        assert set(_read_done_union(ckpt).keys()) == {0}
+
+        # Resume: should redo only the missing circuit, and produce a
+        # complete, correct DataSet again.
+        ds2 = s.simulate(ckpt=ckpt)
+
+        assert set(_read_done_union(ckpt).keys()) == {0, 1}
+        assert ds2[s.circs[0]].counts[("0",)] == 1
+        assert ds2[s.circs[1]].counts[("1",)] == 1
+        # dataset.txt should still reflect both circuits.
         assert (ckpt / "dataset.txt").exists()
         from pygsti.io import read_dataset
+
         persisted_ds = read_dataset(str(ckpt / "dataset.txt"), verbosity=0)
         assert len(persisted_ds) == 2
+
+    def test_genuine_crash_recovery_via_read_and_run(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Simulate a crash partway through circuit processing, recover via
+        EdesignRunner.read(...).run() (a real on-disk decode-then-run
+        recovery), not just in-memory instance reuse."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            program_kwargs=s.program_kwargs,
+        )
+
+        # Patch _run_one_circuit to crash once, at index 1.
+        original_run_one_circuit = pygstitools._run_one_circuit
+        crash_triggered = []
+
+        def crashing_run_one_circuit(circ, index, **kwargs):
+            if index == 1 and not crash_triggered:
+                crash_triggered.append(True)
+                raise RuntimeError("simulated crash")
+            return original_run_one_circuit(circ, index, **kwargs)
+
+        pygstitools._run_one_circuit = crashing_run_one_circuit
+        try:
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                runner1.run()
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        from loqs.tools.multiprogramrunner import _read_done_union
+
+        # Only index 0 should be journaled so far.
+        assert set(_read_done_union(ckpt).keys()) == {0}
+
+        # Recover via a real on-disk decode-then-run, not in-memory reuse.
+        runner2 = EdesignRunner.read(ckpt / "runner.h5")
+        ds = runner2.run()
+
+        assert set(_read_done_union(ckpt).keys()) == {0, 1}
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
 
     def test_resume_mismatched_num_shots_raises(
         self, trivial_counter_setup, tmp_path

@@ -1215,6 +1215,38 @@ class TestMergeReducedResult:
         assert 1 in reduced  # From the run
         assert 2 in reduced  # From the run
 
+    def test_merge_reduced_result_second_call_same_index_is_noop(
+        self, tmp_path, monkeypatch
+    ):
+        """A second _merge_reduced_result call with an already-present index
+        is a true no-op: no second disk write, and the first value is kept."""
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _CountingRunner(
+            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+        )
+        runner.run()
+
+        import h5py as h5py_module
+
+        open_calls = []
+        real_file_init = h5py_module.File.__init__
+
+        def counting_file_init(self, *args, **kwargs):
+            open_calls.append(args)
+            return real_file_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(h5py_module.File, "__init__", counting_file_init)
+
+        runner._merge_reduced_result(10, "reduced_10")
+        assert runner._reduced_results[10] == "reduced_10"
+        assert len(open_calls) == 1
+
+        # Second call with the SAME index but a DIFFERENT value must be a
+        # true no-op: no second h5py.File open, and the original value kept.
+        runner._merge_reduced_result(10, "reduced_10_should_be_ignored")
+        assert runner._reduced_results[10] == "reduced_10"
+        assert len(open_calls) == 1
+
 
 class TestIndexMapPersistence:
     """Tests for index_map persistence through deserialization."""
