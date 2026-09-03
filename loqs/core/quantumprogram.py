@@ -28,7 +28,6 @@ from loqs.core.executors import SubmitExecutor
 from loqs.core.history import (
     History,
     HistoryLike,
-    HistoryCollectDataIndexTypes,
 )
 from loqs.core.instructions import builders, InstructionLabel
 from loqs.core.instructions.instructionlabel import (
@@ -969,15 +968,6 @@ class QuantumProgram(Displayable):
             )
 
         return dict(batch_results.shot_histories)
-
-    # Entry point submitted to a parallel executor: pins this worker's
-    # thread pools to one thread before doing real numerical work, since
-    # env vars alone don't reliably take effect once a numerical library
-    # has already initialized its own thread pool.
-    @staticmethod
-    def _run_shot_worker(*args, **kwargs):
-        pin_worker_threads()
-        return QuantumProgram._run_shot(*args, **kwargs)
 
     # Static for more efficient parallel data movement
     @staticmethod

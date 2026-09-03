@@ -15,10 +15,7 @@ import base64
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-import functools
-import hashlib
 import io
-import numpy as np
 from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
@@ -35,11 +32,8 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
 from loqs.internal.legacy import deprecated
-from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
     ParallelStrategy,
-    pin_worker_threads,
-    resolve_shot_executor,
 )
 from loqs.tools.multiprogramrunner import MultiProgramRunner
 
@@ -475,16 +469,6 @@ class EdesignRunner(MultiProgramRunner):
             "checkpoint": self.shot_checkpoint,
             "lazy_loading": self.lazy_loading,
         }
-
-    def _make_on_item_done(self) -> Callable[[int, Circuit, dict], None]:
-        """Return a closure that merges each circuit's count_dict into the
-        shared `_reduced_results` accumulator via `_merge_reduced_result`.
-        """
-
-        def on_item_done(index: int, circ: Circuit, count_dict: dict) -> None:
-            self._merge_reduced_result(index, count_dict)
-
-        return on_item_done
 
     def _finalize(self, result_list: list) -> Any:
         """Build and return the final DataSet from `_reduced_results`.

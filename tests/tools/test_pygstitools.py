@@ -560,7 +560,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         from loqs.tools.multiprogramrunner import _read_done_union
 
-        # Only index 0 should be journaled so far.
+        # Only index 0 should be checkpointed so far.
         assert set(_read_done_union(ckpt).keys()) == {0}
 
         # Recover via a real on-disk decode-then-run, not in-memory reuse.

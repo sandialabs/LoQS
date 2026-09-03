@@ -3,7 +3,6 @@
 import pytest
 import numpy as np
 import h5py
-from unittest.mock import MagicMock
 
 from loqs.core import Frame
 from loqs.internal.serializable import (

@@ -8,13 +8,12 @@ import numpy as np
 import pytest
 
 from loqs.core import Frame, Instruction, ProgramResults, QuantumProgram
-from loqs.backends.state import BaseQuantumState, NumpyStatevectorQuantumState
-from loqs.internal.serializable import Serializable
+from loqs.backends.state import NumpyStatevectorQuantumState
 from loqs.tools import paralleltools
+from loqs.tools.multiprogramrunner import _checkpoint_subdir_for_prefix
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
-    _sweep_point_checkpoint_subdir,
     compare_noise_sweeps,
     plot_noise_sweep,
 )
@@ -1116,7 +1115,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
         assert len(subdirs) == 2, f"Expected 2 point subdirs, got {len(subdirs)}: {subdirs}"
 
         for index in range(len(runner.strengths)):
-            point_subdir = _sweep_point_checkpoint_subdir(shot_ckpt_dir, index)
+            point_subdir = _checkpoint_subdir_for_prefix(shot_ckpt_dir, "point", index)
             assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
 
             # Confirm the checkpoint file exists and can load the right number of shots
@@ -1163,7 +1162,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
         assert len(subdirs) == 2
 
         for index in range(len(runner.strengths)):
-            point_subdir = _sweep_point_checkpoint_subdir(shot_ckpt_dir, index)
+            point_subdir = _checkpoint_subdir_for_prefix(shot_ckpt_dir, "point", index)
             assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
             checkpoint_file = point_subdir / "results.h5"
             assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
@@ -1267,14 +1266,14 @@ class TestNoiseSweepRunnerShotCheckpointing:
             runner.run()
 
         # Verify: point 0's shot checkpoint should be complete (6 shots)
-        point0_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 0)
+        point0_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 0)
         assert point0_shot_ckpt.exists()
         point0_results = ProgramResults()
         point0_results.load_checkpoint(point0_shot_ckpt)
         assert len(point0_results.shot_histories) == 6
 
         # Verify: point 1's shot checkpoint should be partial (2 of 6 shots)
-        point1_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 1)
+        point1_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 1)
         assert point1_shot_ckpt.exists()
         point1_results_partial = ProgramResults()
         point1_results_partial.load_checkpoint(point1_shot_ckpt)
@@ -1366,7 +1365,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
 
         # Manually verify/set up the precondition: point 0 complete,
         # point 1 subdirectory exists but may or may not have results.h5
-        point0_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 0)
+        point0_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 0)
         assert point0_shot_ckpt.exists()
         point0_results = ProgramResults()
         point0_results.load_checkpoint(point0_shot_ckpt)
@@ -1374,7 +1373,7 @@ class TestNoiseSweepRunnerShotCheckpointing:
 
         # If point 1's results.h5 exists, remove it to simulate the case where
         # point 1's batch didn't complete before the crash
-        point1_shot_ckpt = _sweep_point_checkpoint_subdir(shot_ckpt, 1)
+        point1_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 1)
         point1_results_file = point1_shot_ckpt / "results.h5"
         if point1_results_file.exists():
             point1_results_file.unlink()

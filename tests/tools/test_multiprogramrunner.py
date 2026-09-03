@@ -3,8 +3,6 @@
 import contextlib
 import h5py
 import multiprocessing as mp
-import os
-import tempfile
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -1363,8 +1361,6 @@ def _process_item_with_checkpoint(
     the checkpoint (or None to let the dispatch layer load it).
     When keep_shot_results=False, returns bare result.
     """
-    from loqs.core.programresults import ProgramResults
-
     result = item * 2
 
     if keep_shot_results and shot_checkpoint_dir is not None:
@@ -1418,7 +1414,7 @@ class _KeepShotResultsRunner(MultiProgramRunner):
 
 
 class _CheckpointedKeepShotResultsRunner(_KeepShotResultsRunner):
-    """Test runner that uses checkpoint_batch_size with keep_shot_results."""
+    """Test runner that uses shot_checkpoint/shot_checkpoint_dir with keep_shot_results."""
 
     def _process_item_fn(self):
         return _process_item_with_checkpoint
@@ -1546,7 +1542,7 @@ class TestKeepShotResults:
         assert len(runner2._program_results) == 3
 
     def test_keep_shot_results_with_checkpoint_batch_serial(self, tmp_path):
-        """keep_shot_results with checkpoint_batch_size works in serial dispatch."""
+        """keep_shot_results with shot_checkpoint works in serial dispatch."""
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
@@ -1572,7 +1568,7 @@ class TestKeepShotResults:
             assert pr is not None
 
     def test_keep_shot_results_with_checkpoint_batch_parallel(self, tmp_path):
-        """keep_shot_results with checkpoint_batch_size works in parallel dispatch."""
+        """keep_shot_results with shot_checkpoint works in parallel dispatch."""
         loky = pytest.importorskip("loky")
 
         item_checkpoint_dir = tmp_path / "item_ckpt"

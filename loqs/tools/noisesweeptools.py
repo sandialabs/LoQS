@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 import copy
-import functools
 import math
 from pathlib import Path
 import re
@@ -44,10 +43,12 @@ from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
     ParallelStrategy,
-    pin_worker_threads,
     resolve_shot_executor,
 )
-from loqs.tools.multiprogramrunner import MultiProgramRunner
+from loqs.tools.multiprogramrunner import (
+    MultiProgramRunner,
+    _checkpoint_subdir_for_prefix,
+)
 
 # Every QuantumProgram.__init__ parameter except `default_base_seed`, which NoiseSweepRunner
 # controls exclusively. Kept as a single source of truth for both __init__'s explicit parameter
@@ -103,17 +104,6 @@ def _validate_function_source(source: str, param_name: str) -> None:
             "source code on deserialization, which requires a standalone `def`). "
             f"Got source:\n{source!r}"
         )
-
-
-def _sweep_point_checkpoint_subdir(
-    shot_checkpoint_dir: str | Path, index: int
-) -> Path:
-    """A sweep point's own isolated subdirectory under `shot_checkpoint_dir`,
-    keyed by the point's integer index so multiple points processed by the
-    same worker (sharing one `hostname_pid` identity) never collide on the
-    same [](api:QuantumProgram.run) checkpoint file.
-    """
-    return Path(shot_checkpoint_dir) / f"point_{index}"
 
 
 def _compute_failure_rate(
@@ -181,8 +171,8 @@ def _run_one_sweep_point(
     if checkpoint:
         resolved_run_kwargs["checkpoint"] = True
     if shot_checkpoint_dir is not None:
-        checkpoint_dir = _sweep_point_checkpoint_subdir(
-            shot_checkpoint_dir, index
+        checkpoint_dir = _checkpoint_subdir_for_prefix(
+            shot_checkpoint_dir, "point", index
         )
         resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
         # Cascade resume: only True if this specific point has prior shot state
@@ -221,8 +211,9 @@ class NoiseSweepRunner(MultiProgramRunner):
 
     Encapsulates all configuration needed to run a sweep, including parallel/checkpoint settings,
     in a serializable object that can be recovered after a crash via
-    `NoiseSweepRunner.read(runner_path).run()`. Whether a call resumes a prior run is inferred
-    entirely from `item_checkpoint_dir`'s own on-disk state -- see `MultiProgramRunner.run`.
+    `NoiseSweepRunner.read(runner_path).run()`. Whether a call resumes a prior run is controlled
+    by an explicit `checkpoint`/`resume` flag pair (not inferred from on-disk state alone) -- see
+    `MultiProgramRunner.run`'s own docstring for the exact state machine.
     """
 
     _CACHE_ON_SERIALIZE = True
@@ -676,16 +667,6 @@ class NoiseSweepRunner(MultiProgramRunner):
             "checkpoint": self.shot_checkpoint,
             "lazy_loading": self.lazy_loading,
         }
-
-    def _make_on_item_done(self) -> Callable[[int, int, tuple], None]:
-        """Return a closure that merges each sweep point's (failure_rate, stderr)
-        tuple into the shared `_reduced_results` accumulator."""
-
-        def on_item_done(index: int, item: int, result: tuple) -> None:
-            failure_rate, stderr = result
-            self._merge_reduced_result(index, (failure_rate, stderr))
-
-        return on_item_done
 
     def _finalize(self, result_list: list) -> "NoiseSweepResult":
         """Build and return the final NoiseSweepResult from `_reduced_results`.

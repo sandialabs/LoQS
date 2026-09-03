@@ -479,9 +479,11 @@ class ParallelStrategy(Serializable):
         `n_shot_batches=5` with `num_shots=100` produces 5 batches of 20
         shots each). `None` (default) means "auto": `max(1, ceil(num_shots /
         20))` batches whenever `shot_executor` is set, resolved by
-        `QuantumProgram.run()` itself once `num_shots` is known. Only
-        applies when `shot_executor` is given; ignored when `shot_executor`
-        is `None`.
+        `QuantumProgram.run()` itself once `num_shots` is known. Also usable
+        in serial mode (no `shot_executor`) to control checkpoint-flush batch
+        size instead, via the same count -- see `QuantumProgram.run`'s own
+        `n_shot_batches`/`checkpoint_batch_size` resolution for the exact
+        behavior in each mode.
     shot_executor : SubmitExecutor | Callable[[], SubmitExecutor] | None
         Nested shot-level parallelism, forwarded as
         `QuantumProgram.run(shot_executor=...)` for every program built

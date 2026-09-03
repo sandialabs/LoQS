@@ -480,7 +480,7 @@ class TestFaultInjectionRunnerCheckpointing:
             runner.run()
 
     def test_resume_skips_already_checkpointed_programs(self, tmp_path):
-        """Resuming skips programs recorded in journal; only re-runs missing."""
+        """Resuming skips already-checkpointed programs; only re-runs missing."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
 
@@ -521,7 +521,7 @@ class TestFaultInjectionRunnerCheckpointing:
             fttools._run_one_program = original_run_one_program
 
     def test_crash_truncated_last_program_is_redone_on_resume(self, tmp_path):
-        """A program incomplete in journal after crash is redone on resume."""
+        """A program not yet recorded as checkpointed after a crash is redone on resume."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
 
@@ -588,7 +588,7 @@ class TestFaultInjectionRunnerCheckpointing:
         finally:
             fttools._run_one_program = original_run_one_program
 
-        # Verify partial completion: only index 0 journaled
+        # Verify partial completion: only index 0 checkpointed
         assert self._read_completed_indices(ckpt) == {0}
 
         # Recover via .read().run()
@@ -596,7 +596,7 @@ class TestFaultInjectionRunnerCheckpointing:
         failed2 = runner2.run()
         assert failed2 == []
 
-        # All items should now be journaled
+        # All items should now be checkpointed
         assert self._read_completed_indices(ckpt) == {0, 1, 2}
 
     def test_resume_mismatched_num_shots_raises(self, tmp_path):

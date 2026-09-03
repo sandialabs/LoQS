@@ -16,17 +16,6 @@ from loqs.core.history import History
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
 
-def _report_blas_thread_counts():
-    """Force a BLAS op (registering numpy's thread pool if not already
-    registered) and report every detected pool's thread count. Defined at
-    module level so `loky` can pickle a plain reference to it."""
-    import numpy as np
-    import threadpoolctl
-
-    x = np.random.rand(200, 200)
-    _ = x @ x
-    return [pool["num_threads"] for pool in threadpoolctl.threadpool_info()]
-
 @pytest.mark.skipif(os.getenv("CI", "false") == "true", reason="Breaks GitHub runners?")
 class TestQuantumProgram:
 
@@ -211,35 +200,6 @@ class TestExecutorParallelism:
         assert parallel_counters == serial_counters == {
             i: i + 1 for i in range(num_shots)
         }
-
-    def test_run_shot_worker_pins_thread_pools_to_one_thread(self):
-        loky = pytest.importorskip("loky")
-        pytest.importorskip("threadpoolctl")
-
-        program = self._build_counter_program()
-        executor = loky.get_reusable_executor(max_workers=1, reuse=False)
-        try:
-            # Force this worker's BLAS thread pool to register before the
-            # real worker entry point runs, matching one that already imported numpy.
-            before = executor.submit(_report_blas_thread_counts).result()
-            if not before:
-                pytest.skip(
-                    "No threadpoolctl-visible BLAS backend in this worker "
-                    "(e.g. numpy built against Apple's Accelerate on "
-                    "macOS, which threadpoolctl cannot introspect or "
-                    "control at all) -- nothing to verify pinning against."
-                )
-
-            executor.submit(
-                QuantumProgram._run_shot_worker, program, 100, 0, 0
-            ).result()
-
-            after = executor.submit(_report_blas_thread_counts).result()
-        finally:
-            executor.shutdown(wait=True)
-
-        assert after, "expected at least one detected thread pool"
-        assert all(n == 1 for n in after)
 
     def test_n_shot_batches_auto_default_dispatches_correct_batch_count(
         self, tmp_path

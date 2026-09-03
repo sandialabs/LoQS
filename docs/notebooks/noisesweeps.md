@@ -398,10 +398,11 @@ result_second_pass.failure_rates == result_first_pass.failure_rates
 ```
 
 If a sweep is genuinely interrupted mid-point (say, a crash while running the 3rd of 4 strengths),
-resuming skips the first two points and re-runs the third from scratch -- shot-level resume
-*within* a single point isn't supported yet (that needs a small change to `QuantumProgram.run`
-itself, tracked separately), but this still bounds the worst-case wasted work to a single sweep
-point, however large the overall sweep is.
+resuming skips the first two points and re-runs the third from scratch, since this example doesn't
+enable shot-level checkpointing (`shot_checkpoint`/`shot_checkpoint_dir`, described above). With
+that enabled, `QuantumProgram.run`'s own checkpoint/resume mechanism lets the third point resume
+from wherever its shots left off instead of restarting them. Either way, this bounds the
+worst-case wasted work to a single sweep point, however large the overall sweep is.
 
 ## Comparing an in-progress sweep
 

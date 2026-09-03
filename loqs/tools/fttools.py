@@ -25,7 +25,10 @@ from loqs.core.historydatacollector import (
 )
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.multiprogramrunner import MultiProgramRunner
+from loqs.tools.multiprogramrunner import (
+    MultiProgramRunner,
+    _checkpoint_subdir_for_prefix,
+)
 
 
 def build_discrete_error_injection_program_for_combo(
@@ -397,13 +400,6 @@ def build_discrete_error_injection_programs(
     return errored_programs
 
 
-def _fault_checkpoint_subdir(
-    shot_checkpoint_dir: str | Path, index: int
-) -> Path:
-    """Isolated subdirectory for one program's shots, keyed by index."""
-    return Path(shot_checkpoint_dir) / f"fault_{index}"
-
-
 def _run_one_program(
     program: QuantumProgram,
     index: int,
@@ -429,8 +425,8 @@ def _run_one_program(
     """
     item_shot_checkpoint_dir = None
     if shot_checkpoint_dir is not None:
-        item_shot_checkpoint_dir = _fault_checkpoint_subdir(
-            shot_checkpoint_dir, index
+        item_shot_checkpoint_dir = _checkpoint_subdir_for_prefix(
+            shot_checkpoint_dir, "fault", index
         )
 
     return test_program_output(
@@ -522,19 +518,6 @@ class FaultInjectionRunner(MultiProgramRunner):
             "checkpoint": self.shot_checkpoint,
             "lazy_loading": self.lazy_loading,
         }
-
-    def _make_on_item_done(
-        self,
-    ) -> Callable[[int, QuantumProgram, bool], None]:
-        """Return a closure that merges each program's success bool into the
-        shared `_reduced_results` accumulator."""
-
-        def on_item_done(
-            index: int, program: QuantumProgram, success: bool
-        ) -> None:
-            self._merge_reduced_result(index, success)
-
-        return on_item_done
 
     def _finalize(self, result_list: list[bool]) -> list[QuantumProgram]:
         """Return failed programs (same objects from input, matched by index).

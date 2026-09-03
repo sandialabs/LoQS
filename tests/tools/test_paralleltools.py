@@ -127,8 +127,7 @@ class TestPinWorkerThreads:
 
     def test_pins_thread_pools_to_one_inside_a_worker(self):
         """Run inside a real, single-use loky worker (not the test process
-        itself), mirroring test_quantumprogram.py's identical pattern for
-        QuantumProgram._run_shot_worker."""
+        itself), matching a real worker's own thread-pinning entry point."""
         loky = pytest.importorskip("loky")
         pytest.importorskip("threadpoolctl")
 

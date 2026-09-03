@@ -16,9 +16,6 @@ from collections.abc import Mapping
 from typing import ClassVar
 from pathlib import Path
 import h5py
-import numpy as np
-from datetime import datetime
-import uuid
 
 from loqs.internal import Displayable, Serializable
 from loqs.internal.serializable import ResolvingDecodeCache
@@ -27,12 +24,10 @@ from loqs.core.history import (
     HistoryLike,
     HistoryCollectDataIndexTypes,
 )
-from loqs.core import Frame
 
 # Import QuantumProgram to avoid circular imports - we'll use it in type hints
 from typing import TYPE_CHECKING, Iterable
 
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
@@ -274,8 +269,6 @@ class ProgramResults(Displayable):
         # Write only if results.h5 doesn't exist yet (this is what makes
         # a resuming call not re-derive a fresh config from a possibly-different self)
         if not results_path.exists():
-            from loqs.internal.serializable import Serializable
-
             Serializable.write(self, results_path, format="hdf5")
 
         # Always reassign parent_program to the results.h5 path (whether or not
@@ -291,8 +284,6 @@ class ProgramResults(Displayable):
             return
 
         try:
-            from loqs.internal.serializable import Serializable
-
             decode_cache = {}
             ProgramResults.read(self.parent_program, decode_cache=decode_cache)
 
@@ -942,34 +933,6 @@ class ProgramResults(Displayable):
                     in_root_group, "shot_histories", decode_cache={}
                 )
                 if key not in already_merged
-            )
-            # Consumed fully here, while `in_f` is still open.
-            self._write_shot_entries(out_h5_file, entries)
-
-    def _stream_checkpoint_file_into(
-        self, filename: Path, out_h5_file
-    ) -> None:
-        """Stream one worker's checkpoint file into the output file, decoding
-        and writing its shots one at a time so peak memory stays bounded to
-        a single shot rather than the whole file's shot_histories dict.
-
-        Parameters
-        ----------
-        filename:
-            Path to the worker checkpoint file to read.
-        out_h5_file:
-            Already-open, writable HDF5 file/group to merge this worker's
-            shots into.
-        """
-        with h5py.File(filename, "r") as in_f:
-            if len(in_f.keys()) == 0:
-                return
-
-            in_root_group = _resolve_checkpoint_object_group(in_f)
-            # Fresh decode_cache per file, matching this file's own scope --
-            # not a cache shared across separate worker files.
-            entries = iter_dict_attr_entries(
-                in_root_group, "shot_histories", decode_cache={}
             )
             # Consumed fully here, while `in_f` is still open.
             self._write_shot_entries(out_h5_file, entries)

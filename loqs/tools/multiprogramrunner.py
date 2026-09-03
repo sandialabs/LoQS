@@ -21,9 +21,11 @@ from typing import Any, ClassVar, TypeVar
 
 from tqdm import tqdm
 
+from loqs.core.programresults import _resolve_checkpoint_object_group
 from loqs.internal import pin_worker_threads, worker_id
 from loqs.internal.serializable import Serializable, ResolvingDecodeCache
 from loqs.internal.streamingmerge import (
+    get_dict_attr_keys,
     merge_dict_attr,
     iter_dict_attr_entries,
 )
@@ -563,8 +565,17 @@ class MultiProgramRunner(Serializable):
         raise NotImplementedError
 
     def _make_on_item_done(self) -> Callable[[int, Any, Any], None] | None:
-        """Return a closure for on_item_done callback, or None."""
-        raise NotImplementedError
+        """Return a closure for on_item_done callback, or None.
+
+        Default: merges (index, result) into self._reduced_results via
+        _merge_reduced_result, ignoring the item itself -- covers every
+        current subclass, which all just forward result unchanged.
+        """
+
+        def on_item_done(index: int, item: Any, result: Any) -> None:
+            self._merge_reduced_result(index, result)
+
+        return on_item_done
 
     def _finalize(self, result_list: list) -> Any:
         """Return final result from result_list."""
@@ -601,7 +612,9 @@ class MultiProgramRunner(Serializable):
         prefix = self._shot_checkpoint_subdir_prefix()
         if prefix is None or not self.shot_checkpoint:
             return None
-        return self.shot_checkpoint_dir / f"{prefix}_{index}"
+        return _checkpoint_subdir_for_prefix(
+            self.shot_checkpoint_dir, prefix, index
+        )
 
     def _num_shots_for_progress(self) -> int | None:
         """Return the number of shots per item for progress reporting, or None.
@@ -617,6 +630,13 @@ class MultiProgramRunner(Serializable):
             The number of shots per item, or None if not applicable.
         """
         return getattr(self, "num_shots", None)
+
+
+def _checkpoint_subdir_for_prefix(
+    shot_checkpoint_dir: str | Path, prefix: str, index: int
+) -> Path:
+    """Build a per-item checkpoint subdirectory path for a given prefix and index."""
+    return Path(shot_checkpoint_dir) / f"{prefix}_{index}"
 
 
 def _assign_indices_with_keys(
@@ -748,35 +768,12 @@ def _read_done_union(
 
 def _get_runner_object_group(f: h5py.File) -> h5py.Group:
     """Navigate to the MultiProgramRunner object group inside runner.h5."""
-    root = f[next(iter(f.keys()))]
-    if len(root.keys()) > 0:
-        first_child = root[next(iter(root.keys()))]
-        if (
-            isinstance(first_child, h5py.Group)
-            and first_child.attrs.get("encode_type") == "Serializable"
-        ):
-            return first_child
-    return root
+    return _resolve_checkpoint_object_group(f)
 
 
 def _get_existing_dict_keys(obj_grp: h5py.Group, attr_name: str) -> set[int]:
     """Extract existing keys from a dict attribute in an HDF5 object group."""
-    if attr_name not in obj_grp:
-        return set()
-    grp = obj_grp[attr_name]
-    if not (
-        "dict" in grp
-        and "keys" in grp["dict"]
-        and "iterable" in grp["dict/keys"]
-    ):
-        return set()
-    keys_iterable = grp["dict/keys/iterable"]
-    storage_format = keys_iterable.attrs.get("storage_format", "groups")
-    from loqs.internal.streamingmerge import _read_iterable_side
-
-    return set(
-        _read_iterable_side(keys_iterable, storage_format, decode_cache=None)
-    )
+    return set(get_dict_attr_keys(obj_grp, attr_name))
 
 
 def _consolidate_worker_files(
@@ -906,19 +903,6 @@ def _consolidate_worker_files(
             # Transient lock conflict, missing attribute, or file corruption;
             # skip this file for now (will be retried on next consolidation call)
             continue
-
-
-def _consolidate_program_results(
-    checkpoint_dir: Path, runner_filename: str = "runner.h5"
-) -> None:
-    """Deprecated: use _consolidate_worker_files instead.
-
-    Kept for backward compatibility. Consolidates _program_results from all
-    worker files into runner.h5 without deleting worker files.
-    """
-    _consolidate_worker_files(
-        checkpoint_dir, runner_filename, delete_originals=False
-    )
 
 
 def _write_dict_entry_with_retry(

@@ -481,7 +481,7 @@ This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
 shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),
 [FaultInjectionRunner](api:FaultInjectionRunner), and
 [NoiseSweepRunner.run](api:NoiseSweepRunner.run)) use a separate, unified item-level
-checkpoint mechanism with per-worker journals, crash recovery, and per-item completion tracking.
+checkpoint mechanism with per-worker HDF5 checkpoint files, crash recovery, and per-item completion tracking.
 
 ## Performance profiling
 
