@@ -666,17 +666,70 @@ class ProgramResults(Displayable):
         return done
 
     @staticmethod
+    def _load_done_shot_indices(
+        checkpoint_dir: Path, results_filename: str = "results.h5"
+    ) -> set[int]:
+        """Scan checkpoint files for shot indices without decoding History values.
+
+        Scans checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
+        reading only the shot_histories keys (not their values), and returns
+        the union of those indices. Uses get_dict_attr_keys for this cheap,
+        key-only scan that avoids decoding any History data even when
+        resuming with lazy_loading=True.
+        Explicitly skips *.tmp files (stale leftovers from a crash).
+
+        Parameters
+        ----------
+        checkpoint_dir : Path
+            Directory to scan for checkpoint files.
+        results_filename:
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
+
+        Returns
+        -------
+        set[int]
+            Unique shot indices found across all checkpoint files.
+            Returns empty set if no checkpoints exist yet.
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+        done_indices: set[int] = set()
+
+        # First, read indices from results.h5 if it exists
+        results_file = checkpoint_dir / results_filename
+        if results_file.exists():
+            try:
+                with h5py.File(results_file, "r") as f:
+                    keys = get_dict_attr_keys(f, "shot_histories")
+                    done_indices.update(keys)
+            except Exception:
+                pass  # Skip if we can't read this file
+
+        # Then, read indices from every worker_*_checkpoint.h5 (sorted, no .tmp)
+        worker_files = sorted(
+            f
+            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
+            if not f.name.endswith(".tmp")
+        )
+        for worker_file in worker_files:
+            try:
+                with h5py.File(worker_file, "r") as f:
+                    keys = get_dict_attr_keys(f, "shot_histories")
+                    done_indices.update(keys)
+            except Exception:
+                pass  # Skip if we can't read this file
+
+        return done_indices
+
+    @staticmethod
     def _count_done_shots(
         checkpoint_dir: Path, results_filename: str = "results.h5"
     ) -> int:
         """Count the number of unique shot indices in checkpoint files.
 
-        Scans checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
-        counts the union of their shot_histories keys, and returns the total count.
-        Explicitly skips *.tmp files (stale leftovers from a crash).
-
-        Uses get_dict_attr_keys to read only the keys without decoding any
-        History values, making this cheap even for workers with many shots.
+        Returns the count of unique shot indices found across all checkpoint
+        files (results.h5 and every worker_*_checkpoint.h5), without decoding
+        any History values.
 
         Parameters
         ----------
@@ -692,34 +745,11 @@ class ProgramResults(Displayable):
             Number of unique shot indices found across all checkpoint files.
             Returns 0 if no checkpoints exist yet.
         """
-        checkpoint_dir = Path(checkpoint_dir)
-        done_indices: set[int] = set()
-
-        # First, count indices from results.h5 if it exists
-        results_file = checkpoint_dir / results_filename
-        if results_file.exists():
-            try:
-                with h5py.File(results_file, "r") as f:
-                    keys = get_dict_attr_keys(f, "shot_histories")
-                    done_indices.update(keys)
-            except Exception:
-                pass  # Skip if we can't read this file
-
-        # Then, count indices from every worker_*_checkpoint.h5 (sorted, no .tmp)
-        worker_files = sorted(
-            f
-            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
-            if not f.name.endswith(".tmp")
+        return len(
+            ProgramResults._load_done_shot_indices(
+                checkpoint_dir, results_filename
+            )
         )
-        for worker_file in worker_files:
-            try:
-                with h5py.File(worker_file, "r") as f:
-                    keys = get_dict_attr_keys(f, "shot_histories")
-                    done_indices.update(keys)
-            except Exception:
-                pass  # Skip if we can't read this file
-
-        return len(done_indices)
 
     def load_checkpoint(
         self,

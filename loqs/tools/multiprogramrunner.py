@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import functools
 import h5py
+import itertools
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
@@ -21,7 +22,7 @@ from typing import Any, ClassVar, TypeVar
 from tqdm import tqdm
 
 from loqs.internal import pin_worker_threads, worker_id
-from loqs.internal.serializable import Serializable
+from loqs.internal.serializable import Serializable, ResolvingDecodeCache
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
@@ -665,7 +666,7 @@ def _read_worker_files(
                 # ProgramResults sharing a parent QuantumProgram, say) decodes
                 # to the same real object everywhere, rather than an
                 # unresolved DeferredRef past its first occurrence.
-                decode_cache: dict = {}
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
                 for key, value in iter_dict_attr_entries(
                     f, attr_name, decode_cache=decode_cache
                 ):
@@ -724,7 +725,7 @@ def _read_done_union(
                 # ProgramResults sharing a parent QuantumProgram, say) decodes
                 # to the same real object everywhere, rather than an
                 # unresolved DeferredRef past its first occurrence.
-                decode_cache: dict = {}
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
                 for key, value in iter_dict_attr_entries(
                     f, runner_attr_name, decode_cache=decode_cache
                 ):
@@ -834,21 +835,31 @@ def _consolidate_worker_files(
                     # in either "results" or "_program_results" decode to the
                     # same real object everywhere, rather than unresolved
                     # DeferredRefs past their first occurrence.
-                    decode_cache: dict = {}
+                    decode_cache = ResolvingDecodeCache(
+                        root=in_f, format="hdf5"
+                    )
                     # Merge "results" (stored as "_reduced_results" in runner.h5)
                     if "results" in in_f:
-                        entries_to_merge = []
-                        for key, result in iter_dict_attr_entries(
-                            in_f, "results", decode_cache=decode_cache
-                        ):
-                            if key not in existing_reduced_results_keys:
-                                entries_to_merge.append((key, result))
-                                existing_reduced_results_keys.add(key)
-                        if entries_to_merge:
+
+                        def _filtered_results_gen():
+                            """Stream results entries, skipping already-merged keys."""
+                            for key, result in iter_dict_attr_entries(
+                                in_f, "results", decode_cache=decode_cache
+                            ):
+                                if key not in existing_reduced_results_keys:
+                                    existing_reduced_results_keys.add(key)
+                                    yield (key, result)
+
+                        # Peek first entry to determine if there's anything to merge
+                        gen = _filtered_results_gen()
+                        first_entry = next(gen, None)
+                        if first_entry is not None:
+                            # Reconstruct full sequence and stream to merge_dict_attr
+                            entries = itertools.chain([first_entry], gen)
                             merge_dict_attr(
                                 out_root,
                                 "_reduced_results",
-                                entries_to_merge,
+                                entries,
                                 encode_cache={},
                                 key_use_dataset=True,
                                 value_use_dataset=False,
@@ -856,18 +867,28 @@ def _consolidate_worker_files(
 
                     # Merge "_program_results" if present
                     if "_program_results" in in_f:
-                        entries_to_merge = []
-                        for key, pr in iter_dict_attr_entries(
-                            in_f, "_program_results", decode_cache=decode_cache
-                        ):
-                            if key not in existing_program_results_keys:
-                                entries_to_merge.append((key, pr))
-                                existing_program_results_keys.add(key)
-                        if entries_to_merge:
+
+                        def _filtered_program_results_gen():
+                            """Stream _program_results entries, skipping already-merged keys."""
+                            for key, pr in iter_dict_attr_entries(
+                                in_f,
+                                "_program_results",
+                                decode_cache=decode_cache,
+                            ):
+                                if key not in existing_program_results_keys:
+                                    existing_program_results_keys.add(key)
+                                    yield (key, pr)
+
+                        # Peek first entry to determine if there's anything to merge
+                        gen = _filtered_program_results_gen()
+                        first_entry = next(gen, None)
+                        if first_entry is not None:
+                            # Reconstruct full sequence and stream to merge_dict_attr
+                            entries = itertools.chain([first_entry], gen)
                             merge_dict_attr(
                                 out_root,
                                 "_program_results",
-                                entries_to_merge,
+                                entries,
                                 encode_cache={},
                                 key_use_dataset=True,
                                 value_use_dataset=False,
@@ -1137,7 +1158,7 @@ def _poll_one_worker_file(
             # ProgramResults sharing a parent QuantumProgram, say) decodes
             # to the same real object everywhere, rather than an
             # unresolved DeferredRef past its first occurrence.
-            decode_cache: dict = {}
+            decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
             for key, value in iter_dict_attr_entries(
                 f,
                 "results",

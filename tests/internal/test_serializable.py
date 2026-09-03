@@ -1085,34 +1085,52 @@ class TestResolvingDecodeCache:
         assert cache[100] is decoded_ref
 
     def test_hdf5_reference_before_source_resolution(self, make_temp_path):
-        """Test HDF5 format with reference decoded before source."""
+        """Test HDF5 format with a "copy" entry decoded before its source.
+
+        Two distinct instances sharing one _serial_hash are encoded as
+        siblings (the first becomes cache_type="source", the second
+        cache_type="copy"). The "copy" entry is then decoded directly, in
+        isolation, with a fresh decode_cache that has never seen the source
+        -- forcing ResolvingDecodeCache to locate and decode the source on
+        demand rather than relying on prior top-down traversal order.
+        """
 
         with make_temp_path(suffix=".h5") as temp_path:
-            # Create objects
-            shared_obj = MockSerializable(name="shared", value=42, data={"x": 1})
-            outer = MockSerializable(name="outer", value=1, data={"obj": shared_obj})
+            source_obj = MockSerializable(name="shared", value=42, data={"x": 1})
+            copy_obj = MockSerializable(name="shared", value=42, data={"x": 1})
 
-            # Encode the structure normally
+            encode_cache: dict = {}
             with h5py.File(temp_path, "w") as f:
-                outer.dump(f, format="hdf5")
+                container = f.create_group("container", track_order=True)
+                first_group = Serializable.encode(
+                    source_obj,
+                    format="hdf5",
+                    encode_cache=encode_cache,
+                    h5_group=container,
+                )
+                second_group = Serializable.encode(
+                    copy_obj,
+                    format="hdf5",
+                    encode_cache=encode_cache,
+                    h5_group=container,
+                )
+                assert first_group.attrs["cache_type"] == "source"
+                assert second_group.attrs["cache_type"] == "copy"
+                second_name = second_group.name
 
-            # Now manually decode with a reference-before-source scenario
+            # Decode only the "copy" entry, in isolation, with a fresh cache --
+            # the source is only ever found via `ResolvingDecodeCache`'s own scan.
             with h5py.File(temp_path, "r") as f:
-                root_group = f["root"]
-
-                # Create cache and attempt to resolve a reference
-                # even though the source hasn't been decoded yet
-                cache = ResolvingDecodeCache(root=root_group, format="hdf5")
-
-                # The cache should be able to scan and find sources
-                decoded = Serializable.decode(
-                    root_group, format="hdf5", decode_cache=cache
+                container = f["container"]
+                second_group = f[second_name]
+                cache = ResolvingDecodeCache(root=container, format="hdf5")
+                decoded_copy = Serializable.decode(
+                    second_group, format="hdf5", decode_cache=cache
                 )
 
-                assert isinstance(decoded, MockSerializable)
-                assert decoded.name == "outer"
-                assert isinstance(decoded.data["obj"], MockSerializable)
-                assert decoded.data["obj"].name == "shared"
+                assert isinstance(decoded_copy, MockSerializable)
+                assert decoded_copy.name == "shared"
+                assert decoded_copy.value == 42
 
     def test_resolve_finds_copy_node_not_just_source(self):
         """A `cache_type="copy"` node mints its own resolvable

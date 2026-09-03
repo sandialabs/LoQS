@@ -201,7 +201,7 @@ def iter_dict_attr_entries(
 
     # Read the keys side (cheap, even if large)
     keys = _read_iterable_side(
-        keys_iterable_group, keys_storage_format, decode_cache=None
+        keys_iterable_group, keys_storage_format, decode_cache=decode_cache
     )
 
     # Iterate values, decoding one at a time for groups format
@@ -572,7 +572,11 @@ def _read_iterable_side(
     storage_format: str,
     decode_cache: dict | None,
 ) -> list[Any]:
-    """Read an entire iterable side (for cheap reads like native scalars)."""
+    """Read an entire iterable side (for cheap reads like native scalars).
+
+    For dict attributes' keys side in groups format, keys are read fully upfront
+    rather than one-at-a-time alongside values.
+    """
     if storage_format == "dataset":
         dataset = iterable_group["data"]
         data = dataset[()]
@@ -623,6 +627,7 @@ def _find_group_index_for_key(
     parent_group: h5py.Group,
     attr_name: str,
     key: Any,
+    decode_cache: dict | None = None,
 ) -> int:
     """Find the physical index of an entry by its key in a dict attribute.
 
@@ -639,6 +644,9 @@ def _find_group_index_for_key(
         Name of the dict attribute to search.
     key : Any
         The key to find.
+    decode_cache : dict | None, optional
+        Cache for decoding operations (used when keys are Serializable objects).
+        Default is None.
 
     Returns
     -------
@@ -674,7 +682,7 @@ def _find_group_index_for_key(
 
     # Read all keys (cheap side)
     keys = _read_iterable_side(
-        keys_iterable_group, keys_storage_format, decode_cache=None
+        keys_iterable_group, keys_storage_format, decode_cache=decode_cache
     )
 
     # Find the index of the matching key
@@ -722,7 +730,9 @@ def get_dict_attr_value(
         If `attr_name` doesn't exist or if the key is not found.
     """
     parent_group = _resolve_dict_target_group(parent_group, attr_name)
-    index = _find_group_index_for_key(parent_group, attr_name, key)
+    index = _find_group_index_for_key(
+        parent_group, attr_name, key, decode_cache=decode_cache
+    )
 
     dict_group = parent_group[attr_name]
     dict_subgroup = dict_group["dict"]
@@ -766,6 +776,7 @@ def get_dict_attr_group(
     parent_group: h5py.Group,
     attr_name: str,
     key: Any,
+    decode_cache: dict | None = None,
 ) -> h5py.Group:
     """Get the raw HDF5 Group for a dict entry (groups-format values only).
 
@@ -781,6 +792,9 @@ def get_dict_attr_group(
         Name of the dict attribute.
     key : Any
         The key to retrieve.
+    decode_cache : dict | None, optional
+        Cache for decoding operations (used when keys are Serializable objects).
+        Default is None.
 
     Returns
     -------
@@ -796,7 +810,9 @@ def get_dict_attr_group(
         group to return in that case).
     """
     parent_group = _resolve_dict_target_group(parent_group, attr_name)
-    index = _find_group_index_for_key(parent_group, attr_name, key)
+    index = _find_group_index_for_key(
+        parent_group, attr_name, key, decode_cache=decode_cache
+    )
 
     dict_group = parent_group[attr_name]
     dict_subgroup = dict_group["dict"]

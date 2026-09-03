@@ -1383,6 +1383,55 @@ class TestResumeCheckpointing:
             count = ProgramResults._count_done_shots(checkpoint_dir)
             assert count == 3
 
+    def test_load_done_shot_indices_no_decoding_of_history_values(self):
+        """Verify _load_done_shot_indices never decodes History values.
+
+        This trap test ensures that _load_done_shot_indices uses the cheap
+        key-only scan (get_dict_attr_keys) and never attempts to decode
+        History values, even when the checkpoint file contains real shot data
+        that would normally be decoded. Uses the same technique as
+        test_count_done_shots_no_decoding_of_history_values.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            # Create a checkpoint with several shots
+            pr = ProgramResults()
+            for i in range(5):
+                history = History()
+                history.append(Frame({"index": i}))
+                pr.add_shot(i, history)
+            pr.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Patch Serializable.decode to trap any History value decoding
+            original_decode = Serializable.decode
+
+            def decode_trap(*args, **kwargs):
+                import traceback
+
+                stack = traceback.extract_stack()
+                # Count how many times Serializable.decode appears in the stack.
+                decode_frames = [f for f in stack if "Serializable.decode" in f.line]
+                if len(decode_frames) > 1:
+                    # Recursive decode: a History value being decoded inside
+                    # a parent. Should NOT happen in _load_done_shot_indices.
+                    raise AssertionError(
+                        "_load_done_shot_indices should not decode History values; "
+                        "nested Serializable.decode detected"
+                    )
+                return original_decode(*args, **kwargs)
+
+            with unittest.mock.patch.object(
+                Serializable, "decode", side_effect=decode_trap
+            ):
+                indices = ProgramResults._load_done_shot_indices(checkpoint_dir)
+                # If we get here without an AssertionError, the method
+                # successfully avoided decoding any History values.
+                assert indices == {0, 1, 2, 3, 4}
+                # Also confirm count matches
+                count = ProgramResults._count_done_shots(checkpoint_dir)
+                assert count == len(indices)
+
     def test_checkpoint_fresh_envelope_read_and_decode(self):
         """Regression test for bug #105: decode fresh-envelope checkpoints.
 

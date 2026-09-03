@@ -1096,6 +1096,93 @@ class TestResumeFromCheckpoint:
                     verbose=False,
                 )
 
+    def test_load_remaining_shots_lazy_loading_avoids_decode(self):
+        """Verify _load_remaining_shots with lazy_loading=True avoids History decoding.
+
+        Tests that calling _load_remaining_shots(..., lazy_loading=True) uses
+        the cheap key-only scan and never decodes History values, using the
+        same trap-decode technique as other no-decoding tests in this suite.
+        """
+        import tempfile
+        import unittest.mock
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create a checkpoint with several shots
+            pr = ProgramResults()
+            for i in range(5):
+                history = History()
+                history.append(Frame({"index": i}))
+                pr.add_shot(i, history)
+            pr.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Patch Serializable.decode to trap any History decoding
+            from loqs.internal.serializable import Serializable
+
+            original_decode = Serializable.decode
+
+            def decode_trap(*args, **kwargs):
+                import traceback
+
+                stack = traceback.extract_stack()
+                # Count how many times Serializable.decode appears in the stack.
+                decode_frames = [f for f in stack if "Serializable.decode" in f.line]
+                if len(decode_frames) > 1:
+                    # Recursive decode: a History value being decoded inside
+                    # a parent. Should NOT happen in lazy mode.
+                    raise AssertionError(
+                        "_load_remaining_shots(lazy_loading=True) should not decode "
+                        "History values; nested Serializable.decode detected"
+                    )
+                return original_decode(*args, **kwargs)
+
+            with unittest.mock.patch.object(
+                Serializable, "decode", side_effect=decode_trap
+            ):
+                remaining, num_done, done_data = QuantumProgram._load_remaining_shots(
+                    checkpoint_dir, num_shots=5, lazy_loading=True
+                )
+                # If we get here without an AssertionError, the method
+                # successfully avoided decoding any History values.
+                assert remaining == []
+                assert num_done == 5
+                assert done_data == {}
+
+    def test_load_remaining_shots_normal_mode_populates_done_data(self):
+        """Verify _load_remaining_shots with lazy_loading=False decodes History data.
+
+        Tests that calling _load_remaining_shots(..., lazy_loading=False)
+        fully decodes all History values and returns them in done_data,
+        matching the original behavior used for in-memory re-population.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create a checkpoint with several shots
+            pr = ProgramResults()
+            for i in range(3):
+                history = History()
+                history.append(Frame({"index": i}))
+                pr.add_shot(i, history)
+            pr.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Call with lazy_loading=False
+            remaining, num_done, done_data = QuantumProgram._load_remaining_shots(
+                checkpoint_dir, num_shots=5, lazy_loading=False
+            )
+
+            # Should have correct remaining shots and decoded data
+            assert remaining == [3, 4]
+            assert num_done == 3
+            assert len(done_data) == 3
+            assert set(done_data.keys()) == {0, 1, 2}
+            # Each value should be a History object
+            for idx in [0, 1, 2]:
+                assert isinstance(done_data[idx], History)
+
 
 class TestResolveShotBatching:
     """Unit tests for QuantumProgram._resolve_shot_batching."""

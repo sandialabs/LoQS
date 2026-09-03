@@ -2220,3 +2220,104 @@ class TestDecodeCache:
         assert result1.parent is result2.parent, \
             "Shared parent should decode to the same object both times"
         assert result1.parent.value == 55
+
+    def test_consolidate_worker_files_streaming_one_at_a_time(self, tmp_path):
+        """Trap test enforcing read-ahead bound: decoding doesn't race past writing.
+
+        Asserts that _consolidate_worker_files never decodes more than one entry
+        ahead of what has already been written to runner.h5, so the read and write
+        sides always advance in lockstep (decoded_count - written_count <= 1 at all
+        times) rather than fully materializing decoded entries before any write.
+        """
+        import unittest.mock
+        from loqs.tools.multiprogramrunner import _consolidate_worker_files
+        from loqs.internal.streamingmerge import (
+            iter_dict_attr_entries as real_iter_dict_attr_entries,
+            merge_dict_attr,
+        )
+        from loqs.internal import streamingmerge
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Create a minimal runner.h5 via _SimpleDoubleRunner
+        runner = _SimpleDoubleRunner(
+            items=[],
+            checkpoint=False,
+        )
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # Create worker file with 3 results to merge
+        worker_file = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            encode_cache = {}
+            for i in range(3):
+                merge_dict_attr(
+                    f,
+                    "results",
+                    [(100 + i, 1000 + i)],
+                    encode_cache=encode_cache,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+        # Counters for read and write sides (mutable via closure)
+        decoded_count = [0]
+        written_count = [0]
+
+        def spy_iter_dict_attr_entries(
+            parent_group, attr_name, decode_cache=None, start_index=0
+        ):
+            """Spy on iter_dict_attr_entries: track decoded entries, enforce read-ahead bound."""
+            for key, value in real_iter_dict_attr_entries(
+                parent_group, attr_name, decode_cache=decode_cache, start_index=start_index
+            ):
+                decoded_count[0] += 1
+                # Enforce: read side never more than 1 ahead of write side for "results"
+                if attr_name == "results":
+                    ahead = decoded_count[0] - written_count[0]
+                    assert ahead <= 1, \
+                        f"Read-ahead violation: decoded {decoded_count[0]}, " \
+                        f"written {written_count[0]}, ahead by {ahead} (should be ≤1)"
+                yield (key, value)
+
+        # Save real function reference before patching
+        real_stream_into_existing = streamingmerge._stream_into_existing_dict_attr
+
+        def spy_stream_into_existing_dict_attr(
+            parent_group, attr_name, entries, encode_cache
+        ):
+            """Spy on _stream_into_existing_dict_attr: stream one entry at a time, track writes."""
+            # Stream one entry at a time, calling real function per entry
+            for key, value in entries:
+                real_stream_into_existing(parent_group, attr_name, [(key, value)], encode_cache)
+                # Increment write count only for _reduced_results
+                if attr_name == "_reduced_results":
+                    written_count[0] += 1
+
+        # Patch both iter_dict_attr_entries (read side) and _stream_into_existing_dict_attr
+        import loqs.tools.multiprogramrunner as mpr_module
+
+        with unittest.mock.patch.object(
+            mpr_module, "iter_dict_attr_entries", side_effect=spy_iter_dict_attr_entries
+        ), unittest.mock.patch.object(
+            streamingmerge,
+            "_stream_into_existing_dict_attr",
+            side_effect=spy_stream_into_existing_dict_attr,
+        ):
+            _consolidate_worker_files(
+                checkpoint_dir,
+                runner_filename="runner.h5",
+                delete_originals=True,
+            )
+
+        # Assert both counters reached their expected values
+        assert decoded_count[0] == 3, \
+            f"Expected 3 entries decoded, got {decoded_count[0]}"
+        assert written_count[0] == 3, \
+            f"Expected 3 entries written, got {written_count[0]}"
+
+        # Verify worker file was deleted
+        assert not worker_file.exists(), \
+            "Worker file should be deleted after consolidation"

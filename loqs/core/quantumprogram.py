@@ -459,17 +459,52 @@ class QuantumProgram(Displayable):
         checkpoint_dir: Path,
         num_shots: int,
         results_filename: str = "results.h5",
-    ) -> tuple[list[int], dict]:
-        """Scan `checkpoint_dir` for every already-checkpointed shot (across
-        results file and any `worker_*_checkpoint.h5`) and return the
-        still-missing shot indices, plus the recovered `{index: History}`
-        data itself for the caller's own use (e.g. re-populating an
-        in-memory result when lazy loading is disabled)."""
-        done = ProgramResults._load_done_shots(
-            checkpoint_dir, results_filename
-        )
-        remaining = sorted(set(range(num_shots)) - done.keys())
-        return remaining, done
+        lazy_loading: bool = True,
+    ) -> tuple[list[int], int, dict]:
+        """Scan `checkpoint_dir` for already-checkpointed shots and return
+        missing indices, done count, and optionally the decoded History data.
+
+        When lazy_loading=True, uses a cheap key-only scan (get_dict_attr_keys)
+        to avoid decoding any History values since the decoded data would be
+        discarded immediately (lazy loading evicts checkpointed shots from
+        memory anyway). When lazy_loading=False, fully decodes all History data
+        so the caller can re-populate the in-memory result.
+
+        Parameters
+        ----------
+        checkpoint_dir : Path
+            Directory to scan for checkpoint files.
+        num_shots : int
+            Total number of shots expected.
+        results_filename : str
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
+        lazy_loading : bool
+            Whether to use cheap key-only scan (True) or full decode (False).
+            Defaults to True.
+
+        Returns
+        -------
+        tuple[list[int], int, dict]
+            remaining: sorted list of shot indices still needing computation.
+            num_done: count of already-checkpointed shots.
+            done_data: {index: History} dict (empty if lazy_loading=True,
+                otherwise the decoded History for each checkpointed shot).
+        """
+        if lazy_loading:
+            # Cheap path: scan keys without decoding History values
+            done_indices = ProgramResults._load_done_shot_indices(
+                checkpoint_dir, results_filename
+            )
+            remaining = sorted(set(range(num_shots)) - done_indices)
+            return remaining, len(done_indices), {}
+        else:
+            # Full decode path: recover History data for in-memory re-population
+            done = ProgramResults._load_done_shots(
+                checkpoint_dir, results_filename
+            )
+            remaining = sorted(set(range(num_shots)) - done.keys())
+            return remaining, len(done), done
 
     def _run_serial_checkpointed(
         self,
@@ -858,17 +893,17 @@ class QuantumProgram(Displayable):
         # `remaining` (rather than the full shot range) is what actually
         # gets dispatched below, so a resuming call only redoes whatever a
         # prior interrupted call hadn't already durably checkpointed.
-        remaining, done = self._load_remaining_shots(
-            resolved_checkpoint_dir, num_shots, results_filename
+        remaining, num_done, done_data = self._load_remaining_shots(
+            resolved_checkpoint_dir, num_shots, results_filename, lazy_loading
         )
         if not lazy_loading:
-            program_results.shot_histories.update(done)
+            program_results.shot_histories.update(done_data)
 
         with tqdm(
             total=num_shots, desc=f"Program {self.name}", disable=not verbose
         ) as pbar:
-            if done:
-                pbar.update(len(done))
+            if num_done:
+                pbar.update(num_done)
             if shot_executor is None:
                 self._run_serial_checkpointed(
                     remaining,

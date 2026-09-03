@@ -821,3 +821,87 @@ class TestGetDictAttrGroup:
             # Should not have called Serializable.decode
             assert decode_call_count[0] == 0
             assert isinstance(group, h5py.Group)
+
+
+class TestDecideCacheForwardingKeysResolution:
+    """Tests for decode_cache forwarding on key-side dict reads.
+
+    Regression tests for the bug where keys-side reads of dict attributes
+    were hardcoded with decode_cache=None, preventing correct reference
+    resolution when Serializable objects are used as keys.
+    """
+
+    def test_shared_serializable_key_resolved_via_decode_cache(
+        self, make_temp_path
+    ):
+        """Verify shared Serializable key references resolve correctly via decode_cache.
+
+        Construct a dict with two entries sharing the same Serializable object
+        as a key (entry 1) and value (entry 2), forming a source/reference pair.
+        Decoding both entries with one shared decode_cache should result in
+        the decoded key of entry 1 being the same object instance (is, not ==)
+        as the decoded value of entry 2. This proves the keys-side read correctly
+        registered its decoded object into the shared cache.
+        """
+        with make_temp_path(suffix=".h5") as temp_file:
+            # Create three Serializable objects
+            shared_key_obj = MockSerializable("shared_key", 1000)
+            other_key_obj = MockSerializable("other_key", 2000)
+            val1_obj = MockSerializable("val1", 3000)
+
+            # Encode with groups format for both keys and values, sharing one cache
+            encode_cache = {}
+            with h5py.File(temp_file, "w") as h5_file:
+                # Entry 1: (shared_key_obj, val1_obj)
+                merge_dict_attr(
+                    h5_file,
+                    "shared_dict",
+                    [(shared_key_obj, val1_obj)],
+                    encode_cache=encode_cache,
+                    key_use_dataset=False,
+                    value_use_dataset=False,
+                )
+
+                # Entry 2: (other_key_obj, shared_key_obj) -- shared_key_obj
+                # reappears, forming a source/reference pair with entry 1's key
+                merge_dict_attr(
+                    h5_file,
+                    "shared_dict",
+                    [(other_key_obj, shared_key_obj)],
+                    encode_cache=encode_cache,
+                    key_use_dataset=False,
+                    value_use_dataset=False,
+                )
+
+            # Decode both entries with one shared decode_cache
+            decode_cache = {}
+            with h5py.File(temp_file, "r") as h5_file:
+                entries = list(
+                    iter_dict_attr_entries(h5_file, "shared_dict", decode_cache=decode_cache)
+                )
+
+            # Verify we got two entries
+            assert len(entries) == 2
+
+            # Extract decoded key of entry 1 and decoded value of entry 2
+            key1_decoded, val1_decoded = entries[0]
+            key2_decoded, val2_decoded = entries[1]
+
+            # Verify content
+            assert isinstance(key1_decoded, MockSerializable)
+            assert key1_decoded.name == "shared_key"
+            assert key1_decoded.value == 1000
+
+            assert isinstance(val2_decoded, MockSerializable)
+            assert val2_decoded.name == "shared_key"
+            assert val2_decoded.value == 1000
+
+            # The key assertion: entry 1's decoded key must be the same object
+            # instance as entry 2's decoded value, not just equal, proving the
+            # keys-side read registered it into the shared decode_cache.
+            assert key1_decoded is val2_decoded, (
+                f"Expected decoded key of entry 1 (at {id(key1_decoded)}) to be "
+                f"the same object instance as decoded value of entry 2 "
+                f"(at {id(val2_decoded)}), but they were separate instances. "
+                f"This indicates keys-side decode_cache was not being forwarded."
+            )
