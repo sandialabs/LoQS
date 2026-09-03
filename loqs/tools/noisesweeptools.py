@@ -848,7 +848,7 @@ def compare_noise_sweeps(
     ]
     if incomplete_names:
         details = ", ".join(
-            f"'{name}' ({len(results[name].strengths) - len(results[name].failure_rates)} "
+            f"'{name}' ({sum(1 for fr in results[name].failure_rates if fr is None)} "
             "point(s) missing)"
             for name in incomplete_names
         )
@@ -889,31 +889,32 @@ def plot_noise_sweep(
         _, ax = plt.subplots()
 
     for label, result in results.items():
-        strengths = np.asarray(
-            result.strengths[: len(result.failure_rates)], dtype=float
-        )
+        strengths = np.asarray(result.strengths, dtype=float)
         failure_rates = np.asarray(result.failure_rates, dtype=float)
         stderrs = np.asarray(result.stderrs, dtype=float)
 
         if len(strengths) == 0:
             continue
 
-        zero_mask = failure_rates <= 0
+        # Exclude points with None/nan values (incomplete sweep points).
+        valid_mask = ~np.isnan(failure_rates)
+        zero_mask = valid_mask & (failure_rates <= 0)
+        nonzero_mask = valid_mask & (failure_rates > 0)
         upper_limit = 1.0 / (2 * result.num_shots)
 
         (line,) = ax.plot(
-            strengths[~zero_mask],
-            failure_rates[~zero_mask],
+            strengths[nonzero_mask],
+            failure_rates[nonzero_mask],
             marker="o",
             linestyle="-",
             label=label,
             **kwargs,
         )
-        if (~zero_mask).any():
+        if nonzero_mask.any():
             ax.errorbar(
-                strengths[~zero_mask],
-                failure_rates[~zero_mask],
-                yerr=stderrs[~zero_mask],
+                strengths[nonzero_mask],
+                failure_rates[nonzero_mask],
+                yerr=stderrs[nonzero_mask],
                 linestyle="none",
                 color=line.get_color(),
             )
@@ -928,35 +929,36 @@ def plot_noise_sweep(
             )
 
     if reference_slope is not None:
-        all_strengths = np.concatenate(
-            [
-                np.asarray(r.strengths[: len(r.failure_rates)], dtype=float)
-                for r in results.values()
-                if len(r.failure_rates) > 0
-            ]
-        )
-        all_rates = np.concatenate(
-            [
-                np.asarray(r.failure_rates, dtype=float)
-                for r in results.values()
-                if len(r.failure_rates) > 0
-            ]
-        )
-        nonzero = all_rates > 0
-        if nonzero.any() and len(all_strengths) > 0:
-            anchor_strength = all_strengths[nonzero][0]
-            anchor_rate = all_rates[nonzero][0]
-            guide_x = np.array([all_strengths.min(), all_strengths.max()])
-            guide_y = (
-                anchor_rate * (guide_x / anchor_strength) ** reference_slope
-            )
-            ax.plot(
-                guide_x,
-                guide_y,
-                linestyle="--",
-                color="gray",
-                label=f"slope={reference_slope}",
-            )
+        all_strengths_list = []
+        all_rates_list = []
+        for r in results.values():
+            if len(r.failure_rates) > 0:
+                strengths_arr = np.asarray(r.strengths, dtype=float)
+                rates_arr = np.asarray(r.failure_rates, dtype=float)
+                # Exclude incomplete (nan) points from the guide line fit.
+                valid = ~np.isnan(rates_arr)
+                all_strengths_list.append(strengths_arr[valid])
+                all_rates_list.append(rates_arr[valid])
+
+        if all_strengths_list and all_rates_list:
+            all_strengths = np.concatenate(all_strengths_list)
+            all_rates = np.concatenate(all_rates_list)
+            nonzero = all_rates > 0
+            if nonzero.any() and len(all_strengths) > 0:
+                anchor_strength = all_strengths[nonzero][0]
+                anchor_rate = all_rates[nonzero][0]
+                guide_x = np.array([all_strengths.min(), all_strengths.max()])
+                guide_y = (
+                    anchor_rate
+                    * (guide_x / anchor_strength) ** reference_slope
+                )
+                ax.plot(
+                    guide_x,
+                    guide_y,
+                    linestyle="--",
+                    color="gray",
+                    label=f"slope={reference_slope}",
+                )
 
     ax.set_xscale("log")
     ax.set_yscale("log")

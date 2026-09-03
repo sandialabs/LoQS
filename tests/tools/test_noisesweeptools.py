@@ -918,6 +918,25 @@ class TestCompareNoiseSweeps:
             compare_noise_sweeps(results)
             compare_noise_sweeps(results, strict=True)
 
+    def test_incomplete_missing_point_count_correct(self):
+        """Regression test for bug where missing_point_count was always 0.
+
+        Verifies that the warning message correctly reports the count of None
+        entries in failure_rates, not len(strengths) - len(failure_rates).
+        """
+        results = {
+            "partial": self._make_result([0.0, 0.1, 0.2, 0.3, 0.4], 3),
+        }
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            compare_noise_sweeps(results)
+        assert len(caught) == 1
+        warning_msg = str(caught[0].message)
+        # Should report 2 missing points, not 0
+        assert (
+            "2 point(s) missing" in warning_msg
+        ), f"Expected '2 point(s) missing' in warning, got: {warning_msg}"
+
 
 class TestPlotNoiseSweep:
     def test_smoke(self):
@@ -956,6 +975,87 @@ class TestPlotNoiseSweep:
         )
         with pytest.raises(ImportError):
             plot_noise_sweep(result)
+
+    def test_incomplete_points_not_plotted(self):
+        """Regression test for bug where None/nan values leak into plotted data.
+
+        Verifies that incomplete points (None values in failure_rates/stderrs)
+        are excluded from both the main line/errorbar plot and the zero-rate
+        open-marker plot, and do not appear in the guide line fit.
+        """
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # Create a result with a mix of valid points and None (incomplete) points.
+        # Pattern: valid zero, valid nonzero, None (incomplete), valid nonzero
+        result = NoiseSweepResult(
+            strengths=[0.01, 0.05, 0.1, 0.2],
+            failure_rates=[0.0, 0.05, None, 0.2],
+            stderrs=[0.0, 0.01, None, 0.05],
+            num_shots=100,
+        )
+        fig, ax = plt.subplots()
+        ax = plot_noise_sweep(result, ax=ax, reference_slope=2)
+
+        # Check that plotted data contains no nan values.
+        # The line is drawn only for nonzero points (index 1, 3).
+        assert len(ax.lines) > 0, "Expected at least one line to be plotted"
+        main_line = ax.lines[0]
+        x_data = main_line.get_xdata()
+        y_data = main_line.get_ydata()
+
+        # No nan should appear in the plotted data
+        assert not np.any(np.isnan(x_data)), "Found nan in line x_data"
+        assert not np.any(np.isnan(y_data)), "Found nan in line y_data"
+
+        # The main line should contain the two nonzero valid points (indices 1, 3)
+        assert len(x_data) == 2, "Expected 2 points in main line"
+
+        # Verify guide line exists and contains no nan
+        assert any(
+            "slope=2" in str(getattr(line, "_label", "")) for line in ax.lines
+        ), (
+            "Expected guide line with slope=2 label"
+        )
+
+        plt.close(fig)
+
+    def test_incomplete_points_guide_line_excludes_nan(self):
+        """Verify the guide line's x-range is bounded by valid points only, not by an
+        incomplete point's strength value even when that strength is the series' own extreme."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # The last, most extreme strength (0.5) is incomplete -- a guide line that still uses
+        # it as its own x-bound reveals the incomplete point's strength leaking into the fit.
+        result = NoiseSweepResult(
+            strengths=[0.01, 0.05, 0.1, 0.5],
+            failure_rates=[0.01, 0.02, 0.03, None],
+            stderrs=[0.005, 0.005, 0.005, None],
+            num_shots=100,
+        )
+        fig, ax = plt.subplots()
+        ax = plot_noise_sweep(result, ax=ax, reference_slope=2)
+
+        guide_lines = [
+            line
+            for line in ax.lines
+            if getattr(line, "_label", "").startswith("slope")
+        ]
+        assert len(guide_lines) > 0, "Expected guide line to be plotted despite incomplete points"
+
+        guide_line = guide_lines[0]
+        guide_x = guide_line.get_xdata()
+        guide_y = guide_line.get_ydata()
+
+        assert len(guide_x) == 2, "Expected 2-point guide line"
+        assert not np.any(np.isnan(guide_x)), "Found nan in guide line x_data"
+        assert not np.any(np.isnan(guide_y)), "Found nan in guide line y_data"
+        # The guide line's upper bound must be the largest *valid* strength (0.1),
+        # not the incomplete point's own strength (0.5).
+        assert guide_x.max() == pytest.approx(0.1)
+
+        plt.close(fig)
 
 
 class TestNoiseSweepRunnerShotCheckpointing:
