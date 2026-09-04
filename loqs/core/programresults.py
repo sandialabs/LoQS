@@ -287,10 +287,12 @@ class ProgramResults(Displayable):
             decode_cache = {}
             ProgramResults.read(self.parent_program, decode_cache=decode_cache)
 
-            # Decode cache is cache_id to object
-            # Encode cache is id(object) to cache_id
+            # decode_cache maps cache_id to object; the encode cache the
+            # encoder actually consults is keyed by _serial_hash(object),
+            # mapping to a list of (id(object), cache_id) pairs.
             self._checkpoint_encode_cache = {
-                id(v): k for k, v in decode_cache.items()
+                Serializable._serial_hash(v): [(id(v), k)]
+                for k, v in decode_cache.items()
             }
         except Exception:
             # If there's any error reading the results or building the cache,
@@ -627,7 +629,10 @@ class ProgramResults(Displayable):
         if results_file.exists():
             try:
                 with h5py.File(results_file, "r") as f:
-                    loaded = Serializable.decode(f, format="hdf5")
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    loaded = Serializable.decode(
+                        f, format="hdf5", decode_cache=decode_cache
+                    )
                     if (
                         isinstance(loaded, ProgramResults)
                         and loaded.shot_histories
@@ -645,7 +650,10 @@ class ProgramResults(Displayable):
         for worker_file in worker_files:
             try:
                 with h5py.File(worker_file, "r") as f:
-                    loaded = Serializable.decode(f, format="hdf5")
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    loaded = Serializable.decode(
+                        f, format="hdf5", decode_cache=decode_cache
+                    )
                     if (
                         isinstance(loaded, ProgramResults)
                         and loaded.shot_histories
@@ -787,8 +795,13 @@ class ProgramResults(Displayable):
             Path to the checkpoint file to load.
         """
         with h5py.File(filename, "r") as f:
-            # Use standard Serializable decoding to load the ProgramResults
-            loaded_results = Serializable.decode(f, format="hdf5")
+            # Use standard Serializable decoding to load the ProgramResults.
+            # A ResolvingDecodeCache is required since a shot may reference
+            # content already embedded earlier in this same file.
+            decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+            loaded_results = Serializable.decode(
+                f, format="hdf5", decode_cache=decode_cache
+            )
             assert isinstance(loaded_results, ProgramResults)
 
             # Merge the loaded shot histories into our current results
@@ -883,10 +896,11 @@ class ProgramResults(Displayable):
                     worker_file.unlink()
 
         # Ensure output_file has valid structure even if no workers were present
-        if (
-            not output_file.exists()
-            or len(h5py.File(output_file, "r").keys()) == 0
-        ):
+        needs_init = not output_file.exists()
+        if not needs_init:
+            with h5py.File(output_file, "r") as check_f:
+                needs_init = len(check_f.keys()) == 0
+        if needs_init:
             with h5py.File(output_file, "a") as out_f:
                 if len(out_f.keys()) == 0:
                     self._write_shot_entries(out_f, iter(()))
@@ -930,7 +944,11 @@ class ProgramResults(Displayable):
             entries = (
                 (key, value)
                 for key, value in iter_dict_attr_entries(
-                    in_root_group, "shot_histories", decode_cache={}
+                    in_root_group,
+                    "shot_histories",
+                    decode_cache=ResolvingDecodeCache(
+                        root=in_f, format="hdf5"
+                    ),
                 )
                 if key not in already_merged
             )

@@ -1,5 +1,6 @@
 """Tester for loqs.core.programresults"""
 
+import json
 import multiprocessing as mp
 import os
 import tempfile
@@ -10,10 +11,88 @@ import pytest
 import h5py
 import numpy as np
 
-from loqs.core.programresults import ProgramResults
+from loqs.core.programresults import (
+    ProgramResults,
+    _resolve_checkpoint_object_group,
+)
 from loqs.core.history import History
 from loqs.core import Frame
 from loqs.internal.serializable import Serializable
+from loqs.internal.encoder import HDF5Encoder
+
+
+def _build_reference_before_source_checkpoint(
+    path: Path, source_index: int, copy_index: int
+) -> None:
+    """Build a checkpoint-shaped HDF5 file (a `results.h5` or a
+    `worker_*_checkpoint.h5`) whose `shot_histories` holds two shots --
+    `source_index` and `copy_index` -- encoding the same `History`
+    instance, so the second becomes a `cache_type="reference"` (a plain
+    dict decode_cache can self-heal a "copy" node reached out of order,
+    but never a "reference" node, so this is the case that actually
+    needs `ResolvingDecodeCache`).
+
+    The copy's own HDF5 group is placed at physical index 0 and the
+    source's at index 1 regardless of `source_index`/`copy_index`, since
+    decoding a groups-format iterable walks ascending physical index --
+    forcing the reference to be decoded before its own source.
+    """
+    with h5py.File(path, "a") as f:
+        # Bootstrap a valid ProgramResults envelope, mirroring
+        # `_write_shot_entries`'s own bootstrap, then drop its empty
+        # shot_histories skeleton so a custom one can be built by hand.
+        Serializable.encode(
+            ProgramResults(shot_histories={}),
+            format="hdf5",
+            h5_group=f,
+            encode_cache={},
+        )
+        root_group = _resolve_checkpoint_object_group(f)
+        del root_group["shot_histories"]
+
+        dict_group = root_group.create_group("shot_histories")
+        dict_subgroup = dict_group.create_group("dict")
+        keys_group = dict_subgroup.create_group("keys")
+        values_group = dict_subgroup.create_group("values")
+        keys_iterable = keys_group.create_group("iterable", track_order=True)
+        values_iterable = values_group.create_group(
+            "iterable", track_order=True
+        )
+        keys_iterable.attrs["iterable_type"] = "list"
+        values_iterable.attrs["iterable_type"] = "list"
+        values_iterable.attrs["storage_format"] = "groups"
+
+        # Keys: dataset format, ordered to match values' physical index
+        # order (copy's key at index 0, source's key at index 1).
+        keys_iterable.attrs["storage_format"] = "dataset"
+        HDF5Encoder._encode_iterable_dataset(
+            keys_iterable, [copy_index, source_index], True
+        )
+
+        shared_history = History()
+        shared_history.append(Frame({"marker": "shared"}))
+
+        # Create both groups up front, independent of encode order below,
+        # so physical index order alone controls decode order.
+        copy_group = values_iterable.create_group("0", track_order=True)
+        source_group = values_iterable.create_group("1", track_order=True)
+
+        shared_encode_cache: dict = {}
+        # Encode the source first (registers the cache entry).
+        Serializable.encode(
+            shared_history,
+            format="hdf5",
+            h5_group=source_group,
+            encode_cache=shared_encode_cache,
+        )
+        # Encode the exact same instance again (finds the cache match by
+        # object identity, becoming a "reference" rather than a "copy").
+        Serializable.encode(
+            shared_history,
+            format="hdf5",
+            h5_group=copy_group,
+            encode_cache=shared_encode_cache,
+        )
 
 
 def _write_worker_checkpoint(args: tuple[str, int, int]) -> None:
@@ -1058,6 +1137,123 @@ class TestParentProgramFileWriting:
         mtime2 = file2.stat().st_mtime
         assert mtime1 == mtime2
 
+    @pytest.mark.skipif(
+        os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
+    )
+    def test_checkpoint_encode_cache_references_shared_parent_program(
+        self, tmp_path
+    ):
+        """Regression test for bug #105: the encode cache built from
+        parent_program's own decode_cache must actually be consulted by the
+        encoder (keyed by `_serial_hash`, not `id`), so a shared reference to
+        parent_program appearing again in shot data is written once and
+        referenced afterward, rather than independently re-embedded as a
+        second, disconnected "source" copy.
+        """
+        pytest.importorskip("quantumsim")
+        pytest.importorskip("stim")
+        from loqs.backends import QSimQuantumState
+        from loqs.core import QuantumProgram
+        from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        stack = [
+            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        ]
+        program = QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            state_type=QSimQuantumState,
+            patch_types={"Trivial": trivial_code},
+            name="Shared parent program",
+        )
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        results = ProgramResults(
+            name="Test Results",
+            parent_program=program,
+            checkpoint_enabled=True,
+            checkpoint_dir=checkpoint_dir,
+        )
+
+        # Three shots, each directly holding the same `program` object
+        # (identical content to the parent_program already embedded in
+        # results.h5) inside their own Frame data.
+        for shot_index in range(3):
+            history = History()
+            history.append(Frame({"program_ref": program}))
+            results.add_shot(shot_index, history)
+        results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+        # Walk the whole file (both real HDF5 groups and any array-free
+        # "$collapsed" JSON blob siblings, since a QuantumProgram with no
+        # array content anywhere collapses into one of these) collecting
+        # every cache_type entry, in order to find every node describing
+        # the shared QuantumProgram content.
+        def collect(node, out, path=""):
+            if isinstance(node, h5py.Group):
+                attrs = dict(node.attrs)
+                if attrs.get("cache_type") is not None:
+                    out.append(attrs)
+                for name in node.keys():
+                    collect(node[name], out, f"{path}/{name}")
+                if "$collapsed" in node:
+                    raw = node["$collapsed"][()].tobytes().decode("utf-8")
+                    collect_json(json.loads(raw), out)
+            elif isinstance(node, h5py.Dataset):
+                attrs = dict(node.attrs)
+                if attrs.get("cache_type") is not None:
+                    out.append(attrs)
+
+        def collect_json(node, out):
+            if isinstance(node, dict):
+                if node.get("cache_type") is not None:
+                    out.append(node)
+                for value in node.values():
+                    collect_json(value, out)
+            elif isinstance(node, list):
+                for item in node:
+                    collect_json(item, out)
+
+        cache_nodes: list = []
+        with h5py.File(checkpoint_dir / "results.h5", "r") as f:
+            collect(f, cache_nodes)
+
+        # A "copy"/"reference" node never re-declares "class" (only a fresh
+        # "source" encode does), so the QuantumProgram content is only
+        # identifiable by "class" on its one true source node.
+        program_sources = [
+            n
+            for n in cache_nodes
+            if n.get("class") == "QuantumProgram" and n.get("cache_type") == "source"
+        ]
+        assert len(program_sources) == 1, (
+            "Expected exactly one QuantumProgram source node (parent_program "
+            f"re-embedded fresh {len(program_sources)} times instead)"
+        )
+        source_cache_id = program_sources[0]["cache_id"]
+
+        # Each shot's own reference to `program` should resolve back to that
+        # one source, either directly (a "copy") or transitively through
+        # another already-deduplicated shot (a "reference" to a "copy").
+        referencing_nodes = [
+            n
+            for n in cache_nodes
+            if n.get("cache_type") in ("copy", "reference")
+            and (
+                n.get("reference_cache_id") == source_cache_id
+                or n.get("cache_id") == source_cache_id
+            )
+        ]
+        assert len(referencing_nodes) >= 1, (
+            "Expected at least one copy/reference node pointing back to the "
+            "single QuantumProgram source"
+        )
+
 
 class TestResumeCheckpointing:
     """Test resume functionality for checkpoint-enabled runs."""
@@ -1134,6 +1330,56 @@ class TestResumeCheckpointing:
             assert len(done) == 6
             for i in range(6):
                 assert i in done
+
+    def test_load_done_shots_resolves_reference_before_source(self):
+        """Regression test for bug #105: _load_done_shots must decode with a
+        `ResolvingDecodeCache`, not a bare dict, so a "reference" node
+        physically stored before its own "source" node still resolves
+        correctly instead of raising `RuntimeError`.
+
+        Builds a results.h5-shaped file by hand whose two shots both encode
+        the exact same History instance (the second becomes a
+        `cache_type="reference"`), with the referencing shot's own HDF5
+        group placed at physical index 0 and the source shot's group at
+        index 1.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+            _build_reference_before_source_checkpoint(
+                checkpoint_dir / "results.h5", source_index=1, copy_index=0
+            )
+
+            done = ProgramResults._load_done_shots(checkpoint_dir)
+
+            assert set(done.keys()) == {0, 1}
+            for shot_index, history in done.items():
+                assert isinstance(history, History)
+                assert history[0]["marker"] == "shared"
+
+    def test_merge_worker_into_output_resolves_reference_before_source(self):
+        """Regression test for bug #105: _merge_worker_into_output must
+        decode with a `ResolvingDecodeCache`, not `decode_cache={}`, so a
+        worker file whose referencing shot is physically stored before its
+        own source shot still merges both shots correctly instead of
+        producing an undecodable placeholder.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            worker_file = Path(temp_dir) / "worker_w0_checkpoint.h5"
+            _build_reference_before_source_checkpoint(
+                worker_file, source_index=1, copy_index=0
+            )
+
+            output_file = Path(temp_dir) / "results.h5"
+            results = ProgramResults()
+            with h5py.File(output_file, "a") as out_f:
+                results._merge_worker_into_output(worker_file, out_f, set())
+
+            merged = ProgramResults()
+            merged.load_checkpoint(checkpoint_dir=temp_dir)
+            assert set(merged.shot_histories.keys()) == {0, 1}
+            for shot_index, history in merged.shot_histories.items():
+                assert isinstance(history, History)
+                assert history[0]["marker"] == "shared"
 
     def test_nested_source_mode_set_and_get(self):
         """Test that _set_nested_shot_source stores source file and index."""
