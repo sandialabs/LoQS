@@ -126,6 +126,11 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
     def qubit_labels(self) -> list[QubitTypes]:
         return self._qubit_labels
 
+    @property
+    def used_gate_names(self) -> list[str]:
+        """Return the sorted list of gate names used in this circuit."""
+        return sorted({name for layer in self._circuit for name, _ in layer})
+
     def copy(self) -> ListPhysicalCircuit:
         return ListPhysicalCircuit(
             self._circuit, qubit_labels=self._qubit_labels

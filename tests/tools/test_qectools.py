@@ -1,5 +1,10 @@
 """Tester for loqs.tools.qectools"""
 
+import pytest
+
+from loqs.backends import ListPhysicalCircuit
+from loqs.core import Instruction, QECCode
+from loqs.core.instructions import InstructionLabel
 from loqs.tools import qectools
 
 
@@ -118,3 +123,54 @@ class TestQECTools:
             "XZIIZ", check_order=[4, 0, 1]
         )
         assert XZIIZ_hook_errors == ["IZIII", "XZIII", "YZIII", "ZZIII"]
+
+
+def _noop(frame):
+    return frame
+
+
+def _composite(entries, name):
+    return Instruction(
+        _noop, data={"instructions": entries}, type="Composite", name=name
+    )
+
+
+def _code(instructions):
+    return QECCode(
+        instructions=instructions,
+        template_qubits=["Q0", "Q1"],
+        template_data_qubits=["Q0"],
+    )
+
+
+class TestWalkQECCodeGateNames:
+
+    def test_collects_circuit_leaves_through_composites(self):
+        circuit = ListPhysicalCircuit(
+            [
+                [("Gxpi2", ("Q0",)), ("Imrz", ("Q1",))],
+                [("Gcnot", ("Q0", "Q1"))],
+            ],
+            ["Q0", "Q1"],
+        )
+        leaf = Instruction(_noop, data={"circuit": circuit}, name="Leaf")
+        inert = Instruction(_noop, data={"some_param": 42}, name="Inert")
+        # Both leaves are held only inside the composite, not by name in
+        # the code, so the walk reaches the circuit and skips the inert leaf
+        code = _code({"composite": _composite([leaf, inert], "Composite")})
+        assert qectools.walk_qec_code_gate_names(code) == {
+            "Gxpi2",
+            "Imrz",
+            "Gcnot",
+        }
+
+    def test_patch_label_raises(self):
+        entry = InstructionLabel(instruction="dummy", patch_label="L0")
+        code = _code(
+            {
+                "composite": _composite([entry], "Composite"),
+                "dummy": Instruction(_noop, data={}, name="Dummy"),
+            }
+        )
+        with pytest.raises(ValueError):
+            qectools.walk_qec_code_gate_names(code)
