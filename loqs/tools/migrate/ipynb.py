@@ -124,14 +124,19 @@ def _strip_unparseable_lines(text: str) -> tuple[str, dict[str, str]] | None:
             substituted.add(index)
 
             original_line = lines[index]
-            indent = original_line[: len(original_line) - len(original_line.lstrip())]
+            indent = original_line[
+                : len(original_line) - len(original_line.lstrip())
+            ]
             token = f"__LOQS_MIGRATE_IPYNB_PLACEHOLDER_{len(placeholders)}__"
             placeholders[token] = original_line
             lines[index] = f"{indent}pass  # {token}\n"
 
 
 def _migrate_cell_text(
-    cell_text: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+    cell_text: str,
+    *,
+    rename_iz: bool = False,
+    rename_patch_label: str | None = None,
 ) -> MigrationResult:
     """[](api:migrate_source) a code cell's text, first substituting out
     any line the parser can't handle on its own (see module docstring)
@@ -147,17 +152,23 @@ def _migrate_cell_text(
     patched_text, placeholders = stripped
     nonblank_lines = sum(1 for line in cell_text.splitlines() if line.strip())
     if placeholders and len(placeholders) >= nonblank_lines:
-        raise _NotPythonCell(f"stripped {len(placeholders)}/{nonblank_lines} non-blank lines")
+        raise _NotPythonCell(
+            f"stripped {len(placeholders)}/{nonblank_lines} non-blank lines"
+        )
 
     result = migrate_source(
-        patched_text, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+        patched_text,
+        rename_iz=rename_iz,
+        rename_patch_label=rename_patch_label,
     )
     if not placeholders:
         return result
 
     restored_source = result.source
     for token, original_line in placeholders.items():
-        restored_source = restored_source.replace(f"pass  # {token}\n", original_line)
+        restored_source = restored_source.replace(
+            f"pass  # {token}\n", original_line
+        )
     return MigrationResult(
         source=restored_source,
         changed=result.changed,
@@ -167,7 +178,10 @@ def _migrate_cell_text(
 
 
 def migrate_ipynb_source(
-    source: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+    source: str,
+    *,
+    rename_iz: bool = False,
+    rename_patch_label: str | None = None,
 ) -> MigrationResult:
     """Run [](api:migrate_source) over every `code` cell in a Jupyter
     notebook, leaving markdown/raw cells, outputs, and all other
@@ -235,12 +249,24 @@ def migrate_ipynb_source(
         for index, _cell, _was_list, result in cell_results:
             for item in result.manual_review:
                 manual_review.append(
-                    ManualReviewItem(line=item.line, message=item.message, cell=index, kind=item.kind)
+                    ManualReviewItem(
+                        line=item.line,
+                        message=item.message,
+                        cell=index,
+                        kind=item.kind,
+                    )
                 )
             for item in result.rewrites:
-                rewrites.append(RewriteItem(line=item.line, message=item.message, cell=index))
+                rewrites.append(
+                    RewriteItem(
+                        line=item.line, message=item.message, cell=index
+                    )
+                )
         return MigrationResult(
-            source=source, changed=False, manual_review=manual_review, rewrites=rewrites
+            source=source,
+            changed=False,
+            manual_review=manual_review,
+            rewrites=rewrites,
         )
 
     manual_review = list(unparseable_review)
@@ -258,14 +284,26 @@ def migrate_ipynb_source(
         cell["source"] = _text_to_cell_source(cell_source, was_list)
         for item in cell_manual_review:
             manual_review.append(
-                ManualReviewItem(line=item.line, message=item.message, cell=index, kind=item.kind)
+                ManualReviewItem(
+                    line=item.line,
+                    message=item.message,
+                    cell=index,
+                    kind=item.kind,
+                )
             )
         for item in result.rewrites:
-            rewrites.append(RewriteItem(line=item.line, message=item.message, cell=index))
+            rewrites.append(
+                RewriteItem(line=item.line, message=item.message, cell=index)
+            )
 
-    new_source = json.dumps(notebook, indent=1, sort_keys=True, ensure_ascii=False)
+    new_source = json.dumps(
+        notebook, indent=1, sort_keys=True, ensure_ascii=False
+    )
     if source.endswith("\n"):
         new_source += "\n"
     return MigrationResult(
-        source=new_source, changed=True, manual_review=manual_review, rewrites=rewrites
+        source=new_source,
+        changed=True,
+        manual_review=manual_review,
+        rewrites=rewrites,
     )

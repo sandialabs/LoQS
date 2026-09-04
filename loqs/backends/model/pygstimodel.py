@@ -68,9 +68,7 @@ else:
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
-PyGSTiModelLike: TypeAlias = (
-    ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
-)
+PyGSTiModelLike: TypeAlias = ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
 """Types of pyGSTi models this backend can handle"""
 
 
@@ -278,7 +276,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             Mapping[Label | str, int | float] | None
         ) = None,
         instrument_outcome_qubits: (
-            Mapping[str | tuple[str, tuple[str | int, ...]], str | int | Sequence[str | int]]
+            Mapping[
+                str | tuple[str, tuple[str | int, ...]],
+                str | int | Sequence[str | int],
+            ]
             | None
         ) = None,
     ) -> None:
@@ -372,11 +373,17 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         self.zbasis_proj_resets = zbasis_proj_resets
 
-        if instrument_outcome_qubits is None and isinstance(model, PyGSTiNoiseModel):
+        if instrument_outcome_qubits is None and isinstance(
+            model, PyGSTiNoiseModel
+        ):
             # Copy-constructor: inherit the source model's declarations.
-            self.instrument_outcome_qubits = dict(model.instrument_outcome_qubits)
+            self.instrument_outcome_qubits = dict(
+                model.instrument_outcome_qubits
+            )
         else:
-            self.instrument_outcome_qubits = dict(instrument_outcome_qubits or {})
+            self.instrument_outcome_qubits = dict(
+                instrument_outcome_qubits or {}
+            )
 
         self.use_time_dependence = use_time_dependence
         self.default_gate_durations = default_gate_durations
@@ -678,7 +685,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 op.state_space.qubit_labels.index(q) for q in op.target_labels
             ]
             assert all(
-                i < len(self.model.basis.component_bases) for i in target_indices
+                i < len(self.model.basis.component_bases)
+                for i in target_indices
             )
 
             op = op.embedded_op
@@ -733,7 +741,11 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
                 outcome_ops = {}
                 for k, v in op.items():
-                    if isinstance(k, str) and k != "" and all(c in "01" for c in k):
+                    if (
+                        isinstance(k, str)
+                        and k != ""
+                        and all(c in "01" for c in k)
+                    ):
                         # pyGSTi's usual '0'/'1'-character-string convention
                         # for a decomposable multi-bit outcome.
                         label = tuple(int(c) for c in k)
@@ -773,7 +785,9 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 elif n_channels == 1:
                     # A joint outcome channel isn't owned by any one qubit;
                     # the caller must say which classical register it's in.
-                    aliased_qubits = tuple(self.qubit_aliases[q] for q in qubits)
+                    aliased_qubits = tuple(
+                        self.qubit_aliases[q] for q in qubits
+                    )
                     outcome_qubits = self.instrument_outcome_qubits.get(
                         (name, aliased_qubits),
                         self.instrument_outcome_qubits.get(name),
@@ -883,7 +897,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 for i, label_str in enumerate(labels):
                     name = self._model_label_name(label_str)
                     if name in renames:
-                        labels[i] = renames[name] + label_str[len(name):]
+                        labels[i] = renames[name] + label_str[len(name) :]
             return {
                 "model": json.dumps(model_state),
                 "gatename_renames": renames,
@@ -920,9 +934,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 if cls._model_label_name(label_str) in safe_to_original
             }
             for mm_type in affected_mm_types:
-                container = cls._resolve_modelmember_container(
-                    model, mm_type
-                )
+                container = cls._resolve_modelmember_container(model, mm_type)
                 for key in list(container.keys()):
                     original_name = safe_to_original.get(
                         getattr(key, "name", None)

@@ -230,9 +230,7 @@ class Instruction(Displayable):
         try:
             inspect.getsource(func)
             srcfile = inspect.getsourcefile(func)
-            unavailable = srcfile is not None and not os.path.exists(
-                srcfile
-            )
+            unavailable = srcfile is not None and not os.path.exists(srcfile)
         except (OSError, TypeError):
             unavailable = True
 
@@ -317,9 +315,7 @@ class Instruction(Displayable):
             self._warn_if_source_unavailable(apply_fn, "apply_fn")
         self._serialized_map_qubits_fn_cache = serialized_map_qubits_fn
         if serialized_map_qubits_fn is None:
-            self._warn_if_source_unavailable(
-                map_qubits_fn, "map_qubits_fn"
-            )
+            self._warn_if_source_unavailable(map_qubits_fn, "map_qubits_fn")
 
         if data is None:
             data = {}
@@ -366,8 +362,8 @@ class Instruction(Displayable):
         `Serializable._get_function_str` on first access and cached from
         then on -- see the deferred-computation note in `__init__`."""
         if self._serialized_apply_fn_cache is None:
-            self._serialized_apply_fn_cache = (
-                Serializable._get_function_str(self.apply_fn)
+            self._serialized_apply_fn_cache = Serializable._get_function_str(
+                self.apply_fn
             )
         return self._serialized_apply_fn_cache
 

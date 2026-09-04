@@ -309,9 +309,7 @@ class STIMQuantumState(BaseQuantumState):
                     self.qubit_labels[int(me.strip("!"))]
                     for me in internal_entries[1:]
                 ]
-                self.latest_measurement_labels.extend(
-                    noneg_internal_entries
-                )
+                self.latest_measurement_labels.extend(noneg_internal_entries)
 
             internal_lines.append(" ".join(internal_entries))
 
@@ -450,7 +448,9 @@ class STIMQuantumState(BaseQuantumState):
             # rather than its exponentially-sized dense state vector -- the
             # same information `state_vector()` would derive, at a fraction
             # of the size and with no exponential reconstruction cost.
-            return self.state.current_inverse_tableau().to_numpy(bit_packed=True)
+            return self.state.current_inverse_tableau().to_numpy(
+                bit_packed=True
+            )
 
         # Otherwise fallback
         return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
@@ -467,11 +467,18 @@ class STIMQuantumState(BaseQuantumState):
         if isinstance(encoded_tableau, np.ndarray):
             # A dense state vector, from a file written before this class
             # stored the tableau's own compact bit-packed form directly.
-            tableau = _Tableau.from_state_vector(encoded_tableau, endian="little")
+            tableau = _Tableau.from_state_vector(
+                encoded_tableau, endian="little"
+            )
         else:
             x2x, x2z, z2x, z2z, x_signs, z_signs = encoded_tableau
             tableau = _Tableau.from_numpy(
-                x2x=x2x, x2z=x2z, z2x=z2x, z2z=z2z, x_signs=x_signs, z_signs=z_signs
+                x2x=x2x,
+                x2z=x2z,
+                z2x=z2x,
+                z2z=z2z,
+                x_signs=x_signs,
+                z_signs=z_signs,
             )
 
         obj = cls(tableau, qubit_labels=qubit_labels)

@@ -42,7 +42,10 @@ The packages currently available as noise models:
 from .basemodel import BaseNoiseModel, TimeDependentBaseNoiseModel
 from .dictmodel import DictNoiseModel, build_legacy_stim_dict_model
 
-from loqs.internal.legacy import install_legacy_module, make_legacy_construction_shim
+from loqs.internal.legacy import (
+    install_legacy_module,
+    make_legacy_construction_shim,
+)
 
 # STIMDictNoiseModel was removed in v1.2: DictNoiseModel now natively
 # handles STIM circuits (case/alias-insensitive command lookup included),

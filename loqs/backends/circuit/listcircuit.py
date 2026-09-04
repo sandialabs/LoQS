@@ -26,9 +26,7 @@ OperationTypes: TypeAlias = LabelType | Sequence[LabelType]
 """Type alias for things allowed to be in circuit layer
 """
 
-ListCircuitLike: TypeAlias = (
-    BasePhysicalCircuit | Sequence[OperationTypes]
-)
+ListCircuitLike: TypeAlias = BasePhysicalCircuit | Sequence[OperationTypes]
 """Types we can cast to a built-in circuit.
 """
 

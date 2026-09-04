@@ -586,7 +586,12 @@ def _build_reference_se_circuit(
     # The reference seam block borrows from patch A's reference ancilla
     # pool, matching the real structure (seam checks borrow from qubits_a).
     seam_block, _ = _build_seam_block(
-        seam_geometry, resolve, data_a + scratch_a, all_labels, circuit_backend, counter
+        seam_geometry,
+        resolve,
+        data_a + scratch_a,
+        all_labels,
+        circuit_backend,
+        counter,
     )
     se_circuit_ref = block_a.merge(block_b, 0).append(seam_block)
     se_circuit_ref.pad_single_qubit_idles_by_duration_inplace(
@@ -697,11 +702,20 @@ def _surgery_metadata(
             )
         else:
             reference_se = _build_reference_se_circuit(
-                kind, qubits_a, qubits_b, seam_qubits, idle_layout, circuit_backend
+                kind,
+                qubits_a,
+                qubits_b,
+                seam_qubits,
+                idle_layout,
+                circuit_backend,
             )
-            transplant_qubits = list(qubits_a[:9]) + list(qubits_b[:9]) + list(seam_qubits)
+            transplant_qubits = (
+                list(qubits_a[:9]) + list(qubits_b[:9]) + list(seam_qubits)
+            )
             se_circuit.transplant_idle_schedule_inplace(
-                reference_se, transplant_qubits, list((idle_gates or _DEFAULT_IDLE_GATES).values())
+                reference_se,
+                transplant_qubits,
+                list((idle_gates or _DEFAULT_IDLE_GATES).values()),
             )
 
     # Seam prep / split-measurement circuits (defined on the seam qubits
@@ -938,24 +952,22 @@ def pymatching_merged_window_decode(
     fresh = set(fresh_rows)
     continuing = dict(continuing_rows or {})
     settled = dict(settled_rows or {})
-    assert not (fresh & continuing.keys()), (
-        "a row cannot be both a fresh row and a continuing row"
-    )
-    assert not (fresh & settled.keys()), (
-        "a row cannot be both a fresh row and a settled row"
-    )
-    assert not (continuing.keys() & settled.keys()), (
-        "a row cannot be both a continuing row and a settled row"
-    )
+    assert not (
+        fresh & continuing.keys()
+    ), "a row cannot be both a fresh row and a continuing row"
+    assert not (
+        fresh & settled.keys()
+    ), "a row cannot be both a fresh row and a settled row"
+    assert not (
+        continuing.keys() & settled.keys()
+    ), "a row cannot be both a continuing row and a settled row"
     # Rows that have no node before their own start layer, for the loops
     # below that don't need to distinguish WHY (continuing vs settled).
     late_start = {**continuing, **settled}
 
     matching = pymatching.Matching()
     matching.ensure_num_fault_ids(num_data + 1 + len(ref_rows))
-    ref_fault_id = {
-        row: num_data + 1 + k for k, row in enumerate(ref_rows)
-    }
+    ref_fault_id = {row: num_data + 1 + k for k, row in enumerate(ref_rows)}
     for t in range(num_rounds):
         for j in range(num_data):
             rows = [i for i in range(num_checks) if H[i, j] == 1]
@@ -1018,9 +1030,7 @@ def pymatching_merged_window_decode(
             s = continuing.get(i, 0)
             matching.add_boundary_edge(
                 s * num_checks + i,
-                fault_ids=(
-                    {ref_fault_id[i]} if i in ref_fault_id else set()
-                ),
+                fault_ids=({ref_fault_id[i]} if i in ref_fault_id else set()),
                 weight=0.9,
                 merge_strategy="smallest-weight",
             )
@@ -1180,9 +1190,7 @@ def _merge_bookkeeping_map_qubits_fn(
         ("labels_Z_b", labels_Z_b),
         ("labels_seam", labels_seam),
     ):
-        new_kwargs[key] = [
-            (qubit_mapping.get(q, q), i) for (q, i) in labels
-        ]
+        new_kwargs[key] = [(qubit_mapping.get(q, q), i) for (q, i) in labels]
     new_byproduct = dict(byproduct)
     new_byproduct["support"] = [
         qubit_mapping.get(q, q) for q in byproduct["support"]
@@ -1335,9 +1343,7 @@ def _split_bookkeeping_apply_fn(
         is_settled = [local_rows[i] in settled_maps[i] for i in range(8)]
         # Per-row (0-3 = A, 4-7 = B) reach: round 0 by default, or an
         # earlier repair's last examined round if this row is settled.
-        reach_start = [
-            settled_maps[i].get(local_rows[i], 0) for i in range(8)
-        ]
+        reach_start = [settled_maps[i].get(local_rows[i], 0) for i in range(8)]
         k_shared_rows = [
             len(hists[i]) - num_rounds - reach_start[i] for i in range(8)
         ]
@@ -1423,9 +1429,7 @@ def _split_bookkeeping_apply_fn(
     ):
         pauli_frame = patches[lbl].pauli_frame
         for q in support:
-            frame_correction ^= pauli_frame.get_bit(
-                parity_frame_bit_type, q
-            )
+            frame_correction ^= pauli_frame.get_bit(parity_frame_bit_type, q)
 
     out = {
         parity_frame_key: m_raw ^ frame_correction ^ reference_correction,
@@ -1492,9 +1496,7 @@ def _split_bookkeeping_map_qubits_fn(
     qubit_mapping, seam_qubits, support_a, support_b, byproduct, **kwargs
 ):
     new_kwargs = kwargs.copy()
-    new_kwargs["seam_qubits"] = [
-        qubit_mapping.get(q, q) for q in seam_qubits
-    ]
+    new_kwargs["seam_qubits"] = [qubit_mapping.get(q, q) for q in seam_qubits]
     new_kwargs["support_a"] = [qubit_mapping.get(q, q) for q in support_a]
     new_kwargs["support_b"] = [qubit_mapping.get(q, q) for q in support_b]
     new_byproduct = dict(byproduct)
@@ -1635,7 +1637,9 @@ def _split_byproduct_repair_apply_fn(
     glitch = {}
     settled_at = {}
     for lbl, check_type, row in grown_rows:
-        hist = patches[lbl].data.get(f"syndrome_history_{check_type}", []) or []
+        hist = (
+            patches[lbl].data.get(f"syndrome_history_{check_type}", []) or []
+        )
         assert len(hist) >= min_rounds, (
             "Split byproduct repair needs pre-merge QEC history and at "
             "least one post-split QEC round on both patches "

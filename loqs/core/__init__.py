@@ -43,7 +43,10 @@ from .quantumprogram import QuantumProgram
 from .programresults import ProgramResults
 
 # After ProgramResults
-from .historydatacollector import HistoryDataCollector, HistoryDataCollectorLike
+from .historydatacollector import (
+    HistoryDataCollector,
+    HistoryDataCollectorLike,
+)
 
 from loqs.internal.legacy import install_legacy_module_aliases_for_relocations
 from loqs.internal.serializable import Serializable

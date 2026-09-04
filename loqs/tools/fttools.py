@@ -30,7 +30,9 @@ from loqs.tools.paralleltools import (
 
 # One (program, collect_shot_data_args, expected_outcomes, num_shots) task,
 # as built by `run_discrete_error_injected_programs`.
-_ProgramTask = tuple[QuantumProgram, Sequence[HistoryDataCollectorLike], Sequence, int]
+_ProgramTask = tuple[
+    QuantumProgram, Sequence[HistoryDataCollectorLike], Sequence, int
+]
 
 
 def build_discrete_error_injection_program_for_combo(
@@ -74,9 +76,7 @@ def build_discrete_error_injection_program_for_combo(
     new_stack = base_program.instruction_stack.delete_instruction(
         stack_idx_to_modify
     )
-    new_stack = new_stack.insert_instruction(
-        stack_idx_to_modify, new_label
-    )
+    new_stack = new_stack.insert_instruction(stack_idx_to_modify, new_label)
 
     tag = "/".join(f"{lbl} on qubit {q}" for _, lbl, q in error_injections)
     layer = error_injections[0][0] if error_injections else "?"
@@ -127,7 +127,9 @@ PAULI_PROPAGATION_IDLE_GATES: frozenset[str] = frozenset(
 so are skipped during propagation."""
 
 _PAULI_LABEL_TO_CHAR: dict[str, str] = {
-    "Gxpi": "X", "Gypi": "Y", "Gzpi": "Z",
+    "Gxpi": "X",
+    "Gypi": "Y",
+    "Gzpi": "Z",
 }
 
 
@@ -205,9 +207,7 @@ def prune_error_combos_by_propagation(
             q1, q2 = target
             for lbl1 in error_labels:
                 for lbl2 in error_labels:
-                    all_combos.append(
-                        [(layer, lbl1, q1), (layer, lbl2, q2)]
-                    )
+                    all_combos.append([(layer, lbl1, q1), (layer, lbl2, q2)])
         else:
             for lbl in error_labels:
                 all_combos.append([(layer, lbl, target)])
@@ -218,9 +218,7 @@ def prune_error_combos_by_propagation(
     seen_signatures: set[tuple] = set()
     representatives: list[list[tuple[int, str, int]]] = []
     for combo in all_combos:
-        seed = {
-            qubit: _PAULI_LABEL_TO_CHAR[lbl] for _, lbl, qubit in combo
-        }
+        seed = {qubit: _PAULI_LABEL_TO_CHAR[lbl] for _, lbl, qubit in combo}
         layer = combo[0][0]
         signature = propagate_pauli_signature(circuit, layer, seed)
         if signature not in seen_signatures:
@@ -470,9 +468,7 @@ def run_discrete_error_injected_programs(
         )
         failed = [
             task[0]
-            for task in tqdm(
-                tasks, "Running discrete error injected programs"
-            )
+            for task in tqdm(tasks, "Running discrete error injected programs")
             if not test_program_output(*task, shot_executor=shot_executor)
         ]
     else:

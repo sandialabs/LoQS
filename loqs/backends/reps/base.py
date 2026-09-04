@@ -77,7 +77,9 @@ class OperationRep(ABC, Displayable):
         return f"{type(self).__name__}({attrs})"
 
     @classmethod
-    def _from_decoded_attrs(cls, attr_dict: Mapping[str, Any]) -> "OperationRep":
+    def _from_decoded_attrs(
+        cls, attr_dict: Mapping[str, Any]
+    ) -> "OperationRep":
         # OperationRep is only ever the *recorded* class for a value
         # serialized under the old RepTuple(rep, qubits, reptype) format --
         # decode redirects RepTuple straight here, so this absorbs its old

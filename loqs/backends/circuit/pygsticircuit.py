@@ -91,7 +91,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 ) from e
         else:
             try:
-                self._circuit = self._cast_allowing_nonconforming_labels(circuit)
+                self._circuit = self._cast_allowing_nonconforming_labels(
+                    circuit
+                )
             except Exception as e:
                 raise ValueError("Failed to cast to pyGSTi circuit") from e
 
@@ -324,8 +326,12 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         qubit_labels: Sequence | None = None,
     ) -> _Circuit:
         if isinstance(serial_circuit, dict):
-            circ = cls._deserialize_circuit(serial_circuit["circuit"], qubit_labels)
-            for old_name, safe_name in serial_circuit["gatename_renames"].items():
+            circ = cls._deserialize_circuit(
+                serial_circuit["circuit"], qubit_labels
+            )
+            for old_name, safe_name in serial_circuit[
+                "gatename_renames"
+            ].items():
                 circ.replace_gatename_inplace(safe_name, old_name)
             return circ
 

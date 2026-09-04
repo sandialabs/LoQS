@@ -202,20 +202,26 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 num_subsystems = len(state.shape)
             else:
                 if isinstance(d, int):
-                    num_subsystems = int(np.round(np.log2(state.flatten().shape[0])))
+                    num_subsystems = int(
+                        np.round(np.log2(state.flatten().shape[0]))
+                    )
                 else:
                     num_subsystems = len(d)
         elif isinstance(state, Sequence) and not isinstance(state, str):
             num_subsystems = len(state)
         else:
-            raise ValueError(f"Cannot determine number of subsystems from {state}")
+            raise ValueError(
+                f"Cannot determine number of subsystems from {state}"
+            )
 
         # Resolve dimensions list
         if isinstance(d, int):
             self.d = [d] * num_subsystems
         else:
             self.d = list(d)
-        assert len(self.d) == num_subsystems, f"Length of d ({len(self.d)}) must match number of subsystems ({num_subsystems})"
+        assert (
+            len(self.d) == num_subsystems
+        ), f"Length of d ({len(self.d)}) must match number of subsystems ({num_subsystems})"
 
         if isinstance(state, NumpyStatevectorQuantumState):
             self._state = state._state
@@ -306,7 +312,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
     @singledispatchmethod
     def _apply_gate_rep(self, rep: GateRep) -> None:
-        raise NotImplementedError(f"Cannot apply {type(rep).__name__} to {self.name}")
+        raise NotImplementedError(
+            f"Cannot apply {type(rep).__name__} to {self.name}"
+        )
 
     @_apply_gate_rep.register
     def _(self, rep: UnitaryGateRep) -> None:
@@ -473,7 +481,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             )
         target_dims = [self.d[axis] for axis in axes]
         total_target_dim = int(np.prod(target_dims))
-        assert len(submat.flat) == total_target_dim ** 2
+        assert len(submat.flat) == total_target_dim**2
 
         # Bring the target axes to the front (in sublbls order, matching the
         # operator's row/column qubit ordering), contract with a single BLAS
@@ -481,7 +489,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         # result contiguously: returning a strided view makes every
         # downstream contraction read badly-ordered memory and is a net loss
         moved = np.moveaxis(vec, axes, range(n_sub))
-        out = submat.reshape(total_target_dim, total_target_dim) @ moved.reshape(total_target_dim, -1)
+        out = submat.reshape(
+            total_target_dim, total_target_dim
+        ) @ moved.reshape(total_target_dim, -1)
         return np.ascontiguousarray(
             np.moveaxis(out.reshape(moved.shape), range(n_sub), axes)
         )
@@ -489,7 +499,6 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     def _block_matvec_einsum(self, submat, sublbls, vec) -> np.ndarray:
         # The original einsum contraction, preserved verbatim as a reference
         # implementation; must remain equivalent to _block_matvec_matmul
-        n_sub = len(sublbls)
         n_tot = len(vec.shape)
 
         # We will need n_qubits..n_qubits+n_subqubits temp indices (vals of the dict below)
@@ -505,7 +514,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             )
         target_dims = [self.d[axis] for axis in sub_idx_map]
         total_target_dim = int(np.prod(target_dims))
-        assert len(submat.flat) == total_target_dim ** 2
+        assert len(submat.flat) == total_target_dim**2
         submat = submat.reshape(tuple(target_dims) + tuple(target_dims))
 
         # Get contraction indices
@@ -593,7 +602,9 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 # Bare-int keys record as-is; other labels record by
                 # ordinal position (e.g. 'even'/'odd' reads out as 0/1).
                 value = (
-                    key if isinstance(key, int) else list(rep.outcome_ops).index(key)
+                    key
+                    if isinstance(key, int)
+                    else list(rep.outcome_ops).index(key)
                 )
                 outcomes[outcome_qubits[0]].append(value)
             else:
@@ -608,10 +619,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
 
         probs = []
         for c in range(dim):
-            target_slice = self._slice(self.state, target_idx, start=c, end=c+1)
+            target_slice = self._slice(
+                self.state, target_idx, start=c, end=c + 1
+            )
             prob_c = np.vdot(target_slice.flat, target_slice.flat).real
             probs.append(max(prob_c, 0.0))
-        
+
         probs = np.array(probs)
         sum_probs = np.sum(probs)
         if sum_probs > 0:

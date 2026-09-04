@@ -117,7 +117,9 @@ def _pauli_basis(n: int) -> tuple[NDArray, ...]:
 _QSIM_1Q = (
     np.array([[1.0, 0], [0, 0]], dtype=complex),  # |0><0|
     np.array([[0, 1], [1, 0]], dtype=complex) / np.sqrt(2),  # X / sqrt(2)
-    np.array([[0, -1], [1, 0]], dtype=complex) * 1j / np.sqrt(2),  # Y / sqrt(2)
+    np.array([[0, -1], [1, 0]], dtype=complex)
+    * 1j
+    / np.sqrt(2),  # Y / sqrt(2)
     np.array([[0, 0], [0, 1]], dtype=complex),  # |1><1|
 )
 
@@ -238,7 +240,9 @@ def _kraus_to_ptm(rep: KrausGateRep) -> PTMGateRep:
 
 def _unitary_to_kraus(rep: UnitaryGateRep) -> KrausGateRep:
     """Trivial: a unitary is a single Kraus operator with probability 1."""
-    return KrausGateRep([(rep.unitary, 1.0)], rep.qubit_labels, tp_check_abstol=None)
+    return KrausGateRep(
+        [(rep.unitary, 1.0)], rep.qubit_labels, tp_check_abstol=None
+    )
 
 
 def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
@@ -312,7 +316,8 @@ def _ptm_to_unitary(
 
 
 def _kraus_to_unitary(
-    rep: KrausGateRep, unitarity_check_abstol: Float | None = _UNITARY_CHECK_TOL
+    rep: KrausGateRep,
+    unitarity_check_abstol: Float | None = _UNITARY_CHECK_TOL,
 ) -> UnitaryGateRep:
     """Only succeeds for a single Kraus operator; see `_ptm_to_unitary` for
     `unitarity_check_abstol`."""
@@ -413,7 +418,9 @@ def _stim_circuit_to_unitary(rep: StimCircuitGateRep) -> UnitaryGateRep:
     # Prepend a no-op `I <indices>` line so STIM recognizes exactly `n`
     # qubits even if `circuit_str` doesn't happen to reference all of them
     # (e.g. an idle/no-op circuit_str for a declared-but-untouched qubit).
-    padded_circuit_str = f"I {indices}\n{rep.circuit_str}" if n else rep.circuit_str
+    padded_circuit_str = (
+        f"I {indices}\n{rep.circuit_str}" if n else rep.circuit_str
+    )
     try:
         circuit = stim.Circuit(padded_circuit_str)
         tableau = circuit.to_tableau()
@@ -479,7 +486,9 @@ def _zbasis_pre_post_to_zbasis_projection(
             "ZBasisPrePostInstrumentRep's pre_op/post_op are not both "
             "identity; cannot convert to ZBasisProjectionInstrumentRep"
         )
-    return ZBasisProjectionInstrumentRep(rep.reset, rep.include_outcome, rep.qubit_labels)
+    return ZBasisProjectionInstrumentRep(
+        rep.reset, rep.include_outcome, rep.qubit_labels
+    )
 
 
 def _zbasis_projection_to_outcome_operation_dict(
@@ -580,7 +589,9 @@ def _outcome_operation_dict_to_zbasis_projection(
             "optional reset (its targets are neither the identity nor a "
             "single fixed reset value)"
         )
-    return ZBasisProjectionInstrumentRep(reset, rep.include_outcome, rep.qubit_labels)
+    return ZBasisProjectionInstrumentRep(
+        reset, rep.include_outcome, rep.qubit_labels
+    )
 
 
 #####################################################################################################################
@@ -657,7 +668,10 @@ def _stim_circuit_to_zbasis_projection(
 
     if len(lines) == 1:
         command, targets = _parse(lines[0])
-        if command in _STIM_SINGLE_LINE_PROJECTIONS and targets == expected_targets:
+        if (
+            command in _STIM_SINGLE_LINE_PROJECTIONS
+            and targets == expected_targets
+        ):
             reset, include_outcome = _STIM_SINGLE_LINE_PROJECTIONS[command]
             return ZBasisProjectionInstrumentRep(
                 reset, include_outcome, rep.qubit_labels
@@ -723,8 +737,12 @@ target_cls)`. Consumed by `convert`'s multi-hop shortest-path search.
 """
 
 if stim is not None:
-    _CONVERTERS[(UnitaryGateRep, StimCircuitGateRep)] = _unitary_to_stim_circuit
-    _CONVERTERS[(StimCircuitGateRep, UnitaryGateRep)] = _stim_circuit_to_unitary
+    _CONVERTERS[(UnitaryGateRep, StimCircuitGateRep)] = (
+        _unitary_to_stim_circuit
+    )
+    _CONVERTERS[(StimCircuitGateRep, UnitaryGateRep)] = (
+        _stim_circuit_to_unitary
+    )
 
 
 def _shortest_path(
@@ -797,7 +815,9 @@ def _try_construct(
         return None
     try:
         return cls(
-            source, qubit_labels=qubits, **_accepted_kwargs(cls.__init__, kwargs)
+            source,
+            qubit_labels=qubits,
+            **_accepted_kwargs(cls.__init__, kwargs),
         )
     except (RepConstructionError, TypeError):
         return None
@@ -896,7 +916,9 @@ def convert(
     best_path = None
     for candidate_target in targets:
         path = _shortest_path(source_cls, candidate_target)
-        if path is not None and (best_path is None or len(path) < len(best_path)):
+        if path is not None and (
+            best_path is None or len(path) < len(best_path)
+        ):
             best_path = path
     if best_path is None:
         raise RepConstructionError(

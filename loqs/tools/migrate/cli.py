@@ -65,7 +65,10 @@ from pathlib import Path
 from loqs.tools.migrate import MigrationResult, migrate_source
 from loqs.tools.migrate.ipynb import migrate_ipynb_source
 from loqs.tools.migrate.notebook import migrate_notebook_source
-from loqs.tools.migrate.report import format_manual_review_block, format_rewrite_block
+from loqs.tools.migrate.report import (
+    format_manual_review_block,
+    format_rewrite_block,
+)
 
 _TARGET_SUFFIXES = (".py", ".ipynb", ".md")
 
@@ -100,7 +103,11 @@ def _backup_path(path: Path) -> Path:
 
 
 def _format_followup_suggestion(
-    paths: list[Path], *, iz_found: bool, patch_label_found: bool, rewrote: bool
+    paths: list[Path],
+    *,
+    iz_found: bool,
+    patch_label_found: bool,
+    rewrote: bool,
 ) -> str | None:
     """A suggested follow-up invocation using whichever of
     `--rename-Iz`/`--rename-patch-label` would address something this run
@@ -169,7 +176,10 @@ def _run(
         try:
             source = file.read_text(encoding="utf-8")
             result = _migrate_file(
-                file, source, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+                file,
+                source,
+                rename_iz=rename_iz,
+                rename_patch_label=rename_patch_label,
             )
         except Exception as exc:  # noqa: BLE001 -- report and keep going
             print(f"{file}: error: {exc}", file=sys.stderr)
@@ -196,15 +206,20 @@ def _run(
         if result.manual_review:
             flagged_files += 1
             any_manual_review = True
-            _print_block(format_manual_review_block(str(file), result.manual_review))
-            iz_found = iz_found or any(item.kind == "iz" for item in result.manual_review)
+            _print_block(
+                format_manual_review_block(str(file), result.manual_review)
+            )
+            iz_found = iz_found or any(
+                item.kind == "iz" for item in result.manual_review
+            )
             # Still flagged (as a reminder to update the matching
             # Instruction's apply_fn) even once --rename-patch-label is
             # already in use -- only suggest the flag while it hasn't
             # been supplied yet, or the hint would just loop.
             if rename_patch_label is None:
                 patch_label_found = patch_label_found or any(
-                    item.kind == "patch_label_kwarg" for item in result.manual_review
+                    item.kind == "patch_label_kwarg"
+                    for item in result.manual_review
                 )
 
     noun = "file" if len(files) == 1 else "files"
@@ -264,8 +279,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="rename_iz",
         action="store_true",
         help=(
-            'Confidently rewrite a bare "Iz"/\'Iz\' string literal to '
-            '"Imrz"/\'Imrz\' instead of only flagging it. Off by default, '
+            "Confidently rewrite a bare \"Iz\"/'Iz' string literal to "
+            "\"Imrz\"/'Imrz' instead of only flagging it. Off by default, "
             "since this is a blind string match that could collide with "
             "unrelated text."
         ),

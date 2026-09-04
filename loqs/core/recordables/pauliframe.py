@@ -134,7 +134,7 @@ class PauliFrame(Displayable):
         return PauliFrame(self.qubit_labels, new_paulis)
 
     def update_from_pauli_str(self, pstr: str) -> PauliFrame:
-        """Update the [](api:PauliFrame) by multiplication.
+        r"""Update the [](api:PauliFrame) by multiplication.
 
         This is commonly used to update a [](api:PauliFrame)
         from a correction coming from a lookup table.
@@ -165,7 +165,7 @@ class PauliFrame(Displayable):
     def update_from_clifford_conjugation(
         self, cliffords: Sequence[str]
     ) -> PauliFrame:
-        """Update the [](api:PauliFrame) by Clifford conjugation.
+        r"""Update the [](api:PauliFrame) by Clifford conjugation.
 
         Formally, we are doing \( F_i \rightarrow C_i^{-1} F_i C_i \), where
         \( F_i \) is element \( i \) of the [](api:PauliFrame.pauli_frame) and
@@ -192,7 +192,7 @@ class PauliFrame(Displayable):
         return new_frame
 
     def update_from_transversal_clifford(self, clifford: str) -> PauliFrame:
-        """Update the [](api:PauliFrame) by Clifford conjugation.
+        r"""Update the [](api:PauliFrame) by Clifford conjugation.
 
         This is commonly used to update a [](api:PauliFrame)
         after a logical Clifford gate has been applied.

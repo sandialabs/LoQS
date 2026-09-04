@@ -197,7 +197,9 @@ def deprecated(
             warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
             return func(*args, **kwargs)
 
-        wrapper.__deprecated__ = DeprecationInfo(replacement=replacement, note=note)
+        wrapper.__deprecated__ = DeprecationInfo(
+            replacement=replacement, note=note
+        )
         return wrapper
 
     return decorator

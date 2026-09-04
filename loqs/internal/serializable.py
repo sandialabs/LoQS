@@ -89,11 +89,17 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
     2: {
         # `*CastableTypes` -> `*Like` renames: every one keeps the same
         # module, only the class name changes.
-        ("loqs.core.instructions.instructionlabel", "InstructionLabelCastableTypes"): (
+        (
+            "loqs.core.instructions.instructionlabel",
+            "InstructionLabelCastableTypes",
+        ): (
             "loqs.core.instructions.instructionlabel",
             "InstructionLabelLike",
         ),
-        ("loqs.core.instructions.instructionstack", "InstructionStackCastableTypes"): (
+        (
+            "loqs.core.instructions.instructionstack",
+            "InstructionStackCastableTypes",
+        ): (
             "loqs.core.instructions.instructionstack",
             "InstructionStackLike",
         ),
@@ -143,7 +149,10 @@ IMPORT_LOCATION_CHANGES_BY_VERSION: dict[
             "loqs.backends.state.stimstate",
             "STIMStateLike",
         ),
-        ("loqs.backends.circuit.pygsticircuit", "PyGSTiCircuitCastableTypes"): (
+        (
+            "loqs.backends.circuit.pygsticircuit",
+            "PyGSTiCircuitCastableTypes",
+        ): (
             "loqs.backends.circuit.pygsticircuit",
             "PyGSTiCircuitLike",
         ),
@@ -276,7 +285,12 @@ def _import_usage_index_for_file(srcfile: str, mtime: float):
     environment missing that optional dependency.
     """
     import libcst as cst
-    from libcst.metadata import ImportAssignment, MetadataWrapper, PositionProvider, ScopeProvider
+    from libcst.metadata import (
+        ImportAssignment,
+        MetadataWrapper,
+        PositionProvider,
+        ScopeProvider,
+    )
 
     with open(srcfile, "r") as f:
         file_src = f.read()
@@ -1182,9 +1196,7 @@ class Serializable:
         raise IncorrectDecodableTypeError("Unknown type to decode")
 
     @staticmethod
-    def _prepare_function_source(
-        src: str, version: int
-    ) -> tuple[str, list]:
+    def _prepare_function_source(src: str, version: int) -> tuple[str, list]:
         """Run every source-level backwards-compatibility rewrite on a
         frozen function's source, in order: import location/rename
         updates, old-format `InstructionLabel(...)` construction
@@ -1198,8 +1210,8 @@ class Serializable:
         ignore them).
         """
         updated_src = Serializable._update_imports(src, version)
-        updated_src, manual_review = (
-            Serializable._update_legacy_constructions(updated_src, version)
+        updated_src, manual_review = Serializable._update_legacy_constructions(
+            updated_src, version
         )
         updated_src = Serializable._function_compatibility(
             updated_src, version

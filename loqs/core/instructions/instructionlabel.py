@@ -169,7 +169,11 @@ class InstructionLabel(dict):
                 stacklevel=2,
             )
             padded = list(legacy_positional_args) + [None, (), {}]
-            patch_label, inst_args, inst_kwargs = padded[0], padded[1], padded[2]
+            patch_label, inst_args, inst_kwargs = (
+                padded[0],
+                padded[1],
+                padded[2],
+            )
             remapped = _remap_legacy_positional_args(
                 instruction, tuple(inst_args or ()), dict(inst_kwargs or {})
             )

@@ -80,9 +80,7 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
     _instructions: list[InstructionLabel]
     """Internal list of [](api:InstructionLabels)"""
 
-    def __init__(
-        self, instructions: InstructionStackLike = None
-    ) -> None:
+    def __init__(self, instructions: InstructionStackLike = None) -> None:
         """
         Parameters
         ----------
@@ -132,7 +130,8 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
         `encode_type` of its own."""
         obj = cls()
         obj._instructions = [
-            InstructionLabel.from_raw(item) for item in attr_dict["_instructions"]
+            InstructionLabel.from_raw(item)
+            for item in attr_dict["_instructions"]
         ]
         return obj
 

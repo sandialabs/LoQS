@@ -101,7 +101,9 @@ class DictNoiseModel(BaseNoiseModel):
         gate_dict: Mapping | None = None,
         inst_dict: Mapping | None = None,
         gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
-        instreps: Sequence[type[InstrumentRep]] = (ZBasisProjectionInstrumentRep,),
+        instreps: Sequence[type[InstrumentRep]] = (
+            ZBasisProjectionInstrumentRep,
+        ),
         gaterep_array_cast_rep: type[GateRep] = QSimSuperopGateRep,
         instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
@@ -162,7 +164,9 @@ class DictNoiseModel(BaseNoiseModel):
                 return gr
             if isinstance(gr, np.ndarray):
                 # matrix for dense rep; None (unknown qubits) means "not attached yet".
-                return gaterep_array_cast_rep(gr, () if qubits is None else qubits)
+                return gaterep_array_cast_rep(
+                    gr, () if qubits is None else qubits
+                )
             return convert_rep(gr, _NON_ARRAY_GATEREPS, qubits)
 
         def convert_to_instrumentrep(ir, qubits) -> InstrumentRep:
@@ -229,7 +233,9 @@ class DictNoiseModel(BaseNoiseModel):
         cls: type[T],
         model: BaseNoiseModel,
         gatereps: Sequence[type[GateRep]] = (QSimSuperopGateRep,),
-        instreps: Sequence[type[InstrumentRep]] = (ZBasisProjectionInstrumentRep,),
+        instreps: Sequence[type[InstrumentRep]] = (
+            ZBasisProjectionInstrumentRep,
+        ),
         **kwargs,
     ) -> T:
         """Build a [](api:DictNoiseModel) by converting an existing model.
@@ -288,7 +294,13 @@ class DictNoiseModel(BaseNoiseModel):
         else:
             raise TypeError("Can only convert from other NoiseModels")
 
-        return cls(gate_dict, inst_dict, gatereps=gatereps, instreps=instreps, **kwargs)
+        return cls(
+            gate_dict,
+            inst_dict,
+            gatereps=gatereps,
+            instreps=instreps,
+            **kwargs,
+        )
 
     @property
     def gate_keys(self) -> list:
@@ -390,7 +402,9 @@ class DictNoiseModel(BaseNoiseModel):
         # `upgrade_legacy_gaterep_tag` translates that tag to the
         # corresponding modern class, and passes anything else through
         # unchanged.
-        gatereps = [upgrade_legacy_gaterep_tag(v) for v in attr_dict["_gatereps"]]
+        gatereps = [
+            upgrade_legacy_gaterep_tag(v) for v in attr_dict["_gatereps"]
+        ]
         instreps = [
             upgrade_legacy_instrumentrep_tag(v) for v in attr_dict["_instreps"]
         ]
@@ -434,10 +448,16 @@ def build_legacy_stim_dict_model(
     kwargs: dict[str, Any] = dict(
         gate_dict=gate_dict,
         inst_dict=inst_dict,
-        gatereps=list(gatereps)
-        if gatereps is not None
-        else [StimCircuitGateRep, ProbabilisticStimGateRep],
-        instreps=list(instreps) if instreps is not None else [StimCircuitInstrumentRep],
+        gatereps=(
+            list(gatereps)
+            if gatereps is not None
+            else [StimCircuitGateRep, ProbabilisticStimGateRep]
+        ),
+        instreps=(
+            list(instreps)
+            if instreps is not None
+            else [StimCircuitInstrumentRep]
+        ),
         instrep_cast_reset=instrep_cast_reset,
         instrep_cast_include_outcomes=instrep_cast_include_outcomes,
     )
@@ -500,7 +520,8 @@ def _merge_common_rep(
         return
 
     new_lines = [
-        line + "".join(f" {len(prev.qubit_labels) + i}" for i in range(len(qt)))
+        line
+        + "".join(f" {len(prev.qubit_labels) + i}" for i in range(len(qt)))
         for line in prev.circuit_str.split("\n")
     ]
     merged = copy.copy(generic)

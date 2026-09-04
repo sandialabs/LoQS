@@ -77,7 +77,9 @@ _LEGACY_GATEREP_CLASS: dict[_LegacyGateRepValue, type[GateRep]] = {
 }
 """Maps each legacy `GateRep` enum-member tag to its modern concrete class."""
 
-_LEGACY_INSTRUMENTREP_CLASS: dict[_LegacyInstrumentRepValue, type[InstrumentRep]] = {
+_LEGACY_INSTRUMENTREP_CLASS: dict[
+    _LegacyInstrumentRepValue, type[InstrumentRep]
+] = {
     _LegacyInstrumentRepValue.ZBASIS_PROJECTION: ZBasisProjectionInstrumentRep,
     _LegacyInstrumentRepValue.ZBASIS_PRE_POST_OPERATIONS: ZBasisPrePostInstrumentRep,
     _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT: (
@@ -215,7 +217,9 @@ def _upgrade_legacy_instrumentrep(
             post_op=post_op,
             qubit_labels=qubits,
         )
-    elif legacy_value is _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT:
+    elif (
+        legacy_value is _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT
+    ):
         outcome_ops, include_outcome = rep
         return OutcomeOperationDictInstrumentRep(
             outcome_ops=outcome_ops,

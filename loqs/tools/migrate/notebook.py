@@ -59,7 +59,10 @@ _CELL_FIELD_LINE = re.compile(r"^:[\w-]+:.*$")
 
 
 def migrate_notebook_source(
-    source: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+    source: str,
+    *,
+    rename_iz: bool = False,
+    rename_patch_label: str | None = None,
 ) -> MigrationResult:
     """Run [](api:migrate_source) over every code cell in a MyST Markdown
     document, leaving everything else untouched.
@@ -105,7 +108,9 @@ def migrate_notebook_source(
         cell_source = "".join(lines[code_start:j])
 
         result = migrate_source(
-            cell_source, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+            cell_source,
+            rename_iz=rename_iz,
+            rename_patch_label=rename_patch_label,
         )
         changed = changed or result.changed
         segments.append((code_start, result))
@@ -136,11 +141,15 @@ def migrate_notebook_source(
         for item in cell_manual_review:
             manual_review.append(
                 ManualReviewItem(
-                    line=item.line + code_start, message=item.message, kind=item.kind
+                    line=item.line + code_start,
+                    message=item.message,
+                    kind=item.kind,
                 )
             )
         for item in result.rewrites:
-            rewrites.append(RewriteItem(line=item.line + code_start, message=item.message))
+            rewrites.append(
+                RewriteItem(line=item.line + code_start, message=item.message)
+            )
 
     return MigrationResult(
         source="".join(output),

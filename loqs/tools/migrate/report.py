@@ -132,7 +132,9 @@ def _remap_located_items(
 
     old_lines = old_source.splitlines()
     new_lines = new_source.splitlines()
-    opcodes = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False).get_opcodes()
+    opcodes = difflib.SequenceMatcher(
+        a=old_lines, b=new_lines, autojunk=False
+    ).get_opcodes()
 
     def remap(line: int) -> int:
         index = line - 1
@@ -147,7 +149,9 @@ def _remap_located_items(
                     # within the block is preserved, so several items in
                     # the same block don't all collapse onto its start.
                     return j1 + offset + 1
-                return j1 + 1  # a line-count-changing region: best-effort, start of it
+                return (
+                    j1 + 1
+                )  # a line-count-changing region: best-effort, start of it
         return len(new_lines)  # fell past the end of a shrunk file
 
     return [replace(item, line=remap(item.line)) for item in items]
@@ -217,7 +221,9 @@ def annotate_manual_review(
     final_line_for: dict[int, int] = {}
     cumulative_shift = 0
     for line in sorted(items_by_line):
-        cumulative_shift += sum(len(wrapped_by_id[id(i)]) for i in items_by_line[line])
+        cumulative_shift += sum(
+            len(wrapped_by_id[id(i)]) for i in items_by_line[line]
+        )
         final_line_for[line] = line + cumulative_shift
     remapped = [
         ManualReviewItem(
@@ -262,7 +268,9 @@ def _format_located_block(label: str, items: Sequence[_LocatedItem]) -> str:
     return "\n".join(lines)
 
 
-def format_manual_review_block(label: str, items: Sequence[ManualReviewItem]) -> str:
+def format_manual_review_block(
+    label: str, items: Sequence[ManualReviewItem]
+) -> str:
     """[](api:_format_located_block) for [](api:ManualReviewItem)s."""
     return _format_located_block(label, items)
 

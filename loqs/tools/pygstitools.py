@@ -33,7 +33,11 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
 from loqs.internal.legacy import deprecated
-from loqs.tools.paralleltools import ParallelStrategy, pin_worker_threads, resolve_shot_executor
+from loqs.tools.paralleltools import (
+    ParallelStrategy,
+    pin_worker_threads,
+    resolve_shot_executor,
+)
 
 try:
     import pygsti  # noqa: F401
@@ -76,8 +80,9 @@ def _build_program_for_circuit(
 
 def _collect_program_outcomes(
     program_results: ProgramResults,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
 ) -> list[str]:
     """Extract one outcome-label string per shot from a single program's results.
 
@@ -106,8 +111,9 @@ def _process_circuit_chunk(
     physical_model: ExplicitOpModel,
     label_to_logical: Mapping[Label, list[InstructionLabelLike]],
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     max_frame_limit: int,
     program_kwargs: dict,
     chunk: list[Circuit],
@@ -158,8 +164,9 @@ def _process_circuit_chunk_worker(
     physical_model: ExplicitOpModel,
     label_to_logical: Mapping[Label, list[InstructionLabelLike]],
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     max_frame_limit: int,
     program_kwargs: dict,
     chunk: list[Circuit],
@@ -182,9 +189,7 @@ def _process_circuit_chunk_worker(
 def convert_edesign_to_programs(
     edesign: ExperimentDesign,
     model: ExplicitOpModel,
-    physical_to_logical: Mapping[
-        str | tuple, list[InstructionLabelLike]
-    ],
+    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
     **kwargs,
 ) -> list[QuantumProgram]:
     """Convert a pyGSTi edesign to [](api:QuantumProgram) objects.
@@ -224,8 +229,9 @@ def convert_edesign_to_programs(
 @deprecated("simulate_dataset_for_edesign")
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike] = (
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ) = (
         "logical_measurement",
         -1,
     ),
@@ -279,8 +285,9 @@ def convert_run_programs_to_dataset(
 
 
 def _normalize_collect_shot_data_args(
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
 ) -> HistoryDataCollector | list[HistoryDataCollector]:
     """Cast `collect_shot_data_args` through [](api:HistoryDataCollector.from_raw)
     (recursively, for the `list` case), so its `repr()` is canonical regardless
@@ -297,8 +304,9 @@ def _normalize_collect_shot_data_args(
 
 def _checkpoint_provenance_comment(
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> str:
     """Build the `#`-prefixed comment header for a `simulate_dataset_for_edesign`
@@ -326,8 +334,9 @@ def _checkpoint_provenance_comment(
 def _checkpoint_config_mismatches(
     comment: str,
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> list[str]:
     """Compare a checkpoint's stored provenance comment against the current
@@ -387,9 +396,13 @@ def _append_checkpoint_row(
     prior row -- unlike calling `pygsti.io.write_dataset` again, which
     rewrites the whole file from scratch.
     """
-    row = circ.str + "  " + "  ".join(
-        f"{_outcome_label_to_str(ol)}:{count:g}"
-        for ol, count in count_dict.items()
+    row = (
+        circ.str
+        + "  "
+        + "  ".join(
+            f"{_outcome_label_to_str(ol)}:{count:g}"
+            for ol, count in count_dict.items()
+        )
     )
     with open(checkpoint_path, "a") as f:
         f.write(row + "\n")
@@ -410,12 +423,11 @@ def _drop_incomplete_checkpoint_row(checkpoint_path: Path) -> None:
 def simulate_dataset_for_edesign(
     edesign: ExperimentDesign,
     physical_model: ExplicitOpModel,
-    physical_to_logical: Mapping[
-        str | tuple, list[InstructionLabelLike]
-    ],
+    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike] = (
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ) = (
         "logical_measurement",
         -1,
     ),
@@ -551,7 +563,10 @@ def simulate_dataset_for_edesign(
         loaded_ds = read_dataset(str(checkpoint_path), verbosity=0)
 
         mismatches = _checkpoint_config_mismatches(
-            loaded_ds.comment, num_shots, collect_shot_data_args, physical_to_logical
+            loaded_ds.comment,
+            num_shots,
+            collect_shot_data_args,
+            physical_to_logical,
         )
         if mismatches and not force_resume:
             raise ValueError(
@@ -639,8 +654,9 @@ def _run_program_level_parallel(
     physical_model: ExplicitOpModel,
     label_to_logical: Mapping[Label, list[InstructionLabelLike]],
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     max_frame_limit: int,
     program_kwargs: dict,
 ) -> DataSet:
@@ -650,9 +666,7 @@ def _run_program_level_parallel(
     driving process as each chunk comes back.
     """
     circuits_to_run = [
-        circ
-        for circ in circuits
-        if checkpoint_path is None or circ not in ds
+        circ for circ in circuits if checkpoint_path is None or circ not in ds
     ]
     if not circuits_to_run:
         return ds

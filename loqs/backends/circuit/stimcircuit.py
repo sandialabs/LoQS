@@ -45,15 +45,15 @@ STIM circuit grammar
 <CIRCUIT> ::= <LINE>*
 <LINE> ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\n'
 <BLOCK_START> ::= <INSTRUCTION> /[ \t]*/ '{'
-<BLOCK_END> ::= '}' 
+<BLOCK_END> ::= '}'
 <INSTRUCTION> ::= <NAME> <TAG>? <PARENS_ARGUMENTS>? <TARGETS>
-<NAME> ::= /[a-zA-Z][a-zA-Z0-9_]*/ 
+<NAME> ::= /[a-zA-Z][a-zA-Z0-9_]*/
 <TAG> ::= '[' /[^\r\]\n]/* ']'
-<PARENS_ARGUMENTS> ::= '(' <ARGUMENTS> ')' 
+<PARENS_ARGUMENTS> ::= '(' <ARGUMENTS> ')'
 <ARGUMENTS> ::= /[ \t]*/ <ARG> /[ \t]*/ (',' <ARGUMENTS>)?
-<ARG> ::= <double> 
+<ARG> ::= <double>
 <TARGETS> ::= /[ \t]+/ <TARG> <TARGETS>?
-<TARG> ::= <QUBIT_TARGET> | <MEASUREMENT_RECORD_TARGET> | <SWEEP_BIT_TARGET> | <PAULI_TARGET> | <COMBINER_TARGET> 
+<TARG> ::= <QUBIT_TARGET> | <MEASUREMENT_RECORD_TARGET> | <SWEEP_BIT_TARGET> | <PAULI_TARGET> | <COMBINER_TARGET>
 <QUBIT_TARGET> ::= '!'? <uint>
 <MEASUREMENT_RECORD_TARGET> ::= "rec[-" <uint> "]"
 <SWEEP_BIT_TARGET> ::= "sweep[" <uint> "]"
@@ -135,7 +135,11 @@ def _reindex_stim_circuit_lines(
                 prefix = (
                     "X"
                     if target.is_x_target
-                    else "Y" if target.is_y_target else "Z" if target.is_z_target else ""
+                    else (
+                        "Y"
+                        if target.is_y_target
+                        else "Z" if target.is_z_target else ""
+                    )
                 )
                 inv = "!" if target.is_inverted_result_target else ""
                 line_parts.append(f"{inv}{prefix}{new_idx}")
@@ -751,7 +755,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         idle_names = set(idle_names)
         qubits = set(qubits)
 
-        def layer_events(circ: "STIMPhysicalCircuit", lstr: str) -> dict[QubitTypes, tuple[str, str]]:
+        def layer_events(
+            circ: "STIMPhysicalCircuit", lstr: str
+        ) -> dict[QubitTypes, tuple[str, str]]:
             """qubit -> (kind, gate_name) for every qubit of interest with a
             recognized instruction in this TICK-delimited layer string."""
             events: dict[QubitTypes, tuple[str, str]] = {}
@@ -772,7 +778,9 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         # Reference sequence: for each qubit, its ordered (kind, gate_name)
         # across every layer it appears in.
-        true_seqs: dict[QubitTypes, list[tuple[str, str]]] = {q: [] for q in qubits}
+        true_seqs: dict[QubitTypes, list[tuple[str, str]]] = {
+            q: [] for q in qubits
+        }
         for lstr in str(reference.circuit).split("TICK\n"):
             for q, event in layer_events(reference, lstr).items():
                 true_seqs[q].append(event)
@@ -796,7 +804,11 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                         )
                     ptrs[q] = ptr + 1
                     continue
-                if event is None and ptr < len(true_seq) and true_seq[ptr][0] == "idle":
+                if (
+                    event is None
+                    and ptr < len(true_seq)
+                    and true_seq[ptr][0] == "idle"
+                ):
                     idx = self._qubit_labels.index(q)
                     new_circ_str += f"\n{true_seq[ptr][1]} {idx}"
                     ptrs[q] = ptr + 1

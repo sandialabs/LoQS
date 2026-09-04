@@ -81,7 +81,6 @@ from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.syndromelabel import SyndromeLabel
 import loqs.tools.qectools as qt
 
-
 # Layouts ordered from most to least parallel syndrome extraction: surf17
 # runs all 8 checks at once (7 layers), surf13 runs them in 2 sequential
 # passes of 4 (14 layers), surf10 reuses one ancilla for all 8 checks in
@@ -90,16 +89,28 @@ import loqs.tools.qectools as qt
 # but surf17 may not borrow surf10's (see create_qec_code's idle_layout
 # parameter).
 _LAYOUT_PARALLELISM = {"surf17": 0, "surf13": 1, "surf10": 2}
-_LAYOUT_NAMES = {"surf17": "Surface-17 Code", "surf13": "Surface-13 Code", "surf10": "Surface-10 Code"}
+_LAYOUT_NAMES = {
+    "surf17": "Surface-17 Code",
+    "surf13": "Surface-13 Code",
+    "surf10": "Surface-10 Code",
+}
 
 # Default gate-duration/idle-name tables, shared by every codepack_surf17_*
 # module (codepack_surf17_multipatch.py and codepack_surf17_surgery.py both
 # import these rather than keeping their own copies).
 DEFAULT_GATE_DURATIONS: dict[str, int | float] = {
-    "Gi": 1, "Gi1Q": 1, "Gxpi": 1, "Gypi": 1, "Gzpi": 1,
-    "Gzpi2": 1, "Gzmpi2": 1, "Gh": 1,
-    "Gcnot": 2, "Gi2Q": 2,
-    "Imrz": 3, "GiMCM": 3,
+    "Gi": 1,
+    "Gi1Q": 1,
+    "Gxpi": 1,
+    "Gypi": 1,
+    "Gzpi": 1,
+    "Gzpi2": 1,
+    "Gzmpi2": 1,
+    "Gh": 1,
+    "Gcnot": 2,
+    "Gi2Q": 2,
+    "Imrz": 3,
+    "GiMCM": 3,
 }
 DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 
@@ -230,10 +241,14 @@ def _build_raw_syndrome_extraction_circuit(
         return X_syndrome.append(Z_syndrome)
     else:  # serial
         circuits = [
-            circuit_backend.from_circuit_tiling(X_template, qubits, [tile], merge_offsets=0)
+            circuit_backend.from_circuit_tiling(
+                X_template, qubits, [tile], merge_offsets=0
+            )
             for tile in X_tiles
         ] + [
-            circuit_backend.from_circuit_tiling(Z_template, qubits, [tile], merge_offsets=0)
+            circuit_backend.from_circuit_tiling(
+                Z_template, qubits, [tile], merge_offsets=0
+            )
             for tile in Z_tiles
         ]
         full_syndrome_circ = circuits[0]
@@ -498,7 +513,11 @@ def create_qec_code(
         # real/idle sequence onto this layout's raw circuit.
         reference_qubits = layout_qubits(idle_layout)
         reference_circ = _build_raw_syndrome_extraction_circuit(
-            idle_layout, reference_qubits, circuit_backend, X_template, Z_template
+            idle_layout,
+            reference_qubits,
+            circuit_backend,
+            X_template,
+            Z_template,
         )
         reference_circ.pad_single_qubit_idles_by_duration_inplace(
             idle_gates, gate_durations
@@ -725,14 +744,6 @@ def create_qec_code(
     )
 
     # 6. Logical measurements with PyMatching global decoding
-    try:
-        import pymatching
-    except ImportError as e:
-        raise ImportError(
-            "PyMatching is not installed, cannot use pymatching decoder. "
-            "Please install pymatching: pip install loqs[pymatching]"
-        ) from e
-
     # Global Space-Time deferred decoding over R rounds of syndrome extraction + final data measurements
     def pymatching_global_meas_apply_fn(
         patch_label: str,
@@ -751,8 +762,6 @@ def create_qec_code(
             "raw", "clean_diff", "guarded_diff"
         ] = "raw",
     ) -> Frame:
-        import pymatching
-
         patch = patches[patch_label]
         pauli_frame = patch.pauli_frame
 
