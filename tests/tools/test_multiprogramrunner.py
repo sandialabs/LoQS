@@ -3,6 +3,7 @@
 import contextlib
 import h5py
 import multiprocessing as mp
+import sys
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -406,14 +407,32 @@ class TestMultiProgramRunnerParallel:
         # Now add partial results
         _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
 
-        # Second run: continue from checkpoint
+        # Second run: continue from checkpoint. Spy on _double_item via a
+        # Manager list, since the real worker processes wouldn't be
+        # observable through a plain in-process list.
         runner2 = _SimpleDoubleRunner(
             items, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
             parallel_strategy=strategy,
         )
-        results = runner2.run()
+
+        manager = mp.Manager()
+        recorded_indices = manager.list()
+        original_double_item = _double_item
+
+        def spy_double_item(item, index, *, shot_executor, **kwargs):
+            recorded_indices.append(index)
+            return original_double_item(item, index, shot_executor=shot_executor, **kwargs)
+
+        module = sys.modules[__name__]
+        module._double_item = spy_double_item
+        try:
+            results = runner2.run()
+        finally:
+            module._double_item = original_double_item
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+        # Only the previously-not-done indices should actually be recomputed
+        assert sorted(recorded_indices) == [1, 3, 5, 6, 7, 8, 9]
         # Verify that all 10 items are now done (reading from consolidated
         # runner.h5, since worker files are deleted after consolidation)
         from loqs.tools.multiprogramrunner import _read_done_union
@@ -2252,14 +2271,14 @@ class TestWorkerFileConsolidation:
         assert len(entries) == 6
 
     def test_resume_of_resume_with_interruption(self, tmp_path):
-        """Regression test for Bug A/B: a resume-of-resume where each
-        resume is itself interrupted before completion. Verify that:
-        1. The final result includes every item's correct value
-        2. runner.h5's on-disk _reduced_results (decoded fresh, not in-memory)
-           contains every already-done item at each intermediate stage.
-
-        This test locks in the fix that seeds _reduced_results/_program_results
-        before the first write() in run(), not after.
+        """Regression test for a resume-of-resume where each resume is
+        itself interrupted before completion: the final result includes
+        every item's correct value, and runner.h5's on-disk
+        _reduced_results (decoded fresh) contains every already-done item
+        at each intermediate stage. Exercises done-detection/worker-file
+        consolidation across repeated crashes only, not the seed-before-
+        write ordering (see test_resume_seeds_reduced_results_before_first_write
+        for that).
         """
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(6))
@@ -2329,6 +2348,67 @@ class TestWorkerFileConsolidation:
             )
         assert len(final_on_disk) == 6
         assert final_on_disk == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8, 5: 10}
+
+    def test_resume_seeds_reduced_results_before_first_write(self, tmp_path):
+        """A resuming run() seeds _reduced_results/_program_results from
+        stored state before its first write() call, not after -- otherwise
+        that write would briefly clobber runner.h5's on-disk
+        _reduced_results with a blank value. Uses _CountingRunner, whose
+        first run() completes fully and so genuinely leaves non-empty
+        on-disk state for the second run() to seed from.
+        """
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = [1, 2, 3]
+
+        # First run: completes fully, so its results are consolidated into
+        # runner.h5's own _reduced_results attribute.
+        runner1 = _CountingRunner(
+            items, multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+        )
+        runner1.run()
+
+        with h5py.File(checkpoint_dir / "runner.h5", "r") as f:
+            from loqs.internal.streamingmerge import iter_dict_attr_entries
+
+            on_disk_after_run1 = dict(
+                iter_dict_attr_entries(f, "_reduced_results")
+            )
+        assert on_disk_after_run1 == {0: 2, 1: 4, 2: 6}
+
+        # Second run: resumes the same runner. Capture runner.h5's on-disk
+        # _reduced_results immediately after the *first* write() call inside
+        # run(), before any dispatch happens -- this is exactly the moment
+        # the seed-before-write ordering matters.
+        runner2 = _CountingRunner(
+            items,
+            multiplier=2,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+
+        captured_on_first_write = []
+        real_write = runner2.write
+
+        def capturing_write(path, *args, **kwargs):
+            real_write(path, *args, **kwargs)
+            if not captured_on_first_write:
+                from loqs.internal.streamingmerge import (
+                    iter_dict_attr_entries as _iter_entries,
+                )
+
+                with h5py.File(path, "r") as f:
+                    captured_on_first_write.append(
+                        dict(_iter_entries(f, "_reduced_results"))
+                    )
+
+        runner2.write = capturing_write
+        runner2.run()
+
+        # If seeding happened after this first write instead of before, this
+        # snapshot would be empty (a fresh instance's own blank
+        # _reduced_results, written before ever consulting stored state).
+        assert captured_on_first_write[0] == {0: 2, 1: 4, 2: 6}
 
 
 # Module-level test classes for decode_cache regression tests.

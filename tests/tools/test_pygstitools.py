@@ -2,6 +2,7 @@
 
 import copy
 import gc
+import multiprocessing as mp
 import re
 import sys
 import weakref
@@ -478,8 +479,22 @@ class TestSimulateDatasetForEdesignCheckpointing:
         partial_edesign = ExperimentDesign([s.circs[0]])
         s.simulate(ckpt=ckpt, edesign=partial_edesign)
 
-        ds = s.simulate(ckpt=ckpt)
+        # Spy on _run_one_circuit to confirm only the missing circuit is
+        # actually recomputed on resume.
+        recorded_indices = []
+        original_run_one_circuit = pygstitools._run_one_circuit
 
+        def spy_run_one_circuit(circ, index, **kwargs):
+            recorded_indices.append(index)
+            return original_run_one_circuit(circ, index, **kwargs)
+
+        pygstitools._run_one_circuit = spy_run_one_circuit
+        try:
+            ds = s.simulate(ckpt=ckpt)
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        assert recorded_indices == [1]
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
@@ -876,8 +891,24 @@ class TestSimulateDatasetForEdesignParallel:
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
         )
-        ds = s.simulate(ckpt=ckpt, parallel_strategy=strategy)
 
+        # Spy on _run_one_circuit via a Manager list, since the real worker
+        # processes wouldn't be observable through a plain in-process list.
+        manager = mp.Manager()
+        recorded_indices = manager.list()
+        original_run_one_circuit = pygstitools._run_one_circuit
+
+        def spy_run_one_circuit(circ, index, **kwargs):
+            recorded_indices.append(index)
+            return original_run_one_circuit(circ, index, **kwargs)
+
+        pygstitools._run_one_circuit = spy_run_one_circuit
+        try:
+            ds = s.simulate(ckpt=ckpt, parallel_strategy=strategy)
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        assert list(recorded_indices) == [1]
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
         # Verify both circuits are persisted in the dataset checkpoint file

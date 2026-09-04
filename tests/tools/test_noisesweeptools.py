@@ -722,9 +722,9 @@ class TestResume:
             seed_stride=5,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
         )
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="collect_shot_data_args"):
             runner2.run()
 
     def test_resume_mismatched_expected_outcomes_raises(self, tmp_path):
@@ -749,6 +749,120 @@ class TestResume:
         )
         with pytest.raises(ValueError):
             runner2.run()
+
+    def test_resume_mismatched_num_shots_raises(self, tmp_path):
+        """Mismatched num_shots on resume raises ValueError naming the field."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        runner1 = make_runner(
+            [0.0, 0.1],
+            seed_stride=10,
+            num_shots=5,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        runner1.run()
+
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=8,  # Different from runner1's num_shots
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=10,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        with pytest.raises(ValueError, match="num_shots"):
+            runner2.run()
+
+    def test_resume_mismatched_base_seed_raises(self, tmp_path):
+        """Mismatched base_seed on resume raises ValueError naming the field."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        runner1 = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            base_seed=0,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        runner1.run()
+
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=5,
+            base_seed=99,  # Different from runner1's base_seed
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        with pytest.raises(ValueError, match="base_seed"):
+            runner2.run()
+
+    def test_resume_mismatched_keep_shot_results_raises(self, tmp_path):
+        """A resumed call with a different keep_shot_results than the
+        checkpoint was written with is a hard error naming that field."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        runner1 = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+        runner1.run()
+
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=5,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+        )
+        with pytest.raises(ValueError, match="keep_shot_results"):
+            runner2.run()
+
+    def test_resume_mismatched_keep_shot_results_force_resume_works(
+        self, tmp_path
+    ):
+        """force_resume=True bypasses a keep_shot_results mismatch."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        runner1 = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+        runner1.run()
+
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=5,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+        )
+        result2 = runner2.run()
+        assert result2.is_complete
 
     def test_item_checkpoint_dir_without_resume_still_writes_incrementally(self, tmp_path):
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
