@@ -613,6 +613,31 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 _check_op_for_dense_embedding_blowup(op, inst_key)
                 self._dense_embedding_checked_raw_inst_keys.add(inst_key)
 
+    def _first_successful_rep(
+        self, cache, cache_key, candidates, build_fn, kind: str = "rep"
+    ):
+        """Try build_fn(c) for each candidate, caching and returning the first.
+
+        Iterates through candidates, calling build_fn(c) for each; catches
+        RepConstructionError and accumulates failures. Returns the first
+        successful result (cached unless time-dependent). Raises a combined
+        RepConstructionError citing all failures if every candidate fails.
+        """
+        errors = []
+        for candidate in candidates:
+            try:
+                rep = build_fn(candidate)
+            except RepConstructionError as e:
+                errors.append(e)
+                continue
+            if not self.use_time_dependence:
+                cache[cache_key, candidate] = rep
+            return rep
+        raise RepConstructionError(
+            f"Failed to create {kind} for any of {candidates}, with errors:"
+            + "\n".join([str(e) for e in errors])
+        )
+
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
@@ -695,21 +720,98 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         # let convert() produce whichever concrete GateRep is requested.
         ptm_rep = PTMGateRep(op.to_dense(on_space="HilbertSchmidt"), qubits)
 
-        errors = []
-        for gaterep in gatereps:
-            try:
-                gate_rep = convert_rep(ptm_rep, gaterep)
-            except RepConstructionError as e:
-                errors.append(e)
-                continue
+        return self._first_successful_rep(
+            self._gate_rep_cache,
+            op_key,
+            gatereps,
+            lambda gaterep: convert_rep(ptm_rep, gaterep),
+            kind="gate rep",
+        )
 
-            if not self.use_time_dependence:
-                self._gate_rep_cache[op_key, gaterep] = gate_rep
-            return gate_rep
+    def _build_outcome_dict_rep(
+        self, name: str, qubits, inst_key
+    ) -> OutcomeOperationDictInstrumentRep:
+        """Build an OutcomeOperationDictInstrumentRep from a pyGSTi instrument.
 
-        raise RepConstructionError(
-            f"Failed to create gate rep for any of {gatereps}, with errors:"
-            + "\n".join([str(e) for e in errors])
+        Extracts outcome operations, determines outcome qubits based on
+        channel counts, and validates consistency.
+        """
+        # TODO: What to do with key error?
+        # Look up using unaliased qubits
+        op = self.inst_dict[inst_key]
+
+        if inst_key not in self._dense_embedding_checked_inst_keys:
+            _check_op_for_dense_embedding_blowup(op, inst_key)
+            self._dense_embedding_checked_inst_keys.add(inst_key)
+
+        # if using time-dependence, update operator rep
+        # `Instrument` itself has no `set_time` -- each individual
+        # member operation does.
+        if self.use_time_dependence:
+            for member_op in op.values():
+                member_op.set_time(self.current_time)
+
+        outcome_ops = {}
+        for k, v in op.items():
+            if isinstance(k, str) and k != "" and all(c in "01" for c in k):
+                # pyGSTi's usual '0'/'1'-character-string convention
+                # for a decomposable multi-bit outcome.
+                label = tuple(int(c) for c in k)
+            else:
+                # Any other label (e.g. 'even'/'odd' for a joint
+                # parity-check instrument) is used as-is.
+                label = k
+
+            # Wrap as pyGSTi's native PTM; each consuming backend
+            # converts to whatever concrete GateRep it needs.
+            outcome_ops[label] = PTMGateRep(
+                v.to_dense(on_space="HilbertSchmidt"), qubits
+            )
+
+        # A label that isn't itself a sequence of bits is its own
+        # single (joint) channel, regardless of qubit count.
+        def _n_channels(label):
+            if (
+                isinstance(label, Sequence)
+                and not isinstance(label, str)
+                and all(b in (0, 1) for b in label)
+            ):
+                return len(label)
+            return 1
+
+        channel_counts = {_n_channels(lbl) for lbl in outcome_ops}
+        if len(channel_counts) != 1:
+            raise RepConstructionError(
+                f"instrument {name!r} outcome labels have inconsistent "
+                f"channel counts {channel_counts!r}"
+            )
+        n_channels = next(iter(channel_counts))
+
+        if n_channels == len(qubits):
+            # One classical bit per physical qubit.
+            outcome_qubits = qubits
+        elif n_channels == 1:
+            # A joint outcome channel isn't owned by any one qubit;
+            # the caller must say which classical register it's in.
+            aliased_qubits = tuple(self.qubit_aliases[q] for q in qubits)
+            outcome_qubits = self.instrument_outcome_qubits.get(
+                (name, aliased_qubits),
+                self.instrument_outcome_qubits.get(name),
+            )
+            if outcome_qubits is None:
+                raise RepConstructionError(
+                    f"instrument {name!r} on {aliased_qubits!r} has a "
+                    "single joint outcome channel; add an entry to "
+                    "instrument_outcome_qubits"
+                )
+        else:
+            raise RepConstructionError(
+                f"instrument {name!r} outcome labels have {n_channels} "
+                f"channels, matching neither 1 nor len(qubits)={len(qubits)}"
+            )
+
+        return OutcomeOperationDictInstrumentRep(
+            outcome_ops, True, qubits, outcome_qubits
         )
 
     def _get_instrument_rep(self, name, qubits, instreps):
@@ -724,109 +826,18 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 reset = 0 if self.zbasis_proj_resets else None
                 return ZBasisProjectionInstrumentRep(reset, True, qubits)
             elif instrep is OutcomeOperationDictInstrumentRep:
-                # TODO: What to do with key error?
-                # Look up using unaliased qubits
-                op = self.inst_dict[inst_key]
-
-                if inst_key not in self._dense_embedding_checked_inst_keys:
-                    _check_op_for_dense_embedding_blowup(op, inst_key)
-                    self._dense_embedding_checked_inst_keys.add(inst_key)
-
-                # if using time-dependence, update operator rep
-                # `Instrument` itself has no `set_time` -- each individual
-                # member operation does.
-                if self.use_time_dependence:
-                    for member_op in op.values():
-                        member_op.set_time(self.current_time)
-
-                outcome_ops = {}
-                for k, v in op.items():
-                    if (
-                        isinstance(k, str)
-                        and k != ""
-                        and all(c in "01" for c in k)
-                    ):
-                        # pyGSTi's usual '0'/'1'-character-string convention
-                        # for a decomposable multi-bit outcome.
-                        label = tuple(int(c) for c in k)
-                    else:
-                        # Any other label (e.g. 'even'/'odd' for a joint
-                        # parity-check instrument) is used as-is.
-                        label = k
-
-                    # Wrap as pyGSTi's native PTM; each consuming backend
-                    # converts to whatever concrete GateRep it needs.
-                    outcome_ops[label] = PTMGateRep(
-                        v.to_dense(on_space="HilbertSchmidt"), qubits
-                    )
-
-                # A label that isn't itself a sequence of bits is its own
-                # single (joint) channel, regardless of qubit count.
-                def _n_channels(label):
-                    if (
-                        isinstance(label, Sequence)
-                        and not isinstance(label, str)
-                        and all(b in (0, 1) for b in label)
-                    ):
-                        return len(label)
-                    return 1
-
-                channel_counts = {_n_channels(lbl) for lbl in outcome_ops}
-                if len(channel_counts) != 1:
-                    raise RepConstructionError(
-                        f"instrument {name!r} outcome labels have inconsistent "
-                        f"channel counts {channel_counts!r}"
-                    )
-                n_channels = next(iter(channel_counts))
-
-                if n_channels == len(qubits):
-                    # One classical bit per physical qubit.
-                    outcome_qubits = qubits
-                elif n_channels == 1:
-                    # A joint outcome channel isn't owned by any one qubit;
-                    # the caller must say which classical register it's in.
-                    aliased_qubits = tuple(
-                        self.qubit_aliases[q] for q in qubits
-                    )
-                    outcome_qubits = self.instrument_outcome_qubits.get(
-                        (name, aliased_qubits),
-                        self.instrument_outcome_qubits.get(name),
-                    )
-                    if outcome_qubits is None:
-                        raise RepConstructionError(
-                            f"instrument {name!r} on {aliased_qubits!r} has a "
-                            "single joint outcome channel; add an entry to "
-                            "instrument_outcome_qubits"
-                        )
-                else:
-                    raise RepConstructionError(
-                        f"instrument {name!r} outcome labels have {n_channels} "
-                        f"channels, matching neither 1 nor len(qubits)={len(qubits)}"
-                    )
-
-                return OutcomeOperationDictInstrumentRep(
-                    outcome_ops, True, qubits, outcome_qubits
-                )
+                return self._build_outcome_dict_rep(name, qubits, inst_key)
             else:
                 raise RepConstructionError(
                     f"Cannot create instrument rep for {instrep}"
                 )
 
-        errors = []
-        for instrep in instreps:
-            try:
-                instrument_rep = _make_rep(instrep)
-            except RepConstructionError as e:
-                errors.append(e)
-                continue
-
-            if not self.use_time_dependence:
-                self._inst_rep_cache[inst_key, instrep] = instrument_rep
-            return instrument_rep
-
-        raise RepConstructionError(
-            f"Failed to create instrument rep for any of {instreps}, with errors:"
-            + "\n".join([str(e) for e in errors])
+        return self._first_successful_rep(
+            self._inst_rep_cache,
+            inst_key,
+            instreps,
+            _make_rep,
+            kind="instrument rep",
         )
 
     _LABEL_NAME_RE: ClassVar = re.compile(r"[:;!]")

@@ -190,67 +190,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         self.kraus_sampling = kraus_sampling
         self.contraction = contraction
 
-        # Determine number of subsystems
-        if qubit_labels is not None:
-            num_subsystems = len(qubit_labels)
-        elif isinstance(state, NumpyStatevectorQuantumState):
-            num_subsystems = len(state.qubit_labels)
-        elif isinstance(state, int):
-            num_subsystems = state
-        elif isinstance(state, np.ndarray):
-            if len(state.shape) > 1:
-                num_subsystems = len(state.shape)
-            else:
-                if isinstance(d, int):
-                    num_subsystems = int(
-                        np.round(np.log2(state.flatten().shape[0]))
-                    )
-                else:
-                    num_subsystems = len(d)
-        elif isinstance(state, Sequence) and not isinstance(state, str):
-            num_subsystems = len(state)
-        else:
-            raise ValueError(
-                f"Cannot determine number of subsystems from {state}"
-            )
-
-        # Resolve dimensions list
-        if isinstance(d, int):
-            self.d = [d] * num_subsystems
-        else:
-            self.d = list(d)
-        assert (
-            len(self.d) == num_subsystems
-        ), f"Length of d ({len(self.d)}) must match number of subsystems ({num_subsystems})"
-
         if isinstance(state, NumpyStatevectorQuantumState):
-            self._state = state._state
-            self.qubit_labels = state.qubit_labels
-            self.seed = state.seed
-            self._rng = state._rng
-            self.d = state.d
-            if kraus_sampling is None:
-                self.kraus_sampling = state.kraus_sampling
-            if contraction is None:
-                self.contraction = state.contraction
-        elif isinstance(state, int):
-            self._state = np.zeros(tuple(self.d), np.complex128)
-            self._state[(0,) * state] = 1
-        elif isinstance(state, np.ndarray):
-            self._state = state.copy()
-            curr_shape = state.shape
-            if list(curr_shape) != self.d:
-                # Flat or mismatch, reshape to self.d
-                self._state = self.state.reshape(tuple(self.d))
-        elif isinstance(state, Sequence) and all(
-            [el in range(self.d[i]) for i, el in enumerate(state)]
-        ):
-            self._state = np.zeros(tuple(self.d), np.complex128)
-            self._state[*state] = 1
+            self._init_from_existing_state(state, kraus_sampling, contraction)
         else:
-            raise ValueError(
-                f"Cannot initialize NumpyStatevectorQuantumState from {state}"
-            )
+            num_subsystems = self._infer_num_subsystems(state, qubit_labels, d)
+            self.d = self._resolve_dimensions(num_subsystems, d)
+            self._init_state_array(state)
 
         if qubit_labels is not None:
             self.qubit_labels = list(qubit_labels)
@@ -274,6 +219,101 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             f"contraction must be one of {CONTRACTION_MODES}, "
             f"got {self.contraction}"
         )
+
+    def _init_from_existing_state(
+        self,
+        state: NumpyStatevectorQuantumState,
+        kraus_sampling: str | None,
+        contraction: str | None,
+    ) -> None:
+        """Initialize from an existing NumpyStatevectorQuantumState.
+
+        Copies the state's internal array, qubit labels, RNG, and dimensions,
+        inheriting kraus_sampling and contraction modes if not explicitly
+        provided.
+        """
+        self._state = state._state
+        self.qubit_labels = state.qubit_labels
+        self.seed = state.seed
+        self._rng = state._rng
+        self.d = state.d
+        if kraus_sampling is None:
+            self.kraus_sampling = state.kraus_sampling
+        if contraction is None:
+            self.contraction = state.contraction
+
+    @staticmethod
+    def _infer_num_subsystems(
+        state: NumpyStatevectorLike,
+        qubit_labels: Sequence[QubitTypes] | None,
+        d: int | Sequence[int],
+    ) -> int:
+        """Infer the number of subsystems from state representation and hints.
+
+        Tries qubit_labels length first, then inspects the state itself
+        (array shape, integer directly, sequence length, or dimensions).
+        """
+        if qubit_labels is not None:
+            return len(qubit_labels)
+        elif isinstance(state, int):
+            return state
+        elif isinstance(state, np.ndarray):
+            if len(state.shape) > 1:
+                return len(state.shape)
+            else:
+                if isinstance(d, int):
+                    return int(np.round(np.log2(state.flatten().shape[0])))
+                else:
+                    return len(d)
+        elif isinstance(state, Sequence) and not isinstance(state, str):
+            return len(state)
+        else:
+            raise ValueError(
+                f"Cannot determine number of subsystems from {state}"
+            )
+
+    @staticmethod
+    def _resolve_dimensions(
+        num_subsystems: int,
+        d: int | Sequence[int],
+    ) -> list[int]:
+        """Build the dimensions list from a scalar or sequence.
+
+        Validates that the result matches the number of subsystems.
+        """
+        if isinstance(d, int):
+            dims = [d] * num_subsystems
+        else:
+            dims = list(d)
+        assert (
+            len(dims) == num_subsystems
+        ), f"Length of d ({len(dims)}) must match number of subsystems ({num_subsystems})"
+        return dims
+
+    def _init_state_array(self, state: NumpyStatevectorLike) -> None:
+        """Initialize self._state from a state representation.
+
+        Assumes self.d is already set. Handles integer (all-zeros),
+        numpy array (copy/reshape), and sequence (computational basis state).
+        """
+        if isinstance(state, int):
+            self._state = np.zeros(tuple(self.d), np.complex128)
+            self._state[(0,) * state] = 1
+        elif isinstance(state, np.ndarray):
+            self._state = state.copy()
+            curr_shape = state.shape
+            if list(curr_shape) != self.d:
+                # Flat or mismatch, reshape to self.d
+                self._state = self.state.reshape(tuple(self.d))
+        elif isinstance(state, Sequence) and all(
+            [el in range(self.d[i]) for i, el in enumerate(state)]
+        ):
+            self._state = np.zeros(tuple(self.d), np.complex128)
+            self._state[*state] = 1
+        else:
+            raise ValueError(
+                f"Cannot initialize NumpyStatevectorQuantumState from {state}"
+            )
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state (ds={self.d}):\n"
