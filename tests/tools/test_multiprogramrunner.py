@@ -115,8 +115,17 @@ class _SimpleDoubleRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         return None
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
 
 class _RaisingRunner(MultiProgramRunner):
@@ -143,8 +152,17 @@ class _RaisingRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         return None
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
 
 class _TrackingRunner(MultiProgramRunner):
@@ -177,8 +195,17 @@ class _TrackingRunner(MultiProgramRunner):
             self.on_item_done_calls.append((index, item, result))
         return track
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
 
 class _SleepingRunner(MultiProgramRunner):
@@ -206,8 +233,17 @@ class _SleepingRunner(MultiProgramRunner):
             self.timestamps.append(time.time())
         return track
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
 
 class TestMultiProgramRunnerSerialWithCheckpoint:
@@ -540,8 +576,17 @@ class _DoubleCountProbeRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         return None
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
     def _shot_checkpoint_subdir_prefix(self):
         return "item"
@@ -594,8 +639,17 @@ class TestBugRegressions:
             def _make_on_item_done(self):
                 return None
 
-            def _finalize(self, result_list):
-                return result_list
+            def _finalize(self):
+                if hasattr(self, "items"):
+                    key_fn = self._item_key_fn()
+                    if key_fn is not None:
+                        return [
+                            self._reduced_results[self.index_map[key_fn(item)]]
+                            for item in self.items
+                        ]
+                    return [self._reduced_results[i] for i in range(len(self.items))]
+                else:
+                    return list(self._reduced_results.values())
 
         _track_shot_executor.calls = []
         strategy = ParallelStrategy(shot_executor="SENTINEL_EXECUTOR")
@@ -927,8 +981,17 @@ class _CountingRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         return None
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
     def _mismatch_check_fields(self):
         return ["multiplier"]
@@ -1021,8 +1084,17 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
     def _make_on_item_done(self):
         return None
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        if hasattr(self, "items"):
+            key_fn = self._item_key_fn()
+            if key_fn is not None:
+                return [
+                    self._reduced_results[self.index_map[key_fn(item)]]
+                    for item in self.items
+                ]
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        else:
+            return list(self._reduced_results.values())
 
 
 class TestMultiProgramRunnerRunAndCrashRecovery:
@@ -1409,14 +1481,13 @@ class _KeepShotResultsRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         return None
 
-    def _finalize(self, result_list):
-        return result_list
+    def _finalize(self):
+        # Return results in original item order
+        return [self._reduced_results[i] for i in range(len(self.items))]
 
-    def _shot_checkpoint_subdir(self, index: int) -> Path | None:
-        """Override to provide per-item checkpoint directory when set."""
-        if self.shot_checkpoint_dir is not None:
-            return Path(self.shot_checkpoint_dir) / f"item_{index}"
-        return None
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """Override to provide per-item shot checkpoint subdirectory prefix."""
+        return "item"
 
 
 class _CheckpointedKeepShotResultsRunner(_KeepShotResultsRunner):
@@ -1451,7 +1522,7 @@ class TestKeepShotResults:
         )
         assert runner.keep_shot_results is True
 
-    def test_keep_shot_results_without_checkpoint_batch_raises(self, tmp_path):
+    def test_keep_shot_results_without_shot_checkpoint_raises(self, tmp_path):
         """keep_shot_results requires shot_checkpoint=True, so kept results are
         always read back from an item's own on-disk shot checkpoint rather than
         held fully in memory for every item at once."""
@@ -1547,7 +1618,7 @@ class TestKeepShotResults:
         # Program results should still be populated on resume
         assert len(runner2._program_results) == 3
 
-    def test_keep_shot_results_with_checkpoint_batch_serial(self, tmp_path):
+    def test_keep_shot_results_with_shot_checkpoint_serial(self, tmp_path):
         """keep_shot_results with shot_checkpoint works in serial dispatch."""
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
@@ -1573,7 +1644,7 @@ class TestKeepShotResults:
             # (the actual shots are in per-item checkpoint dirs, not runner.h5)
             assert pr is not None
 
-    def test_keep_shot_results_with_checkpoint_batch_parallel(self, tmp_path):
+    def test_keep_shot_results_with_shot_checkpoint_parallel(self, tmp_path):
         """keep_shot_results with shot_checkpoint works in parallel dispatch."""
         loky = pytest.importorskip("loky")
 
@@ -1684,7 +1755,7 @@ class TestKeepShotResults:
         # Verify that the setting was restored from disk
         assert runner2.keep_shot_results is True
 
-    def test_keep_shot_results_with_checkpoint_batch_parallel_lazy(self, tmp_path):
+    def test_keep_shot_results_with_shot_checkpoint_parallel_lazy(self, tmp_path):
         """keep_shot_results with lazy_loading=True works under parallel dispatch."""
         loky = pytest.importorskip("loky")
 
@@ -1778,17 +1849,20 @@ class TestShotProgressBar:
         def _make_on_item_done(self):
             return None
 
-        def _finalize(self, result_list):
-            return result_list
+        def _finalize(self):
+            if hasattr(self, "items"):
+                key_fn = self._item_key_fn()
+                if key_fn is not None:
+                    return [
+                        self._reduced_results[self.index_map[key_fn(item)]]
+                        for item in self.items
+                    ]
+                return [self._reduced_results[i] for i in range(len(self.items))]
+            else:
+                return list(self._reduced_results.values())
 
-        def _shot_checkpoint_subdir(self, index: int) -> Path | None:
-             """Return per-item shot checkpoint subdirectory."""
-             if (
-                 self.shot_checkpoint_dir is not None
-                 and self.shot_checkpoint
-             ):
-                 return self.shot_checkpoint_dir / f"item_{index}"
-             return None
+        def _shot_checkpoint_subdir_prefix(self) -> str | None:
+            return "item"
 
     def test_num_shots_for_progress_hook_returns_num_shots(self):
         """Verify _num_shots_for_progress returns self.num_shots."""

@@ -790,16 +790,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[1]].counts[("1",)] == 2
 
 
-def _checkpointed_circuits(checkpoint_path) -> set:
-    """Every circuit with a row in a checkpoint text file, parsed as
-    pyGSTi `Circuit`s -- used to confirm a resumed parallel run actually
-    appends the circuits it recomputed, not just returns them in-memory.
-    """
-    from pygsti.io import read_dataset
-
-    return set(read_dataset(str(checkpoint_path / "dataset.txt"), verbosity=0).keys())
-
-
 class TestSimulateDatasetForEdesignParallel:
     """`EdesignRunner`'s `parallel_strategy` (a
     [](api:ParallelStrategy)) path, against real `loky` and `submitit`

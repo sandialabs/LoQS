@@ -45,7 +45,6 @@ import warnings
 from tqdm import tqdm
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
-from loqs.internal import pin_worker_threads
 from loqs.internal.serializable import Serializable
 
 T = TypeVar("T")

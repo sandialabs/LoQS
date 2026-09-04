@@ -522,7 +522,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             "lazy_loading": self.lazy_loading,
         }
 
-    def _finalize(self, result_list: list[bool]) -> list[QuantumProgram]:
+    def _finalize(self) -> list[QuantumProgram]:
         """Return failed programs (same objects from input, matched by index).
 
         Builds the failed list from `_reduced_results`, which holds success
@@ -615,7 +615,7 @@ def test_program_output(
 
     checkpoint_dir : str | Path | None, optional
         Forwarded to [](api:QuantumProgram.run) for shot checkpointing.
-        Defaults to `None`, which disables checkpointing.
+        Required when `checkpoint=True` is passed. Defaults to `None`.
 
     lazy_loading : bool, optional
         Forwarded to [](api:QuantumProgram.run) for lazy loading.

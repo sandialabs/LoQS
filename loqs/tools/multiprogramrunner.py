@@ -323,20 +323,20 @@ class MultiProgramRunner(Serializable):
                     for attr_name in ("_reduced_results", "_program_results"):
                         _reset_empty_groups_format_dict_attr(f, attr_name)
 
-        result_list = self._run_dispatch(
+        self._run_dispatch(
             items=self._get_items(),
             precomputed_indices=precomputed_indices,
         )
-        return self._finalize(result_list)
+        return self._finalize()
 
     def _run_dispatch(
         self,
         items: Sequence[T],
         precomputed_indices: Sequence[int] | None,
-    ) -> list:
+    ) -> None:
         """Dispatch item processing with checkpoint/resume/progress tracking:
         item indexing, prior-progress replay, serial/parallel dispatch, and
-        final result assembly in original item order."""
+        final completion verification in original item order."""
         # Item indexing/identity
         items_with_index = _resolve_items_with_index(
             items, precomputed_indices
@@ -492,16 +492,17 @@ class MultiProgramRunner(Serializable):
                 final_done = done.copy()
                 final_done.update(newly_computed)
 
-            # Build result list in original order
-            result_list = []
+            # `_finalize` reads from `_reduced_results`; sync it from the
+            # authoritative `final_done` set, since a subclass's on_item_done
+            # callback may not populate it itself.
+            self._reduced_results.update(final_done)
+
+            # Verify all items completed in original order
             for index, _ in items_with_index:
                 if index not in final_done:
                     raise RuntimeError(
                         f"Item {index} is missing from final results"
                     )
-                result_list.append(final_done[index])
-
-            return result_list
 
         finally:
             if pbar is not None:
@@ -594,8 +595,8 @@ class MultiProgramRunner(Serializable):
 
         return on_item_done
 
-    def _finalize(self, result_list: list) -> Any:
-        """Return final result from result_list."""
+    def _finalize(self) -> Any:
+        """Return final result from accumulated state in `_reduced_results`."""
         raise NotImplementedError
 
     def _item_key_fn(self) -> Callable[[Any], str] | None:
@@ -793,6 +794,63 @@ def _get_existing_dict_keys(obj_grp: h5py.Group, attr_name: str) -> set[int]:
     return set(get_dict_attr_keys(obj_grp, attr_name))
 
 
+def _merge_dict_attr_from_worker(
+    in_f: Any,
+    out_root: Any,
+    in_attr_name: str,
+    out_attr_name: str,
+    decode_cache: Any,
+    existing_keys: set[int],
+) -> None:
+    """Stream-merge one dict attribute from worker file to runner.h5.
+
+    Filters out keys already present in runner.h5 to avoid duplicates,
+    peeks the first entry to determine if there's anything to merge,
+    then streams the full sequence to merge_dict_attr.
+
+    Parameters
+    ----------
+    in_f : h5py.File
+        Open worker file for reading.
+    out_root : h5py.Group
+        Open runner.h5 object group for writing.
+    in_attr_name : str
+        Name of dict attribute to read from in_f (e.g. "results", "_program_results").
+    out_attr_name : str
+        Name of dict attribute to merge into in out_root (may differ from in_attr_name).
+    decode_cache : ResolvingDecodeCache
+        Shared decode cache for cross-attr Serializable references.
+    existing_keys : set[int]
+        Set of keys already merged; modified in-place to track new keys.
+    """
+    if in_attr_name not in in_f:
+        return
+
+    def _filtered_gen():
+        """Stream entries, skipping already-merged keys."""
+        for key, value in iter_dict_attr_entries(
+            in_f, in_attr_name, decode_cache=decode_cache
+        ):
+            if key not in existing_keys:
+                existing_keys.add(key)
+                yield (key, value)
+
+    # Peek first entry to determine if there's anything to merge
+    gen = _filtered_gen()
+    first_entry = next(gen, None)
+    if first_entry is not None:
+        # Reconstruct full sequence and stream to merge_dict_attr
+        entries = itertools.chain([first_entry], gen)
+        merge_dict_attr(
+            out_root,
+            out_attr_name,
+            entries,
+            encode_cache={},
+            key_use_dataset=True,
+            value_use_dataset=False,
+        )
+
+
 def _consolidate_worker_files(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
@@ -853,60 +911,23 @@ def _consolidate_worker_files(
                         root=in_f, format="hdf5"
                     )
                     # Merge "results" (stored as "_reduced_results" in runner.h5)
-                    if "results" in in_f:
-
-                        def _filtered_results_gen():
-                            """Stream results entries, skipping already-merged keys."""
-                            for key, result in iter_dict_attr_entries(
-                                in_f, "results", decode_cache=decode_cache
-                            ):
-                                if key not in existing_reduced_results_keys:
-                                    existing_reduced_results_keys.add(key)
-                                    yield (key, result)
-
-                        # Peek first entry to determine if there's anything to merge
-                        gen = _filtered_results_gen()
-                        first_entry = next(gen, None)
-                        if first_entry is not None:
-                            # Reconstruct full sequence and stream to merge_dict_attr
-                            entries = itertools.chain([first_entry], gen)
-                            merge_dict_attr(
-                                out_root,
-                                "_reduced_results",
-                                entries,
-                                encode_cache={},
-                                key_use_dataset=True,
-                                value_use_dataset=False,
-                            )
-
+                    _merge_dict_attr_from_worker(
+                        in_f,
+                        out_root,
+                        "results",
+                        "_reduced_results",
+                        decode_cache,
+                        existing_reduced_results_keys,
+                    )
                     # Merge "_program_results" if present
-                    if "_program_results" in in_f:
-
-                        def _filtered_program_results_gen():
-                            """Stream _program_results entries, skipping already-merged keys."""
-                            for key, pr in iter_dict_attr_entries(
-                                in_f,
-                                "_program_results",
-                                decode_cache=decode_cache,
-                            ):
-                                if key not in existing_program_results_keys:
-                                    existing_program_results_keys.add(key)
-                                    yield (key, pr)
-
-                        # Peek first entry to determine if there's anything to merge
-                        gen = _filtered_program_results_gen()
-                        first_entry = next(gen, None)
-                        if first_entry is not None:
-                            # Reconstruct full sequence and stream to merge_dict_attr
-                            entries = itertools.chain([first_entry], gen)
-                            merge_dict_attr(
-                                out_root,
-                                "_program_results",
-                                entries,
-                                encode_cache={},
-                                key_use_dataset=True,
-                                value_use_dataset=False,
-                            )
+                    _merge_dict_attr_from_worker(
+                        in_f,
+                        out_root,
+                        "_program_results",
+                        "_program_results",
+                        decode_cache,
+                        existing_program_results_keys,
+                    )
 
             # Delete worker file once its contents are confirmed merged
             if delete_originals:
@@ -1040,6 +1061,62 @@ def _resolve_kept_program_results(
     return pr
 
 
+def _process_and_checkpoint_item(
+    process_item: Callable[..., Any],
+    item: Any,
+    index: int,
+    static_kwargs: dict[str, Any],
+    shot_executor: Any,
+    n_shot_batches: int | None,
+    keep_shot_results: bool,
+    shot_checkpoint_subdir: Callable[[int], Path | None] | None,
+    item_checkpoint_dir: Path | None,
+) -> Any:
+    """Call process_item, unpack result, and checkpoint to worker file.
+
+    Returns the unpacked result.
+    """
+    # Build kwargs for this item
+    extra_kwargs = static_kwargs.copy()
+    if keep_shot_results:
+        extra_kwargs["keep_shot_results"] = True
+
+    raw_return = process_item(
+        item,
+        index,
+        shot_executor=shot_executor,
+        n_shot_batches=n_shot_batches,
+        **extra_kwargs,
+    )
+
+    # Unpack result and optional ProgramResults based on keep_shot_results
+    if keep_shot_results:
+        result, in_memory_pr = raw_return
+    else:
+        result = raw_return
+
+    # Checkpoint result to worker file
+    if item_checkpoint_dir is not None:
+        worker_file_path = (
+            item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+        )
+        _write_dict_entry_with_retry(
+            worker_file_path, "results", index, result
+        )
+
+        # If keep_shot_results is enabled, retrieve and write ProgramResults
+        if keep_shot_results:
+            pr = _resolve_kept_program_results(
+                index, shot_checkpoint_subdir, in_memory_pr
+            )
+            if pr is not None:
+                _write_dict_entry_with_retry(
+                    worker_file_path, "_program_results", index, pr
+                )
+
+    return result
+
+
 def _run_serial(
     remaining: list[tuple[int, T]],
     process_item: Callable[..., Any],
@@ -1065,45 +1142,19 @@ def _run_serial(
     results_dict: dict[int, Any] = {}
 
     for index, item in remaining:
-        # Call process_item with keep_shot_results kwarg only if enabled
-        extra_kwargs = static_kwargs.copy()
-        if keep_shot_results:
-            extra_kwargs["keep_shot_results"] = True
-
-        raw_return = process_item(
+        result = _process_and_checkpoint_item(
+            process_item,
             item,
             index,
-            shot_executor=shot_executor,
-            n_shot_batches=n_shot_batches,
-            **extra_kwargs,
+            static_kwargs,
+            shot_executor,
+            n_shot_batches,
+            keep_shot_results,
+            shot_checkpoint_subdir,
+            item_checkpoint_dir,
         )
 
-        # Unpack result and optional ProgramResults based on keep_shot_results
-        if keep_shot_results:
-            result, in_memory_pr = raw_return
-        else:
-            result = raw_return
-
         results_dict[index] = result
-
-        # Checkpoint result to worker file
-        if item_checkpoint_dir is not None:
-            worker_file_path = (
-                item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-            )
-            _write_dict_entry_with_retry(
-                worker_file_path, "results", index, result
-            )
-
-            # If keep_shot_results is enabled, retrieve and write ProgramResults
-            if keep_shot_results:
-                pr = _resolve_kept_program_results(
-                    index, shot_checkpoint_subdir, in_memory_pr
-                )
-                if pr is not None:
-                    _write_dict_entry_with_retry(
-                        worker_file_path, "_program_results", index, pr
-                    )
 
         if on_item_done is not None:
             on_item_done(index, item, result)
@@ -1379,43 +1430,17 @@ def _generic_chunk_worker(
             )
             _write_current_item_index_with_retry(worker_file_path, index)
 
-        # Call process_item with keep_shot_results kwarg only if enabled
-        extra_kwargs = static_kwargs.copy()
-        if keep_shot_results:
-            extra_kwargs["keep_shot_results"] = True
-
-        raw_return = process_item(
+        result = _process_and_checkpoint_item(
+            process_item,
             item,
             index,
-            shot_executor=shot_executor,
-            n_shot_batches=n_shot_batches,
-            **extra_kwargs,
+            static_kwargs,
+            shot_executor,
+            n_shot_batches,
+            keep_shot_results,
+            shot_checkpoint_subdir,
+            item_checkpoint_dir,
         )
-
-        # Unpack result and optional ProgramResults based on keep_shot_results
-        if keep_shot_results:
-            result, in_memory_pr = raw_return
-        else:
-            result = raw_return
-
-        # Checkpoint result to worker file
-        if item_checkpoint_dir is not None:
-            worker_file_path = (
-                item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-            )
-            _write_dict_entry_with_retry(
-                worker_file_path, "results", index, result
-            )
-
-            # If keep_shot_results is enabled, retrieve and write ProgramResults
-            if keep_shot_results:
-                pr = _resolve_kept_program_results(
-                    index, shot_checkpoint_subdir, in_memory_pr
-                )
-                if pr is not None:
-                    _write_dict_entry_with_retry(
-                        worker_file_path, "_program_results", index, pr
-                    )
 
         results.append((index, result))
 

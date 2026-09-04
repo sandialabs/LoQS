@@ -35,7 +35,10 @@ from loqs.internal.legacy import deprecated
 from loqs.tools.paralleltools import (
     ParallelStrategy,
 )
-from loqs.tools.multiprogramrunner import MultiProgramRunner
+from loqs.tools.multiprogramrunner import (
+    MultiProgramRunner,
+    _checkpoint_subdir_for_prefix,
+)
 
 try:
     import pygsti  # noqa: F401
@@ -137,7 +140,7 @@ def _run_one_circuit(
         circ, physical_model, label_to_logical, **program_kwargs
     )
     checkpoint_dir = (
-        Path(shot_checkpoint_dir) / f"circ_{index}"
+        _checkpoint_subdir_for_prefix(shot_checkpoint_dir, "circ", index)
         if shot_checkpoint_dir is not None
         else None
     )
@@ -382,7 +385,7 @@ class EdesignRunner(MultiProgramRunner):
             # Use pyGSTi's dumps()/loads() pattern
             return self.physical_model.dumps()
         elif attr == "edesign":
-            # When checkpoint_dir is set, store path string; otherwise tar to base64 str.
+            # When item_checkpoint_dir is set, store path string; otherwise tar to base64 str.
             if self.item_checkpoint_dir is not None:
                 edesign_subdir = self.item_checkpoint_dir / "edesign"
                 if not edesign_subdir.exists():
@@ -473,7 +476,7 @@ class EdesignRunner(MultiProgramRunner):
             "lazy_loading": self.lazy_loading,
         }
 
-    def _finalize(self, result_list: list) -> Any:
+    def _finalize(self) -> Any:
         """Build and return the final DataSet from `_reduced_results`.
 
         Iterates through circuits in original order, mapping each to its
@@ -523,6 +526,10 @@ class EdesignRunner(MultiProgramRunner):
             )
 
         return ds
+
+    def _desc(self) -> str:
+        """Return description for progress bar."""
+        return "Simulating circuits"
 
     def _mismatch_check_fields(self) -> list[str]:
         """Return fields to check for resume mismatch."""

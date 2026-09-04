@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
+from loqs.internal import pin_worker_threads
 from loqs.tools.paralleltools import (
     ChunkResourceStats,
     ExecutorSpec,
@@ -19,7 +20,6 @@ from loqs.tools.paralleltools import (
     _worker_plan,
     chunk_round_robin,
     format_profile_table,
-    pin_worker_threads,
     plot_profile_results,
     profile_strategies,
     reused_slurm_allocation,

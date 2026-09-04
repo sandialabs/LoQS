@@ -671,7 +671,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             "lazy_loading": self.lazy_loading,
         }
 
-    def _finalize(self, result_list: list) -> "NoiseSweepResult":
+    def _finalize(self) -> "NoiseSweepResult":
         """Build and return the final NoiseSweepResult from `_reduced_results`.
 
         Constructs full-length failure_rates and stderrs arrays from the
@@ -730,8 +730,8 @@ class NoiseSweepResult(Displayable):
     A partial instance has `failure_rates` and `stderrs` always full-length (len == len(strengths)),
     but with `None` as placeholders for not-yet-completed indices. An arbitrary subset of indices
     may be completed, not necessarily contiguous. Resuming an interrupted sweep is done by
-    constructing a new `NoiseSweepRunner` with the same `item_checkpoint_dir` and calling
-    `.run()` again.
+    constructing a new `NoiseSweepRunner` with the same `item_checkpoint_dir`, passing
+    `resume=True`, and calling `.run()` again.
     """
 
     _CACHE_ON_SERIALIZE = True
