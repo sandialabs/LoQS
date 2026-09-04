@@ -411,6 +411,7 @@ def _run_one_program(
     num_shots: int,
     shot_checkpoint_dir: str | Path | None,
     checkpoint: bool,
+    force_resume: bool,
     lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> bool | tuple[bool, Any]:
@@ -439,6 +440,7 @@ def _run_one_program(
         checkpoint=checkpoint,
         checkpoint_dir=item_shot_checkpoint_dir,
         lazy_loading=lazy_loading,
+        force_resume=force_resume,
         return_program_results=keep_shot_results,
     )
 
@@ -516,6 +518,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             "num_shots": self.num_shots,
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
             "checkpoint": self.shot_checkpoint,
+            "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
         }
 
@@ -568,6 +571,7 @@ def test_program_output(
     checkpoint_batch_size: int | None = None,
     checkpoint_dir: str | Path | None = None,
     lazy_loading: bool = True,
+    force_resume: bool = False,
     return_program_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Test a program against expected output.
@@ -617,6 +621,10 @@ def test_program_output(
         Forwarded to [](api:QuantumProgram.run) for lazy loading.
         Defaults to `True`.
 
+    force_resume : bool, optional
+        Forwarded to [](api:QuantumProgram.run) to bypass configuration
+        mismatches on resume. Defaults to `False`.
+
     return_program_results : bool, optional
         If `True`, return `(success, program_results)` instead of the bare bool.
         Defaults to `False`.
@@ -635,6 +643,7 @@ def test_program_output(
         "n_shot_batches": n_shot_batches,
         "verbose": False,
         "lazy_loading": lazy_loading,
+        "force_resume": force_resume,
     }
     if checkpoint:
         run_kwargs["checkpoint"] = True

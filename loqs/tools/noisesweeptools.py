@@ -143,6 +143,7 @@ def _run_one_sweep_point(
     run_kwargs: dict,
     shot_checkpoint_dir: str | Path | None,
     checkpoint: bool,
+    force_resume: bool,
     lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> tuple[float, float] | tuple[tuple[float, float], Any]:
@@ -181,6 +182,7 @@ def _run_one_sweep_point(
                 checkpoint_dir / "results.h5"
             ).exists()
     resolved_run_kwargs["lazy_loading"] = lazy_loading
+    resolved_run_kwargs["force_resume"] = force_resume
 
     # Resolve shot_executor
     resolved_shot_executor = resolve_shot_executor(shot_executor)
@@ -665,6 +667,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             },
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
             "checkpoint": self.shot_checkpoint,
+            "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
         }
 

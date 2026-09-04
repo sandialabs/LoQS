@@ -329,13 +329,14 @@ def _stream_into_existing_dict_attr(
         "storage_format", "groups"
     )
 
-    # Append each entry one at a time
+    # Append each entry one at a time, validating value before key to ensure
+    # no partial writes on type mismatches (if value append fails, key is never appended)
     for key, value in entries:
         _append_to_iterable_side(
-            keys_iterable_group, key, keys_storage_format, encode_cache
+            values_iterable_group, value, values_storage_format, encode_cache
         )
         _append_to_iterable_side(
-            values_iterable_group, value, values_storage_format, encode_cache
+            keys_iterable_group, key, keys_storage_format, encode_cache
         )
 
 

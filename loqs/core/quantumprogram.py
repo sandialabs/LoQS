@@ -615,6 +615,16 @@ class QuantumProgram(Displayable):
                 "Provide at most one of n_shot_batches or checkpoint_batch_size, not both."
             )
 
+        # Validate that both parameters, if given, are >= 1
+        if n_shot_batches is not None and n_shot_batches < 1:
+            raise ValueError(
+                f"n_shot_batches must be >= 1, got {n_shot_batches}"
+            )
+        if checkpoint_batch_size is not None and checkpoint_batch_size < 1:
+            raise ValueError(
+                f"checkpoint_batch_size must be >= 1, got {checkpoint_batch_size}"
+            )
+
         resolved_n_shot_batches = None
         if shot_executor is not None:
             if n_shot_batches is not None:

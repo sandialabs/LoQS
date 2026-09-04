@@ -752,6 +752,53 @@ class TestFaultInjectionRunnerCheckpointing:
         failed2 = runner2.run()
         assert failed2 == []
 
+    def test_shot_level_force_resume_propagates_to_program_run(self, tmp_path):
+        """force_resume forwarded from FaultInjectionRunner down into each
+        program's own QuantumProgram.run() call bypasses a shot-level
+        config mismatch. No item_checkpoint_dir is used, so the runner's
+        own item-level mismatch check never triggers -- only the per-item
+        worker's own program.run(force_resume=...) call can bypass this."""
+        program = _build_counter_program()
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run: produce on-disk shot-level checkpoint state.
+        fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+        ).run()
+
+        # Resuming with a different num_shots is a mismatch
+        # QuantumProgram.run() itself validates; force_resume=False raises.
+        with pytest.raises(ValueError, match="num_shots"):
+            fttools.FaultInjectionRunner(
+                errored_programs=[program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                num_shots=2,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+            ).run()
+
+        # force_resume=True on the runner must reach the program's own
+        # program.run() call to bypass the same mismatch.
+        failed = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=2,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+            lazy_loading=False,
+        ).run()
+        assert failed == []
+
     def test_keep_shot_results_end_to_end(self, tmp_path):
         """FaultInjectionRunner with keep_shot_results=True retains full
         ProgramResults objects for each program in runner._program_results,

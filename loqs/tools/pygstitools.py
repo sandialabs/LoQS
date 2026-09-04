@@ -121,6 +121,7 @@ def _run_one_circuit(
     program_kwargs: dict,
     shot_checkpoint_dir: str | Path | None,
     checkpoint: bool,
+    force_resume: bool,
     lazy_loading: bool,
     keep_shot_results: bool = False,
 ) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
@@ -146,6 +147,7 @@ def _run_one_circuit(
         "n_shot_batches": n_shot_batches,
         "verbose": False,
         "lazy_loading": lazy_loading,
+        "force_resume": force_resume,
     }
     if checkpoint:
         run_kwargs["checkpoint"] = True
@@ -467,6 +469,7 @@ class EdesignRunner(MultiProgramRunner):
             "program_kwargs": self.program_kwargs,
             "shot_checkpoint_dir": self.shot_checkpoint_dir,
             "checkpoint": self.shot_checkpoint,
+            "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
         }
 

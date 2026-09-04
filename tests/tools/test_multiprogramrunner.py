@@ -9,6 +9,7 @@ from typing import ClassVar
 
 import pytest
 
+from loqs.core.programresults import _resolve_checkpoint_object_group
 from loqs.internal import worker_id
 from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import iter_dict_attr_entries
@@ -1230,7 +1231,12 @@ class TestMergeReducedResult:
         real_file_init = h5py_module.File.__init__
 
         def counting_file_init(self, *args, **kwargs):
-            open_calls.append(args)
+            # Only count genuine path-based opens; h5py itself may
+            # reflexively wrap an already-open low-level identifier in its
+            # own internal File(id) object (e.g. from a Dataset's `.file`
+            # property), which isn't a second disk open.
+            if args and isinstance(args[0], (str, Path)):
+                open_calls.append(args)
             return real_file_init(self, *args, **kwargs)
 
         monkeypatch.setattr(h5py_module.File, "__init__", counting_file_init)
@@ -2630,3 +2636,29 @@ class TestDecodeCache:
         # Verify worker file was deleted
         assert not worker_file.exists(), \
             "Worker file should be deleted after consolidation"
+
+    def test_reduced_results_uses_dataset_storage_format(self, tmp_path):
+        """After a fresh MultiProgramRunner checkpoint with real result data,
+        _reduced_results' key-side storage_format should be 'dataset', not 'groups'."""
+        checkpoint_dir = tmp_path / "runner_checkpoint"
+
+        # Create a simple runner with one item and run it
+        runner = _SimpleDoubleRunner(
+            items=[5],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+        result_list = runner.run()
+        assert result_list == [10]
+
+        # Verify _reduced_results key-side storage_format is 'dataset'
+        runner_path = checkpoint_dir / "runner.h5"
+        with h5py.File(runner_path, "r") as f:
+            group = _resolve_checkpoint_object_group(f)
+            storage_format = group["_reduced_results"]["dict"]["keys"][
+                "iterable"
+            ].attrs.get("storage_format", "groups")
+            assert storage_format == "dataset", (
+                f"Expected _reduced_results keys to use 'dataset' format "
+                f"after fresh checkpoint with result data, but got '{storage_format}'"
+            )

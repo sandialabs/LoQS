@@ -1316,6 +1316,66 @@ class TestResolveShotBatching:
             batch_size == 5
         ), f"Expected batch_size=5 (unchanged, authoritative), got {batch_size}"
 
+    def test_resolve_shot_batching_checkpoint_batch_size_zero_raises_valueerror(
+        self,
+    ):
+        """checkpoint_batch_size=0 raises ValueError, not ZeroDivisionError."""
+        program = self._build_simple_program()
+
+        with pytest.raises(ValueError, match="checkpoint_batch_size must be >= 1"):
+            program._resolve_shot_batching(
+                num_shots=100,
+                shot_executor=object(),
+                n_shot_batches=None,
+                checkpoint_enabled=True,
+                checkpoint_batch_size=0,
+            )
+
+    def test_resolve_shot_batching_n_shot_batches_zero_raises_valueerror(self):
+        """n_shot_batches=0 raises ValueError, not ZeroDivisionError."""
+        program = self._build_simple_program()
+
+        with pytest.raises(ValueError, match="n_shot_batches must be >= 1"):
+            program._resolve_shot_batching(
+                num_shots=100,
+                shot_executor=object(),
+                n_shot_batches=0,
+                checkpoint_enabled=True,
+                checkpoint_batch_size=None,
+            )
+
+    def test_resolve_shot_batching_negative_checkpoint_batch_size_raises_valueerror(
+        self,
+    ):
+        """negative checkpoint_batch_size raises ValueError even when
+        checkpoint_enabled=False, so this isolates the top-of-function
+        validation from the separate, pre-existing checkpoint_enabled-gated
+        check further down (which a checkpoint_enabled=True call would hit
+        instead, masking whether this validation exists at all)."""
+        program = self._build_simple_program()
+
+        with pytest.raises(ValueError, match="checkpoint_batch_size must be >= 1"):
+            program._resolve_shot_batching(
+                num_shots=100,
+                shot_executor=object(),
+                n_shot_batches=None,
+                checkpoint_enabled=False,
+                checkpoint_batch_size=-1,
+            )
+
+    def test_resolve_shot_batching_negative_n_shot_batches_raises_valueerror(self):
+        """negative n_shot_batches raises ValueError."""
+        program = self._build_simple_program()
+
+        with pytest.raises(ValueError, match="n_shot_batches must be >= 1"):
+            program._resolve_shot_batching(
+                num_shots=100,
+                shot_executor=object(),
+                n_shot_batches=-1,
+                checkpoint_enabled=True,
+                checkpoint_batch_size=None,
+            )
+
 
 class TestCheckResumeAndResolveCheckpointDir:
     """Tests for QuantumProgram._check_resume_and_resolve_checkpoint_dir

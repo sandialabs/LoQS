@@ -1868,3 +1868,36 @@ class TestResumeCheckpointing:
             assert set(reloaded2.shot_histories.keys()) == set(
                 range(num_shots_batch1 + num_shots_batch2)
             )
+
+    def test_shot_histories_uses_dataset_storage_format(self, tmp_path):
+        """After _write_results_snapshot_if_fresh followed by a real shot
+        write, shot_histories key-side storage_format should be 'dataset',
+        not 'groups'."""
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir(parents=True)
+
+        # Create a ProgramResults with checkpoint enabled, which triggers
+        # _write_results_snapshot_if_fresh to write an empty results.h5
+        results = ProgramResults(
+            num_shots=1,
+            lazy_loading=False,
+            parent_program=None,
+        )
+        results._checkpoint_dir = checkpoint_dir
+        results._write_results_snapshot_if_fresh()
+
+        # Now stream a real shot entry in, via the same method a real run
+        # uses to checkpoint shots.
+        with h5py.File(checkpoint_dir / "results.h5", "a") as f:
+            results._write_shot_entries(f, [(0, History())])
+
+        # Verify shot_histories key-side storage_format is 'dataset'
+        with h5py.File(checkpoint_dir / "results.h5", "r") as f:
+            group = _resolve_checkpoint_object_group(f)
+            storage_format = group["shot_histories"]["dict"]["keys"][
+                "iterable"
+            ].attrs.get("storage_format", "groups")
+            assert storage_format == "dataset", (
+                f"Expected shot_histories keys to use 'dataset' format "
+                f"but got '{storage_format}' (empty dict was not cleaned up)"
+            )

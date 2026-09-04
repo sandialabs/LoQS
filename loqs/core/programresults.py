@@ -80,6 +80,25 @@ def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
     return current
 
 
+def _reset_empty_groups_format_dict_attr(
+    h5_file: h5py.File, attr_name: str
+) -> None:
+    """Delete `attr_name` from its checkpoint object group if it is an
+    empty, "groups"-format dict -- the format `Serializable.write` always
+    uses for a dict attribute regardless of its intended dataset storage
+    format. Deleting it lets the next real `merge_dict_attr` call for this
+    attribute create it fresh with the correct format inferred from real
+    data. A non-empty dict, or one already in "dataset" format, is left
+    untouched, so this is idempotent and safe to call after every write.
+    """
+    group = _resolve_checkpoint_object_group(h5_file)
+    if attr_name not in group or get_dict_attr_keys(group, attr_name):
+        return
+    keys_iterable = group[attr_name]["dict"]["keys"]["iterable"]
+    if keys_iterable.attrs.get("storage_format", "groups") == "groups":
+        del group[attr_name]
+
+
 class ProgramResults(Displayable):
     """A container for the results of a quantum program execution.
 
@@ -253,9 +272,10 @@ class ProgramResults(Displayable):
     def _write_results_snapshot_if_fresh(self) -> None:
         """Write the entire ProgramResults (including nested parent_program) to
         results.h5 only if that file doesn't already exist. The written
-        shot_histories attribute (empty dict initially) is already in the state
-        needed for merge_dict_attr to extend it later. Then update
-        self.parent_program to point to results.h5 (as a string path).
+        (empty) shot_histories attribute is then reset so a later
+        merge_dict_attr call establishes it fresh in the correct storage
+        format. Then update self.parent_program to point to results.h5 (as
+        a string path).
         """
         # Set default checkpoint_dir if needed
         if self._checkpoint_dir is None:
@@ -270,6 +290,8 @@ class ProgramResults(Displayable):
         # a resuming call not re-derive a fresh config from a possibly-different self)
         if not results_path.exists():
             Serializable.write(self, results_path, format="hdf5")
+            with h5py.File(results_path, "a") as f:
+                _reset_empty_groups_format_dict_attr(f, "shot_histories")
 
         # Always reassign parent_program to the results.h5 path (whether or not
         # we just wrote it), so _build_encode_cache_from_parent_program works
@@ -430,8 +452,12 @@ class ProgramResults(Displayable):
     @classmethod
     def _from_decoded_attrs(cls, attr_dict) -> "ProgramResults":
         """Create a ProgramResults object from decoded attributes dictionary."""
-        # Handle shot_histories: convert string keys back to integers if needed
-        shot_histories = attr_dict["shot_histories"]
+        # shot_histories may be absent entirely (a checkpoint snapshot
+        # written before any shot data existed can have this attribute
+        # reset, awaiting the first real write to establish its storage
+        # format); treat that the same as an explicitly empty dict.
+        # Convert string keys back to integers if needed.
+        shot_histories = attr_dict.get("shot_histories") or {}
         if shot_histories and all(
             isinstance(k, str) and k.isdigit() for k in shot_histories.keys()
         ):

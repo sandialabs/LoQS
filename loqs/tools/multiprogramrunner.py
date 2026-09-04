@@ -21,7 +21,10 @@ from typing import Any, ClassVar, TypeVar
 
 from tqdm import tqdm
 
-from loqs.core.programresults import _resolve_checkpoint_object_group
+from loqs.core.programresults import (
+    _resolve_checkpoint_object_group,
+    _reset_empty_groups_format_dict_attr,
+)
 from loqs.internal import pin_worker_threads, worker_id
 from loqs.internal.serializable import Serializable, ResolvingDecodeCache
 from loqs.internal.streamingmerge import (
@@ -289,6 +292,12 @@ class MultiProgramRunner(Serializable):
             # Both cases (a) and (c): write/update runner.h5 with seeded state
             self.item_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             self.write(runner_path)
+            # Reset any empty dict attribute Serializable.write just wrote in
+            # the wrong ("groups") format, so the first real merge_dict_attr
+            # call for it establishes the correct format instead.
+            with h5py.File(runner_path, "a") as f:
+                for attr_name in ("_reduced_results", "_program_results"):
+                    _reset_empty_groups_format_dict_attr(f, attr_name)
 
         # Pre-assign indices via item_key_fn, adopting the persisted map
         # (or the now-seeded map) so a fresh resumed instance doesn't reassign
@@ -304,7 +313,15 @@ class MultiProgramRunner(Serializable):
             precomputed_indices = [idx for idx, _ in items_with_index]
             # Update runner.h5 with the now-populated index_map
             if self.item_checkpoint_dir is not None:
-                self.write(self.item_checkpoint_dir / self.runner_filename)
+                index_map_path = (
+                    self.item_checkpoint_dir / self.runner_filename
+                )
+                self.write(index_map_path)
+                # This write may again re-serialize an as-yet-empty dict
+                # attribute in the wrong format; reset it the same way.
+                with h5py.File(index_map_path, "a") as f:
+                    for attr_name in ("_reduced_results", "_program_results"):
+                        _reset_empty_groups_format_dict_attr(f, attr_name)
 
         result_list = self._run_dispatch(
             items=self._get_items(),

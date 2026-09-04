@@ -7,6 +7,7 @@ from loqs.internal.streamingmerge import (
     iter_dict_attr_entries,
     get_dict_attr_value,
     get_dict_attr_group,
+    get_dict_attr_keys,
 )
 from loqs.internal.serializable import Serializable
 
@@ -904,4 +905,53 @@ class TestDecideCacheForwardingKeysResolution:
                 f"the same object instance as decoded value of entry 2 "
                 f"(at {id(val2_decoded)}), but they were separate instances. "
                 f"This indicates keys-side decode_cache was not being forwarded."
+            )
+
+    def test_merge_dict_attr_no_partial_write_on_value_type_mismatch(
+        self, make_temp_path
+    ):
+        """When a new value's type mismatches an established dataset format,
+        the entry is rejected and keys/values stay in sync (no partial write)."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            # Create a dict with int keys and int values in dataset format
+            with h5py.File(temp_file, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    [(1, 10), (2, 20)],
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            # Verify initial state
+            with h5py.File(temp_file, "r") as h5_file:
+                keys_before = get_dict_attr_keys(h5_file, "test_dict")
+                assert keys_before == [1, 2]
+
+            # Attempt to merge a new entry with mismatched value type (string instead of int)
+            with h5py.File(temp_file, "a") as h5_file:
+                with pytest.raises(
+                    TypeError, match="Cannot append str to dataset of integer dtype"
+                ):
+                    merge_dict_attr(
+                        h5_file,
+                        "test_dict",
+                        [(3, "wrong_type")],
+                    )
+
+            # Verify keys and values are still in sync (keys_before length unchanged)
+            with h5py.File(temp_file, "r") as h5_file:
+                keys_after = get_dict_attr_keys(h5_file, "test_dict")
+                values_after = list(
+                    iter_dict_attr_entries(h5_file, "test_dict")
+                )
+                # Extract just the keys from the entries
+                keys_from_entries = [k for k, v in values_after]
+
+            assert keys_after == [1, 2], (
+                f"Keys should remain [1, 2] after failed merge, but got {keys_after}"
+            )
+            assert len(keys_after) == len(keys_from_entries), (
+                f"Keys and values must stay in sync; keys has {len(keys_after)} entries "
+                f"but values has {len(keys_from_entries)} entries"
             )

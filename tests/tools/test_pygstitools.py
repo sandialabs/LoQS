@@ -747,6 +747,48 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
+    def test_shot_level_force_resume_propagates_to_program_run(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """force_resume forwarded from EdesignRunner down into each
+        circuit's own QuantumProgram.run() call bypasses a shot-level
+        config mismatch. No item_checkpoint_dir is used, so the runner's
+        own item-level mismatch check never triggers -- only the per-item
+        worker's own program.run(force_resume=...) call can bypass this."""
+        s = trivial_counter_setup
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run: produce on-disk shot-level checkpoint state for both circuits.
+        s.simulate(
+            num_shots=1,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+        )
+
+        # Resuming with a different num_shots is a mismatch QuantumProgram.run()
+        # itself validates; force_resume=False should raise.
+        with pytest.raises(ValueError, match="num_shots"):
+            s.simulate(
+                num_shots=2,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+            )
+
+        # force_resume=True on the runner must reach each circuit's own
+        # program.run() call to bypass the same mismatch.
+        ds = s.simulate(
+            num_shots=2,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+            lazy_loading=False,
+        )
+
+        assert ds[s.circs[0]].counts[("0",)] == 2
+        assert ds[s.circs[1]].counts[("1",)] == 2
+
 
 def _checkpointed_circuits(checkpoint_path) -> set:
     """Every circuit with a row in a checkpoint text file, parsed as
@@ -1203,3 +1245,44 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             pr = runner._program_results[circ_index]
             # Verify the per-circuit ProgramResults has the correct number of shots
             assert len(pr.shot_histories) == 1
+
+    def test_reduced_results_uses_dataset_storage_format_end_to_end(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """EdesignRunner (the one runner with a real item_key_fn, which
+        triggers a second runner.h5 write for the index_map before any
+        item is dispatched) still ends up with _reduced_results in
+        'dataset' storage format on disk, not stuck in 'groups' format
+        from that second, still-empty write."""
+        import h5py
+        from loqs.core.programresults import _resolve_checkpoint_object_group
+
+        s = trivial_counter_setup
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+
+        runner = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=True,
+            lazy_loading=False,
+            program_kwargs=s.program_kwargs,
+        )
+        ds = runner.run()
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        runner_path = item_checkpoint_dir / runner.runner_filename
+        with h5py.File(runner_path, "r") as f:
+            group = _resolve_checkpoint_object_group(f)
+            storage_format = group["_reduced_results"]["dict"]["keys"][
+                "iterable"
+            ].attrs.get("storage_format", "groups")
+            assert storage_format == "dataset", (
+                f"Expected _reduced_results keys to use 'dataset' format "
+                f"but got '{storage_format}'"
+            )
