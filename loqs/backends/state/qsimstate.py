@@ -267,8 +267,10 @@ class QSimQuantumState(BaseQuantumState):
         assert set(instrument_dict.keys()) == set((0, 1))
 
         # Compute the probability of measuring 0
+        op0 = instrument_dict[0]
+        assert isinstance(op0, QSimSuperopGateRep)
         prob_0 = self._apply_instrument_element_ptm_for_prob(
-            instrument_dict[0].superop, qubits[0]
+            op0.superop, qubits[0]
         )
 
         # Use RNG to see if we measure 0 or 1

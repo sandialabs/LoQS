@@ -267,14 +267,14 @@ class ListPhysicalCircuit(BasePhysicalCircuit):
         # it's already the right type (reference is only ever read below).
         if not isinstance(reference, ListPhysicalCircuit):
             reference = ListPhysicalCircuit(reference)
-        idle_names = set(idle_names)
+        idle_set = set(idle_names)
 
         for qubit in qubits:
             true_seq: list[tuple[str, str]] = []
             for layer in reference._circuit:
                 for name, qs in layer:
                     if qubit in qs:
-                        kind = "idle" if name in idle_names else "real"
+                        kind = "idle" if name in idle_set else "real"
                         true_seq.append((kind, name))
 
             ptr = 0

@@ -183,7 +183,7 @@ class STIMQuantumState(BaseQuantumState):
         self._rng = np.random.default_rng(seed)
 
         self.latest_applied_circuit = _Circuit()
-        self.latest_measurement_labels = []
+        self.latest_measurement_labels: list[QubitTypes] = []
 
     def __str__(self) -> str:
         s = f"Physical {self.name} state:\n"
@@ -266,9 +266,10 @@ class STIMQuantumState(BaseQuantumState):
         # Local: The placeholder/template qubit used in the rep
         # Global: The qubit label
         # Internal: The qubit label index
-        local_to_global = {}
+        local_to_global: dict[str, str | int] = {}
         local_to_internal = {}
         for i, q in enumerate(qubits):
+            assert isinstance(q, str)
             negated = q.startswith("!")
             global_label = q.strip("!")
             try:
@@ -314,7 +315,7 @@ class STIMQuantumState(BaseQuantumState):
             internal_lines.append(" ".join(internal_entries))
 
             global_entries = [entries[0]]  # instruction is unchanged
-            global_entries += [local_to_global[e] for e in entries[1:]]
+            global_entries += [str(local_to_global[e]) for e in entries[1:]]
             global_lines.append(" ".join(global_entries))
 
         internal_circuit_str = "\n".join(internal_lines)
@@ -342,7 +343,9 @@ class STIMQuantumState(BaseQuantumState):
         probs = [r[1] for r in operations]
 
         # Pick an op to apply
-        idx_to_apply = self._rng.choice(list(range(len(operations))), p=probs)
+        idx_to_apply = self._rng.choice(
+            list(range(len(operations))), p=np.asarray(probs)
+        )
 
         rep_to_apply = StimCircuitGateRep(operations[idx_to_apply][0], qubits)
 

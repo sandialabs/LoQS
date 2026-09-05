@@ -11,11 +11,11 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 import functools
 import inspect
 import itertools
-from typing import TypeVar, cast
+from typing import Literal, TypeVar, cast
 
 import numpy as np
 
@@ -527,7 +527,10 @@ def _zbasis_projection_to_outcome_operation_dict(
         matrix[target, b] = 1.0
         return UnitaryGateRep(matrix, rep.qubit_labels)
 
-    outcome_ops = {0: _outcome_operator(0), 1: _outcome_operator(1)}
+    outcome_ops: dict[Hashable, GateRep] = {
+        0: _outcome_operator(0),
+        1: _outcome_operator(1),
+    }
     return OutcomeOperationDictInstrumentRep(
         outcome_ops, rep.include_outcome, rep.qubit_labels
     )
@@ -583,10 +586,13 @@ def _outcome_operation_dict_to_zbasis_projection(
             )
         targets[b] = entry[0]
 
+    reset: Literal[0, 1] | None
     if targets[0] == 0 and targets[1] == 1:
         reset = None
-    elif targets[0] == targets[1]:
-        reset = targets[0]
+    elif targets[0] == 0 and targets[1] == 0:
+        reset = 0
+    elif targets[0] == 1 and targets[1] == 1:
+        reset = 1
     else:
         raise RepConstructionError(
             "outcome_ops does not correspond to a Z-basis projection with "
@@ -602,7 +608,7 @@ def _outcome_operation_dict_to_zbasis_projection(
 # ZBasisProjectionInstrumentRep <-> StimCircuitInstrumentRep.
 #####################################################################################################################
 
-_STIM_SINGLE_LINE_PROJECTIONS: dict[str, tuple[int | None, bool]] = {
+_STIM_SINGLE_LINE_PROJECTIONS: dict[str, tuple[Literal[0, 1] | None, bool]] = {
     "M": (None, True),
     "MZ": (None, True),
     "MR": (0, True),
@@ -818,7 +824,9 @@ def _try_construct(
     if inspect.isabstract(cls):
         return None
     try:
-        return cls(
+        # Cast cls as a callable factory; it's invoked speculatively and
+        # errors caught by the enclosing except block.
+        return cast(Callable[..., OperationRep], cls)(
             source,
             qubit_labels=qubits,
             **_accepted_kwargs(cls.__init__, kwargs),

@@ -130,6 +130,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     d: list[int]
     """List of dimensions of each subsystem (e.g. 2 for qubits, 3 for qutrits)."""
 
+    seed: int | None
+    """RNG seed; None indicates default NumPy behavior."""
+
+    _rng: np.random.Generator
+    """Random number generator."""
+
     @property
     def state(self) -> np.ndarray:
         """Get the underlying quantum state vector.
@@ -186,12 +192,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         """
         self.qubit_labels = []
         self.reset_seed(seed)
-        # These may be None here; resolved below
-        self.kraus_sampling = kraus_sampling
-        self.contraction = contraction
+        # kraus_sampling and contraction resolved after state init
 
         if isinstance(state, NumpyStatevectorQuantumState):
-            self._init_from_existing_state(state, kraus_sampling, contraction)
+            kraus_sampling, contraction = self._init_from_existing_state(
+                state, kraus_sampling, contraction
+            )
         else:
             num_subsystems = self._infer_num_subsystems(state, qubit_labels, d)
             self.d = self._resolve_dimensions(num_subsystems, d)
@@ -207,14 +213,17 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
             self.state.shape
         ), "Must specify a qubit label for every qubit"
 
-        if self.kraus_sampling is None:  # We haven't set it yet
-            self.kraus_sampling = "lazy"
+        # Resolve kraus_sampling and contraction; use defaults if still None
+        if kraus_sampling is None:
+            kraus_sampling = "lazy"
+        if contraction is None:
+            contraction = "matmul"
+        self.kraus_sampling = kraus_sampling
+        self.contraction = contraction
         assert self.kraus_sampling in KRAUS_SAMPLING_MODES, (
             f"kraus_sampling must be one of {KRAUS_SAMPLING_MODES}, "
             f"got {self.kraus_sampling}"
         )
-        if self.contraction is None:  # We haven't set it yet
-            self.contraction = "matmul"
         assert self.contraction in CONTRACTION_MODES, (
             f"contraction must be one of {CONTRACTION_MODES}, "
             f"got {self.contraction}"
@@ -225,12 +234,12 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         state: NumpyStatevectorQuantumState,
         kraus_sampling: str | None,
         contraction: str | None,
-    ) -> None:
+    ) -> tuple[str | None, str | None]:
         """Initialize from an existing NumpyStatevectorQuantumState.
 
         Copies the state's internal array, qubit labels, RNG, and dimensions,
         inheriting kraus_sampling and contraction modes if not explicitly
-        provided.
+        provided. Returns the resolved modes for assignment in __init__.
         """
         self._state = state._state
         self.qubit_labels = state.qubit_labels
@@ -238,9 +247,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         self._rng = state._rng
         self.d = state.d
         if kraus_sampling is None:
-            self.kraus_sampling = state.kraus_sampling
+            kraus_sampling = state.kraus_sampling
         if contraction is None:
-            self.contraction = state.contraction
+            contraction = state.contraction
+        return kraus_sampling, contraction
 
     @staticmethod
     def _infer_num_subsystems(
@@ -657,15 +667,15 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         target_idx = self.qubit_labels.index(qbit)
         dim = self.d[target_idx]
 
-        probs = []
+        raw_probs: list[float] = []
         for c in range(dim):
             target_slice = self._slice(
                 self.state, target_idx, start=c, end=c + 1
             )
             prob_c = np.vdot(target_slice.flat, target_slice.flat).real
-            probs.append(max(prob_c, 0.0))
+            raw_probs.append(max(prob_c, 0.0))
 
-        probs = np.array(probs)
+        probs = np.array(raw_probs)
         sum_probs = np.sum(probs)
         if sum_probs > 0:
             probs = probs / sum_probs

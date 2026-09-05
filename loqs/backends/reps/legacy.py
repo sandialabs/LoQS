@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeVar
 
 from loqs.backends.reps.base import OperationRep
 from loqs.backends.reps.gatereps import (
@@ -31,6 +31,9 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisProjectionInstrumentRep,
 )
 from loqs.internal.serializable import MisformedDecodableError
+
+_E1 = TypeVar("_E1", bound=Enum)
+_E2 = TypeVar("_E2", bound=Enum)
 
 
 class _LegacyGateRepValue(Enum):
@@ -92,10 +95,10 @@ _LEGACY_INSTRUMENTREP_CLASS: dict[
 
 def _upgrade_legacy_tag(
     value: object,
-    primary_enum: type[Enum],
-    primary_class_map: Mapping[Enum, type[OperationRep]],
-    secondary_enum: type[Enum],
-    secondary_class_map: Mapping[Enum, type[OperationRep]],
+    primary_enum: type[_E1],
+    primary_class_map: Mapping[_E1, type[OperationRep]],
+    secondary_enum: type[_E2],
+    secondary_class_map: Mapping[_E2, type[OperationRep]],
 ) -> object:
     """Shared dispatch for `upgrade_legacy_gaterep_tag`/`upgrade_legacy_instrumentrep_tag`.
 

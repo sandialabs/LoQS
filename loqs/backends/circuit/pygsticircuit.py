@@ -261,7 +261,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         # it's already the right type (reference is only ever read below).
         if not isinstance(reference, PyGSTiPhysicalCircuit):
             reference = PyGSTiPhysicalCircuit(reference)
-        idle_names = set(idle_names)
+        idle_set = set(idle_names)
         ref_circuit = reference.circuit
 
         for qubit in qubits:
@@ -269,14 +269,14 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             for lidx in range(ref_circuit.depth):
                 for comp in ref_circuit._layer_components(lidx):
                     if comp.qubits and qubit in comp.qubits:  # type: ignore
-                        kind = "idle" if comp.name in idle_names else "real"  # type: ignore
+                        kind = "idle" if comp.name in idle_set else "real"  # type: ignore
                         true_seq.append((kind, comp.name))  # type: ignore
 
             ptr = 0
             for lidx in range(self._circuit.depth):
                 comps = self._circuit._layer_components(lidx)
                 is_real = any(
-                    comp.qubits and qubit in comp.qubits and comp.name not in idle_names  # type: ignore
+                    comp.qubits and qubit in comp.qubits and comp.name not in idle_set  # type: ignore
                     for comp in comps
                 )
                 if is_real:

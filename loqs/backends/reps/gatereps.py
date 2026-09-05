@@ -302,7 +302,7 @@ class ProbabilisticStimGateRep(GateRep):
                     "pairs)"
                 )
         probs = [el[1] for el in operations]
-        if any(p < 0 for p in probs) or abs(1 - sum(probs)) >= 1e-12:
+        if any(p < 0 for p in probs) or abs(1 - float(sum(probs))) >= 1e-12:
             raise RepConstructionError(
                 f"{operations!r} probabilities must be non-negative and "
                 "sum to 1"
