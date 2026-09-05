@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 import json
 import re
 import warnings
@@ -263,6 +263,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     """Underlying [](api:pygsti.models.explicitmodel.ExplicitOpModel) or [](api:pygsti.models.implicitmodel.ImplicitOpModel)
     """
 
+    qubit_aliases: dict[str | int, str | int]
+    instrument_outcome_qubits: dict[
+        str | tuple[str, tuple[str | int, ...]],
+        str | int | Sequence[str | int],
+    ]
+
     def __init__(
         self,
         model: PyGSTiModelLike,
@@ -391,8 +397,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         # TODO: Crosstalk specification?
 
-        self._gate_rep_cache = {}
-        self._inst_rep_cache = {}
+        self._gate_rep_cache: dict[tuple[Any, type[GateRep]], GateRep] = {}
+        self._inst_rep_cache: dict[
+            tuple[Any, type[InstrumentRep]], InstrumentRep
+        ] = {}
 
         # Tracks which gate_dict/inst_dict keys have already been checked for
         # the pyGSTi EmbeddedOp dense-representation memory-blowup bug (see
@@ -409,7 +417,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def gate_keys(self) -> list:
-        keys = []
+        keys: list[tuple[Any, ...]] = []
         for key in self.gate_dict.keys():
             name = key.name
 
@@ -431,7 +439,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             keys.append((name, aliased_qubits))
         return keys
 
-    _output_gate_reps = [
+    _output_gate_reps: list[type[GateRep]] = [
         UnitaryGateRep,
         KrausGateRep,
         PTMGateRep,
@@ -442,7 +450,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     def output_gate_reps(self) -> list[type[GateRep]]:
         return self._output_gate_reps
 
-    _output_instrument_reps = [
+    _output_instrument_reps: list[type[InstrumentRep]] = [
         ZBasisProjectionInstrumentRep,
         OutcomeOperationDictInstrumentRep,
     ]
@@ -751,7 +759,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             for member_op in op.values():
                 member_op.set_time(self.current_time)
 
-        outcome_ops = {}
+        outcome_ops: dict[Hashable, GateRep] = {}
         for k, v in op.items():
             if isinstance(k, str) and k != "" and all(c in "01" for c in k):
                 # pyGSTi's usual '0'/'1'-character-string convention

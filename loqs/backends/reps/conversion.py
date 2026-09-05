@@ -15,6 +15,7 @@ from collections.abc import Callable, Sequence
 import functools
 import inspect
 import itertools
+from typing import TypeVar, cast
 
 import numpy as np
 
@@ -35,6 +36,9 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisProjectionInstrumentRep,
 )
 from loqs.types import Float, NDArray
+
+T = TypeVar("T", bound=OperationRep)
+"""TypeVar for the convert() function's generic return type."""
 
 # `stim` is an optional dependency (soft-dependency idiom already used by
 # `stimcircuit.py`/`stimstate.py`) -- the `UnitaryGateRep <-> StimCircuitGateRep`
@@ -825,10 +829,10 @@ def _try_construct(
 
 def convert(
     source: object,
-    target: type[OperationRep] | Sequence[type[OperationRep]],
+    target: type[T] | Sequence[type[T]],
     qubits: str | int | Sequence[str | int] | None = None,
     **kwargs,
-) -> OperationRep:
+) -> T:
     """Convert `source` (a raw payload or an `OperationRep`) to `target`.
 
     1. If `source` already is (or is an instance of) `target`, return it.
@@ -859,7 +863,7 @@ def convert(
 
     Returns
     -------
-    OperationRep
+    T
         The converted (or passed-through) representation.
 
     Raises
@@ -869,13 +873,16 @@ def convert(
         conversion path exists from that starting class to any entry in
         `target`.
     """
-    targets: tuple[type[OperationRep], ...] = (
+    # Every return below is guaranteed by construction to be an instance of
+    # one of `targets`'s classes, so each `cast(T, ...)` below is sound even
+    # though mypy can't verify it from a runtime tuple of types.
+    targets: tuple[type[T], ...] = (
         (target,) if isinstance(target, type) else tuple(target)
     )
 
     if isinstance(source, OperationRep):
         if isinstance(source, targets):
-            return source
+            return cast(T, source)
         source_cls: type[OperationRep] = type(source)
         source_rep: OperationRep = source
     else:
@@ -885,7 +892,7 @@ def convert(
         for candidate_target in targets:
             result = _try_construct(candidate_target, source, qubits, kwargs)
             if result is not None:
-                return result
+                return cast(T, result)
 
         # No direct target match -- resolve a single, unambiguous starting
         # class among every known concrete rep class before hopping.
@@ -911,7 +918,7 @@ def convert(
         source_cls, source_rep = starting_candidates[0]
 
     if isinstance(source_rep, targets):
-        return source_rep
+        return cast(T, source_rep)
 
     best_path = None
     for candidate_target in targets:
@@ -930,4 +937,4 @@ def convert(
     for step_cls in best_path[1:]:
         converter = _CONVERTERS[(type(result), step_cls)]
         result = converter(result, **_accepted_kwargs(converter, kwargs))
-    return result
+    return cast(T, result)

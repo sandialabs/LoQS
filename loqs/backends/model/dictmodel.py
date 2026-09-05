@@ -16,7 +16,15 @@ from types import NoneType
 import copy
 import warnings
 import numpy as np
-from typing import ClassVar, Literal, TypeAlias, TypeVar, TYPE_CHECKING, Any
+from typing import (
+    ClassVar,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    TYPE_CHECKING,
+    Any,
+    cast,
+)
 
 if TYPE_CHECKING:
     from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
@@ -29,11 +37,13 @@ from loqs.backends.reps import (
     KrausGateRep,
     OperationRep,
     ProbabilisticStimGateRep,
+    PTMGateRep,
     QSimSuperopGateRep,
     RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     StimCircuitPayloadMixin,
+    UnitaryGateRep,
     OutcomeOperationDictInstrumentRep,
     ZBasisPrePostInstrumentRep,
     ZBasisProjectionInstrumentRep,
@@ -104,7 +114,9 @@ class DictNoiseModel(BaseNoiseModel):
         instreps: Sequence[type[InstrumentRep]] = (
             ZBasisProjectionInstrumentRep,
         ),
-        gaterep_array_cast_rep: type[GateRep] = QSimSuperopGateRep,
+        gaterep_array_cast_rep: (
+            type[UnitaryGateRep] | type[PTMGateRep] | type[QSimSuperopGateRep]
+        ) = QSimSuperopGateRep,
         instrep_cast_reset: Literal[0, 1, None] = None,
         instrep_cast_include_outcomes: bool = True,
     ) -> None:
@@ -360,22 +372,29 @@ class DictNoiseModel(BaseNoiseModel):
             circuit = ListPhysicalCircuit(circuit)
 
         # Iterate through circuit and pull out representations
-        reps = []
+        reps: list[OperationRep] = []
         for layer in circuit.circuit:
             for label in layer:
                 # Try to look up in gates
-                rep = self.gate_dict.get(label, None)
+                rep: OperationRep | None = self.gate_dict.get(label, None)
 
                 if rep is None:
                     # Also try to look up just by name
-                    generic = self.gate_dict.get(label[0], None)
+                    generic: OperationRep | None = self.gate_dict.get(
+                        label[0], None
+                    )
                     if generic is not None:
                         assert isinstance(generic, GateRep)
-                        rep = generic.with_qubit_labels(label[1])
+                        rep = cast(
+                            OperationRep | None,
+                            generic.with_qubit_labels(label[1]),
+                        )
 
                 if rep is None:
                     # Failed, now look up in instruments
-                    rep = self.inst_dict.get(label, None)
+                    rep = cast(
+                        OperationRep | None, self.inst_dict.get(label, None)
+                    )
 
                 if rep is None:
                     # Also try to look up just by name
@@ -402,12 +421,17 @@ class DictNoiseModel(BaseNoiseModel):
         # `upgrade_legacy_gaterep_tag` translates that tag to the
         # corresponding modern class, and passes anything else through
         # unchanged.
-        gatereps = [
-            upgrade_legacy_gaterep_tag(v) for v in attr_dict["_gatereps"]
-        ]
-        instreps = [
-            upgrade_legacy_instrumentrep_tag(v) for v in attr_dict["_instreps"]
-        ]
+        gatereps = cast(
+            list[type[GateRep]],
+            [upgrade_legacy_gaterep_tag(v) for v in attr_dict["_gatereps"]],
+        )
+        instreps = cast(
+            list[type[InstrumentRep]],
+            [
+                upgrade_legacy_instrumentrep_tag(v)
+                for v in attr_dict["_instreps"]
+            ],
+        )
         return cls(gate_dict, inst_dict, gatereps, instreps)
 
 
@@ -415,7 +439,12 @@ def build_legacy_stim_dict_model(
     model_or_dicts: "DictNoiseModel | tuple[Mapping, Mapping]",
     gatereps: Sequence[type[GateRep]] | None = None,
     instreps: Sequence[type[InstrumentRep]] | None = None,
-    gaterep_array_cast_rep: type[GateRep] | None = None,
+    gaterep_array_cast_rep: (
+        type[UnitaryGateRep]
+        | type[PTMGateRep]
+        | type[QSimSuperopGateRep]
+        | None
+    ) = None,
     instrep_cast_reset: Literal[0, 1, None] = None,
     instrep_cast_include_outcomes: bool = True,
 ) -> "DictNoiseModel":
@@ -519,6 +548,7 @@ def _merge_common_rep(
         common[command] = generic.with_qubit_labels(qt)
         return
 
+    assert isinstance(prev, StimCircuitPayloadMixin)
     new_lines = [
         line
         + "".join(f" {len(prev.qubit_labels) + i}" for i in range(len(qt)))
@@ -539,7 +569,7 @@ def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
     assert STIMPhysicalCircuit is not None
     aliases = STIMPhysicalCircuit.stim_command_aliases
 
-    need_aliasing = []
+    need_aliasing: list[MemberLabel] = []
     for k in d:
         if isinstance(k, str) and k in aliases:
             need_aliasing.append(k)
@@ -547,6 +577,7 @@ def add_command_aliases(d: dict[MemberLabel, Any]) -> None:
             need_aliasing.append(k)
 
     for k in need_aliasing:
+        aliased_k: MemberLabel
         if isinstance(k, str):
             aliased_k = aliases[k]
         elif isinstance(k, tuple):
@@ -571,7 +602,9 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
     # for a plain function registered from outside the class body like
     # this, is `self`, not `circuit`. Passing `STIMPhysicalCircuit`
     # explicitly sidesteps that ambiguity entirely.
-    @DictNoiseModel.get_reps.register(STIMPhysicalCircuit)
+    # A known typeshed limitation: singledispatchmethod.__get__'s stub doesn't
+    # expose .register when accessed on the class.
+    @DictNoiseModel.get_reps.register(STIMPhysicalCircuit)  # type: ignore[attr-defined]
     def _get_reps_stim(
         self: DictNoiseModel,
         circuit: STIMPhysicalCircuit,
@@ -639,7 +672,7 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
         add_command_aliases(inst_dict)
 
         # Iterate through circuit and pull out representations
-        reps = []
+        reps: list[OperationRep] = []
         for line in circuit._unroll_repeats().split("\n"):
             entries = line.split()
 
@@ -683,6 +716,7 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
                     mapped_qubits.append(f"{'!' if negated else ''}{qlabel}")
 
                 # Put these in a tuple form commensurate with dict keys
+                qubit_tuples: list[tuple[str, ...]]
                 if command in circuit._stim_twoq_gates:
                     qubit_tuples = [
                         (mapped_qubits[i], mapped_qubits[i + 1])
@@ -701,20 +735,24 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
                     label = (command.upper(), qt)
 
                     # Try to look up in gates
-                    rep = gate_dict.get(label, None)
+                    rep: OperationRep | None = gate_dict.get(label, None)
 
                     if rep is None:
                         # If that failed, check for generic name only
-                        generic = gate_dict.get(command.upper(), None)
+                        generic: OperationRep | None = gate_dict.get(
+                            command.upper(), None
+                        )
                         if generic is not None:
                             assert isinstance(generic, GateRep)
                             is_common = True
                             _merge_common_rep(command, qt, generic, common)
-                            rep = common[command]
+                            rep = cast(OperationRep | None, common[command])
 
                     if rep is None:
                         # Failed, now look up in instruments
-                        rep = inst_dict.get(label, None)
+                        rep = cast(
+                            OperationRep | None, inst_dict.get(label, None)
+                        )
 
                     if rep is None:
                         # If that failed, check for generic name only
@@ -723,7 +761,7 @@ if STIMPhysicalCircuit is not None:  # noqa: C901
                             assert isinstance(generic, InstrumentRep)
                             is_common = True
                             _merge_common_rep(command, qt, generic, common)
-                            rep = common[command]
+                            rep = cast(OperationRep | None, common[command])
 
                     assert rep is not None, f"Failed to look up {label}"
                     assert isinstance(rep, OperationRep)
