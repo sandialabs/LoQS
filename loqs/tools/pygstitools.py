@@ -355,6 +355,7 @@ class EdesignRunner(MultiProgramRunner):
         program_kwargs: dict | None = None,
         poll_interval: float = 1.0,
         show_progress: bool = True,
+        runner_filename: str = "runner.h5",
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -368,6 +369,7 @@ class EdesignRunner(MultiProgramRunner):
             keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
+            runner_filename=runner_filename,
         )
         self.edesign = edesign
         self.physical_model = physical_model

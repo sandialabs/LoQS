@@ -902,6 +902,46 @@ class TestResume:
         loaded = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
         assert loaded.is_complete
 
+    def test_custom_runner_filename_checkpoint_and_resume(self, tmp_path):
+        """A custom runner_filename is correctly written, read back on
+        resume, and the default runner.h5 is not created."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        custom_runner_file = "custom_runner.h5"
+
+        # First run with custom runner_filename
+        runner1 = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            verbose=False,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            runner_filename=custom_runner_file,
+        )
+        result1 = runner1.run()
+        assert result1.is_complete
+
+        # Verify custom file exists and default does not
+        assert (item_checkpoint_dir / custom_runner_file).exists()
+        assert not (item_checkpoint_dir / "runner.h5").exists()
+
+        # Resume with the same custom runner_filename
+        runner2 = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            verbose=False,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            runner_filename=custom_runner_file,
+        )
+        result2 = runner2.run()
+
+        assert result2.failure_rates == result1.failure_rates
+        assert result2.stderrs == result1.stderrs
+        assert result2.is_complete
+
 
 class TestFromNoiseSweepRunner:
     def test_from_noise_sweep_runner_with_single_override(self, tmp_path):
@@ -954,6 +994,32 @@ class TestFromNoiseSweepRunner:
         assert copied_result.failure_rates == base_result.failure_rates
         assert copied_result.stderrs == base_result.stderrs
         assert copied_result.is_complete
+
+    def test_from_noise_sweep_runner_preserves_and_overrides_runner_filename(
+        self, tmp_path
+    ):
+        """from_noise_sweep_runner preserves runner_filename by default and
+        correctly applies an explicit override."""
+        custom_file = "my_custom_runner.h5"
+        base_runner = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            verbose=False,
+            runner_filename=custom_file,
+        )
+        assert base_runner.runner_filename == custom_file
+
+        # Copy with no override should preserve the custom filename
+        copied_runner = NoiseSweepRunner.from_noise_sweep_runner(base_runner)
+        assert copied_runner.runner_filename == custom_file
+
+        # Copy with an explicit override should use the new filename
+        new_file = "another_runner.h5"
+        overridden_runner = NoiseSweepRunner.from_noise_sweep_runner(
+            base_runner, runner_filename=new_file
+        )
+        assert overridden_runner.runner_filename == new_file
 
 
 class TestNoiseSweepResult:

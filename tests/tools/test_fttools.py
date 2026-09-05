@@ -1035,6 +1035,45 @@ class TestFaultInjectionRunnerCheckpointing:
         prog1_results_after.load_checkpoint(prog1_shot_ckpt)
         assert len(prog1_results_after.shot_histories) == 9
 
+    def test_custom_runner_filename_checkpoint_and_resume(self, tmp_path):
+        """A custom runner_filename is correctly written, read back on
+        resume, and the default runner.h5 is not created."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        custom_runner_file = "custom_runner.h5"
+
+        # First run with custom runner_filename
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
+            runner_filename=custom_runner_file,
+        )
+        failed1 = runner1.run()
+
+        assert failed1 == []
+        # Verify custom file exists and default does not
+        assert (ckpt / custom_runner_file).exists()
+        assert not (ckpt / "runner.h5").exists()
+
+        # Resume with the same custom runner_filename
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
+            runner_filename=custom_runner_file,
+        )
+        failed2 = runner2.run()
+
+        assert failed2 == []
+
 
 class TestProgramOutput:
 

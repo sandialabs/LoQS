@@ -1307,3 +1307,39 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
                 f"Expected _reduced_results keys to use 'dataset' format "
                 f"but got '{storage_format}'"
             )
+
+    def test_custom_runner_filename_checkpoint_and_resume(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A custom runner_filename is correctly written, read back on
+        resume, and the default runner.h5 is not created."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        custom_runner_file = "custom_runner.h5"
+
+        # First run with custom runner_filename
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            runner_filename=custom_runner_file,
+            program_kwargs=s.program_kwargs,
+        )
+        ds1 = runner1.run()
+
+        assert ds1[s.circs[0]].counts[("0",)] == 1
+        assert ds1[s.circs[1]].counts[("1",)] == 1
+        # Verify custom file exists and default does not
+        assert (ckpt / custom_runner_file).exists()
+        assert not (ckpt / "runner.h5").exists()
+
+        # Resume with the same custom runner_filename
+        runner2 = EdesignRunner.read(ckpt / custom_runner_file)
+        ds2 = runner2.run()
+
+        assert ds2[s.circs[0]].counts[("0",)] == 1
+        assert ds2[s.circs[1]].counts[("1",)] == 1

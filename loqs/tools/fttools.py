@@ -479,6 +479,7 @@ class FaultInjectionRunner(MultiProgramRunner):
         keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
+        runner_filename: str = "runner.h5",
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -492,6 +493,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
+            runner_filename=runner_filename,
         )
         self.errored_programs = errored_programs
         self.collect_shot_data_args = collect_shot_data_args

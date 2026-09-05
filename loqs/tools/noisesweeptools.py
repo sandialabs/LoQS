@@ -281,6 +281,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         keep_shot_results: bool = False,
         poll_interval: float = 1.0,
         show_progress: bool = True,
+        runner_filename: str = "runner.h5",
     ) -> None:
         """
         Parameters
@@ -341,7 +342,8 @@ class NoiseSweepRunner(MultiProgramRunner):
             rather than `**kwargs`. Replaces the old `**run_kwargs` catch-all.
 
         item_checkpoint_dir, checkpoint, resume, force_resume, parallel_strategy,
-        shot_checkpoint, shot_checkpoint_dir, lazy_loading, keep_shot_results:
+        shot_checkpoint, shot_checkpoint_dir, lazy_loading, keep_shot_results,
+        runner_filename:
             See `MultiProgramRunner.__init__` for these inherited configuration fields.
         """
         super().__init__(
@@ -356,6 +358,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             keep_shot_results=keep_shot_results,
             poll_interval=poll_interval,
             show_progress=show_progress,
+            runner_filename=runner_filename,
         )
         self.strengths = list(strengths)
         self.base_seed = base_seed
@@ -508,6 +511,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         keep_shot_results: bool | None = None,
         poll_interval: float | None = None,
         show_progress: bool | None = None,
+        runner_filename: str | None = None,
     ) -> "NoiseSweepRunner":
         """Create a new NoiseSweepRunner from an existing one with optional overrides.
 
@@ -624,6 +628,11 @@ class NoiseSweepRunner(MultiProgramRunner):
                 show_progress
                 if show_progress is not None
                 else other.show_progress
+            ),
+            runner_filename=(
+                runner_filename
+                if runner_filename is not None
+                else other.runner_filename
             ),
         )
 
