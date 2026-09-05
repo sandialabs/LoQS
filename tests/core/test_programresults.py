@@ -1901,3 +1901,70 @@ class TestResumeCheckpointing:
                 f"Expected shot_histories keys to use 'dataset' format "
                 f"but got '{storage_format}' (empty dict was not cleaned up)"
             )
+
+    def test_consolidate_checkpoints_skips_corrupted_worker_files(
+        self, tmp_path
+    ):
+        """consolidate_checkpoints should skip corrupted/truncated worker files
+        without crashing, leaving them intact for a later retry once they
+        become readable. Verify deduplication logic still works correctly.
+        """
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir(parents=True)
+
+        # Write first valid worker file
+        results1 = ProgramResults(lazy_loading=False)
+        for i in range(3):
+            history = History()
+            history.append(Frame({"shot_id": i}))
+            results1.add_shot(i, history)
+        results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+        # Write second valid worker file
+        results2 = ProgramResults(lazy_loading=False)
+        for i in range(3, 6):
+            history = History()
+            history.append(Frame({"shot_id": i}))
+            results2.add_shot(i, history)
+        results2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w1")
+
+        # Create a corrupted (0-byte) worker file to simulate a crash
+        corrupted_worker = checkpoint_dir / "worker_w2_checkpoint.h5"
+        corrupted_worker.write_bytes(b"")
+
+        # First consolidation should skip the corrupted file but merge valid ones
+        consolidator = ProgramResults()
+        consolidator.consolidate_checkpoints(
+            checkpoint_dir=checkpoint_dir, delete_originals=True
+        )
+
+        # Verify valid shots were merged
+        result = ProgramResults()
+        result.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert set(result.shot_histories.keys()) == {0, 1, 2, 3, 4, 5}
+
+        # Verify corrupted file still exists (not deleted)
+        assert corrupted_worker.exists()
+
+        # Now overwrite corrupted file with valid worker checkpoint
+        results3 = ProgramResults(lazy_loading=False)
+        for i in range(6, 9):
+            history = History()
+            history.append(Frame({"shot_id": i}))
+            results3.add_shot(i, history)
+        # Write directly to corrupted_worker's path
+        with h5py.File(corrupted_worker, "w") as f:
+            Serializable.encode(
+                results3, format="hdf5", h5_group=f, encode_cache={}
+            )
+
+        # Second consolidation should now pick up the previously corrupted file
+        consolidator2 = ProgramResults()
+        consolidator2.consolidate_checkpoints(
+            checkpoint_dir=checkpoint_dir, delete_originals=True
+        )
+
+        # Verify all shots are now present
+        result2 = ProgramResults()
+        result2.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert set(result2.shot_histories.keys()) == {0, 1, 2, 3, 4, 5, 6, 7, 8}

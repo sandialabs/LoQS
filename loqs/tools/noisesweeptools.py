@@ -710,6 +710,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         return [
             "strengths",
             "base_seed",
+            "seed_stride",
             "num_shots",
             "collect_shot_data_args",
             "expected_outcomes",

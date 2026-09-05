@@ -306,17 +306,20 @@ class ProgramResults(Displayable):
             return
 
         try:
-            decode_cache = {}
-            ProgramResults.read(self.parent_program, decode_cache=decode_cache)
+            with h5py.File(self.parent_program, "r") as f:
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                Serializable.decode(
+                    f, format="hdf5", decode_cache=decode_cache
+                )
 
-            # decode_cache maps cache_id to object; the encode cache the
-            # encoder actually consults is keyed by _serial_hash(object),
-            # mapping to a list of (id(object), cache_id) pairs.
-            self._checkpoint_encode_cache = {
-                Serializable._serial_hash(v): [(id(v), k)]
-                for k, v in decode_cache.items()
-            }
-        except Exception:
+                # decode_cache maps cache_id to object; the encode cache the
+                # encoder actually consults is keyed by _serial_hash(object),
+                # mapping to a list of (id(object), cache_id) pairs.
+                self._checkpoint_encode_cache = {
+                    Serializable._serial_hash(v): [(id(v), k)]
+                    for k, v in decode_cache.items()
+                }
+        except (BlockingIOError, OSError, KeyError, ValueError, RuntimeError):
             # If there's any error reading the results or building the cache,
             # just continue without the cache - it's not critical for functionality
             pass
@@ -470,6 +473,7 @@ class ProgramResults(Displayable):
             parent_program=attr_dict["parent_program"],
             num_shots=attr_dict.get("num_shots"),
             max_frame_limit=attr_dict.get("max_frame_limit"),
+            results_filename=attr_dict.get("_results_filename", "results.h5"),
         )
 
         # Set internal attributes that aren't in the constructor
@@ -664,7 +668,13 @@ class ProgramResults(Displayable):
                         and loaded.shot_histories
                     ):
                         done.update(loaded.shot_histories)
-            except Exception:
+            except (
+                BlockingIOError,
+                OSError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+            ):
                 pass  # Skip if we can't read this file
 
         # Then, read every worker_*_checkpoint.h5 (sorted, no .tmp files)
@@ -685,7 +695,13 @@ class ProgramResults(Displayable):
                         and loaded.shot_histories
                     ):
                         done.update(loaded.shot_histories)
-            except Exception:
+            except (
+                BlockingIOError,
+                OSError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+            ):
                 pass  # Skip if we can't read this file
 
         return done
@@ -727,7 +743,7 @@ class ProgramResults(Displayable):
                 with h5py.File(results_file, "r") as f:
                     keys = get_dict_attr_keys(f, "shot_histories")
                     done_indices.update(keys)
-            except Exception:
+            except (BlockingIOError, OSError, KeyError):
                 pass  # Skip if we can't read this file
 
         # Then, read indices from every worker_*_checkpoint.h5 (sorted, no .tmp)
@@ -741,7 +757,7 @@ class ProgramResults(Displayable):
                 with h5py.File(worker_file, "r") as f:
                     keys = get_dict_attr_keys(f, "shot_histories")
                     done_indices.update(keys)
-            except Exception:
+            except (BlockingIOError, OSError, KeyError):
                 pass  # Skip if we can't read this file
 
         return done_indices
@@ -907,14 +923,19 @@ class ProgramResults(Displayable):
                 try:
                     keys = get_dict_attr_keys(out_f, "shot_histories")
                     already_merged.update(keys)
-                except (KeyError, Exception):
+                except (BlockingIOError, OSError, KeyError):
                     # output_file might not have shot_histories yet on first call
                     pass
 
                 # Stream only new entries from this worker file
-                self._merge_worker_into_output(
-                    worker_file, out_f, already_merged
-                )
+                try:
+                    self._merge_worker_into_output(
+                        worker_file, out_f, already_merged
+                    )
+                except (BlockingIOError, OSError, KeyError):
+                    # Skip a truncated/corrupted worker file, leaving it for a
+                    # later consolidation pass to retry once readable.
+                    continue
 
                 # Only delete the worker file once its entries are confirmed
                 # merged and present in output_file
@@ -1002,11 +1023,15 @@ class ProgramResults(Displayable):
                 self._cache_order.append(shot_index)
                 return self._memory_cache[shot_index]
 
+            # Check if shot is in shot_histories (for non-checkpointed runs)
+            if shot_index in self.shot_histories:
+                return self.shot_histories[shot_index]
+
             # If not in cache, try to load from checkpoint
             if (
                 self._checkpoint_dir is not None
-                and self._load_shot_from_checkpoint(shot_index)
-            ):
+                or self._nested_source_file is not None
+            ) and self._load_shot_from_checkpoint(shot_index):
                 # Successfully loaded, move to end of cache order
                 self._cache_order.append(shot_index)
 

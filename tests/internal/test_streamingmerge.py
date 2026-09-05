@@ -447,6 +447,36 @@ class TestMergeDictAttr:
                 result = list(iter_dict_attr_entries(h5_file, "dict"))
                 assert len(result) == 1
 
+    def test_fresh_creation_value_failure_no_orphaned_key(self, make_temp_path):
+        """Test that value-side failure during fresh dict creation with dataset
+        values leaves no orphaned key -- keys and values counts must match."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                # Create with int keys and int values (both dataset format)
+                # Feed an early valid value, then an incompatible value to trigger failure
+                entries = [
+                    (1, 10),    # Valid int value, establishes dataset format
+                    (2, "bad"),  # String value incompatible with int dataset
+                ]
+                with pytest.raises(TypeError):
+                    merge_dict_attr(
+                        h5_file,
+                        "dict",
+                        entries,
+                        key_use_dataset=True,
+                        value_use_dataset=True,
+                    )
+
+            # Re-open and verify no orphaned keys: keys and values counts must match
+            with h5py.File(temp_file, "r") as h5_file:
+                dict_group = h5_file["dict"]["dict"]
+                keys_dataset = dict_group["keys"]["iterable"]["data"]
+                values_dataset = dict_group["values"]["iterable"]["data"]
+                assert len(keys_dataset) == len(values_dataset)
+                # Should have only the one successful entry
+                assert len(keys_dataset) == 1
+                assert len(values_dataset) == 1
+
 
 class TestIterDictAttrEntriesStartIndex:
     """Tests for start_index parameter in iter_dict_attr_entries."""

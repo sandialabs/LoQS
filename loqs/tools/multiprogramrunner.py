@@ -533,9 +533,6 @@ class MultiProgramRunner(Serializable):
 
         pr = ProgramResults(lazy_loading=True)
         pr._set_nested_shot_source(runner_file, index)
-        # Set checkpoint_dir so nested loading works
-        if self.item_checkpoint_dir is not None:
-            pr._checkpoint_dir = self.item_checkpoint_dir
         return pr
 
     def _merge_reduced_result(self, index: int, value: Any) -> None:

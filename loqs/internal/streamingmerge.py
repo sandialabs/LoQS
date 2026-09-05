@@ -222,12 +222,31 @@ def iter_dict_attr_entries(
             yield key, value
 
 
-def get_dict_attr_keys(parent_group: h5py.Group, attr_name: str) -> list:
+def get_dict_attr_keys(
+    parent_group: h5py.Group,
+    attr_name: str,
+    decode_cache: dict | None = None,
+) -> list:
     """Return just the keys of a dict-shaped HDF5 attribute, without decoding
     any values -- cheaper than `iter_dict_attr_entries` when only the set of
     present keys is needed (e.g. checking which shot indices exist), since
     that function always decodes each groups-format value eagerly before
     yielding its paired key. Returns `[]` if the attribute doesn't exist.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The HDF5 group holding the dict attribute.
+    attr_name : str
+        Name of the dict attribute.
+    decode_cache : dict | None, optional
+        Cache for decoding operations (passed to Serializable.decode).
+        Default is None.
+
+    Returns
+    -------
+    list
+        List of keys in insertion order.
     """
     parent_group = _resolve_dict_target_group(parent_group, attr_name)
     if attr_name not in parent_group:
@@ -241,7 +260,7 @@ def get_dict_attr_keys(parent_group: h5py.Group, attr_name: str) -> list:
     keys_iterable_group = dict_subgroup["keys"]["iterable"]
     storage_format = keys_iterable_group.attrs.get("storage_format", "groups")
     return _read_iterable_side(
-        keys_iterable_group, storage_format, decode_cache=None
+        keys_iterable_group, storage_format, decode_cache=decode_cache
     )
 
 
@@ -281,21 +300,21 @@ def _stream_into_new_dict_attr(
 
     # Stream entries one at a time
     for key, value in entries:
-        # Append key
-        keys_dataset_created = _stream_entry_into_iterable_side(
-            keys_iterable_group,
-            key,
-            key_use_dataset,
-            keys_dataset_created,
-            encode_cache,
-        )
-
-        # Append value
+        # Append value first, so a value-side failure never leaves an
+        # orphaned key with no matching value.
         values_dataset_created = _stream_entry_into_iterable_side(
             values_iterable_group,
             value,
             value_use_dataset,
             values_dataset_created,
+            encode_cache,
+        )
+
+        keys_dataset_created = _stream_entry_into_iterable_side(
+            keys_iterable_group,
+            key,
+            key_use_dataset,
+            keys_dataset_created,
             encode_cache,
         )
 

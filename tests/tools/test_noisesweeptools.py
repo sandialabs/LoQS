@@ -800,6 +800,32 @@ class TestResume:
         with pytest.raises(ValueError, match="base_seed"):
             runner2.run()
 
+    def test_resume_mismatched_seed_stride_raises(self, tmp_path):
+        """Mismatched seed_stride on resume raises ValueError naming the field."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+        runner1 = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            base_seed=0,
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        runner1.run()
+
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=50,  # Different from runner1's seed_stride
+            base_seed=0,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        with pytest.raises(ValueError, match="seed_stride"):
+            runner2.run()
+
     def test_resume_mismatched_keep_shot_results_raises(self, tmp_path):
         """A resumed call with a different keep_shot_results than the
         checkpoint was written with is a hard error naming that field."""
