@@ -43,7 +43,6 @@ from loqs.internal import Displayable
 from loqs.internal.serializable import Serializable
 from loqs.tools.paralleltools import (
     ParallelStrategy,
-    resolve_shot_executor,
 )
 from loqs.tools.multiprogramrunner import (
     MultiProgramRunner,
@@ -184,10 +183,8 @@ def _run_one_sweep_point(
     resolved_run_kwargs["lazy_loading"] = lazy_loading
     resolved_run_kwargs["force_resume"] = force_resume
 
-    # Resolve shot_executor
-    resolved_shot_executor = resolve_shot_executor(shot_executor)
-    if resolved_shot_executor is not None:
-        resolved_run_kwargs["shot_executor"] = resolved_shot_executor
+    if shot_executor is not None:
+        resolved_run_kwargs["shot_executor"] = shot_executor
 
     resolved_run_kwargs["n_shot_batches"] = n_shot_batches
 
@@ -735,13 +732,12 @@ class NoiseSweepResult(Displayable):
     """Container for the outcome of a full noise-strength sweep.
 
     Holds one `(failure_rate, stderr)` pair per swept value, plus free-form metadata.
-    Displayable/serializable (via `.write()`/`.read()`, inherited from Serializable) so a sweep
-    can be saved and reloaded without a bespoke schema -- including *while still in progress*.
-    A partial instance has `failure_rates` and `stderrs` always full-length (len == len(strengths)),
-    but with `None` as placeholders for not-yet-completed indices. An arbitrary subset of indices
-    may be completed, not necessarily contiguous. Resuming an interrupted sweep is done by
-    constructing a new `NoiseSweepRunner` with the same `item_checkpoint_dir`, passing
-    `resume=True`, and calling `.run()` again.
+    `failure_rates` and `stderrs` are always full-length (len == len(strengths)), with `None`
+    placeholders for not-yet-completed indices -- an arbitrary subset may be completed, not
+    necessarily contiguous, though in practice `NoiseSweepRunner` only ever writes a fully
+    complete instance to disk (`item_checkpoint_dir/result.h5`), once, at the end of a run.
+    Resuming an interrupted sweep is done by constructing a new `NoiseSweepRunner` with the
+    same `item_checkpoint_dir`, passing `resume=True`, and calling `.run()` again.
     """
 
     _CACHE_ON_SERIALIZE = True

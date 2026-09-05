@@ -460,7 +460,7 @@ class TestRunParallel:
         with pytest.raises(TypeError, match="executor"):
             runner.run()
 
-    def test_parallel_writes_result_once_per_batch_not_per_point(
+    def test_result_written_once_at_finalize_not_incrementally(
         self, tmp_path
     ):
         """Verifies that result.h5 is written exactly once, at the end of
@@ -890,7 +890,8 @@ class TestResume:
         result2 = runner2.run()
         assert result2.is_complete
 
-    def test_item_checkpoint_dir_without_resume_still_writes_incrementally(self, tmp_path):
+    def test_item_checkpoint_dir_first_run_without_resume_completes(self, tmp_path):
+        """A fresh run (no resume=True) with item_checkpoint_dir set completes normally and writes a complete result.h5."""
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
         runner = make_runner(
             [0.0, 0.1, 0.2],

@@ -360,11 +360,13 @@ Counter(raw_results.collect_shot_data("logical_measurement", -1))
 
 Large sweeps (many strengths, many shots each) can take a while, and it would be a shame to lose
 all progress if the process is interrupted partway through. Passing `checkpoint=True` and
-`item_checkpoint_dir` to the constructor writes the in-progress `NoiseSweepResult` out after
-*every* completed point, not just at the end. To resume from a checkpoint, construct a new
-`NoiseSweepRunner` via `from_noise_sweep_runner` (or with the same config) with `resume=True`,
-pointing to the same `item_checkpoint_dir` -- already-completed points are recognized and skipped
-entirely, with at most one point's worth of shots repeated even if interrupted mid-point.
+`item_checkpoint_dir` to the constructor checkpoints each completed point's result into
+`item_checkpoint_dir` immediately, so no completed work is lost on a crash -- the human-readable
+`NoiseSweepResult` itself (and its `result.h5` export) is only written once, at the very end of a
+successful run. To resume from a checkpoint, construct a new `NoiseSweepRunner` via
+`from_noise_sweep_runner` (or with the same config) with `resume=True`, pointing to the same
+`item_checkpoint_dir` -- already-completed points are recognized and skipped entirely, with at
+most one point's worth of shots repeated even if interrupted mid-point.
 
 ```{code-cell} ipython3
 resumable_runner = NoiseSweepRunner(

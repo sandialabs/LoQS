@@ -15,6 +15,7 @@ import copy
 import functools
 import h5py
 import itertools
+import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
@@ -940,6 +941,26 @@ def _consolidate_worker_files(
             continue
 
 
+def _retry_hdf5_write(
+    worker_file_path: Path,
+    write_fn: Callable[[h5py.File], None],
+    max_retries: int = 5,
+) -> None:
+    """Open `worker_file_path` in append mode and call `write_fn(f)`, retrying with
+    exponential backoff on transient HDF5 locking errors (`BlockingIOError`/`OSError`).
+    """
+    for attempt in range(max_retries):
+        try:
+            with h5py.File(worker_file_path, "a") as f:
+                write_fn(f)
+            break
+        except (BlockingIOError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep(0.01 * (2**attempt))
+            else:
+                raise
+
+
 def _write_dict_entry_with_retry(
     worker_file_path: Path,
     attr_name: str,
@@ -964,25 +985,18 @@ def _write_dict_entry_with_retry(
     max_retries : int, optional
         Maximum number of retry attempts (default 5, ~0.15s total delay).
     """
-    import time
-
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(worker_file_path, "a") as f:
-                merge_dict_attr(
-                    f,
-                    attr_name,
-                    [(index, value)],
-                    encode_cache={},
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-            break
-        except (BlockingIOError, OSError):
-            if attempt < max_retries - 1:
-                time.sleep(0.01 * (2**attempt))  # Exponential backoff
-            else:
-                raise
+    _retry_hdf5_write(
+        worker_file_path,
+        lambda f: merge_dict_attr(
+            f,
+            attr_name,
+            [(index, value)],
+            encode_cache={},
+            key_use_dataset=True,
+            value_use_dataset=False,
+        ),
+        max_retries=max_retries,
+    )
 
 
 def _write_current_item_index_with_retry(
@@ -1004,18 +1018,11 @@ def _write_current_item_index_with_retry(
     max_retries : int, optional
         Maximum number of retry attempts (default 5, ~0.15s total delay).
     """
-    import time
-
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(worker_file_path, "a") as f:
-                f.attrs["current_item_index"] = index
-            break
-        except (BlockingIOError, OSError):
-            if attempt < max_retries - 1:
-                time.sleep(0.01 * (2**attempt))  # Exponential backoff
-            else:
-                raise
+    _retry_hdf5_write(
+        worker_file_path,
+        lambda f: f.attrs.__setitem__("current_item_index", index),
+        max_retries=max_retries,
+    )
 
 
 def _resolve_kept_program_results(

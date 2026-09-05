@@ -1206,5 +1206,3 @@ class ProgramResults(Displayable):
                 return True
         except (OSError, ValueError):
             return False
-
-        return False

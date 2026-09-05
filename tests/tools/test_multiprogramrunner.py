@@ -615,7 +615,7 @@ class TestBugRegressions:
     """Regression tests for bugs that were fixed during implementation."""
 
     def test_bug1_parallel_without_checkpoint_dir_returns_correct_results(self):
-        """Bug 1: Parallel execution with item_checkpoint_dir=None was crashing.
+        """Parallel execution with item_checkpoint_dir=None was crashing.
 
         Root cause: _run_parallel didn't capture/return its dispatch results,
         and final assembly had no source of truth when checkpointing was disabled.
@@ -634,7 +634,7 @@ class TestBugRegressions:
         assert results == [0, 2, 4, 6, 8]
 
     def test_bug2_serial_respects_parallel_shot_executor(self):
-        """Bug 2: Serial execution ignored parallel.shot_executor.
+        """Serial execution ignored parallel.shot_executor.
 
         Root cause: _run_serial hardcoded shot_executor=None instead of
         resolving from the ParallelStrategy.
@@ -682,7 +682,7 @@ class TestBugRegressions:
         assert _track_shot_executor.calls == ["SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR"]
 
     def test_bug3_parallel_resume_no_double_on_item_done(self, tmp_path):
-        """Bug 3: Parallel resume with on_item_done double-invoked for replayed items.
+        """Parallel resume with on_item_done double-invoked for replayed items.
 
         Root cause: on_poll's observed_indices set wasn't seeded with already-done
         indices, so it re-fired on_item_done during polling for items that were
@@ -1840,7 +1840,7 @@ def _shot_progress_item_processor(
 
 
 class TestShotProgressBar:
-    """Tests for shot-level progress bar (Stage 17.7)."""
+    """Tests for shot-level progress bar."""
 
     class _ShotProgressTestRunner(MultiProgramRunner):
         """Runner that supports shot-level progress testing."""
@@ -2435,17 +2435,7 @@ class _ChildWithParent(Serializable):
 
 
 class _ItemWithParent(Serializable):
-    """Test object with a parent reference (for consolidate test)."""
-    _SERIALIZE_ATTRS = ["item_id", "parent"]
-    _CACHE_ON_SERIALIZE: ClassVar[bool] = True
-
-    def __init__(self, item_id=0, parent=None):
-        self.item_id = item_id
-        self.parent = parent
-
-
-class _PolledItem(Serializable):
-    """Test object with a parent reference (for poll test)."""
+    """Test object with a parent reference, shared across consolidate/poll decode-cache regression tests."""
     _SERIALIZE_ATTRS = ["item_id", "parent"]
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -2455,7 +2445,7 @@ class _PolledItem(Serializable):
 
 
 class TestDecodeCache:
-    """Regression tests for decode_cache fixes (stage 17.8d Dispatch D).
+    """Regression tests for decode_cache fixes.
 
     Each test verifies that a Serializable value referenced by multiple
     entries in an HDF5 dict attribute decodes to the same real object
@@ -2470,7 +2460,7 @@ class TestDecodeCache:
         _read_worker_files decodes the shared object to the same real object
         both times, not a DeferredRef on the second occurrence.
 
-        Exercises the fix at loqs/tools/multiprogramrunner.py line 667.
+        Exercises the fix in _read_worker_files's shared decode_cache handling.
         """
         from loqs.tools.multiprogramrunner import _read_worker_files
         from loqs.internal.serializable import DeferredRef
@@ -2628,7 +2618,7 @@ class TestDecodeCache:
         sharing a common reference, the shared object decodes to the same
         real object both times, not a DeferredRef on the second occurrence.
 
-        Exercises the fix at loqs/tools/multiprogramrunner.py line 1139.
+        Exercises the fix in _poll_one_worker_file's shared decode_cache handling.
         """
         from loqs.tools.multiprogramrunner import _poll_one_worker_file
         from loqs.internal.serializable import DeferredRef
@@ -2638,8 +2628,8 @@ class TestDecodeCache:
 
         # Create shared parent and items
         shared_parent = _SharedParent(value=55)
-        item1 = _PolledItem(item_id=30, parent=shared_parent)
-        item2 = _PolledItem(item_id=31, parent=shared_parent)
+        item1 = _ItemWithParent(item_id=30, parent=shared_parent)
+        item2 = _ItemWithParent(item_id=31, parent=shared_parent)
 
         # Write items to a worker file
         worker_file = checkpoint_dir / "worker_0_runner.h5"
@@ -2683,9 +2673,9 @@ class TestDecodeCache:
         assert not isinstance(result2, DeferredRef), \
             f"Second polled item decoded to DeferredRef, not {type(result2)}"
 
-        # Both should be PolledItem with the same parent object
-        assert isinstance(result1, _PolledItem)
-        assert isinstance(result2, _PolledItem)
+        # Both should be ItemWithParent with the same parent object
+        assert isinstance(result1, _ItemWithParent)
+        assert isinstance(result2, _ItemWithParent)
         assert result1.parent is result2.parent, \
             "Shared parent should decode to the same object both times"
         assert result1.parent.value == 55
