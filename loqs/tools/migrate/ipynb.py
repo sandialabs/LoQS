@@ -256,10 +256,10 @@ def migrate_ipynb_source(
                         kind=item.kind,
                     )
                 )
-            for item in result.rewrites:
+            for rewrite in result.rewrites:
                 rewrites.append(
                     RewriteItem(
-                        line=item.line, message=item.message, cell=index
+                        line=rewrite.line, message=rewrite.message, cell=index
                     )
                 )
         return MigrationResult(
@@ -291,9 +291,11 @@ def migrate_ipynb_source(
                     kind=item.kind,
                 )
             )
-        for item in result.rewrites:
+        for rewrite in result.rewrites:
             rewrites.append(
-                RewriteItem(line=item.line, message=item.message, cell=index)
+                RewriteItem(
+                    line=rewrite.line, message=rewrite.message, cell=index
+                )
             )
 
     new_source = json.dumps(

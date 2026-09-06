@@ -206,7 +206,7 @@ def _build_dict(
     `patch_label` (in `keyword_args`) has to come after it to keep
     overriding a same-named key the way it always has.
     """
-    elements = [
+    elements: list[cst.BaseDictElement] = [
         cst.DictElement(
             key=cst.SimpleString('"instruction"'), value=instruction_expr
         )
@@ -306,7 +306,10 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         remapped.update(extra_keywords)
         # inst_args is carried through verbatim rather than statically
         # remapped to keyword names -- see the module docstring.
-        if _literal_sequence(inst_args_expr) != []:
+        if (
+            inst_args_expr is not None
+            and _literal_sequence(inst_args_expr) != []
+        ):
             remapped[LEGACY_PENDING_INST_ARGS] = inst_args_expr
         self.changed = True
         line = self.get_metadata(PositionProvider, original_node).start.line

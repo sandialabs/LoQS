@@ -146,9 +146,11 @@ def migrate_notebook_source(
                     kind=item.kind,
                 )
             )
-        for item in result.rewrites:
+        for rewrite in result.rewrites:
             rewrites.append(
-                RewriteItem(line=item.line + code_start, message=item.message)
+                RewriteItem(
+                    line=rewrite.line + code_start, message=rewrite.message
+                )
             )
 
     return MigrationResult(

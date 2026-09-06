@@ -15,7 +15,8 @@ import functools
 from tqdm import tqdm
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.core import QuantumProgram
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
+from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.executors import SubmitExecutor
 from loqs.core.historydatacollector import (
     HistoryDataCollector,
@@ -143,7 +144,7 @@ def is_stim_pauli_propagation_available() -> bool:
 
 
 def propagate_pauli_signature(
-    circuit: BasePhysicalCircuit,
+    circuit: PyGSTiPhysicalCircuit,
     start_layer: int,
     seed: dict[int, str],
 ) -> tuple[tuple[int, str], ...]:
@@ -167,7 +168,7 @@ def propagate_pauli_signature(
     for qidx, pauli in seed.items():
         p[qidx] = pauli
     for lidx in range(start_layer, circuit.depth):
-        for comp in circuit._circuit._layer_components(lidx):
+        for comp in circuit.circuit._layer_components(lidx):
             name = comp.name
             if name in PAULI_PROPAGATION_IDLE_GATES:
                 continue
@@ -204,16 +205,22 @@ def prune_error_combos_by_propagation(
     all_combos: list[list[tuple[int, str, int]]] = []
     for layer, target in locations:
         if post_twoq_gates:
+            assert isinstance(target, tuple) and len(target) == 2
             q1, q2 = target
             for lbl1 in error_labels:
                 for lbl2 in error_labels:
                     all_combos.append([(layer, lbl1, q1), (layer, lbl2, q2)])
         else:
+            assert isinstance(target, int)
             for lbl in error_labels:
                 all_combos.append([(layer, lbl, target)])
 
     if not is_stim_pauli_propagation_available():
         return all_combos, len(all_combos)
+
+    assert isinstance(
+        circuit, PyGSTiPhysicalCircuit
+    ), "Pauli propagation pruning only supports PyGSTiPhysicalCircuit-backed circuits."
 
     seen_signatures: set[tuple] = set()
     representatives: list[list[tuple[int, str, int]]] = []
@@ -467,9 +474,13 @@ def run_discrete_error_injected_programs(
             parallel.shot_executor if parallel is not None else None
         )
         failed = [
-            task[0]
-            for task in tqdm(tasks, "Running discrete error injected programs")
-            if not test_program_output(*task, shot_executor=shot_executor)
+            p
+            for p, c_args, exp, shots in tqdm(
+                tasks, "Running discrete error injected programs"
+            )
+            if not test_program_output(
+                p, c_args, exp, shots, shot_executor=shot_executor
+            )
         ]
     else:
         failed = _run_program_tasks_parallel(tasks, parallel)
@@ -596,11 +607,12 @@ def test_program_output(
         )
     else:
         # If we're skipping the run, we need to get the results from somewhere
-        program_results = getattr(test_program, "_last_results", None)
-        if program_results is None:
+        cached_results = getattr(test_program, "_last_results", None)
+        if not isinstance(cached_results, ProgramResults):
             raise ValueError(
                 "Cannot skip run when no previous results are available"
             )
+        program_results = cached_results
 
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot

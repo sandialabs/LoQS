@@ -90,12 +90,17 @@ def _migrate_file(
     rename_iz: bool = False,
     rename_patch_label: str | None = None,
 ) -> MigrationResult:
-    kwargs = {"rename_iz": rename_iz, "rename_patch_label": rename_patch_label}
     if path.suffix == ".md":
-        return migrate_notebook_source(source, **kwargs)
+        return migrate_notebook_source(
+            source, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+        )
     if path.suffix == ".ipynb":
-        return migrate_ipynb_source(source, **kwargs)
-    return migrate_source(source, **kwargs)
+        return migrate_ipynb_source(
+            source, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+        )
+    return migrate_source(
+        source, rename_iz=rename_iz, rename_patch_label=rename_patch_label
+    )
 
 
 def _backup_path(path: Path) -> Path:
