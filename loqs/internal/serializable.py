@@ -31,6 +31,7 @@ from typing import (
     Type,
     TypeAlias,
     TypeVar,
+    cast,
 )
 
 from loqs.types import Bool, Complex, Float, Int, NDArray, SPSArray
@@ -307,6 +308,8 @@ def _import_usage_index_for_file(srcfile: str, mtime: float):
         def visit_Name(self, node: cst.Name) -> None:
             try:
                 scope = self.get_metadata(ScopeProvider, node)
+                if scope is None:
+                    return
                 assignments = scope[node.value]
             except KeyError:
                 # No scope metadata at all (e.g. a keyword argument's own
@@ -323,7 +326,13 @@ def _import_usage_index_for_file(srcfile: str, mtime: float):
                         PositionProvider, import_node
                     )
                     rendered = cst.Module(
-                        body=[cst.SimpleStatementLine(body=[import_node])]
+                        body=[
+                            cst.SimpleStatementLine(
+                                body=[
+                                    cast(cst.BaseSmallStatement, import_node)
+                                ]
+                            )
+                        ]
                     ).code
                     import_info[key] = (import_pos.start.line, rendered)
                 pos = self.get_metadata(PositionProvider, node)

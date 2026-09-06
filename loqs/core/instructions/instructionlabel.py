@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Final, TypeAlias
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Final, TypeAlias, cast
 import warnings
 
 from loqs.core.instructions.instruction import Instruction
@@ -175,7 +175,9 @@ class InstructionLabel(dict):
                 padded[2],
             )
             remapped = _remap_legacy_positional_args(
-                instruction, tuple(inst_args or ()), dict(inst_kwargs or {})
+                instruction,
+                tuple(cast(Iterable[Any], inst_args or ())),
+                dict(cast(Mapping[str, Any], inst_kwargs or {})),
             )
             if patch_label is not None:
                 remapped["patch_label"] = patch_label

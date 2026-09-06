@@ -196,7 +196,7 @@ class Instruction(Displayable):
     It must conform to the [](api:ApplyCallable) protocol.
     """
 
-    map_qubits_fn: MapQubitsCallable | None
+    map_qubits_fn: MapQubitsCallable
     """A user-defined function called in [](api:Instruction.map_qubits).
 
     It must conform to the [MapQubitsCallable](api:MapQubitsCallable] protocol.

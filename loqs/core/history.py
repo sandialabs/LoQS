@@ -172,17 +172,17 @@ class History(Sequence[Frame], Displayable):
                 return set(source_keys)
             return set(default)
 
-        self.expiring_keys = resolve(
+        self.expiring_keys: set[str] = resolve(
             expiring_keys,
             source.expiring_keys if source is not None else None,
             ("state",),
         )
-        self.propagating_keys = resolve(
+        self.propagating_keys: set[str] = resolve(
             propagating_keys,
             source.propagating_keys if source is not None else None,
             ("state", "patches"),
         )
-        self.no_serialize_keys = resolve(
+        self.no_serialize_keys: set[str] = resolve(
             no_serialize_keys,
             source.no_serialize_keys if source is not None else None,
             (),

@@ -221,3 +221,40 @@ class TestPatchBuilderAndRemoverInstructions:
         inst = builders.build_patch_remover_instruction()
         f = inst.apply(del_patch_label="L0", patches=patches)
         assert f["patches"].relations == {}
+
+
+class TestPhysicalCircuitInstructionSTIM:
+    """Regression test for a `not is_backend_available("stim_state")`
+    inversion bug in `build_physical_circuit_instruction.<locals>.apply_fn`
+    that silently prevented `applied_stim_circuit_str` from ever being
+    recorded on the output `Frame` for a real `STIMQuantumState`.
+    """
+
+    def test_applied_stim_circuit_str_is_populated(self):
+        pytest.importorskip("stim")
+        from loqs.backends import STIMQuantumState, DictNoiseModel
+        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        from loqs.backends.reps import StimCircuitGateRep
+
+        circuit = STIMPhysicalCircuit("H 0\nTICK", ["Q0"])
+        model = DictNoiseModel({"H": "H 0"}, {}, gatereps=[StimCircuitGateRep])
+        state = STIMQuantumState(1, ["Q0"])
+
+        inst = builders.build_physical_circuit_instruction(
+            circuit=circuit, name="PhysCirc STIM"
+        )
+        frame = inst.apply(
+            model=model,
+            circuit=circuit,
+            state=state,
+            inplace=True,
+            error_injections=None,
+            pauli_frame_update=None,
+            patch_label="L0",
+            patches=PatchLayout(),
+        )
+
+        applied_str = frame["applied_stim_circuit_str"]
+        assert applied_str is not None
+        assert applied_str == str(frame["state"].latest_applied_circuit)
+        assert "H 0" in applied_str

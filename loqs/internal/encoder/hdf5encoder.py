@@ -1114,8 +1114,8 @@ class HDF5Encoder(BaseEncoder):
         matrix_group.attrs["shape"] = to_encode.shape
         matrix_group.attrs["dtype"] = str(to_encode.dtype)  # type: ignore
 
-        if isinstance(to_encode, SPSArray):
-            # For dense arrays, store as HDF5 dataset
+        if sps.issparse(to_encode):
+            # For sparse arrays, store as HDF5 dataset
             csr_mx = sps.csr_matrix(
                 to_encode
             )  # convert to CSR and save in this format
