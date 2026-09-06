@@ -632,7 +632,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         from loqs.backends import PyGSTiPhysicalCircuit
 
         if not isinstance(circuit, PyGSTiPhysicalCircuit):
-            circuit = PyGSTiPhysicalCircuit(circuit)
+            circuit = PyGSTiPhysicalCircuit(circuit)  # type: ignore[misc]
         pygsti_circuit = circuit.circuit
 
         # Iterate through circuit and pull out representations
