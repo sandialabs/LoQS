@@ -906,23 +906,28 @@ class TestProgramResults:
 
     def test_consolidate_checkpoints_with_dedup_lazily_pulls_entries(self):
         """Consolidation with deduplication (crash-recovery retry case) must
-        lazily pull entries from iter_dict_attr_entries as merge_dict_attr
-        consumes them, not materialize the entire filtered list beforehand.
+        pull entries from `iter_dict_attr_entries` one at a time and write
+        each as soon as it's decoded, never decoding the whole worker file's
+        shots before writing any of them.
 
-        This test patches _write_shot_entries to track how many calls it receives
-        during the iteration of its entries argument: with lazy evaluation, it
-        will yield-and-write one entry at a time; with eager (buggy) list
-        evaluation, all entries are ready before _write_shot_entries starts.
+        Uses 10 shots with a strict duplicate/new alternation (evens already
+        merged into the output, odds new) so a single `next()` pull can never
+        silently burn through the whole worker file: a genuinely lazy
+        implementation decodes exactly 2 raw entries (1 duplicate skip + 1
+        new write) between each write, giving the deterministic sequence
+        [2, 4, 6, 8, 10]. An eager implementation that decodes everything
+        before writing anything would instead show [10, 10, 10, 10, 10].
         """
-        num_shots = 25
+        import loqs.core.programresults as programresults_module
+
+        num_shots = 10
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
 
-            # Create a worker file with many shots
-            results_w0 = ProgramResults(
-                name="Worker 0", lazy_loading=False
-            )
-            for i in range(num_shots):
+            # First worker: only the even-indexed shots. Consolidating these
+            # first makes them the "already merged" entries in results.h5.
+            results_w0 = ProgramResults(name="Worker 0", lazy_loading=False)
+            for i in range(0, num_shots, 2):
                 history = History()
                 history.append(Frame({"shot_id": i}))
                 results_w0.add_shot(i, history)
@@ -930,27 +935,58 @@ class TestProgramResults:
                 checkpoint_dir=checkpoint_dir, worker_id="w0"
             )
 
-            # First consolidation: worker file -> results.h5
             consolidator = ProgramResults()
             consolidator.consolidate_checkpoints(
-                checkpoint_dir=checkpoint_dir, delete_originals=False
+                checkpoint_dir=checkpoint_dir, delete_originals=True
             )
 
-            # Simulate crash-recovery: consolidate again with same worker file
-            # still present. The deduplication path must pull entries lazily.
-            real_write_shot_entries = ProgramResults._write_shot_entries
+            # Second worker: all 10 shots -- the even ones duplicate what's
+            # already in results.h5, the odd ones are new.
+            results_w1 = ProgramResults(name="Worker 1", lazy_loading=False)
+            for i in range(num_shots):
+                history = History()
+                history.append(Frame({"shot_id": i}))
+                results_w1.add_shot(i, history)
+            results_w1.checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id="w1"
+            )
 
-            # Track how many calls to _write_shot_entries happen and with what argument
-            write_shot_entries_calls = []
+            real_iter_dict_attr_entries = (
+                programresults_module.iter_dict_attr_entries
+            )
+            decoded_count = [0]
+
+            def spy_iter_dict_attr_entries(
+                parent_group, attr_name, decode_cache=None, start_index=0
+            ):
+                """Count every raw entry decoded off the worker file, before
+                dedup filtering discards the duplicates."""
+                for key, value in real_iter_dict_attr_entries(
+                    parent_group,
+                    attr_name,
+                    decode_cache=decode_cache,
+                    start_index=start_index,
+                ):
+                    decoded_count[0] += 1
+                    yield key, value
+
+            real_write_shot_entries = ProgramResults._write_shot_entries
+            decoded_count_at_write = []
 
             def spy_write_shot_entries(self, h5_file, entries):
-                """Spy on _write_shot_entries to see if entries is a generator or list."""
-                entries_type = type(entries).__name__
-                write_shot_entries_calls.append(entries_type)
-                # Call the real function
-                return real_write_shot_entries(self, h5_file, entries)
+                """Manually pull entries one at a time (never a bulk for-loop
+                over a pre-materialized list), writing each via its own
+                single-item real _write_shot_entries call and recording
+                decoded_count at the moment of each write."""
+                for entry in entries:
+                    real_write_shot_entries(self, h5_file, [entry])
+                    decoded_count_at_write.append(decoded_count[0])
 
             with unittest.mock.patch.object(
+                programresults_module,
+                "iter_dict_attr_entries",
+                spy_iter_dict_attr_entries,
+            ), unittest.mock.patch.object(
                 ProgramResults,
                 "_write_shot_entries",
                 spy_write_shot_entries,
@@ -960,18 +996,13 @@ class TestProgramResults:
                     checkpoint_dir=checkpoint_dir, delete_originals=True
                 )
 
-            # _write_shot_entries must receive a generator, not a list --
-            # a list means the deduplication filtered eagerly.
-            assert (
-                write_shot_entries_calls
-            ), "_write_shot_entries was never invoked during dedup consolidation"
-
-            for entries_type in write_shot_entries_calls:
-                assert entries_type == "generator", (
-                    f"_write_shot_entries received {entries_type} instead of generator. "
-                    f"This indicates the deduplication is materializing eagerly. "
-                    f"The deduplication filtering must use a generator expression, not a list comprehension."
-                )
+            assert decoded_count_at_write == [2, 4, 6, 8, 10], (
+                f"Expected exactly 2 raw entries decoded between each write "
+                f"(1 duplicate skip + 1 new write), giving [2, 4, 6, 8, 10], "
+                f"but got {decoded_count_at_write} -- this indicates entries "
+                f"are not being pulled one at a time from "
+                f"iter_dict_attr_entries as they're written."
+            )
 
             # Verify the consolidation actually worked (all shots present)
             reloaded = ProgramResults()
