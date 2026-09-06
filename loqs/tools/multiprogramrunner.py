@@ -529,8 +529,10 @@ class MultiProgramRunner(Serializable):
         own `_program_results` dict attribute at the given index, with
         lazy_loading=True. `num_shots`/`max_frame_limit` are forwarded from
         this runner (genuine per-runner scalars); `parent_program`/`name` are
-        genuinely per-item and aren't available here without a real (non-lazy)
-        read, so they stay at their bare defaults for now.
+        genuinely per-item, so they aren't set here directly -- instead,
+        `_set_nested_shot_source` marks them unresolved, and `ProgramResults`'
+        own `name`/`parent_program` properties lazily resolve each one from
+        this same nested source the first time a caller actually reads it.
 
         Parameters
         ----------

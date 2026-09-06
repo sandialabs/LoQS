@@ -1559,9 +1559,15 @@ def _process_item_with_checkpoint(
         item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
         item_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write the synthetic ProgramResults to checkpoint
+        # Write the synthetic ProgramResults to its own results.h5, mirroring
+        # a real QuantumProgram.run(checkpoint=True) call's "fresh envelope"
+        # write (full metadata plus shots in one file) rather than the
+        # shot-only worker-file shape .checkpoint() produces -- .checkpoint()
+        # deliberately never writes name/parent_program, so using it here
+        # would make this checkpoint file unable to carry those per-item
+        # values at all, regardless of any downstream lazy-resolution logic.
         pr = _make_synthetic_program_results(index)
-        pr.checkpoint(checkpoint_dir=item_dir)
+        pr.write(item_dir / pr._results_filename, format="hdf5")
 
         # Return None so the dispatch layer will load from checkpoint
         return (result, None)
@@ -1988,8 +1994,9 @@ class TestKeepShotResults:
     def test_keep_shot_results_lazy_forwards_runner_metadata(self, tmp_path):
         """With keep_shot_results=True and lazy_loading=True (lazy path),
         num_shots and max_frame_limit should be forwarded from the runner
-        itself. parent_program/name are genuinely per-item and stay at
-        defaults (a known limitation), but scalars should be available."""
+        itself. parent_program/name are genuinely per-item and now resolve
+        lazily, on first access, from the nested source each ProgramResults
+        was configured to read shots from."""
         checkpoint_dir = tmp_path / "ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
@@ -2025,12 +2032,16 @@ class TestKeepShotResults:
                 f"Expected pr.max_frame_limit=200, got {pr.max_frame_limit} "
                 "(lazy path didn't forward runner metadata)"
             )
-            # parent_program and name stay at defaults (known limitation)
-            assert pr.parent_program is None, (
-                "parent_program should stay at None in lazy case (known limitation)"
+            # parent_program and name now resolve lazily to the real,
+            # per-item values written by _make_synthetic_program_results.
+            assert pr.parent_program == f"program_{index}", (
+                f"Expected pr.parent_program='program_{index}', got "
+                f"'{pr.parent_program}' (lazy resolution didn't fetch the "
+                "real per-item value)"
             )
-            assert pr.name == "(Unnamed program results)", (
-                "name should stay at default in lazy case (known limitation)"
+            assert pr.name == f"Results_{index}", (
+                f"Expected pr.name='Results_{index}', got '{pr.name}' "
+                "(lazy resolution didn't fetch the real per-item value)"
             )
 
 

@@ -11,6 +11,7 @@ import pytest
 import h5py
 import numpy as np
 
+import loqs.core.programresults as programresults_module
 from loqs.core.programresults import (
     ProgramResults,
     _resolve_checkpoint_object_group,
@@ -1588,6 +1589,204 @@ class TestResumeCheckpointing:
             # Should have decoded only the one shot's History, not all 20
             # The call count should be minimal (just the target history)
             assert 5 in nested_pr._memory_cache
+
+    def _build_nested_source_with_name_and_parent(self, temp_dir, index=0):
+        """Build a parent HDF5 file whose `_program_results` dict attribute
+        holds a real ProgramResults (with a real `name`/`parent_program`
+        and several shots) at `index`. Returns the parent file path."""
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        parent_path = Path(temp_dir) / "parent.h5"
+        with h5py.File(parent_path, "w") as parent_f:
+            pr = ProgramResults(
+                lazy_loading=False,
+                name="RealName",
+                parent_program="RealProgram",
+            )
+            for i in range(20):
+                history = History()
+                history.append(Frame({"index": i}))
+                pr.add_shot(i, history)
+
+            root_group = parent_f.create_group("container")
+            merge_dict_attr(
+                root_group,
+                "_program_results",
+                [(index, pr)],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+        return parent_path
+
+    def test_lazy_name_and_parent_program_resolve_from_nested_source(self):
+        """A lazy nested-source proxy resolves `.name`/`.parent_program`
+        to the real stored values on first access, instead of staying at
+        their bare constructor defaults."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = self._build_nested_source_with_name_and_parent(
+                temp_dir
+            )
+
+            nested_pr = ProgramResults(lazy_loading=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+
+            assert nested_pr.name == "RealName"
+            assert nested_pr.parent_program == "RealProgram"
+
+    def test_lazy_name_resolution_does_not_decode_shot_histories(self):
+        """Resolving `.name` alone must never decode `shot_histories` (its
+        own real, non-collapsed HDF5 subgroup) or invoke the streaming
+        per-shot decode helpers `_load_shot_from_single_file` itself uses.
+        Confirmed two ways: (1) `Serializable.decode` is never called with
+        the `shot_histories` group (or anything under it) as its source,
+        which a naive "just decode the whole nested object" implementation
+        would trip; (2) `get_dict_attr_value`/`iter_dict_attr_entries` --
+        the per-shot streaming helpers -- are never called either."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = self._build_nested_source_with_name_and_parent(
+                temp_dir
+            )
+
+            nested_pr = ProgramResults(lazy_loading=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+
+            real_decode = Serializable.decode
+            decoded_source_names = []
+
+            def spy_decode(source, *args, **kwargs):
+                if isinstance(source, (h5py.Group, h5py.Dataset)):
+                    decoded_source_names.append(source.name)
+                return real_decode(source, *args, **kwargs)
+
+            with unittest.mock.patch.object(
+                Serializable, "decode", side_effect=spy_decode
+            ), unittest.mock.patch.object(
+                programresults_module, "get_dict_attr_value"
+            ) as mock_get_value, unittest.mock.patch.object(
+                programresults_module, "iter_dict_attr_entries"
+            ) as mock_iter_entries:
+                assert nested_pr.name == "RealName"
+
+            assert not any(
+                "shot_histories" in name for name in decoded_source_names
+            ), (
+                "shot_histories was decoded while resolving .name alone: "
+                f"{decoded_source_names}"
+            )
+            mock_get_value.assert_not_called()
+            mock_iter_entries.assert_not_called()
+
+    def test_lazy_name_resolution_reads_file_only_once(self):
+        """A second read of an already-resolved lazy attribute must not
+        re-open the nested source file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = self._build_nested_source_with_name_and_parent(
+                temp_dir
+            )
+
+            nested_pr = ProgramResults(lazy_loading=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+
+            real_h5py_file = h5py.File
+            open_calls = []
+
+            def spy_file(*args, **kwargs):
+                open_calls.append((args, kwargs))
+                return real_h5py_file(*args, **kwargs)
+
+            with unittest.mock.patch.object(
+                h5py, "File", side_effect=spy_file
+            ):
+                first = nested_pr.name
+                second = nested_pr.name
+
+            assert first == "RealName"
+            assert second == "RealName"
+            assert len(open_calls) == 1
+
+    def test_explicit_assignment_before_read_prevents_lazy_fetch(self):
+        """Explicitly assigning `.name`/`.parent_program` on a lazy proxy
+        before ever reading them must prevent the lazy fetch from ever
+        running -- the nested source file must never be opened."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Deliberately points at a file that doesn't exist -- if the
+            # lazy fetch ever ran, it would either fail to open the file or
+            # (per _resolve_nested_attr's own existence check) silently
+            # return the default, either way proving assignment didn't win.
+            missing_path = Path(temp_dir) / "never_written.h5"
+
+            nested_pr = ProgramResults(lazy_loading=True)
+            nested_pr._set_nested_shot_source(missing_path, 0)
+            nested_pr.name = "ExplicitName"
+            nested_pr.parent_program = "ExplicitParent"
+
+            real_h5py_file = h5py.File
+            open_calls = []
+
+            def spy_file(*args, **kwargs):
+                open_calls.append((args, kwargs))
+                return real_h5py_file(*args, **kwargs)
+
+            with unittest.mock.patch.object(
+                h5py, "File", side_effect=spy_file
+            ):
+                assert nested_pr.name == "ExplicitName"
+                assert nested_pr.parent_program == "ExplicitParent"
+
+            assert len(open_calls) == 0
+
+    def test_non_lazy_name_and_parent_program_unaffected(self):
+        """An ordinary (non-nested-source) ProgramResults behaves exactly
+        as before -- `.name`/`.parent_program` simply return whatever was
+        passed to `__init__`, with no lazy machinery ever triggered."""
+        parent_marker = object()
+        pr = ProgramResults(name="Foo", parent_program=parent_marker)
+
+        assert pr.name == "Foo"
+        assert pr.parent_program is parent_marker
+
+        # No nested source was ever configured, so no lazy resolution path
+        # exists to trigger regardless of how many times these are read.
+        assert pr.name == "Foo"
+        assert pr.parent_program is parent_marker
+
+    def test_name_and_parent_program_survive_serialization_round_trip(self):
+        """An ordinary (non-lazy-proxy) ProgramResults' `name`/
+        `parent_program` still round-trip correctly through
+        `Serializable.encode`/`.decode`, confirming the property-based
+        attributes stay fully compatible with the generic
+        `_SERIALIZE_ATTRS` machinery."""
+        for format_name in ("json", "hdf5"):
+            results = ProgramResults(
+                name="RoundTripName", parent_program="RoundTripProgram"
+            )
+            history = History()
+            history.append(Frame({"marker": "value"}))
+            results.add_shot(0, history)
+
+            if format_name == "hdf5":
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    h5_path = Path(temp_dir) / "roundtrip.h5"
+                    with h5py.File(h5_path, "w") as h5_file:
+                        root_group = h5_file.create_group("root")
+                        encoded = Serializable.encode(
+                            results,
+                            format=format_name,
+                            h5_group=root_group,
+                            reset_encode_id=True,
+                        )
+                        decoded = Serializable.decode(
+                            encoded, format=format_name
+                        )
+            else:
+                encoded = Serializable.encode(
+                    results, format=format_name, reset_encode_id=True
+                )
+                decoded = Serializable.decode(encoded, format=format_name)
+
+            assert isinstance(decoded, ProgramResults)
+            assert decoded.name == "RoundTripName"
+            assert decoded.parent_program == "RoundTripProgram"
 
     def test_count_done_shots_returns_correct_count(self):
         """Verify _count_done_shots returns the correct number of done shots."""

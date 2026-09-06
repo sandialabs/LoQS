@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
-from typing import ClassVar
+from typing import Any, ClassVar
 from pathlib import Path
 import h5py
 
@@ -38,6 +38,12 @@ from loqs.internal.streamingmerge import (
 
 if TYPE_CHECKING:
     from loqs.core.quantumprogram import QuantumProgram
+
+
+_UNRESOLVED = object()
+"""Sentinel distinguishing "not yet lazily resolved" from a real resolved
+value that happens to equal the plain default (e.g. `parent_program=None`,
+or `name="(Unnamed program results)"` genuinely stored on disk)."""
 
 
 def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
@@ -203,8 +209,8 @@ class ProgramResults(Displayable):
         """Integer key of this ProgramResults inside a parent's _program_results
         dict attribute, if loaded from a nested source."""
 
-        self.name = name
-        """Name for logging"""
+        self._name_value: Any = name
+        """Backing field for the `name` property."""
 
         self.num_shots = num_shots
         """Total number of shots for this run (for resume detection)."""
@@ -212,8 +218,10 @@ class ProgramResults(Displayable):
         self.max_frame_limit = max_frame_limit
         """Maximum frame limit for this run (for resume detection)."""
 
-        self.parent_program = parent_program
-        """Reference to the parent QuantumProgram that generated these results."""
+        self._parent_program_value: "QuantumProgram | str | Path | None" = (
+            parent_program
+        )
+        """Backing field for the `parent_program` property."""
 
         self._checkpoint_enabled = checkpoint_enabled
         """Whether checkpointing is enabled."""
@@ -268,6 +276,102 @@ class ProgramResults(Displayable):
         """
         self._nested_source_file = Path(source_file)
         self._nested_source_index = index
+        self._name_value = _UNRESOLVED
+        self._parent_program_value = _UNRESOLVED
+
+    @property
+    def name(self) -> str:
+        """Name for logging. Resolves lazily from the nested source on
+        first access if this is a lazy nested-source proxy that hasn't
+        resolved it yet."""
+        if self._name_value is _UNRESOLVED:
+            self._name_value = self._resolve_nested_attr(
+                "name", default="(Unnamed program results)"
+            )
+        return self._name_value
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self._name_value = value
+
+    @property
+    def parent_program(self) -> "QuantumProgram | str | Path | None":
+        """Reference to the parent QuantumProgram that generated these
+        results. Resolves lazily from the nested source on first access if
+        this is a lazy nested-source proxy that hasn't resolved it yet."""
+        if self._parent_program_value is _UNRESOLVED:
+            self._parent_program_value = self._resolve_nested_attr(
+                "parent_program", default=None
+            )
+        return self._parent_program_value
+
+    @parent_program.setter
+    def parent_program(
+        self, value: "QuantumProgram | str | Path | None"
+    ) -> None:
+        self._parent_program_value = value
+
+    def _resolve_nested_attr(self, attr_name: str, default: Any) -> Any:
+        """Lazily read a single non-dict attribute (`name` or
+        `parent_program`) from this object's own nested-source entry,
+        without decoding `shot_histories` or any other sibling attribute.
+        Only ever meaningful for a `ProgramResults` configured via
+        `_set_nested_shot_source`; returns `default` for anything else or
+        on any lookup failure.
+        """
+        if (
+            self._nested_source_file is None
+            or self._nested_source_index is None
+            or not self._nested_source_file.exists()
+        ):
+            return default
+
+        from loqs.internal.encoder.hdf5encoder import (
+            _COLLAPSED_BLOB_NAME,
+            _decode_collapsed_children,
+        )
+
+        try:
+            with h5py.File(self._nested_source_file, "r") as f:
+                source_group = self._resolve_shot_source_group(f)
+                if source_group is None or len(source_group) == 0:
+                    return default
+
+                # Unwrap the Serializable wrapper group (same pattern
+                # already used by _load_shot_from_single_file).
+                actual_group = source_group[next(iter(source_group.keys()))]
+
+                decode_cache = getattr(self, "_checkpoint_decode_cache", None)
+                if isinstance(decode_cache, ResolvingDecodeCache):
+                    decode_cache._root = f
+                else:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    self._checkpoint_decode_cache = decode_cache
+
+                # Small scalar-ish attrs (name, and parent_program when it
+                # contains no array) share one collapsed blob -- decoding
+                # it never touches shot_histories' own separate,
+                # non-collapsed real group.
+                if _COLLAPSED_BLOB_NAME in actual_group:
+                    collapsed = _decode_collapsed_children(
+                        actual_group[_COLLAPSED_BLOB_NAME], decode_cache
+                    )
+                    if attr_name in collapsed:
+                        return collapsed[attr_name]
+
+                # parent_program containing a real array instead gets its
+                # own real, separate named group -- decode just that one
+                # group by name, still never touching shot_histories.
+                if attr_name in actual_group:
+                    return Serializable.decode(
+                        actual_group[attr_name],
+                        format="hdf5",
+                        decode_cache=decode_cache,
+                    )
+
+                return default
+        except (OSError, ValueError, KeyError):
+            return default
 
     def _write_results_snapshot_if_fresh(self) -> None:
         """Write the entire ProgramResults (including nested parent_program) to
