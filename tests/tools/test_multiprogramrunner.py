@@ -247,6 +247,68 @@ class _SleepingRunner(MultiProgramRunner):
             return list(self._reduced_results.values())
 
 
+class _RunnerWithFieldA(MultiProgramRunner):
+    """Test runner with field_a in mismatch check."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "field_a"]
+
+    def __init__(self, items, field_a=1, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.field_a = field_a
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _double_item
+
+    def _static_kwargs(self):
+        return {}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self):
+        if hasattr(self, "items"):
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        return list(self._reduced_results.values())
+
+    def _mismatch_check_fields(self):
+        return ["field_a"]
+
+
+class _RunnerWithFieldB(MultiProgramRunner):
+    """Test runner with field_b in mismatch check (incompatible with _RunnerWithFieldA)."""
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "field_b"]
+
+    def __init__(self, items, field_b=2, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self.field_b = field_b
+
+    def _get_items(self):
+        return self.items
+
+    def _process_item_fn(self):
+        return _double_item
+
+    def _static_kwargs(self):
+        return {}
+
+    def _make_on_item_done(self):
+        return None
+
+    def _finalize(self):
+        if hasattr(self, "items"):
+            return [self._reduced_results[i] for i in range(len(self.items))]
+        return list(self._reduced_results.values())
+
+    def _mismatch_check_fields(self):
+        return ["field_b"]
+
+
 class TestMultiProgramRunnerSerialWithCheckpoint:
     """Tests for serial execution with checkpointing."""
 
@@ -286,7 +348,7 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         items = list(range(10))
 
         # First run: crash after 3 items
-        runner1 = _RaisingRunner(
+        runner1 = _TrackingRunner(
             items,
             process_fn=_raise_after_n, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             max_count=3,
@@ -1275,6 +1337,34 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         ):
             runner2.run()
 
+    def test_cross_subclass_resume_raises_typeerror(self, tmp_path):
+        """Resuming a checkpoint created by one runner subclass with a
+        different subclass raises TypeError, not AttributeError, when they
+        have incompatible mismatch check fields.
+
+        When type(self).read(runner_path) decodes the actual class stored
+        in the file (e.g., EdesignRunner), not type(self) (e.g.,
+        NoiseSweepRunner), attempting to resume with incompatible mismatch
+        check fields must raise TypeError before field checks run.
+        """
+        checkpoint_dir = tmp_path / "ckpt"
+
+        # First runner creates and checkpoints
+        runner1 = _RunnerWithFieldA(
+            [1, 2, 3], field_a=10, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+        )
+        runner1.run()
+
+        # Second runner (different subclass with incompatible fields) attempts to resume
+        runner2 = _RunnerWithFieldB(
+            [10, 20, 30], field_b=20, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+        )
+        with pytest.raises(
+            TypeError,
+            match="Cannot resume.*checkpoint.*created by.*not",
+        ):
+            runner2.run()
+
 
 class TestMergeReducedResult:
     """Tests for MultiProgramRunner._merge_reduced_result method."""
@@ -1423,7 +1513,11 @@ def _make_synthetic_program_results(index, shot_count=5):
     from loqs.core.history import History
     from loqs.core import Frame
 
-    pr = ProgramResults(lazy_loading=False, name=f"Results_{index}")
+    pr = ProgramResults(
+        lazy_loading=False,
+        name=f"Results_{index}",
+        parent_program=f"program_{index}",  # Set parent_program for testing metadata restoration
+    )
     for i in range(shot_count):
         history = History()
         history.append(Frame({"item": index, "shot": i}))
@@ -1509,11 +1603,50 @@ class _KeepShotResultsRunner(MultiProgramRunner):
         return "item"
 
 
+def _process_item_with_checkpoint_and_in_memory_pr(
+    item, index, *, shot_executor, keep_shot_results=False, shot_checkpoint_dir=None, **kwargs
+):
+    """Test double that creates real checkpoint files for each item and returns in_memory_pr.
+
+    Similar to _process_item_with_checkpoint, but returns the in_memory ProgramResults
+    instead of None, so backfill from in_memory_pr can be tested.
+    """
+    result = item * 2
+
+    if keep_shot_results:
+        # Create a per-item checkpoint directory if provided
+        if shot_checkpoint_dir is not None:
+            item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
+            item_dir.mkdir(parents=True, exist_ok=True)
+            # Write the synthetic ProgramResults to checkpoint
+            pr = _make_synthetic_program_results(index)
+            pr.checkpoint(checkpoint_dir=item_dir)
+        else:
+            # No checkpoint dir, create in-memory
+            pr = _make_synthetic_program_results(index)
+
+        # Return both result and in_memory_pr (unlike _process_item_with_checkpoint
+        # which returns None, this returns the actual pr for backfill testing)
+        return (result, pr)
+    else:
+        return result
+
+
 class _CheckpointedKeepShotResultsRunner(_KeepShotResultsRunner):
     """Test runner that uses shot_checkpoint/shot_checkpoint_dir with keep_shot_results."""
 
     def _process_item_fn(self):
         return _process_item_with_checkpoint
+
+    def _static_kwargs(self):
+        return {"shot_checkpoint_dir": self.shot_checkpoint_dir}
+
+
+class _CheckpointedKeepShotResultsRunnerWithInMemory(_KeepShotResultsRunner):
+    """Test runner that returns both checkpoint and in_memory pr for backfill testing."""
+
+    def _process_item_fn(self):
+        return _process_item_with_checkpoint_and_in_memory_pr
 
     def _static_kwargs(self):
         return {"shot_checkpoint_dir": self.shot_checkpoint_dir}
@@ -1811,6 +1944,94 @@ class TestKeepShotResults:
             data = pr.collect_shot_data("item", "all")
             assert len(data) == 5
             assert all(index in frame_data for frame_data in data)
+
+    def test_keep_shot_results_eager_restores_metadata(self, tmp_path):
+        """With keep_shot_results=True and lazy_loading=False (eager path),
+        ProgramResults metadata (parent_program, num_shots, max_frame_limit)
+        should be restored, not left at defaults.
+
+        This tests the case where in_memory_pr is available (the normal path),
+        and metadata is backfilled from it when the checkpoint doesn't have it."""
+        checkpoint_dir = tmp_path / "ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        runner = _CheckpointedKeepShotResultsRunnerWithInMemory(
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            shot_checkpoint=True,
+            keep_shot_results=True,
+            lazy_loading=False,
+        )
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated and metadata is present
+        # (backfilled from in_memory_pr in _resolve_kept_program_results)
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            pr = runner._program_results[index]
+            # The test doubles create ProgramResults with name like "Results_0"
+            # This should be restored via backfill from in_memory_pr
+            assert pr.name == f"Results_{index}", (
+                f"Expected pr.name='Results_{index}', got '{pr.name}' "
+                "(metadata not restored from in_memory_pr)"
+            )
+            # parent_program should not be None (backfilled from in_memory_pr)
+            assert pr.parent_program is not None, (
+                "Expected pr.parent_program to be set, got None "
+                "(metadata not restored from in_memory_pr)"
+            )
+
+    def test_keep_shot_results_lazy_forwards_runner_metadata(self, tmp_path):
+        """With keep_shot_results=True and lazy_loading=True (lazy path),
+        num_shots and max_frame_limit should be forwarded from the runner
+        itself. parent_program/name are genuinely per-item and stay at
+        defaults (a known limitation), but scalars should be available."""
+        checkpoint_dir = tmp_path / "ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        # Create a runner with specific num_shots and max_frame_limit values
+        # (set as attributes since constructor doesn't accept them)
+        runner = _CheckpointedKeepShotResultsRunner(
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            shot_checkpoint=True,
+            keep_shot_results=True,
+            lazy_loading=True,
+        )
+        # Set per-runner metadata that should be forwarded to lazy ProgramResults
+        runner.num_shots = 15
+        runner.max_frame_limit = 200
+
+        result = runner.run()
+        assert result == [2, 4, 6]
+
+        # Verify _program_results was populated with correct metadata
+        assert len(runner._program_results) == 3
+        for index in [0, 1, 2]:
+            assert index in runner._program_results
+            pr = runner._program_results[index]
+            # num_shots and max_frame_limit should be forwarded from runner
+            assert pr.num_shots == 15, (
+                f"Expected pr.num_shots=15, got {pr.num_shots} "
+                "(lazy path didn't forward runner metadata)"
+            )
+            assert pr.max_frame_limit == 200, (
+                f"Expected pr.max_frame_limit=200, got {pr.max_frame_limit} "
+                "(lazy path didn't forward runner metadata)"
+            )
+            # parent_program and name stay at defaults (known limitation)
+            assert pr.parent_program is None, (
+                "parent_program should stay at None in lazy case (known limitation)"
+            )
+            assert pr.name == "(Unnamed program results)", (
+                "name should stay at default in lazy case (known limitation)"
+            )
 
 
 def _shot_progress_item_processor(
@@ -2284,7 +2505,7 @@ class TestWorkerFileConsolidation:
         items = list(range(6))
 
         # First partial run: complete items 0-1 only
-        runner1 = _RaisingRunner(
+        runner1 = _TrackingRunner(
             items,
             process_fn=_raise_after_n,
             checkpoint=True,
@@ -2307,7 +2528,7 @@ class TestWorkerFileConsolidation:
         # Second run: resume and complete items 2-3 before crashing again.
         # Items 0-1 are already done, so only 2-5 will be processed (4 items).
         # To process items 2-3 then crash on item 4, we need max_count=2.
-        runner2 = _RaisingRunner(
+        runner2 = _TrackingRunner(
             items,
             process_fn=_raise_after_n,
             checkpoint=True,

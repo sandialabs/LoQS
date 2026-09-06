@@ -79,6 +79,7 @@ class MultiProgramRunner(Serializable):
         "poll_interval",
         "show_progress",
         "runner_filename",
+        "results_filename",
     ]
 
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
@@ -100,6 +101,7 @@ class MultiProgramRunner(Serializable):
         poll_interval: float = 1.0,
         show_progress: bool = True,
         runner_filename: str = "runner.h5",
+        results_filename: str = "results.h5",
     ):
         self.parallel_strategy = parallel_strategy
         self.item_checkpoint_dir = (
@@ -124,6 +126,7 @@ class MultiProgramRunner(Serializable):
         self.poll_interval = poll_interval
         self.show_progress = show_progress
         self.runner_filename = runner_filename
+        self.results_filename = results_filename
         self._validate_checkpoint_kwargs()
 
     def _get_encoding_attr(
@@ -155,6 +158,7 @@ class MultiProgramRunner(Serializable):
         reduced_results = attr_dict.pop("_reduced_results", None)
         program_results = attr_dict.pop("_program_results", None)
         runner_filename = attr_dict.pop("runner_filename", "runner.h5")
+        results_filename = attr_dict.pop("results_filename", "results.h5")
         # Reconstruct with constructor parameters only
         obj = super()._from_decoded_attrs(attr_dict)
         # Restore internal state directly on the instance
@@ -166,6 +170,7 @@ class MultiProgramRunner(Serializable):
             program_results if program_results is not None else {}
         )
         obj.runner_filename = runner_filename
+        obj.results_filename = results_filename
         # Auto-set resume=True when deserializing a checkpoint-enabled runner:
         # if checkpoint=True and item_checkpoint_dir exists, we're implicitly resuming
         if obj.checkpoint and obj.item_checkpoint_dir is not None:
@@ -267,6 +272,12 @@ class MultiProgramRunner(Serializable):
             if has_content:
                 # Case (c): on-disk state exists, resuming
                 stored = type(self).read(runner_path)
+                if type(stored) is not type(self):
+                    raise TypeError(
+                        f"Cannot resume: checkpoint at {runner_path} was "
+                        f"created by {type(stored).__name__}, not "
+                        f"{type(self).__name__}."
+                    )
                 mismatches = [
                     f
                     for f in self._mismatch_check_fields()
@@ -516,7 +527,10 @@ class MultiProgramRunner(Serializable):
 
         Creates a ProgramResults configured to load shots from the runner.h5's
         own `_program_results` dict attribute at the given index, with
-        lazy_loading=True.
+        lazy_loading=True. `num_shots`/`max_frame_limit` are forwarded from
+        this runner (genuine per-runner scalars); `parent_program`/`name` are
+        genuinely per-item and aren't available here without a real (non-lazy)
+        read, so they stay at their bare defaults for now.
 
         Parameters
         ----------
@@ -532,7 +546,11 @@ class MultiProgramRunner(Serializable):
         """
         from loqs.core.programresults import ProgramResults
 
-        pr = ProgramResults(lazy_loading=True)
+        pr = ProgramResults(
+            num_shots=getattr(self, "num_shots", None),
+            max_frame_limit=getattr(self, "max_frame_limit", None),
+            lazy_loading=True,
+        )
         pr._set_nested_shot_source(runner_file, index)
         return pr
 
@@ -1059,9 +1077,19 @@ def _resolve_kept_program_results(
 
             pr = ProgramResults()
             pr.load_checkpoint(checkpoint_dir=shot_dir)
-    # Otherwise use the in-memory one from process_item
+    # Otherwise use the in-memory one from process_item; if both are
+    # present, backfill any metadata the checkpoint load still left unset.
     if pr is None:
         pr = in_memory_pr
+    elif in_memory_pr is not None:
+        if pr.parent_program is None:
+            pr.parent_program = in_memory_pr.parent_program
+        if pr.name == "(Unnamed program results)":
+            pr.name = in_memory_pr.name
+        if pr.num_shots is None:
+            pr.num_shots = in_memory_pr.num_shots
+        if pr.max_frame_limit is None:
+            pr.max_frame_limit = in_memory_pr.max_frame_limit
     return pr
 
 

@@ -413,6 +413,7 @@ def _run_one_program(
     checkpoint: bool,
     force_resume: bool,
     lazy_loading: bool,
+    results_filename: str,
     keep_shot_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Run one program via test_program_output, returning success flag.
@@ -442,6 +443,7 @@ def _run_one_program(
         lazy_loading=lazy_loading,
         force_resume=force_resume,
         return_program_results=keep_shot_results,
+        results_filename=results_filename,
     )
 
 
@@ -480,6 +482,7 @@ class FaultInjectionRunner(MultiProgramRunner):
         poll_interval: float = 1.0,
         show_progress: bool = True,
         runner_filename: str = "runner.h5",
+        results_filename: str = "results.h5",
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -494,6 +497,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             poll_interval=poll_interval,
             show_progress=show_progress,
             runner_filename=runner_filename,
+            results_filename=results_filename,
         )
         self.errored_programs = errored_programs
         self.collect_shot_data_args = collect_shot_data_args
@@ -522,6 +526,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             "checkpoint": self.shot_checkpoint,
             "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
+            "results_filename": self.results_filename,
         }
 
     def _finalize(self) -> list[QuantumProgram]:
@@ -574,6 +579,8 @@ def test_program_output(
     checkpoint_dir: str | Path | None = None,
     lazy_loading: bool = True,
     force_resume: bool = False,
+    resume: bool | None = None,
+    results_filename: str = "results.h5",
     return_program_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Test a program against expected output.
@@ -627,6 +634,16 @@ def test_program_output(
         Forwarded to [](api:QuantumProgram.run) to bypass configuration
         mismatches on resume. Defaults to `False`.
 
+    resume : bool | None, optional
+        Forwarded to [](api:QuantumProgram.run). When `None` (default), resumes
+        only if `checkpoint_dir` already holds a matching `results_filename` file
+        (cascade behavior). Pass an explicit `True`/`False` to override that
+        inference for a direct call. Defaults to `None`.
+
+    results_filename : str, optional
+        Forwarded to [](api:QuantumProgram.run) for the results checkpoint
+        filename. Defaults to `"results.h5"`.
+
     return_program_results : bool, optional
         If `True`, return `(success, program_results)` instead of the bare bool.
         Defaults to `False`.
@@ -646,6 +663,7 @@ def test_program_output(
         "verbose": False,
         "lazy_loading": lazy_loading,
         "force_resume": force_resume,
+        "results_filename": results_filename,
     }
     if checkpoint:
         run_kwargs["checkpoint"] = True
@@ -653,11 +671,14 @@ def test_program_output(
         run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
     if checkpoint_dir is not None:
         run_kwargs["checkpoint_dir"] = checkpoint_dir
-        # Cascade resume: only True if this specific item has prior shot state
         if checkpoint:
-            run_kwargs["resume"] = (
-                Path(checkpoint_dir) / "results.h5"
-            ).exists()
+            if resume is not None:
+                run_kwargs["resume"] = resume
+            else:
+                # Cascade resume: only True if this specific item has prior shot state
+                run_kwargs["resume"] = (
+                    Path(checkpoint_dir) / results_filename
+                ).exists()
 
     program_results = test_program.run(**run_kwargs)
 

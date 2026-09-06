@@ -686,6 +686,38 @@ class TestSimulateDatasetForEdesignCheckpointing:
         with pytest.raises(ValueError, match="collect_shot_data_args"):
             s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
 
+    def test_resume_with_equivalent_collect_shot_data_args_succeeds(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed call with a semantically-equivalent but differently-spelled
+        collect_shot_data_args (tuple vs dict form) should succeed without raising
+        a spurious mismatch error, since the normalized forms are identical."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        # Run with tuple form
+        s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -1))
+
+        # Resume with dict form (semantically identical, differently spelled)
+        ds = s.simulate(ckpt=ckpt, collect_shot_data_args={"key": "counter", "indices": -1})
+
+        # Verify both circuits' results are correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_resume_with_genuinely_different_collect_shot_data_args_still_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Verify that genuinely different (non-equivalent) collect_shot_data_args
+        values still correctly raise on resume, not just semantically-equivalent ones."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        # Run with ("counter", -1)
+        s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -1))
+
+        # Try to resume with genuinely different ("counter", -2) -- should raise
+        with pytest.raises(ValueError, match="collect_shot_data_args"):
+            s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
+
     def test_resume_mismatched_physical_to_logical_raises(
         self, trivial_counter_setup, tmp_path
     ):
@@ -1559,6 +1591,64 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
         # Resume with the same custom runner_filename
         runner2 = EdesignRunner.read(ckpt / custom_runner_file)
+        ds2 = runner2.run()
+
+        assert ds2[s.circs[0]].counts[("0",)] == 1
+        assert ds2[s.circs[1]].counts[("1",)] == 1
+
+    def test_custom_results_filename_checkpoint_and_resume(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A custom results_filename is correctly threaded through to
+        QuantumProgram.run() and used for per-circuit shot-level checkpoints,
+        allowing resume to detect prior state with the custom filename."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        custom_results_file = "custom_results.h5"
+
+        # First run with custom results_filename and shot checkpointing
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=ckpt / "shots",
+            results_filename=custom_results_file,
+            program_kwargs=s.program_kwargs,
+        )
+        ds1 = runner1.run()
+
+        assert ds1[s.circs[0]].counts[("0",)] == 1
+        assert ds1[s.circs[1]].counts[("1",)] == 1
+
+        # Verify custom results files exist in shot checkpoints, not default
+        for i in range(2):
+            shot_ckpt = ckpt / "shots" / f"circ_{i}"
+            assert (shot_ckpt / custom_results_file).exists(), \
+                f"Custom results file not found at {shot_ckpt / custom_results_file}"
+            assert not (shot_ckpt / "results.h5").exists(), \
+                f"Default results.h5 should not exist at {shot_ckpt / 'results.h5'}"
+
+        # Resume with the same custom results_filename
+        # The second runner should detect existing state via the custom filename
+        runner2 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            resume=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=ckpt / "shots",
+            results_filename=custom_results_file,
+            program_kwargs=s.program_kwargs,
+        )
         ds2 = runner2.run()
 
         assert ds2[s.circs[0]].counts[("0",)] == 1

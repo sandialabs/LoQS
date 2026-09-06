@@ -126,6 +126,7 @@ def _run_one_circuit(
     checkpoint: bool,
     force_resume: bool,
     lazy_loading: bool,
+    results_filename: str,
     keep_shot_results: bool = False,
 ) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
     """Build, run, and reduce one circuit to a count dict.
@@ -151,12 +152,13 @@ def _run_one_circuit(
         "verbose": False,
         "lazy_loading": lazy_loading,
         "force_resume": force_resume,
+        "results_filename": results_filename,
     }
     if checkpoint:
         run_kwargs["checkpoint"] = True
         run_kwargs["resume"] = (
             checkpoint_dir is not None
-            and (checkpoint_dir / "results.h5").exists()
+            and (checkpoint_dir / results_filename).exists()
         )
         run_kwargs["checkpoint_dir"] = checkpoint_dir
     program_results = program.run(num_shots, **run_kwargs)
@@ -356,6 +358,7 @@ class EdesignRunner(MultiProgramRunner):
         poll_interval: float = 1.0,
         show_progress: bool = True,
         runner_filename: str = "runner.h5",
+        results_filename: str = "results.h5",
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -370,6 +373,7 @@ class EdesignRunner(MultiProgramRunner):
             poll_interval=poll_interval,
             show_progress=show_progress,
             runner_filename=runner_filename,
+            results_filename=results_filename,
         )
         self.edesign = edesign
         self.physical_model = physical_model
@@ -476,6 +480,7 @@ class EdesignRunner(MultiProgramRunner):
             "checkpoint": self.shot_checkpoint,
             "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
+            "results_filename": self.results_filename,
         }
 
     def _finalize(self) -> Any:
@@ -533,11 +538,21 @@ class EdesignRunner(MultiProgramRunner):
         """Return description for progress bar."""
         return "Simulating circuits"
 
+    @property
+    def _normalized_collect_shot_data_args(
+        self,
+    ) -> HistoryDataCollector | list[HistoryDataCollector]:
+        """Canonical form of `collect_shot_data_args`, used only for resume
+        mismatch comparison (never for actual shot collection or storage) so
+        two differently-spelled-but-equivalent specs don't spuriously fail resume.
+        """
+        return _normalize_collect_shot_data_args(self.collect_shot_data_args)
+
     def _mismatch_check_fields(self) -> list[str]:
         """Return fields to check for resume mismatch."""
         return [
             "num_shots",
-            "collect_shot_data_args",
+            "_normalized_collect_shot_data_args",
             "physical_to_logical",
             "max_frame_limit",
             "keep_shot_results",

@@ -902,6 +902,79 @@ class TestResume:
         with pytest.raises(ValueError, match="seed_stride"):
             runner2.run()
 
+    def test_resume_with_default_seed_stride_resolving_to_num_shots(self, tmp_path):
+        """Resume should succeed when effective seeding is identical: one runner
+        uses seed_stride=None (resolves to num_shots), another uses explicit seed_stride
+        equal to num_shots."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+
+        # First runner: seed_stride=None, which resolves to num_shots=5
+        runner1 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=None,  # Explicitly None -> will resolve to num_shots=5
+            base_seed=0,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        runner1.run()
+
+        # Second runner: explicit seed_stride=5 (which equals num_shots)
+        # This has the same effective seeding as runner1, so resume should succeed
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=5,  # Explicitly set to match resolved value
+            base_seed=0,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        # This should NOT raise ValueError about seed_stride mismatch
+        result = runner2.run()
+        assert result.is_complete
+
+    def test_resume_with_different_resolved_seed_stride_still_raises(self, tmp_path):
+        """Verify that a genuine mismatch in effective seeding (different _resolved_seed_stride)
+        is still caught even though we now check _resolved_seed_stride instead of seed_stride."""
+        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
+
+        # First runner: seed_stride=None, which resolves to num_shots=5
+        runner1 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=5,
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=None,  # Explicitly None -> will resolve to num_shots=5
+            base_seed=0,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        runner1.run()
+
+        # Second runner: seed_stride=None but different num_shots=10
+        # This has different effective seeding (_resolved_seed_stride would be 10, not 5)
+        runner2 = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=10,  # Different num_shots -> different _resolved_seed_stride
+            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
+            expected_outcomes=EXPECTED_OUTCOMES,
+            seed_stride=None,
+            base_seed=0,
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+        )
+        # This SHOULD raise ValueError about seed_stride mismatch
+        with pytest.raises(ValueError, match="seed_stride"):
+            runner2.run()
+
     def test_resume_mismatched_keep_shot_results_raises(self, tmp_path):
         """A resumed call with a different keep_shot_results than the
         checkpoint was written with is a hard error naming that field."""
@@ -1973,4 +2046,115 @@ class TestNoiseSweepRunnerShotCheckpointing:
         assert len(stored_runner2._program_results) == 2, (
             "Bug #1: _program_results should have 2 items, but was reset to {} "
             "by hand-built cls() constructor"
+        )
+
+    def test_custom_results_filename(self, tmp_path):
+        """Custom results_filename should be used for sweep point runs and resume."""
+        custom_results_file = "custom_results.h5"
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        runner = make_runner(
+            [0.0, 0.1],
+            num_shots=5,
+            checkpoint=True,
+            item_checkpoint_dir=item_ckpt,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            results_filename=custom_results_file,
+            verbose=False,
+        )
+        result = runner.run()
+        assert result.is_complete
+
+        # Verify custom-named file was created in point checkpoint dirs
+        point0_custom_file = shot_ckpt / "point_0" / custom_results_file
+        point1_custom_file = shot_ckpt / "point_1" / custom_results_file
+        assert point0_custom_file.exists(), (
+            f"Custom results file {custom_results_file} should exist for point 0"
+        )
+        assert point1_custom_file.exists(), (
+            f"Custom results file {custom_results_file} should exist for point 1"
+        )
+
+        # Verify default "results.h5" was NOT created
+        point0_default_file = shot_ckpt / "point_0" / "results.h5"
+        assert not point0_default_file.exists(), (
+            "Default results.h5 should not exist when custom_results_file is used"
+        )
+
+        # Verify resume works with custom filename: clear item checkpoint and resume
+        runner_path = item_ckpt / runner.runner_filename
+        stored_runner = NoiseSweepRunner.read(runner_path)
+        assert (
+            stored_runner.results_filename == custom_results_file
+        ), "results_filename should be preserved in deserialized runner"
+        stored_runner.resume = True
+        result2 = stored_runner.run()
+        assert result2.is_complete
+
+    def test_from_noise_sweep_runner_with_serialized_callables(self):
+        """from_noise_sweep_runner should preserve serialized_callables."""
+        env = {}
+        exec("def interactive_fn(strength):\n    return strength\n", env)
+        interactive_fn = env["interactive_fn"]
+
+        runner1 = make_runner(
+            [0.1],
+            seed_stride=1,
+            default_noise_model=interactive_fn,
+            serialized_callables={
+                "default_noise_model": "def interactive_fn(strength):\n    return strength\n"
+            },
+        )
+
+        # from_noise_sweep_runner without explicit serialized_callables should
+        # preserve the original runner's serialized_callables
+        runner2 = NoiseSweepRunner.from_noise_sweep_runner(
+            runner1, strengths=[0.2]
+        )
+
+        # Should NOT raise OSError when trying to serialize/deserialize
+        # (which would happen if serialized_callables was lost)
+        assert (
+            runner2._quantum_program_serialized_callables[
+                "default_noise_model"
+            ]
+            == "def interactive_fn(strength):\n    return strength\n"
+        )
+
+        # Verify build_program works (would fail if callables weren't preserved)
+        program = runner2.build_program(0)
+        assert program.default_noise_model == 0.2
+
+    def test_run_kwargs_n_shot_batches_not_clobbered(self):
+        """Explicit n_shot_batches in run_kwargs should not be clobbered."""
+        seen_n_shot_batches = []
+
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen_n_shot_batches.append(kwargs.get("n_shot_batches"))
+            return real_run(self, *args, **kwargs)
+
+        runner = make_runner(
+            [0.0, 0.1],
+            seed_stride=5,
+            num_shots=5,
+            verbose=False,
+            run_kwargs={"n_shot_batches": 2},
+        )
+        try:
+            QuantumProgram.run = spy_run
+            runner.run()
+        finally:
+            QuantumProgram.run = real_run
+
+        # Both points should use the explicitly-set n_shot_batches=2,
+        # not be clobbered by ParallelStrategy.n_shot_batches (which is None by default)
+        assert seen_n_shot_batches == [2, 2], (
+            f"n_shot_batches should be [2, 2] but got {seen_n_shot_batches}; "
+            "unconditional n_shot_batches assignment clobbered run_kwargs"
         )

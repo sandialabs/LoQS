@@ -846,6 +846,27 @@ class ProgramResults(Displayable):
             )
             assert isinstance(loaded_results, ProgramResults)
 
+            # Restore metadata this checkpoint file already has, if self's
+            # own fields are still at their default/unset state (never
+            # overwrite metadata a caller deliberately set beforehand).
+            if (
+                self.name == "(Unnamed program results)"
+                and loaded_results.name != "(Unnamed program results)"
+            ):
+                self.name = loaded_results.name
+            if (
+                self.parent_program is None
+                and loaded_results.parent_program is not None
+            ):
+                self.parent_program = loaded_results.parent_program
+            if self.num_shots is None and loaded_results.num_shots is not None:
+                self.num_shots = loaded_results.num_shots
+            if (
+                self.max_frame_limit is None
+                and loaded_results.max_frame_limit is not None
+            ):
+                self.max_frame_limit = loaded_results.max_frame_limit
+
             # Merge the loaded shot histories into our current results
             if loaded_results.shot_histories:
                 # Merge shot histories, keeping track of which shots are already checkpointed

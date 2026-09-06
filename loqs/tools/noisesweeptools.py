@@ -144,6 +144,7 @@ def _run_one_sweep_point(
     checkpoint: bool,
     force_resume: bool,
     lazy_loading: bool,
+    results_filename: str,
     keep_shot_results: bool = False,
 ) -> tuple[float, float] | tuple[tuple[float, float], Any]:
     """Build, run, and reduce one sweep point, returning `(failure_rate, stderr)`.
@@ -175,18 +176,19 @@ def _run_one_sweep_point(
             shot_checkpoint_dir, "point", index
         )
         resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
+        resolved_run_kwargs["results_filename"] = results_filename
         # Cascade resume: only True if this specific point has prior shot state
         if checkpoint:
             resolved_run_kwargs["resume"] = (
-                checkpoint_dir / "results.h5"
+                checkpoint_dir / results_filename
             ).exists()
     resolved_run_kwargs["lazy_loading"] = lazy_loading
     resolved_run_kwargs["force_resume"] = force_resume
 
     if shot_executor is not None:
         resolved_run_kwargs["shot_executor"] = shot_executor
-
-    resolved_run_kwargs["n_shot_batches"] = n_shot_batches
+    if n_shot_batches is not None:
+        resolved_run_kwargs["n_shot_batches"] = n_shot_batches
 
     program_results = program.run(num_shots=num_shots, **resolved_run_kwargs)
     failure_rate, stderr = _compute_failure_rate(
@@ -279,6 +281,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         poll_interval: float = 1.0,
         show_progress: bool = True,
         runner_filename: str = "runner.h5",
+        results_filename: str = "results.h5",
     ) -> None:
         """
         Parameters
@@ -340,7 +343,7 @@ class NoiseSweepRunner(MultiProgramRunner):
 
         item_checkpoint_dir, checkpoint, resume, force_resume, parallel_strategy,
         shot_checkpoint, shot_checkpoint_dir, lazy_loading, keep_shot_results,
-        runner_filename:
+        runner_filename, results_filename:
             See `MultiProgramRunner.__init__` for these inherited configuration fields.
         """
         super().__init__(
@@ -356,6 +359,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             poll_interval=poll_interval,
             show_progress=show_progress,
             runner_filename=runner_filename,
+            results_filename=results_filename,
         )
         self.strengths = list(strengths)
         self.base_seed = base_seed
@@ -489,6 +493,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             bool | Callable[[Any], bool] | None
         ) = None,
         name: str | Callable[[Any], str] | None = None,
+        serialized_callables: Mapping[str, str] | None = None,
         num_shots: int | None = None,
         collect_shot_data_args: (
             Sequence[HistoryDataCollectorLike] | None
@@ -509,6 +514,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         poll_interval: float | None = None,
         show_progress: bool | None = None,
         runner_filename: str | None = None,
+        results_filename: str | None = None,
     ) -> "NoiseSweepRunner":
         """Create a new NoiseSweepRunner from an existing one with optional overrides.
 
@@ -561,6 +567,11 @@ class NoiseSweepRunner(MultiProgramRunner):
                 else other.override_global_instructions
             ),
             name=name if name is not None else other.name,
+            serialized_callables=(
+                serialized_callables
+                if serialized_callables is not None
+                else other._quantum_program_serialized_callables
+            ),
             num_shots=num_shots if num_shots is not None else other.num_shots,
             collect_shot_data_args=(
                 collect_shot_data_args
@@ -631,6 +642,11 @@ class NoiseSweepRunner(MultiProgramRunner):
                 if runner_filename is not None
                 else other.runner_filename
             ),
+            results_filename=(
+                results_filename
+                if results_filename is not None
+                else other.results_filename
+            ),
         )
 
     def build_program(self, index: int) -> QuantumProgram:
@@ -675,6 +691,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             "checkpoint": self.shot_checkpoint,
             "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
+            "results_filename": self.results_filename,
         }
 
     def _finalize(self) -> "NoiseSweepResult":
@@ -716,7 +733,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         return [
             "strengths",
             "base_seed",
-            "seed_stride",
+            "_resolved_seed_stride",
             "num_shots",
             "collect_shot_data_args",
             "expected_outcomes",

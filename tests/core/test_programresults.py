@@ -1011,6 +1011,47 @@ class TestProgramResults:
                 range(num_shots)
             )
 
+    def test_load_checkpoint_restores_metadata_fields(self):
+        """When loading from a checkpoint file, metadata fields (name,
+        parent_program, num_shots, max_frame_limit) that the file already
+        contains should be restored, not left at defaults."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoint"
+            checkpoint_dir.mkdir()
+
+            # Create a ProgramResults with custom metadata and write the
+            # metadata snapshot (via _write_results_snapshot_if_fresh)
+            original = ProgramResults(
+                name="Custom Results Name",
+                num_shots=42,
+                max_frame_limit=100,
+                parent_program=None,
+            )
+            # Write metadata snapshot (normally called in __init__ when
+            # checkpoint_enabled=True and parent_program is a QuantumProgram;
+            # we call it manually to test the restore path)
+            original._checkpoint_dir = checkpoint_dir
+            original._write_results_snapshot_if_fresh()
+
+            # Add shots and checkpoint
+            for i in range(5):
+                history = History()
+                history.append(Frame({"index": i}))
+                original.add_shot(i, history)
+            original.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Load from checkpoint into a fresh ProgramResults
+            loaded = ProgramResults()
+            loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Verify metadata was restored
+            assert loaded.name == "Custom Results Name"
+            assert loaded.num_shots == 42
+            assert loaded.max_frame_limit == 100
+
+            # Verify shot histories were also loaded
+            assert len(loaded.shot_histories) == 5
+
 
 class TestConcurrentCheckpointing:
     """Several genuinely concurrent OS processes, each checkpointing its own

@@ -385,16 +385,18 @@ class QuantumProgram(Displayable):
 
         State machine (cases a-d):
         - (a) no on-disk state, resume=False -> free to create and start
-        - (b) on-disk state exists, resume=False -> error (never silently
-          overwrite)
-        - (c) on-disk state and resume=True -> resume, subject to mismatch
-          check (force_resume bypasses)
+        - (b) on-disk state exists with valid checkpoint, resume=False -> error
+          (never silently overwrite)
+        - (c) on-disk state with valid checkpoint and resume=True -> resume,
+          subject to mismatch check (force_resume bypasses)
         - (d) resume=True but no on-disk state -> error (nothing to resume
           from; covers the case of a caller pointing resume=True at a filename
           the original run never used)
 
-        Also raises `FileExistsError` if `checkpoint_dir` has content that
-        isn't a recognized checkpoint (no matching `results_filename`).
+        Raises `FileExistsError` if `checkpoint_dir` has content that isn't
+        a recognized checkpoint (no matching `results_filename`), regardless
+        of the `resume` flag -- this check runs first to avoid misleading
+        error messages.
         """
         resolved_checkpoint_dir = (
             Path(checkpoint_dir)
@@ -417,6 +419,13 @@ class QuantumProgram(Displayable):
                 )
             return resolved_checkpoint_dir
 
+        # Check for foreign content first (before checking resume flag)
+        if not results_path.exists():
+            raise FileExistsError(
+                f"{resolved_checkpoint_dir} exists with content that isn't "
+                f"a recognized checkpoint (no {results_filename})."
+            )
+
         # Case (b): on-disk state exists without resume=True -> error
         if not resume:
             raise ValueError(
@@ -427,11 +436,6 @@ class QuantumProgram(Displayable):
             )
 
         # From here on: on-disk state exists AND resume=True (case c)
-        if not results_path.exists():
-            raise FileExistsError(
-                f"{resolved_checkpoint_dir} exists with content that isn't "
-                f"a recognized checkpoint (no {results_filename})."
-            )
 
         stored = ProgramResults.read(results_path)
         mismatches = []
