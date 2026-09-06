@@ -69,8 +69,7 @@ class QSimQuantumState(BaseQuantumState):
         "_qsim_maj_vot_mask",
         "_qsim_maj_vot_array",
     ]
-    """`seed` is deliberately not here to avoid triggering re-caching.
-    See #118 for more details."""
+    """`seed` is deliberately not here to avoid triggering re-caching."""
 
     _state: _SparseDM
     """Underlying state object."""

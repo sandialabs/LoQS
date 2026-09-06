@@ -69,7 +69,7 @@ class InstructionLabel(dict):
 
     Both are entirely optional, ordinary dict keys -- an instruction with
     neither is a "global" instruction, resolved from
-    [](api:InstructionStack.global_instructions) rather than a specific
+    [](api:QuantumProgram.global_instructions) rather than a specific
     patch's own instruction set.
 
     A handful of shorter forms are accepted by [](api:from_raw) as sugar

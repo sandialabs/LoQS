@@ -75,8 +75,7 @@ class STIMQuantumState(BaseQuantumState):
     name: ClassVar[str] = "STIM Tableau"
 
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
-    """`seed` is deliberately not here to avoid triggering re-caching.
-    See #118 for more details."""
+    """`seed` is deliberately not here to avoid triggering re-caching."""
 
     _state: _TableauSimulator
     """Underlying state object."""

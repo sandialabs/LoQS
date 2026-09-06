@@ -82,18 +82,12 @@ DEFAULT_PRIORITIES = [
 class Instruction(Displayable):
     """An object that moves the state of the simulation forward.
 
-    This is the possibly the most important `LoQS` object.
-    It was designed to be maximally flexible: it can take in any
-    data it needs from the current state of the simulation,
-    perform any transformation on that data, and output any
-    information to be used by a downstream [](api:Instruction).
-
-    NOTE: The [](api:Instruction) is flexible and powerful; however,
-    with that flexibility comes complexity, and we are aware
-    it may not be immediately clear how to use these. Interested users are
-    encouraged to look at the Object Quickstart > Instructions and
-    Tutorials > Building a Complex Instruction for more,
-    or at [](api:builders) for concrete examples.
+    Designed to be maximally flexible: it can take in any data it needs
+    from the current state of the simulation, perform any transformation
+    on that data, and output any information to be used by a downstream
+    [](api:Instruction). Interested users are encouraged to look at the
+    Object Quickstart > Instructions and Tutorials > Building a Complex
+    Instruction for more, or at [](api:builders) for concrete examples.
 
     At its core, an [](api:Instruction) is defined by five
     pieces of user-defined information:
@@ -199,7 +193,7 @@ class Instruction(Displayable):
     map_qubits_fn: MapQubitsCallable
     """A user-defined function called in [](api:Instruction.map_qubits).
 
-    It must conform to the [MapQubitsCallable](api:MapQubitsCallable] protocol.
+    It must conform to the [](api:MapQubitsCallable) protocol.
     """
 
     param_error_behavior: Literal["continue", "warn", "raise"]
@@ -274,7 +268,7 @@ class Instruction(Displayable):
             A mapping of [](api:apply_fn) parameter names to lists of priorities
             to using during parameter collection with
             [](api:QuantumProgram._collect_kwarg). Defaults to `None`,
-            which sets every parameter's priority to [](api:DEFAULT_PARAMETERS).
+            which sets every parameter's priority to [](api:DEFAULT_PRIORITIES).
             For an example, see [](api:builders.build_lookup_decoder_instruction).
 
         param_error_behavior:

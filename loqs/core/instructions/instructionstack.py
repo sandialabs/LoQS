@@ -78,7 +78,7 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
     _SERIALIZE_ATTRS_MAP = {"_instructions": "instructions"}
 
     _instructions: list[InstructionLabel]
-    """Internal list of [](api:InstructionLabels)"""
+    """Internal list of [](api:InstructionLabel) objects."""
 
     def __init__(self, instructions: InstructionStackLike = None) -> None:
         """
@@ -104,11 +104,10 @@ class InstructionStack(Sequence[InstructionLabel], Displayable):
         # If we are here, we are a sequence of some kind. A tuple is always
         # one InstructionLabel's own raw form (matching InstructionLabelLike's
         # tuple sugar); anything else (e.g. a list) is a sequence of raw
-        # items to convert individually. This can't instead be decided by
-        # inspecting instructions[0]'s type, as done previously: a list of
-        # multiple bare Instruction/str labels (e.g. ["LabelA", "LabelB"])
-        # would then be misread as one InstructionLabel's own raw form,
-        # silently dropping every entry past the first two.
+        # items to convert individually. This prevents a list of multiple bare
+        # Instruction/str labels (e.g. ["LabelA", "LabelB"]) from being
+        # silently misread as one InstructionLabel's raw form, which would
+        # drop every entry past the first two.
         if isinstance(instructions, tuple):
             self._instructions = [InstructionLabel.from_raw(instructions)]
             return

@@ -110,8 +110,7 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
         "contraction",
         "d",
     ]
-    """`seed` is deliberately not here to avoid triggering re-caching.
-    See #118 for more details."""
+    """`seed` is deliberately not here to avoid triggering re-caching."""
 
     _SERIALIZE_ATTRS_MAP = {"_state": "state"}
 

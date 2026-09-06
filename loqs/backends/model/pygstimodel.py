@@ -72,35 +72,17 @@ PyGSTiModelLike: TypeAlias = ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
 """Types of pyGSTi models this backend can handle"""
 
 
-# ---------------------------------------------------------------------------
-# Workaround/detection for a pyGSTi `EmbeddedOp` memory-blowup bug.
-#
-# See `issues/pygsti-543.md` and `issues/pr-543.md` in the LoQS workspace repo
-# for full details, and https://github.com/sandialabs/pyGSTi/issues/543 for
-# the upstream pyGSTi issue.
-#
-# In short: pyGSTi commit 5c5b06a6d ("First pass at updating default evotype
-# behavior") made `Evotype.cast(...)` prefer *dense* representations whenever
-# an operator's own state space has dimension <= 64 (i.e. up to ~3 qubits).
-# `EmbeddedOp` (used to embed a small local operator into a larger multi-qubit
-# model) naively reuses the *embedded* operator's `Evotype` object -- which was
-# decided based on that operator's own small local state space -- to decide
-# its own representation type, even though `EmbeddedOp` itself spans the much
-# larger *parent* state space. This can cause a single `EmbeddedOp` to
-# allocate a dense matrix scaling as O(dim(parent state space)^2) instead of a
-# much smaller "embedded" representation, e.g. ~2.1 GB for a single 1-qubit
-# idle gate embedded into a 7-qubit register. As of this writing the bug is
-# still present on pyGSTi's `develop` branch.
-#
-# This mainly bites user-defined custom (often time-dependent) pyGSTi
-# operators, such as those in the `timedepmodel.md` tutorial, which are
-# commonly built by subclassing `DenseOperator`/`LinearOperator`, passing
-# `evotype` as a bare string (e.g. `"densitymx"`) without an explicit
-# `state_space`, and then wrapping the result in an `EmbeddedOp` targeting a
-# larger multi-qubit model. PyGSTi's own model-construction helpers (e.g.
-# `create_crosstalk_free_model`) are unaffected, since they build their
-# operators/evotypes differently.
-# ---------------------------------------------------------------------------
+# Workaround for a pyGSTi `EmbeddedOp` memory-blowup bug (upstream
+# pyGSTi issue #543). When an `EmbeddedOp` wraps a small local operator
+# (e.g. a 1-qubit idle) and embeds it into a larger multi-qubit model,
+# `EmbeddedOp` naively reuses the wrapped operator's `Evotype` object
+# (decided based on the small local state space) instead of re-deciding
+# based on its own larger parent state space. This causes a single
+# `EmbeddedOp` to allocate a dense matrix scaling as O(parent_dim^2)
+# instead of a compact embedded representation (~2.1 GB for a 1-qubit
+# idle in a 7-qubit register). Happens most often with user-defined
+# custom pyGSTi operators passed as bare evotype strings to
+# `EmbeddedOp`; see [](api:safe_time_dependent_evotype) for a workaround.
 
 _DENSE_EMBEDDING_DIM_THRESHOLD = 64
 """Mirrors the dimension threshold pyGSTi itself uses (as of the bug's
@@ -138,8 +120,7 @@ def safe_time_dependent_evotype(evotype: str = "densitymx") -> Evotype:
     on the wrapped operator's small, local state space) instead of deciding
     based on its own, potentially much larger, parent state space -- which
     can cause disproportionate (and potentially enormous) memory use. See the
-    module-level comment above [](api:PyGSTiNoiseModel) and
-    `issues/pr-543.md` for full details.
+    module-level comment above [](api:PyGSTiNoiseModel) for details.
 
     Explicitly forcing `default_prefer_dense_reps=False` here sidesteps the
     issue entirely (regardless of pyGSTi version) since `EmbeddedOp` will
@@ -228,18 +209,13 @@ def _check_op_for_dense_embedding_blowup(
             f"(dim={parent_dim}, ~{approx_bytes / 1e9:.2f} GB) instead of a "
             f"compact embedded representation (embedded operator only acts "
             f"on a dim={child_dim} subspace). This is a known pyGSTi bug "
-            "(see issues/pygsti-543.md and issues/pr-543.md) where "
-            "EmbeddedOp inherits its wrapped operator's dense-representation "
-            "preference, which was decided based on the wrapped operator's "
-            "own small state space, rather than re-deciding based on its "
-            "own (larger) parent state space. This most commonly happens "
-            "when constructing a custom pyGSTi operator (e.g. subclassing "
-            "DenseOperator) with evotype passed as a bare string and no "
-            "explicit state_space, then embedding it via EmbeddedOp. "
+            "(see the module-level comment near the top of pygstimodel.py "
+            "and upstream pyGSTi issue #543) where EmbeddedOp inherits its "
+            "wrapped operator's dense-representation preference rather than "
+            "re-deciding based on its own (larger) parent state space. "
             "Workaround: construct the operator's evotype explicitly with "
             "dense representations disabled, e.g. using "
-            "loqs.backends.model.pygstimodel.safe_time_dependent_evotype(...) "
-            "in place of a bare evotype string.",
+            "loqs.backends.model.pygstimodel.safe_time_dependent_evotype(...)",
             PyGSTiEmbeddedOpMemoryWarning,
             stacklevel=3,
         )
@@ -589,8 +565,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     def check_for_dense_embedding_issues(self) -> None:
         """Proactively scan every gate/instrument in this model for the
         pyGSTi `EmbeddedOp` dense-representation memory-blowup bug (see the
-        module-level comment near the top of this file, and
-        `issues/pygsti-543.md` / `issues/pr-543.md`), warning (via
+        module-level comment near the top of this file), warning (via
         [](api:PyGSTiEmbeddedOpMemoryWarning)) for each affected gate/
         instrument found.
 

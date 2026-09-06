@@ -200,11 +200,10 @@ def _upgrade_legacy_instrumentrep(
     """Reshape an old `(rep, qubits, reptype)` instrument payload into a new `InstrumentRep`.
 
     For `ZBASIS_PRE_POST_OPERATIONS`/`ZBASIS_OUTCOME_OPERATION_DICT`, the
-    nested gate-level entries of `rep` (originally themselves `RepTuple`
-    objects) have already been upgraded to concrete `GateRep` instances by
-    the time this function runs: attribute decoding happens bottom-up,
-    before the outer `RepTuple`'s own `_from_decoded_attrs` is invoked, so
-    no recursive re-upgrading is needed here.
+    nested gate-level entries of `rep` have already been upgraded to
+    concrete `GateRep` instances by the time this function runs: attribute
+    decoding happens bottom-up, before the outer payload's own
+    `_from_decoded_attrs` is invoked, so no recursive re-upgrading is needed.
     """
     if legacy_value is _LegacyInstrumentRepValue.ZBASIS_PROJECTION:
         reset, include_outcome = rep

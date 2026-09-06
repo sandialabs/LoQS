@@ -139,11 +139,9 @@ class PatchLayout(MutableMapping[str, QECCodePatch], Displayable):
     [](api:set_relation) over touching this directly.
     """
     # FUTURE WORK: relations are looked up purely by participant label
-    # set, with no secondary "kind" tag -- multiple simultaneous,
-    # independent relations over the same patch pair are not supported.
-    # No concrete need for this was found in the surf17 multi-patch
-    # codepacks; extend the key to tuple[tuple[str, ...], str] with an
-    # explicit kind if that changes.
+    # set, with no secondary "kind" tag (no multi-relation support for
+    # the same pair). To support that, extend the key to
+    # tuple[tuple[str, ...], str] with an explicit kind tag.
 
     def __init__(self, patches: PatchLayoutLike = None) -> None:
         """

@@ -399,14 +399,7 @@ def build_discrete_error_injection_programs(
                 # We only have single qubit errors, create the new program at this loop level
                 insert_1q_error(error_loc[0], eclabel, error_loc[1])
 
-    # Also add every error at the end of the circuit in the case of single qubit errors
-    # Two qubit errors don't need this because they are already post errors
-
-    # TODO: Don't do this, instead insert before readout as well
-    # if not post_twoq_gates:
-    #     for eclabel in error_circuit_labels:
-    #         for i in range(len(circuit.qubit_labels)):
-    #             insert_1q_error(circuit.depth, eclabel, i, end=True)
+    # TODO: Insert errors before readout in addition to circuit depth
 
     return errored_programs
 

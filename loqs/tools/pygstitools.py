@@ -467,8 +467,8 @@ def simulate_dataset_for_edesign(
     parallelism within each chunk's own programs. Checkpointing (if
     `checkpoint_path` is given) still happens from this driving process,
     once per circuit, as each chunk's results come back -- not from inside
-    the workers themselves; real per-worker parallel checkpointing is
-    tracked separately under #105.
+    the workers themselves. Per-worker parallel checkpointing is not yet
+    supported.
 
     If `checkpoint_path` is given, each circuit's row is also appended to an
     on-disk text `DataSet` as soon as it's computed, so a crash partway through
