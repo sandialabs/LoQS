@@ -29,6 +29,7 @@ docs/_gen_md
 checkpoints/
 standard_gst_checkpoints/
 submitit-logs/
+steane_zsweep_progress/
 
 .vscode
 venv*/

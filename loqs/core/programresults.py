@@ -16,24 +16,87 @@ from collections.abc import Mapping
 from typing import ClassVar
 from pathlib import Path
 import h5py
-import numpy as np
-from datetime import datetime
 
 from loqs.internal import Displayable, Serializable
+from loqs.internal.serializable import ResolvingDecodeCache
 from loqs.core.history import (
     History,
     HistoryLike,
     HistoryCollectDataIndexTypes,
 )
-from loqs.core import Frame
 
 # Import QuantumProgram to avoid circular imports - we'll use it in type hints
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
+from loqs.internal.streamingmerge import (
+    merge_dict_attr,
+    iter_dict_attr_entries,
+    get_dict_attr_value,
+    get_dict_attr_group,
+    get_dict_attr_keys,
+)
 
 if TYPE_CHECKING:
     from loqs.core.quantumprogram import QuantumProgram
+
+
+def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
+    """Navigate from a checkpoint file (or subgroup) to its actual object's encoded group.
+
+    Handles both file layouts:
+    - Bootstrap path (_write_shot_entries): Top-level is directly the object group
+      (Serializable_1 with encode_type).
+    - Fresh envelope path (_write_results_snapshot_if_fresh): Top-level is a
+      wrapper (/root with version attr), contains the object group.
+
+    Starting from parent_group, descends through single-child wrapper groups
+    (those with no encode_type attribute and only a "version" attribute) until
+    reaching a group that either has encode_type or has more than one child.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The file or subgroup to resolve.
+
+    Returns
+    -------
+    h5py.Group
+        The actual object's encoded group (should have encode_type attribute).
+    """
+    current = parent_group
+    while len(current.keys()) == 1:
+        # Only descend if current has no encode_type (not an actual object yet)
+        if "encode_type" in current.attrs:
+            return current
+        # Descend to the single child
+        first_child_name = next(iter(current.keys()))
+        first_child = current[first_child_name]
+        if isinstance(first_child, h5py.Group):
+            current = first_child
+        else:
+            # Child is a dataset, stop here
+            return current
+    # Stop if we have multiple children or if encode_type is present
+    return current
+
+
+def _reset_empty_groups_format_dict_attr(
+    h5_file: h5py.File, attr_name: str
+) -> None:
+    """Delete `attr_name` from its checkpoint object group if it is an
+    empty, "groups"-format dict -- the format `Serializable.write` always
+    uses for a dict attribute regardless of its intended dataset storage
+    format. Deleting it lets the next real `merge_dict_attr` call for this
+    attribute create it fresh with the correct format inferred from real
+    data. A non-empty dict, or one already in "dataset" format, is left
+    untouched, so this is idempotent and safe to call after every write.
+    """
+    group = _resolve_checkpoint_object_group(h5_file)
+    if attr_name not in group or get_dict_attr_keys(group, attr_name):
+        return
+    keys_iterable = group[attr_name]["dict"]["keys"]["iterable"]
+    if keys_iterable.attrs.get("storage_format", "groups") == "groups":
+        del group[attr_name]
 
 
 class ProgramResults(Displayable):
@@ -51,16 +114,21 @@ class ProgramResults(Displayable):
         "_unwritten_shots",
         "name",
         "parent_program",
+        "num_shots",
+        "max_frame_limit",
+        "_results_filename",
     ]
 
-    # `_merge_into_existing_checkpoint`/`_merge_iterable` navigate directly
-    # into this attr's raw HDF5 structure (dict -> keys/values -> iterable,
-    # one group per shot) to append new shots cheaply, bypassing the normal
-    # recursive decode entirely -- HDF5's array-free-subtree collapse would
-    # silently break that navigation whenever a batch of shots happens to
-    # have no array anywhere in it (e.g. an all-classical program with no
-    # quantum state), so this attr is exempted from collapse.
-    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset({"shot_histories"})
+    # `_write_shot_entries`/`merge_dict_attr` navigate directly into this
+    # attr's raw HDF5 structure (dict -> keys/values -> iterable, one group
+    # per shot) to append new shots cheaply, bypassing the normal recursive
+    # decode entirely -- HDF5's array-free-subtree collapse would silently
+    # break that navigation whenever a batch of shots happens to have no
+    # array anywhere in it (e.g. an all-classical program with no quantum
+    # state), so this attr is exempted from collapse.
+    _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
+        {"shot_histories"}
+    )
 
     def __init__(
         self,
@@ -68,8 +136,12 @@ class ProgramResults(Displayable):
         name: str = "(Unnamed program results)",
         parent_program: "QuantumProgram | str | Path | None" = None,
         checkpoint_enabled: bool = False,
-        lazy_loading_enabled: bool = True,
+        checkpoint_dir: str | Path | None = None,
+        lazy_loading: bool = True,
         max_memory_shots: int = 100,
+        num_shots: int | None = None,
+        max_frame_limit: int | None = None,
+        results_filename: str = "results.h5",
     ) -> None:
         """
         Parameters
@@ -87,6 +159,21 @@ class ProgramResults(Displayable):
 
         checkpoint_enabled:
             Whether checkpointing is enabled for this ProgramResults.
+
+        checkpoint_dir:
+            Directory where checkpoint files (including the parent program file,
+            if written) are stored. If None, a default of `./checkpoints` is
+            used when a write is actually needed.
+
+        num_shots:
+            The total number of shots for this run (for resume detection).
+
+        max_frame_limit:
+            The maximum frame limit used in this run (for resume detection).
+
+        results_filename:
+            Filename to use for the canonical results checkpoint file.
+            Defaults to "results.h5".
         """
         self.shot_histories = (
             shot_histories if shot_histories is not None else {}
@@ -96,17 +183,34 @@ class ProgramResults(Displayable):
         self._unwritten_shots = set()
         """Set of shot indices that have not been written to checkpoint files yet."""
 
-        self._checkpoint_dir = None
+        self._checkpoint_dir = (
+            Path(checkpoint_dir) if checkpoint_dir is not None else None
+        )
         """Directory where checkpoint files are stored."""
 
-        self._checkpoint_strategy = None
-        """Current checkpointing strategy being used."""
-
         self._worker_id = None
-        """Worker ID for parallel checkpointing."""
+        """Which writer's checkpoint file this object last read/wrote --
+        `None` for the un-suffixed `results.h5` (also what
+        `consolidate_checkpoints` itself writes), or a `hostname_pid`-style
+        string identifying one specific writer's own file."""
+
+        self._nested_source_file: Path | None = None
+        """File path containing a nested group source (an entry inside
+        another object's _program_results dict attribute), if this
+        ProgramResults was constructed to load shots from a nested source."""
+
+        self._nested_source_index: int | None = None
+        """Integer key of this ProgramResults inside a parent's _program_results
+        dict attribute, if loaded from a nested source."""
 
         self.name = name
         """Name for logging"""
+
+        self.num_shots = num_shots
+        """Total number of shots for this run (for resume detection)."""
+
+        self.max_frame_limit = max_frame_limit
+        """Maximum frame limit for this run (for resume detection)."""
 
         self.parent_program = parent_program
         """Reference to the parent QuantumProgram that generated these results."""
@@ -114,8 +218,11 @@ class ProgramResults(Displayable):
         self._checkpoint_enabled = checkpoint_enabled
         """Whether checkpointing is enabled."""
 
-        self._lazy_loading_enabled = lazy_loading_enabled
+        self._lazy_loading = lazy_loading
         """Whether lazy loading is enabled"""
+
+        self._results_filename = results_filename
+        """Filename for the canonical results checkpoint file."""
 
         self._max_memory_shots = max_memory_shots
         """Maximum number of shots to keep loaded."""
@@ -128,58 +235,92 @@ class ProgramResults(Displayable):
         call for this object's lifetime, so an object reused across shots is written
         once and cheaply referenced afterward, instead of re-expanded every time."""
 
+        self._checkpoint_decode_cache: ResolvingDecodeCache = ResolvingDecodeCache(
+            root=None, format="hdf5"
+        )
+        """Persistent `Serializable.decode` cache shared across lazy shot loading
+        calls; `_root` is re-pointed at each freshly-opened file handle."""
+
         # If checkpointing is enabled and parent_program is a QuantumProgram object,
-        # we need to write it to file and store the filename instead
+        # write results.h5 (this whole ProgramResults object) if it doesn't already
+        # exist, then use it instead of parent_program for cache building
         from loqs.core import QuantumProgram
 
         if checkpoint_enabled and isinstance(parent_program, QuantumProgram):
-            self._write_parent_program_to_file(parent_program)
-            # Build encode_cache by decoding the written program and reversing cache mapping
+            self._write_results_snapshot_if_fresh()
+            # Build encode_cache by decoding the written results and reversing cache mapping
             self._build_encode_cache_from_parent_program()
 
-    def _write_parent_program_to_file(self, program) -> None:
-        """Write the parent QuantumProgram to file and store the filename.
+    def _set_nested_shot_source(self, source_file: Path, index: int) -> None:
+        """Configure this ProgramResults to load shots from a nested source.
+
+        Sets up internal fields to point to an entry inside another object's
+        own `_program_results` dict attribute, rather than a standalone
+        checkpoint file.
 
         Parameters
         ----------
-        program:
-            The QuantumProgram object to write to file.
+        source_file : Path
+            Path to the HDF5 file containing the parent object.
+        index : int
+            Integer key of this ProgramResults inside the parent's
+            `_program_results` dict attribute.
         """
-        # Create a temporary directory for the program file if checkpoint_dir is not set
+        self._nested_source_file = Path(source_file)
+        self._nested_source_index = index
+
+    def _write_results_snapshot_if_fresh(self) -> None:
+        """Write the entire ProgramResults (including nested parent_program) to
+        results.h5 only if that file doesn't already exist. The written
+        (empty) shot_histories attribute is then reset so a later
+        merge_dict_attr call establishes it fresh in the correct storage
+        format. Then update self.parent_program to point to results.h5 (as
+        a string path).
+        """
+        # Set default checkpoint_dir if needed
         if self._checkpoint_dir is None:
             self._checkpoint_dir = Path("./checkpoints")
-            self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create a unique filename for the program
-        program_filename = (
-            self._checkpoint_dir
-            / f"parent_program_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
-        )
+        # Ensure checkpoint directory exists
+        self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write the program to file
-        program.write(program_filename, format="hdf5")
+        results_path = self._checkpoint_dir / self._results_filename
 
-        # Store the filename instead of the program object
-        self.parent_program = str(program_filename)
+        # Write only if results.h5 doesn't exist yet (this is what makes
+        # a resuming call not re-derive a fresh config from a possibly-different self)
+        if not results_path.exists():
+            Serializable.write(self, results_path, format="hdf5")
+            with h5py.File(results_path, "a") as f:
+                _reset_empty_groups_format_dict_attr(f, "shot_histories")
+
+        # Always reassign parent_program to the results.h5 path (whether or not
+        # we just wrote it), so _build_encode_cache_from_parent_program works
+        # identically on both fresh and resuming calls
+        self.parent_program = str(results_path)
 
     def _build_encode_cache_from_parent_program(self) -> None:
-        """Build an encode_cache by decoding the written parent program and reversing cache mapping."""
+        """Build an encode_cache by decoding results.h5 as a ProgramResults
+        (the nested QuantumProgram decodes normally underneath) and
+        reversing its own cache mapping."""
         if not isinstance(self.parent_program, (str, Path)):
             return
 
         try:
-            # Import QuantumProgram here to avoid circular imports
-            from loqs.core.quantumprogram import QuantumProgram
+            with h5py.File(self.parent_program, "r") as f:
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                Serializable.decode(
+                    f, format="hdf5", decode_cache=decode_cache
+                )
 
-            # Read the parent program from file just to build the decode cache
-            decode_cache = {}
-            QuantumProgram.read(self.parent_program, decode_cache=decode_cache)
-
-            # Decode cache is cache_id to object
-            # Encode cache is id(object) to cache_id
-            self._encode_cache = {id(v): k for k, v in decode_cache.items()}
-        except Exception:
-            # If there's any error reading the program or building the cache,
+                # decode_cache maps cache_id to object; the encode cache the
+                # encoder actually consults is keyed by _serial_hash(object),
+                # mapping to a list of (id(object), cache_id) pairs.
+                self._checkpoint_encode_cache = {
+                    Serializable._serial_hash(v): [(id(v), k)]
+                    for k, v in decode_cache.items()
+                }
+        except (BlockingIOError, OSError, KeyError, ValueError, RuntimeError):
+            # If there's any error reading the results or building the cache,
             # just continue without the cache - it's not critical for functionality
             pass
 
@@ -229,6 +370,15 @@ class ProgramResults(Displayable):
         list
             List of [](api:History.collect_data) outputs per shot
         """
+        if self.shot_histories:
+            histories = list(self.shot_histories.values())
+        elif hasattr(self, "_lazy_loading") and self._lazy_loading:
+            shot_indices = self._get_available_shot_indices()
+            loaded = [self.get_shot_history(idx) for idx in shot_indices]
+            histories = [h for h in loaded if h is not None]
+        else:
+            histories = []
+
         data = [
             h.collect_data(
                 key,
@@ -236,9 +386,49 @@ class ProgramResults(Displayable):
                 strip_none_entries=strip_none_entries,
                 frame_filter=frame_filter,
             )
-            for h in self.shot_histories.values()
+            for h in histories
         ]
         return Counter(data) if return_counter else data
+
+    def _get_available_shot_indices(self) -> list[int]:
+        """Return the available shot indices for lazy loading: checked first
+        against a nested `runner.h5` shot source, then a standalone
+        checkpoint directory, falling back to `range(num_shots)` (or
+        whatever's already in the in-memory cache) if neither is present.
+        """
+        from loqs.internal.streamingmerge import get_dict_attr_keys
+
+        if (
+            self._nested_source_file is not None
+            and self._nested_source_file.exists()
+        ):
+            try:
+                with h5py.File(self._nested_source_file, "r") as f:
+                    source_group = self._resolve_shot_source_group(f)
+                    if source_group is not None:
+                        keys = get_dict_attr_keys(
+                            source_group, "shot_histories"
+                        )
+                        if keys:
+                            return keys
+            except (KeyError, OSError):
+                pass
+
+        if self._checkpoint_dir is not None and self._checkpoint_dir.exists():
+            results_file = self._checkpoint_dir / self._results_filename
+            if results_file.exists():
+                try:
+                    with h5py.File(results_file, "r") as f:
+                        keys = get_dict_attr_keys(f, "shot_histories")
+                        if keys:
+                            return keys
+                except (KeyError, OSError):
+                    pass
+
+        if hasattr(self, "num_shots") and self.num_shots is not None:
+            return list(range(self.num_shots))
+
+        return sorted(self._memory_cache.keys())
 
     def mark_shots_as_written(self, shot_indices: list[int]) -> None:
         """Mark shots as having been written to checkpoint files.
@@ -265,8 +455,12 @@ class ProgramResults(Displayable):
     @classmethod
     def _from_decoded_attrs(cls, attr_dict) -> "ProgramResults":
         """Create a ProgramResults object from decoded attributes dictionary."""
-        # Handle shot_histories: convert string keys back to integers if needed
-        shot_histories = attr_dict["shot_histories"]
+        # shot_histories may be absent entirely (a checkpoint snapshot
+        # written before any shot data existed can have this attribute
+        # reset, awaiting the first real write to establish its storage
+        # format); treat that the same as an explicitly empty dict.
+        # Convert string keys back to integers if needed.
+        shot_histories = attr_dict.get("shot_histories") or {}
         if shot_histories and all(
             isinstance(k, str) and k.isdigit() for k in shot_histories.keys()
         ):
@@ -277,6 +471,9 @@ class ProgramResults(Displayable):
             shot_histories=shot_histories,
             name=attr_dict["name"],
             parent_program=attr_dict["parent_program"],
+            num_shots=attr_dict.get("num_shots"),
+            max_frame_limit=attr_dict.get("max_frame_limit"),
+            results_filename=attr_dict.get("_results_filename", "results.h5"),
         )
 
         # Set internal attributes that aren't in the constructor
@@ -287,32 +484,31 @@ class ProgramResults(Displayable):
     def checkpoint(
         self,
         checkpoint_dir: str | Path | None = None,
-        strategy: str = "single_file",
-        batch_size: int = 1,
-        current_batch_index: int = 1,
-        worker_id: int | None = None,
+        worker_id: str | None = None,
     ) -> None:
-        """Checkpoint the program results to disk.
+        """Write every currently-unwritten shot to this writer's own checkpoint file.
+
+        Always flushes everything `get_unwritten_shots()` currently reports
+        -- there is no separate "batch index" to compute or track. How
+        often this gets called (once per shot, once per batch of several)
+        is entirely up to the caller; a `QuantumProgram.run()` worker
+        processing `checkpoint_batch_size` shots at a time calls this once
+        per batch, which is what actually controls durability granularity
+        vs. I/O overhead.
 
         Parameters
         ----------
         checkpoint_dir:
-            Directory to store checkpoint files. If None, uses a temporary directory.
-        strategy:
-            Checkpointing strategy. Options are "single_file" (all shots in one file)
-            or "per_batch" (one file per batch).
-        batch_size:
-            Number of shots per batch.
-        current_batch_index:
-            Index of the current batch being checkpointed.
+            Directory to store checkpoint files. If None, uses `./checkpoints`.
         worker_id:
-            Worker ID for parallel checkpointing. If None, assumes single worker.
+            A string identifying which physical writer this file belongs to
+            (e.g. `f"{socket.gethostname()}_{os.getpid()}"`), so multiple
+            concurrent writers never open the same file. If None, writes
+            directly to the un-suffixed `results.h5` -- the same filename
+            `consolidate_checkpoints` writes its own merged output under, so
+            a single-writer caller can skip both worker identification and
+            consolidation entirely.
         """
-        # Validate strategy early
-        if strategy not in ("single_file", "per_batch"):
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
-        # Set up checkpoint directory
         if checkpoint_dir is None:
             checkpoint_dir = Path("./checkpoints")
         else:
@@ -320,73 +516,41 @@ class ProgramResults(Displayable):
 
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_dir = checkpoint_dir
-        self._checkpoint_strategy = strategy
         self._worker_id = worker_id
 
-        # Get unwritten shots
-        unwritten_shots = self.get_unwritten_shots()
-        if not unwritten_shots:
+        shots_to_checkpoint = self.get_unwritten_shots()
+        if not shots_to_checkpoint:
             return  # Nothing to checkpoint
 
-        # Determine which shots to checkpoint based on batch
-        # For single_file strategy, checkpoint all shots that belong to batches <= current_batch_index
-        # For per_batch strategy, checkpoint only shots that belong to current_batch_index
-        if batch_size == 1 and current_batch_index == 1:
-            # Special case: when using default batching (batch_size=1, current_batch_index=1),
-            # checkpoint all unwritten shots to avoid confusion
-            shots_to_checkpoint = list(unwritten_shots)
+        if worker_id is not None:
+            filename = checkpoint_dir / f"worker_{worker_id}_checkpoint.h5"
         else:
-            # Normal batching logic
-            shots_to_checkpoint = []
-            for shot_index in unwritten_shots:
-                # Use original batch calculation: (shot_index + 1) // batch_size
-                batch_idx = (shot_index + 1) // batch_size
+            filename = checkpoint_dir / self._results_filename
 
-                if strategy == "single_file":
-                    # For single_file strategy, checkpoint all shots with 1 <= batch_idx <= current_batch_index
-                    # This allows "late" shots that belong to previous batches to be checkpointed
-                    # but excludes shots with batch_idx = 0
-                    if batch_idx >= 1 and batch_idx <= current_batch_index:
-                        shots_to_checkpoint.append(shot_index)
-                else:  # per_batch strategy
-                    # For per_batch strategy, only checkpoint shots that match current_batch_index exactly
-                    if batch_idx == current_batch_index:
-                        shots_to_checkpoint.append(shot_index)
-
-            # If no shots were selected for this batch, but we have unwritten shots,
-            # checkpoint all unwritten shots as a fallback
-            if not shots_to_checkpoint and unwritten_shots:
-                shots_to_checkpoint = list(unwritten_shots)
-
-        if not shots_to_checkpoint:
-            return  # No shots in this batch
-
-        # Create checkpoint filename
-        if strategy == "single_file":
-            if worker_id is not None:
-                filename = checkpoint_dir / f"worker_{worker_id}_checkpoint.h5"
-            else:
-                filename = checkpoint_dir / "checkpoint.h5"
-        elif strategy == "per_batch":
-            if worker_id is not None:
-                filename = (
-                    checkpoint_dir
-                    / f"worker_{worker_id}_batch_{current_batch_index}.h5"
-                )
-            else:
-                filename = checkpoint_dir / f"batch_{current_batch_index}.h5"
-        else:
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
-        # Write checkpoint
-        self._write_checkpoint_file(filename, shots_to_checkpoint, strategy)
-
-        # Mark shots as written
+        self._write_checkpoint_file(filename, shots_to_checkpoint)
         self.mark_shots_as_written(shots_to_checkpoint)
 
         # Implement lazy loading: remove written shots from memory
-        if self._lazy_loading_enabled:
+        if self._lazy_loading:
             for shot_index in shots_to_checkpoint:
+                if shot_index in self.shot_histories:
+                    del self.shot_histories[shot_index]
+
+    def mark_shots_checkpointed(self, shot_indices: list[int]) -> None:
+        """Record that the given shots are already durably checkpointed
+        somewhere else (e.g. by the worker that computed them), without
+        writing anything here. Lets a driver's own `ProgramResults` still
+        honor `lazy_loading` (bounding its own memory) for shots it
+        received from a worker rather than checkpointing itself.
+
+        Parameters
+        ----------
+        shot_indices:
+            Shot indices to mark as already-checkpointed.
+        """
+        self.mark_shots_as_written(list(shot_indices))
+        if self._lazy_loading:
+            for shot_index in shot_indices:
                 if shot_index in self.shot_histories:
                     del self.shot_histories[shot_index]
 
@@ -394,7 +558,6 @@ class ProgramResults(Displayable):
         self,
         filename: Path,
         shot_indices: list[int],
-        strategy: str,
     ) -> None:
         """Write checkpoint data to an HDF5 file using standard Serializable encoding.
 
@@ -404,8 +567,6 @@ class ProgramResults(Displayable):
             Path to the checkpoint file.
         shot_indices:
             List of shot indices to write to the checkpoint.
-        strategy:
-            Checkpointing strategy being used.
         """
         # Prepare data to write - create a dict of unwritten shots
         unwritten_shot_histories = {}
@@ -422,184 +583,219 @@ class ProgramResults(Displayable):
         with h5py.File(
             filename, "a"
         ) as f:  # 'a' mode allows appending to existing files
-            if strategy == "single_file":
-                # For single file strategy, we need to merge into existing structure
-                self._update_single_file_checkpoint(
-                    f, unwritten_shot_histories
-                )
-            else:
-                # For per_batch strategy, create a new file or overwrite
-                # Write all shots using standard encoding
-                self._write_full_checkpoint_structure(
-                    f, unwritten_shot_histories
-                )
+            self._write_shot_entries(f, unwritten_shot_histories.items())
 
-    def _update_single_file_checkpoint(
-        self, h5_file, unwritten_shot_histories: dict[int, History]
+    def _write_shot_entries(
+        self, h5_file: h5py.File, entries: Iterable[tuple[int, History]]
     ) -> None:
-        """Update a single-file checkpoint by merging new shots into existing HDF5 structure.
-
-        This method navigates to the correct HDF5 groups and adds new item_groups
-        for the unwritten shots using Serializable.encode().
+        """Stream shot entries into an HDF5 file's shot_histories dict
+        attribute, creating it fresh or extending it, without ever
+        materializing more than one entry in memory at a time.
 
         Parameters
         ----------
         h5_file:
-            Open HDF5 file object.
-        unwritten_shot_histories:
-            Dictionary mapping shot indices to History objects to be written.
+            Open HDF5 file object in 'a' mode.
+        entries:
+            An iterable of (shot_index: int, history: History) pairs to append.
         """
-        # Check if this is a new file or existing checkpoint
         if len(h5_file.keys()) == 0:
-            # New file - write the full ProgramResults structure
-            self._write_full_checkpoint_structure(
-                h5_file, unwritten_shot_histories
+            # Bootstrap an empty ProgramResults shell, then drop the empty
+            # shot_histories skeleton it leaves behind -- the generic
+            # encoder always writes an empty dict attribute in "groups"
+            # format, which would otherwise prevent the merge_dict_attr
+            # call below from picking "dataset" format for shot-index keys.
+            Serializable.encode(
+                ProgramResults(shot_histories={}),
+                format="hdf5",
+                h5_group=h5_file,
+                encode_cache=self._checkpoint_encode_cache,
             )
-        else:
-            # Existing file - find the shot_histories group and add new entries
-            self._merge_into_existing_checkpoint(
-                h5_file, unwritten_shot_histories
-            )
+            root_group = _resolve_checkpoint_object_group(h5_file)
+            if "shot_histories" in root_group:
+                del root_group["shot_histories"]
 
-    def _merge_into_existing_checkpoint(
-        self, h5_file, unwritten_shot_histories: dict[int, History]
-    ) -> None:
-        """Merge new shots into an existing checkpoint file.
+        # Resolve to the actual object group, handling both fresh-envelope
+        # and bootstrap-created file layouts.
+        root_group = _resolve_checkpoint_object_group(h5_file)
 
-        This method handles both dataset-based and group-based storage formats:
-        - If iterable contains datasets, extend the datasets
-        - If iterable contains groups, add individual entries
-
-        Parameters
-        ----------
-        h5_file:
-            Open HDF5 file object.
-        unwritten_shot_histories:
-            Dictionary mapping shot indices to History objects to be written.
-        """
-        from loqs.internal.serializable import Serializable
-
-        # Find the root group (should be the only one at root level)
-        if len(h5_file.keys()) != 1:
-            raise ValueError(
-                "Invalid checkpoint file structure - expected single root group"
-            )
-
-        root_group_name = list(h5_file.keys())[0]
-        root_group = h5_file[root_group_name]
-
-        # Navigate to shot_histories group
-        if "shot_histories" not in root_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing shot_histories group"
-            )
-
-        shot_histories_group = root_group["shot_histories"]
-
-        # Navigate to the dict group
-        if "dict" not in shot_histories_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing dict group in shot_histories"
-            )
-
-        dict_group = shot_histories_group["dict"]
-
-        # Navigate to keys and values iterable groups
-        if "keys" not in dict_group or "values" not in dict_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing keys/values groups in dict"
-            )
-
-        keys_group = dict_group["keys"]
-        values_group = dict_group["values"]
-
-        # Navigate to the iterable groups within keys and values
-        if "iterable" not in keys_group or "iterable" not in values_group:
-            raise ValueError(
-                "Invalid checkpoint file structure - missing iterable groups"
-            )
-
-        keys_iterable_group = keys_group["iterable"]
-        values_iterable_group = values_group["iterable"]
-
-        def _merge_iterable(group, new_data):
-            if group.attrs["storage_format"] == "dataset":
-                ds = group["data"]
-                if ds.maxshape[0] == None:
-                    # This is an extendable dataset, slice in new data
-                    current_length = len(ds)
-
-                    # Check if we need to resize the dataset first
-                    new_size = current_length + len(new_data)
-                    if new_size > len(ds):
-                        ds.resize((new_size,))
-
-                    ds[current_length : current_length + len(new_data)] = (
-                        new_data[:]
-                    )
-                else:
-                    # Not extendable, do a full load and rewrite as extendable
-                    all_data = list(ds) + new_data
-                    del group["data"]
-                    HDF5Encoder._encode_iterable_dataset(
-                        group, all_data, extendable_dataset=True
-                    )
-            else:
-                # This is groups format, just add groups
-                next_index = len(group.keys())
-
-                for i in new_data:
-                    # track_order=True for consistent group storage; encode_cache
-                    # reuses this object's persistent cache so a shared object is a
-                    # cheap reference here, not re-expanded from scratch.
-                    item_group = group.create_group(
-                        str(next_index), track_order=True
-                    )
-                    Serializable.encode(
-                        i,
-                        format="hdf5",
-                        h5_group=item_group,
-                        encode_cache=self._checkpoint_encode_cache,
-                    )
-                    next_index += 1
-
-        _merge_iterable(
-            keys_iterable_group, list(unwritten_shot_histories.keys())
-        )
-        _merge_iterable(
-            values_iterable_group, list(unwritten_shot_histories.values())
-        )
-
-    def _write_full_checkpoint_structure(
-        self, h5_file, shot_histories: dict[int, History]
-    ) -> None:
-        """Write a complete ProgramResults structure to HDF5 using standard encoding.
-
-        Parameters
-        ----------
-        h5_file:
-            Open HDF5 file object.
-        shot_histories:
-            Dictionary mapping shot indices to History objects.
-        """
-        # Create a temporary ProgramResults object with just the shot_histories
-        # This will use the standard Serializable encoding
-        temp_results = ProgramResults(shot_histories=shot_histories)
-
-        # Reuses this object's own persistent encode_cache (no reset_encode_id),
-        # so a shared object stays cheaply referenced across checkpoint() calls.
-        Serializable.encode(
-            temp_results,
-            format="hdf5",
-            h5_group=h5_file,
+        # Shot-index keys stay a compact dataset (plain ints); History
+        # values are never native scalars, so always end up as groups.
+        merge_dict_attr(
+            root_group,
+            "shot_histories",
+            entries,
             encode_cache=self._checkpoint_encode_cache,
+            key_use_dataset=True,
+            value_use_dataset=False,
+        )
+
+    @staticmethod
+    def _load_done_shots(
+        checkpoint_dir: Path, results_filename: str = "results.h5"
+    ) -> dict[int, HistoryLike]:
+        """Scan checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
+        decode each, and return the union of their shot_histories.
+        Explicitly skips *.tmp files (stale leftovers from a crash).
+
+        Parameters
+        ----------
+        checkpoint_dir:
+            Directory to scan for checkpoint files.
+        results_filename:
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
+
+        Returns
+        -------
+        dict[int, HistoryLike]
+            Union of all shot_histories found, mapping shot index to History.
+            Returns empty dict if no checkpoints exist yet.
+        """
+        done = {}
+
+        # First, read results.h5 if it exists
+        results_file = checkpoint_dir / results_filename
+        if results_file.exists():
+            try:
+                with h5py.File(results_file, "r") as f:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    loaded = Serializable.decode(
+                        f, format="hdf5", decode_cache=decode_cache
+                    )
+                    if (
+                        isinstance(loaded, ProgramResults)
+                        and loaded.shot_histories
+                    ):
+                        done.update(loaded.shot_histories)
+            except (
+                BlockingIOError,
+                OSError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+            ):
+                pass  # Skip if we can't read this file
+
+        # Then, read every worker_*_checkpoint.h5 (sorted, no .tmp files)
+        worker_files = sorted(
+            f
+            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
+            if not f.name.endswith(".tmp")
+        )
+        for worker_file in worker_files:
+            try:
+                with h5py.File(worker_file, "r") as f:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    loaded = Serializable.decode(
+                        f, format="hdf5", decode_cache=decode_cache
+                    )
+                    if (
+                        isinstance(loaded, ProgramResults)
+                        and loaded.shot_histories
+                    ):
+                        done.update(loaded.shot_histories)
+            except (
+                BlockingIOError,
+                OSError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+            ):
+                pass  # Skip if we can't read this file
+
+        return done
+
+    @staticmethod
+    def _load_done_shot_indices(
+        checkpoint_dir: Path, results_filename: str = "results.h5"
+    ) -> set[int]:
+        """Scan checkpoint files for shot indices without decoding History values.
+
+        Scans checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
+        reading only the shot_histories keys (not their values), and returns
+        the union of those indices. Uses get_dict_attr_keys for this cheap,
+        key-only scan that avoids decoding any History data even when
+        resuming with lazy_loading=True.
+        Explicitly skips *.tmp files (stale leftovers from a crash).
+
+        Parameters
+        ----------
+        checkpoint_dir : Path
+            Directory to scan for checkpoint files.
+        results_filename:
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
+
+        Returns
+        -------
+        set[int]
+            Unique shot indices found across all checkpoint files.
+            Returns empty set if no checkpoints exist yet.
+        """
+        checkpoint_dir = Path(checkpoint_dir)
+        done_indices: set[int] = set()
+
+        # First, read indices from results.h5 if it exists
+        results_file = checkpoint_dir / results_filename
+        if results_file.exists():
+            try:
+                with h5py.File(results_file, "r") as f:
+                    keys = get_dict_attr_keys(f, "shot_histories")
+                    done_indices.update(keys)
+            except (BlockingIOError, OSError, KeyError):
+                pass  # Skip if we can't read this file
+
+        # Then, read indices from every worker_*_checkpoint.h5 (sorted, no .tmp)
+        worker_files = sorted(
+            f
+            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
+            if not f.name.endswith(".tmp")
+        )
+        for worker_file in worker_files:
+            try:
+                with h5py.File(worker_file, "r") as f:
+                    keys = get_dict_attr_keys(f, "shot_histories")
+                    done_indices.update(keys)
+            except (BlockingIOError, OSError, KeyError):
+                pass  # Skip if we can't read this file
+
+        return done_indices
+
+    @staticmethod
+    def _count_done_shots(
+        checkpoint_dir: Path, results_filename: str = "results.h5"
+    ) -> int:
+        """Count the number of unique shot indices in checkpoint files.
+
+        Returns the count of unique shot indices found across all checkpoint
+        files (results.h5 and every worker_*_checkpoint.h5), without decoding
+        any History values.
+
+        Parameters
+        ----------
+        checkpoint_dir : Path
+            Directory to scan for checkpoint files.
+        results_filename:
+            Filename for the canonical results checkpoint file.
+            Defaults to "results.h5".
+
+        Returns
+        -------
+        int
+            Number of unique shot indices found across all checkpoint files.
+            Returns 0 if no checkpoints exist yet.
+        """
+        return len(
+            ProgramResults._load_done_shot_indices(
+                checkpoint_dir, results_filename
+            )
         )
 
     def load_checkpoint(
         self,
         checkpoint_dir: str | Path | None = None,
-        strategy: str = "single_file",
-        worker_id: int | None = None,
+        worker_id: str | None = None,
     ) -> None:
         """Load checkpoint data from disk.
 
@@ -607,10 +803,10 @@ class ProgramResults(Displayable):
         ----------
         checkpoint_dir:
             Directory containing checkpoint files. If None, uses the default checkpoint directory.
-        strategy:
-            Checkpointing strategy that was used. Options are "single_file" or "per_batch".
         worker_id:
-            Worker ID for parallel checkpointing. If None, assumes single worker.
+            Which writer's checkpoint file to load. If None (the common
+            case -- also what `consolidate_checkpoints` writes its own
+            merged output under), loads the un-suffixed `results.h5`.
         """
         if checkpoint_dir is None:
             if self._checkpoint_dir is None:
@@ -623,29 +819,14 @@ class ProgramResults(Displayable):
         if not checkpoint_dir.exists():
             return  # No checkpoint directory
 
-        # Find checkpoint files based on strategy
-        if strategy == "single_file":
-            if worker_id is not None:
-                pattern = f"worker_{worker_id}_checkpoint.h5"
-            else:
-                pattern = "checkpoint.h5"
-
-            checkpoint_file = checkpoint_dir / pattern
-            if checkpoint_file.exists():
-                self._load_single_checkpoint_file(checkpoint_file)
-
-        elif strategy == "per_batch":
-            if worker_id is not None:
-                pattern = f"worker_{worker_id}_batch_*.h5"
-            else:
-                pattern = "batch_*.h5"
-
-            # Load all batch files
-            for batch_file in checkpoint_dir.glob(pattern):
-                self._load_single_checkpoint_file(batch_file)
-
+        if worker_id is not None:
+            pattern = f"worker_{worker_id}_checkpoint.h5"
         else:
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
+            pattern = self._results_filename
+
+        checkpoint_file = checkpoint_dir / pattern
+        if checkpoint_file.exists():
+            self._load_single_checkpoint_file(checkpoint_file)
 
     def _load_single_checkpoint_file(self, filename: Path) -> None:
         """Load data from a single checkpoint file using standard Serializable decoding.
@@ -656,8 +837,13 @@ class ProgramResults(Displayable):
             Path to the checkpoint file to load.
         """
         with h5py.File(filename, "r") as f:
-            # Use standard Serializable decoding to load the ProgramResults
-            loaded_results = Serializable.decode(f, format="hdf5")
+            # Use standard Serializable decoding to load the ProgramResults.
+            # A ResolvingDecodeCache is required since a shot may reference
+            # content already embedded earlier in this same file.
+            decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+            loaded_results = Serializable.decode(
+                f, format="hdf5", decode_cache=decode_cache
+            )
             assert isinstance(loaded_results, ProgramResults)
 
             # Merge the loaded shot histories into our current results
@@ -679,30 +865,36 @@ class ProgramResults(Displayable):
         checkpoint_dir: str | Path | None = None,
         output_file: str | Path | None = None,
         delete_originals: bool = True,
-        strategy: str = "single_file",
     ) -> Path:
-        """Consolidate multiple checkpoint files into a single file.
+        """Merge every per-worker checkpoint file in `checkpoint_dir` directly
+        into the output file via streaming-safe, entry-by-entry merging.
+
+        Decodes and writes shots one at a time via `iter_dict_attr_entries`,
+        so peak memory stays bounded to a single shot regardless of how many
+        workers or shots are involved. Deletes each worker file only once its
+        own entries are confirmed merged, so a crash mid-consolidation
+        self-heals on retry (the worker file is still present, gets re-merged,
+        and deduplication against already-merged keys ensures no duplicates).
 
         Parameters
         ----------
         checkpoint_dir:
             Directory containing checkpoint files to consolidate.
         output_file:
-            Path for the consolidated output file. If None, creates a file in checkpoint_dir.
+            Path for the consolidated output file. If None, writes to
+            `checkpoint_dir / "results.h5"` -- the same filename
+            `checkpoint(worker_id=None)` itself writes to, so a single-writer
+            run and a many-writer run both end up readable via
+            `load_checkpoint(worker_id=None)`.
         delete_originals:
-            Whether to delete original checkpoint files after consolidation.
-        strategy:
-            The checkpointing strategy that was used.
+            Whether to delete the original per-worker checkpoint files
+            after consolidation.
 
         Returns
         -------
         Path
             Path to the consolidated checkpoint file.
         """
-        # Validate strategy early
-        if strategy not in ("single_file", "per_batch"):
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
         if checkpoint_dir is None:
             if self._checkpoint_dir is None:
                 checkpoint_dir = Path("./checkpoints")
@@ -711,57 +903,104 @@ class ProgramResults(Displayable):
         else:
             checkpoint_dir = Path(checkpoint_dir)
 
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         if output_file is None:
-            output_file = (
-                checkpoint_dir
-                / f"consolidated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
-            )
+            output_file = checkpoint_dir / self._results_filename
         else:
             output_file = Path(output_file)
 
-        # Load all checkpoint files into self
-        if strategy == "single_file":
-            # Look for worker checkpoint files
-            for worker_file in checkpoint_dir.glob("worker_*_checkpoint.h5"):
-                self._load_single_checkpoint_file(worker_file)
+        worker_files = sorted(checkpoint_dir.glob("worker_*_checkpoint.h5"))
 
-            # Look for main checkpoint file
-            main_file = checkpoint_dir / "checkpoint.h5"
-            if main_file.exists():
-                self._load_single_checkpoint_file(main_file)
+        # Merge each worker file directly into output_file (created if
+        # missing), deduplicating against already-merged keys so a retry
+        # never double-counts.
+        with h5py.File(output_file, "a") as out_f:
+            for worker_file in worker_files:
+                # Read already-merged keys from output_file so we can skip
+                # duplicates and avoid corrupt entries on a retry
+                already_merged = set()
+                try:
+                    keys = get_dict_attr_keys(out_f, "shot_histories")
+                    already_merged.update(keys)
+                except (BlockingIOError, OSError, KeyError):
+                    # output_file might not have shot_histories yet on first call
+                    pass
 
-        elif strategy == "per_batch":
-            # Look for all batch files
-            for batch_file in checkpoint_dir.glob("worker_*_batch_*.h5"):
-                self._load_single_checkpoint_file(batch_file)
+                # Stream only new entries from this worker file
+                try:
+                    self._merge_worker_into_output(
+                        worker_file, out_f, already_merged
+                    )
+                except (BlockingIOError, OSError, KeyError):
+                    # Skip a truncated/corrupted worker file, leaving it for a
+                    # later consolidation pass to retry once readable.
+                    continue
 
-            for batch_file in checkpoint_dir.glob("batch_*.h5"):
-                self._load_single_checkpoint_file(batch_file)
-
-        else:
-            raise ValueError(f"Unknown checkpoint strategy: {strategy}")
-
-        # Write consolidated data to new file
-        self.write(output_file)
-
-        # Optionally delete original files
-        if delete_originals:
-            if strategy == "single_file":
-                for worker_file in checkpoint_dir.glob(
-                    "worker_*_checkpoint.h5"
-                ):
+                # Only delete the worker file once its entries are confirmed
+                # merged and present in output_file
+                if delete_originals:
                     worker_file.unlink()
-                main_file = checkpoint_dir / "checkpoint.h5"
-                if main_file.exists():
-                    main_file.unlink()
 
-            elif strategy == "per_batch":
-                for batch_file in checkpoint_dir.glob("worker_*_batch_*.h5"):
-                    batch_file.unlink()
-                for batch_file in checkpoint_dir.glob("batch_*.h5"):
-                    batch_file.unlink()
+        # Ensure output_file has valid structure even if no workers were present
+        needs_init = not output_file.exists()
+        if not needs_init:
+            with h5py.File(output_file, "r") as check_f:
+                needs_init = len(check_f.keys()) == 0
+        if needs_init:
+            with h5py.File(output_file, "a") as out_f:
+                if len(out_f.keys()) == 0:
+                    self._write_shot_entries(out_f, iter(()))
 
         return output_file
+
+    def _merge_worker_into_output(
+        self,
+        worker_file: Path,
+        out_h5_file: h5py.File,
+        already_merged: set[int],
+    ) -> None:
+        """Merge one worker's checkpoint file into the output file, skipping
+        any shot indices already present in the output (deduplication safety
+        for crash-recovery retries).
+
+        Streams one shot at a time via iter_dict_attr_entries, so peak
+        memory is bounded to a single shot.
+
+        Parameters
+        ----------
+        worker_file:
+            Path to the worker checkpoint file to read.
+        out_h5_file:
+            Already-open, writable HDF5 file to merge this worker's shots into.
+        already_merged:
+            Set of shot indices already present in out_h5_file's
+            shot_histories. Any entry from the worker file whose key is in
+            this set is skipped.
+        """
+        with h5py.File(worker_file, "r") as in_f:
+            if len(in_f.keys()) == 0:
+                return
+
+            in_root_group = _resolve_checkpoint_object_group(in_f)
+            # Fresh decode_cache per worker file, matching this file's own scope --
+            # not a cache shared across separate worker files.
+            # Use a generator expression (not a list comprehension) to filter lazily,
+            # so entries are decoded and written one at a time, with peak memory
+            # bounded to a single shot even when filtering duplicates.
+            entries = (
+                (key, value)
+                for key, value in iter_dict_attr_entries(
+                    in_root_group,
+                    "shot_histories",
+                    decode_cache=ResolvingDecodeCache(
+                        root=in_f, format="hdf5"
+                    ),
+                )
+                if key not in already_merged
+            )
+            # Consumed fully here, while `in_f` is still open.
+            self._write_shot_entries(out_h5_file, entries)
 
     def get_shot_history(self, shot_index: int) -> History | None:
         """Get a shot history, potentially loading from checkpoint if lazy loading is enabled.
@@ -777,21 +1016,22 @@ class ProgramResults(Displayable):
             The requested History object, or None if not found.
         """
         # Check if shot is in memory cache first
-        if (
-            hasattr(self, "_lazy_loading_enabled")
-            and self._lazy_loading_enabled
-        ):
+        if hasattr(self, "_lazy_loading") and self._lazy_loading:
             if shot_index in self._memory_cache:
                 # Move to end of cache order (most recently used)
                 self._cache_order.remove(shot_index)
                 self._cache_order.append(shot_index)
                 return self._memory_cache[shot_index]
 
+            # Check if shot is in shot_histories (for non-checkpointed runs)
+            if shot_index in self.shot_histories:
+                return self.shot_histories[shot_index]
+
             # If not in cache, try to load from checkpoint
             if (
                 self._checkpoint_dir is not None
-                and self._load_shot_from_checkpoint(shot_index)
-            ):
+                or self._nested_source_file is not None
+            ) and self._load_shot_from_checkpoint(shot_index):
                 # Successfully loaded, move to end of cache order
                 self._cache_order.append(shot_index)
 
@@ -805,19 +1045,51 @@ class ProgramResults(Displayable):
             return None
         else:
             # Normal mode: check if shot is in memory
-            if shot_index in self.shot_histories:
-                return self.shot_histories[shot_index]
+            if shot_index not in self.shot_histories:
+                return None
 
-            # If not in memory and we have checkpoint files, try to load
-            if (
-                self._checkpoint_dir is not None
-                and shot_index in self._unwritten_shots
-            ):
-                # Load from checkpoint and add to shot_histories
-                if self._load_shot_from_checkpoint(shot_index):
-                    return self.shot_histories[shot_index]
+            return self.shot_histories[shot_index]
 
-            return None
+    def _resolve_shot_source_group(self, f: h5py.File) -> h5py.Group | None:
+        """Resolve the source group for shot loading (nested or standalone).
+
+        If this ProgramResults was configured with a nested source via
+        `_set_nested_shot_source`, navigates to and returns the nested group.
+        Otherwise, returns the file's own top-level root group.
+
+        Parameters
+        ----------
+        f : h5py.File
+            An open HDF5 file (the caller already has it open).
+
+        Returns
+        -------
+        h5py.Group | None
+            The appropriate source group, or None if nested source is not
+            properly configured.
+        """
+        if (
+            self._nested_source_file is not None
+            and self._nested_source_index is not None
+        ):
+            # get_dict_attr_group already navigates past any wrapper levels
+            # (a plain worker scratch file's _program_results sits directly
+            # at file root; a consolidated runner.h5's sits nested under its
+            # own Serializable-encoded object group) via its own internal
+            # `_resolve_dict_target_group` call, so no manual descent here.
+            try:
+                source_group = get_dict_attr_group(
+                    f, "_program_results", self._nested_source_index
+                )
+                return source_group
+            except (KeyError, TypeError):
+                return None
+        else:
+            # Return the file's own top-level root group, handling both
+            # fresh-envelope and bootstrap-created file layouts.
+            if len(f.keys()) == 0:
+                return None
+            return _resolve_checkpoint_object_group(f)
 
     def _load_shot_from_checkpoint(self, shot_index: int) -> bool:
         """Load a specific shot from checkpoint files.
@@ -832,46 +1104,44 @@ class ProgramResults(Displayable):
         bool
             True if shot was successfully loaded, False otherwise.
         """
-        if self._checkpoint_dir is None or not self._checkpoint_dir.exists():
-            return False
+        if self._nested_source_file is None:
+            # Standalone file mode
+            if (
+                self._checkpoint_dir is None
+                or not self._checkpoint_dir.exists()
+            ):
+                return False
 
-        # Try to find the shot in any checkpoint file
-        success = False
-
-        # Look for single file checkpoints
-        if self._checkpoint_strategy == "single_file":
+            # Try to find the shot in this writer's own checkpoint file
             if self._worker_id is not None:
                 checkpoint_file = (
                     self._checkpoint_dir
                     / f"worker_{self._worker_id}_checkpoint.h5"
                 )
             else:
-                checkpoint_file = self._checkpoint_dir / "checkpoint.h5"
+                checkpoint_file = self._checkpoint_dir / self._results_filename
 
-            if checkpoint_file.exists():
-                success = self._load_shot_from_single_file(
-                    checkpoint_file, shot_index
-                )
+            if not checkpoint_file.exists():
+                return False
 
-        # Look for per-batch checkpoints
-        elif self._checkpoint_strategy == "per_batch":
-            if self._worker_id is not None:
-                pattern = f"worker_{self._worker_id}_batch_*.h5"
-            else:
-                pattern = "batch_*.h5"
-
-            # Check all batch files
-            for batch_file in self._checkpoint_dir.glob(pattern):
-                if self._load_shot_from_batch_file(batch_file, shot_index):
-                    success = True
-                    break
-
-        return success
+            return self._load_shot_from_single_file(
+                checkpoint_file, shot_index
+            )
+        else:
+            # Nested source mode
+            return self._load_shot_from_single_file(
+                self._nested_source_file, shot_index
+            )
 
     def _load_shot_from_single_file(
         self, filename: Path, shot_index: int
     ) -> bool:
-        """Load a shot from a checkpoint file using standard Serializable decoding.
+        """Load a shot from a checkpoint file without materializing the full object.
+
+        Supports both nested and standalone sources. Opens the file, resolves
+        the appropriate source group, then uses get_dict_attr_value to fetch
+        only the requested shot's History from the shot_histories dict attribute,
+        without decoding any other shots.
 
         Parameters
         ----------
@@ -887,45 +1157,52 @@ class ProgramResults(Displayable):
         """
         try:
             with h5py.File(filename, "r") as f:
-                # Load the full ProgramResults from the checkpoint
-                loaded_results = Serializable.decode(f, format="hdf5")
-                assert isinstance(loaded_results, ProgramResults)
+                source_group = self._resolve_shot_source_group(f)
+                if source_group is None:
+                    return False
 
-                # Check if the shot exists in the loaded results
-                if shot_index in loaded_results.shot_histories:
-                    history = loaded_results.shot_histories[shot_index]
+                # If source_group is from a nested dict entry, it contains
+                # the raw Serializable-encoded wrapper, so we need to unwrap it
+                # to get to the actual ProgramResults attributes
+                if self._nested_source_file is not None:
+                    # Unwrap the Serializable wrapper group
+                    if len(source_group) == 0:
+                        return False
+                    actual_group = source_group[
+                        next(iter(source_group.keys()))
+                    ]
+                else:
+                    actual_group = source_group
 
-                    if self._lazy_loading_enabled:
-                        self._memory_cache[shot_index] = history
-                    else:
-                        self.shot_histories[shot_index] = history
-                        # Remove from unwritten_shots since it's already checkpointed
-                        if shot_index in self._unwritten_shots:
-                            self._unwritten_shots.remove(shot_index)
+                # Re-point the persistent decode cache at this freshly-opened
+                # file handle (the previous one, if any, is already closed).
+                decode_cache = getattr(self, "_checkpoint_decode_cache", None)
+                if isinstance(decode_cache, ResolvingDecodeCache):
+                    decode_cache._root = f
+                else:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    self._checkpoint_decode_cache = decode_cache
 
-                    return True
-        except (KeyError, OSError, ValueError):
+                # Use get_dict_attr_value to fetch only this one shot
+                # without decoding all others
+                try:
+                    history = get_dict_attr_value(
+                        actual_group,
+                        "shot_histories",
+                        shot_index,
+                        decode_cache=decode_cache,
+                    )
+                except KeyError:
+                    return False
+
+                if self._lazy_loading:
+                    self._memory_cache[shot_index] = history
+                else:
+                    self.shot_histories[shot_index] = history
+                    # Remove from unwritten_shots since it's already checkpointed
+                    if shot_index in self._unwritten_shots:
+                        self._unwritten_shots.remove(shot_index)
+
+                return True
+        except (OSError, ValueError):
             return False
-
-        return False
-
-    def _load_shot_from_batch_file(
-        self, filename: Path, shot_index: int
-    ) -> bool:
-        """Load a shot from a batch checkpoint file using standard Serializable decoding.
-
-        Parameters
-        ----------
-        filename:
-            Path to the checkpoint file.
-        shot_index:
-            Index of the shot to load.
-
-        Returns
-        -------
-        bool
-            True if shot was successfully loaded, False otherwise.
-        """
-        # For batch files, we use the same loading method as single files
-        # since they both use the standard Serializable encoding
-        return self._load_shot_from_single_file(filename, shot_index)

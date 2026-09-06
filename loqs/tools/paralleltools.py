@@ -27,7 +27,7 @@ rather than reimplemented per tool.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import as_completed
+from concurrent.futures import as_completed, wait, FIRST_COMPLETED
 import contextlib
 from dataclasses import dataclass, field
 import functools
@@ -42,14 +42,10 @@ import time
 from typing import Any, TypeVar
 import warnings
 
-try:
-    from threadpoolctl import threadpool_limits
-except ImportError:
-    threadpool_limits = None  # type: ignore
-
 from tqdm import tqdm
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
+from loqs.internal.serializable import Serializable
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -93,7 +89,7 @@ def _executor_worker_count(executor: Any) -> int | None:
 
 
 @dataclass
-class ExecutorSpec:
+class ExecutorSpec(Serializable):
     """Picklable recipe for building a fresh executor of a given backend,
     extracted from a live executor's own construction parameters.
 
@@ -107,16 +103,18 @@ class ExecutorSpec:
     require an explicit factory.
     """
 
-    backend: str
+    _SERIALIZE_ATTRS = ["exec_backend", "kwargs"]
+
+    exec_backend: str
     kwargs: dict[str, Any]
 
     def __call__(self) -> SubmitExecutor:
-        if self.backend == "loky":
+        if self.exec_backend == "loky":
             import loky
 
             return loky.get_reusable_executor(**self.kwargs)
         raise ValueError(
-            f"ExecutorSpec has no builder for backend {self.backend!r}."
+            f"ExecutorSpec has no builder for backend {self.exec_backend!r}."
         )
 
     def describe(self) -> str:
@@ -124,7 +122,7 @@ class ExecutorSpec:
         params = ", ".join(
             f"{key}={value}" for key, value in sorted(self.kwargs.items())
         )
-        return f"{self.backend}({params})"
+        return f"{self.exec_backend}({params})"
 
 
 def _introspect_executor_spec(executor: SubmitExecutor) -> ExecutorSpec | None:
@@ -134,13 +132,13 @@ def _introspect_executor_spec(executor: SubmitExecutor) -> ExecutorSpec | None:
 
     Only `loky` (identified by its executor class's top-level module
     name, so this doesn't need to import `loky` itself) is currently
-    supported, extracting `max_workers` via the same `_max_workers`
-    attribute `_executor_worker_count` reads.
+    supported, extracting `max_workers` via the same `_executor_worker_count`
+    reads.
     """
     if type(executor).__module__.split(".")[0] == "loky":
         max_workers = _executor_worker_count(executor)
         kwargs = {} if max_workers is None else {"max_workers": max_workers}
-        return ExecutorSpec("loky", kwargs)
+        return ExecutorSpec(exec_backend="loky", kwargs=kwargs)
     return None
 
 
@@ -211,31 +209,6 @@ def resolve_shot_executor(
     return shot_executor() if callable(shot_executor) else shot_executor
 
 
-def pin_worker_threads() -> None:
-    """Pin this process's numerical-library thread pools to one thread.
-
-    The primary, always-correct layer of the thread-oversubscription
-    discipline every chunk-processing worker entry point must apply as
-    its first action, regardless of which executor backend runs it:
-    environment variables (`OMP_NUM_THREADS`, etc.) only help if set
-    before the relevant library first initializes its own thread pool,
-    which isn't guaranteed for a worker process that already imported
-    `numpy`/`pygsti`-adjacent code before reaching this call. Meant to be
-    called directly inside a plain, module-level worker function -- not
-    built via a decorator, since a decorator would return a closure that
-    plain `pickle` (needed for `mpi4py.futures.MPIPoolExecutor`) can't
-    resolve by dotted import path.
-    """
-    if threadpool_limits is not None:
-        threadpool_limits(1)
-    else:
-        warnings.warn(
-            "threadpoolctl is not installed, so worker thread pools "
-            "cannot be limited to avoid oversubscription. Install "
-            "loqs[parallel] or loqs[mpi]."
-        )
-
-
 @dataclass
 class ChunkResourceStats:
     """One dispatched chunk's (or, for an unchunked/serial strategy, the
@@ -292,7 +265,7 @@ class _ResourceSampler:
             return
         current = {self._process.pid: self._process}
         for child in children:
-            current[child.pid] = child
+            current[child.pid] = self._known_procs.get(child.pid, child)
 
         # psutil.Process.children() constructs a brand-new Process object
         # for every child on every call, so cpu_percent(interval=None)'s
@@ -335,6 +308,12 @@ class _ResourceSampler:
             self._cpu_samples.append(cpu)
 
     def _run(self) -> None:
+        # Sample once immediately, before the first wait, so a short-lived
+        # chunk (or a delayed first scheduling slice on a busy runner) still
+        # gets a real peak_memory_mb reading rather than the 0.0 init value.
+        # This call only primes CPU accounting either way (see _sample()'s
+        # docstring), so num_samples is unaffected.
+        self._sample()
         while not self._stop_event.wait(self._interval):
             self._sample()
 
@@ -380,25 +359,43 @@ def run_chunks_with_submit_executor(
     worker_fn: Callable[[list[T]], R],
     chunks: Sequence[list[T]],
     desc: str = "Processing chunks",
+    on_poll: Callable[[], None] | None = None,
+    poll_interval: float = 1.0,
 ) -> list[R]:
     """Dispatch `worker_fn` over each of `chunks` via any `SubmitExecutor`
     (e.g. `loky` or `mpi4py.futures.MPIPoolExecutor`), returning one result
     per chunk in the same order as `chunks` (not completion order).
 
-    Progress is reported per completed chunk via
-    `tqdm(as_completed(...))`, matching this codebase's existing shot-level
-    executor pattern -- `as_completed` blocks efficiently on the futures'
-    own wait primitives rather than polling, so the bar advances as chunks
-    actually finish.
+    Progress is reported per completed chunk via `wait()` with
+    `FIRST_COMPLETED`, allowing an optional `on_poll()` callback to be
+    invoked periodically (every `poll_interval` seconds) even before chunks
+    complete. If `on_poll` is `None`, uses the original `as_completed`
+    pattern for efficient blocking (no polling overhead).
     """
     futures_to_index = {
         executor.submit(worker_fn, chunk): i for i, chunk in enumerate(chunks)
     }
     results: list[Any] = [None] * len(chunks)
-    for future in tqdm(
-        as_completed(futures_to_index), desc=desc, total=len(chunks)
-    ):
-        results[futures_to_index[future]] = future.result()
+
+    # If no on_poll callback, use the original efficient as_completed pattern
+    if on_poll is None:
+        for future in tqdm(
+            as_completed(futures_to_index), desc=desc, total=len(chunks)
+        ):
+            results[futures_to_index[future]] = future.result()
+        return results
+
+    # With on_poll callback, use polling-based wait loop
+    pending = set(futures_to_index.keys())
+    with tqdm(total=len(chunks), desc=desc) as bar:
+        while pending:
+            done, pending = wait(
+                pending, timeout=poll_interval, return_when=FIRST_COMPLETED
+            )
+            for future in done:
+                results[futures_to_index[future]] = future.result()
+            bar.update(len(done))
+            on_poll()
     return results
 
 
@@ -408,6 +405,7 @@ def run_chunks_with_map_array_executor(
     chunks: Sequence[list[T]],
     desc: str = "Processing chunks",
     poll_interval: float = 1.0,
+    on_poll: Callable[[], None] | None = None,
 ) -> list[R]:
     """Dispatch `worker_fn` over `chunks` via a single `MapArrayExecutor.
     map_array` call (e.g. one `sbatch` submission covering every chunk for
@@ -419,7 +417,8 @@ def run_chunks_with_map_array_executor(
     use `as_completed`; instead this polls each job's cheap `.done()`
     check (which only occasionally falls back to an actual cluster status
     call, throttled internally by `submitit` itself) every `poll_interval`
-    seconds.
+    seconds. An optional `on_poll()` callback is invoked once per iteration
+    of the polling loop (whether or not any jobs completed that iteration).
     """
     jobs = executor.map_array(worker_fn, chunks)
     pending = set(range(len(jobs)))
@@ -428,13 +427,15 @@ def run_chunks_with_map_array_executor(
             newly_done = {i for i in pending if jobs[i].done()}
             pending -= newly_done
             bar.update(len(newly_done))
+            if on_poll is not None:
+                on_poll()
             if pending:
                 time.sleep(poll_interval)
     return [job.result() for job in jobs]
 
 
 @dataclass
-class ParallelStrategy:
+class ParallelStrategy(Serializable):
     """Bundles program-level chunk dispatch together with optional nested
     shot-level parallelism, reused identically by every
     `loqs.tools` call site that parallelizes "one `QuantumProgram` per
@@ -470,6 +471,18 @@ class ParallelStrategy:
         typical LoQS workloads); defaults to one chunk per item when
         `program_executor` is a plain `SubmitExecutor`; ignored when
         `program_executor` is `None`.
+    n_shot_batches : int | None
+        Number of batches to split shots into when `shot_executor` is set,
+        governing shot-level parallel dispatch chunking independent of
+        whether checkpointing is on. A batch *count*, not a size (e.g.
+        `n_shot_batches=5` with `num_shots=100` produces 5 batches of 20
+        shots each). `None` (default) means "auto": `max(1, ceil(num_shots /
+        20))` batches whenever `shot_executor` is set, resolved by
+        `QuantumProgram.run()` itself once `num_shots` is known. Also usable
+        in serial mode (no `shot_executor`) to control checkpoint-flush batch
+        size instead, via the same count -- see `QuantumProgram.run`'s own
+        `n_shot_batches`/`checkpoint_batch_size` resolution for the exact
+        behavior in each mode.
     shot_executor : SubmitExecutor | Callable[[], SubmitExecutor] | None
         Nested shot-level parallelism, forwarded as
         `QuantumProgram.run(shot_executor=...)` for every program built
@@ -495,10 +508,20 @@ class ParallelStrategy:
         is `True`.
     """
 
+    _SERIALIZE_ATTRS = [
+        "program_executor",
+        "n_program_chunks",
+        "n_shot_batches",
+        "shot_executor",
+        "collect_resource_stats",
+        "resource_sample_interval",
+    ]
+
     program_executor: (
         SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
     ) = None
     n_program_chunks: int | None = None
+    n_shot_batches: int | None = None
     shot_executor: SubmitExecutor | Callable[[], SubmitExecutor] | None = None
     collect_resource_stats: bool = False
     resource_sample_interval: float = 0.2
@@ -540,6 +563,45 @@ class ParallelStrategy:
                 )
             self.shot_executor = spec
 
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        """Handle encoding of program_executor and shot_executor, which may be
+        live executors, ExecutorSpecs, callables, or None."""
+        if attr == "program_executor":
+            executor = self.program_executor
+            if executor is None or isinstance(executor, ExecutorSpec):
+                return executor
+            if callable(executor):
+                return executor
+            # Live executor: attempt to introspect, else raise
+            spec = _introspect_executor_spec(executor)
+            if spec is not None:
+                return spec
+            raise ValueError(
+                f"Cannot serialize live {type(executor).__name__} executor for "
+                f"program_executor: it either needs to be recognized by "
+                f"_introspect_executor_spec or passed as a plain zero-argument "
+                f"factory callable instead."
+            )
+        elif attr == "shot_executor":
+            executor = self.shot_executor
+            if executor is None or isinstance(executor, ExecutorSpec):
+                return executor
+            if callable(executor):
+                return executor
+            # Live executor: attempt to introspect, else raise
+            spec = _introspect_executor_spec(executor)
+            if spec is not None:
+                return spec
+            raise ValueError(
+                f"Cannot serialize live {type(executor).__name__} executor for "
+                f"shot_executor: it either needs to be recognized by "
+                f"_introspect_executor_spec or passed as a plain zero-argument "
+                f"factory callable instead."
+            )
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
     @property
     def is_chunked(self) -> bool:
         """Whether `program_executor` is set, i.e. whether chunks are
@@ -576,6 +638,8 @@ class ParallelStrategy:
         worker_fn: Callable[[list[T]], R],
         chunks: Sequence[list[T]],
         desc: str = "Processing chunks",
+        on_poll: Callable[[], None] | None = None,
+        poll_interval: float = 1.0,
     ) -> list[R]:
         """Dispatch `worker_fn` over `chunks` via `program_executor`,
         picking the dispatch mechanism (`.submit()`-per-chunk vs. a bulk
@@ -589,6 +653,14 @@ class ParallelStrategy:
         result per chunk, in `chunks` order) is unaffected either way;
         collected stats are appended to `_resource_stats`, retrievable
         via `pop_resource_stats()`.
+
+        Parameters
+        ----------
+        on_poll : Callable[[], None] | None
+            Optional callback invoked during dispatch polling (only relevant
+            for certain executors/strategies).
+        poll_interval : float
+            Polling interval in seconds (default 1.0).
         """
         assert self.program_executor is not None, (
             "dispatch() requires program_executor to be set; check "
@@ -607,11 +679,21 @@ class ParallelStrategy:
         # efficient path it's chosen for.
         if isinstance(executor, MapArrayExecutor):
             raw = run_chunks_with_map_array_executor(
-                executor, dispatched_fn, chunks, desc=desc
+                executor,
+                dispatched_fn,
+                chunks,
+                desc=desc,
+                poll_interval=poll_interval,
+                on_poll=on_poll,
             )
         else:
             raw = run_chunks_with_submit_executor(
-                executor, dispatched_fn, chunks, desc=desc
+                executor,
+                dispatched_fn,
+                chunks,
+                desc=desc,
+                on_poll=on_poll,
+                poll_interval=poll_interval,
             )
         if not self.collect_resource_stats:
             return raw
@@ -1588,14 +1670,15 @@ echo "Submitted batch job ${fake_id}"
 
 
 @contextlib.contextmanager
-def _reused_slurm_allocation():
+def reused_slurm_allocation():
     """Temporarily installs the fake `sbatch` script (see
     `_FAKE_SBATCH_SCRIPT`) on `PATH`, so every `submitit`-driven
     `SlurmExecutor` call made inside this context runs against whatever
     real SLURM allocation this process is already inside, instead of
-    each independently requesting a new one from the scheduler -- see
-    `profile_strategies`'s `reuse_slurm_allocation` parameter for the
-    full rationale and its accepted limitations.
+    each independently requesting a new one from the scheduler -- usable
+    directly around any submitit-driven dispatch, not just through
+    `profile_strategies`'s own `reuse_slurm_allocation` parameter, which
+    is built on top of this same context manager.
 
     Requires actually running inside a real SLURM allocation already
     (checked via `SLURM_JOB_ID`); raises otherwise, since faking
@@ -1818,8 +1901,8 @@ def profile_strategies(
     times each), returning one `ProfileResult` per entry in a `dict`
     keyed by the same labels -- `work_fn` is entirely the caller's, e.g.
     a closure like
-    `lambda strategy: run_discrete_error_injected_programs(programs, ...,
-    parallel=strategy)`, so this function never needs any
+    `lambda strategy: FaultInjectionRunner(programs, ...,
+    parallel_strategy=strategy).run()`, so this function never needs any
     GST/fault-injection/noise-sweep-specific knowledge of what it's
     actually timing.
 
@@ -1844,7 +1927,7 @@ def profile_strategies(
     strategies) installs a fake `sbatch` on `PATH` for the whole sweep,
     so every candidate strategy dispatches against one already-held
     SLURM allocation instead of each independently queueing -- see
-    `_reused_slurm_allocation` for the mechanism and its accepted
+    `reused_slurm_allocation` for the mechanism and its accepted
     limitations. Requires already running inside a real allocation.
 
     If one entry in `strategies` is fully serial (`program_executor` and
@@ -1856,7 +1939,7 @@ def profile_strategies(
     order) when more than one is.
     """
     ctx = (
-        _reused_slurm_allocation()
+        reused_slurm_allocation()
         if reuse_slurm_allocation
         else contextlib.nullcontext()
     )

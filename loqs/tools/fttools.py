@@ -9,10 +9,12 @@
 
 """A collection of functions to help fault-tolerance testing."""
 
+from __future__ import annotations
+
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-import functools
-from tqdm import tqdm
+from pathlib import Path
+from typing import Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.core import QuantumProgram
@@ -22,15 +24,11 @@ from loqs.core.historydatacollector import (
     HistoryDataCollectorLike,
 )
 from loqs.core.instructions import Instruction, InstructionLabel
-from loqs.tools.paralleltools import (
-    ParallelStrategy,
-    pin_worker_threads,
-    resolve_shot_executor,
+from loqs.tools.paralleltools import ParallelStrategy
+from loqs.tools.multiprogramrunner import (
+    MultiProgramRunner,
+    _checkpoint_subdir_for_prefix,
 )
-
-# One (program, collect_shot_data_args, expected_outcomes, num_shots) task,
-# as built by `run_discrete_error_injected_programs`.
-_ProgramTask = tuple[QuantumProgram, Sequence[HistoryDataCollectorLike], Sequence, int]
 
 
 def build_discrete_error_injection_program_for_combo(
@@ -74,9 +72,7 @@ def build_discrete_error_injection_program_for_combo(
     new_stack = base_program.instruction_stack.delete_instruction(
         stack_idx_to_modify
     )
-    new_stack = new_stack.insert_instruction(
-        stack_idx_to_modify, new_label
-    )
+    new_stack = new_stack.insert_instruction(stack_idx_to_modify, new_label)
 
     tag = "/".join(f"{lbl} on qubit {q}" for _, lbl, q in error_injections)
     layer = error_injections[0][0] if error_injections else "?"
@@ -127,7 +123,9 @@ PAULI_PROPAGATION_IDLE_GATES: frozenset[str] = frozenset(
 so are skipped during propagation."""
 
 _PAULI_LABEL_TO_CHAR: dict[str, str] = {
-    "Gxpi": "X", "Gypi": "Y", "Gzpi": "Z",
+    "Gxpi": "X",
+    "Gypi": "Y",
+    "Gzpi": "Z",
 }
 
 
@@ -205,9 +203,7 @@ def prune_error_combos_by_propagation(
             q1, q2 = target
             for lbl1 in error_labels:
                 for lbl2 in error_labels:
-                    all_combos.append(
-                        [(layer, lbl1, q1), (layer, lbl2, q2)]
-                    )
+                    all_combos.append([(layer, lbl1, q1), (layer, lbl2, q2)])
         else:
             for lbl in error_labels:
                 all_combos.append([(layer, lbl, target)])
@@ -218,9 +214,7 @@ def prune_error_combos_by_propagation(
     seen_signatures: set[tuple] = set()
     representatives: list[list[tuple[int, str, int]]] = []
     for combo in all_combos:
-        seed = {
-            qubit: _PAULI_LABEL_TO_CHAR[lbl] for _, lbl, qubit in combo
-        }
+        seed = {qubit: _PAULI_LABEL_TO_CHAR[lbl] for _, lbl, qubit in combo}
         layer = combo[0][0]
         signature = propagate_pauli_signature(circuit, layer, seed)
         if signature not in seen_signatures:
@@ -406,147 +400,165 @@ def build_discrete_error_injection_programs(
     return errored_programs
 
 
-def run_discrete_error_injected_programs(
-    errored_programs: Sequence[QuantumProgram],
+def _run_one_program(
+    program: QuantumProgram,
+    index: int,
+    *,
+    shot_executor: SubmitExecutor | None,
+    n_shot_batches: int | None,
     collect_shot_data_args: Sequence[HistoryDataCollectorLike],
     expected_outcomes: Sequence,
-    num_shots: int = 1,
-    parallel: ParallelStrategy | None = None,
-) -> list[QuantumProgram]:
-    """Call [](api:test_program_output) on many programs.
+    num_shots: int,
+    shot_checkpoint_dir: str | Path | None,
+    checkpoint: bool,
+    force_resume: bool,
+    lazy_loading: bool,
+    keep_shot_results: bool = False,
+) -> bool | tuple[bool, Any]:
+    """Run one program via test_program_output, returning success flag.
 
-    Runs serially over `errored_programs` by default. Passing `parallel`
-    (a [](api:ParallelStrategy)) instead parallelizes across programs,
-    using the same `loqs.tools.paralleltools` chunking/dispatch machinery
-    [](api:simulate_dataset_for_edesign) uses: programs are split into
-    `parallel.n_program_chunks` round-robin chunks, and each chunk is
-    tested as a unit by a worker that pins its own thread pools to one
-    thread before doing any real numerical work. Since each
-    `errored_programs` entry is already a fully built `QuantumProgram`
-    (unlike [](api:simulate_dataset_for_edesign), which builds its
-    programs inside the worker), a program containing closures needs
-    `parallel.program_executor`'s `cloudpickle` fallback (e.g. `loky`) to
-    cross a process boundary -- the same requirement
-    [](api:QuantumProgram.run)'s own `shot_executor` parameter has.
+    When `keep_shot_results=False` (default), returns the bare bool.
+    When `keep_shot_results=True`, returns (success, program_results).
 
-    Parameters
-    ----------
-    errored_programs : Sequence[QuantumProgram]
-        A list of programs to test, usually the output of
-        [](api:build_discrete_error_injection_programs).
-
-    collect_shot_data_args : Sequence[HistoryDataCollectorLike]
-        See [](api:test_program_output).
-
-    expected_outcomes : Sequence
-        See [](api:test_program_output).
-
-    num_shots : int, optional
-        See [](api:test_program_output), by default 1
-
-    parallel : ParallelStrategy | None, optional
-        Parallelizes across programs when given -- see
-        [](api:ParallelStrategy) for its `program_executor`/
-        `n_program_chunks`/`shot_executor` fields. Defaults to `None`,
-        which runs programs serially (still honoring
-        `parallel.shot_executor` if a `ParallelStrategy` with only that
-        field set is passed, for shot-level-only parallelism).
-
-    Returns
-    -------
-    list[QuantumProgram]
-        The failed programs, as the same objects `errored_programs` held
-        (not copies that crossed a process boundary), regardless of
-        whether the run was serial or parallel.
+    Matches _run_one_circuit's shape: (item, index, *, shot_executor,
+    **static_kwargs) -> result_bool. Each program gets its own isolated
+    shot-checkpoint subdirectory keyed by index.
     """
-    tasks: list[_ProgramTask] = [
-        (p, collect_shot_data_args, expected_outcomes, num_shots)
-        for p in errored_programs
-    ]
-
-    if parallel is None or not parallel.is_chunked:
-        shot_executor = resolve_shot_executor(
-            parallel.shot_executor if parallel is not None else None
+    item_shot_checkpoint_dir = None
+    if shot_checkpoint_dir is not None:
+        item_shot_checkpoint_dir = _checkpoint_subdir_for_prefix(
+            shot_checkpoint_dir, "fault", index
         )
-        failed = [
-            task[0]
-            for task in tqdm(
-                tasks, "Running discrete error injected programs"
-            )
-            if not test_program_output(*task, shot_executor=shot_executor)
-        ]
-    else:
-        failed = _run_program_tasks_parallel(tasks, parallel)
 
-    if len(failed):
-        print(f"Failed {len(failed)} programs!")
-    else:
-        print("All programs succeeded!")
-
-    return failed
-
-
-def _run_program_tasks_parallel(
-    tasks: list[_ProgramTask],
-    parallel: ParallelStrategy,
-) -> list[QuantumProgram]:
-    """`run_discrete_error_injected_programs`'s parallel dispatch path:
-    chunk `tasks`, dispatch one worker call per chunk via `parallel`, then
-    match each chunk's returned success flags back to this process's own
-    program objects by chunk position -- not by trusting whatever copy of
-    a program a worker sends back -- so the returned failed list holds the
-    same objects `tasks` held.
-    """
-    if not tasks:
-        return []
-
-    chunks = parallel.make_chunks(tasks)
-    worker = functools.partial(
-        _process_program_chunk_worker, shot_executor=parallel.shot_executor
-    )
-    chunk_results = parallel.dispatch(
-        worker, chunks, desc="Running discrete error injected program chunks"
+    return test_program_output(
+        program,
+        collect_shot_data_args,
+        expected_outcomes,
+        num_shots=num_shots,
+        shot_executor=shot_executor,
+        n_shot_batches=n_shot_batches,
+        checkpoint=checkpoint,
+        checkpoint_dir=item_shot_checkpoint_dir,
+        lazy_loading=lazy_loading,
+        force_resume=force_resume,
+        return_program_results=keep_shot_results,
     )
 
-    failed = []
-    for chunk, successes in zip(chunks, chunk_results):
-        for task, success in zip(chunk, successes):
-            if not success:
-                failed.append(task[0])
-    return failed
 
+class FaultInjectionRunner(MultiProgramRunner):
+    """Runner for testing discrete-error-injected programs with checkpoint/resume.
 
-def _process_program_chunk(
-    chunk: list[_ProgramTask], shot_executor: SubmitExecutor | None = None
-) -> list[bool]:
-    """Run [](api:test_program_output) on every task in one chunk,
-    returning one success flag per task in the same order. Returns plain
-    booleans rather than the tested `QuantumProgram`s themselves, so the
-    driving process can match successes back to its own program objects
-    by chunk position instead. `shot_executor`, if given, is an
-    already-built executor (resolved once per chunk by the caller, not
-    once per task) forwarded to every task's own `program.run`, for hybrid
-    shot-/program-level parallelism.
+    Encapsulates all configuration needed to test error-injected programs,
+    including parallel/checkpoint settings, in a serializable object that can
+    be recovered after a crash via `FaultInjectionRunner.read(runner_path).run()`.
+    Checkpoint/resume behavior is controlled by explicit `checkpoint`/`resume`
+    flags applied against on-disk state -- see `MultiProgramRunner.run`.
     """
-    return [
-        test_program_output(*task, shot_executor=shot_executor)
-        for task in chunk
+
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "errored_programs",
+        "collect_shot_data_args",
+        "expected_outcomes",
+        "num_shots",
     ]
 
+    def __init__(
+        self,
+        errored_programs: Sequence[QuantumProgram],
+        collect_shot_data_args: Sequence[HistoryDataCollectorLike],
+        expected_outcomes: Sequence,
+        num_shots: int = 1,
+        parallel_strategy: ParallelStrategy | None = None,
+        item_checkpoint_dir: str | Path | None = None,
+        checkpoint: bool = False,
+        resume: bool = False,
+        force_resume: bool = False,
+        shot_checkpoint: bool = False,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading: bool = True,
+        keep_shot_results: bool = False,
+        poll_interval: float = 1.0,
+        show_progress: bool = True,
+        runner_filename: str = "runner.h5",
+    ):
+        super().__init__(
+            parallel_strategy=parallel_strategy,
+            item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=checkpoint,
+            resume=resume,
+            force_resume=force_resume,
+            shot_checkpoint=shot_checkpoint,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading=lazy_loading,
+            keep_shot_results=keep_shot_results,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
+            runner_filename=runner_filename,
+        )
+        self.errored_programs = errored_programs
+        self.collect_shot_data_args = collect_shot_data_args
+        self.expected_outcomes = expected_outcomes
+        self.num_shots = num_shots
 
-# Entry point submitted to a parallel executor: pins this worker's thread
-# pools to one thread before doing real numerical work, then delegates to
-# `_process_program_chunk`. Kept as a plain module-level function (not a
-# closure) so plain `pickle` can resolve it by dotted import path, needed
-# by `MPIPoolExecutor`.
-def _process_program_chunk_worker(
-    chunk: list[_ProgramTask],
-    shot_executor: SubmitExecutor | Callable[[], SubmitExecutor] | None = None,
-) -> list[bool]:
-    pin_worker_threads()
-    return _process_program_chunk(
-        chunk, shot_executor=resolve_shot_executor(shot_executor)
-    )
+    def _get_items(self) -> Sequence:
+        """Return programs to test."""
+        return self.errored_programs
+
+    def _item_key_fn(self) -> Callable[[QuantumProgram], str] | None:
+        """No stable identity beyond position."""
+        return None
+
+    def _process_item_fn(self) -> Callable:
+        """Return the _run_one_program function."""
+        return _run_one_program
+
+    def _static_kwargs(self) -> dict[str, Any]:
+        """Return static kwargs for _run_one_program."""
+        return {
+            "collect_shot_data_args": self.collect_shot_data_args,
+            "expected_outcomes": self.expected_outcomes,
+            "num_shots": self.num_shots,
+            "shot_checkpoint_dir": self.shot_checkpoint_dir,
+            "checkpoint": self.shot_checkpoint,
+            "force_resume": self.force_resume,
+            "lazy_loading": self.lazy_loading,
+        }
+
+    def _finalize(self) -> list[QuantumProgram]:
+        """Return failed programs (same objects from input, matched by index).
+
+        Builds the failed list from `_reduced_results`, which holds success
+        bools indexed by program position, in original program order.
+        """
+        failed = [
+            prog
+            for i, prog in enumerate(self.errored_programs)
+            if not self._reduced_results.get(i, True)
+        ]
+
+        if len(failed):
+            print(f"Failed {len(failed)} programs!")
+        else:
+            print("All programs succeeded!")
+
+        return failed
+
+    def _desc(self) -> str:
+        """Return description for progress bar."""
+        return "Running discrete error injected programs"
+
+    def _mismatch_check_fields(self) -> list[str]:
+        """Return fields to check for resume mismatch."""
+        return [
+            "num_shots",
+            "collect_shot_data_args",
+            "expected_outcomes",
+            "keep_shot_results",
+        ]
+
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """fault_{index}"""
+        return "fault"
 
 
 def test_program_output(
@@ -555,9 +567,15 @@ def test_program_output(
     expected_outcomes: Sequence,
     num_shots: int = 1,
     verbose: bool = False,
-    skip_run: bool = False,
     shot_executor: SubmitExecutor | None = None,
-) -> bool:
+    n_shot_batches: int | None = None,
+    checkpoint: bool = False,
+    checkpoint_batch_size: int | None = None,
+    checkpoint_dir: str | Path | None = None,
+    lazy_loading: bool = True,
+    force_resume: bool = False,
+    return_program_results: bool = False,
+) -> bool | tuple[bool, Any]:
     """Test a program against expected output.
 
     Parameters
@@ -580,32 +598,70 @@ def test_program_output(
         Will only print the first failed entry, if more than
         one fails, by default False
 
-    skip_run : bool, optional
-        Whether to skip running the program and use previous results,
-        by default False
-
     shot_executor : SubmitExecutor | None, optional
         Forwarded to [](api:QuantumProgram.run) for shot-level
         parallelism. Defaults to `None`, which runs shots serially.
-        Unused when `skip_run` is `True`.
+
+    n_shot_batches : int | None, optional
+        Forwarded to [](api:QuantumProgram.run) for shot-level
+        parallel dispatch batching. Defaults to `None`.
+
+    checkpoint : bool, optional
+        Explicit gate for shot-level checkpointing. Defaults to `False`.
+        When `True`, requires `checkpoint_dir` to be set.
+
+    checkpoint_batch_size : int | None, optional
+        Forwarded to [](api:QuantumProgram.run) for checkpoint-flush
+        granularity; only meaningful when `checkpoint=True`. Mutually
+        exclusive with `n_shot_batches`. Defaults to `None` (auto).
+
+    checkpoint_dir : str | Path | None, optional
+        Forwarded to [](api:QuantumProgram.run) for shot checkpointing.
+        Required when `checkpoint=True` is passed. Defaults to `None`.
+
+    lazy_loading : bool, optional
+        Forwarded to [](api:QuantumProgram.run) for lazy loading.
+        Defaults to `True`.
+
+    force_resume : bool, optional
+        Forwarded to [](api:QuantumProgram.run) to bypass configuration
+        mismatches on resume. Defaults to `False`.
+
+    return_program_results : bool, optional
+        If `True`, return `(success, program_results)` instead of the bare bool.
+        Defaults to `False`.
 
     Returns
     -------
-    bool
-        `True` if all outputs match expected, `False` on failure
+    bool | tuple[bool, ProgramResults]
+        When `return_program_results=False` (default): `True` if all outputs
+        match expected, `False` on failure.
+        When `return_program_results=True`: `(success, program_results)` tuple
+        with the same success boolean and the full `ProgramResults` object.
     """
-    if not skip_run:
-        program_results = test_program.run(
-            num_shots=num_shots, shot_executor=shot_executor, verbose=False
-        )
-    else:
-        # If we're skipping the run, we need to get the results from somewhere
-        program_results = getattr(test_program, "_last_results", None)
-        if program_results is None:
-            raise ValueError(
-                "Cannot skip run when no previous results are available"
-            )
+    run_kwargs = {
+        "num_shots": num_shots,
+        "shot_executor": shot_executor,
+        "n_shot_batches": n_shot_batches,
+        "verbose": False,
+        "lazy_loading": lazy_loading,
+        "force_resume": force_resume,
+    }
+    if checkpoint:
+        run_kwargs["checkpoint"] = True
+    if checkpoint_batch_size is not None:
+        run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
+    if checkpoint_dir is not None:
+        run_kwargs["checkpoint_dir"] = checkpoint_dir
+        # Cascade resume: only True if this specific item has prior shot state
+        if checkpoint:
+            run_kwargs["resume"] = (
+                Path(checkpoint_dir) / "results.h5"
+            ).exists()
 
+    program_results = test_program.run(**run_kwargs)
+
+    success = True
     for args, expected in zip(collect_shot_data_args, expected_outcomes):
         # Collect shot data for last shot
         outs = HistoryDataCollector.from_raw(args).collect(program_results)
@@ -614,5 +670,11 @@ def test_program_output(
                 if verbose:
                     print(f"Output:   {out}")
                     print(f"Expected: {expected}")
-                return False
-    return True
+                success = False
+                break
+        if not success:
+            break
+
+    if return_program_results:
+        return success, program_results
+    return success

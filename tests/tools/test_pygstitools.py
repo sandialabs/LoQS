@@ -1,9 +1,12 @@
 """Tester for loqs.tools.pygstitools"""
 
 import copy
+import functools
 import gc
+import multiprocessing as mp
 import re
 import sys
+import time
 import weakref
 
 import pytest
@@ -25,7 +28,7 @@ from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.pygstitools import (
     convert_edesign_to_programs,
     convert_run_programs_to_dataset,
-    simulate_dataset_for_edesign,
+    EdesignRunner,
 )
 
 
@@ -38,10 +41,84 @@ def _build_shot_executor():
     return loky.get_reusable_executor(max_workers=1)
 
 
+def _wait_for_index_checkpointed(
+    item_checkpoint_dir, index, timeout=30.0, poll_interval=0.02
+):
+    """Poll `item_checkpoint_dir`'s on-disk checkpoint state (runner.h5 plus
+    any worker files) until `index` is durably recorded as done, or raise
+    `TimeoutError`. Used to deterministically order a crash-injecting
+    worker's own item against a sibling item dispatched concurrently to a
+    different real worker process, since both complete in real (unordered)
+    time otherwise."""
+    from loqs.tools.multiprogramrunner import _read_done_union
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if index in _read_done_union(item_checkpoint_dir):
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(f"Item {index} was not checkpointed within {timeout}s")
+
+
+def _crash_once_and_log_shots(
+    item,
+    index,
+    *,
+    original_fn,
+    crash_index,
+    shots_before_crash,
+    wait_for_index,
+    item_checkpoint_dir,
+    crash_triggered,
+    shot_log,
+    call_log,
+    **kwargs,
+):
+    """Module-level wrapper (not a closure) around a `MultiProgramRunner`
+    per-item worker function, crashing exactly once: on `crash_index`'s
+    first dispatch, after `shots_before_crash` of its own shots have
+    completed. `crash_triggered` (a `multiprocessing.Manager` dict) gates
+    this across real worker processes, since a resumed run re-dispatches
+    the same item to a (possibly different) worker that must not crash
+    again. Every real `QuantumProgram._run_shot` call and every wrapper
+    invocation are recorded to `shot_log`/`call_log` (`Manager` lists),
+    observable from the main test process across process boundaries.
+    Waits for `wait_for_index` to be checkpointed before crashing, so the
+    sibling item dispatched to the other real worker is guaranteed done
+    (and durably checkpointed) once the crash is observed."""
+    call_log.append(index)
+    from loqs.core import QuantumProgram
+
+    should_crash = index == crash_index and not crash_triggered.get(
+        "triggered", False
+    )
+    if should_crash:
+        crash_triggered["triggered"] = True
+        if wait_for_index is not None:
+            _wait_for_index_checkpointed(item_checkpoint_dir, wait_for_index)
+
+    original_run_shot = QuantumProgram._run_shot
+    computed = {"n": 0}
+
+    def _run_shot_and_maybe_crash(self, max_frame_limit, seed, shot_index):
+        if should_crash and computed["n"] >= shots_before_crash:
+            raise RuntimeError("Simulated real-worker crash mid-item")
+        result = original_run_shot(self, max_frame_limit, seed, shot_index)
+        computed["n"] += 1
+        shot_log.append((index, shot_index))
+        return result
+
+    QuantumProgram._run_shot = _run_shot_and_maybe_crash
+    try:
+        return original_fn(item, index, **kwargs)
+    finally:
+        QuantumProgram._run_shot = original_run_shot
+
+
 class _TrivialCounterSetup:
     """A minimal single-qubit edesign (an empty circuit and a one-`Gxpi2`
     circuit) plus a `physical_to_logical` mapping onto the trivial-counter
-    codepack, shared by every `simulate_dataset_for_edesign` test below.
+    codepack, shared by every `EdesignRunner` test below.
     The empty circuit never increments the counter (outcome `"0"`); the
     one-gate circuit increments it once (outcome `"1"`).
     """
@@ -79,21 +156,31 @@ class _TrivialCounterSetup:
             patch_types={"Trivial": trivial_code},
         )
 
-    def simulate(self, ckpt=None, **overrides):
-        """Call `simulate_dataset_for_edesign` with this setup's edesign/model/
-        physical_to_logical/`collect_shot_data_args=("counter", -1)` and
-        `num_shots=1` as defaults, overridable via `overrides`."""
+    def simulate(self, ckpt=None, resume=None, **overrides):
+        """Construct and run an `EdesignRunner` with this setup's edesign/
+        model/physical_to_logical/`collect_shot_data_args=("counter", -1)`/
+        `num_shots=1` as defaults, overridable via `overrides`. `ckpt`, if
+        given, both sets `item_checkpoint_dir` and enables checkpointing;
+        `resume`, if not given explicitly, is inferred as `True` iff `ckpt`
+        already exists with content."""
+        if resume is None:
+            resume = False
+            if ckpt is not None and ckpt.exists() and any(ckpt.iterdir()):
+                resume = True
+
         kwargs = dict(
             edesign=self.edesign,
             physical_model=self.model,
             physical_to_logical=self.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=("counter", -1),
-            checkpoint_path=ckpt,
+            item_checkpoint_dir=ckpt,
+            checkpoint=ckpt is not None,
+            resume=resume,
+            program_kwargs=self.program_kwargs,
         )
         kwargs.update(overrides)
-        kwargs.update(self.program_kwargs)
-        return simulate_dataset_for_edesign(**kwargs)
+        return EdesignRunner(**kwargs).run()
 
 
 @pytest.fixture
@@ -104,27 +191,21 @@ def trivial_counter_setup():
 def _fake_program(circuit_repr, shot_frames):
     """A minimal stand-in for a QuantumProgram: only the surface
     `convert_run_programs_to_dataset` actually touches (`.name` plus a
-    pre-populated `_last_results`), skipping a full QuantumProgram/codepack
-    setup entirely.
-
-    Parameters
-    ----------
-    circuit_repr : str
-        `repr()` of the pyGSTi `Circuit` this program corresponds to.
-    shot_frames : list[list[Frame]]
-        One list of `Frame` objects per shot, appended in order to that
-        shot's `History`.
-    """
+    `.run()` returning canned results), skipping a full QuantumProgram/
+    codepack setup entirely. `circuit_repr` is the pyGSTi `Circuit`'s own
+    `repr()`; `shot_frames` is one list of `Frame` objects per shot, each
+    appended in order to that shot's `History`."""
 
     class _FakeProgram:
-        pass
+        def run(self, *args, **kwargs):
+            return self._canned_results
 
     program = _FakeProgram()
     program.name = circuit_repr
     shot_histories = {
         i: History(frames) for i, frames in enumerate(shot_frames)
     }
-    program._last_results = ProgramResults(shot_histories=shot_histories)
+    program._canned_results = ProgramResults(shot_histories=shot_histories)
     return program
 
 
@@ -186,7 +267,7 @@ class TestConvertRunProgramsToDataset:
         assert counts[("10",)] == 2
 
     def test_auto_runs_a_program_with_no_stored_results(self):
-        """A program with no `_last_results` set gets run (at the default
+        """A program that hasn't been run yet gets run (at the default
         `num_shots=1`) rather than raising or being skipped."""
         trivial_code = trivial_codepack.create_qec_code()
         ideal_model = trivial_codepack.create_ideal_model(["Q0"])
@@ -213,7 +294,6 @@ class TestConvertRunProgramsToDataset:
             patch_types={"Trivial": trivial_code},
             name="Circuit()",
         )
-        assert getattr(program, "_last_results", None) is None
 
         ds = convert_run_programs_to_dataset(
             [program], collect_shot_data_args=("counter", -1)
@@ -223,13 +303,13 @@ class TestConvertRunProgramsToDataset:
 
     def test_warns_deprecation(self):
         """Calling convert_run_programs_to_dataset warns DeprecationWarning,
-        pointing at simulate_dataset_for_edesign as its replacement."""
+        pointing at EdesignRunner as its replacement."""
         circ = Circuit([("Gh", "Q0")], line_labels=["Q0"])
         program = _fake_program(
             repr(circ), [[Frame({"logical_measurement": 0})]]
         )
         with pytest.warns(
-            DeprecationWarning, match="simulate_dataset_for_edesign"
+            DeprecationWarning, match="EdesignRunner"
         ):
             convert_run_programs_to_dataset([program])
 
@@ -291,10 +371,10 @@ class TestConvertEdesignToPrograms:
 
     def test_warns_deprecation(self, trivial_counter_setup):
         """Calling convert_edesign_to_programs warns DeprecationWarning,
-        pointing at simulate_dataset_for_edesign as its replacement."""
+        pointing at EdesignRunner as its replacement."""
         s = trivial_counter_setup
         with pytest.warns(
-            DeprecationWarning, match="simulate_dataset_for_edesign"
+            DeprecationWarning, match="EdesignRunner"
         ):
             convert_edesign_to_programs(
                 s.edesign, s.model, s.physical_to_logical, **s.program_kwargs
@@ -351,7 +431,8 @@ class TestPipelineWithMultiplePatches:
             name="Circuit()",
         )
 
-        program.run(num_shots=5, verbose=False)
+        # convert_run_programs_to_dataset always runs each program itself
+        # (at its own default num_shots=1), so no need to run() it first.
         ds = convert_run_programs_to_dataset(
             [program],
             collect_shot_data_args=[
@@ -361,7 +442,7 @@ class TestPipelineWithMultiplePatches:
         )
 
         # Deterministic, noiseless model: L0 always "1", L1 always "0".
-        assert ds[Circuit("()")].counts[("10",)] == 5
+        assert ds[Circuit("()")].counts[("10",)] == 1
 
 
 class TestSimulateDatasetForEdesign:
@@ -375,13 +456,6 @@ class TestSimulateDatasetForEdesign:
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
-
-    def test_resume_without_checkpoint_path_raises(self, trivial_counter_setup):
-        """resume=True with no checkpoint_path is a configuration error,
-        not something that's silently ignored."""
-        s = trivial_counter_setup
-        with pytest.raises(ValueError, match="checkpoint_path"):
-            s.simulate(resume=True)
 
     def test_max_frame_limit_defaults_to_100(self, trivial_counter_setup):
         """With no override, each circuit's program.run still sees
@@ -430,24 +504,41 @@ class TestSimulateDatasetForEdesignCheckpointing:
         self, trivial_counter_setup, tmp_path
     ):
         """Checkpointing doesn't change the resulting counts, and leaves a
-        checkpoint file behind."""
+        checkpoint directory behind."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
 
         ds = s.simulate(ckpt=ckpt)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
         assert ckpt.exists()
+        assert ckpt.is_dir()
 
-    def test_resume_false_with_existing_checkpoint_raises(
+    def test_existing_checkpoint_with_matching_config_auto_resumes(
         self, trivial_counter_setup, tmp_path
     ):
-        """A checkpoint that already exists is never silently overwritten
-        or ignored -- resume=True must be passed explicitly."""
+        """Whether a call continues a prior checkpoint is inferred purely
+        from item_checkpoint_dir's own on-disk state and a config match --
+        there's no separate flag a caller needs to pass."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
+
+        ds = s.simulate(ckpt=ckpt)
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_existing_content_without_runner_h5_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Content that isn't a recognized EdesignRunner checkpoint (no
+        runner.h5) is never silently overwritten or continued."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        ckpt.mkdir()
+        (ckpt / "unrelated.txt").write_text("not a checkpoint")
 
         with pytest.raises(FileExistsError, match=re.escape(str(ckpt))):
             s.simulate(ckpt=ckpt)
@@ -458,33 +549,116 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """Resuming only re-simulates circuits missing from the checkpoint,
         while still returning a complete DataSet covering every circuit."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
 
         # Checkpoint only the first circuit up front.
         partial_edesign = ExperimentDesign([s.circs[0]])
         s.simulate(ckpt=ckpt, edesign=partial_edesign)
 
-        ds = s.simulate(ckpt=ckpt, resume=True)
+        # Spy on _run_one_circuit to confirm only the missing circuit is
+        # actually recomputed on resume.
+        recorded_indices = []
+        original_run_one_circuit = pygstitools._run_one_circuit
 
+        def spy_run_one_circuit(circ, index, **kwargs):
+            recorded_indices.append(index)
+            return original_run_one_circuit(circ, index, **kwargs)
+
+        pygstitools._run_one_circuit = spy_run_one_circuit
+        try:
+            ds = s.simulate(ckpt=ckpt)
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        assert recorded_indices == [1]
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_crash_truncated_last_row_is_redone_on_resume(
+    def test_incomplete_item_is_redone_on_resume(
         self, trivial_counter_setup, tmp_path
     ):
-        """A checkpoint row left incomplete by a simulated crash (no
-        trailing newline) is dropped and its circuit redone from scratch,
-        rather than failing to parse or being treated as complete."""
+        """An index lost from runner.h5 (simulating a crash where a
+        completed item's own checkpoint entry never durably landed) is
+        redone on resume, not silently treated as already done."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
-        s.simulate(ckpt=ckpt)
+        ckpt = tmp_path / "checkpoint"
 
-        lines = ckpt.read_text().splitlines(keepends=True)
-        truncated = "".join(lines[:-1]) + lines[-1][: len(lines[-1]) // 2]
-        ckpt.write_text(truncated)
+        # First run: complete both circuits.
+        ds1 = s.simulate(ckpt=ckpt)
+        assert ds1[s.circs[0]].counts[("0",)] == 1
+        assert ds1[s.circs[1]].counts[("1",)] == 1
 
-        ds = s.simulate(ckpt=ckpt, resume=True)
+        # Simulate a crash by removing circuit 1's entry directly from
+        # runner.h5, the canonical durable store, via a read-mutate-write.
+        stored = EdesignRunner.read(ckpt / "runner.h5")
+        del stored._reduced_results[1]
+        stored.write(ckpt / "runner.h5")
 
+        from loqs.tools.multiprogramrunner import _read_done_union
+
+        assert set(_read_done_union(ckpt).keys()) == {0}
+
+        # Resume: should redo only the missing circuit, and produce a
+        # complete, correct DataSet again.
+        ds2 = s.simulate(ckpt=ckpt)
+
+        assert set(_read_done_union(ckpt).keys()) == {0, 1}
+        assert ds2[s.circs[0]].counts[("0",)] == 1
+        assert ds2[s.circs[1]].counts[("1",)] == 1
+        # dataset.txt should still reflect both circuits.
+        assert (ckpt / "dataset.txt").exists()
+        from pygsti.io import read_dataset
+
+        persisted_ds = read_dataset(str(ckpt / "dataset.txt"), verbosity=0)
+        assert len(persisted_ds) == 2
+
+    def test_genuine_crash_recovery_via_read_and_run(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Simulate a crash partway through circuit processing, recover via
+        EdesignRunner.read(...).run() (a real on-disk decode-then-run
+        recovery), not just in-memory instance reuse."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            program_kwargs=s.program_kwargs,
+        )
+
+        # Patch _run_one_circuit to crash once, at index 1.
+        original_run_one_circuit = pygstitools._run_one_circuit
+        crash_triggered = []
+
+        def crashing_run_one_circuit(circ, index, **kwargs):
+            if index == 1 and not crash_triggered:
+                crash_triggered.append(True)
+                raise RuntimeError("simulated crash")
+            return original_run_one_circuit(circ, index, **kwargs)
+
+        pygstitools._run_one_circuit = crashing_run_one_circuit
+        try:
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                runner1.run()
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        from loqs.tools.multiprogramrunner import _read_done_union
+
+        # Only index 0 should be checkpointed so far.
+        assert set(_read_done_union(ckpt).keys()) == {0}
+
+        # Recover via a real on-disk decode-then-run, not in-memory reuse.
+        runner2 = EdesignRunner.read(ckpt / "runner.h5")
+        ds = runner2.run()
+
+        assert set(_read_done_union(ckpt).keys()) == {0, 1}
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
@@ -494,11 +668,11 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """A resumed call with a different num_shots than the checkpoint
         was written with is a hard error naming that field."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(ValueError, match="num_shots"):
-            s.simulate(ckpt=ckpt, resume=True, num_shots=2)
+            s.simulate(ckpt=ckpt, num_shots=2)
 
     def test_resume_mismatched_collect_shot_data_args_raises(
         self, trivial_counter_setup, tmp_path
@@ -506,13 +680,11 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """A resumed call with a different collect_shot_data_args than the
         checkpoint was written with is a hard error naming that field."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         with pytest.raises(ValueError, match="collect_shot_data_args"):
-            s.simulate(
-                ckpt=ckpt, resume=True, collect_shot_data_args=("counter", -2)
-            )
+            s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
 
     def test_resume_mismatched_physical_to_logical_raises(
         self, trivial_counter_setup, tmp_path
@@ -521,14 +693,14 @@ class TestSimulateDatasetForEdesignCheckpointing:
         checkpoint was written with is a hard error naming that field, even
         though only one leaf value actually changed."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
         changed_p2l = copy.deepcopy(s.physical_to_logical)
         changed_p2l["rho0"][1]["initial_value"] = 1
 
         with pytest.raises(ValueError, match="physical_to_logical"):
-            s.simulate(ckpt=ckpt, resume=True, physical_to_logical=changed_p2l)
+            s.simulate(ckpt=ckpt, physical_to_logical=changed_p2l)
 
     def test_force_resume_bypasses_config_mismatch(
         self, trivial_counter_setup, tmp_path
@@ -536,27 +708,234 @@ class TestSimulateDatasetForEdesignCheckpointing:
         """force_resume=True proceeds despite a config mismatch that would
         otherwise raise, rather than requiring an untouched checkpoint."""
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
         s.simulate(ckpt=ckpt)
 
-        ds = s.simulate(ckpt=ckpt, resume=True, force_resume=True, num_shots=2)
+        ds = s.simulate(ckpt=ckpt, force_resume=True, num_shots=2)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
+    def test_edesign_roundtrip_without_checkpoint_dir(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Writing and reading an EdesignRunner with checkpoint=False
+        (item_checkpoint_dir=None) preserves edesign as bytes tar archive,
+        not just None. The round-tripped runner's edesign is equivalent to
+        the original, and calling .run() on it succeeds."""
+        s = trivial_counter_setup
+        h5_path = tmp_path / "runner.h5"
 
-def _checkpointed_circuits(checkpoint_path) -> set:
-    """Every circuit with a row in a checkpoint text file, parsed as
-    pyGSTi `Circuit`s -- used to confirm a resumed parallel run actually
-    appends the circuits it recomputed, not just returns them in-memory.
-    """
-    from pygsti.io import read_dataset
+        # Construct and write runner with checkpoint=False (no checkpoint dir)
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=None,
+            checkpoint=False,
+            program_kwargs=s.program_kwargs,
+        )
+        runner1.write(h5_path)
 
-    return set(read_dataset(str(checkpoint_path), verbosity=0).keys())
+        # Read it back
+        runner2 = EdesignRunner.read(h5_path)
+
+        # Assert edesign is not None and is equivalent
+        assert runner2.edesign is not None
+        assert (
+            set(runner2.edesign.all_circuits_needing_data)
+            == set(s.edesign.all_circuits_needing_data)
+        )
+
+        # Assert calling .run() on the round-tripped runner succeeds
+        ds = runner2.run()
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_edesign_roundtrip_with_checkpoint_dir_still_works(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """Writing and reading an EdesignRunner with checkpoint=True and
+        item_checkpoint_dir set still works (uses directory path, not tar)."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        h5_path = tmp_path / "runner.h5"
+
+        # Construct and write runner with checkpoint=True and checkpoint dir
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            program_kwargs=s.program_kwargs,
+        )
+        runner1.write(h5_path)
+
+        # Read it back
+        runner2 = EdesignRunner.read(h5_path)
+
+        # Assert edesign is not None and is equivalent
+        assert runner2.edesign is not None
+        assert (
+            set(runner2.edesign.all_circuits_needing_data)
+            == set(s.edesign.all_circuits_needing_data)
+        )
+
+    def test_resume_mismatched_keep_shot_results_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A resumed call with a different keep_shot_results than the
+        checkpoint was written with is a hard error naming that field."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run with keep_shot_results=False
+        s.simulate(
+            ckpt=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+
+        # Resume with keep_shot_results=True (and required shot_checkpoint)
+        with pytest.raises(ValueError, match="keep_shot_results"):
+            s.simulate(
+                ckpt=ckpt,
+                keep_shot_results=True,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+            )
+
+    def test_resume_mismatched_keep_shot_results_force_resume_works(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """force_resume=True bypasses a keep_shot_results mismatch."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run with keep_shot_results=False
+        s.simulate(
+            ckpt=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+
+        # Resume with keep_shot_results=True but force_resume=True
+        ds = s.simulate(
+            ckpt=ckpt,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+        )
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+    def test_shot_level_force_resume_propagates_to_program_run(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """force_resume forwarded from EdesignRunner down into each
+        circuit's own QuantumProgram.run() call bypasses a shot-level
+        config mismatch. No item_checkpoint_dir is used, so the runner's
+        own item-level mismatch check never triggers -- only the per-item
+        worker's own program.run(force_resume=...) call can bypass this."""
+        s = trivial_counter_setup
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        # First run: produce on-disk shot-level checkpoint state for both circuits.
+        s.simulate(
+            num_shots=1,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            lazy_loading=False,
+        )
+
+        # Resuming with a different num_shots is a mismatch QuantumProgram.run()
+        # itself validates; force_resume=False should raise.
+        with pytest.raises(ValueError, match="num_shots"):
+            s.simulate(
+                num_shots=2,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+            )
+
+        # force_resume=True on the runner must reach each circuit's own
+        # program.run() call to bypass the same mismatch.
+        ds = s.simulate(
+            num_shots=2,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+            lazy_loading=False,
+        )
+
+        assert ds[s.circs[0]].counts[("0",)] == 2
+        assert ds[s.circs[1]].counts[("1",)] == 2
+
+    def test_resume_true_without_checkpoint_raises(self, trivial_counter_setup):
+        """resume=True requires checkpoint=True, raises ValueError."""
+        s = trivial_counter_setup
+        with pytest.raises(
+            ValueError, match="resume=True requires checkpoint=True"
+        ):
+            s.simulate(resume=True, checkpoint=False)
+
+    def test_checkpoint_without_resume_raises_when_content_exists(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """State machine case (b): checkpoint=True, resume=False, but
+        on-disk state already exists raises ValueError."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+
+        # First run: create a genuine checkpoint
+        s.simulate(ckpt=ckpt)
+
+        # Verify runner.h5 exists
+        assert (ckpt / "runner.h5").exists()
+
+        # Second run: attempt to run again with checkpoint=True but
+        # resume=False should raise
+        with pytest.raises(
+            ValueError,
+            match="contains an existing checkpoint.*Pass resume=True",
+        ):
+            s.simulate(ckpt=ckpt, resume=False)
+
+    def test_resume_true_with_empty_checkpoint_dir_raises(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """State machine case (d): resume=True with checkpoint=True but
+        no on-disk state raises ValueError (nothing to resume from)."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "nonexistent_ckpt"
+
+        # Attempt to resume from a nonexistent dir
+        with pytest.raises(
+            ValueError,
+            match="is empty or nonexistent.*nothing to resume from",
+        ):
+            s.simulate(ckpt=ckpt, resume=True)
+
+        # Also test with an empty-but-existent dir
+        ckpt.mkdir(parents=True)
+        with pytest.raises(
+            ValueError,
+            match="is empty or nonexistent.*nothing to resume from",
+        ):
+            s.simulate(ckpt=ckpt, resume=True)
 
 
 class TestSimulateDatasetForEdesignParallel:
-    """`simulate_dataset_for_edesign`'s `parallel` (a
+    """`EdesignRunner`'s `parallel_strategy` (a
     [](api:ParallelStrategy)) path, against real `loky` and `submitit`
     executors -- both must produce the same `DataSet` a serial run does,
     including through checkpoint/resume and hybrid shot-/program-level
@@ -572,7 +951,7 @@ class TestSimulateDatasetForEdesignParallel:
             n_program_chunks=2,
         )
 
-        ds = s.simulate(parallel=strategy)
+        ds = s.simulate(parallel_strategy=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -600,7 +979,7 @@ class TestSimulateDatasetForEdesignParallel:
             n_program_chunks=2,
         )
 
-        ds = s.simulate(parallel=strategy)
+        ds = s.simulate(parallel_strategy=strategy)
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
@@ -620,7 +999,7 @@ class TestSimulateDatasetForEdesignParallel:
             shot_executor=_build_shot_executor,
         )
 
-        ds = s.simulate(parallel=strategy, num_shots=3)
+        ds = s.simulate(parallel_strategy=strategy, num_shots=3)
 
         assert ds[s.circs[0]].counts[("0",)] == 3
         assert ds[s.circs[1]].counts[("1",)] == 3
@@ -633,7 +1012,7 @@ class TestSimulateDatasetForEdesignParallel:
         returns a complete DataSet covering every circuit."""
         loky = pytest.importorskip("loky")
         s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint.txt"
+        ckpt = tmp_path / "checkpoint"
 
         partial_edesign = ExperimentDesign([s.circs[0]])
         s.simulate(ckpt=ckpt, edesign=partial_edesign)
@@ -641,11 +1020,33 @@ class TestSimulateDatasetForEdesignParallel:
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
         )
-        ds = s.simulate(ckpt=ckpt, resume=True, parallel=strategy)
 
+        # Spy on _run_one_circuit via a Manager list, since the real worker
+        # processes wouldn't be observable through a plain in-process list.
+        manager = mp.Manager()
+        recorded_indices = manager.list()
+        original_run_one_circuit = pygstitools._run_one_circuit
+
+        def spy_run_one_circuit(circ, index, **kwargs):
+            recorded_indices.append(index)
+            return original_run_one_circuit(circ, index, **kwargs)
+
+        pygstitools._run_one_circuit = spy_run_one_circuit
+        try:
+            ds = s.simulate(ckpt=ckpt, parallel_strategy=strategy)
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        assert list(recorded_indices) == [1]
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
-        assert s.circs[1] in _checkpointed_circuits(ckpt)
+        # Verify both circuits are persisted in the dataset checkpoint file
+        assert (ckpt / "dataset.txt").exists()
+        from pygsti.io import read_dataset
+        persisted_ds = read_dataset(str(ckpt / "dataset.txt"), verbosity=0)
+        assert len(persisted_ds) == 2
+        assert s.circs[0] in persisted_ds
+        assert s.circs[1] in persisted_ds
 
 
 class TestSimulateDatasetForEdesignMemoryBound:
@@ -685,3 +1086,480 @@ class TestSimulateDatasetForEdesignMemoryBound:
         )
 
         s.simulate(edesign=edesign)
+
+
+class TestSimulateDatasetForEdesignShotCheckpointing:
+    """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
+    checkpointing, threaded through `EdesignRunner` via the
+    `shot_checkpoint`, `shot_checkpoint_dir`, and `lazy_loading`
+    parameters."""
+
+    def test_shot_checkpoint_without_shot_checkpoint_dir_raises(
+        self, trivial_counter_setup
+    ):
+        """shot_checkpoint=True given without shot_checkpoint_dir is a
+        configuration error, not something that's silently ignored."""
+        s = trivial_counter_setup
+        with pytest.raises(ValueError, match="shot_checkpoint_dir"):
+            s.simulate(shot_checkpoint=True)
+
+    def test_serial_shot_checkpoint_creates_per_circuit_subdirs(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A serial (no parallel) run with shot_checkpoint=True and a real
+        shot_checkpoint_dir produces per-circuit subdirectories under it, one
+        per distinct circuit in the edesign, each containing checkpoint files
+        that can be loaded via ProgramResults.load_checkpoint."""
+        s = trivial_counter_setup
+        shot_ckpt_dir = tmp_path / "shot_checkpoints"
+        shot_ckpt_dir.mkdir()
+
+        ds = s.simulate(
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading=False,  # Keep shots in memory for collection
+        )
+
+        # Confirm the data is correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        # Confirm per-circuit subdirs exist and contain checkpoints using the
+        # new circ_{index} naming scheme
+        subdirs = list(shot_ckpt_dir.iterdir())
+        assert len(subdirs) == 2, (
+            f"Expected 2 circuit subdirs, got {len(subdirs)}: {subdirs}"
+        )
+        assert set(d.name for d in subdirs) == {"circ_0", "circ_1"}
+
+        # Verify each circuit's checkpoint subdirectory by index
+        for circuit_index in range(len(s.circs)):
+            circ_subdir = shot_ckpt_dir / f"circ_{circuit_index}"
+            assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
+
+            # Confirm the checkpoint file exists and can load the right number of shots
+            checkpoint_file = circ_subdir / "results.h5"
+            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+
+            loaded_results = ProgramResults()
+            loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
+            assert len(loaded_results.shot_histories) == 1
+
+    def test_parallel_shot_checkpoint_prevents_circuit_collision(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A parallel run with parallel.n_program_chunks=1 (one worker processes
+        both circuits sequentially) and shot_checkpoint_dir set confirms the
+        per-circuit subdirectory scheme actually prevents collisions despite
+        sharing one worker/hostname_pid."""
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        shot_ckpt_dir = tmp_path / "shot_checkpoints"
+        shot_ckpt_dir.mkdir()
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=1),
+            n_program_chunks=1,
+            shot_executor=_build_shot_executor,
+        )
+
+        ds = s.simulate(
+            parallel_strategy=strategy,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading=False,  # Keep shots in memory for collection
+        )
+
+        # Confirm the data is correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        # Confirm both circuit subdirs exist independently using the new
+        # circ_{index} naming scheme where index is the circuit's position
+        subdirs = list(shot_ckpt_dir.iterdir())
+        assert len(subdirs) == 2
+        assert set(d.name for d in subdirs) == {"circ_0", "circ_1"}
+
+        # Verify each circuit's checkpoint subdirectory by index
+        for circuit_index in range(len(s.circs)):
+            circ_subdir = shot_ckpt_dir / f"circ_{circuit_index}"
+            assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
+            checkpoint_file = circ_subdir / "results.h5"
+            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+
+            # Confirm the checkpoint can be loaded with the right number of shots
+            loaded_results = ProgramResults()
+            loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
+            assert len(loaded_results.shot_histories) == 1
+
+    def test_resume_cascades_into_item_partial_shot_checkpoint(
+        self, trivial_counter_setup, tmp_path, monkeypatch
+    ):
+
+        """When an item (circuit) crashes partway through its own shot-level
+        checkpoint, a runner-level resume must cascade the resume flag down to
+        that item's own QuantumProgram.run() call, causing it to resume from its
+        partial shot checkpoint rather than recomputing all shots from scratch.
+        This differs from test_incomplete_item_is_redone_on_resume, which only
+        covers items that hadn't started shot-level work at all."""
+        s = trivial_counter_setup
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: simulate a crash partway through the second circuit's
+        # own shot work (3 shots total, so we'll interrupt at shot 2)
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash after 3 shots total (completing all of circuit 0's 1 shot,
+            # and 2 of circuit 1's 2 shots)
+            if compute_count["n"] > 3:
+                raise RuntimeError("Simulated crash mid-dispatch")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            s.simulate(
+                ckpt=item_ckpt,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                num_shots=2,  # 2 shots per circuit
+                lazy_loading=False,
+            )
+
+        # Verify: circuit 0's shot checkpoint should be complete (2 shots)
+        circ0_shot_ckpt = shot_ckpt / "circ_0"
+        assert circ0_shot_ckpt.exists()
+        circ0_results = ProgramResults()
+        circ0_results.load_checkpoint(circ0_shot_ckpt)
+        assert len(circ0_results.shot_histories) == 2
+
+        # Verify: circuit 1's shot checkpoint should be partial (1 of 2 shots)
+        circ1_shot_ckpt = shot_ckpt / "circ_1"
+        assert circ1_shot_ckpt.exists()
+        circ1_results_partial = ProgramResults()
+        circ1_results_partial.load_checkpoint(circ1_shot_ckpt)
+        assert len(circ1_results_partial.shot_histories) == 1
+
+        # Second run: item-level resume should cascade down to circuit 1's
+        # own QuantumProgram.run() call, resuming its partial checkpoint.
+        monkeypatch.undo()
+        compute_count_on_resume = {"n": 0}
+
+        original_run_shot_2 = QuantumProgram._run_shot
+
+        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+            compute_count_on_resume["n"] += 1
+            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
+
+        monkeypatch.setattr(
+            QuantumProgram, "_run_shot", _count_compute_calls_resume
+        )
+
+        ds = s.simulate(
+            ckpt=item_ckpt,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            num_shots=2,
+            lazy_loading=False,
+        )
+
+        monkeypatch.undo()
+
+        # Verify: the results are fully correct (all 2 shots for both circuits)
+        assert ds[s.circs[0]].counts[("0",)] == 2
+        assert ds[s.circs[1]].counts[("1",)] == 2
+
+        # Only circuit 1's 1 missing shot should be recomputed, not both
+        # (which would mean it was redone from scratch instead of resumed).
+        assert compute_count_on_resume["n"] == 1
+
+    def test_real_parallel_worker_crash_resume_recomputes_only_missing_shots(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A real `loky` worker process crashing mid-item (after 2 of 6
+        shots) during real item-level parallel dispatch: the runner-level
+        resume must cascade into that item's own partial shot checkpoint,
+        recomputing only its missing shots, while the sibling item
+        (dispatched to the other real worker, uninterrupted) is never
+        redispatched at all. Closes the gap left by
+        test_loky_program_executor_resume_only_recomputes_missing_circuits,
+        which never crashes a real worker process or exercises shot-level
+        checkpointing."""
+        loky = pytest.importorskip("loky")
+        s = trivial_counter_setup
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+
+        manager = mp.Manager()
+        crash_triggered = manager.dict()
+        shot_log = manager.list()
+        call_log = manager.list()
+
+        original_run_one_circuit = pygstitools._run_one_circuit
+        pygstitools._run_one_circuit = functools.partial(
+            _crash_once_and_log_shots,
+            original_fn=original_run_one_circuit,
+            crash_index=1,
+            shots_before_crash=2,
+            wait_for_index=0,
+            item_checkpoint_dir=item_ckpt,
+            crash_triggered=crash_triggered,
+            shot_log=shot_log,
+            call_log=call_log,
+        )
+        try:
+            with pytest.raises(
+                RuntimeError, match="Simulated real-worker crash"
+            ):
+                s.simulate(
+                    ckpt=item_ckpt,
+                    parallel_strategy=strategy,
+                    num_shots=6,
+                    shot_checkpoint=True,
+                    shot_checkpoint_dir=shot_ckpt,
+                    lazy_loading=False,
+                )
+
+            shots_before_resume = list(shot_log)
+            calls_before_resume = list(call_log)
+
+            ds = s.simulate(
+                ckpt=item_ckpt,
+                parallel_strategy=strategy,
+                num_shots=6,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                lazy_loading=False,
+            )
+        finally:
+            pygstitools._run_one_circuit = original_run_one_circuit
+
+        # Item 1 crashed after exactly 2 shots; item 0 completed all 6.
+        assert sorted(
+            shot for i, shot in shots_before_resume if i == 1
+        ) == [0, 1]
+        assert sorted(
+            shot for i, shot in shots_before_resume if i == 0
+        ) == [0, 1, 2, 3, 4, 5]
+
+        # Resume recomputes exactly item 1's 4 missing shots; item 0's
+        # shots are never recomputed.
+        shots_during_resume = list(shot_log)[len(shots_before_resume) :]
+        assert sorted(
+            shot for i, shot in shots_during_resume if i == 1
+        ) == [2, 3, 4, 5]
+        assert [shot for i, shot in shots_during_resume if i == 0] == []
+
+        # Item 0 is dispatched exactly once (the crash run); item 1
+        # exactly twice (crash + resume).
+        assert calls_before_resume.count(0) == 1
+        assert list(call_log).count(0) == 1
+        assert list(call_log).count(1) == 2
+
+        assert ds[s.circs[0]].counts[("0",)] == 6
+        assert ds[s.circs[1]].counts[("1",)] == 6
+
+    def test_resume_does_not_cascade_raise_for_item_with_no_shot_checkpoint(
+        self, trivial_counter_setup, tmp_path, monkeypatch
+    ):
+        """When an item (circuit) has no shot-level checkpoint results.h5,
+        a runner-level resume must not cascade resume=True down to that item's
+        QuantumProgram.run() call, avoiding the case (d) ValueError
+        ("resume=True with no on-disk state"). Instead, resume=False is passed,
+        and the item is redone from scratch and completes successfully."""
+        s = trivial_counter_setup
+        item_ckpt = tmp_path / "item_checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt.mkdir()
+        shot_ckpt.mkdir()
+
+        # First run: complete circuit 0, then crash on circuit 1's first shot
+        # before its checkpoint batch can flush.
+        compute_count = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
+            compute_count["n"] += 1
+            # Crash at shot 4 (circuit 1's first shot, after circuit 0's 3)
+            if compute_count["n"] >= 4:
+                raise RuntimeError("Simulated crash mid-circuit-1")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with pytest.raises(RuntimeError, match="mid-circuit-1"):
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _run_shot_with_interrupt
+            )
+            s.simulate(
+                ckpt=item_ckpt,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                num_shots=3,
+                lazy_loading=False,
+            )
+
+        monkeypatch.undo()
+
+        # Manually verify/set up the precondition: circuit 0 complete,
+        # circuit 1 subdirectory exists but may or may not have results.h5
+        circ0_shot_ckpt = shot_ckpt / "circ_0"
+        assert circ0_shot_ckpt.exists()
+        circ0_results = ProgramResults()
+        circ0_results.load_checkpoint(circ0_shot_ckpt)
+        assert len(circ0_results.shot_histories) == 3
+
+        # If circuit 1's results.h5 exists, remove it to simulate the case where
+        # circuit 1's batch didn't complete before the crash
+        circ1_shot_ckpt = shot_ckpt / "circ_1"
+        circ1_results_file = circ1_shot_ckpt / "results.h5"
+        if circ1_results_file.exists():
+            circ1_results_file.unlink()
+
+        # Ensure the precondition is met: circuit 1 has no results.h5
+        assert not circ1_results_file.exists(), (
+            "Precondition setup failed: circuit 1 results.h5 should be removed"
+        )
+
+        # Second run: resume should complete successfully without raising case (d).
+        # The cascading logic checks for results.h5; since it doesn't exist,
+        # resume=False is passed to circuit 1's QuantumProgram.run().
+        ds = s.simulate(
+            ckpt=item_ckpt,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            num_shots=3,
+            lazy_loading=False,
+        )
+
+        # Verify: the results are fully correct (all 3 shots for both circuits)
+        assert ds[s.circs[0]].counts[("0",)] == 3
+        assert ds[s.circs[1]].counts[("1",)] == 3
+
+        # Verify: circuit 1's shot checkpoint now has results.h5 and is complete
+        assert circ1_results_file.exists()
+        circ1_results_after = ProgramResults()
+        circ1_results_after.load_checkpoint(circ1_shot_ckpt)
+        assert len(circ1_results_after.shot_histories) == 3
+
+    def test_keep_shot_results_end_to_end(self, trivial_counter_setup, tmp_path):
+        """EdesignRunner with keep_shot_results=True consolidates per-circuit ProgramResults."""
+        s = trivial_counter_setup
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        # Create and run the runner directly
+        runner = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=True,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            shot_checkpoint=True,
+            keep_shot_results=True,
+            lazy_loading=False,
+            program_kwargs=s.program_kwargs,
+        )
+        ds = runner.run()
+
+        # Verify the dataset is correct
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        # Verify runner has _program_results populated with ProgramResults
+        assert len(runner._program_results) == len(s.circs)
+        for circ_index in range(len(s.circs)):
+            assert circ_index in runner._program_results
+            pr = runner._program_results[circ_index]
+            # Verify the per-circuit ProgramResults has the correct number of shots
+            assert len(pr.shot_histories) == 1
+
+    def test_reduced_results_uses_dataset_storage_format_end_to_end(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """EdesignRunner (the one runner with a real item_key_fn, which
+        triggers a second runner.h5 write for the index_map before any
+        item is dispatched) still ends up with _reduced_results in
+        'dataset' storage format on disk, not stuck in 'groups' format
+        from that second, still-empty write."""
+        import h5py
+        from loqs.core.programresults import _resolve_checkpoint_object_group
+
+        s = trivial_counter_setup
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+
+        runner = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=True,
+            lazy_loading=False,
+            program_kwargs=s.program_kwargs,
+        )
+        ds = runner.run()
+
+        assert ds[s.circs[0]].counts[("0",)] == 1
+        assert ds[s.circs[1]].counts[("1",)] == 1
+
+        runner_path = item_checkpoint_dir / runner.runner_filename
+        with h5py.File(runner_path, "r") as f:
+            group = _resolve_checkpoint_object_group(f)
+            storage_format = group["_reduced_results"]["dict"]["keys"][
+                "iterable"
+            ].attrs.get("storage_format", "groups")
+            assert storage_format == "dataset", (
+                f"Expected _reduced_results keys to use 'dataset' format "
+                f"but got '{storage_format}'"
+            )
+
+    def test_custom_runner_filename_checkpoint_and_resume(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A custom runner_filename is correctly written, read back on
+        resume, and the default runner.h5 is not created."""
+        s = trivial_counter_setup
+        ckpt = tmp_path / "checkpoint"
+        custom_runner_file = "custom_runner.h5"
+
+        # First run with custom runner_filename
+        runner1 = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=("counter", -1),
+            item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            runner_filename=custom_runner_file,
+            program_kwargs=s.program_kwargs,
+        )
+        ds1 = runner1.run()
+
+        assert ds1[s.circs[0]].counts[("0",)] == 1
+        assert ds1[s.circs[1]].counts[("1",)] == 1
+        # Verify custom file exists and default does not
+        assert (ckpt / custom_runner_file).exists()
+        assert not (ckpt / "runner.h5").exists()
+
+        # Resume with the same custom runner_filename
+        runner2 = EdesignRunner.read(ckpt / custom_runner_file)
+        ds2 = runner2.run()
+
+        assert ds2[s.circs[0]].counts[("0",)] == 1
+        assert ds2[s.circs[1]].counts[("1",)] == 1

@@ -118,11 +118,12 @@ class Test5QCodepack:
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            noise_injected_programs,
-            [("logical_measurement", -1)],
-            [1],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=noise_injected_programs,
+            collect_shot_data_args=[("logical_measurement", -1)],
+            expected_outcomes=[1],
         )
+        failed = runner.run()
         return len(failed) == 0
     
     def test_all_discrete_errors_prep(self):

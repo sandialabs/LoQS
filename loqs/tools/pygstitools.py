@@ -11,18 +11,17 @@
 
 from __future__ import annotations
 
-import ast
+import base64
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-import functools
-import numpy as np
+import io
 from pathlib import Path
 import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+import tarfile
 from typing import Any
-from tqdm import tqdm
 
 from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.historydatacollector import (
@@ -33,14 +32,20 @@ from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
 from loqs.internal.legacy import deprecated
-from loqs.tools.paralleltools import ParallelStrategy, pin_worker_threads, resolve_shot_executor
+from loqs.tools.paralleltools import (
+    ParallelStrategy,
+)
+from loqs.tools.multiprogramrunner import (
+    MultiProgramRunner,
+    _checkpoint_subdir_for_prefix,
+)
 
 try:
     import pygsti  # noqa: F401
     from pygsti.baseobjs import Label
     from pygsti.circuits import Circuit
     from pygsti.data import DataSet
-    from pygsti.io import read_dataset, write_dataset
+    from pygsti.io import write_dataset
     from pygsti.protocols import ExperimentDesign
     from pygsti.models import ExplicitOpModel
 except ImportError as e:
@@ -76,8 +81,9 @@ def _build_program_for_circuit(
 
 def _collect_program_outcomes(
     program_results: ProgramResults,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
 ) -> list[str]:
     """Extract one outcome-label string per shot from a single program's results.
 
@@ -102,89 +108,76 @@ def _collect_program_outcomes(
     )
 
 
-def _process_circuit_chunk(
+def _run_one_circuit(
+    circ: Circuit,
+    index: int,
+    *,
+    shot_executor: Any | None,
+    n_shot_batches: int | None,
     physical_model: ExplicitOpModel,
     label_to_logical: Mapping[Label, list[InstructionLabelLike]],
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     max_frame_limit: int,
     program_kwargs: dict,
-    chunk: list[Circuit],
-    shot_executor: Any | None = None,
-) -> list[tuple[Circuit, dict[tuple, int]]]:
-    """Build, run, and reduce every circuit in one chunk to a row of counts.
+    shot_checkpoint_dir: str | Path | None,
+    checkpoint: bool,
+    force_resume: bool,
+    lazy_loading: bool,
+    keep_shot_results: bool = False,
+) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
+    """Build, run, and reduce one circuit to a count dict.
 
-    The actual per-chunk work shared by both of `simulate_dataset_for_edesign`'s
-    program-level dispatch entry points: each circuit's program is built,
-    run, and collected in turn, mirroring the body of the function's serial
-    loop. Every program object (including any closures nested inside its
-    built `Instruction`s) is built and consumed entirely inside this worker
-    -- only plain, `pickle`-friendly ingredients (`physical_model`,
-    `label_to_logical`, `chunk` itself) ever cross a process boundary, so
-    this stays compatible with `mpi4py.futures.MPIPoolExecutor`'s plain
-    `pickle` transport, not just `loky`'s `cloudpickle` fallback.
-    `shot_executor`, if given, is an already-built executor (resolved once
-    per chunk by the caller, not once per circuit) forwarded to every
-    circuit's own `program.run`, for hybrid shot-/program-level parallelism.
+    When `keep_shot_results=False` (default), returns the count_dict for this
+    circuit. The circuit itself is passed separately by `MultiProgramRunner._run_dispatch`
+    and available to `on_item_done` via its `item` parameter.
+
+    When `keep_shot_results=True`, returns (count_dict, program_results) instead.
     """
-    results = []
-    for circ in chunk:
-        program = _build_program_for_circuit(
-            circ, physical_model, label_to_logical, **program_kwargs
-        )
-        program_results = program.run(
-            num_shots,
-            max_frame_limit=max_frame_limit,
-            shot_executor=shot_executor,
-            verbose=False,
-        )
-        outcomes = _collect_program_outcomes(
-            program_results, collect_shot_data_args
-        )
-        counts = Counter(outcomes)
-        count_dict = {(str(k),): v for k, v in counts.items()}
-        results.append((circ, count_dict))
-        del program, program_results
-    return results
-
-
-# Entry point submitted to a parallel executor: pins this worker's thread
-# pools to one thread before doing real numerical work, then delegates to
-# `_process_circuit_chunk`. Kept as a plain module-level function (not a
-# closure) so plain `pickle` can resolve it by dotted import path, needed
-# by `MPIPoolExecutor`.
-def _process_circuit_chunk_worker(
-    physical_model: ExplicitOpModel,
-    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
-    num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
-    max_frame_limit: int,
-    program_kwargs: dict,
-    chunk: list[Circuit],
-    shot_executor: Any | None = None,
-) -> list[tuple[Circuit, dict[tuple, int]]]:
-    pin_worker_threads()
-    return _process_circuit_chunk(
-        physical_model,
-        label_to_logical,
-        num_shots,
-        collect_shot_data_args,
-        max_frame_limit,
-        program_kwargs,
-        chunk,
-        shot_executor=resolve_shot_executor(shot_executor),
+    program = _build_program_for_circuit(
+        circ, physical_model, label_to_logical, **program_kwargs
     )
+    checkpoint_dir = (
+        _checkpoint_subdir_for_prefix(shot_checkpoint_dir, "circ", index)
+        if shot_checkpoint_dir is not None
+        else None
+    )
+    run_kwargs = {
+        "max_frame_limit": max_frame_limit,
+        "shot_executor": shot_executor,
+        "n_shot_batches": n_shot_batches,
+        "verbose": False,
+        "lazy_loading": lazy_loading,
+        "force_resume": force_resume,
+    }
+    if checkpoint:
+        run_kwargs["checkpoint"] = True
+        run_kwargs["resume"] = (
+            checkpoint_dir is not None
+            and (checkpoint_dir / "results.h5").exists()
+        )
+        run_kwargs["checkpoint_dir"] = checkpoint_dir
+    program_results = program.run(num_shots, **run_kwargs)
+    outcomes = _collect_program_outcomes(
+        program_results, collect_shot_data_args
+    )
+    counts = Counter(outcomes)
+    count_dict = {(str(k),): v for k, v in counts.items()}
+
+    if keep_shot_results:
+        return count_dict, program_results
+
+    del program, program_results
+    return count_dict
 
 
-@deprecated("simulate_dataset_for_edesign")
+@deprecated("EdesignRunner")
 def convert_edesign_to_programs(
     edesign: ExperimentDesign,
     model: ExplicitOpModel,
-    physical_to_logical: Mapping[
-        str | tuple, list[InstructionLabelLike]
-    ],
+    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
     **kwargs,
 ) -> list[QuantumProgram]:
     """Convert a pyGSTi edesign to [](api:QuantumProgram) objects.
@@ -221,11 +214,12 @@ def convert_edesign_to_programs(
     ]
 
 
-@deprecated("simulate_dataset_for_edesign")
+@deprecated("EdesignRunner")
 def convert_run_programs_to_dataset(
     programs: Sequence[QuantumProgram],
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike] = (
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ) = (
         "logical_measurement",
         -1,
     ),
@@ -235,9 +229,7 @@ def convert_run_programs_to_dataset(
     Parameters
     ----------
     programs : Sequence[QuantumProgram]
-        List of programs, one per circuit in `edesign.all_circuits_needing_data`,
-        with [](api:QuantumProgram.run) having been called on the programs
-        with the desired number of shots.
+        List of programs, one per circuit in `edesign.all_circuits_needing_data`.
 
     collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
         The [](api:HistoryDataCollector) recipe(s) used to extract outcomes from each
@@ -260,11 +252,7 @@ def convert_run_programs_to_dataset(
 
     ds = DataSet()
     for circ, prog in zip(circs, programs):
-        # Get program results from the program
-        program_results = getattr(prog, "_last_results", None)
-        if program_results is None:
-            # If no results stored, run the program
-            program_results = prog.run()
+        program_results = prog.run()
 
         outcomes = _collect_program_outcomes(
             program_results, collect_shot_data_args
@@ -279,8 +267,9 @@ def convert_run_programs_to_dataset(
 
 
 def _normalize_collect_shot_data_args(
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
 ) -> HistoryDataCollector | list[HistoryDataCollector]:
     """Cast `collect_shot_data_args` through [](api:HistoryDataCollector.from_raw)
     (recursively, for the `list` case), so its `repr()` is canonical regardless
@@ -297,15 +286,16 @@ def _normalize_collect_shot_data_args(
 
 def _checkpoint_provenance_comment(
     num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
+    collect_shot_data_args: (
+        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+    ),
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> str:
-    """Build the `#`-prefixed comment header for a `simulate_dataset_for_edesign`
-    checkpoint's on-disk `DataSet`, serving both as a human-readable provenance
-    record and as the exact text a later resumed call's config is checked
-    against (`_checkpoint_config_mismatches`). `num_shots` is stored as a plain
-    `repr()` string; `collect_shot_data_args` is first normalized via
+    """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
+    on-disk `DataSet`, a human-readable provenance record (config-mismatch
+    detection on resume happens separately, via `MultiProgramRunner`'s own
+    `runner.h5` snapshot). `num_shots` is stored as a plain `repr()` string;
+    `collect_shot_data_args` is first normalized via
     `_normalize_collect_shot_data_args` so its repr is canonical regardless of
     spelling; `physical_to_logical`'s own top-level key order is incidental, so
     its leaves are repr'd individually into a literal-evaluable `dict[str, str]`
@@ -315,7 +305,7 @@ def _checkpoint_provenance_comment(
     p2l_repr_map = {repr(k): repr(v) for k, v in physical_to_logical.items()}
     return "\n".join(
         [
-            "Checkpoint written by loqs.tools.pygstitools.simulate_dataset_for_edesign.",
+            "Checkpoint written by loqs.tools.pygstitools.EdesignRunner.",
             f"num_shots = {num_shots!r}",
             f"collect_shot_data_args = {normalized_args!r}",
             f"physical_to_logical = {p2l_repr_map!r}",
@@ -323,362 +313,239 @@ def _checkpoint_provenance_comment(
     )
 
 
-def _checkpoint_config_mismatches(
-    comment: str,
-    num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
-    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
-) -> list[str]:
-    """Compare a checkpoint's stored provenance comment against the current
-    call's config, returning the names of any mismatched fields (empty if
-    everything matches). A field missing from `comment` entirely (e.g. an
-    older or hand-edited checkpoint) also counts as a mismatch, rather than
-    being silently skipped.
+class EdesignRunner(MultiProgramRunner):
+    """Runner for simulating edesign circuits into a DataSet with crash recovery.
+
+    Encapsulates all configuration needed to simulate an edesign, including
+    parallel/checkpoint settings, in a serializable object that can be
+    recovered after a crash via `EdesignRunner.read(runner_path).run()`.
+    Checkpoint/resume behavior is controlled by explicit `checkpoint`/`resume`
+    flags applied against on-disk state -- see `MultiProgramRunner.run`.
     """
-    stored: dict[str, str] = {}
-    for line in comment.split("\n"):
-        key, sep, value = line.partition(" = ")
-        if sep:
-            stored[key.strip()] = value
 
-    mismatches = []
-    if stored.get("num_shots") != repr(num_shots):
-        mismatches.append("num_shots")
-    normalized_args = _normalize_collect_shot_data_args(collect_shot_data_args)
-    if stored.get("collect_shot_data_args") != repr(normalized_args):
-        mismatches.append("collect_shot_data_args")
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "edesign",
+        "physical_model",
+        "physical_to_logical",
+        "num_shots",
+        "collect_shot_data_args",
+        "max_frame_limit",
+        "program_kwargs",
+    ]
 
-    current_p2l_repr_map = {
-        repr(k): repr(v) for k, v in physical_to_logical.items()
-    }
-    try:
-        stored_p2l_repr_map = ast.literal_eval(
-            stored.get("physical_to_logical", "")
+    def __init__(
+        self,
+        edesign: ExperimentDesign,
+        physical_model: ExplicitOpModel,
+        physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
+        num_shots: int,
+        collect_shot_data_args: (
+            HistoryDataCollectorLike | list[HistoryDataCollectorLike]
+        ) = ("logical_measurement", -1),
+        item_checkpoint_dir: str | Path | None = None,
+        checkpoint: bool = False,
+        resume: bool = False,
+        force_resume: bool = False,
+        max_frame_limit: int = 100,
+        parallel_strategy: ParallelStrategy | None = None,
+        shot_checkpoint: bool = False,
+        shot_checkpoint_dir: str | Path | None = None,
+        lazy_loading: bool = True,
+        keep_shot_results: bool = False,
+        program_kwargs: dict | None = None,
+        poll_interval: float = 1.0,
+        show_progress: bool = True,
+        runner_filename: str = "runner.h5",
+    ):
+        super().__init__(
+            parallel_strategy=parallel_strategy,
+            item_checkpoint_dir=item_checkpoint_dir,
+            checkpoint=checkpoint,
+            resume=resume,
+            force_resume=force_resume,
+            shot_checkpoint=shot_checkpoint,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading=lazy_loading,
+            keep_shot_results=keep_shot_results,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
+            runner_filename=runner_filename,
         )
-    except (ValueError, SyntaxError):
-        stored_p2l_repr_map = None
-    if stored_p2l_repr_map != current_p2l_repr_map:
-        mismatches.append("physical_to_logical")
+        self.edesign = edesign
+        self.physical_model = physical_model
+        self.physical_to_logical = physical_to_logical
+        self.num_shots = num_shots
+        self.collect_shot_data_args = collect_shot_data_args
+        self.max_frame_limit = max_frame_limit
+        self.program_kwargs = program_kwargs or {}
 
-    return mismatches
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        """Handle encoding of physical_model and edesign."""
+        if attr == "physical_model":
+            # Use pyGSTi's dumps()/loads() pattern
+            return self.physical_model.dumps()
+        elif attr == "edesign":
+            # When item_checkpoint_dir is set, store path string; otherwise tar to base64 str.
+            if self.item_checkpoint_dir is not None:
+                edesign_subdir = self.item_checkpoint_dir / "edesign"
+                if not edesign_subdir.exists():
+                    edesign_subdir.mkdir(parents=True, exist_ok=True)
+                    self.edesign.write(str(edesign_subdir))
+                return str(edesign_subdir)
+            else:
+                # Write to temp directory, tar to bytes, then base64-encode for JSON
+                with TemporaryDirectory() as tmpdir:
+                    self.edesign.write(tmpdir)
+                    tar_bytes = io.BytesIO()
+                    with tarfile.open(fileobj=tar_bytes, mode="w:gz") as tar:
+                        tar.add(tmpdir, arcname="edesign")
+                    # Return as base64-encoded string (JSON-safe)
+                    return base64.b64encode(tar_bytes.getvalue()).decode(
+                        "ascii"
+                    )
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
 
+    @classmethod
+    def _from_decoded_attrs(
+        cls, attr_dict: Mapping[str, Any]
+    ) -> "EdesignRunner":
+        """Reconstruct from decoded attributes."""
+        # Decode physical_model from string
+        if isinstance(attr_dict["physical_model"], str):
+            from pygsti.models import Model
 
-def _outcome_label_to_str(outcome_label: str | tuple) -> str:
-    """Render an outcome label the same way pyGSTi's own text `DataSet` writer
-    does (`pygsti.io.writers.write_dataset`'s private `_outcome_to_str`), so a
-    hand-appended checkpoint row matches what `write_dataset` would have
-    produced for that row.
-    """
-    if isinstance(outcome_label, str):
-        return outcome_label
-    return ":".join(str(part) for part in outcome_label)
-
-
-def _append_checkpoint_row(
-    checkpoint_path: Path,
-    circ: Circuit,
-    count_dict: Mapping[tuple, int],
-) -> None:
-    """Append one circuit's counts as a single self-describing row to an
-    existing checkpoint file, matching pyGSTi's own expanded
-    (`fixed_column_mode=False`, trivial-time) text `DataSet` row format so
-    `pygsti.io.read_dataset` can read it back unchanged. This touches no
-    prior row -- unlike calling `pygsti.io.write_dataset` again, which
-    rewrites the whole file from scratch.
-    """
-    row = circ.str + "  " + "  ".join(
-        f"{_outcome_label_to_str(ol)}:{count:g}"
-        for ol, count in count_dict.items()
-    )
-    with open(checkpoint_path, "a") as f:
-        f.write(row + "\n")
-
-
-def _drop_incomplete_checkpoint_row(checkpoint_path: Path) -> None:
-    """Drop a trailing incomplete line left by a crash mid-write, so the
-    checkpoint file parses as a valid pyGSTi `DataSet` again. Every complete
-    row is written by a single call ending in a newline, so a file that
-    doesn't end in one has a final row that was never finished; that row's
-    circuit is simply absent afterward and gets redone from scratch.
-    """
-    text = checkpoint_path.read_text()
-    if text and not text.endswith("\n"):
-        checkpoint_path.write_text(text.rsplit("\n", 1)[0] + "\n")
-
-
-def simulate_dataset_for_edesign(
-    edesign: ExperimentDesign,
-    physical_model: ExplicitOpModel,
-    physical_to_logical: Mapping[
-        str | tuple, list[InstructionLabelLike]
-    ],
-    num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike] = (
-        "logical_measurement",
-        -1,
-    ),
-    checkpoint_path: str | Path | None = None,
-    resume: bool = False,
-    force_resume: bool = False,
-    max_frame_limit: int = 100,
-    parallel: ParallelStrategy | None = None,
-    **program_kwargs,
-) -> DataSet:
-    """Simulate a pyGSTi edesign directly into a `DataSet`, one circuit at a time.
-
-    Fuses `convert_edesign_to_programs`, [](api:QuantumProgram.run), and
-    `convert_run_programs_to_dataset`'s collection step into a single pass
-    over `edesign.all_circuits_needing_data`: each circuit's program is
-    built, run, and reduced to a row of counts in turn, with the program
-    and its results dropped before the next circuit starts. This bounds
-    peak memory to roughly one circuit's worth of shots, rather than
-    every circuit's `QuantumProgram`/`ProgramResults` at once. Progress is
-    reported with one bar over circuits rather than [](api:QuantumProgram.run)'s
-    own per-shot bar, which would otherwise print once per circuit.
-
-    Passing `parallel` (a [](api:ParallelStrategy)) instead parallelizes
-    across circuits: circuits still needing data are split into
-    `parallel.n_program_chunks` round-robin chunks (so cost drift across
-    the circuit list, e.g. later GST circuits typically being deeper,
-    doesn't concentrate onto a few chunks), and each chunk is
-    built/run/collected as a unit by a worker that pins its own thread
-    pools to one thread before doing any real numerical work.
-    `parallel.program_executor` accepts either a `SubmitExecutor` (e.g.
-    `loky.get_reusable_executor()` or `mpi4py.futures.MPIPoolExecutor`,
-    dispatched with per-chunk progress via `tqdm(as_completed(...))`) or a
-    `MapArrayExecutor` (e.g. a `submitit.Executor`, dispatched via a single
-    bulk `map_array` call with progress reported by polling each job's
-    `.done()`) -- see [](api:ParallelStrategy) for the full field
-    reference, including `parallel.shot_executor` for nested shot-level
-    parallelism within each chunk's own programs. Checkpointing (if
-    `checkpoint_path` is given) still happens from this driving process,
-    once per circuit, as each chunk's results come back -- not from inside
-    the workers themselves; real per-worker parallel checkpointing is
-    tracked separately under #105.
-
-    If `checkpoint_path` is given, each circuit's row is also appended to an
-    on-disk text `DataSet` as soon as it's computed, so a crash partway through
-    doesn't lose already-completed circuits. `resume` and `force_resume` are
-    two independent gates: `resume=True` is required to continue from an
-    existing checkpoint at all (with `checkpoint_path` present but
-    `resume=False`, this raises rather than silently overwriting or ignoring
-    it); `force_resume=True` additionally bypasses a mismatch between the
-    checkpoint's stored `num_shots`/`collect_shot_data_args`/`physical_to_logical`
-    and this call's own, which is otherwise a hard error. A circuit already
-    present in the checkpoint is trusted as complete and never redone; one
-    left incomplete by a crash mid-write (a truncated last line) is dropped
-    and redone from scratch, never resumed partway through its own shots.
-
-    Parameters
-    ----------
-    edesign : ExperimentDesign
-        pyGSTi `ExperimentDesign` to simulate.
-
-    physical_model : ExplicitOpModel
-        pyGSTi model for the edesign. Currently only used
-        for `physical_model.complete_circuit`, to be removed soon.
-
-    physical_to_logical : Mapping[str | tuple, list[InstructionLabelLike]]
-        A mapping from pyGSTi physical circuit labels to
-        [](api:InstructionStackLike) to build up
-        the [](api:InstructionStack) for each circuit's program.
-
-    num_shots : int
-        Number of shots to run for each circuit.
-
-    collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
-        The [](api:HistoryDataCollector) recipe(s) used to extract outcomes
-        from each shot. See `convert_run_programs_to_dataset` for the
-        single-recipe vs. multi-recipe list behavior, by default
-        `("logical_measurement", -1)`.
-
-    checkpoint_path : str | Path | None, optional
-        Where to incrementally write a row-per-circuit checkpoint `DataSet`.
-        If `None` (default), no checkpoint is written and `resume`/`force_resume`
-        are unused.
-
-    resume : bool, optional
-        Whether to continue from an existing checkpoint at `checkpoint_path`,
-        by default `False`. If `checkpoint_path` exists and `resume` is
-        `False`, this raises `FileExistsError` rather than overwriting or
-        ignoring it. Has no effect if `checkpoint_path` doesn't exist yet.
-
-    force_resume : bool, optional
-        Whether to proceed despite a config mismatch between the checkpoint
-        being resumed and this call's own `num_shots`/`collect_shot_data_args`/
-        `physical_to_logical`, by default `False`. Only relevant when `resume`
-        is `True` and `checkpoint_path` already exists.
-
-    max_frame_limit : int, optional
-        Forwarded to each circuit's [](api:QuantumProgram.run). Defaults to
-        `QuantumProgram.run`'s own default (100); circuits deep enough to need
-        more frames than that should raise this explicitly, or they will be
-        silently truncated and then fail during outcome collection.
-
-    parallel : ParallelStrategy | None, optional
-        Parallelizes across circuits when given -- see
-        [](api:ParallelStrategy) for its `program_executor`/
-        `n_program_chunks`/`shot_executor` fields. Defaults to `None`,
-        which runs circuits serially (still honoring
-        `parallel.shot_executor` if a `ParallelStrategy` with only that
-        field set is passed, for shot-level-only parallelism).
-
-    **program_kwargs : Any
-        Any additional kwargs that should be passed to each circuit's
-        [](api:QuantumProgram).
-
-    Returns
-    -------
-    DataSet
-        A pyGSTi `DataSet` with one row of counts per circuit in
-        `edesign.all_circuits_needing_data`.
-    """
-    if checkpoint_path is not None:
-        checkpoint_path = Path(checkpoint_path)
-    if resume and checkpoint_path is None:
-        raise ValueError("checkpoint_path is required when resume=True.")
-
-    if checkpoint_path is not None and checkpoint_path.exists():
-        if not resume:
-            raise FileExistsError(
-                f"Checkpoint {checkpoint_path} already exists. Either remove "
-                "or move it, or pass resume=True to continue from it."
+            attr_dict["physical_model"] = Model.loads(
+                attr_dict["physical_model"]
             )
 
-        _drop_incomplete_checkpoint_row(checkpoint_path)
-        loaded_ds = read_dataset(str(checkpoint_path), verbosity=0)
+        # Decode edesign: dispatch based on how it was encoded, which depended on
+        # item_checkpoint_dir at encode time. If item_checkpoint_dir was None,
+        # edesign was base64-tar-encoded; otherwise it's a directory path string.
+        if attr_dict.get("edesign") is not None:
+            edesign_value = attr_dict["edesign"]
+            # Check item_checkpoint_dir to determine encoding: mirrors the encode-time
+            # dispatch in _get_encoding_attr (which checks self.item_checkpoint_dir).
+            if attr_dict.get("item_checkpoint_dir") is None:
+                # Was encoded as base64-tar: decode, extract, and load
+                tar_bytes = base64.b64decode(edesign_value.encode("ascii"))
+                with TemporaryDirectory() as tmpdir:
+                    with tarfile.open(
+                        fileobj=io.BytesIO(tar_bytes), mode="r:gz"
+                    ) as tar:
+                        tar.extractall(tmpdir, filter="data")
+                    # The tar was created with arcname="edesign", so extract into that subdir
+                    edesign_dir = Path(tmpdir) / "edesign"
+                    attr_dict["edesign"] = ExperimentDesign.from_dir(
+                        str(edesign_dir)
+                    )
+            else:
+                # Was encoded as directory path; load directly
+                attr_dict["edesign"] = ExperimentDesign.from_dir(edesign_value)
 
-        mismatches = _checkpoint_config_mismatches(
-            loaded_ds.comment, num_shots, collect_shot_data_args, physical_to_logical
-        )
-        if mismatches and not force_resume:
-            raise ValueError(
-                f"Cannot resume: the checkpoint at {checkpoint_path} was "
-                f"written with a different {', '.join(mismatches)} than this "
-                "call. Pass force_resume=True to resume anyway."
-            )
+        return super()._from_decoded_attrs(attr_dict)
 
-        ds = loaded_ds.copy_nonstatic()
-        ds.comment = loaded_ds.comment
-    elif checkpoint_path is not None:
+    def _get_items(self) -> Sequence:
+        """Return circuits needing data."""
+        return self.edesign.all_circuits_needing_data
+
+    def _item_key_fn(self) -> Callable[[Circuit], str] | None:
+        """Use circuit string representation as stable identity when checkpointing."""
+        if self.checkpoint:
+            return lambda c: c.str
+        return None
+
+    def _process_item_fn(self) -> Callable:
+        """Return the _run_one_circuit function."""
+        return _run_one_circuit
+
+    def _static_kwargs(self) -> dict[str, Any]:
+        """Return static kwargs for _run_one_circuit."""
+        label_to_logical = {
+            Label(k): v for k, v in self.physical_to_logical.items()
+        }
+        return {
+            "physical_model": self.physical_model,
+            "label_to_logical": label_to_logical,
+            "num_shots": self.num_shots,
+            "collect_shot_data_args": self.collect_shot_data_args,
+            "max_frame_limit": self.max_frame_limit,
+            "program_kwargs": self.program_kwargs,
+            "shot_checkpoint_dir": self.shot_checkpoint_dir,
+            "checkpoint": self.shot_checkpoint,
+            "force_resume": self.force_resume,
+            "lazy_loading": self.lazy_loading,
+        }
+
+    def _finalize(self) -> Any:
+        """Build and return the final DataSet from `_reduced_results`.
+
+        Iterates through circuits in original order, mapping each to its
+        index via `index_map` (if set), looks up its count_dict in
+        `_reduced_results`, and adds it to a fresh DataSet. Sets the
+        DataSet's comment via `_checkpoint_provenance_comment` if
+        checkpointing is enabled, and writes it once to disk if
+        `item_checkpoint_dir` is set.
+        """
+        # Build the final DataSet
         n_keys = (
-            len(collect_shot_data_args)
-            if isinstance(collect_shot_data_args, list)
+            len(self.collect_shot_data_args)
+            if isinstance(self.collect_shot_data_args, list)
             else 1
         )
         ds = DataSet()
         ds.add_std_nqubit_outcome_labels(n_keys)
-        ds.comment = _checkpoint_provenance_comment(
-            num_shots, collect_shot_data_args, physical_to_logical
-        )
-        write_dataset(
-            str(checkpoint_path), ds, fixed_column_mode=False, with_times=False
-        )
-    else:
-        ds = DataSet()
 
-    label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
+        # Iterate through circuits in original order
+        for pos, circ in enumerate(self._get_items()):
+            # Determine index: use index_map if set, else plain position
+            if self.index_map is not None:
+                index = self.index_map[circ.str]
+            else:
+                index = pos
 
-    circuits = edesign.all_circuits_needing_data
+            # Get count_dict from _reduced_results
+            if index in self._reduced_results:
+                count_dict = self._reduced_results[index]
+                ds.add_count_dict(circ, count_dict)
 
-    if parallel is None or not parallel.is_chunked:
-        shot_executor = resolve_shot_executor(
-            parallel.shot_executor if parallel is not None else None
-        )
-        for circ in tqdm(circuits, desc="Simulating edesign circuits"):
-            if checkpoint_path is not None and circ in ds:
-                continue
-
-            program = _build_program_for_circuit(
-                circ, physical_model, label_to_logical, **program_kwargs
+        # Set comment if checkpointing is enabled
+        if self.item_checkpoint_dir is not None:
+            ds.comment = _checkpoint_provenance_comment(
+                self.num_shots,
+                self.collect_shot_data_args,
+                self.physical_to_logical,
             )
-            program_results = program.run(
-                num_shots,
-                max_frame_limit=max_frame_limit,
-                shot_executor=shot_executor,
-                verbose=False,
+            # Write dataset once to disk
+            dataset_path = self.item_checkpoint_dir / "dataset.txt"
+            dataset_path.parent.mkdir(parents=True, exist_ok=True)
+            write_dataset(
+                str(dataset_path),
+                ds,
+                fixed_column_mode=False,
+                with_times=False,
             )
-
-            outcomes = _collect_program_outcomes(
-                program_results, collect_shot_data_args
-            )
-            counts = Counter(outcomes)
-            count_dict = {(str(k),): v for k, v in counts.items()}
-
-            ds.add_count_dict(circ, count_dict)
-            if checkpoint_path is not None:
-                _append_checkpoint_row(checkpoint_path, circ, count_dict)
-
-            # Drop references so the program/results are collectible before
-            # the next circuit, bounding peak memory across the whole edesign.
-            del program, program_results
 
         return ds
 
-    return _run_program_level_parallel(
-        ds,
-        circuits,
-        checkpoint_path,
-        parallel,
-        physical_model,
-        label_to_logical,
-        num_shots,
-        collect_shot_data_args,
-        max_frame_limit,
-        program_kwargs,
-    )
+    def _desc(self) -> str:
+        """Return description for progress bar."""
+        return "Simulating circuits"
 
+    def _mismatch_check_fields(self) -> list[str]:
+        """Return fields to check for resume mismatch."""
+        return [
+            "num_shots",
+            "collect_shot_data_args",
+            "physical_to_logical",
+            "max_frame_limit",
+            "keep_shot_results",
+        ]
 
-def _run_program_level_parallel(
-    ds: DataSet,
-    circuits: Sequence[Circuit],
-    checkpoint_path: Path | None,
-    parallel: ParallelStrategy,
-    physical_model: ExplicitOpModel,
-    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
-    num_shots: int,
-    collect_shot_data_args: HistoryDataCollectorLike
-    | list[HistoryDataCollectorLike],
-    max_frame_limit: int,
-    program_kwargs: dict,
-) -> DataSet:
-    """`simulate_dataset_for_edesign`'s program-level parallel path: chunk
-    whatever circuits still need data, dispatch one worker call per chunk
-    via `parallel`, then checkpoint/collect results into `ds` from this
-    driving process as each chunk comes back.
-    """
-    circuits_to_run = [
-        circ
-        for circ in circuits
-        if checkpoint_path is None or circ not in ds
-    ]
-    if not circuits_to_run:
-        return ds
-
-    chunks = parallel.make_chunks(circuits_to_run)
-    worker = functools.partial(
-        _process_circuit_chunk_worker,
-        physical_model,
-        label_to_logical,
-        num_shots,
-        collect_shot_data_args,
-        max_frame_limit,
-        program_kwargs,
-        shot_executor=parallel.shot_executor,
-    )
-    chunk_results = parallel.dispatch(
-        worker, chunks, desc="Simulating edesign circuit chunks"
-    )
-
-    for chunk_result in chunk_results:
-        for circ, count_dict in chunk_result:
-            ds.add_count_dict(circ, count_dict)
-            if checkpoint_path is not None:
-                _append_checkpoint_row(checkpoint_path, circ, count_dict)
-
-    return ds
+    def _shot_checkpoint_subdir_prefix(self) -> str | None:
+        """circ_{index}"""
+        return "circ"
 
 
 ## BEGIN VISUALIZATION TOOLS
