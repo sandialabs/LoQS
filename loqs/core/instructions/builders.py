@@ -1087,7 +1087,7 @@ def build_physical_circuit_instruction(
                 # qubit index, so STIM infers exactly `len(qubits)`
                 # qubits regardless of which qubit the error targets.
                 padded_str = (
-                    f"QUBIT_COORDS(0, 0) {n - 1}\n{error[1]} {error[2]}\nTICK\n"
+                    f"QUBIT_COORDS(0, 0) {qubits[n - 1]}\n{error[1]} {qubits[error[2]]}\nTICK\n"
                     if n
                     else f"{error[1]} {error[2]}\nTICK\n"
                 )

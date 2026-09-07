@@ -547,8 +547,10 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     if entries[0] in self._stim_twoq_gates:
                         # Handle the case where multiple 2Q gates are defined on one line
                         for i in range(1, len(entries[1:]), 2):
-                            stim_idx1 = int(entries[i])
-                            stim_idx2 = int(entries[i + 1])
+                            # Strip inverted-target prefix; it does not
+                            # change which physical qubit is targeted.
+                            stim_idx1 = int(entries[i].lstrip("!"))
+                            stim_idx2 = int(entries[i + 1].lstrip("!"))
                             circuit_locations.append(
                                 (
                                     lidx + 1,
@@ -560,7 +562,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                             )
                 else:
                     circuit_locations.extend(
-                        [(lidx, int(q)) for q in entries[1:]]
+                        [(lidx, int(q.lstrip("!"))) for q in entries[1:]]
                     )
         return circuit_locations
 

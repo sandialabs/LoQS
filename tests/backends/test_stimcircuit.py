@@ -665,6 +665,18 @@ class TestSTIMPhysicalCircuitQueries(unittest.TestCase):
             self.assertIn(qubit_info[0], [0, 1])
             self.assertIn(qubit_info[1], [0, 1])
 
+    def test_get_possible_discrete_error_locations_inverted_target(self):
+        # An inverted target ("!") flips the recorded outcome, not the
+        # measured qubit, so this should resolve like plain "M 0".
+        circ = STIMPhysicalCircuit("M !0\nTICK", ['Q0'])
+
+        locations = circ.get_possible_discrete_error_locations()
+
+        self.assertEqual(len(locations), 1)
+        _, qubit_info = locations[0]
+        self.assertEqual(qubit_info, 0)
+        self.assertIsInstance(qubit_info, int)
+
     def test_edge_cases(self):
         # Test various edge cases
 

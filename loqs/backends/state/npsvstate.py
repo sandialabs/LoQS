@@ -236,9 +236,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
     ) -> tuple[str | None, str | None]:
         """Initialize from an existing NumpyStatevectorQuantumState.
 
-        Copies the state's internal array, qubit labels, RNG, and dimensions,
-        inheriting kraus_sampling and contraction modes if not explicitly
-        provided. Returns the resolved modes for assignment in __init__.
+        Adopts the state's internal array, qubit labels, RNG, and dimensions
+        by reference (not copies), inheriting kraus_sampling and contraction
+        modes if not explicitly provided. Returns the resolved modes for
+        assignment in __init__.
         """
         self._state = state._state
         self.qubit_labels = state.qubit_labels
@@ -271,7 +272,10 @@ class NumpyStatevectorQuantumState(BaseQuantumState):
                 return len(state.shape)
             else:
                 if isinstance(d, int):
-                    return int(np.round(np.log2(state.flatten().shape[0])))
+                    # Base-d logarithm: works for qubits (d=2) and qudits alike.
+                    return int(
+                        np.round(np.log(state.flatten().shape[0]) / np.log(d))
+                    )
                 else:
                     return len(d)
         elif isinstance(state, Sequence) and not isinstance(state, str):

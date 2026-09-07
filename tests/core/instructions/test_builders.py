@@ -224,10 +224,9 @@ class TestPatchBuilderAndRemoverInstructions:
 
 
 class TestPhysicalCircuitInstructionSTIM:
-    """Regression test for a `not is_backend_available("stim_state")`
-    inversion bug in `build_physical_circuit_instruction.<locals>.apply_fn`
-    that silently prevented `applied_stim_circuit_str` from ever being
-    recorded on the output `Frame` for a real `STIMQuantumState`.
+    """Regression tests for STIM-backend `build_physical_circuit_instruction`
+    bugs, including frame recording, error injection alignment, and qubit
+    label mapping.
     """
 
     def test_applied_stim_circuit_str_is_populated(self):
@@ -305,3 +304,58 @@ class TestPhysicalCircuitInstructionSTIM:
         assert outcomes["Q0"] == [1]
         assert outcomes["Q1"] == [0]
         assert outcomes["Q2"] == [0]
+
+    def test_error_injection_targets_correct_qubit_with_non_positional_labels(
+        self,
+    ):
+        """Regression test for a bug where the STIM error-injection padding
+        string interpolated raw positional indices instead of the qubits'
+        own labels. When a label happens to collide with an unrelated
+        qubit's own positional index (e.g. `qubit_labels = ["2", "0", "1"]`),
+        that collision silently remapped the injected error onto the wrong
+        physical qubit.
+        """
+        pytest.importorskip("stim")
+        from loqs.backends import STIMQuantumState, DictNoiseModel
+        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        from loqs.backends.reps import (
+            StimCircuitGateRep,
+            ZBasisProjectionInstrumentRep,
+        )
+
+        # Labels are small integers (as strings) that do NOT match their
+        # own position: label "2" is at position 0, "0" is at position 1,
+        # and "1" is at position 2.
+        qubits = ["2", "0", "1"]
+        circuit = STIMPhysicalCircuit("M 2 0 1\nTICK", qubits)
+        inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("2",))}
+        model = DictNoiseModel(
+            {"X": "X 0"},
+            inst_dict,
+            gatereps=[StimCircuitGateRep],
+            instreps=[ZBasisProjectionInstrumentRep],
+        )
+        state = STIMQuantumState(3, qubits)
+
+        inst = builders.build_physical_circuit_instruction(
+            circuit=circuit, name="PhysCirc STIM"
+        )
+        # Inject an "X" error at position index 1, which is qubit label
+        # "0" -- with the raw-index bug, the padding string's own digit
+        # tokens collide with unrelated labels, silently remapping this
+        # error onto qubit "1" instead.
+        frame = inst.apply(
+            model=model,
+            circuit=circuit,
+            state=state,
+            inplace=True,
+            error_injections=[(0, "X", 1)],
+            pauli_frame_update=None,
+            patch_label="L0",
+            patches=PatchLayout(),
+        )
+
+        outcomes = frame["measurement_outcomes"]
+        assert outcomes["0"] == [1]
+        assert outcomes["1"] == [0]
+        assert outcomes["2"] == [0]
