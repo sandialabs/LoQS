@@ -1081,8 +1081,18 @@ def build_physical_circuit_instruction(
         for error in rev_sorted_errors:
             circuit_backend = type(circuit)
             if isinstance(circuit, STIMPhysicalCircuit):
+                n = len(qubits)
+                # Prepend a `QUBIT_COORDS` annotation (not a gate, so
+                # never resolved against the noise model) on the highest
+                # qubit index, so STIM infers exactly `len(qubits)`
+                # qubits regardless of which qubit the error targets.
+                padded_str = (
+                    f"QUBIT_COORDS(0, 0) {n - 1}\n{error[1]} {error[2]}\nTICK\n"
+                    if n
+                    else f"{error[1]} {error[2]}\nTICK\n"
+                )
                 error_circuit = circuit_backend(
-                    f"{error[1]} {error[2]}\nTICK\n", qubit_labels=qubits
+                    padded_str, qubit_labels=qubits
                 )
             else:
                 error_circuit = circuit_backend(

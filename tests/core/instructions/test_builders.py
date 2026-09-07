@@ -258,3 +258,50 @@ class TestPhysicalCircuitInstructionSTIM:
         assert applied_str is not None
         assert applied_str == str(frame["state"].latest_applied_circuit)
         assert "H 0" in applied_str
+
+    def test_error_injection_on_non_highest_qubit_does_not_raise(self):
+        """Regression test for a bug where injecting an error onto any
+        qubit other than the circuit's highest-indexed one raised
+        `ValueError`, since STIM infers `num_qubits` from the highest
+        qubit index explicitly referenced in the injected error's own
+        circuit string, which then mismatched `qubit_labels`.
+        """
+        pytest.importorskip("stim")
+        from loqs.backends import STIMQuantumState, DictNoiseModel
+        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+        from loqs.backends.reps import (
+            StimCircuitGateRep,
+            ZBasisProjectionInstrumentRep,
+        )
+
+        qubits = ["Q0", "Q1", "Q2"]
+        circuit = STIMPhysicalCircuit("M 0 1 2\nTICK", qubits)
+        inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
+        model = DictNoiseModel(
+            {"X": "X 0"},
+            inst_dict,
+            gatereps=[StimCircuitGateRep],
+            instreps=[ZBasisProjectionInstrumentRep],
+        )
+        state = STIMQuantumState(3, qubits)
+
+        inst = builders.build_physical_circuit_instruction(
+            circuit=circuit, name="PhysCirc STIM"
+        )
+        # Inject an "X" error on qubit index 0, which is not the highest
+        # qubit index (2) referenced elsewhere in the circuit.
+        frame = inst.apply(
+            model=model,
+            circuit=circuit,
+            state=state,
+            inplace=True,
+            error_injections=[(0, "X", 0)],
+            pauli_frame_update=None,
+            patch_label="L0",
+            patches=PatchLayout(),
+        )
+
+        outcomes = frame["measurement_outcomes"]
+        assert outcomes["Q0"] == [1]
+        assert outcomes["Q1"] == [0]
+        assert outcomes["Q2"] == [0]
