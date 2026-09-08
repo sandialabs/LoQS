@@ -697,6 +697,51 @@ class TestRunParallel:
             # Verify correct shot count
             assert len(pr.shot_histories) == 10
 
+    def test_keep_shot_results_parallel_forces_checkpoint_read_write_race(
+        self, tmp_path
+    ):
+        """Same mechanism as test_keep_shot_results_parallel, but with an
+        aggressively short poll_interval so the driver's shots-progress
+        poll (reading each item's results.h5) collides with a worker's own
+        checkpoint flush (appending to that same file) on essentially every
+        batch, rather than relying on natural timing to hit the race only
+        occasionally."""
+        loky = pytest.importorskip("loky")
+
+        strengths = [0.0, 0.1, 0.2, 0.3]
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+
+        runner = make_runner(
+            strengths,
+            seed_stride=30,
+            base_seed=7,
+            num_shots=30,
+            verbose=False,
+            parallel_strategy=strategy,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            shot_checkpoint=True,
+            keep_shot_results=True,
+            lazy_loading=False,
+            poll_interval=0.001,
+        )
+        result = runner.run()
+
+        assert result.is_complete
+        assert len(result.failure_rates) == len(strengths)
+        assert all(fr is not None for fr in result.failure_rates)
+        assert len(runner._program_results) == len(strengths)
+        for sweep_index in range(len(strengths)):
+            pr = runner._program_results[sweep_index]
+            assert len(pr.shot_histories) == 30
+
 
 class TestResume:
     def test_skips_completed_points_and_matches_uninterrupted_run(self, tmp_path):

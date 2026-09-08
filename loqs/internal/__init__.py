@@ -11,7 +11,13 @@
 
 import os
 import socket
+import time
 import warnings
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import h5py
 
 try:
     from threadpoolctl import threadpool_limits
@@ -59,3 +65,44 @@ def pin_worker_threads() -> None:
             "cannot be limited to avoid oversubscription. Install "
             "loqs[parallel] or loqs[mpi]."
         )
+
+
+def _retry_hdf5_write(
+    worker_file_path: Path,
+    write_fn: Callable[[h5py.File], None],
+    max_retries: int = 5,
+) -> None:
+    """Open `worker_file_path` in append mode and call `write_fn(f)`, retrying with
+    exponential backoff on transient HDF5 locking errors (`BlockingIOError`/`OSError`).
+    """
+    for attempt in range(max_retries):
+        try:
+            with h5py.File(worker_file_path, "a") as f:
+                write_fn(f)
+            break
+        except (BlockingIOError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep(0.01 * (2**attempt))
+            else:
+                raise
+
+
+def _retry_hdf5_read(
+    filename: Path,
+    read_fn: Callable[[h5py.File], Any],
+    max_retries: int = 5,
+) -> Any:
+    """Open `filename` read-only and call `read_fn(f)`, retrying with the
+    same exponential backoff as `_retry_hdf5_write` on transient HDF5
+    locking errors (`BlockingIOError`/`OSError`). Kept separate from that
+    helper since it can't use its append-mode-only open.
+    """
+    for attempt in range(max_retries):
+        try:
+            with h5py.File(filename, "r") as f:
+                return read_fn(f)
+        except (BlockingIOError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep(0.01 * (2**attempt))
+            else:
+                raise

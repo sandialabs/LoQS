@@ -11,7 +11,7 @@ from typing import ClassVar
 import pytest
 
 from loqs.core.programresults import _resolve_checkpoint_object_group
-from loqs.internal import worker_id
+from loqs.internal import _retry_hdf5_write, worker_id
 from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
@@ -1431,6 +1431,58 @@ class TestMergeReducedResult:
         runner._merge_reduced_result(10, "reduced_10_should_be_ignored")
         assert runner._reduced_results[10] == "reduced_10"
         assert len(open_calls) == 1
+
+
+class TestRetryHdf5Write:
+    """Unit tests for `loqs.internal._retry_hdf5_write`, the shared
+    exponential-backoff retry helper every HDF5 checkpoint-write call site
+    (across both ProgramResults and MultiProgramRunner) funnels through to
+    tolerate a transient concurrent-reader lock conflict."""
+
+    def test_retries_on_blocking_io_error_then_succeeds(
+        self, tmp_path, monkeypatch
+    ):
+        """The first two opens raise BlockingIOError; the third succeeds
+        and write_fn actually runs."""
+        target = tmp_path / "retry_target.h5"
+        real_file = h5py.File
+        call_count = {"n": 0}
+
+        def flaky_file(path, mode, *args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                raise BlockingIOError("simulated transient lock")
+            return real_file(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(h5py, "File", flaky_file)
+
+        written = []
+        _retry_hdf5_write(
+            target, lambda f: written.append(True), max_retries=5
+        )
+
+        assert call_count["n"] == 3
+        assert written == [True]
+
+    def test_reraises_after_max_retries_exhausted(
+        self, tmp_path, monkeypatch
+    ):
+        """Every open raises BlockingIOError; once max_retries is
+        exhausted, the original error propagates rather than being
+        swallowed."""
+        target = tmp_path / "retry_target_always_fails.h5"
+        call_count = {"n": 0}
+
+        def always_fails(path, mode, *args, **kwargs):
+            call_count["n"] += 1
+            raise BlockingIOError("simulated persistent lock")
+
+        monkeypatch.setattr(h5py, "File", always_fails)
+
+        with pytest.raises(BlockingIOError):
+            _retry_hdf5_write(target, lambda f: None, max_retries=3)
+
+        assert call_count["n"] == 3
 
 
 class TestIndexMapPersistence:

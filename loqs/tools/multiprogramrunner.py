@@ -15,7 +15,6 @@ import copy
 import functools
 import h5py
 import itertools
-import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
@@ -26,7 +25,7 @@ from loqs.core.programresults import (
     _resolve_checkpoint_object_group,
     _reset_empty_groups_format_dict_attr,
 )
-from loqs.internal import pin_worker_threads, worker_id
+from loqs.internal import _retry_hdf5_write, pin_worker_threads, worker_id
 from loqs.internal.serializable import Serializable, ResolvingDecodeCache
 from loqs.internal.streamingmerge import (
     get_dict_attr_keys,
@@ -577,7 +576,8 @@ class MultiProgramRunner(Serializable):
             return
 
         runner_path = self.item_checkpoint_dir / self.runner_filename
-        with h5py.File(runner_path, "a") as f:
+
+        def _write(f: h5py.File) -> None:
             obj_grp = _get_runner_object_group(f)
             merge_dict_attr(
                 obj_grp,
@@ -586,6 +586,8 @@ class MultiProgramRunner(Serializable):
                 key_use_dataset=True,
                 value_use_dataset=False,
             )
+
+        _retry_hdf5_write(runner_path, _write)
 
     # Hook methods -- subclasses implement these
     def _get_items(self) -> Sequence:
@@ -959,26 +961,6 @@ def _consolidate_worker_files(
             # Transient lock conflict, missing attribute, or file corruption;
             # skip this file for now (will be retried on next consolidation call)
             continue
-
-
-def _retry_hdf5_write(
-    worker_file_path: Path,
-    write_fn: Callable[[h5py.File], None],
-    max_retries: int = 5,
-) -> None:
-    """Open `worker_file_path` in append mode and call `write_fn(f)`, retrying with
-    exponential backoff on transient HDF5 locking errors (`BlockingIOError`/`OSError`).
-    """
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(worker_file_path, "a") as f:
-                write_fn(f)
-            break
-        except (BlockingIOError, OSError):
-            if attempt < max_retries - 1:
-                time.sleep(0.01 * (2**attempt))
-            else:
-                raise
 
 
 def _write_dict_entry_with_retry(

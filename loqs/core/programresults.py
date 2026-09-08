@@ -17,7 +17,12 @@ from typing import Any, ClassVar
 from pathlib import Path
 import h5py
 
-from loqs.internal import Displayable, Serializable
+from loqs.internal import (
+    Displayable,
+    Serializable,
+    _retry_hdf5_read,
+    _retry_hdf5_write,
+)
 from loqs.internal.serializable import ResolvingDecodeCache
 from loqs.core.history import (
     History,
@@ -394,8 +399,12 @@ class ProgramResults(Displayable):
         # a resuming call not re-derive a fresh config from a possibly-different self)
         if not results_path.exists():
             Serializable.write(self, results_path, format="hdf5")
-            with h5py.File(results_path, "a") as f:
-                _reset_empty_groups_format_dict_attr(f, "shot_histories")
+            _retry_hdf5_write(
+                results_path,
+                lambda f: _reset_empty_groups_format_dict_attr(
+                    f, "shot_histories"
+                ),
+            )
 
         # Always reassign parent_program to the results.h5 path (whether or not
         # we just wrote it), so _build_encode_cache_from_parent_program works
@@ -683,11 +692,15 @@ class ProgramResults(Displayable):
         if not unwritten_shot_histories:
             return  # No data to write
 
-        # Write to HDF5 file using standard Serializable encoding
-        with h5py.File(
-            filename, "a"
-        ) as f:  # 'a' mode allows appending to existing files
-            self._write_shot_entries(f, unwritten_shot_histories.items())
+        # Write to HDF5 file using standard Serializable encoding, retrying
+        # with backoff since a concurrent reader (e.g. a driver's progress
+        # poll) may transiently hold this same file's lock.
+        _retry_hdf5_write(
+            filename,
+            lambda f: self._write_shot_entries(
+                f, unwritten_shot_histories.items()
+            ),
+        )
 
     def _write_shot_entries(
         self, h5_file: h5py.File, entries: Iterable[tuple[int, History]]
@@ -940,7 +953,8 @@ class ProgramResults(Displayable):
         filename:
             Path to the checkpoint file to load.
         """
-        with h5py.File(filename, "r") as f:
+
+        def _load(f: h5py.File) -> None:
             # Use standard Serializable decoding to load the ProgramResults.
             # A ResolvingDecodeCache is required since a shot may reference
             # content already embedded earlier in this same file.
@@ -984,6 +998,8 @@ class ProgramResults(Displayable):
                     # Don't add to unwritten_shots since it's already checkpointed
                     if shot_index in self._unwritten_shots:
                         self._unwritten_shots.remove(shot_index)
+
+        _retry_hdf5_read(filename, _load)
 
     def consolidate_checkpoints(
         self,
@@ -1040,7 +1056,7 @@ class ProgramResults(Displayable):
         # Merge each worker file directly into output_file (created if
         # missing), deduplicating against already-merged keys so a retry
         # never double-counts.
-        with h5py.File(output_file, "a") as out_f:
+        def _do_merge(out_f: h5py.File) -> None:
             for worker_file in worker_files:
                 # Read already-merged keys from output_file so we can skip
                 # duplicates and avoid corrupt entries on a retry
@@ -1067,15 +1083,21 @@ class ProgramResults(Displayable):
                 if delete_originals:
                     worker_file.unlink()
 
+        _retry_hdf5_write(output_file, _do_merge)
+
         # Ensure output_file has valid structure even if no workers were present
         needs_init = not output_file.exists()
         if not needs_init:
-            with h5py.File(output_file, "r") as check_f:
-                needs_init = len(check_f.keys()) == 0
+            needs_init = _retry_hdf5_read(
+                output_file, lambda check_f: len(check_f.keys()) == 0
+            )
         if needs_init:
-            with h5py.File(output_file, "a") as out_f:
+
+            def _init(out_f: h5py.File) -> None:
                 if len(out_f.keys()) == 0:
                     self._write_shot_entries(out_f, iter(()))
+
+            _retry_hdf5_write(output_file, _init)
 
         return output_file
 
