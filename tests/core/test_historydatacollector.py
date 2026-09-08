@@ -6,6 +6,56 @@ from loqs.core import Frame, History, ProgramResults
 from loqs.core.historydatacollector import HistoryDataCollector
 
 
+class TestSerialization:
+    """Test HistoryDataCollector serialization round-trips."""
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_default_fields_roundtrip(self, format, make_temp_path):
+        """Default field values survive write/read cycle."""
+        hdc = HistoryDataCollector(key="logical_measurement")
+        with make_temp_path(suffix=f".{format}") as f_path:
+            hdc.write(f_path)
+            loaded = HistoryDataCollector.read(f_path)
+        assert loaded == hdc
+        assert loaded.key == "logical_measurement"
+        assert loaded.indices == -1
+        assert loaded.frame_filter is None
+        assert loaded.strip_none_entries is False
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_all_kwargs_populated_roundtrip(self, format, make_temp_path):
+        """All fields explicitly set survive write/read cycle."""
+        hdc = HistoryDataCollector(
+            key="val",
+            indices="all",
+            frame_filter={"patch_label": "L0"},
+            strip_none_entries=True,
+        )
+        with make_temp_path(suffix=f".{format}") as f_path:
+            hdc.write(f_path)
+            loaded = HistoryDataCollector.read(f_path)
+        assert loaded == hdc
+        assert loaded.key == "val"
+        assert loaded.indices == "all"
+        assert loaded.frame_filter == {"patch_label": "L0"}
+        assert loaded.strip_none_entries is True
+
+    @pytest.mark.parametrize("format", ["json", "hdf5"])
+    def test_frame_filter_dict_roundtrip(self, format, make_temp_path):
+        """Complex frame_filter dict survives serialization."""
+        hdc = HistoryDataCollector(
+            key="counter",
+            indices=[0, 2, 3],
+            frame_filter={"patch_label": "L1", "outcome": 1},
+            strip_none_entries=False,
+        )
+        with make_temp_path(suffix=f".{format}") as f_path:
+            hdc.write(f_path)
+            loaded = HistoryDataCollector.read(f_path)
+        assert loaded == hdc
+        assert loaded.frame_filter == {"patch_label": "L1", "outcome": 1}
+
+
 class TestFromRaw:
 
     def test_bare_str(self):

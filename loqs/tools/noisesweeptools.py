@@ -381,7 +381,7 @@ class NoiseSweepRunner(MultiProgramRunner):
 
         self.num_shots = num_shots
         self.collect_shot_data_args = collect_shot_data_args
-        self.expected_outcomes = expected_outcomes
+        self.expected_outcomes = tuple(expected_outcomes)
         self.verbose = verbose
         self.metadata = metadata or {}
         self.run_kwargs = run_kwargs
@@ -735,10 +735,16 @@ class NoiseSweepRunner(MultiProgramRunner):
             "base_seed",
             "_resolved_seed_stride",
             "num_shots",
-            "collect_shot_data_args",
+            "_normalized_collect_shot_data_args",
             "expected_outcomes",
             "keep_shot_results",
         ]
+
+    def _mismatch_field_display_name(self, field: str) -> str:
+        """Map internal comparison-only field names to public names."""
+        if field == "_resolved_seed_stride":
+            return "seed_stride"
+        return super()._mismatch_field_display_name(field)
 
     def _shot_checkpoint_subdir_prefix(self) -> str | None:
         """point_{index}"""

@@ -5,100 +5,25 @@ import multiprocessing as mp
 import sys
 import time
 
+import numpy as np
 import pytest
 
 pygsti = pytest.importorskip("pygsti")
 stim = pytest.importorskip("stim")
 
 from loqs.backends import PyGSTiPhysicalCircuit
-from loqs.core import QuantumProgram
+from loqs.core import Frame, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools import fttools
 from loqs.tools.paralleltools import ParallelStrategy
 
-
-def _build_shot_executor():
-    """Module-level factory (not a closure) building a fresh loky
-    executor -- a picklable `shot_executor` factory for hybrid
-    shot-/program-level parallelism tests."""
-    import loky
-
-    return loky.get_reusable_executor(max_workers=1)
-
-
-def _wait_for_index_checkpointed(
-    item_checkpoint_dir, index, timeout=30.0, poll_interval=0.02
-):
-    """Poll `item_checkpoint_dir`'s on-disk checkpoint state (runner.h5 plus
-    any worker files) until `index` is durably recorded as done, or raise
-    `TimeoutError`. Used to deterministically order a crash-injecting
-    worker's own item against a sibling item dispatched concurrently to a
-    different real worker process, since both complete in real (unordered)
-    time otherwise."""
-    from loqs.tools.multiprogramrunner import _read_done_union
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if index in _read_done_union(item_checkpoint_dir):
-            return
-        time.sleep(poll_interval)
-    raise TimeoutError(f"Item {index} was not checkpointed within {timeout}s")
-
-
-def _crash_once_and_log_shots(
-    item,
-    index,
-    *,
-    original_fn,
-    crash_index,
-    shots_before_crash,
-    wait_for_index,
-    item_checkpoint_dir,
-    crash_triggered,
-    shot_log,
-    call_log,
-    **kwargs,
-):
-    """Module-level wrapper (not a closure) around a `MultiProgramRunner`
-    per-item worker function, crashing exactly once: on `crash_index`'s
-    first dispatch, after `shots_before_crash` of its own shots have
-    completed. `crash_triggered` (a `multiprocessing.Manager` dict) gates
-    this across real worker processes, since a resumed run re-dispatches
-    the same item to a (possibly different) worker that must not crash
-    again. Every real `QuantumProgram._run_shot` call and every wrapper
-    invocation are recorded to `shot_log`/`call_log` (`Manager` lists),
-    observable from the main test process across process boundaries.
-    Waits for `wait_for_index` to be checkpointed before crashing, so the
-    sibling item dispatched to the other real worker is guaranteed done
-    (and durably checkpointed) once the crash is observed."""
-    call_log.append(index)
-
-    should_crash = index == crash_index and not crash_triggered.get(
-        "triggered", False
-    )
-    if should_crash:
-        crash_triggered["triggered"] = True
-        if wait_for_index is not None:
-            _wait_for_index_checkpointed(item_checkpoint_dir, wait_for_index)
-
-    original_run_shot = QuantumProgram._run_shot
-    computed = {"n": 0}
-
-    def _run_shot_and_maybe_crash(self, max_frame_limit, seed, shot_index):
-        if should_crash and computed["n"] >= shots_before_crash:
-            raise RuntimeError("Simulated real-worker crash mid-item")
-        result = original_run_shot(self, max_frame_limit, seed, shot_index)
-        computed["n"] += 1
-        shot_log.append((index, shot_index))
-        return result
-
-    QuantumProgram._run_shot = _run_shot_and_maybe_crash
-    try:
-        return original_fn(item, index, **kwargs)
-    finally:
-        QuantumProgram._run_shot = original_run_shot
+from _shared_checkpoint_test_helpers import (
+    _build_shot_executor,
+    _crash_once_and_log_shots,
+    _wait_for_index_checkpointed,
+)
 
 
 def _build_circuit_program():
@@ -303,6 +228,23 @@ class TestRunDiscreteErrorInjectedPrograms:
         failed = runner.run()
         assert failed == [program, program]
         assert "Failed 2 programs!" in capsys.readouterr().out
+
+    def test_finalize_summary_suppressed_when_show_progress_false(
+        self, capsys
+    ):
+        """FaultInjectionRunner._finalize suppresses summary prints when show_progress=False."""
+        program = _build_counter_program()
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            show_progress=False,
+        )
+        runner.run()
+        out = capsys.readouterr().out
+        assert "succeeded" not in out
+        assert "Failed" not in out
 
 
 class TestRunDiscreteErrorInjectedProgramsParallel:
@@ -1342,6 +1284,74 @@ class TestFaultInjectionRunnerCheckpointing:
         ):
             runner2.run()
 
+    def test_resume_with_equivalent_collect_shot_data_args_succeeds(
+        self, tmp_path
+    ):
+        """Resume succeeds when collect_shot_data_args is passed as an
+        equivalent-but-differently-typed spec."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        # Run with list form
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
+        )
+        runner1.run()
+
+        # Resume with an equivalent literal HistoryDataCollector.
+        from loqs.core.historydatacollector import HistoryDataCollector
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[
+                HistoryDataCollector(key="counter", indices=-1)
+            ],
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
+        )
+        # Should not raise despite the differently-typed collect_shot_data_args.
+        result = runner2.run()
+        assert result is not None
+
+    def test_resume_with_equivalent_expected_outcomes_succeeds(
+        self, tmp_path
+    ):
+        """Resume succeeds when expected_outcomes is passed as an
+        equivalent-but-differently-typed sequence."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        # Run with list form
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
+        )
+        runner1.run()
+
+        # Resume with tuple form
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=(1,),  # tuple instead of list
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
+        )
+        # Should not raise despite differently-typed expected_outcomes
+        result = runner2.run()
+        assert result is not None
+
 
 class TestProgramOutput:
 
@@ -1367,7 +1377,6 @@ class TestProgramOutput:
 
     def test_custom_results_filename_in_checkpoint(self, tmp_path):
         """Custom results_filename creates and resumes from custom-named file."""
-        from pathlib import Path
         program = _build_counter_program()
         ckpt_dir = tmp_path / "checkpoint"
         ckpt_dir.mkdir()
@@ -1401,7 +1410,6 @@ class TestProgramOutput:
 
     def test_explicit_resume_false_overrides_cascade(self, tmp_path):
         """Explicit resume=False prevents cascade from resuming existing checkpoint."""
-        from pathlib import Path
         program = _build_counter_program()
         ckpt_dir = tmp_path / "checkpoint"
         ckpt_dir.mkdir()
@@ -1431,6 +1439,36 @@ class TestProgramOutput:
                 resume=False,
             )
 
+    def test_explicit_resume_true_without_checkpoint_raises(self):
+        """resume=True without checkpoint=True raises ValueError."""
+        program = _build_counter_program()
+        with pytest.raises(
+            ValueError, match="resume=True requires checkpoint=True"
+        ):
+            fttools.test_program_output(
+                program,
+                [("counter", -1)],
+                [1],
+                num_shots=1,
+                checkpoint=False,
+                resume=True,
+            )
+
+    def test_checkpoint_true_without_checkpoint_dir_raises(self):
+        """checkpoint=True without checkpoint_dir raises ValueError."""
+        program = _build_counter_program()
+        with pytest.raises(
+            ValueError, match="checkpoint=True requires checkpoint_dir"
+        ):
+            fttools.test_program_output(
+                program,
+                [("counter", -1)],
+                [1],
+                num_shots=1,
+                checkpoint=True,
+                checkpoint_dir=None,
+            )
+
     def test_fault_injection_runner_with_custom_results_filename(self, tmp_path):
         """FaultInjectionRunner threads results_filename through shot checkpoints."""
         program = _build_counter_program()
@@ -1453,3 +1491,157 @@ class TestProgramOutput:
         item_shot_ckpt = shot_ckpt / "fault_0"
         assert (item_shot_ckpt / custom_filename).exists()
         assert not (item_shot_ckpt / "results.h5").exists()
+
+
+class TestRunKwargsPassthrough:
+    """Test run_kwargs passthrough in FaultInjectionRunner and test_program_output."""
+
+    def test_run_kwargs_roundtrips_via_serialization(self, tmp_path, make_temp_path):
+        """FaultInjectionRunner with run_kwargs serializes and deserializes correctly."""
+        program = _build_counter_program()
+        item_ckpt = tmp_path / "item_checkpoint"
+
+        original_runner = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=item_ckpt,
+            run_kwargs={"max_frame_limit": 999},
+        )
+
+        with make_temp_path(suffix=".h5") as f_path:
+            original_runner.write(f_path)
+            loaded_runner = fttools.FaultInjectionRunner.read(f_path)
+
+        assert loaded_runner.run_kwargs == {"max_frame_limit": 999}
+
+    def test_checkpoint_dir_in_run_kwargs_conflicts_with_shot_checkpoint_dir(
+        self, tmp_path
+     ):
+         """Raises ValueError when checkpoint_dir appears in both places."""
+         program = _build_counter_program()
+         shot_ckpt = tmp_path / "shot_ckpt"
+
+         with pytest.raises(ValueError, match="checkpoint_dir in run_kwargs conflicts"):
+             fttools.FaultInjectionRunner(
+                 errored_programs=[program],
+                 collect_shot_data_args=[("counter", -1)],
+                 expected_outcomes=[1],
+                 num_shots=1,
+                 shot_checkpoint=True,
+                 shot_checkpoint_dir=shot_ckpt,
+                 run_kwargs={"checkpoint_dir": shot_ckpt},
+             )
+
+    def test_run_kwargs_passed_to_program_run(self, tmp_path):
+        """test_program_output forwards run_kwargs to QuantumProgram.run()."""
+        program = _build_counter_program()
+        # Use a high max_frame_limit to verify it's actually forwarded
+        # (if it wasn't, default limit would apply and behavior could differ)
+        result = fttools.test_program_output(
+            program,
+            [("counter", -1)],
+            [1],
+            num_shots=1,
+            run_kwargs={"max_frame_limit": 1000},
+        )
+        assert result is True
+
+    def test_fault_injection_runner_with_keep_shot_results_and_run_kwargs(
+        self, tmp_path
+    ):
+        """FaultInjectionRunner with both keep_shot_results=True and run_kwargs works."""
+        program = _build_counter_program()
+        shot_ckpt = tmp_path / "shot_checkpoint"
+        item_ckpt = tmp_path / "item_checkpoint"
+
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=2,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            checkpoint=True,
+            item_checkpoint_dir=item_ckpt,
+            keep_shot_results=True,
+            run_kwargs={"max_frame_limit": 500},
+        )
+        failed = runner.run()
+
+        assert failed == []
+        # Verify shot checkpoint was created
+        item_shot_ckpt = shot_ckpt / "fault_0"
+        assert (item_shot_ckpt / "results.h5").exists()
+
+
+def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
+    """"Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
+    rng = np.random.default_rng(seed)
+    return Frame({"failed": bool(rng.random() < fail_prob)})
+
+
+FLIP_COIN = Instruction(apply_fn=_flip_coin_apply, name="Flip Coin")
+
+
+class TestHistoryDataCollectorWithDict:
+    """Tests that a literal HistoryDataCollector instance can be used directly
+    in collect_shot_data_args and survives checkpointing/serialization."""
+
+    def test_literal_history_data_collector_in_runner_serialize(self, tmp_path, make_temp_path):
+        """FaultInjectionRunner accepts a literal HistoryDataCollector instance."""
+        from loqs.core.historydatacollector import HistoryDataCollector
+
+        program = _build_counter_program()
+        item_ckpt = tmp_path / "item_checkpoint"
+
+        # A literal HistoryDataCollector instance, not a raw dict/tuple spec.
+        collector = HistoryDataCollector(key="counter", indices=-1)
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[collector],  # literal, not dict
+            expected_outcomes=[1],
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=item_ckpt,
+        )
+        runner.run()
+
+        # Serialize and resume
+        with make_temp_path(suffix=".h5") as f_path:
+            runner.write(f_path)
+            loaded = fttools.FaultInjectionRunner.read(f_path)
+
+        # Loaded instance should have the same collector
+        assert loaded.collect_shot_data_args == [collector]
+
+    def test_literal_history_data_collector_in_noisesweep(self, tmp_path, make_temp_path):
+        """NoiseSweepRunner accepts a literal HistoryDataCollector instance."""
+        from loqs.core.historydatacollector import HistoryDataCollector
+        from loqs.tools.noisesweeptools import NoiseSweepRunner
+
+        item_ckpt = tmp_path / "item_checkpoint"
+
+        # A literal HistoryDataCollector instance, not a raw dict/tuple spec.
+        collector = HistoryDataCollector(key="failed", indices=-1)
+        runner = NoiseSweepRunner(
+            strengths=[0.0, 0.1],
+            num_shots=1,
+            collect_shot_data_args=[collector],  # literal, not dict
+            expected_outcomes=[False, False],
+            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+            global_instructions={"Flip Coin": FLIP_COIN},
+            checkpoint=True,
+            item_checkpoint_dir=item_ckpt,
+        )
+        runner.run()
+
+        # Serialize and resume
+        with make_temp_path(suffix=".h5") as f_path:
+            runner.write(f_path)
+            loaded = NoiseSweepRunner.read(f_path)
+
+        # Loaded instance should have the same collector
+        assert loaded.collect_shot_data_args == [collector]

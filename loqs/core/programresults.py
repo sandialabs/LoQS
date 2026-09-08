@@ -220,8 +220,8 @@ class ProgramResults(Displayable):
         self.num_shots = num_shots
         """Total number of shots for this run (for resume detection)."""
 
-        self.max_frame_limit = max_frame_limit
-        """Maximum frame limit for this run (for resume detection)."""
+        self._max_frame_limit_value: int | None = max_frame_limit
+        """Backing field for the `max_frame_limit` property."""
 
         self._parent_program_value: "QuantumProgram | str | Path | None" = (
             parent_program
@@ -248,8 +248,8 @@ class ProgramResults(Displayable):
         call for this object's lifetime, so an object reused across shots is written
         once and cheaply referenced afterward, instead of re-expanded every time."""
 
-        self._checkpoint_decode_cache: ResolvingDecodeCache = ResolvingDecodeCache(
-            root=None, format="hdf5"
+        self._checkpoint_decode_cache: ResolvingDecodeCache = (
+            ResolvingDecodeCache(root=None, format="hdf5")
         )
         """Persistent `Serializable.decode` cache shared across lazy shot loading
         calls; `_root` is re-pointed at each freshly-opened file handle."""
@@ -283,6 +283,8 @@ class ProgramResults(Displayable):
         self._nested_source_index = index
         self._name_value = _UNRESOLVED
         self._parent_program_value = _UNRESOLVED
+        if self._max_frame_limit_value is None:
+            self._max_frame_limit_value = _UNRESOLVED
 
     @property
     def name(self) -> str:
@@ -316,6 +318,21 @@ class ProgramResults(Displayable):
     ) -> None:
         self._parent_program_value = value
 
+    @property
+    def max_frame_limit(self) -> "int | None":
+        """Maximum frame limit for this run (for resume detection). Resolves
+        lazily from the nested source on first access if this is a lazy
+        nested-source proxy that hasn't resolved it yet."""
+        if self._max_frame_limit_value is _UNRESOLVED:
+            self._max_frame_limit_value = self._resolve_nested_attr(
+                "max_frame_limit", default=None
+            )
+        return self._max_frame_limit_value
+
+    @max_frame_limit.setter
+    def max_frame_limit(self, value: "int | None") -> None:
+        self._max_frame_limit_value = value
+
     def _resolve_nested_attr(self, attr_name: str, default: Any) -> Any:
         """Lazily read a single non-dict attribute (`name` or
         `parent_program`) from this object's own nested-source entry,
@@ -336,46 +353,48 @@ class ProgramResults(Displayable):
             _decode_collapsed_children,
         )
 
-        try:
-            with h5py.File(self._nested_source_file, "r") as f:
-                source_group = self._resolve_shot_source_group(f)
-                if source_group is None or len(source_group) == 0:
-                    return default
-
-                # Unwrap the Serializable wrapper group (same pattern
-                # already used by _load_shot_from_single_file).
-                actual_group = source_group[next(iter(source_group.keys()))]
-
-                decode_cache = getattr(self, "_checkpoint_decode_cache", None)
-                if isinstance(decode_cache, ResolvingDecodeCache):
-                    decode_cache._root = f
-                else:
-                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                    self._checkpoint_decode_cache = decode_cache
-
-                # Small scalar-ish attrs (name, and parent_program when it
-                # contains no array) share one collapsed blob -- decoding
-                # it never touches shot_histories' own separate,
-                # non-collapsed real group.
-                if _COLLAPSED_BLOB_NAME in actual_group:
-                    collapsed = _decode_collapsed_children(
-                        actual_group[_COLLAPSED_BLOB_NAME], decode_cache
-                    )
-                    if attr_name in collapsed:
-                        return collapsed[attr_name]
-
-                # parent_program containing a real array instead gets its
-                # own real, separate named group -- decode just that one
-                # group by name, still never touching shot_histories.
-                if attr_name in actual_group:
-                    return Serializable.decode(
-                        actual_group[attr_name],
-                        format="hdf5",
-                        decode_cache=decode_cache,
-                    )
-
+        def _read_attr(f: h5py.File) -> Any:
+            source_group = self._resolve_shot_source_group(f)
+            if source_group is None or len(source_group) == 0:
                 return default
-        except (OSError, ValueError, KeyError):
+
+            # Unwrap the Serializable wrapper group (same pattern
+            # already used by _load_shot_from_single_file).
+            actual_group = source_group[next(iter(source_group.keys()))]
+
+            decode_cache = getattr(self, "_checkpoint_decode_cache", None)
+            if isinstance(decode_cache, ResolvingDecodeCache):
+                decode_cache._root = f
+            else:
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                self._checkpoint_decode_cache = decode_cache
+
+            # Small scalar-ish attrs (name, and parent_program when it
+            # contains no array) share one collapsed blob -- decoding
+            # it never touches shot_histories' own separate,
+            # non-collapsed real group.
+            if _COLLAPSED_BLOB_NAME in actual_group:
+                collapsed = _decode_collapsed_children(
+                    actual_group[_COLLAPSED_BLOB_NAME], decode_cache
+                )
+                if attr_name in collapsed:
+                    return collapsed[attr_name]
+
+            # parent_program containing a real array instead gets its
+            # own real, separate named group -- decode just that one
+            # group by name, still never touching shot_histories.
+            if attr_name in actual_group:
+                return Serializable.decode(
+                    actual_group[attr_name],
+                    format="hdf5",
+                    decode_cache=decode_cache,
+                )
+
+            return default
+
+        try:
+            return _retry_hdf5_read(self._nested_source_file, _read_attr)
+        except (ValueError, KeyError):
             return default
 
     def _write_results_snapshot_if_fresh(self) -> None:
@@ -1023,10 +1042,10 @@ class ProgramResults(Displayable):
             Directory containing checkpoint files to consolidate.
         output_file:
             Path for the consolidated output file. If None, writes to
-            `checkpoint_dir / "results.h5"` -- the same filename
-            `checkpoint(worker_id=None)` itself writes to, so a single-writer
-            run and a many-writer run both end up readable via
-            `load_checkpoint(worker_id=None)`.
+            `checkpoint_dir / self._results_filename` (a configurable attribute,
+            defaulting to `"results.h5"`), the same filename `checkpoint(worker_id=None)`
+            itself writes to, so a single-writer run and a many-writer run both end
+            up readable via `load_checkpoint(worker_id=None)`.
         delete_originals:
             Whether to delete the original per-worker checkpoint files
             after consolidation.
@@ -1125,7 +1144,8 @@ class ProgramResults(Displayable):
             shot_histories. Any entry from the worker file whose key is in
             this set is skipped.
         """
-        with h5py.File(worker_file, "r") as in_f:
+
+        def _do_merge(in_f: h5py.File) -> None:
             if len(in_f.keys()) == 0:
                 return
 
@@ -1148,6 +1168,8 @@ class ProgramResults(Displayable):
             )
             # Consumed fully here, while `in_f` is still open.
             self._write_shot_entries(out_h5_file, entries)
+
+        _retry_hdf5_read(worker_file, _do_merge)
 
     def get_shot_history(self, shot_index: int) -> History | None:
         """Get a shot history, potentially loading from checkpoint if lazy loading is enabled.
@@ -1302,54 +1324,55 @@ class ProgramResults(Displayable):
         bool
             True if shot was successfully loaded, False otherwise.
         """
+
+        def _load(f: h5py.File) -> bool:
+            source_group = self._resolve_shot_source_group(f)
+            if source_group is None:
+                return False
+
+            # If source_group is from a nested dict entry, it contains
+            # the raw Serializable-encoded wrapper, so we need to unwrap it
+            # to get to the actual ProgramResults attributes
+            if self._nested_source_file is not None:
+                # Unwrap the Serializable wrapper group
+                if len(source_group) == 0:
+                    return False
+                actual_group = source_group[next(iter(source_group.keys()))]
+            else:
+                actual_group = source_group
+
+            # Re-point the persistent decode cache at this freshly-opened
+            # file handle (the previous one, if any, is already closed).
+            decode_cache = getattr(self, "_checkpoint_decode_cache", None)
+            if isinstance(decode_cache, ResolvingDecodeCache):
+                decode_cache._root = f
+            else:
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                self._checkpoint_decode_cache = decode_cache
+
+            # Use get_dict_attr_value to fetch only this one shot
+            # without decoding all others
+            try:
+                history = get_dict_attr_value(
+                    actual_group,
+                    "shot_histories",
+                    shot_index,
+                    decode_cache=decode_cache,
+                )
+            except KeyError:
+                return False
+
+            if self._lazy_loading:
+                self._memory_cache[shot_index] = history
+            else:
+                self.shot_histories[shot_index] = history
+                # Remove from unwritten_shots since it's already checkpointed
+                if shot_index in self._unwritten_shots:
+                    self._unwritten_shots.remove(shot_index)
+
+            return True
+
         try:
-            with h5py.File(filename, "r") as f:
-                source_group = self._resolve_shot_source_group(f)
-                if source_group is None:
-                    return False
-
-                # If source_group is from a nested dict entry, it contains
-                # the raw Serializable-encoded wrapper, so we need to unwrap it
-                # to get to the actual ProgramResults attributes
-                if self._nested_source_file is not None:
-                    # Unwrap the Serializable wrapper group
-                    if len(source_group) == 0:
-                        return False
-                    actual_group = source_group[
-                        next(iter(source_group.keys()))
-                    ]
-                else:
-                    actual_group = source_group
-
-                # Re-point the persistent decode cache at this freshly-opened
-                # file handle (the previous one, if any, is already closed).
-                decode_cache = getattr(self, "_checkpoint_decode_cache", None)
-                if isinstance(decode_cache, ResolvingDecodeCache):
-                    decode_cache._root = f
-                else:
-                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                    self._checkpoint_decode_cache = decode_cache
-
-                # Use get_dict_attr_value to fetch only this one shot
-                # without decoding all others
-                try:
-                    history = get_dict_attr_value(
-                        actual_group,
-                        "shot_histories",
-                        shot_index,
-                        decode_cache=decode_cache,
-                    )
-                except KeyError:
-                    return False
-
-                if self._lazy_loading:
-                    self._memory_cache[shot_index] = history
-                else:
-                    self.shot_histories[shot_index] = history
-                    # Remove from unwritten_shots since it's already checkpointed
-                    if shot_index in self._unwritten_shots:
-                        self._unwritten_shots.remove(shot_index)
-
-                return True
-        except (OSError, ValueError):
+            return _retry_hdf5_read(filename, _load)
+        except ValueError:
             return False

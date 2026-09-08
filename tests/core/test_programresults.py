@@ -3,6 +3,7 @@
 import json
 import multiprocessing as mp
 import os
+import re
 import tempfile
 import unittest.mock
 
@@ -1216,7 +1217,7 @@ class TestParentProgramFileWriting:
     def test_checkpoint_encode_cache_references_shared_parent_program(
         self, tmp_path
     ):
-        """Regression test for bug #105: the encode cache built from
+        """The encode cache built from
         parent_program's own decode_cache must actually be consulted by the
         encoder (keyed by `_serial_hash`, not `id`), so a shared reference to
         parent_program appearing again in shot data is written once and
@@ -1405,7 +1406,7 @@ class TestResumeCheckpointing:
                 assert i in done
 
     def test_load_done_shots_resolves_reference_before_source(self):
-        """Regression test for bug #105: _load_done_shots must decode with a
+        """_load_done_shots must decode with a
         `ResolvingDecodeCache`, not a bare dict, so a "reference" node
         physically stored before its own "source" node still resolves
         correctly instead of raising `RuntimeError`.
@@ -1430,7 +1431,7 @@ class TestResumeCheckpointing:
                 assert history[0]["marker"] == "shared"
 
     def test_merge_worker_into_output_resolves_reference_before_source(self):
-        """Regression test for bug #105: _merge_worker_into_output must
+        """_merge_worker_into_output must
         decode with a `ResolvingDecodeCache`, not `decode_cache={}`, so a
         worker file whose referencing shot is physically stored before its
         own source shot still merges both shots correctly instead of
@@ -1511,6 +1512,92 @@ class TestResumeCheckpointing:
             history = nested_pr._memory_cache[1]
             assert history is not None
 
+    def test_load_shot_from_single_file_retries_transient_lock_then_succeeds(
+        self, monkeypatch
+    ):
+        """`_load_shot_from_checkpoint` still recovers a nested-source shot
+        after a transient HDF5 lock conflict is retried away."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = Path(temp_dir) / "parent.h5"
+
+            with h5py.File(parent_path, "w") as parent_f:
+                pr1 = ProgramResults(lazy_loading=False)
+                for i in range(3):
+                    history = History()
+                    history.append(Frame({"nested": i}))
+                    pr1.add_shot(i, history)
+
+                from loqs.internal.streamingmerge import merge_dict_attr
+
+                root_group = parent_f.create_group("container")
+                merge_dict_attr(
+                    root_group,
+                    "_program_results",
+                    [(0, pr1)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            nested_pr = ProgramResults(lazy_loading=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+            nested_pr._checkpoint_dir = Path(temp_dir)
+
+            real_file = h5py.File
+            call_count = {"n": 0}
+
+            def flaky_file(path, mode, *args, **kwargs):
+                call_count["n"] += 1
+                if call_count["n"] <= 2:
+                    raise BlockingIOError("simulated transient lock")
+                return real_file(path, mode, *args, **kwargs)
+
+            monkeypatch.setattr(h5py, "File", flaky_file)
+
+            assert nested_pr._load_shot_from_checkpoint(1) is True
+            assert call_count["n"] > 1
+            history = nested_pr._memory_cache[1]
+            assert isinstance(history, History)
+            assert history[0]["nested"] == 1
+
+    def test_load_shot_from_single_file_raises_after_persistent_lock_error(
+        self, monkeypatch
+    ):
+        """`_load_shot_from_checkpoint` propagates a persistent
+        `BlockingIOError` instead of silently reporting the shot as
+        not found."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = Path(temp_dir) / "parent.h5"
+
+            with h5py.File(parent_path, "w") as parent_f:
+                pr1 = ProgramResults(lazy_loading=False)
+                for i in range(3):
+                    history = History()
+                    history.append(Frame({"nested": i}))
+                    pr1.add_shot(i, history)
+
+                from loqs.internal.streamingmerge import merge_dict_attr
+
+                root_group = parent_f.create_group("container")
+                merge_dict_attr(
+                    root_group,
+                    "_program_results",
+                    [(0, pr1)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            nested_pr = ProgramResults(lazy_loading=True)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+            nested_pr._checkpoint_dir = Path(temp_dir)
+
+            def always_fails(path, mode, *args, **kwargs):
+                raise BlockingIOError("simulated persistent lock")
+
+            monkeypatch.setattr(h5py, "File", always_fails)
+
+            with pytest.raises(BlockingIOError):
+                nested_pr._load_shot_from_checkpoint(1)
+
     def test_nested_source_resolve_group(self):
         """Test that _resolve_shot_source_group correctly navigates nested groups."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1572,12 +1659,15 @@ class TestResumeCheckpointing:
             nested_pr._set_nested_shot_source(parent_path, 0)
             nested_pr._checkpoint_dir = Path(temp_dir)
 
-            # Spy on Serializable.decode
+            # Spy on Serializable.decode, capturing each decoded group's own
+            # HDF5 path eagerly -- the source file closes once the `with`
+            # block below exits, after which h5py.Group.name returns None.
             real_decode = Serializable.decode
-            decode_calls = []
+            decoded_group_names = []
 
             def spy_decode(*args, **kwargs):
-                decode_calls.append(("decode", args, kwargs))
+                if args and isinstance(args[0], h5py.Group):
+                    decoded_group_names.append(args[0].name)
                 return real_decode(*args, **kwargs)
 
             with unittest.mock.patch.object(
@@ -1586,11 +1676,31 @@ class TestResumeCheckpointing:
                 # Load just one shot
                 assert nested_pr._load_shot_from_checkpoint(5) is True
 
-            # Should have decoded only the one shot's History, not all 20
-            # The call count should be minimal (just the target history)
+            # Verify only shot 5's own subtree was decoded: every decoded
+            # group must live at or below shot 5's own iterable entry.
+            assert decoded_group_names, (
+                "Expected at least one h5py.Group to be decoded for shot 5"
+            )
+            shot_index_pattern = re.compile(
+                r"/shot_histories/dict/values/iterable/(\d+)(?:/|$)"
+            )
+            for name in decoded_group_names:
+                match = shot_index_pattern.search(name)
+                assert match is not None, (
+                    f"Decoded group {name!r} isn't under shot_histories' "
+                    f"own iterable entries"
+                )
+                assert match.group(1) == "5", (
+                    f"Expected only shot 5 to be decoded, but found shot "
+                    f"{match.group(1)} in group path {name!r}"
+                )
+
+            # Also verify that shot 5 is in the cache
             assert 5 in nested_pr._memory_cache
 
-    def _build_nested_source_with_name_and_parent(self, temp_dir, index=0):
+    def _build_nested_source_with_name_and_parent(
+        self, temp_dir, index=0, max_frame_limit=None
+    ):
         """Build a parent HDF5 file whose `_program_results` dict attribute
         holds a real ProgramResults (with a real `name`/`parent_program`
         and several shots) at `index`. Returns the parent file path."""
@@ -1602,6 +1712,7 @@ class TestResumeCheckpointing:
                 lazy_loading=False,
                 name="RealName",
                 parent_program="RealProgram",
+                max_frame_limit=max_frame_limit,
             )
             for i in range(20):
                 history = History()
@@ -1632,6 +1743,56 @@ class TestResumeCheckpointing:
 
             assert nested_pr.name == "RealName"
             assert nested_pr.parent_program == "RealProgram"
+
+    def test_lazy_max_frame_limit_resolves_from_nested_source(self):
+        """A lazy nested-source proxy constructed with `max_frame_limit=None`
+        resolves `.max_frame_limit` to the real stored value from the
+        nested source on first access, mirroring `.name`/`.parent_program`."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = self._build_nested_source_with_name_and_parent(
+                temp_dir, max_frame_limit=17
+            )
+
+            nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+
+            assert nested_pr.max_frame_limit == 17
+
+    def test_resolve_nested_attr_raises_after_persistent_lock_error(
+        self, monkeypatch
+    ):
+        """Resolving `.max_frame_limit` on a lazy nested-source proxy
+        propagates a persistent `BlockingIOError` instead of silently
+        falling back to its `default` of `None`."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parent_path = self._build_nested_source_with_name_and_parent(
+                temp_dir, max_frame_limit=17
+            )
+
+            nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
+            nested_pr._set_nested_shot_source(parent_path, 0)
+
+            def always_fails(path, mode, *args, **kwargs):
+                raise BlockingIOError("simulated persistent lock")
+
+            monkeypatch.setattr(h5py, "File", always_fails)
+
+            with pytest.raises(BlockingIOError):
+                nested_pr.max_frame_limit
+
+    def test_set_nested_shot_source_preserves_non_none_max_frame_limit(self):
+        """A `ProgramResults` constructed with a real, non-`None`
+        `max_frame_limit` keeps that value after `_set_nested_shot_source` is
+        called, since the `is None` guard there only marks the field
+        unresolved when it was never actually set."""
+        results = ProgramResults(max_frame_limit=99)
+        # Deliberately points at a file that doesn't exist -- if the value
+        # were reset to _UNRESOLVED, resolution would fall through to the
+        # `default=None` case (a missing file) rather than raising, so a
+        # value of 99 surviving is real proof the guard skipped it.
+        results._set_nested_shot_source(Path("/never/written.h5"), 0)
+
+        assert results.max_frame_limit == 99
 
     def test_lazy_name_resolution_does_not_decode_shot_histories(self):
         """Resolving `.name` alone must never decode `shot_histories` (its
@@ -1950,7 +2111,7 @@ class TestResumeCheckpointing:
                 assert count == len(indices)
 
     def test_checkpoint_fresh_envelope_read_and_decode(self):
-        """Regression test for bug #105: decode fresh-envelope checkpoints.
+        """Decode fresh-envelope checkpoints.
 
         Tests that a checkpoint file created via _write_results_snapshot_if_fresh
         (which wraps the object in a /root version wrapper) can be decoded and
@@ -2005,7 +2166,7 @@ class TestResumeCheckpointing:
                 assert isinstance(stored.shot_histories[i], History)
 
     def test_load_done_shots_fresh_envelope_no_silent_failure(self):
-        """Regression test for bug #105: _load_done_shots finds fresh-envelope shots.
+        """_load_done_shots finds fresh-envelope shots.
 
         Tests that _load_done_shots correctly reports already-checkpointed shots
         from a fresh-envelope file (created via _write_results_snapshot_if_fresh),
@@ -2239,3 +2400,42 @@ class TestResumeCheckpointing:
         result2 = ProgramResults()
         result2.load_checkpoint(checkpoint_dir=checkpoint_dir)
         assert set(result2.shot_histories.keys()) == {0, 1, 2, 3, 4, 5, 6, 7, 8}
+
+    def test_merge_worker_into_output_retries_transient_lock_then_succeeds(
+        self, tmp_path, monkeypatch
+    ):
+        """consolidate_checkpoints still merges a worker's shots into the
+        output file after a transient HDF5 lock conflict on that worker
+        file is retried away, instead of silently skipping the worker."""
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir(parents=True)
+
+        results1 = ProgramResults(lazy_loading=False)
+        history = History()
+        history.append(Frame({"shot_id": 0}))
+        results1.add_shot(0, history)
+        results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+        worker_file = checkpoint_dir / "worker_w0_checkpoint.h5"
+        real_file = h5py.File
+        call_count = {"n": 0}
+
+        def flaky_file(path, mode, *args, **kwargs):
+            if Path(path) == worker_file:
+                call_count["n"] += 1
+                if call_count["n"] <= 2:
+                    raise BlockingIOError("simulated transient lock")
+            return real_file(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(h5py, "File", flaky_file)
+
+        consolidator = ProgramResults()
+        consolidator.consolidate_checkpoints(
+            checkpoint_dir=checkpoint_dir, delete_originals=True
+        )
+
+        assert call_count["n"] > 1
+
+        result = ProgramResults()
+        result.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert 0 in result.shot_histories

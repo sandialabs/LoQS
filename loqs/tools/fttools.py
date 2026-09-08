@@ -414,6 +414,7 @@ def _run_one_program(
     force_resume: bool,
     lazy_loading: bool,
     results_filename: str,
+    run_kwargs: dict | None = None,
     keep_shot_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Run one program via test_program_output, returning success flag.
@@ -444,6 +445,7 @@ def _run_one_program(
         force_resume=force_resume,
         return_program_results=keep_shot_results,
         results_filename=results_filename,
+        run_kwargs=run_kwargs,
     )
 
 
@@ -462,6 +464,7 @@ class FaultInjectionRunner(MultiProgramRunner):
         "collect_shot_data_args",
         "expected_outcomes",
         "num_shots",
+        "run_kwargs",
     ]
 
     def __init__(
@@ -470,6 +473,7 @@ class FaultInjectionRunner(MultiProgramRunner):
         collect_shot_data_args: Sequence[HistoryDataCollectorLike],
         expected_outcomes: Sequence,
         num_shots: int = 1,
+        run_kwargs: dict | None = None,
         parallel_strategy: ParallelStrategy | None = None,
         item_checkpoint_dir: str | Path | None = None,
         checkpoint: bool = False,
@@ -501,8 +505,16 @@ class FaultInjectionRunner(MultiProgramRunner):
         )
         self.errored_programs = errored_programs
         self.collect_shot_data_args = collect_shot_data_args
-        self.expected_outcomes = expected_outcomes
+        self.expected_outcomes = tuple(expected_outcomes)
         self.num_shots = num_shots
+        self.run_kwargs = run_kwargs
+
+        if self.run_kwargs is not None and "checkpoint_dir" in self.run_kwargs:
+            if self.shot_checkpoint_dir is not None:
+                raise ValueError(
+                    "checkpoint_dir in run_kwargs conflicts with shot_checkpoint_dir; "
+                    "use only one of the two (or leave both unset)."
+                )
 
     def _get_items(self) -> Sequence:
         """Return programs to test."""
@@ -527,6 +539,7 @@ class FaultInjectionRunner(MultiProgramRunner):
             "force_resume": self.force_resume,
             "lazy_loading": self.lazy_loading,
             "results_filename": self.results_filename,
+            "run_kwargs": self.run_kwargs or {},
         }
 
     def _finalize(self) -> list[QuantumProgram]:
@@ -541,10 +554,11 @@ class FaultInjectionRunner(MultiProgramRunner):
             if not self._reduced_results.get(i, True)
         ]
 
-        if len(failed):
-            print(f"Failed {len(failed)} programs!")
-        else:
-            print("All programs succeeded!")
+        if self.show_progress:
+            if len(failed):
+                print(f"Failed {len(failed)} programs!")
+            else:
+                print("All programs succeeded!")
 
         return failed
 
@@ -556,7 +570,7 @@ class FaultInjectionRunner(MultiProgramRunner):
         """Return fields to check for resume mismatch."""
         return [
             "num_shots",
-            "collect_shot_data_args",
+            "_normalized_collect_shot_data_args",
             "expected_outcomes",
             "keep_shot_results",
         ]
@@ -581,6 +595,7 @@ def test_program_output(
     force_resume: bool = False,
     resume: bool | None = None,
     results_filename: str = "results.h5",
+    run_kwargs: dict | None = None,
     return_program_results: bool = False,
 ) -> bool | tuple[bool, Any]:
     """Test a program against expected output.
@@ -644,6 +659,11 @@ def test_program_output(
         Forwarded to [](api:QuantumProgram.run) for the results checkpoint
         filename. Defaults to `"results.h5"`.
 
+    run_kwargs : dict | None, optional
+        Extra keyword arguments forwarded directly to `QuantumProgram.run`, for
+        options with no dedicated parameter here (e.g. `max_frame_limit`).
+        Defaults to `None`.
+
     return_program_results : bool, optional
         If `True`, return `(success, program_results)` instead of the bare bool.
         Defaults to `False`.
@@ -656,31 +676,37 @@ def test_program_output(
         When `return_program_results=True`: `(success, program_results)` tuple
         with the same success boolean and the full `ProgramResults` object.
     """
-    run_kwargs = {
-        "num_shots": num_shots,
-        "shot_executor": shot_executor,
-        "n_shot_batches": n_shot_batches,
-        "verbose": False,
-        "lazy_loading": lazy_loading,
-        "force_resume": force_resume,
-        "results_filename": results_filename,
-    }
+    resolved_run_kwargs = dict(run_kwargs or {})
+    resolved_run_kwargs.update(
+        {
+            "num_shots": num_shots,
+            "shot_executor": shot_executor,
+            "n_shot_batches": n_shot_batches,
+            "verbose": False,
+            "lazy_loading": lazy_loading,
+            "force_resume": force_resume,
+            "results_filename": results_filename,
+        }
+    )
     if checkpoint:
-        run_kwargs["checkpoint"] = True
+        if checkpoint_dir is None:
+            raise ValueError(
+                "checkpoint=True requires checkpoint_dir to be set"
+            )
+        resolved_run_kwargs["checkpoint"] = True
     if checkpoint_batch_size is not None:
-        run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
+        resolved_run_kwargs["checkpoint_batch_size"] = checkpoint_batch_size
     if checkpoint_dir is not None:
-        run_kwargs["checkpoint_dir"] = checkpoint_dir
-        if checkpoint:
-            if resume is not None:
-                run_kwargs["resume"] = resume
-            else:
-                # Cascade resume: only True if this specific item has prior shot state
-                run_kwargs["resume"] = (
-                    Path(checkpoint_dir) / results_filename
-                ).exists()
+        resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
+    if resume is not None:
+        resolved_run_kwargs["resume"] = resume
+    elif checkpoint and checkpoint_dir is not None:
+        # Cascade resume: only True if this specific item has prior shot state
+        resolved_run_kwargs["resume"] = (
+            Path(checkpoint_dir) / results_filename
+        ).exists()
 
-    program_results = test_program.run(**run_kwargs)
+    program_results = test_program.run(**resolved_run_kwargs)
 
     success = True
     for args, expected in zip(collect_shot_data_args, expected_outcomes):

@@ -294,14 +294,12 @@ class TestResolveInstructionLegacyNameHint:
             QuantumProgram._resolve_instruction(fake_self, label, frame={})
         assert "v1.2" not in str(exc_info.value)
 
-    @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true", reason="Breaks GitHub runners?"
-    )
-    def test_run_with_checkpoint_dir_does_not_create_default_checkpoints(self):
+    def test_run_with_checkpoint_dir_does_not_create_default_checkpoints(self, monkeypatch, tmp_path):
         """Regression test: run(..., checkpoint_dir=...) should not create a
         ./checkpoints directory relative to cwd -- only the explicit
         checkpoint_dir should be used."""
-        import tempfile
+        # Change to a temp directory for the duration of this test
+        monkeypatch.chdir(tmp_path)
 
         # Use the trivial codepack for faster testing
         trivial_code = trivial_codepack.create_qec_code()
@@ -334,28 +332,27 @@ class TestResolveInstructionLegacyNameHint:
             name="Checkpoint dir test",
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a separate directory for checkpoints
-            checkpoint_dir = Path(tmpdir) / "my_checkpoints"
+        # Create a separate directory for checkpoints
+        checkpoint_dir = tmp_path / "my_checkpoints"
 
-            # Run with checkpoint=True and checkpoint_batch_size to enable checkpointing
-            program.run(
-                num_shots=2,
-                checkpoint=True,
-                checkpoint_batch_size=1,
-                checkpoint_dir=checkpoint_dir,
-            )
+        # Run with checkpoint=True and checkpoint_batch_size to enable checkpointing
+        program.run(
+            num_shots=2,
+            checkpoint=True,
+            checkpoint_batch_size=1,
+            checkpoint_dir=checkpoint_dir,
+        )
 
-            # Verify that checkpoint_dir was used
-            assert checkpoint_dir.exists()
-            assert (checkpoint_dir / "results.h5").exists()
+        # Verify that checkpoint_dir was used
+        assert checkpoint_dir.exists()
+        assert (checkpoint_dir / "results.h5").exists()
 
-            # Verify that no ./checkpoints dir was created relative to cwd
-            cwd_checkpoints = Path("./checkpoints")
-            assert not cwd_checkpoints.exists(), (
-                "Default ./checkpoints was created relative to cwd; "
-                "should use explicit checkpoint_dir instead"
-            )
+        # Verify that no ./checkpoints dir was created relative to cwd
+        cwd_checkpoints = Path("./checkpoints")
+        assert not cwd_checkpoints.exists(), (
+            "Default ./checkpoints was created relative to cwd; "
+            "should use explicit checkpoint_dir instead"
+        )
 
 
 class TestResumeFromCheckpoint:
@@ -766,6 +763,54 @@ class TestResumeFromCheckpoint:
                     num_shots=2,
                     checkpoint=True,
                     resume=True,
+                    checkpoint_batch_size=1,
+                    checkpoint_dir=checkpoint_dir,
+                )
+
+    def test_no_content_in_checkpoint_dir_raises_file_exists_error_fresh_run(self):
+        """Covers the fresh-run (resume=False) case that Stage 24a's fix for
+        FileExistsError on unrecognized checkpoint_dir content didn't have a regression test for."""
+        import tempfile
+
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+
+        stack = [
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+        ]
+
+        program = QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            state_type=QSimQuantumState,
+            patch_types={"Trivial": trivial_code},
+            name="Invalid checkpoint test",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+            checkpoint_dir.mkdir()
+
+            # Create an unrelated file in the directory
+            (checkpoint_dir / "unrelated.txt").write_text("some content")
+
+            # A fresh run (resume=False) hits the same foreign-content check
+            # as resume=True, since it runs before the resume flag is read.
+            with pytest.raises(FileExistsError, match="isn't a recognized checkpoint"):
+                program.run(
+                    num_shots=2,
+                    checkpoint=True,
+                    resume=False,
                     checkpoint_batch_size=1,
                     checkpoint_dir=checkpoint_dir,
                 )

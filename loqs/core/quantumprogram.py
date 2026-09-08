@@ -726,43 +726,43 @@ class QuantumProgram(Displayable):
             on-disk match with `resume=True` actually resumes, subject to
             the mismatch check below.
 
-        checkpoint_batch_size:
-             Number of shots to accumulate, per writer, before durably
-             flushing them to that writer's own checkpoint file. Only
-             meaningful when `checkpoint=True`; ignored otherwise. Mutually
-             exclusive with `n_shot_batches` (providing both raises `ValueError`).
-             If both `n_shot_batches` and `checkpoint_batch_size` are `None`, both
-             default to `max(1, ceil(num_shots / 20))`. If `shot_executor` is
-             given, each dispatched batch of this many shots is computed and
-             checkpointed together inside its own worker process, keyed by
-             that worker's own `hostname_pid` identity, so multiple workers
-             never contend for the same file; once every batch has returned,
-             `run()` merges every worker's file into one final,
-             bounded-memory-streamed `results.h5` (see
-             [](api:ProgramResults.consolidate_checkpoints)). With no
-             `shot_executor` (serial), there is only ever one writer, so
-             shots are checkpointed directly to that same `results.h5`
-             with no separate merge step needed. Set to `1` to checkpoint
-             every single shot as soon as it completes (the finest possible
-             granularity -- a crash loses at most one in-flight shot per
-             writer); a larger value trades that granularity for fewer,
-             larger writes.
+         checkpoint_batch_size:
+            Number of shots to accumulate, per writer, before durably
+            flushing them to that writer's own checkpoint file. Only
+            meaningful when `checkpoint=True`; ignored otherwise. Mutually
+            exclusive with `n_shot_batches` (providing both raises `ValueError`).
+            If both `n_shot_batches` and `checkpoint_batch_size` are `None`, both
+            default to `max(1, ceil(num_shots / 20))`. If `shot_executor` is
+            given, each dispatched batch of this many shots is computed and
+            checkpointed together inside its own worker process, keyed by
+            that worker's own `hostname_pid` identity, so multiple workers
+            never contend for the same file; once every batch has returned,
+            `run()` merges every worker's file into one final,
+            bounded-memory-streamed `results.h5` (see
+            [](api:ProgramResults.consolidate_checkpoints)). With no
+            `shot_executor` (serial), there is only ever one writer, so
+            shots are checkpointed directly to that same `results.h5`
+            with no separate merge step needed. Set to `1` to checkpoint
+            every single shot as soon as it completes (the finest possible
+            granularity -- a crash loses at most one in-flight shot per
+            writer); a larger value trades that granularity for fewer,
+            larger writes.
 
         checkpoint_dir:
             Directory to store checkpoint files. If None (default), checkpoints
             are stored in a `./checkpoints` directory in the current working
             directory. Only relevant when `checkpoint=True`; ignored otherwise.
 
-        lazy_loading:
-             Whether checkpointed shots are evicted from the returned
-             [](api:ProgramResults)'s own in-memory `shot_histories` as soon
-             as they're durably checkpointed (`True`, default -- bounds this
-             process's own memory use, at the cost of the returned object no
-             longer holding every shot in memory; evicted shots can still be
-             read back via [](api:ProgramResults.load_checkpoint) or
-             [](api:ProgramResults.get_shot_history)). Set to `False` to keep
-             every shot in memory regardless of checkpointing. Has no effect
-             when `checkpoint` is `False`.
+         lazy_loading:
+            Whether checkpointed shots are evicted from the returned
+            [](api:ProgramResults)'s own in-memory `shot_histories` as soon
+            as they're durably checkpointed (`True`, default -- bounds this
+            process's own memory use, at the cost of the returned object no
+            longer holding every shot in memory; evicted shots can still be
+            read back via [](api:ProgramResults.load_checkpoint) or
+            [](api:ProgramResults.get_shot_history)). Set to `False` to keep
+            every shot in memory regardless of checkpointing. Has no effect
+            when `checkpoint` is `False`.
 
         force_resume:
             When resuming a checkpoint-enabled call (rerunning against a
@@ -773,24 +773,24 @@ class QuantumProgram(Displayable):
             anyway, trusting the already-checkpointed data as-is. Has no
             effect when `checkpoint` is `False`.
 
-         n_shot_batches:
-             Number of batches to split shots into. A batch *count*, not a size
-             (e.g. `n_shot_batches=5` with `num_shots=100` produces 5 batches of
-             20 shots each). Mutually exclusive with `checkpoint_batch_size`
-             (providing both raises `ValueError`). `None` (default) means "auto":
-             `max(1, ceil(num_shots / 20))` when needed. If given explicitly, used
-             as-is regardless of dispatch mode; if neither `n_shot_batches` nor
-             `checkpoint_batch_size` is given, both default to the same auto
-             formula applied independently to their own modes.
+        n_shot_batches:
+            Number of batches to split shots into. A batch *count*, not a size
+            (e.g. `n_shot_batches=5` with `num_shots=100` produces 5 batches of
+            20 shots each). Mutually exclusive with `checkpoint_batch_size`
+            (providing both raises `ValueError`). `None` (default) means "auto":
+            `max(1, ceil(num_shots / 20))` when needed. If given explicitly, used
+            as-is regardless of dispatch mode; if neither `n_shot_batches` nor
+            `checkpoint_batch_size` is given, both default to the same auto
+            formula applied independently to their own modes.
 
-         results_filename:
-             Filename to use for the canonical results checkpoint file.
-             Defaults to "results.h5". Only relevant when `checkpoint=True`.
+        results_filename:
+            Filename to use for the canonical results checkpoint file.
+            Defaults to "results.h5". Only relevant when `checkpoint=True`.
 
-         Returns
-         -------
-         ProgramResults
-              A [](api:ProgramResults) object containing the shot histories.
+        Returns
+        -------
+        ProgramResults
+            A [](api:ProgramResults) object containing the shot histories.
         """
 
         # State machine validation: explicit checkpoint/resume flags

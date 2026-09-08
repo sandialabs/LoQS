@@ -854,7 +854,7 @@ class TestGetDictAttrGroup:
             assert isinstance(group, h5py.Group)
 
 
-class TestDecideCacheForwardingKeysResolution:
+class TestDecodeCacheForwardingKeysResolution:
     """Tests for decode_cache forwarding on key-side dict reads.
 
     Regression tests for the bug where keys-side reads of dict attributes
