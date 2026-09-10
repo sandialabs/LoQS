@@ -11,10 +11,11 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 import functools
 import inspect
 import itertools
+from typing import Literal, TypeVar, cast
 
 import numpy as np
 
@@ -35,6 +36,9 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisProjectionInstrumentRep,
 )
 from loqs.types import Float, NDArray
+
+T = TypeVar("T", bound=OperationRep)
+"""TypeVar for the convert() function's generic return type."""
 
 # `stim` is an optional dependency (soft-dependency idiom already used by
 # `stimcircuit.py`/`stimstate.py`) -- the `UnitaryGateRep <-> StimCircuitGateRep`
@@ -117,7 +121,9 @@ def _pauli_basis(n: int) -> tuple[NDArray, ...]:
 _QSIM_1Q = (
     np.array([[1.0, 0], [0, 0]], dtype=complex),  # |0><0|
     np.array([[0, 1], [1, 0]], dtype=complex) / np.sqrt(2),  # X / sqrt(2)
-    np.array([[0, -1], [1, 0]], dtype=complex) * 1j / np.sqrt(2),  # Y / sqrt(2)
+    np.array([[0, -1], [1, 0]], dtype=complex)
+    * 1j
+    / np.sqrt(2),  # Y / sqrt(2)
     np.array([[0, 0], [0, 1]], dtype=complex),  # |1><1|
 )
 
@@ -238,7 +244,9 @@ def _kraus_to_ptm(rep: KrausGateRep) -> PTMGateRep:
 
 def _unitary_to_kraus(rep: UnitaryGateRep) -> KrausGateRep:
     """Trivial: a unitary is a single Kraus operator with probability 1."""
-    return KrausGateRep([(rep.unitary, 1.0)], rep.qubit_labels, tp_check_abstol=None)
+    return KrausGateRep(
+        [(rep.unitary, 1.0)], rep.qubit_labels, tp_check_abstol=None
+    )
 
 
 def _ptm_to_kraus(rep: PTMGateRep) -> KrausGateRep:
@@ -312,7 +320,8 @@ def _ptm_to_unitary(
 
 
 def _kraus_to_unitary(
-    rep: KrausGateRep, unitarity_check_abstol: Float | None = _UNITARY_CHECK_TOL
+    rep: KrausGateRep,
+    unitarity_check_abstol: Float | None = _UNITARY_CHECK_TOL,
 ) -> UnitaryGateRep:
     """Only succeeds for a single Kraus operator; see `_ptm_to_unitary` for
     `unitarity_check_abstol`."""
@@ -413,7 +422,9 @@ def _stim_circuit_to_unitary(rep: StimCircuitGateRep) -> UnitaryGateRep:
     # Prepend a no-op `I <indices>` line so STIM recognizes exactly `n`
     # qubits even if `circuit_str` doesn't happen to reference all of them
     # (e.g. an idle/no-op circuit_str for a declared-but-untouched qubit).
-    padded_circuit_str = f"I {indices}\n{rep.circuit_str}" if n else rep.circuit_str
+    padded_circuit_str = (
+        f"I {indices}\n{rep.circuit_str}" if n else rep.circuit_str
+    )
     try:
         circuit = stim.Circuit(padded_circuit_str)
         tableau = circuit.to_tableau()
@@ -479,7 +490,9 @@ def _zbasis_pre_post_to_zbasis_projection(
             "ZBasisPrePostInstrumentRep's pre_op/post_op are not both "
             "identity; cannot convert to ZBasisProjectionInstrumentRep"
         )
-    return ZBasisProjectionInstrumentRep(rep.reset, rep.include_outcome, rep.qubit_labels)
+    return ZBasisProjectionInstrumentRep(
+        rep.reset, rep.include_outcome, rep.qubit_labels
+    )
 
 
 def _zbasis_projection_to_outcome_operation_dict(
@@ -514,7 +527,10 @@ def _zbasis_projection_to_outcome_operation_dict(
         matrix[target, b] = 1.0
         return UnitaryGateRep(matrix, rep.qubit_labels)
 
-    outcome_ops = {0: _outcome_operator(0), 1: _outcome_operator(1)}
+    outcome_ops: dict[Hashable, GateRep] = {
+        0: _outcome_operator(0),
+        1: _outcome_operator(1),
+    }
     return OutcomeOperationDictInstrumentRep(
         outcome_ops, rep.include_outcome, rep.qubit_labels
     )
@@ -570,24 +586,29 @@ def _outcome_operation_dict_to_zbasis_projection(
             )
         targets[b] = entry[0]
 
+    reset: Literal[0, 1] | None
     if targets[0] == 0 and targets[1] == 1:
         reset = None
-    elif targets[0] == targets[1]:
-        reset = targets[0]
+    elif targets[0] == 0 and targets[1] == 0:
+        reset = 0
+    elif targets[0] == 1 and targets[1] == 1:
+        reset = 1
     else:
         raise RepConstructionError(
             "outcome_ops does not correspond to a Z-basis projection with "
             "optional reset (its targets are neither the identity nor a "
             "single fixed reset value)"
         )
-    return ZBasisProjectionInstrumentRep(reset, rep.include_outcome, rep.qubit_labels)
+    return ZBasisProjectionInstrumentRep(
+        reset, rep.include_outcome, rep.qubit_labels
+    )
 
 
 #####################################################################################################################
 # ZBasisProjectionInstrumentRep <-> StimCircuitInstrumentRep.
 #####################################################################################################################
 
-_STIM_SINGLE_LINE_PROJECTIONS: dict[str, tuple[int | None, bool]] = {
+_STIM_SINGLE_LINE_PROJECTIONS: dict[str, tuple[Literal[0, 1] | None, bool]] = {
     "M": (None, True),
     "MZ": (None, True),
     "MR": (0, True),
@@ -657,7 +678,10 @@ def _stim_circuit_to_zbasis_projection(
 
     if len(lines) == 1:
         command, targets = _parse(lines[0])
-        if command in _STIM_SINGLE_LINE_PROJECTIONS and targets == expected_targets:
+        if (
+            command in _STIM_SINGLE_LINE_PROJECTIONS
+            and targets == expected_targets
+        ):
             reset, include_outcome = _STIM_SINGLE_LINE_PROJECTIONS[command]
             return ZBasisProjectionInstrumentRep(
                 reset, include_outcome, rep.qubit_labels
@@ -723,8 +747,12 @@ target_cls)`. Consumed by `convert`'s multi-hop shortest-path search.
 """
 
 if stim is not None:
-    _CONVERTERS[(UnitaryGateRep, StimCircuitGateRep)] = _unitary_to_stim_circuit
-    _CONVERTERS[(StimCircuitGateRep, UnitaryGateRep)] = _stim_circuit_to_unitary
+    _CONVERTERS[(UnitaryGateRep, StimCircuitGateRep)] = (
+        _unitary_to_stim_circuit
+    )
+    _CONVERTERS[(StimCircuitGateRep, UnitaryGateRep)] = (
+        _stim_circuit_to_unitary
+    )
 
 
 def _shortest_path(
@@ -796,8 +824,12 @@ def _try_construct(
     if inspect.isabstract(cls):
         return None
     try:
-        return cls(
-            source, qubit_labels=qubits, **_accepted_kwargs(cls.__init__, kwargs)
+        # Cast cls as a callable factory; it's invoked speculatively and
+        # errors caught by the enclosing except block.
+        return cast(Callable[..., OperationRep], cls)(
+            source,
+            qubit_labels=qubits,
+            **_accepted_kwargs(cls.__init__, kwargs),
         )
     except (RepConstructionError, TypeError):
         return None
@@ -805,10 +837,10 @@ def _try_construct(
 
 def convert(
     source: object,
-    target: type[OperationRep] | Sequence[type[OperationRep]],
+    target: type[T] | Sequence[type[T]],
     qubits: str | int | Sequence[str | int] | None = None,
     **kwargs,
-) -> OperationRep:
+) -> T:
     """Convert `source` (a raw payload or an `OperationRep`) to `target`.
 
     1. If `source` already is (or is an instance of) `target`, return it.
@@ -839,7 +871,7 @@ def convert(
 
     Returns
     -------
-    OperationRep
+    T
         The converted (or passed-through) representation.
 
     Raises
@@ -849,13 +881,16 @@ def convert(
         conversion path exists from that starting class to any entry in
         `target`.
     """
-    targets: tuple[type[OperationRep], ...] = (
+    # Every return below is guaranteed by construction to be an instance of
+    # one of `targets`'s classes, so each `cast(T, ...)` below is sound even
+    # though mypy can't verify it from a runtime tuple of types.
+    targets: tuple[type[T], ...] = (
         (target,) if isinstance(target, type) else tuple(target)
     )
 
     if isinstance(source, OperationRep):
         if isinstance(source, targets):
-            return source
+            return cast(T, source)
         source_cls: type[OperationRep] = type(source)
         source_rep: OperationRep = source
     else:
@@ -865,7 +900,7 @@ def convert(
         for candidate_target in targets:
             result = _try_construct(candidate_target, source, qubits, kwargs)
             if result is not None:
-                return result
+                return cast(T, result)
 
         # No direct target match -- resolve a single, unambiguous starting
         # class among every known concrete rep class before hopping.
@@ -891,12 +926,14 @@ def convert(
         source_cls, source_rep = starting_candidates[0]
 
     if isinstance(source_rep, targets):
-        return source_rep
+        return cast(T, source_rep)
 
     best_path = None
     for candidate_target in targets:
         path = _shortest_path(source_cls, candidate_target)
-        if path is not None and (best_path is None or len(path) < len(best_path)):
+        if path is not None and (
+            best_path is None or len(path) < len(best_path)
+        ):
             best_path = path
     if best_path is None:
         raise RepConstructionError(
@@ -908,4 +945,4 @@ def convert(
     for step_cls in best_path[1:]:
         converter = _CONVERTERS[(type(result), step_cls)]
         result = converter(result, **_accepted_kwargs(converter, kwargs))
-    return result
+    return cast(T, result)

@@ -206,7 +206,7 @@ def _build_dict(
     `patch_label` (in `keyword_args`) has to come after it to keep
     overriding a same-named key the way it always has.
     """
-    elements = [
+    elements: list[cst.BaseDictElement] = [
         cst.DictElement(
             key=cst.SimpleString('"instruction"'), value=instruction_expr
         )
@@ -237,7 +237,9 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         # before this node, so `migrate_instruction_labels` remaps every
         # line here against its actual output before returning.
         line = self.get_metadata(PositionProvider, node).start.line
-        self.manual_review.append(ManualReviewItem(line=line, message=message, kind=kind))
+        self.manual_review.append(
+            ManualReviewItem(line=line, message=message, kind=kind)
+        )
 
     def _resolve_and_rewrite(
         self,
@@ -287,7 +289,9 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
             # regardless, since the matching Instruction's apply_fn
             # parameter still needs the same rename by hand.
             literal_kwargs = dict(literal_kwargs)
-            literal_kwargs[self._rename_patch_label] = literal_kwargs.pop("patch_label")
+            literal_kwargs[self._rename_patch_label] = literal_kwargs.pop(
+                "patch_label"
+            )
             self._flag(
                 original_node,
                 f"inst_kwargs's 'patch_label' key renamed to "
@@ -302,7 +306,10 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         remapped.update(extra_keywords)
         # inst_args is carried through verbatim rather than statically
         # remapped to keyword names -- see the module docstring.
-        if _literal_sequence(inst_args_expr) != []:
+        if (
+            inst_args_expr is not None
+            and _literal_sequence(inst_args_expr) != []
+        ):
             remapped[LEGACY_PENDING_INST_ARGS] = inst_args_expr
         self.changed = True
         line = self.get_metadata(PositionProvider, original_node).start.line
@@ -313,9 +320,15 @@ class _InstructionLabelRewriter(cst.CSTTransformer):
         )
         self.rewrites.append(RewriteItem(line=line, message=message))
         if func is None:
-            return _build_dict(instruction_expr, remapped, unpack_expr=unpack_expr)
+            return _build_dict(
+                instruction_expr, remapped, unpack_expr=unpack_expr
+            )
         return _build_call(
-            func, instruction_expr, remapped, extra_args, unpack_expr=unpack_expr
+            func,
+            instruction_expr,
+            remapped,
+            extra_args,
+            unpack_expr=unpack_expr,
         )
 
     def leave_Call(
@@ -422,12 +435,16 @@ def migrate_instruction_labels(
     """
     module = cst.parse_module(source)
     wrapper = MetadataWrapper(module)
-    transformer = _InstructionLabelRewriter(rename_patch_label=rename_patch_label)
+    transformer = _InstructionLabelRewriter(
+        rename_patch_label=rename_patch_label
+    )
     new_module = wrapper.visit(transformer)
     new_source = new_module.code
     return MigrationResult(
         source=new_source,
         changed=transformer.changed,
-        manual_review=remap_manual_review(source, new_source, transformer.manual_review),
+        manual_review=remap_manual_review(
+            source, new_source, transformer.manual_review
+        ),
         rewrites=remap_rewrites(source, new_source, transformer.rewrites),
     )

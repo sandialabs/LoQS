@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeVar
 
 from loqs.backends.reps.base import OperationRep
 from loqs.backends.reps.gatereps import (
@@ -31,6 +31,9 @@ from loqs.backends.reps.instrumentreps import (
     ZBasisProjectionInstrumentRep,
 )
 from loqs.internal.serializable import MisformedDecodableError
+
+_E1 = TypeVar("_E1", bound=Enum)
+_E2 = TypeVar("_E2", bound=Enum)
 
 
 class _LegacyGateRepValue(Enum):
@@ -77,7 +80,9 @@ _LEGACY_GATEREP_CLASS: dict[_LegacyGateRepValue, type[GateRep]] = {
 }
 """Maps each legacy `GateRep` enum-member tag to its modern concrete class."""
 
-_LEGACY_INSTRUMENTREP_CLASS: dict[_LegacyInstrumentRepValue, type[InstrumentRep]] = {
+_LEGACY_INSTRUMENTREP_CLASS: dict[
+    _LegacyInstrumentRepValue, type[InstrumentRep]
+] = {
     _LegacyInstrumentRepValue.ZBASIS_PROJECTION: ZBasisProjectionInstrumentRep,
     _LegacyInstrumentRepValue.ZBASIS_PRE_POST_OPERATIONS: ZBasisPrePostInstrumentRep,
     _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT: (
@@ -90,10 +95,10 @@ _LEGACY_INSTRUMENTREP_CLASS: dict[_LegacyInstrumentRepValue, type[InstrumentRep]
 
 def _upgrade_legacy_tag(
     value: object,
-    primary_enum: type[Enum],
-    primary_class_map: Mapping[Enum, type[OperationRep]],
-    secondary_enum: type[Enum],
-    secondary_class_map: Mapping[Enum, type[OperationRep]],
+    primary_enum: type[_E1],
+    primary_class_map: Mapping[_E1, type[OperationRep]],
+    secondary_enum: type[_E2],
+    secondary_class_map: Mapping[_E2, type[OperationRep]],
 ) -> object:
     """Shared dispatch for `upgrade_legacy_gaterep_tag`/`upgrade_legacy_instrumentrep_tag`.
 
@@ -195,11 +200,10 @@ def _upgrade_legacy_instrumentrep(
     """Reshape an old `(rep, qubits, reptype)` instrument payload into a new `InstrumentRep`.
 
     For `ZBASIS_PRE_POST_OPERATIONS`/`ZBASIS_OUTCOME_OPERATION_DICT`, the
-    nested gate-level entries of `rep` (originally themselves `RepTuple`
-    objects) have already been upgraded to concrete `GateRep` instances by
-    the time this function runs: attribute decoding happens bottom-up,
-    before the outer `RepTuple`'s own `_from_decoded_attrs` is invoked, so
-    no recursive re-upgrading is needed here.
+    nested gate-level entries of `rep` have already been upgraded to
+    concrete `GateRep` instances by the time this function runs: attribute
+    decoding happens bottom-up, before the outer payload's own
+    `_from_decoded_attrs` is invoked, so no recursive re-upgrading is needed.
     """
     if legacy_value is _LegacyInstrumentRepValue.ZBASIS_PROJECTION:
         reset, include_outcome = rep
@@ -215,7 +219,9 @@ def _upgrade_legacy_instrumentrep(
             post_op=post_op,
             qubit_labels=qubits,
         )
-    elif legacy_value is _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT:
+    elif (
+        legacy_value is _LegacyInstrumentRepValue.ZBASIS_OUTCOME_OPERATION_DICT
+    ):
         outcome_ops, include_outcome = rep
         return OutcomeOperationDictInstrumentRep(
             outcome_ops=outcome_ops,

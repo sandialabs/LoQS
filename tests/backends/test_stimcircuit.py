@@ -645,23 +645,37 @@ class TestSTIMPhysicalCircuitQueries(unittest.TestCase):
         # Get error locations
         locations = circ.get_possible_discrete_error_locations()
 
-        # Should return LoQS labels, not STIM indices
+        # Should return STIM qubit indices, not LoQS labels (matches the
+        # other 2 backends and the abstract method's own declared contract).
         for _, qubit_info in locations:
             if isinstance(qubit_info, tuple):
                 # Two-qubit gate
-                self.assertIn(qubit_info[0], ['Q0', 'Q1'])
-                self.assertIn(qubit_info[1], ['Q0', 'Q1'])
+                self.assertIn(qubit_info[0], [0, 1])
+                self.assertIn(qubit_info[1], [0, 1])
             else:
                 # Single-qubit gate
-                self.assertIn(qubit_info, ['Q0', 'Q1'])
+                self.assertIn(qubit_info, [0, 1])
+                self.assertIsInstance(qubit_info, int)
 
         # Test post_twoq_gates mode
         locations_2q = circ.get_possible_discrete_error_locations(post_twoq_gates=True)
         for _, qubit_info in locations_2q:
             self.assertIsInstance(qubit_info, tuple)
             assert isinstance(qubit_info, tuple)  # narrow for type checker
-            self.assertIn(qubit_info[0], ['Q0', 'Q1'])
-            self.assertIn(qubit_info[1], ['Q0', 'Q1'])
+            self.assertIn(qubit_info[0], [0, 1])
+            self.assertIn(qubit_info[1], [0, 1])
+
+    def test_get_possible_discrete_error_locations_inverted_target(self):
+        # An inverted target ("!") flips the recorded outcome, not the
+        # measured qubit, so this should resolve like plain "M 0".
+        circ = STIMPhysicalCircuit("M !0\nTICK", ['Q0'])
+
+        locations = circ.get_possible_discrete_error_locations()
+
+        self.assertEqual(len(locations), 1)
+        _, qubit_info = locations[0]
+        self.assertEqual(qubit_info, 0)
+        self.assertIsInstance(qubit_info, int)
 
     def test_edge_cases(self):
         # Test various edge cases
@@ -681,12 +695,14 @@ class TestSTIMPhysicalCircuitQueries(unittest.TestCase):
         self.assertEqual(circ3.qubit_labels, ['Q0', 'Q1'])
         self.assertEqual(circ3.circuit.num_qubits, 2)
 
-        # Test error locations with mixed operations
+        # Test error locations with mixed operations. Returns STIM qubit
+        # indices, not LoQS labels (matches the other 2 backends and the
+        # abstract method's own declared contract).
         error_locs = circ3.get_possible_discrete_error_locations()
         self.assertGreater(len(error_locs), 0)
         for _, qubit_label in error_locs:
-            self.assertIn(qubit_label, ['Q0', 'Q1'])
-            self.assertIsInstance(qubit_label, str)
+            self.assertIn(qubit_label, [0, 1])
+            self.assertIsInstance(qubit_label, int)
 
         # Test post_twoq_gates mode
         error_locs_2q = circ3.get_possible_discrete_error_locations(post_twoq_gates=True)
@@ -694,8 +710,8 @@ class TestSTIMPhysicalCircuitQueries(unittest.TestCase):
             self.assertIsInstance(qubit_tuple, tuple)
             assert isinstance(qubit_tuple, tuple)  # narrow for type checker
             self.assertEqual(len(qubit_tuple), 2)
-            self.assertIn(qubit_tuple[0], ['Q0', 'Q1'])
-            self.assertIn(qubit_tuple[1], ['Q0', 'Q1'])
+            self.assertIn(qubit_tuple[0], [0, 1])
+            self.assertIn(qubit_tuple[1], [0, 1])
 
     def test_sparse_circuit_compactness(self):
         # Test that sparse circuits maintain compact indices

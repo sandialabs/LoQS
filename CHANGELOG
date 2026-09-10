@@ -9,6 +9,7 @@
 
 ### Fixed
 - **`QuantumProgram._last_result` not caching properly (#121, @sserita):** The returned `ProgramResults` is now also properly cached on `self._last_results`.
+- **STIM and qudit-statevector bugfixes (#129, @sserita):** Fixes several latent bugs in STIM-backed circuit execution and qudit statevector construction, and brings `loqs` into compliance with its own `black`/`flake8`/`mypy` configuration.
 
 
 ## [1.2] - 2026-08-21

@@ -1819,9 +1819,7 @@ def _create_unflagged_QEC_instruction(
 
         # Extract syndrome across multiple historical check frames using SyndromeLabel
         syndrome_labels_raw = [("A0", -4), ("A0", -3), ("A0", -2), ("A0", -1)]
-        syndrome_labels = [
-            SyndromeLabel(*lbl) for lbl in syndrome_labels_raw
-        ]
+        syndrome_labels = [SyndromeLabel(*lbl) for lbl in syndrome_labels_raw]
         syndrome: list[int] = []
         for synlbl in syndrome_labels:
             frame_outcomes = syndrome_outcomes[synlbl.frame_idx]

@@ -23,7 +23,10 @@ from .measurementoutcomes import MeasurementOutcomes
 from .qeccodepatch import QECCodePatch
 from .patchlayout import PatchLayout, PatchRelation
 
-from loqs.internal.legacy import install_legacy_module, make_legacy_construction_shim
+from loqs.internal.legacy import (
+    install_legacy_module,
+    make_legacy_construction_shim,
+)
 
 # PatchDict was renamed to PatchLayout (v1.2); an already-serialized
 # PatchDict redirects straight to PatchLayout on decode. This shim keeps
@@ -35,4 +38,6 @@ PatchDict = make_legacy_construction_shim(
     message="PatchDict is deprecated; use PatchLayout instead. "
     "Constructing a PatchLayout on your behalf for now.",
 )
-install_legacy_module("loqs.core.recordables.patchdict", {"PatchDict": PatchDict})
+install_legacy_module(
+    "loqs.core.recordables.patchdict", {"PatchDict": PatchDict}
+)

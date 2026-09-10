@@ -51,7 +51,8 @@ class SubmitExecutor(Protocol):
     depending on either package.
     """
 
-    def submit(self, fn, /, *args, **kwargs) -> Future: ...
+    def submit(self, fn, /, *args, **kwargs) -> Future:
+        pass
 
 
 @runtime_checkable
@@ -62,4 +63,5 @@ class MapArrayExecutor(Protocol):
     satisfies this without this module depending on `submitit` directly.
     """
 
-    def map_array(self, fn, *iterables) -> list[Any]: ...
+    def map_array(self, fn, *iterables) -> list[Any]:
+        pass

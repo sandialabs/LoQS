@@ -85,7 +85,9 @@ class BaseQuantumState(Displayable):
         pass
 
     @abstractmethod
-    def apply_reps(self: T, reps: Sequence[OperationRep]) -> tuple[T, OutcomeDict]:
+    def apply_reps(
+        self: T, reps: Sequence[OperationRep]
+    ) -> tuple[T, OutcomeDict]:
         """Apply the reps to the state in-place.
 
         Parameters

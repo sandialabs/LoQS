@@ -72,7 +72,11 @@ _decode_hdf5_iterable_version = VersionedDecoder("hdf5_iterable")
 @_decode_hdf5_iterable_version.register(1)
 def _decode_hdf5_iterable_version_v1(list_group):
     assert isinstance(list_group, h5py.Group)
-    assert list_group.attrs.get("iterable_type", "") in ["list", "tuple", "set"]
+    assert list_group.attrs.get("iterable_type", "") in [
+        "list",
+        "tuple",
+        "set",
+    ]
 
 
 _decode_hdf5_iterable_version.alias(2, same_as=1)
@@ -157,8 +161,8 @@ def _decode_hdf5_primitive_version_v1(encoded):
 _decode_hdf5_primitive_version.alias(2, same_as=1)
 
 
-_HDF5_DECODE_VERSION: contextvars.ContextVar[int | None] = contextvars.ContextVar(
-    "hdf5_decode_version", default=None
+_HDF5_DECODE_VERSION: contextvars.ContextVar[int | None] = (
+    contextvars.ContextVar("hdf5_decode_version", default=None)
 )
 """The serialization version of the file currently being decoded.
 
@@ -238,7 +242,9 @@ def _decode_hdf5_collapsed_version_current(encoded):
     assert isinstance(encoded, h5py.Dataset)
 
 
-def _contains_no_array(value, encode_cache, ignore_no_serialize_flags, _visited=None):
+def _contains_no_array(
+    value, encode_cache, ignore_no_serialize_flags, _visited=None
+):
     """Whether encoding `value` right now would touch no real array anywhere in its own expansion.
 
     A value that would resolve to an already-registered cache
@@ -286,13 +292,17 @@ def _contains_no_array(value, encode_cache, ignore_no_serialize_flags, _visited=
 
     if isinstance(value, dict):
         return all(
-            _contains_no_array(v, encode_cache, ignore_no_serialize_flags, _visited)
+            _contains_no_array(
+                v, encode_cache, ignore_no_serialize_flags, _visited
+            )
             for v in (*value.keys(), *value.values())
         )
 
     if isinstance(value, (list, tuple, set)):
         return all(
-            _contains_no_array(v, encode_cache, ignore_no_serialize_flags, _visited)
+            _contains_no_array(
+                v, encode_cache, ignore_no_serialize_flags, _visited
+            )
             for v in value
         )
 
@@ -343,7 +353,9 @@ def _decode_collapsed_children(blob_dataset, decode_cache):
     raw = blob_dataset[()].tobytes().decode("utf-8")
     blob = json.loads(raw)
     return {
-        name: Serializable.decode(value, format="json", decode_cache=decode_cache)
+        name: Serializable.decode(
+            value, format="json", decode_cache=decode_cache
+        )
         for name, value in blob.items()
     }
 
@@ -1102,8 +1114,8 @@ class HDF5Encoder(BaseEncoder):
         matrix_group.attrs["shape"] = to_encode.shape
         matrix_group.attrs["dtype"] = str(to_encode.dtype)  # type: ignore
 
-        if isinstance(to_encode, SPSArray):
-            # For dense arrays, store as HDF5 dataset
+        if sps.issparse(to_encode):
+            # For sparse arrays, store as HDF5 dataset
             csr_mx = sps.csr_matrix(
                 to_encode
             )  # convert to CSR and save in this format

@@ -85,7 +85,10 @@ every gate type."""
 _INSTRUMENT_REPTYPES: dict[str, tuple[str, bool]] = {
     "ZBASIS_PROJECTION": ("ZBasisProjectionInstrumentRep", True),
     "ZBASIS_PRE_POST_OPERATIONS": ("ZBasisPrePostInstrumentRep", True),
-    "ZBASIS_OUTCOME_OPERATION_DICT": ("OutcomeOperationDictInstrumentRep", True),
+    "ZBASIS_OUTCOME_OPERATION_DICT": (
+        "OutcomeOperationDictInstrumentRep",
+        True,
+    ),
     "STIM_CIRCUIT_STR": ("StimCircuitInstrumentRep", False),
 }
 """Old `InstrumentRep.<NAME>` enum member -> `(modern concrete class,
@@ -126,7 +129,9 @@ def _extract_positional_or_keyword(
     positional = [a.value for a in node.args if a.keyword is None]
     if len(positional) > len(names):
         return None
-    keyword = {a.keyword.value: a.value for a in node.args if a.keyword is not None}
+    keyword = {
+        a.keyword.value: a.value for a in node.args if a.keyword is not None
+    }
     if any(k not in names for k in keyword) or any(
         name in keyword for name in names[: len(positional)]
     ):
@@ -140,7 +145,9 @@ def _extract_positional_or_keyword(
     return values
 
 
-def _destructured_positional_args(rep_expr: cst.BaseExpression) -> list[cst.Arg]:
+def _destructured_positional_args(
+    rep_expr: cst.BaseExpression,
+) -> list[cst.Arg]:
     """The positional `Arg`s a destructuring reptype's `rep` unpacks into.
     A literal tuple/list is destructured directly into separate
     arguments (more readable than a splat); any other expression falls
@@ -194,7 +201,9 @@ class _RepTupleRewriter(cst.CSTTransformer):
 
         resolved = _resolve_reptype(reptype_expr)
         if resolved is None:
-            line = self.get_metadata(PositionProvider, original_node).start.line
+            line = self.get_metadata(
+                PositionProvider, original_node
+            ).start.line
             self.manual_review.append(
                 ManualReviewItem(
                     line=line,
@@ -210,7 +219,9 @@ class _RepTupleRewriter(cst.CSTTransformer):
             return updated_node
 
         new_module, new_class, needs_destructure = resolved
-        AddImportsVisitor.add_needed_import(self.context, new_module, new_class)
+        AddImportsVisitor.add_needed_import(
+            self.context, new_module, new_class
+        )
         RemoveImportsVisitor.remove_unused_import(
             self.context, _OLD_REPTUPLE_MODULE, "RepTuple"
         )
@@ -230,7 +241,9 @@ class _RepTupleRewriter(cst.CSTTransformer):
         self.changed = True
         line = self.get_metadata(PositionProvider, original_node).start.line
         self.rewrites.append(
-            RewriteItem(line=line, message=f"RepTuple(...) -> {new_class}(...)")
+            RewriteItem(
+                line=line, message=f"RepTuple(...) -> {new_class}(...)"
+            )
         )
         return cst.Call(func=cst.Name(new_class), args=args)
 
@@ -252,7 +265,9 @@ def rewrite_reptuple_construction(source: str) -> MigrationResult:
     # real CST/import-machinery overhead for files that never mention
     # `RepTuple` at all -- the overwhelming majority of files scanned.
     if "RepTuple" not in source:
-        return MigrationResult(source=source, changed=False, manual_review=[], rewrites=[])
+        return MigrationResult(
+            source=source, changed=False, manual_review=[], rewrites=[]
+        )
 
     context = CodemodContext()
     module = cst.parse_module(source)
@@ -266,6 +281,8 @@ def rewrite_reptuple_construction(source: str) -> MigrationResult:
     return MigrationResult(
         source=new_source,
         changed=transformer.changed,
-        manual_review=remap_manual_review(source, new_source, transformer.manual_review),
+        manual_review=remap_manual_review(
+            source, new_source, transformer.manual_review
+        ),
         rewrites=remap_rewrites(source, new_source, transformer.rewrites),
     )

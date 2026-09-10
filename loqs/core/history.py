@@ -21,9 +21,7 @@ from loqs.internal import Displayable
 
 T = TypeVar("T", bound="History")
 
-HistoryLike: TypeAlias = (
-    "History | FrameLike | Sequence[FrameLike] | None"
-)
+HistoryLike: TypeAlias = "History | FrameLike | Sequence[FrameLike] | None"
 """Things that can be cast to [](api:History)."""
 
 HistoryCollectDataIndexTypes: TypeAlias = (
@@ -174,17 +172,17 @@ class History(Sequence[Frame], Displayable):
                 return set(source_keys)
             return set(default)
 
-        self.expiring_keys = resolve(
+        self.expiring_keys: set[str] = resolve(
             expiring_keys,
             source.expiring_keys if source is not None else None,
             ("state",),
         )
-        self.propagating_keys = resolve(
+        self.propagating_keys: set[str] = resolve(
             propagating_keys,
             source.propagating_keys if source is not None else None,
             ("state", "patches"),
         )
-        self.no_serialize_keys = resolve(
+        self.no_serialize_keys: set[str] = resolve(
             no_serialize_keys,
             source.no_serialize_keys if source is not None else None,
             (),
@@ -333,7 +331,10 @@ class History(Sequence[Frame], Displayable):
             candidates = [
                 frame
                 for frame in self._history
-                if all(frame.get(field) == value for field, value in frame_filter.items())
+                if all(
+                    frame.get(field) == value
+                    for field, value in frame_filter.items()
+                )
             ]
 
         if isinstance(indices, int):

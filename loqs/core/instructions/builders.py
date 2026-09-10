@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import inspect as ins
 import numpy as np
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loqs.backends import is_backend_available, propagate_state
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -177,10 +177,14 @@ def build_composite_instruction(
                 # Exclude "instruction" -- it's re-supplied positionally
                 # below, so keeping it here would duplicate the argument.
                 nested_kwargs = {
-                    k: v for k, v in inst_or_label.items() if k != "instruction"
+                    k: v
+                    for k, v in inst_or_label.items()
+                    if k != "instruction"
                 }
                 merged = {**kwargs, **nested_kwargs}
-                new_label = InstructionLabel(inst_or_label["instruction"], **merged)
+                new_label = InstructionLabel(
+                    inst_or_label["instruction"], **merged
+                )
             stack = stack.insert_instruction(i, new_label)
 
         return Frame({"stack": stack})
@@ -207,7 +211,9 @@ def build_composite_instruction(
     data["instructions"] = instructions
 
     # Make sure all extra data gets pulled in
-    param_priorities = {k: DEFAULT_PRIORITIES for k in data.keys()}
+    param_priorities: dict[str, Sequence[str]] = {
+        k: DEFAULT_PRIORITIES for k in data.keys()
+    }
 
     # Pull in the parameter priorities of any already-resolved underlying
     # instructions, so a kwarg meant for a nested instruction (e.g.
@@ -218,9 +224,13 @@ def build_composite_instruction(
         if isinstance(inst_or_label, Instruction):
             sub_instruction: Instruction | None = inst_or_label
         else:
-            raw_instruction = InstructionLabel.from_raw(inst_or_label)["instruction"]
+            raw_instruction = InstructionLabel.from_raw(inst_or_label)[
+                "instruction"
+            ]
             sub_instruction = (
-                raw_instruction if isinstance(raw_instruction, Instruction) else None
+                raw_instruction
+                if isinstance(raw_instruction, Instruction)
+                else None
             )
         if sub_instruction is None:
             continue  # A lazily-resolved string label; nothing to pull yet
@@ -400,15 +410,16 @@ def build_lookup_decoder_instruction(
         # TODO: This will not distinguish tags between patches. We have the history,
         # so can figure it out by comparing patch_labels and patch objects
         # but punting on this for now. Need to fix before production 2Q runs
-        prev_syndrome = None
+        prev_syndrome: list[int] | None = None
         prev_frame_info = None
         if diff_prev_syndrome:
             for i, frame in enumerate(history[::-1]):
-                prev_syndrome = frame.get(raw_syndrome_frame_key, None)
-                if prev_syndrome is None:
+                prev_syndrome_raw = frame.get(raw_syndrome_frame_key, None)
+                if prev_syndrome_raw is None:
                     continue
-                assert isinstance(prev_syndrome, list)
-                assert all([isinstance(i, int) for i in prev_syndrome])
+                assert isinstance(prev_syndrome_raw, list)
+                assert all([isinstance(i, int) for i in prev_syndrome_raw])
+                prev_syndrome = cast(list[int], prev_syndrome_raw)
 
                 # If we got one, record logging info and break
                 prev_frame_info = (frame.log, -i - 1)
@@ -1070,8 +1081,18 @@ def build_physical_circuit_instruction(
         for error in rev_sorted_errors:
             circuit_backend = type(circuit)
             if isinstance(circuit, STIMPhysicalCircuit):
+                n = len(qubits)
+                # Prepend a `QUBIT_COORDS` annotation (not a gate, so
+                # never resolved against the noise model) on the highest
+                # qubit index, so STIM infers exactly `len(qubits)`
+                # qubits regardless of which qubit the error targets.
+                padded_str = (
+                    f"QUBIT_COORDS(0, 0) {qubits[n - 1]}\n{error[1]} {qubits[error[2]]}\nTICK\n"
+                    if n
+                    else f"{error[1]} {error[2]}\nTICK\n"
+                )
                 error_circuit = circuit_backend(
-                    f"{error[1]} {error[2]}\nTICK\n", qubit_labels=qubits
+                    padded_str, qubit_labels=qubits
                 )
             else:
                 error_circuit = circuit_backend(
@@ -1125,11 +1146,11 @@ def build_physical_circuit_instruction(
         if len(error_injections):
             data["errored_circuit"] = errored_circuit
         # TODO: Make this more general, maybe models have a "save_to_frame_attrs" or somethign
-        if not is_backend_available("stim_state") and isinstance(
+        if is_backend_available("stim_state") and isinstance(
             state, STIMQuantumState
         ):
             data["applied_stim_circuit_str"] = str(
-                state.latest_applied_circuit
+                state.latest_applied_circuit  # type: ignore[attr-defined]
             )
 
         return Frame(data)
