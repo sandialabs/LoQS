@@ -88,17 +88,8 @@ def get_backend_error(backend_name: str) -> str | None:
 #
 # This block (and everything above it) must come *before* the `.reps`/
 # `.circuit`/`.model`/`.state` imports below. `stimcircuit.py`/`stimstate.py`
-# reach back into this package (`from loqs.backends import
-# BasePhysicalCircuit, is_backend_available`) -- safe today only because
-# they are exclusively loaded on-demand via `__getattr__`, by definition
-# after this module has finished executing. If any eagerly-imported
-# submodule below were to import one of those STIM modules at its own
-# top level, that import would run *during* this module's own execution,
-# before `is_backend_available` exists yet if it were defined later in this
-# file -- a circular-import false negative with nothing to do with whether
-# `stim` is actually installed, reproduced and confirmed while designing
-# LoQS#72's model-backend consolidation (see
-# `loqs.backends.model.dictmodel`, which does exactly this).
+# reach back into this package -- safe only because they are exclusively
+# loaded on-demand via `__getattr__`, after this module has finished.
 _check_backend_availability("pygsti_circuit", "pygsti")
 _check_backend_availability("pygsti_model", "pygsti")
 _check_backend_availability("stim_circuit", "stim")

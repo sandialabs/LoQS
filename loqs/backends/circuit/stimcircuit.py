@@ -45,15 +45,15 @@ STIM circuit grammar
 <CIRCUIT> ::= <LINE>*
 <LINE> ::= <INDENT> (<INSTRUCTION> | <BLOCK_START> | <BLOCK_END>)? <COMMENT>? '\n'
 <BLOCK_START> ::= <INSTRUCTION> /[ \t]*/ '{'
-<BLOCK_END> ::= '}' 
+<BLOCK_END> ::= '}'
 <INSTRUCTION> ::= <NAME> <TAG>? <PARENS_ARGUMENTS>? <TARGETS>
-<NAME> ::= /[a-zA-Z][a-zA-Z0-9_]*/ 
+<NAME> ::= /[a-zA-Z][a-zA-Z0-9_]*/
 <TAG> ::= '[' /[^\r\]\n]/* ']'
-<PARENS_ARGUMENTS> ::= '(' <ARGUMENTS> ')' 
+<PARENS_ARGUMENTS> ::= '(' <ARGUMENTS> ')'
 <ARGUMENTS> ::= /[ \t]*/ <ARG> /[ \t]*/ (',' <ARGUMENTS>)?
-<ARG> ::= <double> 
+<ARG> ::= <double>
 <TARGETS> ::= /[ \t]+/ <TARG> <TARGETS>?
-<TARG> ::= <QUBIT_TARGET> | <MEASUREMENT_RECORD_TARGET> | <SWEEP_BIT_TARGET> | <PAULI_TARGET> | <COMBINER_TARGET> 
+<TARG> ::= <QUBIT_TARGET> | <MEASUREMENT_RECORD_TARGET> | <SWEEP_BIT_TARGET> | <PAULI_TARGET> | <COMBINER_TARGET>
 <QUBIT_TARGET> ::= '!'? <uint>
 <MEASUREMENT_RECORD_TARGET> ::= "rec[-" <uint> "]"
 <SWEEP_BIT_TARGET> ::= "sweep[" <uint> "]"
@@ -135,7 +135,11 @@ def _reindex_stim_circuit_lines(
                 prefix = (
                     "X"
                     if target.is_x_target
-                    else "Y" if target.is_y_target else "Z" if target.is_z_target else ""
+                    else (
+                        "Y"
+                        if target.is_y_target
+                        else "Z" if target.is_z_target else ""
+                    )
                 )
                 inv = "!" if target.is_inverted_result_target else ""
                 line_parts.append(f"{inv}{prefix}{new_idx}")
@@ -537,28 +541,28 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                     # Empty line or not a gate, skip to next line
                     continue
 
-                # Convert STIM indices to LoQS labels
+                # Report plain STIM qubit indices, matching the other
+                # backends and this method's own declared return type.
                 if post_twoq_gates:
                     if entries[0] in self._stim_twoq_gates:
                         # Handle the case where multiple 2Q gates are defined on one line
                         for i in range(1, len(entries[1:]), 2):
-                            stim_idx1 = int(entries[i])
-                            stim_idx2 = int(entries[i + 1])
+                            # Strip inverted-target prefix; it does not
+                            # change which physical qubit is targeted.
+                            stim_idx1 = int(entries[i].lstrip("!"))
+                            stim_idx2 = int(entries[i + 1].lstrip("!"))
                             circuit_locations.append(
                                 (
                                     lidx + 1,
                                     (
-                                        self._qubit_labels[stim_idx1],
-                                        self._qubit_labels[stim_idx2],
+                                        stim_idx1,
+                                        stim_idx2,
                                     ),
                                 )
                             )
                 else:
                     circuit_locations.extend(
-                        [
-                            (lidx, self._qubit_labels[int(q)])
-                            for q in entries[1:]
-                        ]
+                        [(lidx, int(q.lstrip("!"))) for q in entries[1:]]
                     )
         return circuit_locations
 
@@ -748,10 +752,12 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
         # it's already the right type (reference is only ever read below).
         if not isinstance(reference, STIMPhysicalCircuit):
             reference = STIMPhysicalCircuit(reference)
-        idle_names = set(idle_names)
-        qubits = set(qubits)
+        idle_set = set(idle_names)
+        qubit_set = set(qubits)
 
-        def layer_events(circ: "STIMPhysicalCircuit", lstr: str) -> dict[QubitTypes, tuple[str, str]]:
+        def layer_events(
+            circ: "STIMPhysicalCircuit", lstr: str
+        ) -> dict[QubitTypes, tuple[str, str]]:
             """qubit -> (kind, gate_name) for every qubit of interest with a
             recognized instruction in this TICK-delimited layer string."""
             events: dict[QubitTypes, tuple[str, str]] = {}
@@ -759,32 +765,34 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                 entries = line.split()
                 if len(entries) == 0 or entries[0] not in circ._stim_gates:
                     continue
-                kind = "idle" if entries[0] in idle_names else "real"
+                kind = "idle" if entries[0] in idle_set else "real"
                 for tok in entries[1:]:
                     try:
                         idx = int(tok)
                     except ValueError:
                         continue
                     q = circ._qubit_labels[idx]
-                    if q in qubits:
+                    if q in qubit_set:
                         events[q] = (kind, entries[0])
             return events
 
         # Reference sequence: for each qubit, its ordered (kind, gate_name)
         # across every layer it appears in.
-        true_seqs: dict[QubitTypes, list[tuple[str, str]]] = {q: [] for q in qubits}
+        true_seqs: dict[QubitTypes, list[tuple[str, str]]] = {
+            q: [] for q in qubit_set
+        }
         for lstr in str(reference.circuit).split("TICK\n"):
-            for q, event in layer_events(reference, lstr).items():
-                true_seqs[q].append(event)
+            for q, ref_event in layer_events(reference, lstr).items():
+                true_seqs[q].append(ref_event)
 
-        ptrs = {q: 0 for q in qubits}
+        ptrs = {q: 0 for q in qubit_set}
         new_circ_str = ""
         for lstr in str(self.circuit).split("TICK\n"):
             events = layer_events(self, lstr)
 
             new_circ_str += lstr
 
-            for q in qubits:
+            for q in qubit_set:
                 true_seq = true_seqs[q]
                 ptr = ptrs[q]
                 event = events.get(q)
@@ -796,7 +804,11 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
                         )
                     ptrs[q] = ptr + 1
                     continue
-                if event is None and ptr < len(true_seq) and true_seq[ptr][0] == "idle":
+                if (
+                    event is None
+                    and ptr < len(true_seq)
+                    and true_seq[ptr][0] == "idle"
+                ):
                     idx = self._qubit_labels.index(q)
                     new_circ_str += f"\n{true_seq[ptr][1]} {idx}"
                     ptrs[q] = ptr + 1
@@ -805,7 +817,7 @@ class STIMPhysicalCircuit(BasePhysicalCircuit):
 
         self._circuit = _Circuit(new_circ_str)
 
-        for q in qubits:
+        for q in qubit_set:
             if ptrs[q] != len(true_seqs[q]):
                 raise ValueError(
                     f"Qubit {q!r}: only matched {ptrs[q]}/{len(true_seqs[q])} reference "

@@ -52,7 +52,11 @@ import re
 import libcst as cst
 
 from loqs.tools.migrate.renames import RENAMES
-from loqs.tools.migrate.report import ManualReviewItem, MigrationResult, RewriteItem
+from loqs.tools.migrate.report import (
+    ManualReviewItem,
+    MigrationResult,
+    RewriteItem,
+)
 
 _CASTABLE_CLASS_NAMES = sorted(
     {
@@ -96,7 +100,9 @@ def _detect_iz_literal(source: str) -> list[ManualReviewItem]:
     items = []
     for lineno, line in enumerate(source.splitlines(), start=1):
         if _IZ_PATTERN.search(line):
-            items.append(ManualReviewItem(line=lineno, message=_IZ_MESSAGE, kind="iz"))
+            items.append(
+                ManualReviewItem(line=lineno, message=_IZ_MESSAGE, kind="iz")
+            )
     return items
 
 
@@ -118,7 +124,9 @@ def rewrite_iz_literal(source: str) -> MigrationResult:
         return f"{quote}Imrz{quote}"
 
     new_source = _IZ_PATTERN.sub(_replace, source)
-    return MigrationResult(source=new_source, changed=bool(rewrites), rewrites=rewrites)
+    return MigrationResult(
+        source=new_source, changed=bool(rewrites), rewrites=rewrites
+    )
 
 
 def _func_name(node: cst.BaseExpression) -> str | None:

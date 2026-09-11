@@ -99,7 +99,13 @@ class ZBasisPrePostInstrumentRep(InstrumentRep):
     post_op: GateRep
     """Noisy operation applied immediately after the projection."""
 
-    _SERIALIZE_ATTRS = ["reset", "include_outcome", "pre_op", "post_op", "qubit_labels"]
+    _SERIALIZE_ATTRS = [
+        "reset",
+        "include_outcome",
+        "pre_op",
+        "post_op",
+        "qubit_labels",
+    ]
 
     def __init__(
         self,
@@ -182,7 +188,12 @@ class OutcomeOperationDictInstrumentRep(InstrumentRep):
     acts on); defaults to `qubit_labels` when not given explicitly.
     """
 
-    _SERIALIZE_ATTRS = ["outcome_ops", "include_outcome", "qubit_labels", "outcome_qubits"]
+    _SERIALIZE_ATTRS = [
+        "outcome_ops",
+        "include_outcome",
+        "qubit_labels",
+        "outcome_qubits",
+    ]
 
     def __init__(
         self,

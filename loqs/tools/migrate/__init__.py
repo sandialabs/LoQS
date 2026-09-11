@@ -51,7 +51,10 @@ file actually written.
 
 from __future__ import annotations
 
-from loqs.tools.migrate.flags import detect_flagged_patterns, rewrite_iz_literal
+from loqs.tools.migrate.flags import (
+    detect_flagged_patterns,
+    rewrite_iz_literal,
+)
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.renames import rewrite_renames
 from loqs.tools.migrate.reptuple import rewrite_reptuple_construction
@@ -72,7 +75,9 @@ __all__ = [
 ]
 
 
-def _chain(result: MigrationResult, next_result: MigrationResult) -> MigrationResult:
+def _chain(
+    result: MigrationResult, next_result: MigrationResult
+) -> MigrationResult:
     """Combine `result` with the next pass's own result over `result`'s
     (already-updated) source, remapping `result`'s own manual-review and
     rewrite items forward in case `next_result` changed the surrounding
@@ -81,7 +86,9 @@ def _chain(result: MigrationResult, next_result: MigrationResult) -> MigrationRe
         source=next_result.source,
         changed=result.changed or next_result.changed,
         manual_review=(
-            remap_manual_review(result.source, next_result.source, result.manual_review)
+            remap_manual_review(
+                result.source, next_result.source, result.manual_review
+            )
             + next_result.manual_review
         ),
         rewrites=(
@@ -92,7 +99,10 @@ def _chain(result: MigrationResult, next_result: MigrationResult) -> MigrationRe
 
 
 def migrate_source(
-    source: str, *, rename_iz: bool = False, rename_patch_label: str | None = None
+    source: str,
+    *,
+    rename_iz: bool = False,
+    rename_patch_label: str | None = None,
 ) -> MigrationResult:
     """Run every migration pass over `source`, returning the combined result.
 
@@ -132,15 +142,21 @@ def migrate_source(
     result = _chain(result, rewrite_renames(result.source))
     result = _chain(
         result,
-        migrate_instruction_labels(result.source, rename_patch_label=rename_patch_label),
+        migrate_instruction_labels(
+            result.source, rename_patch_label=rename_patch_label
+        ),
     )
     if rename_iz:
         result = _chain(result, rewrite_iz_literal(result.source))
-    result.manual_review.extend(detect_flagged_patterns(result.source, rename_iz=rename_iz))
+    result.manual_review.extend(
+        detect_flagged_patterns(result.source, rename_iz=rename_iz)
+    )
     if result.changed:
         pre_annotate_source = result.source
         result.source, result.manual_review = annotate_manual_review(
             result.source, result.manual_review
         )
-        result.rewrites = remap_rewrites(pre_annotate_source, result.source, result.rewrites)
+        result.rewrites = remap_rewrites(
+            pre_annotate_source, result.source, result.rewrites
+        )
     return result

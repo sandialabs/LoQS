@@ -11,7 +11,7 @@ import pytest
 pygsti = pytest.importorskip("pygsti")
 stim = pytest.importorskip("stim")
 
-from loqs.backends import PyGSTiPhysicalCircuit
+from loqs.backends import PyGSTiPhysicalCircuit, STIMPhysicalCircuit
 from loqs.core import Frame, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
@@ -150,6 +150,23 @@ class TestPauliPropagation:
             circ, ["Gxpi", "Gzpi"], post_twoq_gates=False
         )
         assert len(representatives) == total == 6
+
+    def test_prune_error_combos_rejects_stim_circuit(self):
+        # STIMPhysicalCircuit should raise AssertionError when passed to
+        # prune_error_combos_by_propagation (requires PyGSTiPhysicalCircuit).
+        stim_circ = STIMPhysicalCircuit(
+            "H 0\nTICK\nCX 0 1", qubit_labels=[0, 1]
+        )
+        with pytest.raises(
+            AssertionError,
+            match=(
+                "Pauli propagation pruning only supports "
+                "PyGSTiPhysicalCircuit-backed circuits."
+            ),
+        ):
+            fttools.prune_error_combos_by_propagation(
+                stim_circ, ["Gxpi"], post_twoq_gates=False
+            )
 
 
 class TestBuildPrunedDiscreteErrorInjectionPrograms:

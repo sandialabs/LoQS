@@ -91,7 +91,9 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
                 ) from e
         else:
             try:
-                self._circuit = self._cast_allowing_nonconforming_labels(circuit)
+                self._circuit = self._cast_allowing_nonconforming_labels(
+                    circuit
+                )
             except Exception as e:
                 raise ValueError("Failed to cast to pyGSTi circuit") from e
 
@@ -259,7 +261,7 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         # it's already the right type (reference is only ever read below).
         if not isinstance(reference, PyGSTiPhysicalCircuit):
             reference = PyGSTiPhysicalCircuit(reference)
-        idle_names = set(idle_names)
+        idle_set = set(idle_names)
         ref_circuit = reference.circuit
 
         for qubit in qubits:
@@ -267,14 +269,14 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
             for lidx in range(ref_circuit.depth):
                 for comp in ref_circuit._layer_components(lidx):
                     if comp.qubits and qubit in comp.qubits:  # type: ignore
-                        kind = "idle" if comp.name in idle_names else "real"  # type: ignore
+                        kind = "idle" if comp.name in idle_set else "real"  # type: ignore
                         true_seq.append((kind, comp.name))  # type: ignore
 
             ptr = 0
             for lidx in range(self._circuit.depth):
                 comps = self._circuit._layer_components(lidx)
                 is_real = any(
-                    comp.qubits and qubit in comp.qubits and comp.name not in idle_names  # type: ignore
+                    comp.qubits and qubit in comp.qubits and comp.name not in idle_set  # type: ignore
                     for comp in comps
                 )
                 if is_real:
@@ -324,8 +326,12 @@ class PyGSTiPhysicalCircuit(BasePhysicalCircuit):
         qubit_labels: Sequence | None = None,
     ) -> _Circuit:
         if isinstance(serial_circuit, dict):
-            circ = cls._deserialize_circuit(serial_circuit["circuit"], qubit_labels)
-            for old_name, safe_name in serial_circuit["gatename_renames"].items():
+            circ = cls._deserialize_circuit(
+                serial_circuit["circuit"], qubit_labels
+            )
+            for old_name, safe_name in serial_circuit[
+                "gatename_renames"
+            ].items():
                 circ.replace_gatename_inplace(safe_name, old_name)
             return circ
 

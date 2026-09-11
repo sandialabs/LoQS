@@ -69,6 +69,10 @@ class Frame(Mapping[str, object], Displayable):
         if data is None:
             data = {}
 
+        # Initialize attributes with explicit types to help mypy
+        self._expired_keys: list[str]
+        self._no_serialize_keys: list[str]
+
         if isinstance(data, Frame):
             self._data = deepcopy(data._data)
             self.log = data.log if log == "N/A" else log

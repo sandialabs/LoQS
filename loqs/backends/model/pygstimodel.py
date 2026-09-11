@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 import json
 import re
 import warnings
@@ -68,41 +68,21 @@ else:
 T = TypeVar("T", bound="PyGSTiNoiseModel")
 
 
-PyGSTiModelLike: TypeAlias = (
-    ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
-)
+PyGSTiModelLike: TypeAlias = ExplicitOpModel | ImplicitOpModel | BaseNoiseModel
 """Types of pyGSTi models this backend can handle"""
 
 
-# ---------------------------------------------------------------------------
-# Workaround/detection for a pyGSTi `EmbeddedOp` memory-blowup bug.
-#
-# See `issues/pygsti-543.md` and `issues/pr-543.md` in the LoQS workspace repo
-# for full details, and https://github.com/sandialabs/pyGSTi/issues/543 for
-# the upstream pyGSTi issue.
-#
-# In short: pyGSTi commit 5c5b06a6d ("First pass at updating default evotype
-# behavior") made `Evotype.cast(...)` prefer *dense* representations whenever
-# an operator's own state space has dimension <= 64 (i.e. up to ~3 qubits).
-# `EmbeddedOp` (used to embed a small local operator into a larger multi-qubit
-# model) naively reuses the *embedded* operator's `Evotype` object -- which was
-# decided based on that operator's own small local state space -- to decide
-# its own representation type, even though `EmbeddedOp` itself spans the much
-# larger *parent* state space. This can cause a single `EmbeddedOp` to
-# allocate a dense matrix scaling as O(dim(parent state space)^2) instead of a
-# much smaller "embedded" representation, e.g. ~2.1 GB for a single 1-qubit
-# idle gate embedded into a 7-qubit register. As of this writing the bug is
-# still present on pyGSTi's `develop` branch.
-#
-# This mainly bites user-defined custom (often time-dependent) pyGSTi
-# operators, such as those in the `timedepmodel.md` tutorial, which are
-# commonly built by subclassing `DenseOperator`/`LinearOperator`, passing
-# `evotype` as a bare string (e.g. `"densitymx"`) without an explicit
-# `state_space`, and then wrapping the result in an `EmbeddedOp` targeting a
-# larger multi-qubit model. PyGSTi's own model-construction helpers (e.g.
-# `create_crosstalk_free_model`) are unaffected, since they build their
-# operators/evotypes differently.
-# ---------------------------------------------------------------------------
+# Workaround for a pyGSTi `EmbeddedOp` memory-blowup bug (upstream
+# pyGSTi issue #543). When an `EmbeddedOp` wraps a small local operator
+# (e.g. a 1-qubit idle) and embeds it into a larger multi-qubit model,
+# `EmbeddedOp` naively reuses the wrapped operator's `Evotype` object
+# (decided based on the small local state space) instead of re-deciding
+# based on its own larger parent state space. This causes a single
+# `EmbeddedOp` to allocate a dense matrix scaling as O(parent_dim^2)
+# instead of a compact embedded representation (~2.1 GB for a 1-qubit
+# idle in a 7-qubit register). Happens most often with user-defined
+# custom pyGSTi operators passed as bare evotype strings to
+# `EmbeddedOp`; see [](api:safe_time_dependent_evotype) for a workaround.
 
 _DENSE_EMBEDDING_DIM_THRESHOLD = 64
 """Mirrors the dimension threshold pyGSTi itself uses (as of the bug's
@@ -140,8 +120,7 @@ def safe_time_dependent_evotype(evotype: str = "densitymx") -> Evotype:
     on the wrapped operator's small, local state space) instead of deciding
     based on its own, potentially much larger, parent state space -- which
     can cause disproportionate (and potentially enormous) memory use. See the
-    module-level comment above [](api:PyGSTiNoiseModel) and
-    `issues/pr-543.md` for full details.
+    module-level comment above [](api:PyGSTiNoiseModel) for details.
 
     Explicitly forcing `default_prefer_dense_reps=False` here sidesteps the
     issue entirely (regardless of pyGSTi version) since `EmbeddedOp` will
@@ -230,18 +209,13 @@ def _check_op_for_dense_embedding_blowup(
             f"(dim={parent_dim}, ~{approx_bytes / 1e9:.2f} GB) instead of a "
             f"compact embedded representation (embedded operator only acts "
             f"on a dim={child_dim} subspace). This is a known pyGSTi bug "
-            "(see issues/pygsti-543.md and issues/pr-543.md) where "
-            "EmbeddedOp inherits its wrapped operator's dense-representation "
-            "preference, which was decided based on the wrapped operator's "
-            "own small state space, rather than re-deciding based on its "
-            "own (larger) parent state space. This most commonly happens "
-            "when constructing a custom pyGSTi operator (e.g. subclassing "
-            "DenseOperator) with evotype passed as a bare string and no "
-            "explicit state_space, then embedding it via EmbeddedOp. "
+            "(see the module-level comment near the top of pygstimodel.py "
+            "and upstream pyGSTi issue #543) where EmbeddedOp inherits its "
+            "wrapped operator's dense-representation preference rather than "
+            "re-deciding based on its own (larger) parent state space. "
             "Workaround: construct the operator's evotype explicitly with "
             "dense representations disabled, e.g. using "
-            "loqs.backends.model.pygstimodel.safe_time_dependent_evotype(...) "
-            "in place of a bare evotype string.",
+            "loqs.backends.model.pygstimodel.safe_time_dependent_evotype(...)",
             PyGSTiEmbeddedOpMemoryWarning,
             stacklevel=3,
         )
@@ -265,6 +239,12 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     """Underlying [](api:pygsti.models.explicitmodel.ExplicitOpModel) or [](api:pygsti.models.implicitmodel.ImplicitOpModel)
     """
 
+    qubit_aliases: dict[str | int, str | int]
+    instrument_outcome_qubits: dict[
+        str | tuple[str, tuple[str | int, ...]],
+        str | int | Sequence[str | int],
+    ]
+
     def __init__(
         self,
         model: PyGSTiModelLike,
@@ -278,7 +258,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             Mapping[Label | str, int | float] | None
         ) = None,
         instrument_outcome_qubits: (
-            Mapping[str | tuple[str, tuple[str | int, ...]], str | int | Sequence[str | int]]
+            Mapping[
+                str | tuple[str, tuple[str | int, ...]],
+                str | int | Sequence[str | int],
+            ]
             | None
         ) = None,
     ) -> None:
@@ -372,11 +355,17 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         self.zbasis_proj_resets = zbasis_proj_resets
 
-        if instrument_outcome_qubits is None and isinstance(model, PyGSTiNoiseModel):
+        if instrument_outcome_qubits is None and isinstance(
+            model, PyGSTiNoiseModel
+        ):
             # Copy-constructor: inherit the source model's declarations.
-            self.instrument_outcome_qubits = dict(model.instrument_outcome_qubits)
+            self.instrument_outcome_qubits = dict(
+                model.instrument_outcome_qubits
+            )
         else:
-            self.instrument_outcome_qubits = dict(instrument_outcome_qubits or {})
+            self.instrument_outcome_qubits = dict(
+                instrument_outcome_qubits or {}
+            )
 
         self.use_time_dependence = use_time_dependence
         self.default_gate_durations = default_gate_durations
@@ -384,8 +373,10 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
         # TODO: Crosstalk specification?
 
-        self._gate_rep_cache = {}
-        self._inst_rep_cache = {}
+        self._gate_rep_cache: dict[tuple[Any, type[GateRep]], GateRep] = {}
+        self._inst_rep_cache: dict[
+            tuple[Any, type[InstrumentRep]], InstrumentRep
+        ] = {}
 
         # Tracks which gate_dict/inst_dict keys have already been checked for
         # the pyGSTi EmbeddedOp dense-representation memory-blowup bug (see
@@ -402,7 +393,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
 
     @property
     def gate_keys(self) -> list:
-        keys = []
+        keys: list[tuple[Any, ...]] = []
         for key in self.gate_dict.keys():
             name = key.name
 
@@ -424,7 +415,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
             keys.append((name, aliased_qubits))
         return keys
 
-    _output_gate_reps = [
+    _output_gate_reps: list[type[GateRep]] = [
         UnitaryGateRep,
         KrausGateRep,
         PTMGateRep,
@@ -435,7 +426,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     def output_gate_reps(self) -> list[type[GateRep]]:
         return self._output_gate_reps
 
-    _output_instrument_reps = [
+    _output_instrument_reps: list[type[InstrumentRep]] = [
         ZBasisProjectionInstrumentRep,
         OutcomeOperationDictInstrumentRep,
     ]
@@ -574,8 +565,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
     def check_for_dense_embedding_issues(self) -> None:
         """Proactively scan every gate/instrument in this model for the
         pyGSTi `EmbeddedOp` dense-representation memory-blowup bug (see the
-        module-level comment near the top of this file, and
-        `issues/pygsti-543.md` / `issues/pr-543.md`), warning (via
+        module-level comment near the top of this file), warning (via
         [](api:PyGSTiEmbeddedOpMemoryWarning)) for each affected gate/
         instrument found.
 
@@ -606,6 +596,31 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 _check_op_for_dense_embedding_blowup(op, inst_key)
                 self._dense_embedding_checked_raw_inst_keys.add(inst_key)
 
+    def _first_successful_rep(
+        self, cache, cache_key, candidates, build_fn, kind: str = "rep"
+    ):
+        """Try build_fn(c) for each candidate, caching and returning the first.
+
+        Iterates through candidates, calling build_fn(c) for each; catches
+        RepConstructionError and accumulates failures. Returns the first
+        successful result (cached unless time-dependent). Raises a combined
+        RepConstructionError citing all failures if every candidate fails.
+        """
+        errors = []
+        for candidate in candidates:
+            try:
+                rep = build_fn(candidate)
+            except RepConstructionError as e:
+                errors.append(e)
+                continue
+            if not self.use_time_dependence:
+                cache[cache_key, candidate] = rep
+            return rep
+        raise RepConstructionError(
+            f"Failed to create {kind} for any of {candidates}, with errors:"
+            + "\n".join([str(e) for e in errors])
+        )
+
     def get_reps(
         self,
         circuit: BasePhysicalCircuit,
@@ -617,7 +632,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         from loqs.backends import PyGSTiPhysicalCircuit
 
         if not isinstance(circuit, PyGSTiPhysicalCircuit):
-            circuit = PyGSTiPhysicalCircuit(circuit)
+            circuit = PyGSTiPhysicalCircuit(circuit)  # type: ignore[misc]
         pygsti_circuit = circuit.circuit
 
         # Iterate through circuit and pull out representations
@@ -678,7 +693,8 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 op.state_space.qubit_labels.index(q) for q in op.target_labels
             ]
             assert all(
-                i < len(self.model.basis.component_bases) for i in target_indices
+                i < len(self.model.basis.component_bases)
+                for i in target_indices
             )
 
             op = op.embedded_op
@@ -687,21 +703,98 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
         # let convert() produce whichever concrete GateRep is requested.
         ptm_rep = PTMGateRep(op.to_dense(on_space="HilbertSchmidt"), qubits)
 
-        errors = []
-        for gaterep in gatereps:
-            try:
-                gate_rep = convert_rep(ptm_rep, gaterep)
-            except RepConstructionError as e:
-                errors.append(e)
-                continue
+        return self._first_successful_rep(
+            self._gate_rep_cache,
+            op_key,
+            gatereps,
+            lambda gaterep: convert_rep(ptm_rep, gaterep),
+            kind="gate rep",
+        )
 
-            if not self.use_time_dependence:
-                self._gate_rep_cache[op_key, gaterep] = gate_rep
-            return gate_rep
+    def _build_outcome_dict_rep(
+        self, name: str, qubits, inst_key
+    ) -> OutcomeOperationDictInstrumentRep:
+        """Build an OutcomeOperationDictInstrumentRep from a pyGSTi instrument.
 
-        raise RepConstructionError(
-            f"Failed to create gate rep for any of {gatereps}, with errors:"
-            + "\n".join([str(e) for e in errors])
+        Extracts outcome operations, determines outcome qubits based on
+        channel counts, and validates consistency.
+        """
+        # TODO: What to do with key error?
+        # Look up using unaliased qubits
+        op = self.inst_dict[inst_key]
+
+        if inst_key not in self._dense_embedding_checked_inst_keys:
+            _check_op_for_dense_embedding_blowup(op, inst_key)
+            self._dense_embedding_checked_inst_keys.add(inst_key)
+
+        # if using time-dependence, update operator rep
+        # `Instrument` itself has no `set_time` -- each individual
+        # member operation does.
+        if self.use_time_dependence:
+            for member_op in op.values():
+                member_op.set_time(self.current_time)
+
+        outcome_ops: dict[Hashable, GateRep] = {}
+        for k, v in op.items():
+            if isinstance(k, str) and k != "" and all(c in "01" for c in k):
+                # pyGSTi's usual '0'/'1'-character-string convention
+                # for a decomposable multi-bit outcome.
+                label = tuple(int(c) for c in k)
+            else:
+                # Any other label (e.g. 'even'/'odd' for a joint
+                # parity-check instrument) is used as-is.
+                label = k
+
+            # Wrap as pyGSTi's native PTM; each consuming backend
+            # converts to whatever concrete GateRep it needs.
+            outcome_ops[label] = PTMGateRep(
+                v.to_dense(on_space="HilbertSchmidt"), qubits
+            )
+
+        # A label that isn't itself a sequence of bits is its own
+        # single (joint) channel, regardless of qubit count.
+        def _n_channels(label):
+            if (
+                isinstance(label, Sequence)
+                and not isinstance(label, str)
+                and all(b in (0, 1) for b in label)
+            ):
+                return len(label)
+            return 1
+
+        channel_counts = {_n_channels(lbl) for lbl in outcome_ops}
+        if len(channel_counts) != 1:
+            raise RepConstructionError(
+                f"instrument {name!r} outcome labels have inconsistent "
+                f"channel counts {channel_counts!r}"
+            )
+        n_channels = next(iter(channel_counts))
+
+        if n_channels == len(qubits):
+            # One classical bit per physical qubit.
+            outcome_qubits = qubits
+        elif n_channels == 1:
+            # A joint outcome channel isn't owned by any one qubit;
+            # the caller must say which classical register it's in.
+            aliased_qubits = tuple(self.qubit_aliases[q] for q in qubits)
+            outcome_qubits = self.instrument_outcome_qubits.get(
+                (name, aliased_qubits),
+                self.instrument_outcome_qubits.get(name),
+            )
+            if outcome_qubits is None:
+                raise RepConstructionError(
+                    f"instrument {name!r} on {aliased_qubits!r} has a "
+                    "single joint outcome channel; add an entry to "
+                    "instrument_outcome_qubits"
+                )
+        else:
+            raise RepConstructionError(
+                f"instrument {name!r} outcome labels have {n_channels} "
+                f"channels, matching neither 1 nor len(qubits)={len(qubits)}"
+            )
+
+        return OutcomeOperationDictInstrumentRep(
+            outcome_ops, True, qubits, outcome_qubits
         )
 
     def _get_instrument_rep(self, name, qubits, instreps):
@@ -716,103 +809,18 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 reset = 0 if self.zbasis_proj_resets else None
                 return ZBasisProjectionInstrumentRep(reset, True, qubits)
             elif instrep is OutcomeOperationDictInstrumentRep:
-                # TODO: What to do with key error?
-                # Look up using unaliased qubits
-                op = self.inst_dict[inst_key]
-
-                if inst_key not in self._dense_embedding_checked_inst_keys:
-                    _check_op_for_dense_embedding_blowup(op, inst_key)
-                    self._dense_embedding_checked_inst_keys.add(inst_key)
-
-                # if using time-dependence, update operator rep
-                # `Instrument` itself has no `set_time` -- each individual
-                # member operation does.
-                if self.use_time_dependence:
-                    for member_op in op.values():
-                        member_op.set_time(self.current_time)
-
-                outcome_ops = {}
-                for k, v in op.items():
-                    if isinstance(k, str) and k != "" and all(c in "01" for c in k):
-                        # pyGSTi's usual '0'/'1'-character-string convention
-                        # for a decomposable multi-bit outcome.
-                        label = tuple(int(c) for c in k)
-                    else:
-                        # Any other label (e.g. 'even'/'odd' for a joint
-                        # parity-check instrument) is used as-is.
-                        label = k
-
-                    # Wrap as pyGSTi's native PTM; each consuming backend
-                    # converts to whatever concrete GateRep it needs.
-                    outcome_ops[label] = PTMGateRep(
-                        v.to_dense(on_space="HilbertSchmidt"), qubits
-                    )
-
-                # A label that isn't itself a sequence of bits is its own
-                # single (joint) channel, regardless of qubit count.
-                def _n_channels(label):
-                    if (
-                        isinstance(label, Sequence)
-                        and not isinstance(label, str)
-                        and all(b in (0, 1) for b in label)
-                    ):
-                        return len(label)
-                    return 1
-
-                channel_counts = {_n_channels(lbl) for lbl in outcome_ops}
-                if len(channel_counts) != 1:
-                    raise RepConstructionError(
-                        f"instrument {name!r} outcome labels have inconsistent "
-                        f"channel counts {channel_counts!r}"
-                    )
-                n_channels = next(iter(channel_counts))
-
-                if n_channels == len(qubits):
-                    # One classical bit per physical qubit.
-                    outcome_qubits = qubits
-                elif n_channels == 1:
-                    # A joint outcome channel isn't owned by any one qubit;
-                    # the caller must say which classical register it's in.
-                    aliased_qubits = tuple(self.qubit_aliases[q] for q in qubits)
-                    outcome_qubits = self.instrument_outcome_qubits.get(
-                        (name, aliased_qubits),
-                        self.instrument_outcome_qubits.get(name),
-                    )
-                    if outcome_qubits is None:
-                        raise RepConstructionError(
-                            f"instrument {name!r} on {aliased_qubits!r} has a "
-                            "single joint outcome channel; add an entry to "
-                            "instrument_outcome_qubits"
-                        )
-                else:
-                    raise RepConstructionError(
-                        f"instrument {name!r} outcome labels have {n_channels} "
-                        f"channels, matching neither 1 nor len(qubits)={len(qubits)}"
-                    )
-
-                return OutcomeOperationDictInstrumentRep(
-                    outcome_ops, True, qubits, outcome_qubits
-                )
+                return self._build_outcome_dict_rep(name, qubits, inst_key)
             else:
                 raise RepConstructionError(
                     f"Cannot create instrument rep for {instrep}"
                 )
 
-        errors = []
-        for instrep in instreps:
-            try:
-                instrument_rep = _make_rep(instrep)
-            except RepConstructionError as e:
-                errors.append(e)
-                continue
-
-            if not self.use_time_dependence:
-                self._inst_rep_cache[inst_key, instrep] = instrument_rep
-            return instrument_rep
-
-        raise RepConstructionError(
-            f"Failed to create instrument rep for any of {instreps}, with errors:"
-            + "\n".join([str(e) for e in errors])
+        return self._first_successful_rep(
+            self._inst_rep_cache,
+            inst_key,
+            instreps,
+            _make_rep,
+            kind="instrument rep",
         )
 
     _LABEL_NAME_RE: ClassVar = re.compile(r"[:;!]")
@@ -883,7 +891,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 for i, label_str in enumerate(labels):
                     name = self._model_label_name(label_str)
                     if name in renames:
-                        labels[i] = renames[name] + label_str[len(name):]
+                        labels[i] = renames[name] + label_str[len(name) :]
             return {
                 "model": json.dumps(model_state),
                 "gatename_renames": renames,
@@ -920,9 +928,7 @@ class PyGSTiNoiseModel(TimeDependentBaseNoiseModel):
                 if cls._model_label_name(label_str) in safe_to_original
             }
             for mm_type in affected_mm_types:
-                container = cls._resolve_modelmember_container(
-                    model, mm_type
-                )
+                container = cls._resolve_modelmember_container(model, mm_type)
                 for key in list(container.keys()):
                     original_name = safe_to_original.get(
                         getattr(key, "name", None)

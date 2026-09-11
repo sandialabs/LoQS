@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
-from loqs.core import QuantumProgram
+from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
+from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.executors import SubmitExecutor
 from loqs.core.historydatacollector import (
     HistoryDataCollector,
@@ -139,7 +140,7 @@ def is_stim_pauli_propagation_available() -> bool:
 
 
 def propagate_pauli_signature(
-    circuit: BasePhysicalCircuit,
+    circuit: PyGSTiPhysicalCircuit,
     start_layer: int,
     seed: dict[int, str],
 ) -> tuple[tuple[int, str], ...]:
@@ -163,7 +164,7 @@ def propagate_pauli_signature(
     for qidx, pauli in seed.items():
         p[qidx] = pauli
     for lidx in range(start_layer, circuit.depth):
-        for comp in circuit._circuit._layer_components(lidx):
+        for comp in circuit.circuit._layer_components(lidx):
             name = comp.name
             if name in PAULI_PROPAGATION_IDLE_GATES:
                 continue
@@ -200,16 +201,22 @@ def prune_error_combos_by_propagation(
     all_combos: list[list[tuple[int, str, int]]] = []
     for layer, target in locations:
         if post_twoq_gates:
+            assert isinstance(target, tuple) and len(target) == 2
             q1, q2 = target
             for lbl1 in error_labels:
                 for lbl2 in error_labels:
                     all_combos.append([(layer, lbl1, q1), (layer, lbl2, q2)])
         else:
+            assert isinstance(target, int)
             for lbl in error_labels:
                 all_combos.append([(layer, lbl, target)])
 
     if not is_stim_pauli_propagation_available():
         return all_combos, len(all_combos)
+
+    assert isinstance(
+        circuit, PyGSTiPhysicalCircuit
+    ), "Pauli propagation pruning only supports PyGSTiPhysicalCircuit-backed circuits."
 
     seen_signatures: set[tuple] = set()
     representatives: list[list[tuple[int, str, int]]] = []
@@ -388,14 +395,7 @@ def build_discrete_error_injection_programs(
                 # We only have single qubit errors, create the new program at this loop level
                 insert_1q_error(error_loc[0], eclabel, error_loc[1])
 
-    # Also add every error at the end of the circuit in the case of single qubit errors
-    # Two qubit errors don't need this because they are already post errors
-
-    # TODO: Don't do this, instead insert before readout as well
-    # if not post_twoq_gates:
-    #     for eclabel in error_circuit_labels:
-    #         for i in range(len(circuit.qubit_labels)):
-    #             insert_1q_error(circuit.depth, eclabel, i, end=True)
+    # TODO: Insert errors before readout in addition to circuit depth
 
     return errored_programs
 

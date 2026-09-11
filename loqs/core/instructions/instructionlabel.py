@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Final, TypeAlias
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Final, TypeAlias, cast
 import warnings
 
 from loqs.core.instructions.instruction import Instruction
@@ -69,7 +69,7 @@ class InstructionLabel(dict):
 
     Both are entirely optional, ordinary dict keys -- an instruction with
     neither is a "global" instruction, resolved from
-    [](api:InstructionStack.global_instructions) rather than a specific
+    [](api:QuantumProgram.global_instructions) rather than a specific
     patch's own instruction set.
 
     A handful of shorter forms are accepted by [](api:from_raw) as sugar
@@ -169,9 +169,15 @@ class InstructionLabel(dict):
                 stacklevel=2,
             )
             padded = list(legacy_positional_args) + [None, (), {}]
-            patch_label, inst_args, inst_kwargs = padded[0], padded[1], padded[2]
+            patch_label, inst_args, inst_kwargs = (
+                padded[0],
+                padded[1],
+                padded[2],
+            )
             remapped = _remap_legacy_positional_args(
-                instruction, tuple(inst_args or ()), dict(inst_kwargs or {})
+                instruction,
+                tuple(cast(Iterable[Any], inst_args or ())),
+                dict(cast(Mapping[str, Any], inst_kwargs or {})),
             )
             if patch_label is not None:
                 remapped["patch_label"] = patch_label

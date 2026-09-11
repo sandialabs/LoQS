@@ -202,7 +202,9 @@ def rewrite_renames(
     # file's text can't be referenced in its code either.
     applicable_renames = {k: v for k, v in renames.items() if k[1] in source}
     if not applicable_renames:
-        return MigrationResult(source=source, changed=False, manual_review=[], rewrites=[])
+        return MigrationResult(
+            source=source, changed=False, manual_review=[], rewrites=[]
+        )
 
     module = cst.parse_module(source)
 

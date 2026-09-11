@@ -75,7 +75,8 @@ from loqs.core.recordables.patchlayout import PatchLayout
 from loqs.core.recordables.pauliframe import PauliFrame
 
 PATCH_QUBIT_COUNTS = {
-    layout: len(layout_qubits(layout)) for layout in ("surf17", "surf13", "surf10")
+    layout: len(layout_qubits(layout))
+    for layout in ("surf17", "surf13", "surf10")
 }
 """Physical qubits (data + auxiliary) per patch for each layout -- sourced
 from codepack_surf17_tomita2014.layout_qubits, the single canonical
@@ -83,9 +84,7 @@ definition."""
 
 
 def _pauli_from_bits(x_bit: int, z_bit: int) -> str:
-    return {(0, 0): "I", (1, 0): "X", (0, 1): "Z", (1, 1): "Y"}[
-        (x_bit, z_bit)
-    ]
+    return {(0, 0): "I", (1, 0): "X", (0, 1): "Z", (1, 1): "Y"}[(x_bit, z_bit)]
 
 
 def pairwise_cnot_pauli_frames(
@@ -137,8 +136,8 @@ def pairwise_cnot_pauli_frames(
         new_ctrl.pauli_frame[new_ctrl.qubit_labels.index(c)] = (
             _pauli_from_bits(xc, zc ^ zt)
         )
-        new_tgt.pauli_frame[new_tgt.qubit_labels.index(t)] = (
-            _pauli_from_bits(xt ^ xc, zt)
+        new_tgt.pauli_frame[new_tgt.qubit_labels.index(t)] = _pauli_from_bits(
+            xt ^ xc, zt
         )
 
     return new_ctrl, new_tgt
@@ -621,9 +620,7 @@ def warn_if_backend_infeasible(
     int
         The total number of physical qubits.
     """
-    num_qubits = (
-        PATCH_QUBIT_COUNTS[layout] * n_patches + extra_qubits
-    )
+    num_qubits = PATCH_QUBIT_COUNTS[layout] * n_patches + extra_qubits
     backend_str = (
         backend if isinstance(backend, str) else backend.__name__
     ).lower()

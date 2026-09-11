@@ -82,18 +82,12 @@ DEFAULT_PRIORITIES = [
 class Instruction(Displayable):
     """An object that moves the state of the simulation forward.
 
-    This is the possibly the most important `LoQS` object.
-    It was designed to be maximally flexible: it can take in any
-    data it needs from the current state of the simulation,
-    perform any transformation on that data, and output any
-    information to be used by a downstream [](api:Instruction).
-
-    NOTE: The [](api:Instruction) is flexible and powerful; however,
-    with that flexibility comes complexity, and we are aware
-    it may not be immediately clear how to use these. Interested users are
-    encouraged to look at the Object Quickstart > Instructions and
-    Tutorials > Building a Complex Instruction for more,
-    or at [](api:builders) for concrete examples.
+    Designed to be maximally flexible: it can take in any data it needs
+    from the current state of the simulation, perform any transformation
+    on that data, and output any information to be used by a downstream
+    [](api:Instruction). Interested users are encouraged to look at the
+    Object Quickstart > Instructions and Tutorials > Building a Complex
+    Instruction for more, or at [](api:builders) for concrete examples.
 
     At its core, an [](api:Instruction) is defined by five
     pieces of user-defined information:
@@ -196,10 +190,10 @@ class Instruction(Displayable):
     It must conform to the [](api:ApplyCallable) protocol.
     """
 
-    map_qubits_fn: MapQubitsCallable | None
+    map_qubits_fn: MapQubitsCallable
     """A user-defined function called in [](api:Instruction.map_qubits).
 
-    It must conform to the [MapQubitsCallable](api:MapQubitsCallable] protocol.
+    It must conform to the [](api:MapQubitsCallable) protocol.
     """
 
     param_error_behavior: Literal["continue", "warn", "raise"]
@@ -230,9 +224,7 @@ class Instruction(Displayable):
         try:
             inspect.getsource(func)
             srcfile = inspect.getsourcefile(func)
-            unavailable = srcfile is not None and not os.path.exists(
-                srcfile
-            )
+            unavailable = srcfile is not None and not os.path.exists(srcfile)
         except (OSError, TypeError):
             unavailable = True
 
@@ -276,7 +268,7 @@ class Instruction(Displayable):
             A mapping of [](api:apply_fn) parameter names to lists of priorities
             to using during parameter collection with
             [](api:QuantumProgram._collect_kwarg). Defaults to `None`,
-            which sets every parameter's priority to [](api:DEFAULT_PARAMETERS).
+            which sets every parameter's priority to [](api:DEFAULT_PRIORITIES).
             For an example, see [](api:builders.build_lookup_decoder_instruction).
 
         param_error_behavior:
@@ -317,9 +309,7 @@ class Instruction(Displayable):
             self._warn_if_source_unavailable(apply_fn, "apply_fn")
         self._serialized_map_qubits_fn_cache = serialized_map_qubits_fn
         if serialized_map_qubits_fn is None:
-            self._warn_if_source_unavailable(
-                map_qubits_fn, "map_qubits_fn"
-            )
+            self._warn_if_source_unavailable(map_qubits_fn, "map_qubits_fn")
 
         if data is None:
             data = {}
@@ -366,8 +356,8 @@ class Instruction(Displayable):
         `Serializable._get_function_str` on first access and cached from
         then on -- see the deferred-computation note in `__init__`."""
         if self._serialized_apply_fn_cache is None:
-            self._serialized_apply_fn_cache = (
-                Serializable._get_function_str(self.apply_fn)
+            self._serialized_apply_fn_cache = Serializable._get_function_str(
+                self.apply_fn
             )
         return self._serialized_apply_fn_cache
 

@@ -612,7 +612,9 @@ class JSONEncoder(BaseEncoder):
             else:
                 assert isinstance(encoded, dict)
                 version = encoded.get("version", -1)
-            items_to_decode, iter_type = _decode_json_iterable(version, encoded)
+            items_to_decode, iter_type = _decode_json_iterable(
+                version, encoded
+            )
 
         # Decode all items
         items = []

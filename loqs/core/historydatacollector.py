@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import ClassVar, TypeAlias
+from typing import Any, ClassVar, TypeAlias, cast
 
 from loqs.core.history import HistoryCollectDataIndexTypes
 from loqs.core.programresults import ProgramResults
@@ -89,7 +89,7 @@ class HistoryDataCollector(Serializable):
         if isinstance(raw, str):
             return cls(key=raw)
         if isinstance(raw, Mapping):
-            return cls(**raw)
+            return cls(**cast(dict[str, Any], raw))
         if isinstance(raw, list):
             raise TypeError(
                 "A list combines several collectors; use a tuple for the "
@@ -105,9 +105,10 @@ class HistoryDataCollector(Serializable):
         Scoped to [](api:ProgramResults) since that is the only thing any
         current caller needs.
         """
-        return program_results.collect_shot_data(
+        result = program_results.collect_shot_data(
             self.key,
             self.indices,
             strip_none_entries=self.strip_none_entries,
             frame_filter=self.frame_filter,
         )
+        return cast(list, result)

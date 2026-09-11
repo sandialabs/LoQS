@@ -1006,6 +1006,16 @@ class TestNumPyStatevectorQuantumState:
         s5 = s3.copy()
         self._check(s5, s3)
 
+    def test_qudit_infer_num_subsystems_from_flat_array(self):
+        # Flat array with no qubit_labels forces _infer_num_subsystems to use
+        # a base-d logarithm; d=3 here must not be mistaken for base-2 (qubit).
+        flat_arr = np.zeros(27, dtype=complex)
+        flat_arr[0] = 1.0
+        s = SVState(flat_arr, d=3)
+        assert len(s.qubit_labels) == 3
+        assert s.d == [3, 3, 3]
+        assert s.state.shape == (3, 3, 3)
+
     def test_qutrit_apply_gates(self):
         # Swap 0 <-> 1, leave 2 untouched
         U_X = np.array([

@@ -225,7 +225,9 @@ class QSimSuperopGateRep(GateRep):
             `_validate_process_shape`).
         """
         super().__init__(qubit_labels)
-        _validate_process_shape(superop, self.qubit_labels, 4, type(self).__name__)
+        _validate_process_shape(
+            superop, self.qubit_labels, 4, type(self).__name__
+        )
         self.superop = superop
 
 
@@ -300,7 +302,7 @@ class ProbabilisticStimGateRep(GateRep):
                     "pairs)"
                 )
         probs = [el[1] for el in operations]
-        if any(p < 0 for p in probs) or abs(1 - sum(probs)) >= 1e-12:
+        if any(p < 0 for p in probs) or abs(1 - float(sum(probs))) >= 1e-12:
             raise RepConstructionError(
                 f"{operations!r} probabilities must be non-negative and "
                 "sum to 1"
@@ -693,5 +695,8 @@ class KrausGateRep(GateRep):
         ]
 
         return KrausGateRep(
-            deduped_kraus_reps, self.qubit_labels, tp_check_abstol=None, dims=self.dims
+            deduped_kraus_reps,
+            self.qubit_labels,
+            tp_check_abstol=None,
+            dims=self.dims,
         )

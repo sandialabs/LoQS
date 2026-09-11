@@ -67,11 +67,11 @@ def install_legacy_module_aliases_for_relocations(
     module); or the new location can't actually be imported right now
     (e.g. it's behind an optional third-party backend dependency that
     isn't installed -- not this function's problem to solve). Multiple
-    classes that used to share the same old module (e.g. `SyndromeLabel`
-    and `PauliFrame` both moved out of `loqs.core.syndrome`) are grouped
-    into a single `install_legacy_module` call for that module, rather
-    than one call per class -- `install_legacy_module` can only register
-    a given dotted name once.
+    classes sharing the same legacy module path (e.g. `SyndromeLabel`
+    and `PauliFrame` from `loqs.core.syndrome`) are grouped into a
+    single `install_legacy_module` call for that module, rather than one
+    per class -- `install_legacy_module` can only register a given
+    dotted name once.
     """
     exports_by_old_module: dict[str, dict[str, object]] = {}
     for (old_module, old_name), new_loc in table.items():
@@ -197,7 +197,11 @@ def deprecated(
             warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
             return func(*args, **kwargs)
 
-        wrapper.__deprecated__ = DeprecationInfo(replacement=replacement, note=note)
+        setattr(
+            wrapper,
+            "__deprecated__",
+            DeprecationInfo(replacement=replacement, note=note),
+        )
         return wrapper
 
     return decorator
