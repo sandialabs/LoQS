@@ -23,7 +23,10 @@ import copy
 import math
 from pathlib import Path
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    import matplotlib.axes
 import warnings
 
 from loqs.backends.model import BaseNoiseModel
@@ -365,7 +368,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         self.base_seed = base_seed
         self.seed_stride = seed_stride
         # Resolved immediately since num_shots is now always known upfront
-        self._resolved_seed_stride: int | None = (
+        self._resolved_seed_stride: int = (
             seed_stride if seed_stride is not None else num_shots
         )
 
@@ -426,6 +429,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         cls, attr_dict: Mapping[str, Any]
     ) -> "NoiseSweepRunner":
         """Create a NoiseSweepRunner from decoded attributes dictionary."""
+        attr_dict = dict(attr_dict)
         values = attr_dict["_quantum_program_values"]
         serialized_callables = attr_dict[
             "_quantum_program_serialized_callables"
@@ -455,7 +459,7 @@ class NoiseSweepRunner(MultiProgramRunner):
         attr_dict.pop("_quantum_program_values", None)
         attr_dict.pop("_quantum_program_serialized_callables", None)
 
-        return super()._from_decoded_attrs(attr_dict)
+        return cast("NoiseSweepRunner", super()._from_decoded_attrs(attr_dict))
 
     @classmethod
     def from_noise_sweep_runner(
@@ -875,10 +879,10 @@ def compare_noise_sweeps(
 
 def plot_noise_sweep(
     results: NoiseSweepResult | Mapping[str, NoiseSweepResult],
-    ax: "matplotlib.axes.Axes | None" = None,  # noqa: F821
+    ax: matplotlib.axes.Axes | None = None,
     reference_slope: float | None = None,
     **kwargs,
-) -> "matplotlib.axes.Axes":  # noqa: F821
+) -> matplotlib.axes.Axes:
     """Log-log plot of failure rate vs. noise strength, one series per `NoiseSweepResult`, reading
     directly from its stored `failure_rates`/`stderrs`. Points with zero observed failures are
     drawn as open markers at the `1 / (2 * num_shots)` statistical upper limit (since a failure
@@ -896,7 +900,7 @@ def plot_noise_sweep(
     import numpy as np
 
     if isinstance(results, NoiseSweepResult):
-        results = {None: results}
+        results = cast(Mapping[Any, NoiseSweepResult], {None: results})
 
     if ax is None:
         _, ax = plt.subplots()

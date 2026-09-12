@@ -16,7 +16,7 @@ from concurrent.futures import as_completed
 import copy
 import math
 from pathlib import Path
-from typing import ClassVar, Literal, TypeVar
+from typing import ClassVar, Literal, TypeVar, cast
 import warnings
 
 from tqdm import tqdm
@@ -40,6 +40,7 @@ from loqs.core.instructions.instructionstack import (
 )
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchLayout
+from loqs.core.recordables.patchlayout import PatchLayoutLike
 from loqs.core.programresults import ProgramResults
 from loqs.internal import Displayable, pin_worker_threads, worker_id
 from loqs.internal.legacy import legacy_name_hint
@@ -169,7 +170,9 @@ class QuantumProgram(Displayable):
         self._noise_model_filename = None
         if isinstance(default_noise_model, str):
             # Likely passed a filename, try to load
-            self.default_noise_model = BaseNoiseModel.read(default_noise_model)
+            self.default_noise_model = cast(
+                BaseNoiseModel, BaseNoiseModel.read(default_noise_model)
+            )
             self._noise_model_filename = default_noise_model
         self.default_base_seed = default_base_seed
         """A default base seed value for shot RNG.
@@ -194,7 +197,7 @@ class QuantumProgram(Displayable):
                 ) from e
         else:
             self.instruction_stack = InstructionStack(
-                self.initial_history[-1]["stack"]
+                cast(InstructionStackLike, self.initial_history[-1]["stack"])
             )
 
         if global_instructions is None:
@@ -437,7 +440,7 @@ class QuantumProgram(Displayable):
 
         # From here on: on-disk state exists AND resume=True (case c)
 
-        stored = ProgramResults.read(results_path)
+        stored = cast(ProgramResults, ProgramResults.read(results_path))
         mismatches = []
         if stored.num_shots != num_shots:
             mismatches.append("num_shots")
@@ -649,6 +652,7 @@ class QuantumProgram(Displayable):
                     num_shots / n_shot_batches
                 )
             elif shot_executor is not None:
+                assert resolved_n_shot_batches is not None
                 resolved_checkpoint_batch_size = math.ceil(
                     num_shots / resolved_n_shot_batches
                 )
@@ -862,6 +866,7 @@ class QuantumProgram(Displayable):
                 # Dispatch shots in batches (resolved_n_shot_batches is
                 # non-None whenever shot_executor is set); checkpoint_dir is
                 # always None here since checkpointing is off for this path.
+                assert resolved_n_shot_batches is not None
                 batch_size = math.ceil(num_shots / resolved_n_shot_batches)
                 batches = [
                     list(
@@ -907,6 +912,8 @@ class QuantumProgram(Displayable):
         # `remaining` (rather than the full shot range) is what actually
         # gets dispatched below, so a resuming call only redoes whatever a
         # prior interrupted call hadn't already durably checkpointed.
+        assert resolved_checkpoint_dir is not None
+        assert checkpoint_batch_size is not None
         remaining, num_done, done_data = self._load_remaining_shots(
             resolved_checkpoint_dir, num_shots, results_filename, lazy_loading
         )
@@ -997,7 +1004,7 @@ class QuantumProgram(Displayable):
 
         # If we have state in the last frame, reset seed
         try:
-            history[-1]["state"].reset_seed(seed)
+            cast(BaseQuantumState, history[-1]["state"]).reset_seed(seed)
         except (KeyError, IndexError):
             pass
 
@@ -1060,7 +1067,9 @@ class QuantumProgram(Displayable):
 
             history.append(applied_frame)
 
-            stack = InstructionStack(applied_frame["stack"])
+            stack = InstructionStack(
+                cast(InstructionStackLike, applied_frame["stack"])
+            )
 
             num_frames += 1
 
@@ -1142,7 +1151,7 @@ class QuantumProgram(Displayable):
 
         # Otherwise, we must be a patch instruction
         try:
-            layout = PatchLayout(frame["patches"])
+            layout = PatchLayout(cast(PatchLayoutLike, frame["patches"]))
         except KeyError:
             raise RuntimeError(
                 f"'patches' not available in last frame for resolving {ilbl}"
@@ -1242,8 +1251,7 @@ class QuantumProgram(Displayable):
         - "patch_label": The resolved [](api:InstructionLabel)'s `"patch_label"` entry
         - "stack": The current [](api:InstructionStack) object being
             read by [](api:run).
-        - "seed": The shot of the seed, as [](api:default_base_seed)
-            \[](api:default_base_seed) is
+        - "seed": The shot of the seed, as [](api:default_base_seed) is
             not `None`, or `None` otherwise.
         - "model": The [](api:default_noise_model) if it is not `None`,
             otherwise it is not included in the dict
@@ -1324,7 +1332,7 @@ class QuantumProgram(Displayable):
                     continue
 
                 patches = history[-1].get("patches", None)
-                if patches is None:
+                if not isinstance(patches, Mapping):
                     continue
 
                 # Get the specific patch by label

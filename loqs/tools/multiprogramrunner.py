@@ -15,7 +15,7 @@ import copy
 import functools
 import h5py
 import itertools
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
@@ -146,7 +146,7 @@ class MultiProgramRunner(Serializable):
             else None
         )
         self.lazy_loading = lazy_loading
-        self.index_map = None
+        self.index_map: dict[str, int] | None = None
         self._reduced_results: dict[int, Any] = {}
         self.keep_shot_results = keep_shot_results
         self._program_results: dict[int, Any] = {}
@@ -167,9 +167,10 @@ class MultiProgramRunner(Serializable):
 
     @classmethod
     def _from_decoded_attrs(
-        cls, attr_dict: dict[str, Any]
+        cls, attr_dict: Mapping[str, Any]
     ) -> "MultiProgramRunner":
         """Reconstruct from decoded attributes, converting strings back to Paths."""
+        attr_dict = dict(attr_dict)
         # Convert path strings back to Path objects
         if attr_dict.get("item_checkpoint_dir") is not None:
             attr_dict["item_checkpoint_dir"] = Path(
@@ -315,6 +316,7 @@ class MultiProgramRunner(Serializable):
             # Seed internal state from stored before writing runner.h5, so the
             # first write reflects the full prior state, not a later one.
             if stored is not None:
+                assert isinstance(stored, MultiProgramRunner)
                 self._reduced_results = dict(stored._reduced_results)
                 self._program_results = dict(stored._program_results)
                 if self.index_map is None:
@@ -338,8 +340,8 @@ class MultiProgramRunner(Serializable):
         # (or the now-seeded map) so a fresh resumed instance doesn't reassign
         # indices out from under already-checkpointed work.
         precomputed_indices = None
-        if self._item_key_fn() is not None:
-            key_fn = self._item_key_fn()
+        key_fn = self._item_key_fn()
+        if key_fn is not None:
             if self.index_map is None:
                 self.index_map = {}
             items_with_index = _assign_indices_with_keys(
@@ -423,6 +425,7 @@ class MultiProgramRunner(Serializable):
         )
 
         if show_shots_bar:
+            assert num_shots_for_progress is not None
             shots_pbar = tqdm(
                 total=len(items) * num_shots_for_progress,
                 initial=len(done) * num_shots_for_progress,
@@ -677,16 +680,20 @@ class MultiProgramRunner(Serializable):
         return []
 
     @property
-    def _normalized_collect_shot_data_args(self) -> tuple:
+    def _normalized_collect_shot_data_args(
+        self,
+    ) -> (
+        tuple[HistoryDataCollector, ...]
+        | HistoryDataCollector
+        | list[HistoryDataCollector]
+    ):
         """Canonical form of collect_shot_data_args (a plain sequence of one
         or more collector specs), used only for resume mismatch comparison so
         a differently-spelled-but-equivalent spec doesn't spuriously fail
         resume. A subclass whose own field can also be a single bare spec
         overrides this."""
-        return tuple(
-            HistoryDataCollector.from_raw(c)
-            for c in self.collect_shot_data_args
-        )
+        raw_args = getattr(self, "collect_shot_data_args", ())
+        return tuple(HistoryDataCollector.from_raw(c) for c in raw_args)
 
     def _mismatch_field_display_name(self, field: str) -> str:
         """Map an internal comparison-only field name (as returned by
@@ -715,6 +722,7 @@ class MultiProgramRunner(Serializable):
         prefix = self._shot_checkpoint_subdir_prefix()
         if prefix is None or not self.shot_checkpoint:
             return None
+        assert self.shot_checkpoint_dir is not None
         return _checkpoint_subdir_for_prefix(
             self.shot_checkpoint_dir, prefix, index
         )
@@ -1557,13 +1565,14 @@ def _run_parallel(
             in_flight_items = _read_worker_current_indices(item_checkpoint_dir)
             in_flight_items = in_flight_items - observed_indices
             total_shots_from_inflight = 0
-            for item_index in in_flight_items:
-                shot_subdir = shot_checkpoint_subdir(item_index)
-                if shot_subdir is not None:
-                    shots_done = ProgramResults._count_done_shots(
-                        shot_subdir, results_filename=results_filename
-                    )
-                    total_shots_from_inflight += shots_done
+            if shot_checkpoint_subdir is not None:
+                for item_index in in_flight_items:
+                    shot_subdir = shot_checkpoint_subdir(item_index)
+                    if shot_subdir is not None:
+                        shots_done = ProgramResults._count_done_shots(
+                            shot_subdir, results_filename=results_filename
+                        )
+                        total_shots_from_inflight += shots_done
 
             # Set absolute total and refresh
             total_shots = total_shots_from_done + total_shots_from_inflight

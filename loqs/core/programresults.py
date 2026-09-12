@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from loqs.core.quantumprogram import QuantumProgram
 
 
-_UNRESOLVED = object()
+_UNRESOLVED: Any = object()
 """Sentinel distinguishing "not yet lazily resolved" from a real resolved
 value that happens to equal the plain default (e.g. `parent_program=None`,
 or `name="(Unnamed program results)"` genuinely stored on disk)."""
@@ -191,7 +191,7 @@ class ProgramResults(Displayable):
         )
         """Record of shot [](api:History) objects, mapped by shot index."""
 
-        self._unwritten_shots = set()
+        self._unwritten_shots: set[int] = set()
         """Set of shot indices that have not been written to checkpoint files yet."""
 
         self._checkpoint_dir = (
@@ -199,7 +199,7 @@ class ProgramResults(Displayable):
         )
         """Directory where checkpoint files are stored."""
 
-        self._worker_id = None
+        self._worker_id: str | None = None
         """Which writer's checkpoint file this object last read/wrote --
         `None` for the un-suffixed `results.h5` (also what
         `consolidate_checkpoints` itself writes), or a `hostname_pid`-style
@@ -240,8 +240,10 @@ class ProgramResults(Displayable):
         self._max_memory_shots = max_memory_shots
         """Maximum number of shots to keep loaded."""
 
-        self._memory_cache = {}  # Cache for loaded shots
-        self._cache_order = []  # Track order of cache usage for LRU eviction
+        self._memory_cache: dict[int, History] = {}  # Cache for loaded shots
+        self._cache_order: list[int] = (
+            []
+        )  # Track order of cache usage for LRU eviction
 
         self._checkpoint_encode_cache: dict = {}
         """Persistent `Serializable.encode` cache shared across every `checkpoint()`
@@ -788,7 +790,7 @@ class ProgramResults(Displayable):
             Union of all shot_histories found, mapping shot index to History.
             Returns empty dict if no checkpoints exist yet.
         """
-        done = {}
+        done: dict[int, HistoryLike] = {}
 
         # First, read results.h5 if it exists
         results_file = checkpoint_dir / results_filename

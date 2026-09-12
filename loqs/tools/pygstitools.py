@@ -21,7 +21,7 @@ import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import tarfile
-from typing import Any
+from typing import Any, cast
 
 from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.historydatacollector import (
@@ -145,7 +145,7 @@ def _run_one_circuit(
         if shot_checkpoint_dir is not None
         else None
     )
-    run_kwargs = {
+    run_kwargs: dict[str, Any] = {
         "max_frame_limit": max_frame_limit,
         "shot_executor": shot_executor,
         "n_shot_batches": n_shot_batches,
@@ -416,6 +416,7 @@ class EdesignRunner(MultiProgramRunner):
         cls, attr_dict: Mapping[str, Any]
     ) -> "EdesignRunner":
         """Reconstruct from decoded attributes."""
+        attr_dict = dict(attr_dict)
         # Decode physical_model from string
         if isinstance(attr_dict["physical_model"], str):
             from pygsti.models import Model
@@ -448,7 +449,7 @@ class EdesignRunner(MultiProgramRunner):
                 # Was encoded as directory path; load directly
                 attr_dict["edesign"] = ExperimentDesign.from_dir(edesign_value)
 
-        return super()._from_decoded_attrs(attr_dict)
+        return cast("EdesignRunner", super()._from_decoded_attrs(attr_dict))
 
     def _get_items(self) -> Sequence:
         """Return circuits needing data."""

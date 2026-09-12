@@ -39,13 +39,16 @@ import statistics
 import tempfile
 import threading
 import time
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 import warnings
 
 from tqdm import tqdm
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
 from loqs.internal.serializable import Serializable
+
+if TYPE_CHECKING:
+    import matplotlib.axes
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -125,7 +128,9 @@ class ExecutorSpec(Serializable):
         return f"{self.exec_backend}({params})"
 
 
-def _introspect_executor_spec(executor: SubmitExecutor) -> ExecutorSpec | None:
+def _introspect_executor_spec(
+    executor: SubmitExecutor | MapArrayExecutor,
+) -> ExecutorSpec | None:
     """Best-effort extraction of a live executor's backend and
     construction parameters into an `ExecutorSpec`, or `None` if the
     backend isn't recognized.
@@ -569,33 +574,33 @@ class ParallelStrategy(Serializable):
         """Handle encoding of program_executor and shot_executor, which may be
         live executors, ExecutorSpecs, callables, or None."""
         if attr == "program_executor":
-            executor = self.program_executor
-            if executor is None or isinstance(executor, ExecutorSpec):
-                return executor
-            if callable(executor):
-                return executor
+            prog_exec = self.program_executor
+            if prog_exec is None or isinstance(prog_exec, ExecutorSpec):
+                return prog_exec
+            if callable(prog_exec):
+                return prog_exec
             # Live executor: attempt to introspect, else raise
-            spec = _introspect_executor_spec(executor)
+            spec = _introspect_executor_spec(prog_exec)
             if spec is not None:
                 return spec
             raise ValueError(
-                f"Cannot serialize live {type(executor).__name__} executor for "
+                f"Cannot serialize live {type(prog_exec).__name__} executor for "
                 f"program_executor: it either needs to be recognized by "
                 f"_introspect_executor_spec or passed as a plain zero-argument "
                 f"factory callable instead."
             )
         elif attr == "shot_executor":
-            executor = self.shot_executor
-            if executor is None or isinstance(executor, ExecutorSpec):
-                return executor
-            if callable(executor):
-                return executor
+            shot_exec = self.shot_executor
+            if shot_exec is None or isinstance(shot_exec, ExecutorSpec):
+                return shot_exec
+            if callable(shot_exec):
+                return shot_exec
             # Live executor: attempt to introspect, else raise
-            spec = _introspect_executor_spec(executor)
+            spec = _introspect_executor_spec(shot_exec)
             if spec is not None:
                 return spec
             raise ValueError(
-                f"Cannot serialize live {type(executor).__name__} executor for "
+                f"Cannot serialize live {type(shot_exec).__name__} executor for "
                 f"shot_executor: it either needs to be recognized by "
                 f"_introspect_executor_spec or passed as a plain zero-argument "
                 f"factory callable instead."
@@ -631,6 +636,7 @@ class ParallelStrategy(Serializable):
             if self._resolved_program_executor is None:
                 self._resolved_program_executor = self.program_executor()
             return self._resolved_program_executor
+        assert self.program_executor is not None
         return self.program_executor
 
     def dispatch(
@@ -667,7 +673,7 @@ class ParallelStrategy(Serializable):
             "is_chunked first."
         )
         executor = self._resolve_program_executor()
-        dispatched_fn = worker_fn
+        dispatched_fn: Callable[[list[T]], Any] = worker_fn
         if self.collect_resource_stats:
             dispatched_fn = functools.partial(
                 _self_reporting_worker,
@@ -735,6 +741,27 @@ class ParallelStrategy(Serializable):
         lines = [self._describe_program_axis(items)]
         lines.extend(self._describe_shot_axis(num_shots))
         return "\n".join(lines)
+
+    def plot(
+        self,
+        items: Sequence[T] | None = None,
+        program_workers: int | None = None,
+        shot_workers: int | None = None,
+        node_count: int = 1,
+        legend: bool = True,
+    ) -> matplotlib.axes.Axes:
+        """Diagram of this strategy's real dispatch structure.
+
+        See `_plot` for full documentation.
+        """
+        return _plot(
+            self,
+            items=items,
+            program_workers=program_workers,
+            shot_workers=shot_workers,
+            node_count=node_count,
+            legend=legend,
+        )
 
     def _describe_program_axis(self, items: Sequence[T] | None) -> str:
         """First line of `describe()`'s program-axis block, plus any
@@ -1101,7 +1128,7 @@ def _group_worker_plan(plan: Sequence[_WorkerSlot]) -> list[_RenderGroup]:
 
 
 def _curved_arrow(
-    ax: "matplotlib.axes.Axes",  # noqa: F821
+    ax: matplotlib.axes.Axes,
     start: tuple[float, float],
     end: tuple[float, float],
     rad: float = 0.45,
@@ -1130,7 +1157,7 @@ def _curved_arrow(
 
 
 def _draw_caption(
-    ax: "matplotlib.axes.Axes",  # noqa: F821
+    ax: matplotlib.axes.Axes,
     box: Box,
     text: str,
     *,
@@ -1152,7 +1179,7 @@ def _draw_caption(
 
 
 def _draw_labeled_box(
-    ax: "matplotlib.axes.Axes",  # noqa: F821
+    ax: matplotlib.axes.Axes,
     box: Box,
     level: str,
     label: str | None = None,
@@ -1194,7 +1221,7 @@ def _draw_labeled_box(
 
 
 def _draw_centered_label(
-    ax: "matplotlib.axes.Axes",  # noqa: F821
+    ax: matplotlib.axes.Axes,
     box: Box,
     text: str,
     *,
@@ -1239,7 +1266,7 @@ def _duplicate_group_label(indices: Sequence[int], points_to: int) -> str:
 
 
 def _draw_pointer_group(
-    ax: "matplotlib.axes.Axes",  # noqa: F821
+    ax: matplotlib.axes.Axes,
     box: Box,
     indices: Sequence[int],
     points_to: int,
@@ -1255,7 +1282,7 @@ def _draw_pointer_group(
 
 
 def _draw_chunk_unit(
-    ax: "matplotlib.axes.Axes",  # noqa: F821
+    ax: matplotlib.axes.Axes,
     box: Box,
     real_size: int,
     padded_size: int,
@@ -1394,7 +1421,7 @@ def _plot(
     shot_workers: int | None = None,
     node_count: int = 1,
     legend: bool = True,
-) -> "matplotlib.axes.Axes":  # noqa: F821
+) -> matplotlib.axes.Axes:
     """`ParallelStrategy.plot`: diagram of this strategy's real dispatch
     structure. Defined here (as a plain function attached to the class
     below, `ParallelStrategy.plot = _plot`) rather than in the class body
@@ -1474,8 +1501,12 @@ def _plot(
         ) or 1
 
     shot_serial = strategy.shot_executor is None and shot_workers is None
-    if not shot_serial and shot_workers is None:
-        shot_workers = _axis_worker_count(strategy.shot_executor) or 1
+    if shot_workers is None:
+        shot_workers = (
+            _axis_worker_count(strategy.shot_executor)
+            if strategy.shot_executor is not None
+            else None
+        ) or 1
 
     sizes = _chunk_sizes(strategy, items, program_workers)
     assigned, idle = _assign_chunks_to_workers(sizes, program_workers)
@@ -1550,6 +1581,7 @@ def _plot(
             full_boxes, gutter_boxes, content_boxes, groups
         ):
             if group.kind in ("pointer_group", "idle_pointer_group"):
+                assert group.points_to is not None
                 _draw_pointer_group(
                     ax, full_box, group.worker_indices, group.points_to
                 )
@@ -1570,6 +1602,7 @@ def _plot(
                 worker_label,
                 fontweight="bold",
             )
+            assert slot is not None
             chunk_boxes = _split_box(
                 _inset_box(content_box, margin_frac=0.01),
                 len(slot.real_sizes),
@@ -1635,11 +1668,6 @@ def _plot(
             fontsize=8,
         )
     return ax
-
-
-# Attached here, rather than in the class body above, since _plot depends
-# on drawing helpers defined throughout the rest of this module.
-ParallelStrategy.plot = _plot
 
 
 # ---------------------------------------------------------------------------
@@ -1850,7 +1878,7 @@ def _profile_one_strategy(
                 # Shut down spec-owned executors to avoid cross-strategy worker
                 # reuse in singleton pools (e.g. loky) and ensure clean restarts.
                 try:
-                    strategy._resolved_program_executor.shutdown(
+                    cast(Any, strategy._resolved_program_executor).shutdown(
                         wait=True, kill_workers=True
                     )
                 except Exception:
@@ -2013,7 +2041,7 @@ def format_profile_table(results: Mapping[str, ProfileResult]) -> str:
 
 def plot_profile_results(
     results: Mapping[str, ProfileResult],
-) -> "matplotlib.axes.Axes":  # noqa: F821
+) -> list[matplotlib.axes.Axes]:
     """Simple bar/box-plot summary of `profile_strategies` results: a
     wall-time bar chart (mean, with error bars when `repeats > 1`) plus,
     whenever resource stats were collected, a peak-memory box plot and a
