@@ -53,7 +53,7 @@ parallel = [
 ]
 mpi = [
     "mpi4py",
-    "threadpoolctl",
+    "threadpoolctl>=3.5.0",
     "psutil"
 ]
 dev = [

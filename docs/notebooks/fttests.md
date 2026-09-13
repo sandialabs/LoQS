@@ -219,11 +219,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
 ```
 
 ```{code-cell} ipython3
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 ## Adaptive FT Measure with Single Errors
@@ -256,11 +256,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
 ```
 
 ```{code-cell} ipython3
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 Now we can circumvent the feed-forward by manually creating a stack with the later parts of the circuit as intended. However, because the later parts expect the part I feed forward frame for their processing, we will need to create a dummy instruction that outputs the expected frame.
@@ -303,11 +303,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
 ```
 
 ```{code-cell} ipython3
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 And we can do the same thing for Part III, but we have to mock both feed forwards.
@@ -355,11 +355,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
 ```
 
 ```{code-cell} ipython3
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 ## QEC with Single Errors
@@ -389,11 +389,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 Now we begin to mess with the flow of the feed-forward to get access to those operations for testing. The good news is that unlike adaptive measure, we don't rely on previous information. Successful feed-forward only sets the next flagged check to be run, so we can directly do that in the stack.
@@ -421,11 +421,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 ```{code-cell} ipython3
@@ -451,11 +451,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 ```{code-cell} ipython3
@@ -481,11 +481,11 @@ noise_injected_programs = fttools.build_discrete_error_injection_programs(
     error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
 )
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     noise_injected_programs,
     [("logical_measurement", -1)],
     [1],
-)
+).run()
 ```
 
 ## More In-Depth Testing

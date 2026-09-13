@@ -384,11 +384,12 @@ class TestExhaustiveFaultInjectionAcrossCx:
             stack_idx_to_modify=cx_idx,
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
         )
-        failed = fttools.run_discrete_error_injected_programs(
-            injected,
-            [{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
-            [[0, 0]],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=injected,
+            collect_shot_data_args=[{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
+            expected_outcomes=[[0, 0]],
         )
+        failed = runner.run()
         assert len(failed) == 0, (
             f"{len(failed)} pre-gate fault(s) not corrected"
         )
@@ -403,11 +404,12 @@ class TestExhaustiveFaultInjectionAcrossCx:
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
             post_twoq_gates=True,
         )
-        failed = fttools.run_discrete_error_injected_programs(
-            injected,
-            [{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
-            [[0, 0]],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=injected,
+            collect_shot_data_args=[{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
+            expected_outcomes=[[0, 0]],
         )
+        failed = runner.run()
         assert len(failed) == 0, (
             f"{len(failed)} post-gate fault(s) not corrected"
         )

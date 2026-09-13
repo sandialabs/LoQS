@@ -203,11 +203,12 @@ class TestTwoPatchFoundations:
                 stack_idx_to_modify=stack_idx,
                 error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
             )
-            failed = fttools.run_discrete_error_injected_programs(
-                injected,
-                [("logical_measurement", -1)],
-                [0],
+            runner = fttools.FaultInjectionRunner(
+                errored_programs=injected,
+                collect_shot_data_args=[("logical_measurement", -1)],
+                expected_outcomes=[0],
             )
+            failed = runner.run()
             assert (
                 len(failed) == 0
             ), f"Reference round broke FT for round at stack idx {stack_idx}"
@@ -221,11 +222,12 @@ class TestTwoPatchFoundations:
             stack_idx_to_modify=3,
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
         )
-        failed = fttools.run_discrete_error_injected_programs(
-            injected,
-            [("logical_measurement", -1)],
-            [0],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=injected,
+            collect_shot_data_args=[("logical_measurement", -1)],
+            expected_outcomes=[0],
         )
+        failed = runner.run()
         assert len(failed) > 0
 
 
@@ -482,11 +484,12 @@ class TestTransversalCnot:
                 error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
                 post_twoq_gates=post_twoq,
             )
-            failed = fttools.run_discrete_error_injected_programs(
-                injected,
-                [{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
-                [[0, 0]],
+            runner = fttools.FaultInjectionRunner(
+                errored_programs=injected,
+                collect_shot_data_args=[{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
+                expected_outcomes=[[0, 0]],
             )
+            failed = runner.run()
             assert len(failed) == 0, (
                 f"{tag}: {len(failed)}/{len(injected)} injected programs "
                 "caused a logical error on some patch"

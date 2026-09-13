@@ -121,13 +121,13 @@ program = QuantumProgram(
 ## Running a `QuantumProgram`
 
 
-We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 100 times by specifying `num_shots=100` to the `run()` function.
+We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 20 times by specifying `num_shots=20` to the `run()` function.
 
 `run()` returns a [](api:ProgramResults) object, so we need to capture that return value to look at what happened during execution.
 
 ```{code-cell} ipython3
 # And now we can run it for real!
-results = program.run(num_shots=100)
+results = program.run(num_shots=20)
 ```
 
 The individual `History` objects are now available in the `results.shot_histories` member variable, a `dict` keyed by (non-negative) shot index -- so unlike a `list`, negative indices like `-1` aren't supported.
@@ -152,7 +152,7 @@ In this case, we may be interested in the `"logical_measurement"` element of the
 
 We can collect these using the `collect_shot_data()` function on our `results`, where we specify a `Frame` key and a set of indices into the `History` for which frames to target (in this case, we are only interested in the final frame so use `-1`.)
 
-This will return a list of 100 entries (one per shot), so we instead use a `Counter` collection to look at how many of these are 0 or 1.
+This will return a list of 20 entries (one per shot), so we instead use a `Counter` collection to look at how many of these are 0 or 1.
 
 ```{code-cell} ipython3
 from collections import Counter
@@ -188,7 +188,7 @@ stack = [
 # We want to use the same program settings, just swap out the stack and name
 program2 = QuantumProgram.from_quantum_program(program, stack, name="Prep 0, measure Z")
 
-results2 = program2.run(num_shots=100)
+results2 = program2.run(num_shots=20)
 
 Counter(results2.collect_shot_data("logical_measurement", -1))
 ```
@@ -213,7 +213,7 @@ stack = [
 # This one will be non-determinate outcome. Let's seed the RNG
 program3 = QuantumProgram.from_quantum_program(program, stack, default_base_seed=20240702, name="Prep -, measure Z")
 
-results3 = program3.run(num_shots=1000) # Let's also collect more statistics!
+results3 = program3.run(num_shots=150) # Let's also collect more statistics!
 
 Counter(results3.collect_shot_data("logical_measurement", -1))
 ```
@@ -224,7 +224,7 @@ And now we create a copy of this program (i.e. it has the same base seed since w
 # And now we can show that it's deterministic counts with the same RNG seed
 program4 = QuantumProgram.from_quantum_program(program3, name="Prep -, measure Z... again")
 
-results4 = program4.run(num_shots=1000) # Let's also collect more statistics!
+results4 = program4.run(num_shots=150) # Let's also collect more statistics!
 
 Counter(results4.collect_shot_data("logical_measurement", -1))
 ```
@@ -255,7 +255,7 @@ program5 = QuantumProgram.read('test.json')
 Because `program4` was created with a fixed `default_base_seed`, re-running the deserialized `program5` reproduces exactly the same shot outcomes, demonstrating that the program definition round-tripped correctly through serialization.
 
 ```{code-cell} ipython3
-results5 = program5.run(num_shots=1000)
+results5 = program5.run(num_shots=150)
 
 # Same counts as results4 above, since program5 has the same instruction stack, noise model, and RNG seed
 Counter(results5.collect_shot_data("logical_measurement", -1))
@@ -278,15 +278,15 @@ Counter(reloaded_results4.collect_shot_data("logical_measurement", -1))
 
 ## Checkpointing QuantumProgram execution
 
-We can also checkpoint the execution of a `QuantumProgram` as it runs, writing completed shots to disk in batches. This is done by passing `checkpoint_batch_size` (how many shots to accumulate before writing a checkpoint file) and `checkpoint_dir` (where to write them) to `run()`.
+We can also checkpoint the execution of a `QuantumProgram` as it runs, writing completed shots to disk in batches. This is done by passing `checkpoint=True` to `run()`, along with `checkpoint_batch_size` (how many shots to accumulate before writing a checkpoint file) and `checkpoint_dir` (where to write them) -- `checkpoint_batch_size`/`checkpoint_dir` alone do not enable checkpointing without `checkpoint=True`.
 
 Note that enabling checkpointing will add some file I/O overhead to every checkpointed batch. For the small jobs being run here, it is noticeable; for larger jobs where you would like to checkpoint, it should be less of a factor.
 
 ```{code-cell} ipython3
 program6 = QuantumProgram.from_quantum_program(program3, name="Prep -, measure Z... again")
 
-# Checkpoint every 100 shots to the given directory
-results6 = program6.run(num_shots=1000, checkpoint_batch_size=100, checkpoint_dir="test-checkpoint")
+# Checkpoint every 30 shots to the given directory
+results6 = program6.run(num_shots=150, checkpoint=True, checkpoint_batch_size=30, checkpoint_dir="test-checkpoint")
 ```
 
 If a run is interrupted partway through (e.g. a crash, or a manual `Ctrl-C`), the shots that were already checkpointed to disk are not lost. We can recover them by constructing a fresh `ProgramResults` and pointing `load_checkpoint()` at the checkpoint directory.
@@ -299,7 +299,7 @@ len(recovered_results6.shot_histories)
 ```
 
 ```{note}
-Unlike the old (pre-`ProgramResults`) checkpointing API, `run()` currently always starts a fresh set of shots from 0 rather than resuming a previous, interrupted run -- there is currently no built-in way to feed `recovered_results6` back into a new `run()` call to "finish off" an interrupted job. Checkpointing today is primarily useful for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`/`load_checkpoint`). If you need true resume-and-continue support, please file a LoQS issue requesting it.
+`run()` also supports genuine resume: calling it again with `checkpoint=True, resume=True` against the same `checkpoint_dir` picks up right where an interrupted run left off, computing only the shots not yet checkpointed rather than starting over from 0 (pass `force_resume=True` if the resuming call's own `num_shots`/`max_frame_limit`/RNG seed intentionally differ from the original -- otherwise a mismatch raises `ValueError`). Checkpointing is also useful even without resuming, for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`/`load_checkpoint`).
 ```
 
 ```{code-cell} ipython3

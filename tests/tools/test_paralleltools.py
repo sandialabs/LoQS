@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from loqs.core.executors import MapArrayExecutor, SubmitExecutor
+from loqs.internal import pin_worker_threads
 from loqs.tools.paralleltools import (
     ChunkResourceStats,
     ExecutorSpec,
@@ -16,13 +17,12 @@ from loqs.tools.paralleltools import (
     _assign_chunks_to_workers,
     _canonical_shapes,
     _ResourceSampler,
-    _reused_slurm_allocation,
     _worker_plan,
     chunk_round_robin,
     format_profile_table,
-    pin_worker_threads,
     plot_profile_results,
     profile_strategies,
+    reused_slurm_allocation,
     resolve_shot_executor,
     run_chunks_with_map_array_executor,
     run_chunks_with_submit_executor,
@@ -127,8 +127,7 @@ class TestPinWorkerThreads:
 
     def test_pins_thread_pools_to_one_inside_a_worker(self):
         """Run inside a real, single-use loky worker (not the test process
-        itself), mirroring test_quantumprogram.py's identical pattern for
-        QuantumProgram._run_shot_worker."""
+        itself), matching a real worker's own thread-pinning entry point."""
         loky = pytest.importorskip("loky")
         pytest.importorskip("threadpoolctl")
 
@@ -153,9 +152,7 @@ class TestPinWorkerThreads:
         assert all(n == 1 for n in after)
 
     def test_warns_when_threadpoolctl_not_installed(self, monkeypatch):
-        monkeypatch.setattr(
-            "loqs.tools.paralleltools.threadpool_limits", None
-        )
+        monkeypatch.setattr("loqs.internal.threadpool_limits", None)
         with pytest.warns(UserWarning, match="threadpoolctl"):
             pin_worker_threads()
 
@@ -276,7 +273,7 @@ class TestParallelStrategy:
             shot_executor=loky.get_reusable_executor(max_workers=3),
         )
         assert isinstance(strategy.shot_executor, ExecutorSpec)
-        assert strategy.shot_executor.backend == "loky"
+        assert strategy.shot_executor.exec_backend == "loky"
         assert strategy.shot_executor.kwargs == {"max_workers": 3}
 
     def test_live_unrecognized_shot_executor_with_program_executor_raises(
@@ -388,6 +385,78 @@ class TestParallelStrategy:
                 6,
                 8,
             ]
+
+
+class TestExecutorSpecAndParallelStrategySerialization:
+    """`ExecutorSpec`/`ParallelStrategy` are `Serializable`, needed so a
+    `MultiProgramRunner` holding either can survive a `.write()`/`.read()`
+    round-trip (e.g. as part of its own crash-recovery snapshot)."""
+
+    def test_executor_spec_round_trips(self, tmp_path):
+        spec = ExecutorSpec(exec_backend="loky", kwargs={"max_workers": 3})
+        path = tmp_path / "spec.json"
+        spec.write(path)
+        loaded = ExecutorSpec.read(path)
+        assert loaded.exec_backend == "loky"
+        assert loaded.kwargs == {"max_workers": 3}
+
+    def test_parallel_strategy_round_trips_with_none_executors(
+        self, tmp_path
+    ):
+        strategy = ParallelStrategy(n_program_chunks=2)
+        path = tmp_path / "strategy.json"
+        strategy.write(path)
+        loaded = ParallelStrategy.read(path)
+        assert loaded.program_executor is None
+        assert loaded.shot_executor is None
+        assert loaded.n_program_chunks == 2
+
+    def test_parallel_strategy_round_trips_with_executor_spec(
+        self, tmp_path
+    ):
+        strategy = ParallelStrategy(
+            program_executor=ExecutorSpec(
+                exec_backend="loky", kwargs={"max_workers": 2}
+            ),
+            n_program_chunks=2,
+            shot_executor=ExecutorSpec(
+                exec_backend="loky", kwargs={"max_workers": 1}
+            ),
+        )
+        path = tmp_path / "strategy.json"
+        strategy.write(path)
+        loaded = ParallelStrategy.read(path)
+        assert isinstance(loaded.program_executor, ExecutorSpec)
+        assert loaded.program_executor.exec_backend == "loky"
+        assert loaded.program_executor.kwargs == {"max_workers": 2}
+        assert isinstance(loaded.shot_executor, ExecutorSpec)
+        assert loaded.shot_executor.kwargs == {"max_workers": 1}
+
+    def test_parallel_strategy_round_trips_live_recognized_executor(
+        self, tmp_path
+    ):
+        """A live, loky-backed program_executor is transparently converted
+        to an ExecutorSpec on encode, the same conversion already applied
+        to a live shot_executor at construction time."""
+        loky = pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+        path = tmp_path / "strategy.json"
+        strategy.write(path)
+        loaded = ParallelStrategy.read(path)
+        assert isinstance(loaded.program_executor, ExecutorSpec)
+        assert loaded.program_executor.exec_backend == "loky"
+
+    def test_encoding_live_unrecognized_program_executor_raises(
+        self, tmp_path
+    ):
+        strategy = ParallelStrategy(
+            program_executor=_FakeMapArrayExecutor(), n_program_chunks=1
+        )
+        with pytest.raises(ValueError, match="program_executor"):
+            strategy.write(tmp_path / "strategy.json")
 
 
 class TestParallelStrategyDescribe:
@@ -853,22 +922,36 @@ class TestResourceSampler:
         """A child appearing after self is already known gets primed and
         excluded on its own first sample, while the already-known self
         process still contributes normally in that same round -- the
-        child then contributes starting the next sample."""
+        child then contributes starting the next sample. The fake children()
+        returns a different _FakeProcess object (same pid, same cpu_value)
+        on each call, mimicking real psutil.Process.children() behavior,
+        to verify the cached object is reused rather than the fresh one."""
         pytest.importorskip("psutil")
         sampler = self._bare_sampler()
         self_proc = _FakeProcess(pid=1, cpu_value=10.0)
-        child = _FakeProcess(pid=2, cpu_value=99.0)
-        self_proc.children = lambda recursive=True: [child]
+        # Two distinct _FakeProcess objects, both pid=2, both cpu_value=99.0
+        first_child = _FakeProcess(pid=2, cpu_value=99.0)
+        second_child = _FakeProcess(pid=2, cpu_value=99.0)
+        # Alternate between the two on successive calls to children()
+        children_list = [first_child, second_child]
+        children_iter = iter(children_list)
+        self_proc.children = lambda recursive=True: [next(children_iter)]
         sampler._process = self_proc
         sampler._known_procs = {1: self_proc}
 
         sampler._sample()
         assert sampler._cpu_samples == [10.0]
-        assert child.cpu_percent_calls == 1
+        assert first_child.cpu_percent_calls == 1
         assert 2 in sampler._known_procs
+        # Verify the cached object is the first child
+        assert sampler._known_procs[2] is first_child
 
         sampler._sample()
         assert sampler._cpu_samples == [10.0, 10.0 + 99.0]
+        # The first child object should have been reused and queried again
+        assert first_child.cpu_percent_calls == 2
+        # The second child object should never have been used
+        assert second_child.cpu_percent_calls == 0
 
     def test_real_child_process_is_measured_across_multiple_samples(self):
         """End-to-end check against a real OS process tree (not a
@@ -1351,7 +1434,7 @@ class TestReusedSlurmAllocation:
     def test_raises_without_slurm_job_id(self, monkeypatch):
         monkeypatch.delenv("SLURM_JOB_ID", raising=False)
         with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
-            with _reused_slurm_allocation():
+            with reused_slurm_allocation():
                 pass
 
     def test_installs_and_restores_path(self, monkeypatch):
@@ -1359,7 +1442,7 @@ class TestReusedSlurmAllocation:
 
         monkeypatch.setenv("SLURM_JOB_ID", "12345")
         original_path = os.environ.get("PATH", "")
-        with _reused_slurm_allocation():
+        with reused_slurm_allocation():
             new_path = os.environ["PATH"]
             assert new_path != original_path
             fake_dir = new_path.split(os.pathsep)[0]
@@ -1389,7 +1472,7 @@ class TestReusedSlurmAllocation:
             "#!/bin/bash\n#SBATCH --time=10\necho ran > " + str(marker) + "\n"
         )
         script.chmod(0o755)
-        with _reused_slurm_allocation():
+        with reused_slurm_allocation():
             output = subprocess.run(
                 ["sbatch", str(script)],
                 capture_output=True,
@@ -1402,3 +1485,38 @@ class TestReusedSlurmAllocation:
                 break
             time.sleep(0.1)
         assert marker.read_text() == "ran\n"
+
+
+class TestParallelStrategyNShotBatches:
+    """Test the new n_shot_batches field on ParallelStrategy."""
+
+    def test_n_shot_batches_field_in_serialize_attrs(self):
+        """Verify n_shot_batches is included in _SERIALIZE_ATTRS."""
+        from loqs.tools.paralleltools import ParallelStrategy
+        assert "n_shot_batches" in ParallelStrategy._SERIALIZE_ATTRS
+
+    def test_n_shot_batches_field_default_none(self):
+        """Verify n_shot_batches defaults to None."""
+        from loqs.tools.paralleltools import ParallelStrategy
+        strategy = ParallelStrategy()
+        assert strategy.n_shot_batches is None
+
+    def test_n_shot_batches_field_explicit_value(self):
+        """Verify n_shot_batches can be set explicitly."""
+        from loqs.tools.paralleltools import ParallelStrategy
+        strategy = ParallelStrategy(n_shot_batches=5)
+        assert strategy.n_shot_batches == 5
+
+    def test_n_shot_batches_serialization(self):
+        """Verify n_shot_batches round-trips through serialization."""
+        import tempfile
+        from pathlib import Path
+        from loqs.tools.paralleltools import ParallelStrategy
+
+        strategy_orig = ParallelStrategy(n_shot_batches=7)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "strategy.json"
+            strategy_orig.write(path)
+            strategy_decoded = ParallelStrategy.read(path)
+            assert strategy_decoded.n_shot_batches == 7

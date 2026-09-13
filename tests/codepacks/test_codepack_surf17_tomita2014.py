@@ -174,11 +174,12 @@ class TestSurf17Codepack:
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            noise_injected_programs,
-            [("logical_measurement", -1)],
-            [0],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=noise_injected_programs,
+            collect_shot_data_args=[("logical_measurement", -1)],
+            expected_outcomes=[0],
         )
+        failed = runner.run()
         assert len(failed) == 0
 
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
@@ -228,11 +229,12 @@ class TestSurf17Codepack:
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            noise_injected_programs,
-            [("logical_measurement", -1)],
-            [0],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=noise_injected_programs,
+            collect_shot_data_args=[("logical_measurement", -1)],
+            expected_outcomes=[0],
         )
+        failed = runner.run()
         assert len(failed) == 0
 
 

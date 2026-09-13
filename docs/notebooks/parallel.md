@@ -37,14 +37,14 @@ both, or neither can be active at once:
   shots of that one program are dispatched across the executor's workers instead
   of running one at a time in the calling process.
 - **Programs**, across a whole batch. Every program-level call site --
-  [simulate_dataset_for_edesign](api:simulate_dataset_for_edesign) (one
-  `QuantumProgram` per edesign circuit),
-  [run_discrete_error_injected_programs](api:run_discrete_error_injected_programs)
+  [EdesignRunner](api:EdesignRunner) (one `QuantumProgram` per edesign circuit,
+  configured via its own `parallel_strategy` field),
+  [FaultInjectionRunner](api:FaultInjectionRunner)
   (one per error-injected variant), and
   [NoiseSweepRunner.run](api:NoiseSweepRunner.run) (one per sweep point) --
-  accepts a `parallel` argument (a [ParallelStrategy](api:ParallelStrategy))
-  instead of a single executor. The batch is split into chunks, and each chunk (a
-  sub-list of programs) is built/run/collected as a unit by one worker.
+  accepts a [ParallelStrategy](api:ParallelStrategy) instead of a single
+  executor. The batch is split into chunks, and each chunk (a sub-list of
+  programs) is built/run/collected as a unit by one worker.
 
 These compose: a [ParallelStrategy](api:ParallelStrategy) can dispatch chunks
 of programs to *outer* workers (e.g. one per node), each of which then runs its
@@ -169,13 +169,13 @@ strategy = ParallelStrategy(
 print(strategy.describe(programs, num_shots=1))
 strategy.plot(programs)
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     programs,
     collect_shot_data_args=[("counter", -1)],
     expected_outcomes=[1],
     num_shots=1,
-    parallel=strategy,
-)
+    parallel_strategy=strategy,
+).run()
 len(failed)
 ```
 
@@ -196,13 +196,13 @@ strategy = ParallelStrategy(
 print(strategy.describe(programs, num_shots=20))
 strategy.plot(programs)
 
-failed = fttools.run_discrete_error_injected_programs(
+failed = fttools.FaultInjectionRunner(
     programs,
     collect_shot_data_args=[("counter", -1)],
     expected_outcomes=[1],
     num_shots=20,
-    parallel=strategy,
-)
+    parallel_strategy=strategy,
+).run()
 len(failed)
 ```
 
@@ -253,13 +253,13 @@ strategy = ParallelStrategy(
 if sys.platform == "win32":
     print("submitit does not support Windows -- skipping dispatch.")
 else:
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=1,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
     print(f"{len(failed)} failed")
 ```
 
@@ -286,13 +286,13 @@ strategy.plot(programs, program_workers=2)
 if sys.platform == "win32":
     print("submitit does not support Windows -- skipping dispatch.")
 else:
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=20,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
     print(f"{len(failed)} failed")
 ```
 
@@ -339,13 +339,13 @@ with MPIPoolExecutor() as executor:
     # from the executor object alone ahead of time.
     strategy.plot(programs, program_workers=3)
 
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=1,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
 ```
 
 `MPIPoolExecutor` is typically launched as one atomic multi-node allocation
@@ -370,13 +370,13 @@ with MPIPoolExecutor() as executor:
     print(strategy.describe(programs, num_shots=20))
     strategy.plot(programs, program_workers=3)
 
-    failed = fttools.run_discrete_error_injected_programs(
+    failed = fttools.FaultInjectionRunner(
         programs,
         collect_shot_data_args=[("counter", -1)],
         expected_outcomes=[1],
         num_shots=20,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
 ```
 
 ## Thread-oversubscription safety
@@ -389,6 +389,99 @@ to use every available core for BLAS operations, which would otherwise
 make a parallel run slower than serial rather than faster, and matters
 more, not less, once both axes are combined (as in the hybrid examples
 above).
+
+## Checkpointing under parallelism
+
+The [Basic Workflow](workflow.md) tutorial introduces
+[QuantumProgram.run](api:QuantumProgram.run)'s `checkpoint_batch_size`/
+`checkpoint_dir` for the serial case. With a `shot_executor`,
+`checkpoint_batch_size` also sets how many shots are dispatched to one
+worker per call: each worker computes its whole batch, checkpoints all of
+it to its own private file (keyed by that worker's own hostname/PID, so
+concurrent workers never open the same file), and only then returns. Once
+every dispatched batch is confirmed done, `run()` runs one race-free,
+driver-side pass that streams every worker's file into the same canonical
+`results.h5` a serial run would have written directly -- callers never
+need to touch the per-worker files themselves.
+
+```{code-cell} ipython3
+import tempfile
+
+from loqs.core import ProgramResults
+
+with tempfile.TemporaryDirectory() as checkpoint_dir:
+    results = program.run(
+        num_shots=20,
+        shot_executor=executor,
+        checkpoint=True,
+        checkpoint_batch_size=5,
+        checkpoint_dir=checkpoint_dir,
+        verbose=False,
+    )
+    print(f"in-memory shots right after run(): {len(results.shot_histories)}")
+
+    # The consolidated checkpoint is an ordinary, single-writer checkpoint,
+    # readable the same way regardless of how many workers wrote it.
+    recovered = ProgramResults()
+    recovered.load_checkpoint(checkpoint_dir=checkpoint_dir)
+    print(f"shots recovered from disk: {len(recovered.shot_histories)}")
+```
+
+Since each worker computes its whole batch before writing anything, a
+crash loses at most one worker's own in-flight batch (up to
+`checkpoint_batch_size` shots from that one worker, not the whole run) --
+set it to `1` to checkpoint every shot as soon as it's computed, trading
+batching efficiency for the finest possible durability.
+
+The `0` above isn't a bug: `lazy_loading` (default `True`) evicts a
+shot from the returned [ProgramResults](api:ProgramResults)'s own in-memory
+`shot_histories` as soon as it's durably checkpointed, so `run()`'s return
+value holds only the yet-unwritten tail once checkpointing is active --
+pass `lazy_loading=False` to keep every shot in memory regardless,
+or reload the full set from disk via `load_checkpoint()` as above.
+
+### Resuming after a crash
+
+A checkpointing-enabled `run()` also supports genuine resume, regardless of whether the original call used a `shot_executor`: calling `run()` again with `checkpoint=True, resume=True` against the same `checkpoint_dir` only computes whatever wasn't already durably checkpointed, rather than starting over from shot 0. `run()` never returns leaving stray `worker_*_checkpoint.h5` files behind either -- a race-free consolidation pass into `results.h5` runs whenever any exist, even if the resuming call itself dispatches serially, so a parallel run that crashed mid-batch can always be finished off with a plain serial call.
+
+```{code-cell} ipython3
+with tempfile.TemporaryDirectory() as resume_checkpoint_dir:
+    partial = program.run(
+        num_shots=10,
+        shot_executor=executor,
+        checkpoint=True,
+        checkpoint_batch_size=5,
+        checkpoint_dir=resume_checkpoint_dir,
+        lazy_loading=False,
+        verbose=False,
+    )
+    print(f"shots after first call: {len(partial.shot_histories)}")
+
+    # Finishing off with more shots than originally planned: num_shots
+    # differs from the original call, so force_resume=True is needed to
+    # bypass the mismatch check -- the 10 already-checkpointed shots are
+    # kept as-is, and only the remaining 10 are actually computed.
+    finished = program.run(
+        num_shots=20,
+        shot_executor=executor,
+        checkpoint=True,
+        resume=True,
+        force_resume=True,
+        checkpoint_batch_size=5,
+        checkpoint_dir=resume_checkpoint_dir,
+        lazy_loading=False,
+        verbose=False,
+    )
+    print(f"shots after resuming call: {len(finished.shot_histories)}")
+```
+
+If a resuming call's own `num_shots`/`max_frame_limit`/RNG seed happen to exactly match the original call, no mismatch is detected and `force_resume` isn't needed at all.
+
+This mechanism is scoped to `QuantumProgram`/`ProgramResults`'s own
+shot-level checkpointing. The program-level call sites ([EdesignRunner](api:EdesignRunner),
+[FaultInjectionRunner](api:FaultInjectionRunner), and
+[NoiseSweepRunner.run](api:NoiseSweepRunner.run)) use a separate, unified item-level
+checkpoint mechanism with per-worker HDF5 checkpoint files, crash recovery, and per-item completion tracking.
 
 ## Performance profiling
 
@@ -492,13 +585,13 @@ from loqs.tools.paralleltools import (
 
 
 def profile_work(strategy):
-    return fttools.run_discrete_error_injected_programs(
+    return fttools.FaultInjectionRunner(
         ft_programs,
         collect_shot_data_args=[("logical_measurement", -1)],
         expected_outcomes=[1],
         num_shots=20,
-        parallel=strategy,
-    )
+        parallel_strategy=strategy,
+    ).run()
 
 
 strategies = {

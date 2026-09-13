@@ -215,11 +215,12 @@ class TestSteaneCodepack:
             error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
         )
 
-        failed = fttools.run_discrete_error_injected_programs(
-            noise_injected_programs,
-            [("logical_measurement", -1)],
-            [0],
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=noise_injected_programs,
+            collect_shot_data_args=[("logical_measurement", -1)],
+            expected_outcomes=[0],
         )
+        failed = runner.run()
         return len(failed)
     
     def test_qec_ft_branch1(self):

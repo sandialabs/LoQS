@@ -29,7 +29,7 @@ gst_model = modelpack.target_model(qubit_labels=["Q0"]) # 1 physical qubit model
 
 ## Step 2: Simulate the GST design directly into a `DataSet`
 
-`simulate_dataset_for_edesign` takes the place of a `pygsti.data.simulate_data`: it builds, runs, and collects outcomes for one circuit at a time, so LoQS never has to hold every circuit's `QuantumProgram`/`ProgramResults` in memory at once.
+`EdesignRunner` takes the place of a `pygsti.data.simulate_data`: it builds, runs, and collects outcomes for one circuit at a time, so LoQS never has to hold every circuit's `QuantumProgram`/`ProgramResults` in memory at once.
 
 ```{code-cell} ipython3
 from loqs.backends import PyGSTiPhysicalCircuit, QSimQuantumState
@@ -72,7 +72,8 @@ physical_to_logical = {
 ```
 
 ```{code-cell} ipython3
-ds = pt.simulate_dataset_for_edesign(gst_design, gst_model, physical_to_logical, num_shots=10, **program_kwargs)
+runner = pt.EdesignRunner(gst_design, gst_model, physical_to_logical, num_shots=10, program_kwargs=program_kwargs)
+ds = runner.run()
 ```
 
 ```{code-cell} ipython3

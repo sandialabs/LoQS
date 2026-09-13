@@ -518,7 +518,15 @@ class JSONEncoder(BaseEncoder):
             assert decode_cache is not None
 
             if cache_type == "reference":
-                cached_obj = decode_cache[encoded["cache_id"]]
+                cache_id = encoded["cache_id"]
+                # Try to get from cache; if missing, resolve on demand if supported
+                if cache_id not in decode_cache:
+                    if hasattr(decode_cache, "resolve"):
+                        cached_obj = decode_cache.resolve(cache_id)
+                    else:
+                        raise KeyError(cache_id)
+                else:
+                    cached_obj = decode_cache[cache_id]
                 if isinstance(cached_obj, DeferredRef):
                     # This is a forward reference that will be resolved later
                     # Return the deferred reference object
@@ -531,16 +539,23 @@ class JSONEncoder(BaseEncoder):
 
                 # Check if reference object is available
                 if reference_cache_id not in decode_cache:
-                    # Reference object not available yet, create a placeholder
-                    copied_obj = DeferredRef(reference_cache_id)
+                    # Try to resolve on demand if supported
+                    if hasattr(decode_cache, "resolve"):
+                        reference_obj = decode_cache.resolve(
+                            reference_cache_id
+                        )
+                    else:
+                        # Reference object not available yet, create a placeholder
+                        reference_obj = DeferredRef(reference_cache_id)
                 else:
                     reference_obj = decode_cache[reference_cache_id]
-                    # Check if reference is a placeholder
-                    if isinstance(reference_obj, DeferredRef):
-                        # Create a new placeholder for the copy
-                        copied_obj = DeferredRef(reference_obj.cache_id)
-                    else:
-                        copied_obj = copy_cached_reference(reference_obj)
+
+                # Check if reference is a placeholder
+                if isinstance(reference_obj, DeferredRef):
+                    # Create a new placeholder for the copy
+                    copied_obj = DeferredRef(reference_obj.cache_id)
+                else:
+                    copied_obj = copy_cached_reference(reference_obj)
 
                 # Add the copy to cache
                 decode_cache[source_cache_id] = copied_obj

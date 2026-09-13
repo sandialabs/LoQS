@@ -848,9 +848,9 @@ class TestFTSurgery:
                 stack_idx_to_modify=idx,
                 error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
             )
-            failed = fttools.run_discrete_error_injected_programs(
-                injected,
-                [
+            runner = fttools.FaultInjectionRunner(
+                errored_programs=injected,
+                collect_shot_data_args=[
                     {"key": parity_key, "indices": "all", "strip_none_entries": True},
                     {
                         "key": "logical_measurement",
@@ -858,8 +858,9 @@ class TestFTSurgery:
                         "strip_none_entries": True,
                     },
                 ],
-                [[0], [0, 0]],
+                expected_outcomes=[[0], [0, 0]],
             )
+            failed = runner.run()
             assert not failed, (
                 f"{kind} stack idx {idx}: "
                 + "; ".join(

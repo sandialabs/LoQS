@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias, cast
+from typing import Any, ClassVar, TypeAlias, cast
 
 from loqs.core.history import HistoryCollectDataIndexTypes
 from loqs.core.programresults import ProgramResults
+from loqs.internal.serializable import Serializable
 
 HistoryDataCollectorLike: TypeAlias = (
     "HistoryDataCollector | str | Mapping[str, object] | "
@@ -32,12 +33,19 @@ a `list[HistoryDataCollectorLike]` context, e.g.
 
 
 @dataclass
-class HistoryDataCollector:
+class HistoryDataCollector(Serializable):
     """A recipe for pulling one series of values out of a [](api:ProgramResults).
 
     Bundles the arguments to [](api:ProgramResults.collect_shot_data) into a
     single, reusable object instead of a raw positional tuple.
     """
+
+    _SERIALIZE_ATTRS: ClassVar[list[str]] = [
+        "key",
+        "indices",
+        "frame_filter",
+        "strip_none_entries",
+    ]
 
     key: str
     """See `key` in [](api:History.collect_data)."""
