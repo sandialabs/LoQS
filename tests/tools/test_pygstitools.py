@@ -20,14 +20,12 @@ from pygsti.processors import QubitProcessorSpec
 from pygsti.protocols import ExperimentDesign
 
 from loqs.backends import DictNoiseModel, STIMQuantumState, StimCircuitGateRep
-from loqs.core import Frame, History, PatchGeometry, ProgramResults, QuantumProgram
+from loqs.core import PatchGeometry, ProgramResults, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools import pygstitools
 from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.pygstitools import (
-    convert_edesign_to_programs,
-    convert_run_programs_to_dataset,
     EdesignRunner,
 )
 
@@ -111,204 +109,10 @@ def trivial_counter_setup():
     return _TrivialCounterSetup()
 
 
-def _fake_program(circuit_repr, shot_frames):
-    """A minimal stand-in for a QuantumProgram: only the surface
-    `convert_run_programs_to_dataset` actually touches (`.name` plus a
-    `.run()` returning canned results), skipping a full QuantumProgram/
-    codepack setup entirely. `circuit_repr` is the pyGSTi `Circuit`'s own
-    `repr()`; `shot_frames` is one list of `Frame` objects per shot, each
-    appended in order to that shot's `History`."""
-
-    class _FakeProgram:
-        def run(self, *args, **kwargs):
-            return self._canned_results
-
-    program = _FakeProgram()
-    program.name = circuit_repr
-    shot_histories = {
-        i: History(frames) for i, frames in enumerate(shot_frames)
-    }
-    program._canned_results = ProgramResults(shot_histories=shot_histories)
-    return program
-
-
-class TestConvertRunProgramsToDataset:
-
-    def test_tuple_args_give_one_outcome_per_shot(self):
-        """A plain tuple-shaped collect_shot_data_args (the single-key
-        case) produces exactly one outcome label per shot."""
-        circ = Circuit([("Gh", "Q0")], line_labels=["Q0"])
-        shots = [
-            [Frame({"logical_measurement": 0})],
-            [Frame({"logical_measurement": 1})],
-            [Frame({"logical_measurement": 1})],
-        ]
-        program = _fake_program(repr(circ), shots)
-
-        ds = convert_run_programs_to_dataset([program])
-
-        counts = ds[circ].counts
-        assert counts[("0",)] == 1
-        assert counts[("1",)] == 2
-
-    def test_list_args_join_per_collector_outcomes_in_order(self):
-        """A list of per-collector (key, index) args -- e.g. one per logical
-        patch -- joins each shot's per-collector values, in list order,
-        into a single combined outcome label."""
-        circ = Circuit([("Gh", "Q0"), ("Gh", "Q1")], line_labels=["Q0", "Q1"])
-        shots = [
-            [
-                Frame({"logical_measurement": 0, "patch_label": "L0"}),
-                Frame({"logical_measurement": 0, "patch_label": "L1"}),
-            ],
-            [
-                Frame({"logical_measurement": 0, "patch_label": "L0"}),
-                Frame({"logical_measurement": 1, "patch_label": "L1"}),
-            ],
-            [
-                Frame({"logical_measurement": 1, "patch_label": "L0"}),
-                Frame({"logical_measurement": 0, "patch_label": "L1"}),
-            ],
-            [
-                Frame({"logical_measurement": 1, "patch_label": "L0"}),
-                Frame({"logical_measurement": 0, "patch_label": "L1"}),
-            ],
-        ]
-        program = _fake_program(repr(circ), shots)
-
-        ds = convert_run_programs_to_dataset(
-            [program],
-            collect_shot_data_args=[
-                ("logical_measurement", -2),
-                ("logical_measurement", -1),
-            ],
-        )
-
-        counts = ds[circ].counts
-        assert counts[("00",)] == 1
-        assert counts[("01",)] == 1
-        assert counts[("10",)] == 2
-
-    def test_auto_runs_a_program_with_no_stored_results(self):
-        """A program that hasn't been run yet gets run (at the default
-        `num_shots=1`) rather than raising or being skipped."""
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
-        stack = [
-            {
-                "instruction": "Init Patch Trivial",
-                "new_patch_label": "L0",
-                "qubits": ["Q0"],
-            },
-            {
-                "instruction": "Init Counter",
-                "patch_label": "L0",
-                "initial_value": 0,
-            },
-            {
-                "instruction": "Increment",
-                "patch_label": "L0",
-                "increment_by": 2,
-            },
-        ]
-        program = QuantumProgram(
-            stack,
-            default_noise_model=ideal_model,
-            patch_types={"Trivial": trivial_code},
-            name="Circuit()",
-        )
-
-        ds = convert_run_programs_to_dataset(
-            [program], collect_shot_data_args=("counter", -1)
-        )
-
-        assert ds[Circuit("()")].counts[("2",)] == 1
-
-    def test_warns_deprecation(self):
-        """Calling convert_run_programs_to_dataset warns DeprecationWarning,
-        pointing at EdesignRunner as its replacement."""
-        circ = Circuit([("Gh", "Q0")], line_labels=["Q0"])
-        program = _fake_program(
-            repr(circ), [[Frame({"logical_measurement": 0})]]
-        )
-        with pytest.warns(
-            DeprecationWarning, match="EdesignRunner"
-        ):
-            convert_run_programs_to_dataset([program])
-
-
-class TestConvertEdesignToPrograms:
-
-    def test_builds_one_program_per_circuit_and_runs_correctly(self):
-        """One QuantumProgram per edesign circuit, each running the
-        physical_to_logical-mapped instructions for that circuit's gates."""
-        pspec = QubitProcessorSpec(
-            num_qubits=1, gate_names=["Gxpi2"], qubit_labels=["Q0"]
-        )
-        model = create_explicit_model(pspec, ideal_gate_type="full TP")
-        circs = [
-            Circuit([], line_labels=["Q0"]),
-            Circuit([("Gxpi2", "Q0")], line_labels=["Q0"]),
-        ]
-        edesign = ExperimentDesign(circs)
-
-        physical_to_logical = {
-            "rho0": [
-                {
-                    "instruction": "Init Patch Trivial",
-                    "new_patch_label": "L0",
-                    "qubits": ["Q0"],
-                },
-                {
-                    "instruction": "Init Counter",
-                    "patch_label": "L0",
-                    "initial_value": 0,
-                },
-            ],
-            ("Gxpi2", "Q0"): [("Increment", "L0")],
-            "Mdefault": [],
-        }
-        trivial_code = trivial_codepack.create_qec_code()
-        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
-
-        programs = convert_edesign_to_programs(
-            edesign,
-            model,
-            physical_to_logical,
-            default_noise_model=ideal_model,
-            patch_types={"Trivial": trivial_code},
-        )
-
-        assert len(programs) == len(edesign.all_circuits_needing_data) == 2
-
-        for program in programs:
-            program.run(num_shots=1, verbose=False)
-        ds = convert_run_programs_to_dataset(
-            programs, collect_shot_data_args=("counter", -1)
-        )
-
-        # The empty circuit never increments the counter; the one-gate
-        # circuit increments it once.
-        assert ds[circs[0]].counts[("0",)] == 1
-        assert ds[circs[1]].counts[("1",)] == 1
-
-    def test_warns_deprecation(self, trivial_counter_setup):
-        """Calling convert_edesign_to_programs warns DeprecationWarning,
-        pointing at EdesignRunner as its replacement."""
-        s = trivial_counter_setup
-        with pytest.warns(
-            DeprecationWarning, match="EdesignRunner"
-        ):
-            convert_edesign_to_programs(
-                s.edesign, s.model, s.physical_to_logical, **s.program_kwargs
-            )
-
-
 class TestPipelineWithMultiplePatches:
-    """`convert_edesign_to_programs`/`convert_run_programs_to_dataset`
-    against a real two-patch [[7,1,3]] program, confirming `frame_filter`
-    picks out each patch's own `"FT Logical Z Measure"` output correctly
-    regardless of the composite instruction's internal frame count."""
+    """`EdesignRunner` against a real two-patch [[7,1,3]] program, confirming
+    `frame_filter` picks out each patch's own `"FT Logical Z Measure"` output
+    correctly regardless of the composite instruction's internal frame count."""
 
     @staticmethod
     def _steane_qubits(suffix: str) -> list[str]:
@@ -327,53 +131,76 @@ class TestPipelineWithMultiplePatches:
 
         # L0 prepped to |1>_L, L1 left at |0>_L, each independently
         # FT-measured -- no CX, so the expected joint outcome is fixed.
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(all_qubits),
-                "qubit_labels": all_qubits,
-            },
-            *geometry.init_patch_entries("Steane"),
-            ("FT Zero Prep", "L0"),
-            ("X", "L0"),
-            ("FT Zero Prep", "L1"),
-            ("FT Logical Z Measure", "L0"),
-            ("FT Logical Z Measure", "L1"),
-        ]
+        phys_qubits = ["Q0", "Q1"]
+        physical_to_logical = {
+            "rho0": [
+                {
+                    "instruction": "Init State",
+                    "state": len(all_qubits),
+                    "qubit_labels": all_qubits,
+                },
+                *geometry.init_patch_entries("Steane"),
+                ("FT Zero Prep", "L0"),
+                ("X", "L0"),
+                ("FT Zero Prep", "L1"),
+            ],
+            "Mdefault": [
+                ("FT Logical Z Measure", "L0"),
+                ("FT Logical Z Measure", "L1"),
+            ],
+        }
+
+        # A minimal 2-qubit model only drives circuit completion; the
+        # actual program below runs the full two-patch Steane setup.
+        pspec = QubitProcessorSpec(
+            num_qubits=len(phys_qubits),
+            gate_names=["Gi"],
+            qubit_labels=phys_qubits,
+            availability={"Gi": [(q,) for q in phys_qubits]},
+        )
+        physical_model = create_explicit_model(pspec, ideal_gate_type="full unitary")
+        circ = Circuit([], line_labels=phys_qubits)
+        edesign = ExperimentDesign([circ])
+
         code = steane_codepack.create_qec_code()
-        model = steane_codepack.create_ideal_model(
+        noise_model = steane_codepack.create_ideal_model(
             all_qubits,
             gaterep=StimCircuitGateRep,
             model_backend=DictNoiseModel,
         )
-        program = QuantumProgram(
-            stack,
-            default_noise_model=model,
-            state_type=STIMQuantumState,
-            patch_types={"Steane": code},
-            name="Circuit()",
-        )
 
-        # convert_run_programs_to_dataset always runs each program itself
-        # (at its own default num_shots=1), so no need to run() it first.
-        ds = convert_run_programs_to_dataset(
-            [program],
+        runner = EdesignRunner(
+            edesign=edesign,
+            physical_model=physical_model,
+            physical_to_logical=physical_to_logical,
+            num_shots=1,
             collect_shot_data_args=[
-                {"key": "logical_measurement", "frame_filter": {"patch_label": "L0"}},
-                {"key": "logical_measurement", "frame_filter": {"patch_label": "L1"}},
+                {
+                    "key": "logical_measurement",
+                    "frame_filter": {"patch_label": "L0"},
+                },
+                {
+                    "key": "logical_measurement",
+                    "frame_filter": {"patch_label": "L1"},
+                },
             ],
+            program_kwargs=dict(
+                default_noise_model=noise_model,
+                state_type=STIMQuantumState,
+                patch_types={"Steane": code},
+            ),
         )
+        ds = runner.run()
 
         # Deterministic, noiseless model: L0 always "1", L1 always "0".
-        assert ds[Circuit("()")].counts[("10",)] == 1
+        assert ds[circ].counts[("10",)] == 1
 
 
 class TestSimulateDatasetForEdesign:
 
-    def test_end_to_end_matches_deprecated_pipeline(self, trivial_counter_setup):
-        """A normal (non-checkpointed) run produces the same per-circuit
-        counts as the deprecated convert_edesign_to_programs +
-        convert_run_programs_to_dataset pipeline."""
+    def test_end_to_end_counts(self, trivial_counter_setup):
+        """A normal (non-checkpointed) run produces the expected per-circuit
+        counts."""
         s = trivial_counter_setup
         ds = s.simulate()
 

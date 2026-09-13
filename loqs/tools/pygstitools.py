@@ -31,7 +31,6 @@ from loqs.core.historydatacollector import (
 from loqs.core.instructions.instructionlabel import (
     InstructionLabelLike,
 )
-from loqs.internal.legacy import deprecated
 from loqs.tools.paralleltools import (
     ParallelStrategy,
 )
@@ -63,7 +62,7 @@ def _build_program_for_circuit(
 ) -> QuantumProgram:
     """Build the [](api:QuantumProgram) for a single edesign circuit.
 
-    Used by `convert_edesign_to_programs`, and shared by any other caller
+    Used by `EdesignRunner`, and shared by any other caller
     that builds one program at a time rather than materializing every
     program in an edesign up front. `label_to_logical` is expected to
     already have `Label`-typed keys, converted once by the caller rather
@@ -87,7 +86,7 @@ def _collect_program_outcomes(
 ) -> list[str]:
     """Extract one outcome-label string per shot from a single program's results.
 
-    Used by `convert_run_programs_to_dataset`, and shared by any other
+    Used by `EdesignRunner`, and shared by any other
     caller that needs to turn one program's raw shot results into outcome
     labels. A single recipe (cast via [](api:HistoryDataCollector.from_raw))
     returns its `collect` output unchanged; a `list` of recipes instead makes
@@ -173,99 +172,6 @@ def _run_one_circuit(
 
     del program, program_results
     return count_dict
-
-
-@deprecated("EdesignRunner")
-def convert_edesign_to_programs(
-    edesign: ExperimentDesign,
-    model: ExplicitOpModel,
-    physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
-    **kwargs,
-) -> list[QuantumProgram]:
-    """Convert a pyGSTi edesign to [](api:QuantumProgram) objects.
-
-    Parameters
-    ----------
-    edesign : ExperimentDesign
-        pyGSTi `ExperimentDesign` to convert
-
-    model : ExplicitOpModel
-        pyGSTi model for the edesign. Currently only used
-        for `model.complete_circuit`, to be removed soon.
-
-    physical_to_logical : Mapping[str | tuple, list[InstructionLabelLike]]
-        A mapping from pyGSTi physical circuit labels to
-        [](api:InstructionStackLike) to build up
-        the [](api:InstructionStack) for each program.
-
-    **kwargs : Any
-        Any additional kwargs that should be passed to the
-        [](api:QuantumProgram).
-
-    Returns
-    -------
-    list[QuantumProgram]
-        List of programs, one per circuit in
-        `edesign.all_circuits_needing_data`
-    """
-    label_to_logical = {Label(k): v for k, v in physical_to_logical.items()}
-
-    return [
-        _build_program_for_circuit(circ, model, label_to_logical, **kwargs)
-        for circ in edesign.all_circuits_needing_data
-    ]
-
-
-@deprecated("EdesignRunner")
-def convert_run_programs_to_dataset(
-    programs: Sequence[QuantumProgram],
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ) = (
-        "logical_measurement",
-        -1,
-    ),
-) -> DataSet:
-    """Convert [](api:QuantumProgram) objects to a pyGSTi `DataSet`.
-
-    Parameters
-    ----------
-    programs : Sequence[QuantumProgram]
-        List of programs, one per circuit in `edesign.all_circuits_needing_data`.
-
-    collect_shot_data_args : HistoryDataCollectorLike | list[HistoryDataCollectorLike], optional
-        The [](api:HistoryDataCollector) recipe(s) used to extract outcomes from each
-        shot, cast via [](api:HistoryDataCollector.from_raw). The output should be a
-        single element per shot, by default `("logical_measurement", -1)`. For circuits
-        acting on multiple logical qubits/patches whose outcomes each need their own
-        [](api:ProgramResults.collect_shot_data) call (e.g. one `"logical_measurement"`
-        per patch), pass a `list` of recipes instead, e.g.
-        `[{"key": "logical_measurement", "frame_filter": {"patch_label": "L0"}},
-        {"key": "logical_measurement", "frame_filter": {"patch_label": "L1"}}]`. Each
-        shot's per-recipe values are then joined (in list order) into a single outcome
-        string, e.g. `"01"`, rather than each recipe producing its own separate outcome.
-
-    Returns
-    -------
-    DataSet
-        A pyGSTi `DataSet` with outcomes stripped from the programs.
-    """
-    circs = [Circuit(p.name[8:-1]) for p in programs]
-
-    ds = DataSet()
-    for circ, prog in zip(circs, programs):
-        program_results = prog.run()
-
-        outcomes = _collect_program_outcomes(
-            program_results, collect_shot_data_args
-        )
-
-        counts = Counter(outcomes)
-        count_dict = {(str(k),): v for k, v in counts.items()}
-
-        ds.add_count_dict(circ, count_dict)
-
-    return ds
 
 
 def _normalize_collect_shot_data_args(
