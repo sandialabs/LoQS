@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import random
+import time
 from collections import Counter
 from collections.abc import Mapping
 from typing import Any, ClassVar
@@ -507,7 +509,9 @@ class ProgramResults(Displayable):
         if self.shot_histories:
             histories = list(self.shot_histories.values())
         elif hasattr(self, "_lazy_loading") and self._lazy_loading:
-            shot_indices = self._get_available_shot_indices()
+            shot_indices = self._get_available_shot_indices(
+                expected_num_shots=getattr(self, "num_shots", None)
+            )
             loaded = [self.get_shot_history(idx) for idx in shot_indices]
             histories = [h for h in loaded if h is not None]
         else:
@@ -524,40 +528,68 @@ class ProgramResults(Displayable):
         ]
         return Counter(data) if return_counter else data
 
-    def _get_available_shot_indices(self) -> list[int]:
+    def _get_available_shot_indices(
+        self, expected_num_shots: int | None = None
+    ) -> list[int]:
         """Return the available shot indices for lazy loading: checked first
         against a nested `runner.h5` shot source, then a standalone
         checkpoint directory, falling back to `range(num_shots)` (or
         whatever's already in the in-memory cache) if neither is present.
+
+        `expected_num_shots`, when given, opts into retrying a branch (up to
+        5 total attempts, jittered exponential backoff) whenever a
+        successful read returns fewer keys than expected, to ride out a
+        benign write/read race rather than silently reporting a partial
+        shot list. Left `None` (the default), a single successful read is
+        returned immediately regardless of completeness -- some callers
+        (e.g. live progress polling) expect a partial list as a normal
+        result, not a bug to retry away.
         """
         from loqs.internal.streamingmerge import get_dict_attr_keys
+
+        max_attempts = 5 if expected_num_shots is not None else 1
+
+        def _read_until_enough(filename: Path, read_fn) -> list[int] | None:
+            for attempt in range(max_attempts):
+                try:
+                    keys = _retry_hdf5_read(filename, read_fn)
+                except (KeyError, OSError):
+                    keys = None
+                if keys and (
+                    expected_num_shots is None
+                    or len(keys) >= expected_num_shots
+                ):
+                    return keys
+                if attempt < max_attempts - 1:
+                    delay = 0.01 * (2**attempt)
+                    time.sleep(delay + random.uniform(0, delay))
+            return None
 
         if (
             self._nested_source_file is not None
             and self._nested_source_file.exists()
         ):
-            try:
-                with h5py.File(self._nested_source_file, "r") as f:
-                    source_group = self._resolve_shot_source_group(f)
-                    if source_group is not None:
-                        keys = get_dict_attr_keys(
-                            source_group, "shot_histories"
-                        )
-                        if keys:
-                            return keys
-            except (KeyError, OSError):
-                pass
+
+            def _read_nested(f: h5py.File) -> list[int] | None:
+                source_group = self._resolve_shot_source_group(f)
+                if source_group is None:
+                    return None
+                return get_dict_attr_keys(source_group, "shot_histories")
+
+            keys = _read_until_enough(self._nested_source_file, _read_nested)
+            if keys:
+                return keys
 
         if self._checkpoint_dir is not None and self._checkpoint_dir.exists():
             results_file = self._checkpoint_dir / self._results_filename
             if results_file.exists():
-                try:
-                    with h5py.File(results_file, "r") as f:
-                        keys = get_dict_attr_keys(f, "shot_histories")
-                        if keys:
-                            return keys
-                except (KeyError, OSError):
-                    pass
+
+                def _read_checkpoint(f: h5py.File) -> list[int]:
+                    return get_dict_attr_keys(f, "shot_histories")
+
+                keys = _read_until_enough(results_file, _read_checkpoint)
+                if keys:
+                    return keys
 
         if hasattr(self, "num_shots") and self.num_shots is not None:
             return list(range(self.num_shots))
@@ -1353,16 +1385,16 @@ class ProgramResults(Displayable):
                 self._checkpoint_decode_cache = decode_cache
 
             # Use get_dict_attr_value to fetch only this one shot
-            # without decoding all others
-            try:
-                history = get_dict_attr_value(
-                    actual_group,
-                    "shot_histories",
-                    shot_index,
-                    decode_cache=decode_cache,
-                )
-            except KeyError:
-                return False
+            # without decoding all others. A KeyError here is allowed to
+            # propagate out of this closure so _retry_hdf5_read can retry it
+            # as a possibly-transient "not visible yet" race rather than
+            # treating it as immediately conclusive.
+            history = get_dict_attr_value(
+                actual_group,
+                "shot_histories",
+                shot_index,
+                decode_cache=decode_cache,
+            )
 
             if self._lazy_loading:
                 self._memory_cache[shot_index] = history
@@ -1375,6 +1407,11 @@ class ProgramResults(Displayable):
             return True
 
         try:
-            return _retry_hdf5_read(filename, _load)
-        except ValueError:
+            return _retry_hdf5_read(
+                filename,
+                _load,
+                max_retries=5,
+                retry_exceptions=(BlockingIOError, OSError, KeyError),
+            )
+        except (ValueError, KeyError):
             return False

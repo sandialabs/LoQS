@@ -1598,6 +1598,149 @@ class TestResumeCheckpointing:
             with pytest.raises(BlockingIOError):
                 nested_pr._load_shot_from_checkpoint(1)
 
+    def test_get_available_shot_indices_retries_transient_stale_keys_then_succeeds(
+        self, monkeypatch
+    ):
+        """`_get_available_shot_indices(expected_num_shots=...)` must retry
+        a successful-but-incomplete key read instead of returning the stale
+        list immediately."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            results = ProgramResults(num_shots=2, lazy_loading=False)
+            for i in range(2):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history)
+            results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
+            pr_read._checkpoint_dir = checkpoint_dir
+
+            import loqs.internal.streamingmerge as streamingmerge_module
+
+            real_get_dict_attr_keys = streamingmerge_module.get_dict_attr_keys
+            call_count = {"n": 0}
+
+            def flaky_get_dict_attr_keys(*args, **kwargs):
+                call_count["n"] += 1
+                if call_count["n"] <= 2:
+                    return [0]
+                return real_get_dict_attr_keys(*args, **kwargs)
+
+            monkeypatch.setattr(
+                streamingmerge_module,
+                "get_dict_attr_keys",
+                flaky_get_dict_attr_keys,
+            )
+
+            indices = pr_read._get_available_shot_indices(
+                expected_num_shots=2
+            )
+            assert indices == [0, 1]
+            assert call_count["n"] > 2
+
+    def test_get_available_shot_indices_falls_back_to_range_after_persistent_stale_keys(
+        self, monkeypatch
+    ):
+        """When a branch's key list never reaches `expected_num_shots` after
+        the bounded retry budget, `_get_available_shot_indices` must fall
+        back to the safe `range(num_shots)` result rather than hanging or
+        returning the incomplete list."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            results = ProgramResults(num_shots=2, lazy_loading=False)
+            for i in range(2):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history)
+            results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
+            pr_read._checkpoint_dir = checkpoint_dir
+
+            import loqs.internal.streamingmerge as streamingmerge_module
+
+            def always_stale(*args, **kwargs):
+                return [0]
+
+            monkeypatch.setattr(
+                streamingmerge_module, "get_dict_attr_keys", always_stale
+            )
+
+            indices = pr_read._get_available_shot_indices(
+                expected_num_shots=2
+            )
+            assert indices == [0, 1]
+
+    def test_load_shot_from_checkpoint_retries_transient_key_error_then_succeeds(
+        self, monkeypatch
+    ):
+        """`_load_shot_from_checkpoint` must retry a `KeyError` raised while
+        looking up a shot's history, since it may only mean the entry isn't
+        visible yet due to a benign write/read race, not that the shot was
+        never written."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            results = ProgramResults(num_shots=2, lazy_loading=False)
+            for i in range(2):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history)
+            results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
+            pr_read._checkpoint_dir = checkpoint_dir
+
+            real_get_dict_attr_value = (
+                programresults_module.get_dict_attr_value
+            )
+            call_count = {"n": 0}
+
+            def flaky_get_dict_attr_value(
+                parent_group, attr_name, key, decode_cache=None
+            ):
+                if key == 1:
+                    call_count["n"] += 1
+                    if call_count["n"] <= 2:
+                        raise KeyError(key)
+                return real_get_dict_attr_value(
+                    parent_group, attr_name, key, decode_cache=decode_cache
+                )
+
+            monkeypatch.setattr(
+                programresults_module,
+                "get_dict_attr_value",
+                flaky_get_dict_attr_value,
+            )
+
+            assert pr_read._load_shot_from_checkpoint(1) is True
+            assert call_count["n"] > 2
+            assert 1 in pr_read._memory_cache
+
+    def test_load_shot_from_checkpoint_returns_false_for_genuinely_absent_shot(
+        self,
+    ):
+        """A shot index that was genuinely never written must still return
+        `False`, not retry forever or raise -- the retry added for a
+        transient `KeyError` must still degrade safely once retries are
+        exhausted."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            results = ProgramResults(num_shots=2, lazy_loading=False)
+            history = History()
+            history.append(Frame({"shot": 0}))
+            results.add_shot(0, history)
+            results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
+            pr_read._checkpoint_dir = checkpoint_dir
+
+            assert pr_read._load_shot_from_checkpoint(1) is False
+
     def test_nested_source_resolve_group(self):
         """Test that _resolve_shot_source_group correctly navigates nested groups."""
         with tempfile.TemporaryDirectory() as temp_dir:

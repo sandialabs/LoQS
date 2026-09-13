@@ -93,17 +93,23 @@ def _retry_hdf5_read(
     filename: Path,
     read_fn: Callable[[h5py.File], Any],
     max_retries: int = 8,
+    retry_exceptions: tuple[type[Exception], ...] = (BlockingIOError, OSError),
 ) -> Any:
     """Open `filename` read-only and call `read_fn(f)`, retrying with the
     same jittered exponential backoff as `_retry_hdf5_write` on transient
-    HDF5 locking errors (`BlockingIOError`/`OSError`). Kept separate from
-    that helper since it can't use its append-mode-only open.
+    HDF5 locking errors (`BlockingIOError`/`OSError` by default). Kept
+    separate from that helper since it can't use its append-mode-only open.
+
+    `retry_exceptions` lets a caller widen (or narrow) which exceptions
+    count as transient and retryable -- e.g. including `KeyError` when
+    `read_fn` looks up a key that may not be visible yet due to a benign
+    write/read race rather than genuine absence.
     """
     for attempt in range(max_retries):
         try:
             with h5py.File(filename, "r") as f:
                 return read_fn(f)
-        except (BlockingIOError, OSError):
+        except retry_exceptions:
             if attempt < max_retries - 1:
                 delay = 0.01 * (2**attempt)
                 time.sleep(delay + random.uniform(0, delay))
