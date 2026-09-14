@@ -1,5 +1,6 @@
 """Tester for loqs.codepacks.codepack_trivial_counter"""
 
+import time
 import pytest
 
 from loqs.core import Frame, Instruction, QuantumProgram
@@ -27,7 +28,7 @@ class TestTrivialCounterCodepack:
         assert code.name == "Trivial Counter Code"
         
         # Check that we have the expected instructions
-        expected_instructions = ["Increment", "Init Counter"]
+        expected_instructions = ["Increment", "Init Counter", "Sleep"]
         for instr_name in expected_instructions:
             assert instr_name in code.instructions
             assert isinstance(code.instructions[instr_name], Instruction)
@@ -85,6 +86,22 @@ class TestTrivialCounterCodepack:
         
         result_frame = init_counter_instr.apply(initial_value=-10)
         assert result_frame["counter"] == -10
+    
+    def test_sleep_instruction(self):
+        """Test the sleep instruction."""
+        sleep_instr = self.trivial_code.instructions["Sleep"]
+        
+        # Test with duration and counter value
+        start_time = time.time()
+        result_frame = sleep_instr.apply(duration=0.05, counter=3)
+        elapsed = time.time() - start_time
+        assert isinstance(result_frame, Frame)
+        assert elapsed >= 0.05, f"Sleep did not sleep long enough: {elapsed}s"
+        assert result_frame["counter"] == 3
+        
+        # Test with no counter kwarg - should use instruction-priority default (None)
+        result_frame = sleep_instr.apply(duration=0.0)
+        assert result_frame["counter"] is None
     
     def test_ideal_model(self):
         """Test that the ideal model returns an empty DictNoiseModel."""

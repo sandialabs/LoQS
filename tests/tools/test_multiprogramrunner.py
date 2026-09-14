@@ -1,15 +1,21 @@
 """Tester for loqs.tools.multiprogramrunner"""
 
 import contextlib
+import functools
+import gc
 import h5py
 import multiprocessing as mp
+import pickle
 import sys
 import time
+import weakref
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
+from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.core import QuantumProgram
 from loqs.core.programresults import _resolve_checkpoint_object_group
 from loqs.internal import _retry_hdf5_write, worker_id
 from loqs.internal.serializable import Serializable
@@ -38,13 +44,6 @@ def _count_and_double(item, index, *, shot_executor, **kwargs):
     return item * 2
 
 
-def _sleep_and_double(item, index, *, shot_executor, **kwargs):
-    """Sleep briefly then double the item (for parallel timing tests)."""
-    sleep_time = kwargs.get("sleep_time", 0.01)
-    time.sleep(sleep_time)
-    return item * 2
-
-
 def _raise_after_n(item, index, *, shot_executor, **kwargs):
     """Raise an exception after processing a certain number of items.
 
@@ -58,6 +57,28 @@ def _raise_after_n(item, index, *, shot_executor, **kwargs):
     if call_count_list[0] > max_count:
         raise RuntimeError(f"Simulated crash after {max_count} items")
     return item * 2
+
+
+def _build_counter_program(num_increments, increment_by, name="Trivial counter test program"):
+    """Build a QuantumProgram via codepack_trivial_counter: an Init Counter
+    (starting at 0) followed by num_increments Increment instructions, each
+    adding increment_by -- final counter value is num_increments * increment_by."""
+    trivial_code = trivial_codepack.create_qec_code()
+    ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+    stack = [
+        {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": ["Q0"]},
+        {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+    ]
+    for _ in range(num_increments):
+        stack.append(
+            {"instruction": "Increment", "patch_label": "L0", "increment_by": increment_by}
+        )
+    return QuantumProgram(
+        stack,
+        default_noise_model=ideal_model,
+        patch_types={"Trivial": trivial_code},
+        name=name,
+    )
 
 
 def _write_worker_file(args):
@@ -86,14 +107,6 @@ def _write_worker_file(args):
 
 # Test runner helpers for checkpoint/resume/parallel tests
 
-def _track_shot_executor(item, index, *, shot_executor, **kwargs):
-    """Helper function to track shot_executor values."""
-    _track_shot_executor.calls.append(shot_executor)
-    return item * 2
-
-
-_track_shot_executor.calls = []
-
 
 class _SimpleDoubleRunner(MultiProgramRunner):
     """Simple runner that doubles items, for checkpoint tests."""
@@ -104,29 +117,34 @@ class _SimpleDoubleRunner(MultiProgramRunner):
         super().__init__(**kwargs)
         self.items = items
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
 
-    def _process_item_fn(self):
-        return _double_item
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {}
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
-    def _make_on_item_done(self):
-        return None
 
-    def _finalize(self):
-        if hasattr(self, "items"):
-            key_fn = self._item_key_fn()
-            if key_fn is not None:
-                return [
-                    self._reduced_results[self.index_map[key_fn(item)]]
-                    for item in self.items
-                ]
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        else:
-            return list(self._reduced_results.values())
+class _TrackingDoubleRunner(_SimpleDoubleRunner):
+    """Simple runner that tracks which indices are built.
+
+    The tracked_indices attribute should be set to a multiprocessing.Manager().list()
+    to enable cross-process tracking during parallel execution. This attribute is NOT
+    serialized, so it must be set anew on the resumed runner instance.
+    """
+
+    def __init__(self, items, tracked_indices=None, **kwargs):
+        super().__init__(items, **kwargs)
+        self.tracked_indices = tracked_indices
+
+    def build_program(self, index):
+        if self.tracked_indices is not None:
+            self.tracked_indices.append(index)
+        return super().build_program(index)
 
 
 class _TrackingRunner(MultiProgramRunner):
@@ -134,46 +152,57 @@ class _TrackingRunner(MultiProgramRunner):
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
-        "max_count",
+        "raise_after",
+        "call_count",
+        "track_calls",
     ]
 
-    def __init__(self, items, process_fn=_double_item, max_count=999, **kwargs):
+    def __init__(self, items, process_fn=_double_item, max_count=999, raise_after=None, call_count=None, track_calls=None, **kwargs):
         super().__init__(**kwargs)
         self.items = items
-        self.process_fn = process_fn
-        self.call_count = [0]
-        self.max_count = max_count
+        # Support legacy process_fn parameter: map _raise_after_n to raise_after behavior
+        # (raise_after may be passed directly during deserialization)
+        if raise_after is not None:
+            self.raise_after = raise_after
+        else:
+            self.raise_after = None if process_fn != _raise_after_n else max_count
+        # Determine if we should track calls (old _count_and_double behavior)
+        if track_calls is not None:
+            self.track_calls = track_calls
+        else:
+            self.track_calls = (process_fn == _count_and_double)
+        # call_count may be passed during deserialization
+        self.call_count = call_count if call_count is not None else [0]
         self.on_item_done_calls = []
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        # Increment call count (either for tracking calls or for crash simulation)
+        self.call_count[0] += 1
 
-    def _process_item_fn(self):
-        return self.process_fn
+        # Check for crash simulation on this item
+        if self.raise_after is not None:
+            if self.call_count[0] > self.raise_after:
+                raise RuntimeError(f"Simulated crash after {self.raise_after} items")
 
-    def _static_kwargs(self):
-        return {"call_count": self.call_count, "max_count": self.max_count}
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
+
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
+
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
     def _make_on_item_done(self):
         def track(index, item, result):
             self.on_item_done_calls.append((index, item, result))
         return track
 
-    def _finalize(self):
-        if hasattr(self, "items"):
-            key_fn = self._item_key_fn()
-            if key_fn is not None:
-                return [
-                    self._reduced_results[self.index_map[key_fn(item)]]
-                    for item in self.items
-                ]
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        else:
-            return list(self._reduced_results.values())
-
 
 class _SleepingRunner(MultiProgramRunner):
-    """Runner that sleeps before returning results, for timing tests."""
+    """Runner that sleeps (via a real Sleep instruction) before returning
+    results, for timing tests."""
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "sleep_time"]
 
@@ -183,31 +212,37 @@ class _SleepingRunner(MultiProgramRunner):
         self.sleep_time = sleep_time
         self.timestamps = []
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        trivial_code = trivial_codepack.create_qec_code()
+        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        stack = [
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": ["Q0"]},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {"instruction": "Sleep", "patch_label": "L0", "duration": self.sleep_time},
+        ]
+        for _ in range(abs(item)):
+            stack.append(
+                {"instruction": "Increment", "patch_label": "L0", "increment_by": 2 * sign}
+            )
+        return QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            name="Sleeping counter program",
+        )
 
-    def _process_item_fn(self):
-        return _sleep_and_double
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {"sleep_time": self.sleep_time}
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
     def _make_on_item_done(self):
         def track(index, item, result):
             self.timestamps.append(time.time())
         return track
-
-    def _finalize(self):
-        if hasattr(self, "items"):
-            key_fn = self._item_key_fn()
-            if key_fn is not None:
-                return [
-                    self._reduced_results[self.index_map[key_fn(item)]]
-                    for item in self.items
-                ]
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        else:
-            return list(self._reduced_results.values())
 
 
 class _RunnerWithFieldA(MultiProgramRunner):
@@ -220,22 +255,16 @@ class _RunnerWithFieldA(MultiProgramRunner):
         self.items = items
         self.field_a = field_a
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
 
-    def _process_item_fn(self):
-        return _double_item
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {}
-
-    def _make_on_item_done(self):
-        return None
-
-    def _finalize(self):
-        if hasattr(self, "items"):
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        return list(self._reduced_results.values())
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
     def _mismatch_check_fields(self):
         return ["field_a"]
@@ -251,22 +280,16 @@ class _RunnerWithFieldB(MultiProgramRunner):
         self.items = items
         self.field_b = field_b
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
 
-    def _process_item_fn(self):
-        return _double_item
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {}
-
-    def _make_on_item_done(self):
-        return None
-
-    def _finalize(self):
-        if hasattr(self, "items"):
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        return list(self._reduced_results.values())
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
     def _mismatch_check_fields(self):
         return ["field_b"]
@@ -413,15 +436,19 @@ class TestMultiProgramRunnerParallel:
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(10))
 
+        # Set up a shared tracking list (using Manager for cross-process access)
+        manager = mp.Manager()
+        recorded_indices = manager.list()
+
         # First run: do a partial run that completes some items
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=3,
         )
 
-        runner1 = _SimpleDoubleRunner(
-            items, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
-            parallel_strategy=strategy,
+        runner1 = _TrackingDoubleRunner(
+            items, tracked_indices=recorded_indices, checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
         )
 
         # Manually create a partial completion scenario by manually seeding
@@ -432,28 +459,16 @@ class TestMultiProgramRunnerParallel:
         # Now add partial results
         _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
 
-        # Second run: continue from checkpoint. Spy on _double_item via a
-        # Manager list, since the real worker processes wouldn't be
-        # observable through a plain in-process list.
-        runner2 = _SimpleDoubleRunner(
-            items, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
-            parallel_strategy=strategy,
+        # Clear tracked indices before second run (to track only the resume phase)
+        del recorded_indices[:]
+
+        # Second run: continue from checkpoint. Use the tracking subclass.
+        runner2 = _TrackingDoubleRunner(
+            items, tracked_indices=recorded_indices, checkpoint=True, resume=True,
+            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
         )
 
-        manager = mp.Manager()
-        recorded_indices = manager.list()
-        original_double_item = _double_item
-
-        def spy_double_item(item, index, *, shot_executor, **kwargs):
-            recorded_indices.append(index)
-            return original_double_item(item, index, shot_executor=shot_executor, **kwargs)
-
-        module = sys.modules[__name__]
-        module._double_item = spy_double_item
-        try:
-            results = runner2.run()
-        finally:
-            module._double_item = original_double_item
+        results = runner2.run()
 
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
         # Only the previously-not-done indices should actually be recomputed
@@ -559,41 +574,8 @@ def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
 # Regression tests for bugs fixed
 
 
-def _double_count_probe_item_processor(
-    item,
-    index,
-    *,
-    shot_executor,
-    n_shot_batches,
-    shot_checkpoint_dir,
-    num_shots,
-    **kwargs,
-):
-    """Write a real, complete per-item shot checkpoint, mirroring a real
-    subclass's own _run_one_circuit-style worker function, so the finished
-    item's on-disk shot data is genuinely readable by _count_done_shots."""
-    from loqs.core.programresults import ProgramResults
-    from loqs.core.history import History
-    from loqs.core import Frame
-
-    pr = ProgramResults()
-    for i in range(num_shots):
-        history = History()
-        history.append(Frame({"item": item, "shot": i}))
-        pr.add_shot(i, history)
-
-    if shot_checkpoint_dir is not None:
-        item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
-        item_dir.mkdir(parents=True, exist_ok=True)
-        pr.checkpoint(checkpoint_dir=item_dir)
-
-    return item * 2
-
-
 class _DoubleCountProbeRunner(MultiProgramRunner):
-    """Minimal MultiProgramRunner subclass wiring shot_checkpoint_dir/
-    _shot_checkpoint_subdir consistently, matching real subclasses like
-    EdesignRunner, for real-dispatch shots-progress-bar testing."""
+    """Minimal MultiProgramRunner subclass for real-dispatch shots-progress-bar testing."""
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
@@ -605,80 +587,21 @@ class _DoubleCountProbeRunner(MultiProgramRunner):
         self.items = items
         self.num_shots = num_shots
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
 
-    def _process_item_fn(self):
-        return _double_count_probe_item_processor
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {
-            "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "num_shots": self.num_shots,
-        }
-
-    def _make_on_item_done(self):
-        return None
-
-    def _finalize(self):
-        if hasattr(self, "items"):
-            key_fn = self._item_key_fn()
-            if key_fn is not None:
-                return [
-                    self._reduced_results[self.index_map[key_fn(item)]]
-                    for item in self.items
-                ]
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        else:
-            return list(self._reduced_results.values())
-
-    def _shot_checkpoint_subdir_prefix(self):
-        return "item"
-
-
-def _custom_filename_probe_item_processor(
-    item,
-    index,
-    *,
-    shot_executor,
-    n_shot_batches,
-    shot_checkpoint_dir,
-    num_shots,
-    results_filename,
-    **kwargs,
-):
-    """Write a real, complete per-item shot checkpoint under a caller-chosen
-    results_filename, mirroring _double_count_probe_item_processor but
-    honoring a custom name instead of the default "results.h5". Item index 1
-    sleeps briefly after checkpointing so it stays genuinely "in flight"
-    (checkpointed but not yet reported done) long enough for the driver's
-    poll loop to reliably observe it."""
-    from loqs.core.programresults import ProgramResults
-    from loqs.core.history import History
-    from loqs.core import Frame
-    import time
-
-    pr = ProgramResults(results_filename=results_filename)
-    for i in range(num_shots):
-        history = History()
-        history.append(Frame({"item": item, "shot": i}))
-        pr.add_shot(i, history)
-
-    if shot_checkpoint_dir is not None:
-        item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
-        item_dir.mkdir(parents=True, exist_ok=True)
-        pr.checkpoint(checkpoint_dir=item_dir)
-
-    if index == 1:
-        time.sleep(0.5)
-
-    return item * 2
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
 
 class _CustomFilenameProbeRunner(MultiProgramRunner):
-    """Minimal MultiProgramRunner subclass mirroring _DoubleCountProbeRunner,
-    but with a custom results_filename, for real-dispatch shots-progress-bar
-    testing under that filename."""
+    """Mirrors _DoubleCountProbeRunner but with a custom results_filename,
+    and item index 1 stays in-flight briefly via a real Sleep instruction."""
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
@@ -690,28 +613,40 @@ class _CustomFilenameProbeRunner(MultiProgramRunner):
         self.items = items
         self.num_shots = num_shots
         self._on_item_done = on_item_done
+        self._pending_index = None
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        trivial_code = trivial_codepack.create_qec_code()
+        ideal_model = trivial_codepack.create_ideal_model(["Q0"])
+        stack = [
+            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": ["Q0"]},
+            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        ]
+        for _ in range(abs(item)):
+            stack.append(
+                {"instruction": "Increment", "patch_label": "L0", "increment_by": 2 * sign}
+            )
+        self._pending_index = index
+        return QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            name="Custom filename probe program",
+        )
 
-    def _process_item_fn(self):
-        return _custom_filename_probe_item_processor
+    def reduce_program_outcomes(self, program_results):
+        result = program_results.collect_shot_data("counter", -1)[0]
+        if self._pending_index == 1:
+            time.sleep(0.5)
+        return result
 
-    def _static_kwargs(self):
-        return {
-            "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "num_shots": self.num_shots,
-            "results_filename": self.results_filename,
-        }
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
     def _make_on_item_done(self):
         return self._on_item_done
-
-    def _finalize(self):
-        return [self._reduced_results[i] for i in range(len(self.items))]
-
-    def _shot_checkpoint_subdir_prefix(self):
-        return "item"
 
 
 class TestParallelDispatchAndPollingRegressions:
@@ -745,35 +680,20 @@ class TestParallelDispatchAndPollingRegressions:
         class _ShotExecutorTracker(MultiProgramRunner):
             _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
 
-            def __init__(self, items, **kwargs):
+            def __init__(self, items, run_kwargs_log=None, **kwargs):
                 super().__init__(**kwargs)
                 self.items = items
+                self.run_kwargs_log = run_kwargs_log if run_kwargs_log is not None else []
 
-            def _get_items(self):
-                return self.items
+            def build_program(self, index):
+                return _FakeProgram(self.items[index] * 2, self.run_kwargs_log)
 
-            def _process_item_fn(self):
-                return _track_shot_executor
+            def reduce_program_outcomes(self, program_results):
+                return program_results.value
 
-            def _static_kwargs(self):
-                return {}
+            def _build_output(self, ordered_results):
+                return [result for _, result in ordered_results]
 
-            def _make_on_item_done(self):
-                return None
-
-            def _finalize(self):
-                if hasattr(self, "items"):
-                    key_fn = self._item_key_fn()
-                    if key_fn is not None:
-                        return [
-                            self._reduced_results[self.index_map[key_fn(item)]]
-                            for item in self.items
-                        ]
-                    return [self._reduced_results[i] for i in range(len(self.items))]
-                else:
-                    return list(self._reduced_results.values())
-
-        _track_shot_executor.calls = []
         strategy = ParallelStrategy(shot_executor="SENTINEL_EXECUTOR")
         runner = _ShotExecutorTracker(
             [1, 2, 3],
@@ -782,7 +702,7 @@ class TestParallelDispatchAndPollingRegressions:
         )
         runner.run()
         # All calls should receive the sentinel value, not None
-        assert _track_shot_executor.calls == ["SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR"]
+        assert [log["shot_executor"] for log in runner.run_kwargs_log] == ["SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR"]
 
     def test_parallel_resume_no_double_on_item_done(self, tmp_path):
         """Parallel resume with on_item_done double-invoked for replayed items.
@@ -1072,8 +992,9 @@ class TestParallelDispatchAndPollingRegressions:
         assert done[1] == "value_1"
 
 
-def _multiply_item(item, index, *, shot_executor, multiplier, **kwargs):
-    return item * multiplier
+# Module-level (not test-local): Serializable.read() resolves a decoded
+# object's class by dotted import path, unavailable to a local class.
+_FLAKY_CALL_COUNT = {"n": 0}
 
 
 class _CountingRunner(MultiProgramRunner):
@@ -1091,57 +1012,37 @@ class _CountingRunner(MultiProgramRunner):
         self.items = items
         self.multiplier = multiplier
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(
+            num_increments=abs(item), increment_by=self.multiplier * sign
+        )
 
-    def _process_item_fn(self):
-        return _multiply_item
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {"multiplier": self.multiplier}
-
-    def _make_on_item_done(self):
-        return None
-
-    def _finalize(self):
-        if hasattr(self, "items"):
-            key_fn = self._item_key_fn()
-            if key_fn is not None:
-                return [
-                    self._reduced_results[self.index_map[key_fn(item)]]
-                    for item in self.items
-                ]
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        else:
-            return list(self._reduced_results.values())
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
     def _mismatch_check_fields(self):
         return ["multiplier"]
 
 
-# Module-level (not test-local): Serializable.read() resolves a decoded
-# object's class by dotted import path, unavailable to a local class.
-_FLAKY_CALL_COUNT = {"n": 0}
-
-
-def _flaky_multiply(item, index, *, shot_executor, multiplier, **kwargs):
-    _FLAKY_CALL_COUNT["n"] += 1
-    if _FLAKY_CALL_COUNT["n"] == 2:
-        raise RuntimeError("simulated crash mid-dispatch")
-    return item * multiplier
-
-
 class _FlakyRunner(_CountingRunner):
-    def _process_item_fn(self):
-        return _flaky_multiply
+    def build_program(self, index):
+        _FLAKY_CALL_COUNT["n"] += 1
+        if _FLAKY_CALL_COUNT["n"] == 2:
+            raise RuntimeError("simulated crash mid-dispatch")
+        return super().build_program(index)
 
 
 class _KeyedRunner(_CountingRunner):
     """_CountingRunner that uses item-based keys for index_map persistence."""
 
-    def _item_key_fn(self):
-        # Key items by their string representation (like EdesignRunner does)
-        return lambda item: f"item_{item}"
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.item_key_fn = lambda item: f"item_{item}"
 
 
 class _KeyedRunnerFixedSignature(MultiProgramRunner):
@@ -1176,51 +1077,40 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
         show_progress=True,
         runner_filename: str = "runner.h5",
         results_filename: str = "results.h5",
-     ):
-         super().__init__(
-             checkpoint=checkpoint,
-             resume=resume,
-             parallel_strategy=parallel_strategy,
-             item_checkpoint_dir=item_checkpoint_dir,
-             force_resume=force_resume,
-             shot_checkpoint=shot_checkpoint,
-             shot_checkpoint_dir=shot_checkpoint_dir,
-             lazy_loading=lazy_loading,
-             keep_shot_results=keep_shot_results,
-             poll_interval=poll_interval,
-             show_progress=show_progress,
-             runner_filename=runner_filename,
-             results_filename=results_filename,
-         )
-         self.items = items
-         self.multiplier = multiplier
+        run_kwargs: dict[str, Any] | None = None,
+    ):
+        super().__init__(
+            checkpoint=checkpoint,
+            resume=resume,
+            parallel_strategy=parallel_strategy,
+            item_checkpoint_dir=item_checkpoint_dir,
+            force_resume=force_resume,
+            shot_checkpoint=shot_checkpoint,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            lazy_loading=lazy_loading,
+            keep_shot_results=keep_shot_results,
+            poll_interval=poll_interval,
+            show_progress=show_progress,
+            runner_filename=runner_filename,
+            results_filename=results_filename,
+            run_kwargs=run_kwargs,
+        )
+        self.items = items
+        self.multiplier = multiplier
+        self.item_key_fn = lambda item: f"item_{item}"
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(
+            num_increments=abs(item), increment_by=self.multiplier * sign
+        )
 
-    def _item_key_fn(self):
-        return lambda item: f"item_{item}"
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _process_item_fn(self):
-        return _multiply_item
-
-    def _static_kwargs(self):
-        return {"multiplier": self.multiplier}
-
-    def _make_on_item_done(self):
-        return None
-
-    def _finalize(self):
-        if hasattr(self, "items"):
-            key_fn = self._item_key_fn()
-            if key_fn is not None:
-                return [
-                    self._reduced_results[self.index_map[key_fn(item)]]
-                    for item in self.items
-                ]
-            return [self._reduced_results[i] for i in range(len(self.items))]
-        else:
-            return list(self._reduced_results.values())
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
 
 class TestMultiProgramRunnerRunAndCrashRecovery:
@@ -1239,13 +1129,10 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         a crash mid-dispatch would leave nothing to recover from."""
         checkpoint_dir = tmp_path / "ckpt"
 
-        def _process_and_check(item, index, *, shot_executor, multiplier, **kwargs):
-            assert (checkpoint_dir / "runner.h5").exists()
-            return item * multiplier
-
         class _CheckingRunner(_CountingRunner):
-            def _process_item_fn(self):
-                return _process_and_check
+            def build_program(self, index):
+                assert (checkpoint_dir / "runner.h5").exists()
+                return super().build_program(index)
 
         runner = _CheckingRunner(
             [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
@@ -1680,60 +1567,6 @@ def _make_synthetic_program_results(index, shot_count=5):
     return pr
 
 
-def _process_item_with_kept_shots(
-    item, index, *, shot_executor, keep_shot_results=False, **kwargs
-):
-    """Test double process_item following the new return contract.
-
-    When keep_shot_results=False, returns bare result (int).
-    When keep_shot_results=True, returns (result, pr) tuple where pr is
-    the in-memory ProgramResults or None if checkpoint reading will handle it.
-    """
-    result = item * 2
-    if keep_shot_results:
-        # Create synthetic results for this item
-        pr = _make_synthetic_program_results(index)
-        return (result, pr)
-    else:
-        return result
-
-
-def _process_item_with_checkpoint(
-    item, index, *, shot_executor, keep_shot_results=False, shot_checkpoint_dir=None, **kwargs
-):
-    """Test double that creates real checkpoint files for each item.
-
-    When keep_shot_results=True, returns (result, pr) where pr is loaded from
-    the checkpoint (or None to let the dispatch layer load it).
-    When keep_shot_results=False, returns bare result.
-    """
-    result = item * 2
-
-    if keep_shot_results and shot_checkpoint_dir is not None:
-        # Create a per-item checkpoint directory
-        item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
-        item_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write the synthetic ProgramResults to its own results.h5, mirroring
-        # a real QuantumProgram.run(checkpoint=True) call's "fresh envelope"
-        # write (full metadata plus shots in one file) rather than the
-        # shot-only worker-file shape .checkpoint() produces -- .checkpoint()
-        # deliberately never writes name/parent_program, so using it here
-        # would make this checkpoint file unable to carry those per-item
-        # values at all, regardless of any downstream lazy-resolution logic.
-        pr = _make_synthetic_program_results(index)
-        pr.write(item_dir / pr._results_filename, format="hdf5")
-
-        # Return None so the dispatch layer will load from checkpoint
-        return (result, None)
-    elif keep_shot_results:
-        # No checkpoint dir, use in-memory
-        pr = _make_synthetic_program_results(index)
-        return (result, pr)
-    else:
-        return result
-
-
 class _KeepShotResultsRunner(MultiProgramRunner):
     """Test runner that supports keep_shot_results."""
 
@@ -1743,74 +1576,24 @@ class _KeepShotResultsRunner(MultiProgramRunner):
         super().__init__(**kwargs)
         self.items = items
 
-    def _get_items(self):
-        return self.items
+    def build_program(self, index):
+        item = self.items[index]
+        sign = 1 if item >= 0 else -1
+        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign, name=f"Item {index}")
 
-    def _process_item_fn(self):
-        return _process_item_with_kept_shots
+    def reduce_program_outcomes(self, program_results):
+        return program_results.collect_shot_data("counter", -1)[0]
 
-    def _static_kwargs(self):
-        return {}
-
-    def _make_on_item_done(self):
-        return None
-
-    def _finalize(self):
-        # Return results in original item order
-        return [self._reduced_results[i] for i in range(len(self.items))]
-
-    def _shot_checkpoint_subdir_prefix(self) -> str | None:
-        """Override to provide per-item shot checkpoint subdirectory prefix."""
-        return "item"
-
-
-def _process_item_with_checkpoint_and_in_memory_pr(
-    item, index, *, shot_executor, keep_shot_results=False, shot_checkpoint_dir=None, **kwargs
-):
-    """Test double that creates real checkpoint files for each item and returns in_memory_pr.
-
-    Similar to _process_item_with_checkpoint, but returns the in_memory ProgramResults
-    instead of None, so backfill from in_memory_pr can be tested.
-    """
-    result = item * 2
-
-    if keep_shot_results:
-        # Create a per-item checkpoint directory if provided
-        if shot_checkpoint_dir is not None:
-            item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
-            item_dir.mkdir(parents=True, exist_ok=True)
-            # Write the synthetic ProgramResults to checkpoint
-            pr = _make_synthetic_program_results(index)
-            pr.checkpoint(checkpoint_dir=item_dir)
-        else:
-            # No checkpoint dir, create in-memory
-            pr = _make_synthetic_program_results(index)
-
-        # Return both result and in_memory_pr (unlike _process_item_with_checkpoint
-        # which returns None, this returns the actual pr for backfill testing)
-        return (result, pr)
-    else:
-        return result
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
 
 
 class _CheckpointedKeepShotResultsRunner(_KeepShotResultsRunner):
     """Test runner that uses shot_checkpoint/shot_checkpoint_dir with keep_shot_results."""
 
-    def _process_item_fn(self):
-        return _process_item_with_checkpoint
-
-    def _static_kwargs(self):
-        return {"shot_checkpoint_dir": self.shot_checkpoint_dir}
-
 
 class _CheckpointedKeepShotResultsRunnerWithInMemory(_KeepShotResultsRunner):
     """Test runner that returns both checkpoint and in_memory pr for backfill testing."""
-
-    def _process_item_fn(self):
-        return _process_item_with_checkpoint_and_in_memory_pr
-
-    def _static_kwargs(self):
-        return {"shot_checkpoint_dir": self.shot_checkpoint_dir}
 
 
 class TestKeepShotResults:
@@ -1870,6 +1653,7 @@ class TestKeepShotResults:
             keep_shot_results=True,
             lazy_loading=True,
         )
+        runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
         assert result == [2, 4, 6]
 
@@ -1892,6 +1676,7 @@ class TestKeepShotResults:
             keep_shot_results=True,
             lazy_loading=False,
         )
+        runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
         assert result == [2, 4, 6]
 
@@ -1901,7 +1686,7 @@ class TestKeepShotResults:
             assert index in runner._program_results
             # Check that it has shot_histories eagerly loaded
             pr = runner._program_results[index]
-            assert len(pr.shot_histories) == 5  # _make_synthetic_program_results makes 5 shots
+            assert len(pr.shot_histories) == 5  # Real program executed with num_shots=5
 
     def test_keep_shot_results_resume_preserves(self, tmp_path):
         """Resuming a run with keep_shot_results persists correctly."""
@@ -1977,6 +1762,7 @@ class TestKeepShotResults:
                 n_program_chunks=2,
             ),
         )
+        runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
         assert result == [2, 4, 6]
 
@@ -2001,10 +1787,12 @@ class TestKeepShotResults:
             keep_shot_results=True,
             lazy_loading=True,
         )
+        runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
         assert result == [2, 4, 6]
 
         # Verify structure: lazy loading should have created ProgramResults objects
+        # Index 1 corresponds to item value 2: num_increments=2, increment_by=2, counter=4
         pr = runner._program_results[1]
         assert pr is not None
         # Verify that it's set up for lazy loading (has nested source configured)
@@ -2013,9 +1801,10 @@ class TestKeepShotResults:
         # Verify shots can be retrieved and collected lazily from runner.h5
         shot = pr.get_shot_history(0)
         assert shot is not None
-        data = pr.collect_shot_data("item", "all")
+        # With real counter program, each shot produces a "counter" key
+        data = pr.collect_shot_data("counter", -1)
         assert len(data) == 5
-        assert all(1 in frame_data for frame_data in data)
+        assert all(frame_val == 4 for frame_val in data)  # Counter value = item_value * increment_by = 2 * 2
 
     def test_keep_shot_results_eager_shot_content_verification(self, tmp_path):
         """Verify eagerly-loaded shots contain correct data end-to-end."""
@@ -2030,17 +1819,19 @@ class TestKeepShotResults:
             keep_shot_results=True,
             lazy_loading=False,
         )
+        runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
         assert result == [2, 4, 6]
 
         # Verify shot content through eager loading
+        # Index 1 corresponds to item value 2: num_increments=2, increment_by=2, counter=4
         pr = runner._program_results[1]
         for shot_idx in range(5):
             shot = pr.shot_histories[shot_idx]
             assert shot is not None
-            # Verify frame data
-            frame_data = shot.collect_data("item", "all")
-            assert 1 in frame_data  # Item index should be 1
+            # Verify frame data: real counter program produces "counter" key
+            frame_data = shot.collect_data("counter", -1)
+            assert frame_data == 4  # Counter value = item_value * increment_by = 2 * 2
 
     def test_keep_shot_results_write_read_round_trip(self, tmp_path):
         """Writing and reading back a runner with keep_shot_results=True preserves the setting."""
@@ -2088,6 +1879,7 @@ class TestKeepShotResults:
                 n_program_chunks=2,
             ),
         )
+        runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
         assert result == [2, 4, 6]
 
@@ -2102,9 +1894,12 @@ class TestKeepShotResults:
             # Verify lazy reads work correctly post-parallel-consolidation
             shot = pr.get_shot_history(0)
             assert shot is not None
-            data = pr.collect_shot_data("item", "all")
+            # With real counter program, each shot produces a "counter" key
+            # Item values are [1, 2, 3], so counter values are [2, 4, 6]
+            # Counter value = item_value * increment_by = (index + 1) * 2
+            data = pr.collect_shot_data("counter", -1)
             assert len(data) == 5
-            assert all(index in frame_data for frame_data in data)
+            assert all(frame_val == (index + 1) * 2 for frame_val in data)
 
     def test_keep_shot_results_eager_restores_metadata(self, tmp_path):
         """With keep_shot_results=True and lazy_loading=False (eager path),
@@ -2134,10 +1929,10 @@ class TestKeepShotResults:
         for index in [0, 1, 2]:
             assert index in runner._program_results
             pr = runner._program_results[index]
-            # The test doubles create ProgramResults with name like "Results_0"
+            # Real QuantumProgram.run() produces name like "Results for Item {index}"
             # This should be restored via backfill from in_memory_pr
-            assert pr.name == f"Results_{index}", (
-                f"Expected pr.name='Results_{index}', got '{pr.name}' "
+            assert pr.name == f"Results for Item {index}", (
+                f"Expected pr.name='Results for Item {index}', got '{pr.name}' "
                 "(metadata not restored from in_memory_pr)"
             )
             # parent_program should not be None (backfilled from in_memory_pr)
@@ -2168,7 +1963,7 @@ class TestKeepShotResults:
         )
         # Set per-runner metadata that should be forwarded to lazy ProgramResults
         runner.num_shots = 15
-        runner.max_frame_limit = 200
+        runner.run_kwargs["max_frame_limit"] = 200
 
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2188,14 +1983,13 @@ class TestKeepShotResults:
                 "(lazy path didn't forward runner metadata)"
             )
             # parent_program and name now resolve lazily to the real,
-            # per-item values written by _make_synthetic_program_results.
-            assert pr.parent_program == f"program_{index}", (
-                f"Expected pr.parent_program='program_{index}', got "
-                f"'{pr.parent_program}' (lazy resolution didn't fetch the "
-                "real per-item value)"
+            # per-item values written by build_program.
+            assert pr.parent_program is not None, (
+                f"Expected pr.parent_program to be resolved (not None) for index {index} "
+                "(lazy resolution didn't happen)"
             )
-            assert pr.name == f"Results_{index}", (
-                f"Expected pr.name='Results_{index}', got '{pr.name}' "
+            assert pr.name == f"Results for Item {index}", (
+                f"Expected pr.name='Results for Item {index}', got '{pr.name}' "
                 "(lazy resolution didn't fetch the real per-item value)"
             )
 
@@ -2205,30 +1999,10 @@ class TestKeepShotResults:
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        def _process_item_custom_filename(
-            item, index, *, shot_executor, keep_shot_results=False, shot_checkpoint_dir=None, **kwargs
-        ):
-            """Helper that writes to custom filename."""
-            result = item * 2
-            if keep_shot_results and shot_checkpoint_dir is not None:
-                item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
-                item_dir.mkdir(parents=True, exist_ok=True)
-                pr = _make_synthetic_program_results(index)
-                pr.write(item_dir / custom_filename, format="hdf5")
-                return (result, None)
-            elif keep_shot_results:
-                pr = _make_synthetic_program_results(index)
-                return (result, pr)
-            else:
-                return result
-
         class _CustomFilenameRunner(_CheckpointedKeepShotResultsRunner):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 self.results_filename = custom_filename
-
-            def _process_item_fn(self):
-                return _process_item_custom_filename
 
         runner = _CustomFilenameRunner(
             [1, 2, 3],
@@ -2259,30 +2033,10 @@ class TestKeepShotResults:
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        def _process_item_custom_filename(
-            item, index, *, shot_executor, keep_shot_results=False, shot_checkpoint_dir=None, **kwargs
-        ):
-            """Helper that writes to custom filename."""
-            result = item * 2
-            if keep_shot_results and shot_checkpoint_dir is not None:
-                item_dir = Path(shot_checkpoint_dir) / f"item_{index}"
-                item_dir.mkdir(parents=True, exist_ok=True)
-                pr = _make_synthetic_program_results(index)
-                pr.write(item_dir / custom_filename, format="hdf5")
-                return (result, None)
-            elif keep_shot_results:
-                pr = _make_synthetic_program_results(index)
-                return (result, pr)
-            else:
-                return result
-
         class _CustomFilenameRunner(_CheckpointedKeepShotResultsRunner):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 self.results_filename = custom_filename
-
-            def _process_item_fn(self):
-                return _process_item_custom_filename
 
         runner = _CustomFilenameRunner(
             [1, 2, 3],
@@ -2440,75 +2194,32 @@ class TestKeepShotResults:
         assert result.parent_program == "program_0"
 
 
-def _shot_progress_item_processor(
-    item, index, *, shot_executor, num_shots=5, keep_shot_results=False, **kwargs
-):
-    """Process an item for shot progress testing."""
-    from loqs.core.programresults import ProgramResults
-    from loqs.core.history import History
-    from loqs.core import Frame
-
-    # Create a ProgramResults with some shots
-    pr = ProgramResults()
-    for i in range(num_shots):
-        history = History()
-        history.append(Frame({"item": item, "shot": i}))
-        pr.add_shot(i, history)
-
-    # Checkpoint if enabled
-    checkpoint_dir = kwargs.get("shot_checkpoint_dir")
-    if checkpoint_dir is not None:
-        pr.checkpoint(checkpoint_dir=checkpoint_dir)
-
-    if keep_shot_results:
-        return item * 2, pr
-    else:
-        return item * 2
-
-
 class TestShotProgressBar:
     """Tests for shot-level progress bar."""
 
     class _ShotProgressTestRunner(MultiProgramRunner):
         """Runner that supports shot-level progress testing."""
 
-        _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
+        _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+            "items",
+            "num_shots",
+        ]
 
         def __init__(self, items, num_shots=5, **kwargs):
             super().__init__(**kwargs)
             self.items = items
             self.num_shots = num_shots
 
-        def _get_items(self):
-            return self.items
+        def build_program(self, index):
+            item = self.items[index]
+            sign = 1 if item >= 0 else -1
+            return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
 
-        def _process_item_fn(self):
-            import functools
+        def reduce_program_outcomes(self, program_results):
+            return program_results.collect_shot_data("counter", -1)[0]
 
-            return functools.partial(
-                _shot_progress_item_processor, num_shots=self.num_shots
-            )
-
-        def _static_kwargs(self):
-            return {}
-
-        def _make_on_item_done(self):
-            return None
-
-        def _finalize(self):
-            if hasattr(self, "items"):
-                key_fn = self._item_key_fn()
-                if key_fn is not None:
-                    return [
-                        self._reduced_results[self.index_map[key_fn(item)]]
-                        for item in self.items
-                    ]
-                return [self._reduced_results[i] for i in range(len(self.items))]
-            else:
-                return list(self._reduced_results.values())
-
-        def _shot_checkpoint_subdir_prefix(self) -> str | None:
-            return "item"
+        def _build_output(self, ordered_results):
+            return [result for _, result in ordered_results]
 
     def test_num_shots_for_progress_hook_returns_num_shots(self):
         """Verify _num_shots_for_progress returns self.num_shots."""
@@ -3657,3 +3368,146 @@ class TestDecodeCache:
                 f"Expected _reduced_results keys to use 'dataset' format "
                 f"after fresh checkpoint with result data, but got '{storage_format}'"
             )
+
+
+# Test doubles for the redesigned build_program/reduce_program_outcomes/
+# _build_output hook surface (not yet implemented on the base class -- see
+# TestMultiProgramRunnerRedesignedHooks below).
+
+
+class _FakeProgramResult:
+    """Minimal stand-in for a QuantumProgram.run() return value, for
+    mechanism-level tests that don't need a real program."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+class _FakeProgram:
+    """Minimal stand-in for a QuantumProgram, for mechanism-level tests
+    exercising build_program/reduce_program_outcomes without a real program.
+    If run_kwargs_log is given, each run() call's kwargs are appended to it
+    so a test can inspect what the dispatch layer actually passed through."""
+
+    def __init__(self, value, run_kwargs_log=None):
+        self.value = value
+        self._run_kwargs_log = run_kwargs_log
+
+    def run(self, **kwargs):
+        if self._run_kwargs_log is not None:
+            self._run_kwargs_log.append(kwargs)
+        return _FakeProgramResult(self.value)
+
+
+class _NewHookRunner(MultiProgramRunner):
+    """Test double for the redesigned hook surface: build_program,
+    reduce_program_outcomes, and _build_output, replacing the current
+    _get_items/_process_item_fn/_static_kwargs/_finalize hooks. Deliberately
+    does not override any of the old hooks, so any code path still relying
+    on them (i.e. the current, unfixed base class) fails loudly instead of
+    silently working."""
+
+    def __init__(self, items, run_kwargs_log=None, weakrefs=None, **kwargs):
+        super().__init__(**kwargs)
+        self.items = items
+        self._run_kwargs_log = run_kwargs_log
+        self._weakrefs = weakrefs if weakrefs is not None else []
+
+    def build_program(self, index):
+        program = _FakeProgram(self.items[index], self._run_kwargs_log)
+        self._weakrefs.append(weakref.ref(program))
+        return program
+
+    def reduce_program_outcomes(self, program_results):
+        self._weakrefs.append(weakref.ref(program_results))
+        return program_results.value * 2
+
+    def _build_output(self, ordered_results):
+        return [result for _, result in ordered_results]
+
+
+class TestMultiProgramRunnerRedesignedHooks:
+    """Tests proving specific properties of the not-yet-implemented
+    build_program/reduce_program_outcomes/_build_output/build_output hook
+    surface and its _shared_item_worker cascade guard. These are expected to
+    fail against the current base class (NotImplementedError/AttributeError
+    from the still-abstract old hooks or the not-yet-existing new ones); a
+    later change makes the base class implement the new surface without
+    touching this test file."""
+
+    def test_shared_item_worker_releases_program_and_results_for_gc(self):
+        """Once dispatch completes for an item with keep_shot_results=False,
+        the program/program_results objects built for it must be
+        garbage-collectible -- no lingering reference held anywhere (self, a
+        closure, or a runner snapshot's own bound method)."""
+        weakrefs = []
+        runner = _NewHookRunner(items=[5], weakrefs=weakrefs)
+
+        result = runner.run()
+
+        assert result == [10]
+        gc.collect()
+        assert len(weakrefs) == 2, (
+            "expected one weakref each for the built program and its "
+            "program_results"
+        )
+        assert all(ref() is None for ref in weakrefs), (
+            "program/program_results should be garbage-collected once "
+            "dispatch completes for a keep_shot_results=False item"
+        )
+
+    def test_process_item_fn_and_static_kwargs_produce_a_picklable_worker(
+        self,
+    ):
+        """A functools.partial-wrapped worker built from the runner's own
+        process-item hooks must itself be picklable, since _run_parallel
+        relies on pickling the worker (plus its static kwargs) to send to
+        worker processes. A hook wiring that captures something unpicklable
+        (an open file handle, a whole ParallelStrategy with a live executor)
+        would fail this."""
+        runner = _NewHookRunner(items=[1, 2, 3])
+
+        worker = functools.partial(
+            runner._process_item_fn(), **(runner._static_kwargs() or {})
+        )
+
+        pickle.dumps(worker)
+
+    def test_build_output_warns_on_incomplete_none_result(self):
+        """build_output must warn when any ordered_results entry has a None
+        result (an incomplete run), before delegating to the subclass's own
+        _build_output."""
+        runner = _NewHookRunner(items=["a", "b"])
+        ordered_results = [("a", 1), ("b", None)]
+
+        with pytest.warns(UserWarning, match="None result"):
+            output = runner.build_output(ordered_results)
+
+        assert output == [1, None]
+
+    def test_cascade_guard_resumes_when_checkpoint_file_already_exists(
+        self, tmp_path
+    ):
+        """If shot_checkpoint=True and the per-item checkpoint's results
+        file already exists on disk, the cascade guard must resume
+        (resume=True, checkpoint=True, checkpoint_dir set) rather than
+        raising or trying to fresh-create an already-existing checkpoint."""
+        shot_checkpoint_dir = tmp_path / "shot_checkpoints"
+        item_dir = shot_checkpoint_dir / "item_0"
+        item_dir.mkdir(parents=True)
+        (item_dir / "results.h5").touch()
+
+        run_kwargs_log = []
+        runner = _NewHookRunner(
+            items=[7],
+            run_kwargs_log=run_kwargs_log,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+        )
+
+        runner.run()
+
+        assert len(run_kwargs_log) == 1
+        assert run_kwargs_log[0]["resume"] is True
+        assert run_kwargs_log[0]["checkpoint"] is True
+        assert run_kwargs_log[0]["checkpoint_dir"] == item_dir

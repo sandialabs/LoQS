@@ -15,6 +15,7 @@ import copy
 import functools
 import h5py
 import itertools
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
@@ -26,6 +27,7 @@ from loqs.core.programresults import (
     _resolve_checkpoint_object_group,
     _reset_empty_groups_format_dict_attr,
 )
+from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal import (
     _retry_hdf5_read,
     _retry_hdf5_write,
@@ -108,11 +110,14 @@ class MultiProgramRunner(Serializable):
         "show_progress",
         "runner_filename",
         "results_filename",
+        "run_kwargs",
     ]
 
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
         {"_reduced_results", "_program_results"}
     )
+
+    CHKPT_SUBDIR_PREFIX: ClassVar[str] = "item"
 
     def __init__(
         self,
@@ -129,6 +134,7 @@ class MultiProgramRunner(Serializable):
         show_progress: bool = True,
         runner_filename: str = "runner.h5",
         results_filename: str = "results.h5",
+        run_kwargs: dict[str, Any] | None = None,
     ):
         self.parallel_strategy = parallel_strategy
         self.item_checkpoint_dir = (
@@ -154,6 +160,20 @@ class MultiProgramRunner(Serializable):
         self.show_progress = show_progress
         self.runner_filename = runner_filename
         self.results_filename = results_filename
+        self.item_key_fn: Callable[[Any], str] | None = None
+        self.run_kwargs = dict(run_kwargs) if run_kwargs is not None else {}
+        if "max_frame_limit" not in self.run_kwargs:
+            warnings.warn(
+                "run_kwargs did not specify 'max_frame_limit'; defaulting to 1_000_000."
+            )
+            self.run_kwargs["max_frame_limit"] = 1_000_000
+        if (
+            "checkpoint_dir" in self.run_kwargs
+            and self.shot_checkpoint_dir is not None
+        ):
+            raise ValueError(
+                "checkpoint_dir in run_kwargs conflicts with shot_checkpoint_dir; use only one of the two (or leave both unset)."
+            )
         self._validate_checkpoint_kwargs()
 
     def _get_encoding_attr(
@@ -340,12 +360,12 @@ class MultiProgramRunner(Serializable):
         # (or the now-seeded map) so a fresh resumed instance doesn't reassign
         # indices out from under already-checkpointed work.
         precomputed_indices = None
-        key_fn = self._item_key_fn()
+        key_fn = self.item_key_fn
         if key_fn is not None:
             if self.index_map is None:
                 self.index_map = {}
             items_with_index = _assign_indices_with_keys(
-                self._get_items(), key_fn, self.index_map
+                self.items, key_fn, self.index_map
             )
             precomputed_indices = [idx for idx, _ in items_with_index]
             # Update runner.h5 with the now-populated index_map
@@ -361,10 +381,10 @@ class MultiProgramRunner(Serializable):
                         _reset_empty_groups_format_dict_attr(f, attr_name)
 
         self._run_dispatch(
-            items=self._get_items(),
+            items=self.items,
             precomputed_indices=precomputed_indices,
         )
-        return self._finalize()
+        return self.build_output(self._ordered_reduced_results())
 
     def _run_dispatch(
         self,
@@ -597,7 +617,7 @@ class MultiProgramRunner(Serializable):
 
         pr = ProgramResults(
             num_shots=getattr(self, "num_shots", None),
-            max_frame_limit=getattr(self, "max_frame_limit", None),
+            max_frame_limit=self.run_kwargs.get("max_frame_limit"),
             lazy_loading=True,
         )
         pr._set_nested_shot_source(runner_file, index)
@@ -638,17 +658,62 @@ class MultiProgramRunner(Serializable):
         _retry_hdf5_write(runner_path, _write)
 
     # Hook methods -- subclasses implement these
-    def _get_items(self) -> Sequence:
-        """Return list of items to process."""
+    def build_program(self, index: int) -> QuantumProgram:
+        """Build a QuantumProgram for the item at the given index."""
         raise NotImplementedError
+
+    def reduce_program_outcomes(self, program_results: Any) -> Any:
+        """Reduce program_results to a single outcome value."""
+        raise NotImplementedError
+
+    def build_output(self, ordered_results: list[tuple[Any, Any]]) -> Any:
+        """Build final output from ordered (item, result) pairs.
+
+        Warns if any result is None (incomplete run), then delegates
+        to _build_output for subclass-specific final assembly.
+        """
+        if any(result is None for _, result in ordered_results):
+            warnings.warn(
+                "One or more items produced a None result (incomplete run)."
+            )
+        return self._build_output(ordered_results)
+
+    def _build_output(self, ordered_results: list[tuple[Any, Any]]) -> Any:
+        """Subclass-specific final output assembly from ordered results."""
+        raise NotImplementedError
+
+    def _ordered_reduced_results(self) -> list[tuple[Any, Any]]:
+        """Build a list of (item, result) pairs in original item order."""
+        ordered = []
+        for pos, item in enumerate(self.items):
+            if self.item_key_fn is not None and self.index_map is not None:
+                key = self.item_key_fn(item)
+                index = self.index_map.get(key, pos)
+            else:
+                index = pos
+            ordered.append((item, self._reduced_results.get(index)))
+        return ordered
 
     def _process_item_fn(self) -> Callable:
         """Return a plain top-level function reference for process_item."""
-        raise NotImplementedError
+        return _shared_item_worker
 
     def _static_kwargs(self) -> dict[str, Any]:
         """Return dict of static kwargs to pass to process_item."""
-        raise NotImplementedError
+        runner_snapshot = copy.copy(self)
+        runner_snapshot.parallel_strategy = None
+        return {
+            "build_program": runner_snapshot.build_program,
+            "reduce_program_outcomes": runner_snapshot.reduce_program_outcomes,
+            "run_kwargs": self.run_kwargs,
+            "shot_checkpoint_dir": self.shot_checkpoint_dir,
+            "shot_checkpoint": self.shot_checkpoint,
+            "chkpt_subdir_prefix": self.CHKPT_SUBDIR_PREFIX,
+            "results_filename": self.results_filename,
+            "lazy_loading": self.lazy_loading,
+            "force_resume": self.force_resume,
+            "num_shots": getattr(self, "num_shots", None),
+        }
 
     def _make_on_item_done(self) -> Callable[[int, Any, Any], None] | None:
         """Return a closure for on_item_done callback, or None.
@@ -662,14 +727,6 @@ class MultiProgramRunner(Serializable):
             self._merge_reduced_result(index, result)
 
         return on_item_done
-
-    def _finalize(self) -> Any:
-        """Return final result from accumulated state in `_reduced_results`."""
-        raise NotImplementedError
-
-    def _item_key_fn(self) -> Callable[[Any], str] | None:
-        """Return item_key_fn or None (uses plain position if None)."""
-        return None
 
     def _desc(self) -> str:
         """Return description string for progress bar."""
@@ -703,14 +760,6 @@ class MultiProgramRunner(Serializable):
             return "collect_shot_data_args"
         return field
 
-    def _shot_checkpoint_subdir_prefix(self) -> str | None:
-        """Return this subclass's per-item shot-checkpoint subdirectory name
-        prefix (e.g. "circ", "point", "fault"), or None if this subclass
-        doesn't support per-item shot-level checkpointing at all. Base default
-        is None, preserving `_shot_checkpoint_subdir`'s own no-op default.
-        """
-        return None
-
     def _shot_checkpoint_subdir(self, index: int) -> Path | None:
         """Return the checkpoint directory for a specific item's shots, or None.
 
@@ -719,7 +768,7 @@ class MultiProgramRunner(Serializable):
         shot subdirectories). The bijection validates that shot_checkpoint_dir is
         set whenever shot_checkpoint is True.
         """
-        prefix = self._shot_checkpoint_subdir_prefix()
+        prefix = self.CHKPT_SUBDIR_PREFIX
         if prefix is None or not self.shot_checkpoint:
             return None
         assert self.shot_checkpoint_dir is not None
@@ -748,6 +797,69 @@ def _checkpoint_subdir_for_prefix(
 ) -> Path:
     """Build a per-item checkpoint subdirectory path for a given prefix and index."""
     return Path(shot_checkpoint_dir) / f"{prefix}_{index}"
+
+
+def _shared_item_worker(
+    item: Any,
+    index: int,
+    *,
+    build_program: Callable[[int], QuantumProgram],
+    reduce_program_outcomes: Callable[[Any], Any],
+    run_kwargs: dict[str, Any],
+    shot_checkpoint_dir: Path | None = None,
+    shot_checkpoint: bool = False,
+    chkpt_subdir_prefix: str = "item",
+    results_filename: str = "results.h5",
+    lazy_loading: bool = True,
+    force_resume: bool = False,
+    num_shots: int | None = None,
+    shot_executor: Any = None,
+    n_shot_batches: int | None = None,
+    keep_shot_results: bool = False,
+    **kwargs: Any,
+) -> Any:
+    """Shared worker function for processing items with program building and reduction.
+
+    Builds a program for the given index, runs it with resolved kwargs, reduces
+    the program results, and optionally keeps shot results. Handles checkpoint
+    setup when needed.
+    """
+    program = build_program(index)
+
+    resolved_run_kwargs = dict(run_kwargs)
+    resolved_run_kwargs.setdefault("verbose", False)
+    resolved_run_kwargs["lazy_loading"] = lazy_loading
+    resolved_run_kwargs["force_resume"] = force_resume
+    resolved_run_kwargs["results_filename"] = results_filename
+
+    if shot_executor is not None:
+        resolved_run_kwargs["shot_executor"] = shot_executor
+    if n_shot_batches is not None:
+        resolved_run_kwargs["n_shot_batches"] = n_shot_batches
+    if num_shots is not None and "num_shots" not in resolved_run_kwargs:
+        resolved_run_kwargs["num_shots"] = num_shots
+
+    if shot_checkpoint and shot_checkpoint_dir is not None:
+        checkpoint_dir = _checkpoint_subdir_for_prefix(
+            shot_checkpoint_dir, chkpt_subdir_prefix, index
+        )
+        resolved_run_kwargs["checkpoint"] = True
+        resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
+        resolved_run_kwargs["resume"] = (
+            checkpoint_dir / results_filename
+        ).exists()
+    else:
+        resolved_run_kwargs.setdefault("checkpoint", False)
+        resolved_run_kwargs.setdefault("resume", False)
+
+    program_results = program.run(**resolved_run_kwargs)
+    reduced_result = reduce_program_outcomes(program_results)
+
+    if keep_shot_results:
+        return reduced_result, program_results
+
+    del program, program_results
+    return reduced_result
 
 
 def _assign_indices_with_keys(
