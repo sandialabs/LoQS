@@ -486,7 +486,7 @@ class MultiProgramRunner(Serializable):
                 # Serial execution
                 newly_computed = _run_serial(
                     remaining,
-                    self._process_item_fn(),
+                    _shared_item_worker,
                     self._static_kwargs() or {},
                     self.item_checkpoint_dir,
                     on_item_done,
@@ -498,12 +498,11 @@ class MultiProgramRunner(Serializable):
                 )
             else:
                 # Parallel execution: create a snapshot for pickling
-                # (same pattern as NoiseSweepRunner._static_kwargs)
                 runner_snapshot = copy.copy(self)
                 runner_snapshot.parallel_strategy = None
                 newly_computed = _run_parallel(
                     remaining,
-                    self._process_item_fn(),
+                    _shared_item_worker,
                     self._static_kwargs() or {},
                     self.item_checkpoint_dir,
                     on_item_done,
@@ -568,9 +567,9 @@ class MultiProgramRunner(Serializable):
                 final_done = done.copy()
                 final_done.update(newly_computed)
 
-            # `_finalize` reads from `_reduced_results`; sync it from the
-            # authoritative `final_done` set, since a subclass's on_item_done
-            # callback may not populate it itself.
+            # `build_output` and `_ordered_reduced_results` read from
+            # `_reduced_results`; sync it from the authoritative `final_done`
+            # set, since a subclass's on_item_done callback may not populate it.
             self._reduced_results.update(final_done)
 
             _verify_final_completeness(
@@ -682,6 +681,7 @@ class MultiProgramRunner(Serializable):
         """Subclass-specific final output assembly from ordered results."""
         raise NotImplementedError
 
+    # Internal helpers -- not subclass hooks
     def _ordered_reduced_results(self) -> list[tuple[Any, Any]]:
         """Build a list of (item, result) pairs in original item order."""
         ordered = []
@@ -693,10 +693,6 @@ class MultiProgramRunner(Serializable):
                 index = pos
             ordered.append((item, self._reduced_results.get(index)))
         return ordered
-
-    def _process_item_fn(self) -> Callable:
-        """Return a plain top-level function reference for process_item."""
-        return _shared_item_worker
 
     def _static_kwargs(self) -> dict[str, Any]:
         """Return dict of static kwargs to pass to process_item."""
@@ -763,8 +759,8 @@ class MultiProgramRunner(Serializable):
     def _shot_checkpoint_subdir(self, index: int) -> Path | None:
         """Return the checkpoint directory for a specific item's shots, or None.
 
-        Guards on `shot_checkpoint` being True and this subclass having a real
-        `_shot_checkpoint_subdir_prefix()`; otherwise returns None (no per-item
+        Guards on `shot_checkpoint` being True and the CHKPT_SUBDIR_PREFIX
+        class attribute being non-None; otherwise returns None (no per-item
         shot subdirectories). The bijection validates that shot_checkpoint_dir is
         set whenever shot_checkpoint is True.
         """

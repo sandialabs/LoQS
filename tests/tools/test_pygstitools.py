@@ -250,21 +250,6 @@ class TestSimulateDatasetForEdesign:
 
 class TestSimulateDatasetForEdesignCheckpointing:
 
-    def test_checkpoint_run_matches_non_checkpointed_result(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """Checkpointing doesn't change the resulting counts, and leaves a
-        checkpoint directory behind."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-
-        ds = s.simulate(ckpt=ckpt)
-
-        assert ds[s.circs[0]].counts[("0",)] == 1
-        assert ds[s.circs[1]].counts[("1",)] == 1
-        assert ckpt.exists()
-        assert ckpt.is_dir()
-
     def test_existing_checkpoint_with_matching_config_auto_resumes(
         self, trivial_counter_setup, tmp_path
     ):
@@ -279,19 +264,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
-
-    def test_existing_content_without_runner_h5_raises(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """Content that isn't a recognized EdesignRunner checkpoint (no
-        runner.h5) is never silently overwritten or continued."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        ckpt.mkdir()
-        (ckpt / "unrelated.txt").write_text("not a checkpoint")
-
-        with pytest.raises(FileExistsError, match=re.escape(str(ckpt))):
-            s.simulate(ckpt=ckpt)
 
     def test_resume_skips_already_checkpointed_circuits(
         self, trivial_counter_setup, tmp_path
@@ -412,30 +384,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_resume_mismatched_num_shots_raises(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """A resumed call with a different num_shots than the checkpoint
-        was written with is a hard error naming that field."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        s.simulate(ckpt=ckpt)
-
-        with pytest.raises(ValueError, match="num_shots"):
-            s.simulate(ckpt=ckpt, num_shots=2)
-
-    def test_resume_mismatched_collect_shot_data_args_raises(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """A resumed call with a different collect_shot_data_args than the
-        checkpoint was written with is a hard error naming that field."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        s.simulate(ckpt=ckpt)
-
-        with pytest.raises(ValueError, match="collect_shot_data_args"):
-            s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
-
     def test_resume_with_equivalent_collect_shot_data_args_succeeds(
         self, trivial_counter_setup, tmp_path
     ):
@@ -454,45 +402,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
-    def test_resume_with_genuinely_different_collect_shot_data_args_still_raises(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """Verify that genuinely different (non-equivalent) collect_shot_data_args
-        values still correctly raise on resume, not just semantically-equivalent ones."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        # Run with ("counter", -1)
-        s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -1))
-
-        # Try to resume with genuinely different ("counter", -2) -- should raise
-        with pytest.raises(ValueError, match="collect_shot_data_args"):
-            s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
-
-    def test_mismatch_error_message_contains_public_name_not_private(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """Error message for collect_shot_data_args mismatch must contain the
-        public field name 'collect_shot_data_args', not the private name
-        '_normalized_collect_shot_data_args'."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -1))
-
-        # Try to resume with genuinely different collect_shot_data_args
-        try:
-            s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -2))
-            pytest.fail("Should have raised ValueError")
-        except ValueError as e:
-            msg = str(e)
-            # Must contain public name "collect_shot_data_args"
-            assert "collect_shot_data_args" in msg, (
-                f"Expected 'collect_shot_data_args' in error message: {msg}"
-            )
-            # Must NOT contain private name "_normalized_collect_shot_data_args"
-            assert "_normalized_collect_shot_data_args" not in msg, (
-                f"Error message must not leak private name '_normalized_collect_shot_data_args': {msg}"
-            )
-
     def test_resume_mismatched_physical_to_logical_raises(
         self, trivial_counter_setup, tmp_path
     ):
@@ -508,20 +417,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         with pytest.raises(ValueError, match="physical_to_logical"):
             s.simulate(ckpt=ckpt, physical_to_logical=changed_p2l)
-
-    def test_force_resume_bypasses_config_mismatch(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """force_resume=True proceeds despite a config mismatch that would
-        otherwise raise, rather than requiring an untouched checkpoint."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        s.simulate(ckpt=ckpt)
-
-        ds = s.simulate(ckpt=ckpt, force_resume=True, num_shots=2)
-
-        assert ds[s.circs[0]].counts[("0",)] == 1
-        assert ds[s.circs[1]].counts[("1",)] == 1
 
     def test_edesign_roundtrip_without_checkpoint_dir(
         self, trivial_counter_setup, tmp_path
@@ -644,101 +539,6 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
-
-    def test_shot_level_force_resume_propagates_to_program_run(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """force_resume forwarded from EdesignRunner down into each
-        circuit's own QuantumProgram.run() call bypasses a shot-level
-        config mismatch. No item_checkpoint_dir is used, so the runner's
-        own item-level mismatch check never triggers -- only the per-item
-        worker's own program.run(force_resume=...) call can bypass this."""
-        s = trivial_counter_setup
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        # First run: produce on-disk shot-level checkpoint state for both circuits.
-        s.simulate(
-            num_shots=1,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            lazy_loading=False,
-        )
-
-        # Resuming with a different num_shots is a mismatch QuantumProgram.run()
-        # itself validates; force_resume=False should raise.
-        with pytest.raises(ValueError, match="num_shots"):
-            s.simulate(
-                num_shots=2,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                lazy_loading=False,
-            )
-
-        # force_resume=True on the runner must reach each circuit's own
-        # program.run() call to bypass the same mismatch.
-        ds = s.simulate(
-            num_shots=2,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            force_resume=True,
-            lazy_loading=False,
-        )
-
-        assert ds[s.circs[0]].counts[("0",)] == 2
-        assert ds[s.circs[1]].counts[("1",)] == 2
-
-    def test_resume_true_without_checkpoint_raises(self, trivial_counter_setup):
-        """resume=True requires checkpoint=True, raises ValueError."""
-        s = trivial_counter_setup
-        with pytest.raises(
-            ValueError, match="resume=True requires checkpoint=True"
-        ):
-            s.simulate(resume=True, checkpoint=False)
-
-    def test_checkpoint_without_resume_raises_when_content_exists(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """State machine case (b): checkpoint=True, resume=False, but
-        on-disk state already exists raises ValueError."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-
-        # First run: create a genuine checkpoint
-        s.simulate(ckpt=ckpt)
-
-        # Verify runner.h5 exists
-        assert (ckpt / "runner.h5").exists()
-
-        # Second run: attempt to run again with checkpoint=True but
-        # resume=False should raise
-        with pytest.raises(
-            ValueError,
-            match="contains an existing checkpoint.*Pass resume=True",
-        ):
-            s.simulate(ckpt=ckpt, resume=False)
-
-    def test_resume_true_with_empty_checkpoint_dir_raises(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """State machine case (d): resume=True with checkpoint=True but
-        no on-disk state raises ValueError (nothing to resume from)."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "nonexistent_ckpt"
-
-        # Attempt to resume from a nonexistent dir
-        with pytest.raises(
-            ValueError,
-            match="is empty or nonexistent.*nothing to resume from",
-        ):
-            s.simulate(ckpt=ckpt, resume=True)
-
-        # Also test with an empty-but-existent dir
-        ckpt.mkdir(parents=True)
-        with pytest.raises(
-            ValueError,
-            match="is empty or nonexistent.*nothing to resume from",
-        ):
-            s.simulate(ckpt=ckpt, resume=True)
 
 
 class TestSimulateDatasetForEdesignParallel:
@@ -999,273 +799,6 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
             assert len(loaded_results.shot_histories) == 1
 
-    def test_resume_cascades_into_item_partial_shot_checkpoint(
-        self, trivial_counter_setup, tmp_path, monkeypatch
-    ):
-
-        """When an item (circuit) crashes partway through its own shot-level
-        checkpoint, a runner-level resume must cascade the resume flag down to
-        that item's own QuantumProgram.run() call, causing it to resume from its
-        partial shot checkpoint rather than recomputing all shots from scratch.
-        This differs from test_incomplete_item_is_redone_on_resume, which only
-        covers items that hadn't started shot-level work at all. With
-        n_shot_batches=3 -> checkpoint_batch_size=2, a crash mid-batch also
-        drops the whole incomplete batch, not just the interrupted shot."""
-        s = trivial_counter_setup
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt.mkdir()
-        shot_ckpt.mkdir()
-
-        # First run: simulate a crash partway through the second circuit's
-        # own shot work (2 circuits, 6 shots each, so we'll interrupt at shot 9)
-        compute_count = {"n": 0}
-        original_run_shot = QuantumProgram._run_shot
-
-        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
-            compute_count["n"] += 1
-            # Crash after 9 shots total (completing all of circuit 0's 6
-            # shots, and 3 of circuit 1's 6 shots)
-            if compute_count["n"] > 9:
-                raise RuntimeError("Simulated crash mid-dispatch")
-            return original_run_shot(self, max_frame_limit, seed, shot_index)
-
-        with pytest.raises(RuntimeError, match="Simulated crash"):
-            monkeypatch.setattr(
-                QuantumProgram, "_run_shot", _run_shot_with_interrupt
-            )
-            s.simulate(
-                ckpt=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                num_shots=6,  # 6 shots per circuit
-                # n_shot_batches=3 -> checkpoint_batch_size=2, so a crash
-                # mid-batch drops the incomplete batch, not just the shot.
-                parallel_strategy=ParallelStrategy(n_shot_batches=3),
-                lazy_loading=False,
-            )
-
-        # Verify: circuit 0's shot checkpoint should be complete (6 shots)
-        circ0_shot_ckpt = shot_ckpt / "circ_0"
-        assert circ0_shot_ckpt.exists()
-        circ0_results = ProgramResults()
-        circ0_results.load_checkpoint(circ0_shot_ckpt)
-        assert len(circ0_results.shot_histories) == 6
-
-        # Verify: circuit 1's checkpoint holds only its one complete batch
-        # (2 shots) -- the 3rd shot's incomplete batch is dropped wholesale.
-        circ1_shot_ckpt = shot_ckpt / "circ_1"
-        assert circ1_shot_ckpt.exists()
-        circ1_results_partial = ProgramResults()
-        circ1_results_partial.load_checkpoint(circ1_shot_ckpt)
-        assert len(circ1_results_partial.shot_histories) == 2
-
-        # Second run: item-level resume should cascade down to circuit 1's
-        # own QuantumProgram.run() call, resuming its partial checkpoint.
-        monkeypatch.undo()
-        compute_count_on_resume = {"n": 0}
-
-        original_run_shot_2 = QuantumProgram._run_shot
-
-        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
-            compute_count_on_resume["n"] += 1
-            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
-
-        monkeypatch.setattr(
-            QuantumProgram, "_run_shot", _count_compute_calls_resume
-        )
-
-        ds = s.simulate(
-            ckpt=item_ckpt,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            num_shots=6,
-            parallel_strategy=ParallelStrategy(n_shot_batches=3),
-            lazy_loading=False,
-        )
-
-        monkeypatch.undo()
-
-        # Verify: the results are fully correct (all 6 shots for both circuits)
-        assert ds[s.circs[0]].counts[("0",)] == 6
-        assert ds[s.circs[1]].counts[("1",)] == 6
-
-        # Circuit 1 recomputes only its 4 missing shots (indices 2-5), not
-        # all 6 -- proving it resumed rather than redoing everything.
-        assert compute_count_on_resume["n"] == 4
-
-    def test_real_parallel_worker_crash_resume_recomputes_only_missing_shots(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """A real `loky` worker process crashing mid-item (after 2 of 6
-        shots) during real item-level parallel dispatch: the runner-level
-        resume must cascade into that item's own partial shot checkpoint,
-        recomputing only its missing shots, while the sibling item
-        (dispatched to the other real worker, uninterrupted) is never
-        redispatched at all. Closes the gap left by
-        test_loky_program_executor_resume_only_recomputes_missing_circuits,
-        which never crashes a real worker process or exercises shot-level
-        checkpointing."""
-        loky = pytest.importorskip("loky")
-        s = trivial_counter_setup
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-
-        manager = mp.Manager()
-        crash_triggered = manager.dict()
-        shot_log = manager.list()
-        call_log = manager.list()
-
-        original_run_one_circuit = pygstitools._run_one_circuit
-        pygstitools._run_one_circuit = functools.partial(
-            _crash_once_and_log_shots,
-            original_fn=original_run_one_circuit,
-            crash_index=1,
-            shots_before_crash=2,
-            wait_for_index=0,
-            item_checkpoint_dir=item_ckpt,
-            crash_triggered=crash_triggered,
-            shot_log=shot_log,
-            call_log=call_log,
-        )
-        try:
-            with pytest.raises(
-                RuntimeError, match="Simulated real-worker crash"
-            ):
-                s.simulate(
-                    ckpt=item_ckpt,
-                    parallel_strategy=strategy,
-                    num_shots=6,
-                    shot_checkpoint=True,
-                    shot_checkpoint_dir=shot_ckpt,
-                    lazy_loading=False,
-                )
-
-            shots_before_resume = list(shot_log)
-            calls_before_resume = list(call_log)
-
-            ds = s.simulate(
-                ckpt=item_ckpt,
-                parallel_strategy=strategy,
-                num_shots=6,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                lazy_loading=False,
-            )
-        finally:
-            pygstitools._run_one_circuit = original_run_one_circuit
-
-        # Item 1 crashed after exactly 2 shots; item 0 completed all 6.
-        assert sorted(
-            shot for i, shot in shots_before_resume if i == 1
-        ) == [0, 1]
-        assert sorted(
-            shot for i, shot in shots_before_resume if i == 0
-        ) == [0, 1, 2, 3, 4, 5]
-
-        # Resume recomputes exactly item 1's 4 missing shots; item 0's
-        # shots are never recomputed.
-        shots_during_resume = list(shot_log)[len(shots_before_resume) :]
-        assert sorted(
-            shot for i, shot in shots_during_resume if i == 1
-        ) == [2, 3, 4, 5]
-        assert [shot for i, shot in shots_during_resume if i == 0] == []
-
-        # Item 0 is dispatched exactly once (the crash run); item 1
-        # exactly twice (crash + resume).
-        assert calls_before_resume.count(0) == 1
-        assert list(call_log).count(0) == 1
-        assert list(call_log).count(1) == 2
-
-        assert ds[s.circs[0]].counts[("0",)] == 6
-        assert ds[s.circs[1]].counts[("1",)] == 6
-
-    def test_resume_does_not_cascade_raise_for_item_with_no_shot_checkpoint(
-        self, trivial_counter_setup, tmp_path, monkeypatch
-    ):
-        """When an item (circuit) has no shot-level checkpoint results.h5,
-        a runner-level resume must not cascade resume=True down to that item's
-        QuantumProgram.run() call, avoiding the case (d) ValueError
-        ("resume=True with no on-disk state"). Instead, resume=False is passed,
-        and the item is redone from scratch and completes successfully."""
-        s = trivial_counter_setup
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt.mkdir()
-        shot_ckpt.mkdir()
-
-        # First run: complete circuit 0, then crash on circuit 1's first shot
-        # before its checkpoint batch can flush.
-        compute_count = {"n": 0}
-        original_run_shot = QuantumProgram._run_shot
-
-        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
-            compute_count["n"] += 1
-            # Crash at shot 4 (circuit 1's first shot, after circuit 0's 3)
-            if compute_count["n"] >= 4:
-                raise RuntimeError("Simulated crash mid-circuit-1")
-            return original_run_shot(self, max_frame_limit, seed, shot_index)
-
-        with pytest.raises(RuntimeError, match="mid-circuit-1"):
-            monkeypatch.setattr(
-                QuantumProgram, "_run_shot", _run_shot_with_interrupt
-            )
-            s.simulate(
-                ckpt=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                num_shots=3,
-                lazy_loading=False,
-            )
-
-        monkeypatch.undo()
-
-        # Manually verify/set up the precondition: circuit 0 complete,
-        # circuit 1 subdirectory exists but may or may not have results.h5
-        circ0_shot_ckpt = shot_ckpt / "circ_0"
-        assert circ0_shot_ckpt.exists()
-        circ0_results = ProgramResults()
-        circ0_results.load_checkpoint(circ0_shot_ckpt)
-        assert len(circ0_results.shot_histories) == 3
-
-        # If circuit 1's results.h5 exists, remove it to simulate the case where
-        # circuit 1's batch didn't complete before the crash
-        circ1_shot_ckpt = shot_ckpt / "circ_1"
-        circ1_results_file = circ1_shot_ckpt / "results.h5"
-        if circ1_results_file.exists():
-            circ1_results_file.unlink()
-
-        # Ensure the precondition is met: circuit 1 has no results.h5
-        assert not circ1_results_file.exists(), (
-            "Precondition setup failed: circuit 1 results.h5 should be removed"
-        )
-
-        # Second run: resume should complete successfully without raising case (d).
-        # The cascading logic checks for results.h5; since it doesn't exist,
-        # resume=False is passed to circuit 1's QuantumProgram.run().
-        ds = s.simulate(
-            ckpt=item_ckpt,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            num_shots=3,
-            lazy_loading=False,
-        )
-
-        # Verify: the results are fully correct (all 3 shots for both circuits)
-        assert ds[s.circs[0]].counts[("0",)] == 3
-        assert ds[s.circs[1]].counts[("1",)] == 3
-
-        # Verify: circuit 1's shot checkpoint now has results.h5 and is complete
-        assert circ1_results_file.exists()
-        circ1_results_after = ProgramResults()
-        circ1_results_after.load_checkpoint(circ1_shot_ckpt)
-        assert len(circ1_results_after.shot_histories) == 3
-
     def test_keep_shot_results_end_to_end(self, trivial_counter_setup, tmp_path):
         """EdesignRunner with keep_shot_results=True consolidates per-circuit ProgramResults."""
         s = trivial_counter_setup
@@ -1341,42 +874,6 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
                 f"Expected _reduced_results keys to use 'dataset' format "
                 f"but got '{storage_format}'"
             )
-
-    def test_custom_runner_filename_checkpoint_and_resume(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """A custom runner_filename is correctly written, read back on
-        resume, and the default runner.h5 is not created."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        custom_runner_file = "custom_runner.h5"
-
-        # First run with custom runner_filename
-        runner1 = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=("counter", -1),
-            item_checkpoint_dir=ckpt,
-            checkpoint=True,
-            runner_filename=custom_runner_file,
-            program_kwargs=s.program_kwargs,
-        )
-        ds1 = runner1.run()
-
-        assert ds1[s.circs[0]].counts[("0",)] == 1
-        assert ds1[s.circs[1]].counts[("1",)] == 1
-        # Verify custom file exists and default does not
-        assert (ckpt / custom_runner_file).exists()
-        assert not (ckpt / "runner.h5").exists()
-
-        # Resume with the same custom runner_filename
-        runner2 = EdesignRunner.read(ckpt / custom_runner_file)
-        ds2 = runner2.run()
-
-        assert ds2[s.circs[0]].counts[("0",)] == 1
-        assert ds2[s.circs[1]].counts[("1",)] == 1
 
     def test_custom_results_filename_checkpoint_and_resume(
         self, trivial_counter_setup, tmp_path, monkeypatch

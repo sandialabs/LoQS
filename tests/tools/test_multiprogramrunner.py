@@ -6,7 +6,6 @@ import gc
 import h5py
 import multiprocessing as mp
 import pickle
-import sys
 import time
 import weakref
 from pathlib import Path
@@ -16,12 +15,16 @@ import pytest
 
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.core import QuantumProgram
+from loqs.core.historydatacollector import HistoryDataCollector
 from loqs.core.programresults import _resolve_checkpoint_object_group
 from loqs.internal import _retry_hdf5_write, worker_id
 from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.multiprogramrunner import MultiProgramRunner
+from loqs.tools.multiprogramrunner import (
+    MultiProgramRunner,
+    _checkpoint_subdir_for_prefix,
+)
 
 
 # Module-level worker functions for parallel/multiprocessing tests
@@ -298,36 +301,6 @@ class _RunnerWithFieldB(MultiProgramRunner):
 class TestMultiProgramRunnerSerialWithCheckpoint:
     """Tests for serial execution with checkpointing."""
 
-    def test_serial_with_checkpoint_full_run(self, tmp_path):
-        """Full serial run with checkpointing."""
-        checkpoint_dir = tmp_path / "checkpoints"
-        items = list(range(5))
-
-        runner = _TrackingRunner(
-            items,
-            process_fn=_double_item, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
-        )
-        results = runner.run()
-
-        assert results == [0, 2, 4, 6, 8]
-        # Verify on_item_done was called for each item
-        assert len(runner.on_item_done_calls) == 5
-        for i, (index, item, result) in enumerate(runner.on_item_done_calls):
-            assert index == i
-            assert item == i
-            assert result == i * 2
-
-        # After a completed run, worker files should be consolidated into
-        # runner.h5 and deleted (verify consolidation occurred by checking
-        # runner.h5 has all results)
-        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 0  # Worker files deleted after consolidation
-        runner_path = checkpoint_dir / "runner.h5"
-        assert runner_path.exists()
-        with h5py.File(runner_path, "r") as f:
-            entries = list(iter_dict_attr_entries(f, "_reduced_results"))
-        assert len(entries) == 5
-
     def test_serial_crash_simulation_and_resume(self, tmp_path):
         """Simulate a crash and verify resume capability."""
         checkpoint_dir = tmp_path / "checkpoints"
@@ -574,8 +547,8 @@ def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
 # Regression tests for bugs fixed
 
 
-class _DoubleCountProbeRunner(MultiProgramRunner):
-    """Minimal MultiProgramRunner subclass for real-dispatch shots-progress-bar testing."""
+class _ShotProgressTestRunner(MultiProgramRunner):
+    """Runner that supports shot-level progress testing."""
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
@@ -600,7 +573,7 @@ class _DoubleCountProbeRunner(MultiProgramRunner):
 
 
 class _CustomFilenameProbeRunner(MultiProgramRunner):
-    """Mirrors _DoubleCountProbeRunner but with a custom results_filename,
+    """Mirrors _ShotProgressTestRunner but with a custom results_filename,
     and item index 1 stays in-flight briefly via a real Sleep instruction."""
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
@@ -831,7 +804,7 @@ class TestParallelDispatchAndPollingRegressions:
             n_program_chunks=2,
         )
         with patch.object(mpr_module, "tqdm", side_effect=TqdmSpy):
-            runner = _DoubleCountProbeRunner(
+            runner = _ShotProgressTestRunner(
                 [1, 2],
                 num_shots=5,
                 checkpoint=True,
@@ -1027,6 +1000,23 @@ class _CountingRunner(MultiProgramRunner):
 
     def _mismatch_check_fields(self):
         return ["multiplier"]
+
+
+class _ShotDataArgsRunner(_CountingRunner):
+    """Runner that checks normalized collect_shot_data_args on resume."""
+
+    _SERIALIZE_ATTRS = _CountingRunner._SERIALIZE_ATTRS + [
+        "collect_shot_data_args",
+    ]
+
+    def __init__(self, items, collect_shot_data_args=None, **kwargs):
+        super().__init__(items, **kwargs)
+        self.collect_shot_data_args = collect_shot_data_args or []
+
+    def _mismatch_check_fields(self):
+        return super()._mismatch_check_fields() + [
+            "_normalized_collect_shot_data_args"
+        ]
 
 
 class _FlakyRunner(_CountingRunner):
@@ -1588,14 +1578,6 @@ class _KeepShotResultsRunner(MultiProgramRunner):
         return [result for _, result in ordered_results]
 
 
-class _CheckpointedKeepShotResultsRunner(_KeepShotResultsRunner):
-    """Test runner that uses shot_checkpoint/shot_checkpoint_dir with keep_shot_results."""
-
-
-class _CheckpointedKeepShotResultsRunnerWithInMemory(_KeepShotResultsRunner):
-    """Test runner that returns both checkpoint and in_memory pr for backfill testing."""
-
-
 class TestKeepShotResults:
     """Tests for MultiProgramRunner.keep_shot_results mechanism."""
 
@@ -1646,7 +1628,7 @@ class TestKeepShotResults:
     def test_keep_shot_results_lazy_loading(self, tmp_path):
         """With lazy_loading=True, _program_results contains lazy handles."""
         checkpoint_dir = tmp_path / "ckpt"
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             shot_checkpoint=True,
@@ -1669,7 +1651,7 @@ class TestKeepShotResults:
     def test_keep_shot_results_lazy_loading_disabled(self, tmp_path):
         """With lazy_loading=False, _program_results contains eager results."""
         checkpoint_dir = tmp_path / "ckpt"
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             shot_checkpoint=True,
@@ -1694,7 +1676,7 @@ class TestKeepShotResults:
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
         # First run completes all items
-        runner1 = _CheckpointedKeepShotResultsRunner(
+        runner1 = _KeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
             shot_checkpoint=True,
@@ -1705,7 +1687,7 @@ class TestKeepShotResults:
         assert len(runner1._program_results) == 3
 
         # Resume (all items already done)
-        runner2 = _CheckpointedKeepShotResultsRunner(
+        runner2 = _KeepShotResultsRunner(
             [1, 2, 3], checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
             shot_checkpoint=True,
@@ -1716,32 +1698,6 @@ class TestKeepShotResults:
         # Program results should still be populated on resume
         assert len(runner2._program_results) == 3
 
-    def test_keep_shot_results_with_shot_checkpoint_serial(self, tmp_path):
-        """keep_shot_results with shot_checkpoint works in serial dispatch."""
-        item_checkpoint_dir = tmp_path / "item_ckpt"
-        shot_checkpoint_dir = tmp_path / "shot_ckpt"
-
-        runner = _CheckpointedKeepShotResultsRunner(
-            [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=True,
-        )
-        result = runner.run()
-        assert result == [2, 4, 6]
-
-        # Verify _program_results was populated
-        assert len(runner._program_results) == 3
-        for index in [0, 1, 2]:
-            assert index in runner._program_results
-            pr = runner._program_results[index]
-            # Verify structure shows it's configured for nested loading
-            # (the actual shots are in per-item checkpoint dirs, not runner.h5)
-            assert pr is not None
-
     def test_keep_shot_results_with_shot_checkpoint_parallel(self, tmp_path):
         """keep_shot_results with shot_checkpoint works in parallel dispatch."""
         loky = pytest.importorskip("loky")
@@ -1749,7 +1705,7 @@ class TestKeepShotResults:
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
@@ -1778,7 +1734,7 @@ class TestKeepShotResults:
         """Verify lazy-loaded ProgramResults can access shot data."""
         item_checkpoint_dir = tmp_path / "item_ckpt"
 
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
@@ -1810,7 +1766,7 @@ class TestKeepShotResults:
         """Verify eagerly-loaded shots contain correct data end-to-end."""
         item_checkpoint_dir = tmp_path / "item_ckpt"
 
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
@@ -1839,7 +1795,7 @@ class TestKeepShotResults:
         runner_file = checkpoint_dir / "runner.h5"
 
         # Create a runner with keep_shot_results=True
-        runner1 = _CheckpointedKeepShotResultsRunner(
+        runner1 = _KeepShotResultsRunner(
             [1, 2], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             shot_checkpoint=True,
@@ -1866,7 +1822,7 @@ class TestKeepShotResults:
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
@@ -1911,7 +1867,7 @@ class TestKeepShotResults:
         checkpoint_dir = tmp_path / "ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        runner = _CheckpointedKeepShotResultsRunnerWithInMemory(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=checkpoint_dir,
@@ -1952,7 +1908,7 @@ class TestKeepShotResults:
 
         # Create a runner with specific num_shots and max_frame_limit values
         # (set as attributes since constructor doesn't accept them)
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=checkpoint_dir,
@@ -1999,12 +1955,7 @@ class TestKeepShotResults:
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        class _CustomFilenameRunner(_CheckpointedKeepShotResultsRunner):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.results_filename = custom_filename
-
-        runner = _CustomFilenameRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
@@ -2012,6 +1963,7 @@ class TestKeepShotResults:
             shot_checkpoint=True,
             keep_shot_results=True,
             lazy_loading=False,
+            results_filename=custom_filename,
         )
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2033,12 +1985,7 @@ class TestKeepShotResults:
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        class _CustomFilenameRunner(_CheckpointedKeepShotResultsRunner):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.results_filename = custom_filename
-
-        runner = _CustomFilenameRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=item_checkpoint_dir,
@@ -2050,6 +1997,7 @@ class TestKeepShotResults:
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
             ),
+            results_filename=custom_filename,
         )
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2197,33 +2145,9 @@ class TestKeepShotResults:
 class TestShotProgressBar:
     """Tests for shot-level progress bar."""
 
-    class _ShotProgressTestRunner(MultiProgramRunner):
-        """Runner that supports shot-level progress testing."""
-
-        _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
-            "items",
-            "num_shots",
-        ]
-
-        def __init__(self, items, num_shots=5, **kwargs):
-            super().__init__(**kwargs)
-            self.items = items
-            self.num_shots = num_shots
-
-        def build_program(self, index):
-            item = self.items[index]
-            sign = 1 if item >= 0 else -1
-            return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
-
-        def reduce_program_outcomes(self, program_results):
-            return program_results.collect_shot_data("counter", -1)[0]
-
-        def _build_output(self, ordered_results):
-            return [result for _, result in ordered_results]
-
     def test_num_shots_for_progress_hook_returns_num_shots(self):
         """Verify _num_shots_for_progress returns self.num_shots."""
-        runner = self._ShotProgressTestRunner(
+        runner = _ShotProgressTestRunner(
             [1, 2, 3], num_shots=10, show_progress=False
         )
         assert runner._num_shots_for_progress() == 10
@@ -2290,7 +2214,7 @@ class TestShotProgressBar:
         )
 
         # Parallel dispatch WITHOUT shot checkpointing
-        runner = self._ShotProgressTestRunner(
+        runner = _ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
@@ -2316,7 +2240,7 @@ class TestShotProgressBar:
              n_program_chunks=2,
          )
 
-        runner = self._ShotProgressTestRunner(
+        runner = _ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
@@ -2333,7 +2257,7 @@ class TestShotProgressBar:
     ):
         """Verify no message is printed for serial dispatch even if hook is non-None."""
         # Serial dispatch (no parallel_strategy)
-        runner = self._ShotProgressTestRunner(
+        runner = _ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=None,
@@ -2350,7 +2274,7 @@ class TestShotProgressBar:
     ):
         """Verify no message when _num_shots_for_progress returns None."""
 
-        class _NoShotsRunner(self._ShotProgressTestRunner):
+        class _NoShotsRunner(_ShotProgressTestRunner):
             def _num_shots_for_progress(self):
                 return None
 
@@ -2394,7 +2318,7 @@ class TestShotProgressBar:
             program_executor=loky.get_reusable_executor(max_workers=1),
             n_program_chunks=2,
         )
-        runner = self._ShotProgressTestRunner(
+        runner = _ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
@@ -2435,7 +2359,7 @@ class TestShotProgressBar:
             program_executor=loky.get_reusable_executor(max_workers=1),
             n_program_chunks=2,
         )
-        runner = self._ShotProgressTestRunner(
+        runner = _ShotProgressTestRunner(
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
@@ -2536,7 +2460,7 @@ class TestShotProgressBar:
                 "_read_worker_files",
                 side_effect=read_with_preseeded_done,
             ):
-                runner = self._ShotProgressTestRunner(
+                runner = _ShotProgressTestRunner(
                     [1, 2, 3],
                     num_shots=5,
                     checkpoint=True,
@@ -2593,6 +2517,12 @@ class TestWorkerFileConsolidation:
         results = runner.run()
 
         assert results == [0, 2, 4, 6, 8]
+        # Verify on_item_done was called for each item
+        assert len(runner.on_item_done_calls) == 5
+        for i, (index, item, result) in enumerate(runner.on_item_done_calls):
+            assert index == i
+            assert item == i
+            assert result == i * 2
 
         # After completion, worker files should be deleted
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
@@ -2913,7 +2843,7 @@ class TestWorkerFileConsolidation:
             read_done_union_dropping_program_result,
         )
 
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=checkpoint_dir,
@@ -2966,7 +2896,7 @@ class TestWorkerFileConsolidation:
             get_dict_attr_keys_dropping_program_result,
         )
 
-        runner = _CheckpointedKeepShotResultsRunner(
+        runner = _KeepShotResultsRunner(
             [1, 2, 3],
             checkpoint=True,
             item_checkpoint_dir=checkpoint_dir,
@@ -3465,10 +3395,12 @@ class TestMultiProgramRunnerRedesignedHooks:
         worker processes. A hook wiring that captures something unpicklable
         (an open file handle, a whole ParallelStrategy with a live executor)
         would fail this."""
+        from loqs.tools.multiprogramrunner import _shared_item_worker
+
         runner = _NewHookRunner(items=[1, 2, 3])
 
         worker = functools.partial(
-            runner._process_item_fn(), **(runner._static_kwargs() or {})
+            _shared_item_worker, **(runner._static_kwargs() or {})
         )
 
         pickle.dumps(worker)
@@ -3511,3 +3443,234 @@ class TestMultiProgramRunnerRedesignedHooks:
         assert run_kwargs_log[0]["resume"] is True
         assert run_kwargs_log[0]["checkpoint"] is True
         assert run_kwargs_log[0]["checkpoint_dir"] == item_dir
+
+
+class TestBaseClassMechanisms:
+    """Direct tests for base-class mechanisms (mismatch, normalized args, etc.)."""
+
+    def test_mismatch_field_display_name_maps_normalized_collect_shot_data_args(self):
+        """_mismatch_field_display_name maps internal field name to public param."""
+        runner = _SimpleDoubleRunner([1])
+        assert (
+            runner._mismatch_field_display_name("_normalized_collect_shot_data_args")
+            == "collect_shot_data_args"
+        )
+
+    def test_mismatch_field_display_name_identity_fallback(self):
+        """_mismatch_field_display_name returns unknown fields unchanged."""
+        runner = _SimpleDoubleRunner([1])
+        assert runner._mismatch_field_display_name("foo_bar") == "foo_bar"
+
+    def test_mismatch_display_name_in_error_message_on_resume(self, tmp_path):
+        """Error message on resume mismatch uses public name, not internal."""
+        # Checkpoint with one collect_shot_data_args spec
+        checkpoint_dir = tmp_path / "ckpt1"
+        checkpoint_dir.mkdir(parents=True)
+        runner1 = _ShotDataArgsRunner(
+            [1],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            collect_shot_data_args=[("counter", -1)],
+        )
+        runner1.run()
+
+        # Try to resume with a different spec
+        runner2 = _ShotDataArgsRunner(
+            [1],
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+            collect_shot_data_args=[("counter", 0)],
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            runner2.run()
+        assert "collect_shot_data_args" in str(exc_info.value)
+        assert "_normalized_collect_shot_data_args" not in str(exc_info.value)
+
+    def test_normalized_collect_shot_data_args_tuple_form(self):
+        """_normalized_collect_shot_data_args normalizes tuple form."""
+        runner = _ShotDataArgsRunner([1], collect_shot_data_args=[("counter", -1)])
+        normalized = runner._normalized_collect_shot_data_args
+        assert len(normalized) == 1
+        assert isinstance(normalized[0], HistoryDataCollector)
+        assert normalized[0].key == "counter"
+        assert normalized[0].indices == -1
+
+    def test_normalized_collect_shot_data_args_dict_form(self):
+        """_normalized_collect_shot_data_args normalizes dict form."""
+        runner = _ShotDataArgsRunner(
+            [1], collect_shot_data_args=[{"key": "counter", "indices": -1}]
+        )
+        normalized = runner._normalized_collect_shot_data_args
+        assert len(normalized) == 1
+        assert isinstance(normalized[0], HistoryDataCollector)
+        assert normalized[0].key == "counter"
+        assert normalized[0].indices == -1
+
+    def test_normalized_collect_shot_data_args_collector_form(self):
+        """_normalized_collect_shot_data_args handles HistoryDataCollector objects."""
+        collector = HistoryDataCollector(key="counter", indices=-1)
+        runner = _ShotDataArgsRunner([1], collect_shot_data_args=[collector])
+        normalized = runner._normalized_collect_shot_data_args
+        assert len(normalized) == 1
+        assert isinstance(normalized[0], HistoryDataCollector)
+        assert normalized[0].key == "counter"
+        assert normalized[0].indices == -1
+
+    def test_normalized_collect_shot_data_args_empty(self):
+        """_normalized_collect_shot_data_args normalizes missing to empty tuple."""
+        runner = _ShotDataArgsRunner([1])
+        normalized = runner._normalized_collect_shot_data_args
+        assert normalized == ()
+
+    def test_normalized_collect_shot_data_args_equivalence_on_resume(self, tmp_path):
+        """Different encodings of equivalent args resume successfully."""
+        # Checkpoint with tuple form
+        checkpoint_dir = tmp_path / "ckpt2"
+        checkpoint_dir.mkdir(parents=True)
+        runner1 = _ShotDataArgsRunner(
+            [1],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            collect_shot_data_args=[("counter", -1)],
+        )
+        runner1.run()
+
+        # Resume with dict form (should succeed, not raise)
+        runner2 = _ShotDataArgsRunner(
+            [1],
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+            collect_shot_data_args=[{"key": "counter", "indices": -1}],
+        )
+        result = runner2.run()
+        assert result == [2]
+
+    def test_run_kwargs_checkpoint_dir_conflict(self, tmp_path):
+        """ValueError raised when both checkpoint_dir in run_kwargs and
+        shot_checkpoint_dir are set."""
+        with pytest.raises(ValueError, match="checkpoint_dir.*conflict"):
+            _SimpleDoubleRunner(
+                [1],
+                shot_checkpoint=True,
+                shot_checkpoint_dir=tmp_path / "shots",
+                run_kwargs={"checkpoint_dir": tmp_path / "other"},
+            )
+
+    def test_run_kwargs_max_frame_limit_warning_on_missing(self):
+        """Warning fires when max_frame_limit not in run_kwargs."""
+        with pytest.warns(UserWarning, match="max_frame_limit"):
+            runner = _SimpleDoubleRunner([1], run_kwargs=None)
+        assert runner.run_kwargs["max_frame_limit"] == 1_000_000
+
+    def test_run_kwargs_max_frame_limit_no_warning_when_present(self):
+        """No warning when max_frame_limit already in run_kwargs."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as warning_list:
+            warnings.simplefilter("always")
+            runner = _SimpleDoubleRunner(
+                [1], run_kwargs={"max_frame_limit": 500}
+            )
+        max_frame_warnings = [
+            w
+            for w in warning_list
+            if "max_frame_limit" in str(w.message)
+        ]
+        assert len(max_frame_warnings) == 0
+        assert runner.run_kwargs["max_frame_limit"] == 500
+
+    def test_force_resume_propagation_with_shot_checkpoint(self, tmp_path):
+        """force_resume=True is genuinely forwarded into program.run() (via
+        _shared_item_worker), bypassing a shot-level num_shots mismatch.
+        item_checkpoint_dir is left unset so every run() call actually
+        dispatches through program.run() again, rather than short-circuiting
+        on cached item-level completion state."""
+        shot_ckpt_dir = tmp_path / "shots"
+        shot_ckpt_dir.mkdir(parents=True)
+
+        # First run establishes the on-disk shot checkpoint with num_shots=1.
+        runner1 = _CountingRunner(
+            [1, 2],
+            item_checkpoint_dir=None,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+        )
+        runner1.num_shots = 1
+        result1 = runner1.run()
+        assert result1 == [2, 4]
+
+        # Same shot checkpoint, different num_shots, force_resume=False:
+        # QuantumProgram.run() itself raises on the num_shots mismatch.
+        runner2 = _CountingRunner(
+            [1, 2],
+            item_checkpoint_dir=None,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            force_resume=False,
+        )
+        runner2.num_shots = 2
+        with pytest.raises(ValueError, match="num_shots"):
+            runner2.run()
+
+        # Same num_shots mismatch, but force_resume=True: succeeds only if
+        # force_resume was actually forwarded into program.run().
+        runner3 = _CountingRunner(
+            [1, 2],
+            item_checkpoint_dir=None,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            force_resume=True,
+        )
+        runner3.num_shots = 2
+        result3 = runner3.run()
+        assert result3 == [2, 4]
+
+    def test_checkpoint_subdir_for_prefix_function(self, tmp_path):
+        """_checkpoint_subdir_for_prefix builds correct subdir path."""
+        result = _checkpoint_subdir_for_prefix(tmp_path, "item", 3)
+        assert result == tmp_path / "item_3"
+
+    def test_shot_checkpoint_subdir_returns_none_when_disabled(self):
+        """_shot_checkpoint_subdir returns None when shot_checkpoint=False."""
+        runner = _SimpleDoubleRunner([1], shot_checkpoint=False)
+        assert runner._shot_checkpoint_subdir(3) is None
+
+    def test_shot_checkpoint_subdir_returns_path_when_enabled(self, tmp_path):
+        """_shot_checkpoint_subdir returns correct path when enabled."""
+        runner = _SimpleDoubleRunner(
+            [1],
+            shot_checkpoint=True,
+            shot_checkpoint_dir=tmp_path,
+        )
+        subdir = runner._shot_checkpoint_subdir(3)
+        assert subdir == tmp_path / "item_3"
+
+    def test_custom_runner_filename_checkpoint_and_resume(self, tmp_path):
+        """Custom runner_filename is used for checkpoint and resume."""
+        ckpt_dir = tmp_path / "ckpt"
+        ckpt_dir.mkdir(parents=True)
+
+        # Run with custom runner_filename
+        runner1 = _SimpleDoubleRunner(
+            [1],
+            checkpoint=True,
+            item_checkpoint_dir=ckpt_dir,
+            runner_filename="custom_runner.h5",
+        )
+        result1 = runner1.run()
+        assert (ckpt_dir / "custom_runner.h5").exists()
+        assert not (ckpt_dir / "runner.h5").exists()
+
+        # Resume with same custom runner_filename
+        runner2 = _SimpleDoubleRunner(
+            [1],
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt_dir,
+            runner_filename="custom_runner.h5",
+        )
+        result2 = runner2.run()
+        assert result2 == result1
