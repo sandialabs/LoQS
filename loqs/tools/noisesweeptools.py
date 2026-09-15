@@ -645,8 +645,8 @@ class NoiseSweepResult(Displayable):
     Holds one `(failure_rate, stderr)` pair per swept value, plus free-form metadata.
     `failure_rates` and `stderrs` are always full-length (len == len(strengths)), with `None`
     placeholders for not-yet-completed indices -- an arbitrary subset may be completed, not
-    necessarily contiguous, though in practice `NoiseSweepRunner` only ever writes a fully
-    complete instance to disk (`item_checkpoint_dir/result.h5`), once, at the end of a run.
+    necessarily contiguous, though in practice `NoiseSweepRunner` only ever produces a fully
+    complete instance, built once at the end of a successful `run()` call.
     Resuming an interrupted sweep is done by constructing a new `NoiseSweepRunner` with the
     same `item_checkpoint_dir`, passing `resume=True`, and calling `.run()` again.
     """
