@@ -11,10 +11,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
@@ -26,10 +26,7 @@ from loqs.core.historydatacollector import (
 )
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.multiprogramrunner import (
-    MultiProgramRunner,
-    _checkpoint_subdir_for_prefix,
-)
+from loqs.tools.multiprogramrunner import MultiProgramRunner
 
 
 def build_discrete_error_injection_program_for_combo(
@@ -400,55 +397,6 @@ def build_discrete_error_injection_programs(
     return errored_programs
 
 
-def _run_one_program(
-    program: QuantumProgram,
-    index: int,
-    *,
-    shot_executor: SubmitExecutor | None,
-    n_shot_batches: int | None,
-    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
-    expected_outcomes: Sequence,
-    num_shots: int,
-    shot_checkpoint_dir: str | Path | None,
-    checkpoint: bool,
-    force_resume: bool,
-    lazy_loading: bool,
-    results_filename: str,
-    run_kwargs: dict | None = None,
-    keep_shot_results: bool = False,
-) -> bool | tuple[bool, Any]:
-    """Run one program via test_program_output, returning success flag.
-
-    When `keep_shot_results=False` (default), returns the bare bool.
-    When `keep_shot_results=True`, returns (success, program_results).
-
-    Matches _run_one_circuit's shape: (item, index, *, shot_executor,
-    **static_kwargs) -> result_bool. Each program gets its own isolated
-    shot-checkpoint subdirectory keyed by index.
-    """
-    item_shot_checkpoint_dir = None
-    if shot_checkpoint_dir is not None:
-        item_shot_checkpoint_dir = _checkpoint_subdir_for_prefix(
-            shot_checkpoint_dir, "fault", index
-        )
-
-    return test_program_output(
-        program,
-        collect_shot_data_args,
-        expected_outcomes,
-        num_shots=num_shots,
-        shot_executor=shot_executor,
-        n_shot_batches=n_shot_batches,
-        checkpoint=checkpoint,
-        checkpoint_dir=item_shot_checkpoint_dir,
-        lazy_loading=lazy_loading,
-        force_resume=force_resume,
-        return_program_results=keep_shot_results,
-        results_filename=results_filename,
-        run_kwargs=run_kwargs,
-    )
-
-
 class FaultInjectionRunner(MultiProgramRunner):
     """Runner for testing discrete-error-injected programs with checkpoint/resume.
 
@@ -459,12 +407,13 @@ class FaultInjectionRunner(MultiProgramRunner):
     flags applied against on-disk state -- see `MultiProgramRunner.run`.
     """
 
+    CHKPT_SUBDIR_PREFIX: ClassVar[str] = "fault"
+
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "errored_programs",
         "collect_shot_data_args",
         "expected_outcomes",
         "num_shots",
-        "run_kwargs",
     ]
 
     def __init__(
@@ -502,57 +451,37 @@ class FaultInjectionRunner(MultiProgramRunner):
             show_progress=show_progress,
             runner_filename=runner_filename,
             results_filename=results_filename,
+            run_kwargs=run_kwargs,
         )
         self.errored_programs = errored_programs
+        self.items = self.errored_programs
         self.collect_shot_data_args = collect_shot_data_args
         self.expected_outcomes = tuple(expected_outcomes)
         self.num_shots = num_shots
-        self.run_kwargs = run_kwargs
 
-        if self.run_kwargs is not None and "checkpoint_dir" in self.run_kwargs:
-            if self.shot_checkpoint_dir is not None:
-                raise ValueError(
-                    "checkpoint_dir in run_kwargs conflicts with shot_checkpoint_dir; "
-                    "use only one of the two (or leave both unset)."
-                )
+    def build_program(self, index: int) -> QuantumProgram:
+        """Return the program assigned to this index."""
+        return self.items[index]
 
-    def _get_items(self) -> Sequence:
-        """Return programs to test."""
-        return self.errored_programs
+    def reduce_program_outcomes(self, program_results: Any) -> bool:
+        """Reduce one program's shot outcomes to a pass/fail bool.
 
-    def _item_key_fn(self) -> Callable[[QuantumProgram], str] | None:
-        """No stable identity beyond position."""
-        return None
-
-    def _process_item_fn(self) -> Callable:
-        """Return the _run_one_program function."""
-        return _run_one_program
-
-    def _static_kwargs(self) -> dict[str, Any]:
-        """Return static kwargs for _run_one_program."""
-        return {
-            "collect_shot_data_args": self.collect_shot_data_args,
-            "expected_outcomes": self.expected_outcomes,
-            "num_shots": self.num_shots,
-            "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "checkpoint": self.shot_checkpoint,
-            "force_resume": self.force_resume,
-            "lazy_loading": self.lazy_loading,
-            "results_filename": self.results_filename,
-            "run_kwargs": self.run_kwargs or {},
-        }
-
-    def _finalize(self) -> list[QuantumProgram]:
-        """Return failed programs (same objects from input, matched by index).
-
-        Builds the failed list from `_reduced_results`, which holds success
-        bools indexed by program position, in original program order.
+        Returns `True` if all shots match expected outcomes, `False` on any mismatch.
         """
-        failed = [
-            prog
-            for i, prog in enumerate(self.errored_programs)
-            if not self._reduced_results.get(i, True)
-        ]
+        for args, expected in zip(
+            self.collect_shot_data_args, self.expected_outcomes
+        ):
+            outs = HistoryDataCollector.from_raw(args).collect(program_results)
+            for out in outs[-self.num_shots :]:
+                if out != expected:
+                    return False
+        return True
+
+    def _build_output(
+        self, ordered_results: list[tuple[Any, Any]]
+    ) -> list[QuantumProgram]:
+        """Build the final list of failed programs."""
+        failed = [prog for prog, success in ordered_results if not success]
 
         if self.show_progress:
             if len(failed):
@@ -574,10 +503,6 @@ class FaultInjectionRunner(MultiProgramRunner):
             "expected_outcomes",
             "keep_shot_results",
         ]
-
-    def _shot_checkpoint_subdir_prefix(self) -> str | None:
-        """fault_{index}"""
-        return "fault"
 
 
 def test_program_output(

@@ -3767,6 +3767,28 @@ class TestBaseClassMechanisms:
         hybrid_result = runner_hybrid.run()
         assert hybrid_result == serial_result
 
+    def test_hybrid_with_live_loky_shot_executor(self):
+        """A live loky executor (not a hand-written factory) works as
+        shot_executor too -- ParallelStrategy auto-converts it to a
+        picklable factory internally (see test_paralleltools.py for
+        coverage of the conversion itself)."""
+        loky = pytest.importorskip("loky")
+
+        runner = _CountingRunner(items=[2, 3], checkpoint=False)
+        serial_result = runner.run()
+
+        runner_hybrid = _CountingRunner(
+            items=[2, 3],
+            checkpoint=False,
+            parallel_strategy=ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+                shot_executor=loky.get_reusable_executor(max_workers=2),
+            ),
+        )
+        hybrid_result = runner_hybrid.run()
+        assert hybrid_result == serial_result
+
     def test_shot_checkpoint_true_without_dir_raises(self):
         """shot_checkpoint=True without shot_checkpoint_dir raises ValueError."""
         with pytest.raises(ValueError, match="shot_checkpoint_dir"):

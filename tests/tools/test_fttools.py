@@ -20,7 +20,6 @@ from loqs.tools import fttools
 from loqs.tools.paralleltools import ParallelStrategy
 
 from _shared_checkpoint_test_helpers import (
-    _build_shot_executor,
     _crash_once_and_log_shots,
     _wait_for_index_checkpointed,
 )
@@ -249,7 +248,7 @@ class TestRunDiscreteErrorInjectedPrograms:
     def test_finalize_summary_suppressed_when_show_progress_false(
         self, capsys
     ):
-        """FaultInjectionRunner._finalize suppresses summary prints when show_progress=False."""
+        """FaultInjectionRunner._build_output suppresses summary prints when show_progress=False."""
         program = _build_counter_program()
         runner = fttools.FaultInjectionRunner(
             errored_programs=[program, program],
@@ -296,89 +295,6 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
         assert failed == [program, program]
         assert all(p is program for p in failed)
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason=(
-            "submitit unconditionally registers a SIGCONT handler for "
-            "every job it runs (submitit/core/job_environment.py), a "
-            "POSIX-only signal that doesn't exist in Windows's `signal` "
-            "module at all -- a real, unconditional upstream limitation "
-            "(submitit targets SLURM, a Linux-only scheduler), not "
-            "something fixable from LoQS's side."
-        ),
-    )
-    def test_submitit_program_executor_matches_serial_result(
-        self, tmp_path
-    ):
-        submitit = pytest.importorskip("submitit")
-        program = _build_counter_program()
-        strategy = ParallelStrategy(
-            program_executor=submitit.AutoExecutor(
-                folder=tmp_path, cluster="local"
-            ),
-            n_program_chunks=2,
-        )
-
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-            parallel_strategy=strategy,
-        )
-        failed = runner.run()
-
-        assert failed == []
-
-    def test_hybrid_program_and_shot_executor_matches_serial_result(self):
-        """program_executor (across programs) and shot_executor (within
-        each program's own shots) nested together -- the real hybrid
-        parallelism this stage adds."""
-        loky = pytest.importorskip("loky")
-        program = _build_counter_program()
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-            shot_executor=_build_shot_executor,
-        )
-
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-            parallel_strategy=strategy,
-        )
-        failed = runner.run()
-
-        assert failed == []
-
-    def test_hybrid_with_live_loky_shot_executor_needs_no_hand_written_factory(
-        self,
-    ):
-        """A plain live loky executor works as shot_executor here too --
-        ParallelStrategy auto-converts it to a picklable factory, so a
-        caller never needs to write one by hand (see
-        test_paralleltools.py for coverage of the conversion itself)."""
-        loky = pytest.importorskip("loky")
-        program = _build_counter_program()
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-            shot_executor=loky.get_reusable_executor(max_workers=2),
-        )
-
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-            parallel_strategy=strategy,
-        )
-        failed = runner.run()
-
-        assert failed == []
-
 
 class TestFaultInjectionRunnerCheckpointing:
     """Checkpoint/resume and crash-recovery tests for FaultInjectionRunner."""
@@ -412,66 +328,6 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
-        )
-        failed2 = runner2.run()
-        assert failed2 == []
-
-    def test_resume_mismatched_keep_shot_results_raises(self, tmp_path):
-        """A resumed call with a different keep_shot_results than the
-        checkpoint was written with is a hard error naming that field."""
-        program = _build_counter_program()
-        ckpt = tmp_path / "checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        runner1 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
-            keep_shot_results=False,
-            shot_checkpoint=False,
-        )
-        runner1.run()
-
-        runner2 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
-            keep_shot_results=True,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-        )
-        with pytest.raises(ValueError, match="keep_shot_results"):
-            runner2.run()
-
-    def test_resume_mismatched_keep_shot_results_force_resume_works(
-        self, tmp_path
-    ):
-        """force_resume=True bypasses a keep_shot_results mismatch."""
-        program = _build_counter_program()
-        ckpt = tmp_path / "checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        runner1 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
-            keep_shot_results=False,
-            shot_checkpoint=False,
-        )
-        runner1.run()
-
-        runner2 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
-            keep_shot_results=True,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            force_resume=True,
         )
         failed2 = runner2.run()
         assert failed2 == []
