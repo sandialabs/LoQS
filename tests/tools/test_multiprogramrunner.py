@@ -6,6 +6,7 @@ import gc
 import h5py
 import multiprocessing as mp
 import pickle
+import sys
 import time
 import weakref
 from pathlib import Path
@@ -2237,8 +2238,8 @@ class TestShotProgressBar:
 
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=1),
-             n_program_chunks=2,
-         )
+            n_program_chunks=2,
+        )
 
         runner = _ShotProgressTestRunner(
             [1, 2, 3],
@@ -3674,3 +3675,156 @@ class TestBaseClassMechanisms:
         )
         result2 = runner2.run()
         assert result2 == result1
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="submitit unconditionally registers a SIGCONT handler, POSIX-only",
+    )
+    def test_submitit_program_executor_produces_correct_results(self, tmp_path):
+        """submitit program executor (in-process DebugExecutor) produces correct results."""
+        submitit = pytest.importorskip("submitit")
+
+        runner = _CountingRunner(items=[3, -2], checkpoint=False)
+        serial_result = runner.run()
+
+        runner_parallel = _CountingRunner(
+            items=[3, -2],
+            checkpoint=False,
+            # DebugExecutor: AutoExecutor(cluster="local") can't unpickle a
+            # test-double class defined in this test module by reference.
+            parallel_strategy=ParallelStrategy(
+                program_executor=submitit.DebugExecutor(folder=tmp_path),
+                n_program_chunks=2,
+            ),
+        )
+        parallel_result = runner_parallel.run()
+        assert parallel_result == serial_result
+
+    def test_hybrid_program_and_shot_executor_parallelism(self, tmp_path):
+        """Hybrid program_executor + shot_executor nested parallelism produces correct results."""
+        loky = pytest.importorskip("loky")
+        from _shared_checkpoint_test_helpers import _build_shot_executor
+
+        runner = _CountingRunner(items=[2, 3], checkpoint=False)
+        serial_result = runner.run()
+
+        runner_hybrid = _CountingRunner(
+            items=[2, 3],
+            checkpoint=False,
+            parallel_strategy=ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+                shot_executor=_build_shot_executor,
+            ),
+        )
+        hybrid_result = runner_hybrid.run()
+        assert hybrid_result == serial_result
+
+    def test_shot_checkpoint_true_without_dir_raises(self):
+        """shot_checkpoint=True without shot_checkpoint_dir raises ValueError."""
+        with pytest.raises(ValueError, match="shot_checkpoint_dir"):
+            _CountingRunner(items=[1], shot_checkpoint=True)
+
+    def test_shot_checkpoint_creates_per_item_subdirs(self, tmp_path):
+        """Serial run with shot_checkpoint=True creates per-item subdirectories."""
+        shot_ckpt_dir = tmp_path / "shots"
+        runner = _CountingRunner(
+            items=[1, 1],
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading=False,
+        )
+        result = runner.run()
+        assert result == [2, 2]
+
+        # Verify subdirectories exist
+        assert (shot_ckpt_dir / "item_0").exists()
+        assert (shot_ckpt_dir / "item_1").exists()
+
+        # Verify each contains results.h5
+        from loqs.core.programresults import ProgramResults
+
+        for idx in [0, 1]:
+            subdir = shot_ckpt_dir / f"item_{idx}"
+            results_file = subdir / "results.h5"
+            assert results_file.exists(), f"Missing {results_file}"
+
+            # Load and verify checkpoint data
+            pr = ProgramResults()
+            pr.load_checkpoint(checkpoint_dir=subdir)
+            assert len(pr.shot_histories) == 1
+
+    def test_parallel_one_chunk_preserves_per_item_shot_checkpoints(self, tmp_path):
+        """Parallel run with n_program_chunks=1 keeps collision-free per-item shot checkpoints."""
+        loky = pytest.importorskip("loky")
+        from _shared_checkpoint_test_helpers import _build_shot_executor
+
+        shot_ckpt_dir = tmp_path / "shots"
+        runner = _CountingRunner(
+            items=[2, 2],
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt_dir,
+            lazy_loading=False,
+            parallel_strategy=ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=1),
+                n_program_chunks=1,
+                shot_executor=_build_shot_executor,
+            ),
+        )
+        result = runner.run()
+        assert result == [4, 4]
+
+        # Verify per-item subdirectories exist (collision-free)
+        assert (shot_ckpt_dir / "item_0").exists()
+        assert (shot_ckpt_dir / "item_1").exists()
+        assert (shot_ckpt_dir / "item_0" / "results.h5").exists()
+        assert (shot_ckpt_dir / "item_1" / "results.h5").exists()
+
+    def test_cascade_guard_respects_custom_results_filename(self, tmp_path):
+        """The cascade guard's on-disk existence check for a per-item
+        checkpoint must consult the same custom results_filename passed to
+        the runner, not a hardcoded 'results.h5'."""
+        shot_checkpoint_dir = tmp_path / "shot_checkpoints"
+        item_dir = shot_checkpoint_dir / "item_0"
+        item_dir.mkdir(parents=True)
+        (item_dir / "custom_results.h5").touch()
+
+        run_kwargs_log = []
+        runner = _NewHookRunner(
+            items=[7],
+            run_kwargs_log=run_kwargs_log,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_checkpoint_dir,
+            results_filename="custom_results.h5",
+        )
+
+        runner.run()
+
+        assert len(run_kwargs_log) == 1
+        assert run_kwargs_log[0]["resume"] is True
+        assert run_kwargs_log[0]["checkpoint"] is True
+        assert run_kwargs_log[0]["checkpoint_dir"] == item_dir
+
+    def test_keyed_runner_reduced_results_dataset_format(self, tmp_path):
+        """_KeyedRunner's second index_map write preserves dataset storage format."""
+        checkpoint_dir = tmp_path / "ckpt"
+
+        runner = _KeyedRunner(
+            items=[5],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+        )
+        result = runner.run()
+        assert result == [10]
+
+        # Verify _reduced_results key-side storage_format is 'dataset'
+        runner_path = checkpoint_dir / "runner.h5"
+        with h5py.File(runner_path, "r") as f:
+            group = _resolve_checkpoint_object_group(f)
+            storage_format = group["_reduced_results"]["dict"]["keys"][
+                "iterable"
+            ].attrs.get("storage_format", "groups")
+            assert storage_format == "dataset", (
+                f"Expected _reduced_results keys to use 'dataset' format "
+                f"after _KeyedRunner checkpoint, but got '{storage_format}'"
+            )
