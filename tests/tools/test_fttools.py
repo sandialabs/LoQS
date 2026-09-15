@@ -364,123 +364,6 @@ class TestFaultInjectionRunnerCheckpointing:
         result = runner2.run()
         assert result is not None
 
-
-class TestProgramOutput:
-
-    def test_matching_output_returns_true(self):
-        program = _build_counter_program()
-        assert fttools.test_program_output(
-            program, [("counter", -1)], [1], num_shots=1
-        )
-
-    def test_mismatched_output_returns_false(self):
-        program = _build_counter_program()
-        assert not fttools.test_program_output(
-            program, [("counter", -1)], [999], num_shots=1
-        )
-
-    def test_verbose_mismatch_prints_output_and_expected(self, capsys):
-        program = _build_counter_program()
-        fttools.test_program_output(
-            program, [("counter", -1)], [999], num_shots=1, verbose=True
-        )
-        out = capsys.readouterr().out
-        assert "Output:" in out and "Expected:" in out
-
-    def test_custom_results_filename_in_checkpoint(self, tmp_path):
-        """Custom results_filename creates and resumes from custom-named file."""
-        program = _build_counter_program()
-        ckpt_dir = tmp_path / "checkpoint"
-        ckpt_dir.mkdir()
-
-        # First run with custom filename
-        custom_filename = "custom_results.h5"
-        result = fttools.test_program_output(
-            program,
-            [("counter", -1)],
-            [1],
-            num_shots=1,
-            checkpoint=True,
-            checkpoint_dir=ckpt_dir,
-            results_filename=custom_filename,
-        )
-        assert result is True
-        assert (ckpt_dir / custom_filename).exists()
-        assert not (ckpt_dir / "results.h5").exists()
-
-        # Second run should resume from the custom file
-        result = fttools.test_program_output(
-            program,
-            [("counter", -1)],
-            [1],
-            num_shots=1,
-            checkpoint=True,
-            checkpoint_dir=ckpt_dir,
-            results_filename=custom_filename,
-        )
-        assert result is True
-
-    def test_explicit_resume_false_overrides_cascade(self, tmp_path):
-        """Explicit resume=False prevents cascade from resuming existing checkpoint."""
-        program = _build_counter_program()
-        ckpt_dir = tmp_path / "checkpoint"
-        ckpt_dir.mkdir()
-
-        # First run to create checkpoint
-        result = fttools.test_program_output(
-            program,
-            [("counter", -1)],
-            [1],
-            num_shots=1,
-            checkpoint=True,
-            checkpoint_dir=ckpt_dir,
-        )
-        assert result is True
-        assert (ckpt_dir / "results.h5").exists()
-
-        # Second run with explicit resume=False should fail
-        # (resume=False + checkpoint=True + existing checkpoint triggers state mismatch error)
-        with pytest.raises(ValueError):
-            fttools.test_program_output(
-                program,
-                [("counter", -1)],
-                [1],
-                num_shots=1,
-                checkpoint=True,
-                checkpoint_dir=ckpt_dir,
-                resume=False,
-            )
-
-    def test_explicit_resume_true_without_checkpoint_raises(self):
-        """resume=True without checkpoint=True raises ValueError."""
-        program = _build_counter_program()
-        with pytest.raises(
-            ValueError, match="resume=True requires checkpoint=True"
-        ):
-            fttools.test_program_output(
-                program,
-                [("counter", -1)],
-                [1],
-                num_shots=1,
-                checkpoint=False,
-                resume=True,
-            )
-
-    def test_checkpoint_true_without_checkpoint_dir_raises(self):
-        """checkpoint=True without checkpoint_dir raises ValueError."""
-        program = _build_counter_program()
-        with pytest.raises(
-            ValueError, match="checkpoint=True requires checkpoint_dir"
-        ):
-            fttools.test_program_output(
-                program,
-                [("counter", -1)],
-                [1],
-                num_shots=1,
-                checkpoint=True,
-                checkpoint_dir=None,
-            )
-
     def test_fault_injection_runner_with_custom_results_filename(self, tmp_path):
         """FaultInjectionRunner threads results_filename through shot checkpoints."""
         program = _build_counter_program()
@@ -506,7 +389,7 @@ class TestProgramOutput:
 
 
 class TestRunKwargsPassthrough:
-    """Test run_kwargs passthrough in FaultInjectionRunner and test_program_output."""
+    """Test run_kwargs passthrough in FaultInjectionRunner."""
 
     def test_run_kwargs_roundtrips_via_serialization(self, tmp_path, make_temp_path):
         """FaultInjectionRunner with run_kwargs serializes and deserializes correctly."""
@@ -528,20 +411,6 @@ class TestRunKwargsPassthrough:
             loaded_runner = fttools.FaultInjectionRunner.read(f_path)
 
         assert loaded_runner.run_kwargs == {"max_frame_limit": 999}
-
-    def test_run_kwargs_passed_to_program_run(self, tmp_path):
-        """test_program_output forwards run_kwargs to QuantumProgram.run()."""
-        program = _build_counter_program()
-        # Use a high max_frame_limit to verify it's actually forwarded
-        # (if it wasn't, default limit would apply and behavior could differ)
-        result = fttools.test_program_output(
-            program,
-            [("counter", -1)],
-            [1],
-            num_shots=1,
-            run_kwargs={"max_frame_limit": 1000},
-        )
-        assert result is True
 
     def test_fault_injection_runner_with_keep_shot_results_and_run_kwargs(
         self, tmp_path

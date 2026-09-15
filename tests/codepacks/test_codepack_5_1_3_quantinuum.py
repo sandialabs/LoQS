@@ -9,10 +9,28 @@ stim = pytest.importorskip("stim")
 
 from loqs.backends import PyGSTiPhysicalCircuit, ListPhysicalCircuit, PyGSTiNoiseModel, DictNoiseModel, QSimQuantumState, STIMQuantumState
 from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
-from loqs.core import Frame, Instruction, QuantumProgram
+from loqs.core import Frame, Instruction, QuantumProgram, HistoryDataCollector
 from loqs.codepacks import codepack_5_1_3_quantinuum2022 as codepack_5_1_3
 from loqs.core.recordables import MeasurementOutcomes
 from loqs.tools import fttools
+
+
+def _check_shot_features(results, collect_shot_data_args, expected_outcomes, verbose=False):
+    """Check collected shot features against expected values, replicating
+    the removed fttools.test_program_output's pass/fail logic locally so
+    this file no longer depends on fttools internals. Each collect_shot_data_args
+    entry is a HistoryDataCollector-compatible spec: a plain (key, indices) tuple,
+    or a dict also supporting frame_filter to select by log text instead of a
+    raw frame index."""
+    for args, expected in zip(collect_shot_data_args, expected_outcomes):
+        out = HistoryDataCollector.from_raw(args).collect(results)[-1]
+        if out != expected:
+            if verbose:
+                print(f"Output:   {out}")
+                print(f"Expected: {expected}")
+            return False
+    return True
+
 
 class Test5QCodepack:
 
@@ -291,13 +309,14 @@ class Test5QCodepack:
         ]
 
         program_ftprep_D3X_error = QuantumProgram.from_quantum_program(self.program, stack_ftprep_D3X_error)
-        assert fttools.test_program_output(
-            program_ftprep_D3X_error,
+        results = program_ftprep_D3X_error.run()
+        assert _check_shot_features(
+            results,
             collect_shot_data_args=[
-                ("measurement_outcomes", 2), # Let's grab the outcomes for the first round of RUS
-                ("rus_success", 3),       # And also the computed RUS success value
-                ("measurement_outcomes", 5), # Let's do it again for the second round (frame 3 is the reset)
-                ("rus_success", 6),       
+                {"key": "measurement_outcomes", "indices": 0, "frame_filter": {"log": "Non-FT Minus Prep + Checks result"}}, # Let's grab the outcomes for the first round of RUS
+                {"key": "rus_success", "indices": 0, "frame_filter": {"log": "Repeat-until-success FT Minus Prep result"}}, # And also the computed RUS success value
+                {"key": "measurement_outcomes", "indices": -1, "frame_filter": {"log": "Non-FT Minus Prep + Checks result"}}, # Let's do it again for the second round
+                {"key": "rus_success", "indices": -1, "frame_filter": {"log": "Repeat-until-success FT Minus Prep result"}},
                 ("logical_measurement", -1) # And still check the logical outcome
             ],
             expected_outcomes=[
@@ -320,41 +339,30 @@ class Test5QCodepack:
         ]
 
         program_ftmeas_partI_D2Z_error = QuantumProgram.from_quantum_program(self.program, stack_ftmeas_partI_D2Z_error)
-        assert fttools.test_program_output(
-            program_ftmeas_partI_D2Z_error,
+        results = program_ftmeas_partI_D2Z_error.run()
+        assert _check_shot_features(
+            results,
             collect_shot_data_args=[
-                ("log", 6),                # Double-check this is the Part I circuit result
-                ("measurement_outcomes", 6),  # This should be all 0
-                ("log", 7),                # Double-check this is the Part I feed-forward result
-                ("F1", 7),                 # Should have no flag
-                ("inferred_M1", 7),        # and this should have correctly identified logical 1 measurement
-                ("log", 8),                # Double-check this is the Part II circuit result
-                ("measurement_outcomes", 8),  # Now syndrome should be tripped
-                ("log", 9),                # Double-check this is the Part II feed-forward result
-                ("F2", 9),                 # Should have no flag
-                ("inferred_M2", 9),        # but incorrectly identify logical 0 measurement
-                ("log", 10),                # We should now hit decoder circuit
-                ("measurement_outcomes", 10), # The Z error should show up as a bitflip on data qubit 2
-                ("log", 11),                # Finally we hit the classical decoder
-                ("classical_correction", 11), # Let's see that the decoder picked out the correct error...
-                ("corrected_outcomes", 11), # ... and applied the correction properly
-                ("logical_measurement", 11) # And still check the logical outcome
+                {"key": "measurement_outcomes", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part I Circuit result"}}, # This should be all 0
+                {"key": "F1", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part I Feed-Forward result"}}, # Should have no flag
+                {"key": "inferred_M1", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part I Feed-Forward result"}}, # and this should have correctly identified logical 1 measurement
+                {"key": "measurement_outcomes", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part II Circuit result"}}, # Now syndrome should be tripped
+                {"key": "F2", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part II Feed-Forward result"}}, # Should have no flag
+                {"key": "inferred_M2", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part II Feed-Forward result"}}, # but incorrectly identify logical 0 measurement
+                {"key": "measurement_outcomes", "indices": -1, "frame_filter": {"log": "Non-FT state decoder circuit result"}}, # The Z error should show up as a bitflip on data qubit 2
+                {"key": "classical_correction", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Classical Decoder result"}}, # Remember that this is the decoded error
+                {"key": "corrected_outcomes", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Classical Decoder result"}}, # ... and applied the correction properly
+                ("logical_measurement", -1) # And still check the logical outcome
             ],
             expected_outcomes=[
-                "FT Logical X Measure Part I Circuit result",
                 MeasurementOutcomes({"A0": [0], "A1": [0]}),
-                "FT Logical X Measure Part I Feed-Forward result",
                 0,
                 1,
-                "FT Logical X Measure Part II Circuit result",
                 MeasurementOutcomes({"A0": [1], "A1": [0]}),
-                "FT Logical X Measure Part II Feed-Forward result",
                 0,
                 0,
-                "Non-FT state decoder circuit result",
                 MeasurementOutcomes({"D2": [0], "D3": [1], "D4": [0], "D5": [0], "D6": [0]}),
-                "FT Logical X Measure Classical Decoder result",
-                "IXIII", # Remember that this is the decoded error
+                "IXIII",
                 [0, 0, 0, 0, 0],
                 1
             ],
@@ -371,34 +379,27 @@ class Test5QCodepack:
         ]
 
         program_ftmeas_partI_M1X_error = QuantumProgram.from_quantum_program(self.program, stack_ftmeas_partI_M1X_error)
-        assert fttools.test_program_output(
-            program_ftmeas_partI_M1X_error,
+        results = program_ftmeas_partI_M1X_error.run()
+        assert _check_shot_features(
+            results,
             collect_shot_data_args=[
-                ("log", 6),                # Double-check this is the Part I circuit result
-                ("measurement_outcomes", 6),  # An X error is undetectable on measure, but it should trip the flag!
-                ("log", 7),                # Double-check this is the Part I feed-forward result
-                ("F1", 7),                 # We should have a flag...
-                ("inferred_M1", 7),        # ... but still think this is logical 1
-                ("log", 8),                # We should now hit decoder circuit
+                {"key": "measurement_outcomes", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part I Circuit result"}}, # An X error is undetectable on measure, but it should trip the flag!
+                {"key": "F1", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part I Feed-Forward result"}}, # We should have a flag...
+                {"key": "inferred_M1", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Part I Feed-Forward result"}}, # ... but still think this is logical 1
                 # The expected measurement outcome is non-trivial.
                 # The X error on data qubit 1 will prop to Z errors on data qubit 2 and 5
                 # This will cancel the Z error on data qubit 2, but show up as a bitflip on data qubit 5
-                ("measurement_outcomes", 8),
-                ("log", 9),                # Finally we hit the classical decoder
-                ("classical_correction", 9), # Let's see that the decoder picked out the correct error...
-                ("corrected_outcomes", 9), # ... and applied the correction properly
-                ("logical_measurement", 9) # And still check the logical outcome
+                {"key": "measurement_outcomes", "indices": -1, "frame_filter": {"log": "Non-FT state decoder circuit result"}},
+                {"key": "classical_correction", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Classical Decoder result"}}, # Remember that this is the decoded error
+                {"key": "corrected_outcomes", "indices": -1, "frame_filter": {"log": "FT Logical X Measure Classical Decoder result"}},
+                ("logical_measurement", -1) # And still check the logical outcome
             ],
             expected_outcomes=[
-                "FT Logical X Measure Part I Circuit result",
                 MeasurementOutcomes({"A0": [0], "A1": [1]}),
-                "FT Logical X Measure Part I Feed-Forward result",
                 1,
                 1,
-                "Non-FT state decoder circuit result",
-                 MeasurementOutcomes({"D2": [0], "D3": [0], "D4": [0], "D5": [0], "D6": [1]}),
-                "FT Logical X Measure Classical Decoder result",
-                "IIIIX", # Remember that this is the decoded error
+                MeasurementOutcomes({"D2": [0], "D3": [0], "D4": [0], "D5": [0], "D6": [1]}),
+                "IIIIX",
                 [0, 0, 0, 0, 0],
                 1
             ]
