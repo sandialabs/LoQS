@@ -822,7 +822,14 @@ def _shared_item_worker(
     """
     program = build_program(index)
 
-    resolved_run_kwargs = dict(run_kwargs)
+    resolved_run_kwargs = {
+        key: (
+            value(item)
+            if callable(value) and not isinstance(value, type)
+            else value
+        )
+        for key, value in run_kwargs.items()
+    }
     resolved_run_kwargs.setdefault("verbose", False)
     resolved_run_kwargs["lazy_loading"] = lazy_loading
     resolved_run_kwargs["force_resume"] = force_resume

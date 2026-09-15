@@ -3583,6 +3583,53 @@ class TestBaseClassMechanisms:
         assert len(max_frame_warnings) == 0
         assert runner.run_kwargs["max_frame_limit"] == 500
 
+    def test_run_kwargs_callable_value_resolved_against_item_not_index(self):
+        """A callable (non-class) run_kwargs value is resolved by calling it with
+        the actual item, not its dispatch index -- proven by using items whose
+        values differ from their positional index."""
+        seen_limits = []
+
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen_limits.append(kwargs.get("max_frame_limit"))
+            return real_run(self, *args, **kwargs)
+
+        runner = _CountingRunner(
+            items=[5, 10, 15],
+            run_kwargs={"max_frame_limit": lambda item: item * 1000},
+        )
+        try:
+            QuantumProgram.run = spy_run
+            runner.run()
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen_limits == [5000, 10000, 15000]
+
+    def test_run_kwargs_n_shot_batches_not_clobbered_when_parallel_strategy_n_shot_batches_is_none(self):
+        """Explicit n_shot_batches in run_kwargs survives when ParallelStrategy
+        doesn't set its own (parallel_strategy=None, the serial default)."""
+        seen_n_shot_batches = []
+
+        real_run = QuantumProgram.run
+
+        def spy_run(self, *args, **kwargs):
+            seen_n_shot_batches.append(kwargs.get("n_shot_batches"))
+            return real_run(self, *args, **kwargs)
+
+        runner = _CountingRunner(
+            items=[1, 2],
+            run_kwargs={"n_shot_batches": 2},
+        )
+        try:
+            QuantumProgram.run = spy_run
+            runner.run()
+        finally:
+            QuantumProgram.run = real_run
+
+        assert seen_n_shot_batches == [2, 2]
+
     def test_force_resume_propagation_with_shot_checkpoint(self, tmp_path):
         """force_resume=True is genuinely forwarded into program.run() (via
         _shared_item_worker), bypassing a shot-level num_shots mismatch.

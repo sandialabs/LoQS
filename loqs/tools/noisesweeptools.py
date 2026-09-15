@@ -23,7 +23,7 @@ import copy
 import math
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -132,79 +132,6 @@ def _compute_failure_rate(
     return failure_rate, stderr
 
 
-def _run_one_sweep_point(
-    item: int,
-    index: int,
-    *,
-    shot_executor: Any | None,
-    n_shot_batches: int | None,
-    runner: "NoiseSweepRunner",
-    num_shots: int,
-    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
-    expected_outcomes: Sequence,
-    run_kwargs: dict,
-    shot_checkpoint_dir: str | Path | None,
-    checkpoint: bool,
-    force_resume: bool,
-    lazy_loading: bool,
-    results_filename: str,
-    keep_shot_results: bool = False,
-) -> tuple[float, float] | tuple[tuple[float, float], Any]:
-    """Build, run, and reduce one sweep point, returning `(failure_rate, stderr)`.
-
-    When `keep_shot_results=False` (default), returns the bare tuple.
-    When `keep_shot_results=True`, returns `((failure_rate, stderr), program_results)`.
-
-    The `item` and `index` parameters are both passed by `MultiProgramRunner._run_dispatch`
-    and are always equal here (a sweep point's identity is its index).
-    """
-    strength = runner.strengths[index]
-    program = runner.build_program(index)
-    resolved_run_kwargs = {
-        key: _resolve_value(value, strength)
-        for key, value in run_kwargs.items()
-    }
-    resolved_run_kwargs.setdefault("verbose", False)
-
-    if resolved_run_kwargs["verbose"]:
-        print(
-            f"NoiseSweepRunner: point {index + 1}/{len(runner.strengths)} "
-            f"(strength={strength!r})"
-        )
-
-    if checkpoint:
-        resolved_run_kwargs["checkpoint"] = True
-    if shot_checkpoint_dir is not None:
-        checkpoint_dir = _checkpoint_subdir_for_prefix(
-            shot_checkpoint_dir, "point", index
-        )
-        resolved_run_kwargs["checkpoint_dir"] = checkpoint_dir
-        resolved_run_kwargs["results_filename"] = results_filename
-        # Cascade resume: only True if this specific point has prior shot state
-        if checkpoint:
-            resolved_run_kwargs["resume"] = (
-                checkpoint_dir / results_filename
-            ).exists()
-    resolved_run_kwargs["lazy_loading"] = lazy_loading
-    resolved_run_kwargs["force_resume"] = force_resume
-
-    if shot_executor is not None:
-        resolved_run_kwargs["shot_executor"] = shot_executor
-    if n_shot_batches is not None:
-        resolved_run_kwargs["n_shot_batches"] = n_shot_batches
-
-    program_results = program.run(num_shots=num_shots, **resolved_run_kwargs)
-    failure_rate, stderr = _compute_failure_rate(
-        program_results, collect_shot_data_args, expected_outcomes, num_shots
-    )
-
-    if keep_shot_results:
-        return (failure_rate, stderr), program_results
-
-    del program, program_results
-    return failure_rate, stderr
-
-
 class NoiseSweepRunner(MultiProgramRunner):
     """Builds and runs one `QuantumProgram` per value in a range of noise-parameter values.
 
@@ -220,6 +147,8 @@ class NoiseSweepRunner(MultiProgramRunner):
     `MultiProgramRunner.run`'s own docstring for the exact state machine.
     """
 
+    CHKPT_SUBDIR_PREFIX: ClassVar[str] = "point"
+
     _CACHE_ON_SERIALIZE = True
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "strengths",
@@ -232,7 +161,6 @@ class NoiseSweepRunner(MultiProgramRunner):
         "expected_outcomes",
         "verbose",
         "metadata",
-        "run_kwargs",
     ]
 
     def __init__(
@@ -363,8 +291,10 @@ class NoiseSweepRunner(MultiProgramRunner):
             show_progress=show_progress,
             runner_filename=runner_filename,
             results_filename=results_filename,
+            run_kwargs=run_kwargs,
         )
         self.strengths = list(strengths)
+        self.items = self.strengths
         self.base_seed = base_seed
         self.seed_stride = seed_stride
         # Resolved immediately since num_shots is now always known upfront
@@ -382,12 +312,12 @@ class NoiseSweepRunner(MultiProgramRunner):
         self.override_global_instructions = override_global_instructions
         self.name = name
 
+        self.run_kwargs["verbose"] = verbose
         self.num_shots = num_shots
         self.collect_shot_data_args = collect_shot_data_args
         self.expected_outcomes = tuple(expected_outcomes)
         self.verbose = verbose
         self.metadata = metadata or {}
-        self.run_kwargs = run_kwargs
 
         # Validation: moved from run() to __init__
         if self.num_shots > self._resolved_seed_stride:
@@ -396,13 +326,6 @@ class NoiseSweepRunner(MultiProgramRunner):
                 f"({self._resolved_seed_stride}), or seed ranges from adjacent sweep "
                 "points would overlap."
             )
-
-        if self.run_kwargs is not None and "checkpoint_dir" in self.run_kwargs:
-            if self.shot_checkpoint_dir is not None:
-                raise ValueError(
-                    "checkpoint_dir in run_kwargs conflicts with shot_checkpoint_dir; "
-                    "use only one of the two (or leave both unset)."
-                )
 
         serialized_callables = (
             dict(serialized_callables) if serialized_callables else {}
@@ -666,67 +589,32 @@ class NoiseSweepRunner(MultiProgramRunner):
         seed = self.base_seed + index * self._resolved_seed_stride
         return QuantumProgram(default_base_seed=seed, **resolved)
 
-    def _get_items(self) -> Sequence:
-        """Return sweep point indices."""
-        return list(range(len(self.strengths)))
+    def reduce_program_outcomes(self, program_results):
+        """Reduce one sweep point's shot outcomes to (failure_rate, stderr)."""
+        return _compute_failure_rate(
+            program_results,
+            self.collect_shot_data_args,
+            self.expected_outcomes,
+            self.num_shots,
+        )
 
-    def _item_key_fn(self) -> Callable[[int], str] | None:
-        """Use position as item identity (sweep points have no better natural key)."""
-        return None
-
-    def _process_item_fn(self) -> Callable:
-        """Return the _run_one_sweep_point function."""
-        return _run_one_sweep_point
-
-    def _static_kwargs(self) -> dict[str, Any]:
-        """Return static kwargs for _run_one_sweep_point."""
-        runner_snapshot = copy.copy(self)
-        runner_snapshot.parallel_strategy = None
-        return {
-            "runner": runner_snapshot,
-            "num_shots": self.num_shots,
-            "collect_shot_data_args": self.collect_shot_data_args,
-            "expected_outcomes": self.expected_outcomes,
-            "run_kwargs": {
-                **(self.run_kwargs or {}),
-                "verbose": self.verbose,
-            },
-            "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "checkpoint": self.shot_checkpoint,
-            "force_resume": self.force_resume,
-            "lazy_loading": self.lazy_loading,
-            "results_filename": self.results_filename,
-        }
-
-    def _finalize(self) -> "NoiseSweepResult":
-        """Build and return the final NoiseSweepResult from `_reduced_results`.
-
-        Constructs full-length failure_rates and stderrs arrays from the
-        accumulated results, and writes result.h5 once if checkpointing is enabled.
-        """
-        # Initialize full-length arrays with None placeholders
-        failure_rates = [None] * len(self.strengths)
-        stderrs = [None] * len(self.strengths)
-
-        # Fill in completed indices from _reduced_results
-        for index, (failure_rate, stderr) in self._reduced_results.items():
-            failure_rates[index] = failure_rate
-            stderrs[index] = stderr
-
-        result = NoiseSweepResult(
+    def _build_output(self, ordered_results):
+        """Build the final NoiseSweepResult from (strength, (failure_rate, stderr)) pairs."""
+        failure_rates = [
+            result[0] if result is not None else None
+            for _, result in ordered_results
+        ]
+        stderrs = [
+            result[1] if result is not None else None
+            for _, result in ordered_results
+        ]
+        return NoiseSweepResult(
             strengths=self.strengths,
             failure_rates=failure_rates,
             stderrs=stderrs,
             num_shots=self.num_shots,
             metadata=self.metadata,
         )
-
-        # Write result once to disk if checkpointing is enabled
-        if self.item_checkpoint_dir is not None:
-            result_file = self.item_checkpoint_dir / "result.h5"
-            result.write(result_file)
-
-        return result
 
     def _desc(self) -> str:
         """Return progress bar description."""
@@ -749,10 +637,6 @@ class NoiseSweepRunner(MultiProgramRunner):
         if field == "_resolved_seed_stride":
             return "seed_stride"
         return super()._mismatch_field_display_name(field)
-
-    def _shot_checkpoint_subdir_prefix(self) -> str | None:
-        """point_{index}"""
-        return "point"
 
 
 class NoiseSweepResult(Displayable):
