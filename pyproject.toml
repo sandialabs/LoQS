@@ -124,7 +124,7 @@ force-exclude = '''
     | \.tox
     | \.vscode
     | docs
-    | tests
+    | tests/tools/migrate_fixtures
     | venv
 )/
 '''
