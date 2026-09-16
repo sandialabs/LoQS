@@ -62,8 +62,13 @@ def build_dictmodel_fixture() -> DictNoiseModel:
     (`QSIM_SUPEROPERATOR`, `KRAUS_OPERATORS`, `ZBASIS_PROJECTION`), to
     exercise more than a single rep type in one fixture."""
     gate_dict = {
-        ("X", ("Q0",)): np.eye(4),  # cast to GateRep.QSIM_SUPEROPERATOR (default)
-        ("KRAUS", ("Q0",)): ((_K0, None), (_K1, None)),  # -> GateRep.KRAUS_OPERATORS
+        ("X", ("Q0",)): np.eye(
+            4
+        ),  # cast to GateRep.QSIM_SUPEROPERATOR (default)
+        ("KRAUS", ("Q0",)): (
+            (_K0, None),
+            (_K1, None),
+        ),  # -> GateRep.KRAUS_OPERATORS
     }
     inst_dict = {
         ("M", ("Q0",)): (None, True),  # -> InstrumentRep.ZBASIS_PROJECTION
@@ -118,7 +123,9 @@ def main() -> None:
     write_json(stimdictmodel, FIXTURES_DIR / "stimdictmodel_v1.json")
     write_hdf5(stimdictmodel, FIXTURES_DIR / "stimdictmodel_v1.h5")
 
-    print(f"Wrote DictNoiseModel/STIMDictNoiseModel fixtures to {FIXTURES_DIR}")
+    print(
+        f"Wrote DictNoiseModel/STIMDictNoiseModel fixtures to {FIXTURES_DIR}"
+    )
 
 
 if __name__ == "__main__":

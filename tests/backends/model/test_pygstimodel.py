@@ -46,7 +46,9 @@ except ImportError:
 _GAMMA = 0.1
 _K0 = np.array([[1.0, 0.0], [0.0, np.sqrt(1 - _GAMMA)]], dtype=complex)
 _K1 = np.array([[0.0, np.sqrt(_GAMMA)], [0.0, 0.0]], dtype=complex)
-_AMP_DAMP_SUPEROP = FullArbitraryOp.from_kraus_operators([_K0, _K1], "pp").to_dense()
+_AMP_DAMP_SUPEROP = FullArbitraryOp.from_kraus_operators(
+    [_K0, _K1], "pp"
+).to_dense()
 
 # Individual Z-basis measurement branches |0><0|(.)|0><0| and |1><1|(.)|1><1|
 # (each a single, non-trace-preserving-on-its-own Kraus operator; their sum
@@ -62,8 +64,12 @@ _ZBASIS_P1 = FullArbitraryOp.from_kraus_operators(
 
 def _build_explicit_model():
     model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
-    model.operations[Label("Gxpi", "Q0")] = FullArbitraryOp(np.eye(4), basis="pp")
-    model.operations[Label("Gad", "Q0")] = FullArbitraryOp(_AMP_DAMP_SUPEROP, basis="pp")
+    model.operations[Label("Gxpi", "Q0")] = FullArbitraryOp(
+        np.eye(4), basis="pp"
+    )
+    model.operations[Label("Gad", "Q0")] = FullArbitraryOp(
+        _AMP_DAMP_SUPEROP, basis="pp"
+    )
     model.instruments[Label("Imrz", "Q0")] = Instrument(
         {"0": _ZBASIS_P0, "1": _ZBASIS_P1}
     )
@@ -146,11 +152,15 @@ class TestConstruction:
         assert pgm.qubit_aliases == {"Q0": "Q0"}
 
     def test_qubit_aliases_mapping_renames_qubits(self):
-        pgm = PyGSTiNoiseModel(_build_explicit_model(), qubit_aliases={"Q0": "MyQubit"})
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), qubit_aliases={"Q0": "MyQubit"}
+        )
         assert pgm.gate_keys == [("Gxpi", ["MyQubit"]), ("Gad", ["MyQubit"])]
 
     def test_qubit_aliases_sequence_renames_qubits(self):
-        pgm = PyGSTiNoiseModel(_build_explicit_model(), qubit_aliases=["MyQubit"])
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), qubit_aliases=["MyQubit"]
+        )
         assert pgm.gate_keys == [("Gxpi", ["MyQubit"]), ("Gad", ["MyQubit"])]
 
     def test_invalid_qubit_aliases_type_raises(self):
@@ -159,22 +169,30 @@ class TestConstruction:
 
     def test_non_conforming_qubit_label_without_alias_raises(self):
         model = ExplicitOpModel(state_space=QubitSpace(["A0"]), basis="pp")
-        model.operations[Label("Gxpi", "A0")] = FullArbitraryOp(np.eye(4), basis="pp")
+        model.operations[Label("Gxpi", "A0")] = FullArbitraryOp(
+            np.eye(4), basis="pp"
+        )
         with pytest.raises(AssertionError, match="Model must use int or str"):
             PyGSTiNoiseModel(model)
 
-    def test_qubit_aliases_do_not_bypass_the_underlying_model_label_check(self):
+    def test_qubit_aliases_do_not_bypass_the_underlying_model_label_check(
+        self,
+    ):
         """`qubit_aliases` lets you present different qubit labels to LoQS
         on top of a conforming model; it does not let you use a model with
         non-conforming raw labels (e.g. `"A0"`), since the label-format
         restriction applies to the underlying pyGSTi model itself."""
         model = ExplicitOpModel(state_space=QubitSpace(["A0"]), basis="pp")
-        model.operations[Label("Gxpi", "A0")] = FullArbitraryOp(np.eye(4), basis="pp")
+        model.operations[Label("Gxpi", "A0")] = FullArbitraryOp(
+            np.eye(4), basis="pp"
+        )
         with pytest.raises(AssertionError, match="Model must use int or str"):
             PyGSTiNoiseModel(model, qubit_aliases={"A0": "Q0"})
 
     def test_copy_constructor_copies_model_and_aliases(self):
-        pgm = PyGSTiNoiseModel(_build_explicit_model(), qubit_aliases={"Q0": "MyQubit"})
+        pgm = PyGSTiNoiseModel(
+            _build_explicit_model(), qubit_aliases={"Q0": "MyQubit"}
+        )
         pgm_copy = PyGSTiNoiseModel(pgm)
         assert pgm_copy.model is pgm.model
         assert pgm_copy.gate_dict is pgm.gate_dict
@@ -196,7 +214,9 @@ class TestConstruction:
         pgm_copy = PyGSTiNoiseModel(pgm)
         assert pgm_copy.instrument_outcome_qubits == {"Ipc": "synd_Q0Q1"}
 
-    def test_copy_constructor_allows_overriding_instrument_outcome_qubits(self):
+    def test_copy_constructor_allows_overriding_instrument_outcome_qubits(
+        self,
+    ):
         pgm = PyGSTiNoiseModel(
             _build_explicit_model(),
             instrument_outcome_qubits={"Ipc": "synd_Q0Q1"},
@@ -207,11 +227,15 @@ class TestConstruction:
         assert pgm_copy.instrument_outcome_qubits == {"Ipc": "other_label"}
 
     def test_invalid_model_type_raises_type_error(self):
-        with pytest.raises(TypeError, match="Cannot cast .* to PyGSTiNoiseModel"):
+        with pytest.raises(
+            TypeError, match="Cannot cast .* to PyGSTiNoiseModel"
+        ):
             PyGSTiNoiseModel(42)
 
     def test_dictnoisemodel_raises_not_implemented_error(self):
-        with pytest.raises(NotImplementedError, match="Build explicit op model"):
+        with pytest.raises(
+            NotImplementedError, match="Build explicit op model"
+        ):
             PyGSTiNoiseModel(DictNoiseModel({}, {}))
 
     def test_output_gate_reps_property(self):
@@ -267,16 +291,22 @@ class TestGetGateRep:
         assert rep.superop.shape == (4, 4)
 
     def test_no_valid_candidate_raises(self, pgm):
-        with pytest.raises(RepConstructionError, match="Failed to create gate rep for any of"):
+        with pytest.raises(
+            RepConstructionError, match="Failed to create gate rep for any of"
+        ):
             pgm._get_gate_rep("Gad", ["Q0"], [UnitaryGateRep])
 
-    def test_embedded_op_gate_with_naturally_compact_rep_no_warning(self, recwarn):
+    def test_embedded_op_gate_with_naturally_compact_rep_no_warning(
+        self, recwarn
+    ):
         """On a large-enough crosstalk-free model, pyGSTi's own `Evotype`
         selection already prefers the compact 'embedded' representation
         over 'dense', so the blowup check must recognize this and not warn
         -- distinct from the smaller model below, where pyGSTi picks
         'dense' but the parent space is small enough to be cheap."""
-        from loqs.backends.model.pygstimodel import PyGSTiEmbeddedOpMemoryWarning
+        from loqs.backends.model.pygstimodel import (
+            PyGSTiEmbeddedOpMemoryWarning,
+        )
 
         pspec = pygsti.processors.QubitProcessorSpec(
             4,
@@ -374,7 +404,8 @@ class TestGetInstrumentRep:
         # ZBASIS_OUTCOME_OPERATION_DICT, so this exercises the same
         # "no candidate worked" final-failure path as the gate-rep case.
         with pytest.raises(
-            RepConstructionError, match="Failed to create instrument rep for any of"
+            RepConstructionError,
+            match="Failed to create instrument rep for any of",
         ):
             pgm._get_instrument_rep("Imrz", ["Q0"], [StimCircuitInstrumentRep])
 
@@ -387,7 +418,9 @@ class TestGetInstrumentRep:
             (("Imrz", "Q0"), ZBasisProjectionInstrumentRep): rep
         }
         assert (
-            pgm._get_instrument_rep("Imrz", ["Q0"], [ZBasisProjectionInstrumentRep])
+            pgm._get_instrument_rep(
+                "Imrz", ["Q0"], [ZBasisProjectionInstrumentRep]
+            )
             is rep
         )
 
@@ -395,7 +428,9 @@ class TestGetInstrumentRep:
         pgm = PyGSTiNoiseModel(
             _build_explicit_model(), use_time_dependence=True
         )
-        pgm._get_instrument_rep("Imrz", ["Q0"], [ZBasisProjectionInstrumentRep])
+        pgm._get_instrument_rep(
+            "Imrz", ["Q0"], [ZBasisProjectionInstrumentRep]
+        )
         assert pgm._inst_rep_cache == {}
 
     def test_repeated_outcome_operation_dict_lookup_skips_rechecking(self):
@@ -433,7 +468,9 @@ class TestGetInstrumentRep:
         odd_ptm = FullArbitraryOp.from_kraus_operators(
             [np.diag([0, 1.0, 1.0, 0]).astype(complex)], "pp"
         ).to_dense()
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ipc", ("Q0", "Q1"))] = Instrument(
             {"even": even_ptm, "odd": odd_ptm}
         )
@@ -452,7 +489,9 @@ class TestGetInstrumentRep:
 
         bell_state = np.array([1, 0, 0, 1]) / np.sqrt(2)
         for trial in range(5):
-            state = SVState(bell_state.copy(), ["Q0", "Q1"], seed=20260815 + trial)
+            state = SVState(
+                bell_state.copy(), ["Q0", "Q1"], seed=20260815 + trial
+            )
             outs = state.apply_reps_inplace([rep])
             assert outs["synd_Q0Q1"] == [0]
             # Up to global phase: converting through pyGSTi's PTM
@@ -493,7 +532,9 @@ class TestTimeDependence:
         label = Label("Gxpi", "Q0", time=1.5)
         assert pgm_time_dependent.get_gate_duration(label) == 1.5
 
-    def test_instrument_duration_from_label_with_time(self, pgm_time_dependent):
+    def test_instrument_duration_from_label_with_time(
+        self, pgm_time_dependent
+    ):
         label = Label("Imrz", "Q0", time=2.5)
         assert pgm_time_dependent.get_instrument_duration(label) == 2.5
 
@@ -519,7 +560,9 @@ class TestTimeDependence:
         pgm = PyGSTiNoiseModel(
             _build_explicit_model(), use_time_dependence=True
         )
-        with pytest.raises(ValueError, match="no default instrument durations"):
+        with pytest.raises(
+            ValueError, match="no default instrument durations"
+        ):
             pgm.get_instrument_duration(Label("Imrz", "Q0"))
 
     def test_gate_duration_exact_label_match(self, pgm_time_dependent):
@@ -532,9 +575,14 @@ class TestTimeDependence:
         assert pgm_time_dependent.get_gate_duration(Label("Gad", "Q0")) == 7
 
     def test_instrument_duration_exact_label_match(self, pgm_time_dependent):
-        assert pgm_time_dependent.get_instrument_duration(Label("Imrz", "Q0")) == 3
+        assert (
+            pgm_time_dependent.get_instrument_duration(Label("Imrz", "Q0"))
+            == 3
+        )
 
-    def test_gate_duration_not_found_raises_key_error(self, pgm_time_dependent):
+    def test_gate_duration_not_found_raises_key_error(
+        self, pgm_time_dependent
+    ):
         with pytest.raises(KeyError, match="not available by label or name"):
             pgm_time_dependent.get_gate_duration(Label("Gunknown", "Q0"))
 
@@ -597,7 +645,9 @@ class TestTimeDependence:
             call_count[0] += 1
             return original_init(self, *args, **kwargs)
 
-        with mock.patch.object(PyGSTiPhysicalCircuit, "__init__", counting_init):
+        with mock.patch.object(
+            PyGSTiPhysicalCircuit, "__init__", counting_init
+        ):
             pgm.get_reps(circuit, [UnitaryGateRep, QSimSuperopGateRep], [])
         assert call_count[0] == 0
 
@@ -658,15 +708,21 @@ class TestDenseEmbeddingWarningHelpers:
         )
 
         child_space = QubitSpace(["Q0"])
-        child_op = FullArbitraryOp(np.eye(4), basis="pp", state_space=child_space)
-        parent_space = QubitSpace([f"Q{i}" for i in range(5)])  # dim = 4**5 = 1024
+        child_op = FullArbitraryOp(
+            np.eye(4), basis="pp", state_space=child_space
+        )
+        parent_space = QubitSpace(
+            [f"Q{i}" for i in range(5)]
+        )  # dim = 4**5 = 1024
         embedded_op = EmbeddedOp(parent_space, ["Q0"], child_op)
         embedded_op._rep_type = "dense"
 
         with pytest.warns(PyGSTiEmbeddedOpMemoryWarning, match="TestLabel"):
             _check_op_for_dense_embedding_blowup(embedded_op, "TestLabel")
 
-    def test_check_op_for_dense_embedding_blowup_skips_small_or_non_embedding(self):
+    def test_check_op_for_dense_embedding_blowup_skips_small_or_non_embedding(
+        self,
+    ):
         """Neither a small parent state space nor a child that's (almost)
         as large as its parent counts as a memory-blowup symptom, even
         with `_rep_type == 'dense'`."""
@@ -701,7 +757,9 @@ class TestDenseEmbeddingWarningHelpers:
             _check_op_for_dense_embedding_blowup(small_embedded, "Small")
             _check_op_for_dense_embedding_blowup(non_embedding, "NonEmbedding")
 
-    def test_check_for_dense_embedding_issues_second_call_skips_rechecking(self):
+    def test_check_for_dense_embedding_issues_second_call_skips_rechecking(
+        self,
+    ):
         """Each gate/instrument key is only ever checked once; a second
         call must skip straight past the already-checked keys rather than
         re-running the (potentially expensive) blowup check."""
@@ -757,7 +815,9 @@ class TestGetRepsErrorPaths:
         assert isinstance(rep.circuit_str, str)
 
     def test_gate_rep_qsim_superoperator_more_than_2_qubits_raises(self):
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1", "Q2"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1", "Q2"]), basis="pp"
+        )
         model.operations[Label("Gccx", ("Q0", "Q1", "Q2"))] = FullArbitraryOp(
             np.eye(64), basis="pp"
         )
@@ -765,9 +825,7 @@ class TestGetRepsErrorPaths:
         with pytest.raises(
             RepConstructionError, match="Failed to create gate rep for any of"
         ):
-            pgm._get_gate_rep(
-                "Gccx", ["Q0", "Q1", "Q2"], [QSimSuperopGateRep]
-            )
+            pgm._get_gate_rep("Gccx", ["Q0", "Q1", "Q2"], [QSimSuperopGateRep])
 
     def test_kraus_operators_identity_branch(self):
         """`_get_gate_rep`'s KRAUS_OPERATORS branch pre-computes a fixed
@@ -780,10 +838,14 @@ class TestGetRepsErrorPaths:
         p = 0.2
         K0 = np.sqrt(1 - p) * np.eye(2)
         K1 = np.sqrt(p) * U_X
-        superop = FullArbitraryOp.from_kraus_operators([K0, K1], "pp").to_dense()
+        superop = FullArbitraryOp.from_kraus_operators(
+            [K0, K1], "pp"
+        ).to_dense()
 
         model = ExplicitOpModel(state_space=QubitSpace(["Q0"]), basis="pp")
-        model.operations[Label("Gbf", "Q0")] = FullArbitraryOp(superop, basis="pp")
+        model.operations[Label("Gbf", "Q0")] = FullArbitraryOp(
+            superop, basis="pp"
+        )
         pgm = PyGSTiNoiseModel(model)
 
         rep = pgm._get_gate_rep("Gbf", ["Q0"], [KrausGateRep])
@@ -797,8 +859,12 @@ class TestGetRepsErrorPaths:
         strings (e.g. `"01"`), exercising the multi-char branch of the
         outcome-key-to-tuple conversion (as opposed to the existing
         single-qubit fixture's single-character keys)."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
-        effects = {k: np.eye(16, dtype=complex) for k in ["00", "01", "10", "11"]}
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
+        effects = {
+            k: np.eye(16, dtype=complex) for k in ["00", "01", "10", "11"]
+        }
         model.instruments[Label("Izz", ("Q0", "Q1"))] = Instrument(effects)
         pgm = PyGSTiNoiseModel(model)
 
@@ -826,7 +892,9 @@ class TestGetRepsErrorPaths:
         )
         assert set(rep.outcome_ops.keys()) == {0, 1}
 
-    def test_instrument_rep_arbitrary_outcome_keys_on_matching_qubit_count(self):
+    def test_instrument_rep_arbitrary_outcome_keys_on_matching_qubit_count(
+        self,
+    ):
         """A single-qubit instrument with non-numeric outcome labels (e.g.
         'a'/'b') is still just one classical channel matching its one
         physical qubit, so it's accepted with those labels used as-is --
@@ -849,13 +917,19 @@ class TestGetRepsErrorPaths:
         two physical qubits) with no matching `instrument_outcome_qubits`
         entry must raise -- there's no physical qubit to default the
         classical label to."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ipc", ("Q0", "Q1"))] = Instrument(
-            {"even": np.eye(16, dtype=complex), "odd": np.eye(16, dtype=complex)}
+            {
+                "even": np.eye(16, dtype=complex),
+                "odd": np.eye(16, dtype=complex),
+            }
         )
         pgm = PyGSTiNoiseModel(model)
         with pytest.raises(
-            RepConstructionError, match="Failed to create instrument rep for any of"
+            RepConstructionError,
+            match="Failed to create instrument rep for any of",
         ):
             pgm._get_instrument_rep(
                 "Ipc", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
@@ -864,9 +938,14 @@ class TestGetRepsErrorPaths:
     def test_instrument_rep_joint_outcome_bare_name_lookup(self):
         """`instrument_outcome_qubits` keyed by a bare instrument name
         applies wherever that name is used."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ipc", ("Q0", "Q1"))] = Instrument(
-            {"even": np.eye(16, dtype=complex), "odd": np.eye(16, dtype=complex)}
+            {
+                "even": np.eye(16, dtype=complex),
+                "odd": np.eye(16, dtype=complex),
+            }
         )
         pgm = PyGSTiNoiseModel(
             model, instrument_outcome_qubits={"Ipc": "synd_Q0Q1"}
@@ -881,9 +960,14 @@ class TestGetRepsErrorPaths:
         """A more specific `(name, aliased_qubits)` entry in
         `instrument_outcome_qubits` takes priority over a bare-name entry
         for the same instrument name."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ipc", ("Q0", "Q1"))] = Instrument(
-            {"even": np.eye(16, dtype=complex), "odd": np.eye(16, dtype=complex)}
+            {
+                "even": np.eye(16, dtype=complex),
+                "odd": np.eye(16, dtype=complex),
+            }
         )
         pgm = PyGSTiNoiseModel(
             model,
@@ -900,9 +984,14 @@ class TestGetRepsErrorPaths:
     def test_instrument_rep_joint_outcome_uses_aliased_qubits_for_lookup(self):
         """The `(name, aliased_qubits)` lookup key uses the user-facing
         aliased qubit labels, not the underlying pyGSTi model's own."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ipc", ("Q0", "Q1"))] = Instrument(
-            {"even": np.eye(16, dtype=complex), "odd": np.eye(16, dtype=complex)}
+            {
+                "even": np.eye(16, dtype=complex),
+                "odd": np.eye(16, dtype=complex),
+            }
         )
         pgm = PyGSTiNoiseModel(
             model,
@@ -919,13 +1008,19 @@ class TestGetRepsErrorPaths:
         that's neither 1 nor `len(qubits)` (e.g. 3-bit labels on a 2-qubit
         instrument) are rejected -- there's no sensible physical or joint
         interpretation for them."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ibad", ("Q0", "Q1"))] = Instrument(
-            {"000": np.eye(16, dtype=complex), "111": np.eye(16, dtype=complex)}
+            {
+                "000": np.eye(16, dtype=complex),
+                "111": np.eye(16, dtype=complex),
+            }
         )
         pgm = PyGSTiNoiseModel(model)
         with pytest.raises(
-            RepConstructionError, match="Failed to create instrument rep for any of"
+            RepConstructionError,
+            match="Failed to create instrument rep for any of",
         ):
             pgm._get_instrument_rep(
                 "Ibad", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]
@@ -934,13 +1029,16 @@ class TestGetRepsErrorPaths:
     def test_instrument_rep_inconsistent_channel_counts_raises(self):
         """Outcome labels that don't all share one channel count (e.g. a
         mix of single-bit and two-bit labels) are rejected outright."""
-        model = ExplicitOpModel(state_space=QubitSpace(["Q0", "Q1"]), basis="pp")
+        model = ExplicitOpModel(
+            state_space=QubitSpace(["Q0", "Q1"]), basis="pp"
+        )
         model.instruments[Label("Ibad", ("Q0", "Q1"))] = Instrument(
             {"0": np.eye(16, dtype=complex), "01": np.eye(16, dtype=complex)}
         )
         pgm = PyGSTiNoiseModel(model)
         with pytest.raises(
-            RepConstructionError, match="Failed to create instrument rep for any of"
+            RepConstructionError,
+            match="Failed to create instrument rep for any of",
         ):
             pgm._get_instrument_rep(
                 "Ibad", ["Q0", "Q1"], [OutcomeOperationDictInstrumentRep]

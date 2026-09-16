@@ -83,10 +83,14 @@ def build_flat_rep_fixtures() -> dict[str, RepTuple]:
     `RepTuple`s (`ZBASIS_PRE_POST_OPERATIONS`, `ZBASIS_OUTCOME_OPERATION_DICT`).
     """
     preop = RepTuple(_UNITARY_1Q, QUBITS_1Q, GateRep.UNITARY)
-    postop = RepTuple(_K0, QUBITS_1Q, GateRep.UNITARY)  # any unitary-shaped array is fine here
+    postop = RepTuple(
+        _K0, QUBITS_1Q, GateRep.UNITARY
+    )  # any unitary-shaped array is fine here
 
     outcome_0 = RepTuple(_PTM_1Q, QUBITS_1Q, GateRep.PTM)
-    outcome_1 = RepTuple(_QSIM_SUPEROP_1Q, QUBITS_1Q, GateRep.QSIM_SUPEROPERATOR)
+    outcome_1 = RepTuple(
+        _QSIM_SUPEROP_1Q, QUBITS_1Q, GateRep.QSIM_SUPEROPERATOR
+    )
 
     return {
         # GateRep members

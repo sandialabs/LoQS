@@ -40,7 +40,7 @@ class TestSyndromeLabel:
         self._check(l8, "Q0", 1, 2)
 
         with pytest.raises(TypeError):
-            SyndromeLabel() # type: ignore
+            SyndromeLabel()  # type: ignore
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_syndrome_label_serialization(self, format, make_temp_path):
@@ -48,7 +48,7 @@ class TestSyndromeLabel:
         # Test with all parameters
         label = SyndromeLabel("Q5", 10, 3)
 
-        with make_temp_path(suffix=f'.{format}') as f_path:
+        with make_temp_path(suffix=f".{format}") as f_path:
             label.write(f_path)
             loaded_label = SyndromeLabel.read(f_path)
             self._check(loaded_label, "Q5", 10, 3)

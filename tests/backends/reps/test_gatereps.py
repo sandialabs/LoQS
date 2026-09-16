@@ -180,9 +180,7 @@ class TestKrausGateRep:
         assert isinstance(rep, KrausGateRep)  # still constructed, just warned
 
     def test_tp_check_disabled_by_none(self, recwarn):
-        rep = KrausGateRep(
-            ((_NON_TP_K, None),), ("Q0",), tp_check_abstol=None
-        )
+        rep = KrausGateRep(((_NON_TP_K, None),), ("Q0",), tp_check_abstol=None)
         assert isinstance(rep, KrausGateRep)
         assert len(recwarn) == 0
 
@@ -214,7 +212,9 @@ class TestKrausGateRepFromPauliStochastic:
 
         ptm = _kraus_to_ptm(rep).ptm
         assert np.allclose(ptm, np.diag(np.diag(ptm)), atol=1e-10)
-        assert np.allclose(np.diag(ptm).real, rep_diag_from_rates(rates), atol=1e-8)
+        assert np.allclose(
+            np.diag(ptm).real, rep_diag_from_rates(rates), atol=1e-8
+        )
 
     def test_negligible_terms_are_omitted(self):
         rates = [1.0, 0.0, 0.0, 0.0]
@@ -243,7 +243,8 @@ class TestKrausGateRepFromDepolarizing:
             via_pauli_stochastic.kraus_operators
         )
         for (k1, p1), (k2, p2) in zip(
-            via_depolarizing.kraus_operators, via_pauli_stochastic.kraus_operators
+            via_depolarizing.kraus_operators,
+            via_pauli_stochastic.kraus_operators,
         ):
             assert np.allclose(k1, k2)
             assert np.isclose(p1, p2)
@@ -266,7 +267,9 @@ class TestKrausGateRepFromAmplitudeDamping:
 
 
 class TestKrausGateRepDedup:
-    def _assert_kraus_reps_equal(self, expected: KrausGateRep, actual: KrausGateRep):
+    def _assert_kraus_reps_equal(
+        self, expected: KrausGateRep, actual: KrausGateRep
+    ):
         assert isinstance(actual, KrausGateRep)
         assert expected.qubit_labels == actual.qubit_labels
         assert len(expected.kraus_operators) == len(actual.kraus_operators)
@@ -278,7 +281,8 @@ class TestKrausGateRepDedup:
 
     def test_dedup_simple_duplicate(self):
         rep = KrausGateRep(
-            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * np.eye(2), 0.4)], [0]
+            [(np.sqrt(0.6) * np.eye(2), 0.6), (np.sqrt(0.4) * np.eye(2), 0.4)],
+            [0],
         )
         expected = KrausGateRep([(np.eye(2), 1.0)], [0])
         self._assert_kraus_reps_equal(expected, rep.dedup())
@@ -311,7 +315,9 @@ class TestKrausGateRepDedup:
 
 
 class TestKrausGateRepCompose:
-    def _assert_kraus_reps_equal(self, expected: KrausGateRep, actual: KrausGateRep):
+    def _assert_kraus_reps_equal(
+        self, expected: KrausGateRep, actual: KrausGateRep
+    ):
         assert isinstance(actual, KrausGateRep)
         assert expected.qubit_labels == actual.qubit_labels
         assert len(expected.kraus_operators) == len(actual.kraus_operators)

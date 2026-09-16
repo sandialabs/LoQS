@@ -132,9 +132,7 @@ class TestSyndromeRowOrdering:
     @pytest.mark.parametrize("check_type", ["X", "Z"])
     def test_history_rows_match_H_rows(self, layout, check_type):
         qubits = layout_qubits(layout)
-        code = codepack_surf17.create_qec_code(
-            layout=layout, num_qec_rounds=1
-        )
+        code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=1)
         model = codepack_surf17.create_ideal_model(
             qubits,
             gaterep=StimCircuitGateRep,
@@ -153,8 +151,16 @@ class TestSyndromeRowOrdering:
                 err_circ, name="probe error"
             )
             stack = [
-                {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-                {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
                 (prep, "L0"),
                 (err_inst, "L0"),
                 ("Syndrome Extraction", "L0"),
@@ -199,11 +205,7 @@ class TestMergedGeometry:
         assert len(labels_X) == H_X.shape[0]
         assert len(labels_Z) == H_Z.shape[0]
         # Exactly two grown checks, on the grown-check type only
-        grown = [
-            lbl
-            for lbl in labels_X + labels_Z
-            if lbl.endswith("_grown")
-        ]
+        grown = [lbl for lbl in labels_X + labels_Z if lbl.endswith("_grown")]
         assert len(grown) == 2
 
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
@@ -281,9 +283,7 @@ class TestMergedGeometry:
             expected = support_vector(
                 grown["old_support"] + grown["seam_pair"]
             )
-            assert np.array_equal(
-                expected, support_vector(grown["support"])
-            )
+            assert np.array_equal(expected, support_vector(grown["support"]))
 
     @pytest.mark.parametrize("kind", ["ZZ", "XX"])
     def test_merged_logicals(self, kind):
@@ -303,9 +303,12 @@ class TestMergedGeometry:
         """Non-grown patch checks appear verbatim at their patch offsets."""
         seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         grown_type = seam_geometry["grown_check_type"]
-        for check_type, H_base in (("X", surgery.BASE_H_X), ("Z", surgery.BASE_H_Z)):
-            H_X, H_Z, labels_X, labels_Z = (
-                surgery.build_merged_check_matrices(kind)
+        for check_type, H_base in (
+            ("X", surgery.BASE_H_X),
+            ("Z", surgery.BASE_H_Z),
+        ):
+            H_X, H_Z, labels_X, labels_Z = surgery.build_merged_check_matrices(
+                kind
             )
             H_merged = H_X if check_type == "X" else H_Z
             labels = labels_X if check_type == "X" else labels_Z
@@ -320,9 +323,7 @@ class TestMergedGeometry:
                         continue
                     label = f"{patch}.S{check_type}{i}"
                     row = H_merged[labels.index(label)]
-                    assert np.array_equal(
-                        row[offset : offset + 9], H_base[i]
-                    )
+                    assert np.array_equal(row[offset : offset + 9], H_base[i])
                     # ... and nothing outside the patch block
                     mask = np.ones(21, dtype=bool)
                     mask[offset : offset + 9] = False
@@ -340,7 +341,9 @@ class TestMergedGeometry:
         """
         seam_geometry = surgery.SEAM_GEOMETRIES[kind]
         through_logical = (
-            seam_geometry["merged_X_L"] if kind == "ZZ" else seam_geometry["merged_Z_L"]
+            seam_geometry["merged_X_L"]
+            if kind == "ZZ"
+            else seam_geometry["merged_Z_L"]
         )
         seam_crossings = [e for e in through_logical if e[0] == "S"]
         assert seam_crossings == [("S", 0)]
@@ -403,7 +406,11 @@ class TestSimplifiedSurgeryZZ:
             "ZZ", geometry, mode="simple"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -438,7 +445,11 @@ class TestSimplifiedSurgeryZZ:
             for _ in range(2)
         ]
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Plus Prep", "L1"),
@@ -481,7 +492,11 @@ class TestSimplifiedSurgeryZZ:
             "ZZ", geometry, mode="simple"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
@@ -490,12 +505,22 @@ class TestSimplifiedSurgeryZZ:
             (zz, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            {"instruction": "FT Logical X Measure", "patch_label": "L0", "reference_round_mode_X": "guarded_diff"},
-            {"instruction": "FT Logical X Measure", "patch_label": "L1", "reference_round_mode_X": "guarded_diff"},
+            {
+                "instruction": "FT Logical X Measure",
+                "patch_label": "L0",
+                "reference_round_mode_X": "guarded_diff",
+            },
+            {
+                "instruction": "FT Logical X Measure",
+                "patch_label": "L1",
+                "reference_round_mode_X": "guarded_diff",
+            },
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
+        ms = [
+            p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")
+        ]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # |++> gives a random m_ZZ
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -515,7 +540,11 @@ class TestSimplifiedSurgeryXX:
             "XX", geometry, mode="simple"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
@@ -549,7 +578,11 @@ class TestSimplifiedSurgeryXX:
             for _ in range(2)
         ]
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -587,7 +620,11 @@ class TestSimplifiedSurgeryXX:
             "XX", geometry, mode="simple"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -596,12 +633,22 @@ class TestSimplifiedSurgeryXX:
             (xx, None),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            {"instruction": "FT Logical Z Measure", "patch_label": "L0", "reference_round_mode_Z": "guarded_diff"},
-            {"instruction": "FT Logical Z Measure", "patch_label": "L1", "reference_round_mode_Z": "guarded_diff"},
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "L0",
+                "reference_round_mode_Z": "guarded_diff",
+            },
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "L1",
+                "reference_round_mode_Z": "guarded_diff",
+            },
         ]
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_xx_L0_L1")]
+        ms = [
+            p[0] for p in collect_parities(results, "surgery_parity_xx_L0_L1")
+        ]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # |00> gives a random m_XX
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -649,7 +696,11 @@ class TestSimplifiedSurgeryBell:
             "XX", xx_geometry, mode="simple"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *cnot_geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -685,7 +736,11 @@ class TestFTSurgery:
             "ZZ", geometry, mode="ft"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -718,7 +773,11 @@ class TestFTSurgery:
             "XX", geometry, mode="ft"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
@@ -771,7 +830,11 @@ class TestFTSurgery:
             "XX", xx_geometry, mode="ft"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *cnot_geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -812,21 +875,27 @@ class TestFTSurgery:
             kind, geometry, mode="ft"
         )
         prep = "Zero Prep" if kind == "ZZ" else "Plus Prep"
-        meas = "FT Logical Z Measure" if kind == "ZZ" else "FT Logical X Measure"
+        meas = (
+            "FT Logical Z Measure" if kind == "ZZ" else "FT Logical X Measure"
+        )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             (prep, "L0"),
             (prep, "L1"),
             ("QEC", "L0"),
             ("QEC", "L1"),
-            (seq[0], None),   # 7: seam prep
-            (seq[1], None),   # 8: merge SE round 1
-            (seq[2], None),   # 9: merge SE round 2
-            (seq[3], None),   # 10: merge SE round 3
-            (seq[4], None),   # 11: merge bookkeeping
-            (seq[5], None),   # 12: seam measurement
-            (seq[6], None),   # 13: split bookkeeping
+            (seq[0], None),  # 7: seam prep
+            (seq[1], None),  # 8: merge SE round 1
+            (seq[2], None),  # 9: merge SE round 2
+            (seq[3], None),  # 10: merge SE round 3
+            (seq[4], None),  # 11: merge bookkeeping
+            (seq[5], None),  # 12: seam measurement
+            (seq[6], None),  # 13: split bookkeeping
             ("QEC", "L0"),
             ("QEC", "L1"),
             (meas, "L0"),
@@ -835,9 +904,9 @@ class TestFTSurgery:
         base_program = make_stim_program(layout, stack, all_q)
         parity_key = f"surgery_parity_{kind.lower()}_L0_L1"
         sweep_targets = [
-            (seq[0], 7),   # seam prep
-            (seq[1], 8),   # SE round 1
-            (seq[2], 9),   # SE round 2
+            (seq[0], 7),  # seam prep
+            (seq[1], 8),  # SE round 1
+            (seq[2], 9),  # SE round 2
             (seq[3], 10),  # SE round 3
             (seq[5], 12),  # seam measurement
         ]
@@ -851,7 +920,11 @@ class TestFTSurgery:
             runner = fttools.FaultInjectionRunner(
                 errored_programs=injected,
                 collect_shot_data_args=[
-                    {"key": parity_key, "indices": "all", "strip_none_entries": True},
+                    {
+                        "key": parity_key,
+                        "indices": "all",
+                        "strip_none_entries": True,
+                    },
                     {
                         "key": "logical_measurement",
                         "indices": "all",
@@ -861,11 +934,8 @@ class TestFTSurgery:
                 expected_outcomes=[[0], [0, 0]],
             )
             failed = runner.run()
-            assert not failed, (
-                f"{kind} stack idx {idx}: "
-                + "; ".join(
-                    f.name.split("+ injected error ")[-1] for f in failed
-                )
+            assert not failed, f"{kind} stack idx {idx}: " + "; ".join(
+                f.name.split("+ injected error ")[-1] for f in failed
             )
 
 
@@ -899,7 +969,11 @@ class TestParityReadoutConsistencyA:
             meas = "FT Logical X Measure"
             flag = {"reference_round_mode_X": "guarded_diff"}
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             (prep0, "L0"),
             (prep1, "L1"),
@@ -915,7 +989,9 @@ class TestParityReadoutConsistencyA:
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
         parities = [
             p[0]
-            for p in collect_parities(results, f"surgery_parity_{kind.lower()}_L0_L1")
+            for p in collect_parities(
+                results, f"surgery_parity_{kind.lower()}_L0_L1"
+            )
         ]
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -952,7 +1028,11 @@ class TestSurgeryCnot:
         )
         seq = surgery.build_surgery_cnot_sequence(geometry, mode="ft")
         prelude = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
         ]
         return prelude, seq, all_q
@@ -981,7 +1061,11 @@ class TestSurgeryCnot:
             ("QEC", "T"),
             # T's XX merge grows a Z check -> reference_round_mode_Z="guarded_diff" on T.
             ("FT Logical Z Measure", "C"),
-            {"instruction": "FT Logical Z Measure", "patch_label": "T", "reference_round_mode_Z": "guarded_diff"},
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "T",
+                "reference_round_mode_Z": "guarded_diff",
+            },
         ]
         program = make_stim_program("surf17", stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -1013,7 +1097,11 @@ class TestSurgeryCnot:
             ("QEC", "C"),
             ("QEC", "T"),
             # C's ZZ merge grows an X check -> reference_round_mode_X="guarded_diff" on C.
-            {"instruction": "FT Logical X Measure", "patch_label": "C", "reference_round_mode_X": "guarded_diff"},
+            {
+                "instruction": "FT Logical X Measure",
+                "patch_label": "C",
+                "reference_round_mode_X": "guarded_diff",
+            },
             ("FT Logical X Measure", "T"),
         ]
         program = make_stim_program("surf17", stack, all_q)
@@ -1042,8 +1130,16 @@ class TestSurgeryCnot:
             *seq,
             ("QEC", "C"),
             ("QEC", "T"),
-            {"instruction": f"FT Logical {basis} Measure", "patch_label": "C", **flag},
-            {"instruction": f"FT Logical {basis} Measure", "patch_label": "T", **flag},
+            {
+                "instruction": f"FT Logical {basis} Measure",
+                "patch_label": "C",
+                **flag,
+            },
+            {
+                "instruction": f"FT Logical {basis} Measure",
+                "patch_label": "T",
+                **flag,
+            },
         ]
         program = make_stim_program("surf17", stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
@@ -1072,7 +1168,11 @@ class TestSurgeryDenseSmoke:
             num_merge_rounds=2,
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),
@@ -1110,11 +1210,13 @@ class TestMzzBellPrep:
     @staticmethod
     def bell_prep_stack(layout, geometry, all_q, mode, basis):
         """|+>|+> -> M_ZZ Bell prep -> QEC -> FT readout of both patches."""
-        seq = surgery.build_mzz_bell_prep_sequence(
-            geometry, mode=mode
-        )
+        seq = surgery.build_mzz_bell_prep_sequence(geometry, mode=mode)
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
@@ -1128,8 +1230,16 @@ class TestMzzBellPrep:
         # merge grows an X check on both patches (also "guarded_diff").
         flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
-            {"instruction": f"FT Logical {basis} Measure", "patch_label": "L0", **flag},
-            {"instruction": f"FT Logical {basis} Measure", "patch_label": "L1", **flag},
+            {
+                "instruction": f"FT Logical {basis} Measure",
+                "patch_label": "L0",
+                **flag,
+            },
+            {
+                "instruction": f"FT Logical {basis} Measure",
+                "patch_label": "L1",
+                **flag,
+            },
         ]
         return stack
 
@@ -1145,7 +1255,9 @@ class TestMzzBellPrep:
         stack = self.bell_prep_stack(layout, geometry, all_q, mode, "Z")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
+        ms = [
+            p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")
+        ]
         assert 0 < sum(ms) < NUM_STIM_SHOTS  # both branches appear
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1160,7 +1272,9 @@ class TestMzzBellPrep:
         stack = self.bell_prep_stack(layout, geometry, all_q, mode, "X")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
+        ms = [
+            p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")
+        ]
         assert 0 < sum(ms) < NUM_STIM_SHOTS
         logicals = results.collect_shot_data(
             "logical_measurement", "all", strip_none_entries=True
@@ -1175,7 +1289,9 @@ class TestMzzBellPrep:
         stack = self.bell_prep_stack(layout, geometry, all_q, mode, "Z")
         program = make_stim_program(layout, stack, all_q)
         results = program.run(num_shots=NUM_STIM_SHOTS, verbose=False)
-        ms = [p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")]
+        ms = [
+            p[0] for p in collect_parities(results, "surgery_parity_zz_L0_L1")
+        ]
         corrections = results.collect_shot_data(
             "mzz_bell_correction_L0_L1", "all", strip_none_entries=True
         )
@@ -1238,7 +1354,11 @@ class TestMzzFaultTolerance:
         }
         meas = f"FT Logical {basis} Measure"
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "L0"),
             ("Plus Prep", "L1"),
@@ -1257,7 +1377,8 @@ class TestMzzFaultTolerance:
         ]
         if mode == "ft":
             repair = surgery.build_split_byproduct_repair_instruction(
-                "L0", "L1",
+                "L0",
+                "L1",
                 num_post_split_rounds=3,
             )
             stack.append((repair, None))
@@ -1290,17 +1411,20 @@ class TestMzzFaultTolerance:
 
         "total_injected" counts the Pauli-propagation equivalence-class
         representatives actually run, not the raw location x label
-        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs)."""
+        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs).
+        """
         base_program, seq = self._mzz_program(layout, mode, basis)
         seq_idxs = self.POST2Q_SEQ_IDXS if post_twoq else self.WEIGHT1_SEQ_IDXS
         failed, total = [], 0
         for i in seq_idxs:
-            injected, _ = fttools.build_pruned_discrete_error_injection_programs(
-                base_program=base_program,
-                instruction_to_analyze=seq[i],
-                stack_idx_to_modify=7 + i,
-                error_circuit_labels=self.WEIGHT1_LABELS,
-                post_twoq_gates=post_twoq,
+            injected, _ = (
+                fttools.build_pruned_discrete_error_injection_programs(
+                    base_program=base_program,
+                    instruction_to_analyze=seq[i],
+                    stack_idx_to_modify=7 + i,
+                    error_circuit_labels=self.WEIGHT1_LABELS,
+                    post_twoq_gates=post_twoq,
+                )
             )
             total += len(injected)
             failed += self._run_xor_sweep(injected)
@@ -1423,7 +1547,11 @@ class TestSurgeryCnotFaultTolerance:
             "C", "T", "ANC"
         )
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Plus Prep", "C"),
             ("Zero Prep", "T"),
@@ -1439,7 +1567,8 @@ class TestSurgeryCnotFaultTolerance:
             stack.append(
                 (
                     surgery.build_split_byproduct_repair_instruction(
-                        "C", "ANC",
+                        "C",
+                        "ANC",
                         fire_rule="b_only",
                         defect_decode_mode="matching",
                     ),
@@ -1462,12 +1591,24 @@ class TestSurgeryCnotFaultTolerance:
             ]
         flag = {f"reference_round_mode_{basis}": "guarded_diff"}
         stack += [
-            {"instruction": "FT Logical Z Measure", "patch_label": "ANC", "reference_round_mode_Z": "guarded_diff"},
+            {
+                "instruction": "FT Logical Z Measure",
+                "patch_label": "ANC",
+                "reference_round_mode_Z": "guarded_diff",
+            },
             (corrections, None),
             ("QEC", "C"),
             ("QEC", "T"),
-            {"instruction": f"FT Logical {basis} Measure", "patch_label": "C", **flag},
-            {"instruction": f"FT Logical {basis} Measure", "patch_label": "T", **flag},
+            {
+                "instruction": f"FT Logical {basis} Measure",
+                "patch_label": "C",
+                **flag,
+            },
+            {
+                "instruction": f"FT Logical {basis} Measure",
+                "patch_label": "T",
+                **flag,
+            },
         ]
         targets = {"ZZ": (zzseq, zz_base), "XX": (xxseq, xx_base)}
         return make_stim_program(layout, stack, all_q), targets
@@ -1495,18 +1636,21 @@ class TestSurgeryCnotFaultTolerance:
 
         "total_injected" counts the Pauli-propagation equivalence-class
         representatives actually run, not the raw location x label
-        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs)."""
+        count -- see [](api:fttools.build_pruned_discrete_error_injection_programs).
+        """
         base_program, targets = self._cnot_program(layout, mode, basis)
         seq_idxs = self.POST2Q_SEQ_IDXS if post_twoq else self.WEIGHT1_SEQ_IDXS
         failed, total = [], 0
         for seq, base in targets.values():
             for i in seq_idxs:
-                injected, _ = fttools.build_pruned_discrete_error_injection_programs(
-                    base_program=base_program,
-                    instruction_to_analyze=seq[i],
-                    stack_idx_to_modify=base + i,
-                    error_circuit_labels=self.WEIGHT1_LABELS,
-                    post_twoq_gates=post_twoq,
+                injected, _ = (
+                    fttools.build_pruned_discrete_error_injection_programs(
+                        base_program=base_program,
+                        instruction_to_analyze=seq[i],
+                        stack_idx_to_modify=base + i,
+                        error_circuit_labels=self.WEIGHT1_LABELS,
+                        post_twoq_gates=post_twoq,
+                    )
                 )
                 total += len(injected)
                 failed += self._run_xor_sweep(injected)
@@ -1691,7 +1835,5 @@ class TestSurgeryCnotFaultToleranceSmoke:
                 step = max(1, len(injected) // cls.SAMPLES_PER_LOCATION)
                 sample = injected[::step][: cls.SAMPLES_PER_LOCATION]
                 total += len(sample)
-                failed += TestSurgeryCnotFaultTolerance._run_xor_sweep(
-                    sample
-                )
+                failed += TestSurgeryCnotFaultTolerance._run_xor_sweep(sample)
         return failed, total

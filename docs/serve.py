@@ -158,7 +158,7 @@ def main() -> None:
 
     docs_cfg = (project_root / args.docs_config).resolve()
     ref_cfg = (project_root / args.ref_config).resolve()
-    
+
     # The inventory file is written by gen_ref_pages.py to disk at this location
     # so BOTH builds can resolve api: links with progressive qualification.
     inv_disk = docs_root / "_api_inventory.json"

@@ -15,7 +15,9 @@ from loqs.backends.reps import (
 
 
 class TestZBasisProjectionInstrumentRep:
-    @pytest.mark.parametrize("reset,include_outcome", [(None, True), (0, False), (1, True)])
+    @pytest.mark.parametrize(
+        "reset,include_outcome", [(None, True), (0, False), (1, True)]
+    )
     def test_constructs_instance(self, reset, include_outcome):
         rep = ZBasisProjectionInstrumentRep(reset, include_outcome, ("Q0",))
         assert isinstance(rep, ZBasisProjectionInstrumentRep)
@@ -161,8 +163,12 @@ class TestOutcomeOperationDictInstrumentRep:
             {(0, 2): None, (1, 1): None},  # entry not in {0, 1}
         ],
     )
-    def test_decomposable_outcome_qubits_rejects_mismatched_keys(self, bad_keys):
-        outcome_ops = {k: UnitaryGateRep(np.eye(4), ("Q0", "Q1")) for k in bad_keys}
+    def test_decomposable_outcome_qubits_rejects_mismatched_keys(
+        self, bad_keys
+    ):
+        outcome_ops = {
+            k: UnitaryGateRep(np.eye(4), ("Q0", "Q1")) for k in bad_keys
+        }
         with pytest.raises(RepConstructionError):
             OutcomeOperationDictInstrumentRep(
                 outcome_ops, True, ("Q0", "Q1"), outcome_qubits=("Q0", "Q1")
@@ -172,7 +178,10 @@ class TestOutcomeOperationDictInstrumentRep:
         """When `outcome_qubits` was defaulted (tracks `qubit_labels`),
         retargeting the rep onto new qubits moves the classical label too
         -- preserving the pre-existing 1-qubit behavior exactly."""
-        outcome_ops = {0: UnitaryGateRep(np.eye(2), ("Q0",)), 1: UnitaryGateRep(np.eye(2), ("Q0",))}
+        outcome_ops = {
+            0: UnitaryGateRep(np.eye(2), ("Q0",)),
+            1: UnitaryGateRep(np.eye(2), ("Q0",)),
+        }
         rep = OutcomeOperationDictInstrumentRep(outcome_ops, True, ("Q0",))
         retargeted = rep.with_qubit_labels(("Q1",))
         assert retargeted.qubit_labels == ("Q1",)

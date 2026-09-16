@@ -10,8 +10,12 @@ FIXTURES = Path(__file__).parent / "migrate_fixtures"
 
 class TestRewriteReptupleConstruction:
     def test_matches_golden_fixture(self):
-        before = FIXTURES.joinpath("reptuple_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("reptuple_after.py").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("reptuple_before.py").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("reptuple_after.py").read_text(
+            encoding="utf-8"
+        )
         result = rewrite_reptuple_construction(before)
         assert result.source == after
         assert not result.manual_review
@@ -28,7 +32,10 @@ class TestRewriteReptupleConstruction:
         result = rewrite_reptuple_construction(src)
         assert result.changed
         assert "UnitaryGateRep(unitary, qubit_labels=qubits)" in result.source
-        assert "from loqs.backends.reps.gatereps import UnitaryGateRep" in result.source
+        assert (
+            "from loqs.backends.reps.gatereps import UnitaryGateRep"
+            in result.source
+        )
 
     def test_kraus_omits_tp_check_abstol(self):
         """Decode itself passes `tp_check_abstol=None` to skip
@@ -51,9 +58,14 @@ class TestRewriteReptupleConstruction:
         """A `*`-unpack of any expression enforces the same arity a
         tuple-assignment would at decode time, so this is correct
         regardless of what `rep_data` actually contains."""
-        src = "i = RepTuple(rep_data, qubits, InstrumentRep.ZBASIS_PROJECTION)\n"
+        src = (
+            "i = RepTuple(rep_data, qubits, InstrumentRep.ZBASIS_PROJECTION)\n"
+        )
         result = rewrite_reptuple_construction(src)
-        assert "ZBasisProjectionInstrumentRep(*rep_data, qubit_labels=qubits)" in result.source
+        assert (
+            "ZBasisProjectionInstrumentRep(*rep_data, qubit_labels=qubits)"
+            in result.source
+        )
 
     def test_stim_circuit_str_disambiguated_by_receiver(self):
         """`GateRep.STIM_CIRCUIT_STR`/`InstrumentRep.STIM_CIRCUIT_STR`
@@ -64,18 +76,27 @@ class TestRewriteReptupleConstruction:
         gate_result = rewrite_reptuple_construction(
             "g = RepTuple(circuit_str, qubits, GateRep.STIM_CIRCUIT_STR)\n"
         )
-        assert "StimCircuitGateRep(circuit_str, qubit_labels=qubits)" in gate_result.source
+        assert (
+            "StimCircuitGateRep(circuit_str, qubit_labels=qubits)"
+            in gate_result.source
+        )
 
         inst_result = rewrite_reptuple_construction(
             "i = RepTuple(circuit_str, qubits, InstrumentRep.STIM_CIRCUIT_STR)\n"
         )
-        assert "StimCircuitInstrumentRep(circuit_str, qubit_labels=qubits)" in inst_result.source
+        assert (
+            "StimCircuitInstrumentRep(circuit_str, qubit_labels=qubits)"
+            in inst_result.source
+        )
 
     def test_keyword_and_mixed_positional_keyword_calls_both_resolve(self):
         all_keyword = rewrite_reptuple_construction(
             "g = RepTuple(rep=unitary, qubits=qubits, reptype=GateRep.UNITARY)\n"
         )
-        assert "UnitaryGateRep(unitary, qubit_labels=qubits)" in all_keyword.source
+        assert (
+            "UnitaryGateRep(unitary, qubit_labels=qubits)"
+            in all_keyword.source
+        )
 
         mixed = rewrite_reptuple_construction(
             "g = RepTuple(unitary, reptype=GateRep.UNITARY, qubits=qubits)\n"
@@ -113,7 +134,9 @@ class TestRewriteReptupleConstruction:
         src = "g = RepTuple(*args)\n"
         result = rewrite_reptuple_construction(src)
         assert not result.changed
-        assert not result.manual_review  # not our call shape at all; renames.py's job
+        assert (
+            not result.manual_review
+        )  # not our call shape at all; renames.py's job
 
     def test_wrong_arity_call_is_left_alone(self):
         src = "g = RepTuple(payload, qubits, reptype, extra)\n"

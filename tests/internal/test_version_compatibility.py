@@ -12,23 +12,31 @@ import loqs.internal.serializable as serializable_module
 from loqs.backends.state.qsimstate import QSimQuantumState
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.quantumprogram import QuantumProgram
-from loqs.internal.serializable import IMPORT_LOCATION_CHANGES_BY_VERSION, Serializable
+from loqs.internal.serializable import (
+    IMPORT_LOCATION_CHANGES_BY_VERSION,
+    Serializable,
+)
 
 
 class TestVersionCompatibility:
     """Parameterized tests for Serializable class functionality."""
 
-    @pytest.mark.parametrize("version_file",[
-        "QuantumProgram_v0.json.gz",
-        "QuantumProgram_v1.json.gz",
-    ])
+    @pytest.mark.parametrize(
+        "version_file",
+        [
+            "QuantumProgram_v0.json.gz",
+            "QuantumProgram_v1.json.gz",
+        ],
+    )
     def test_read_versioned_quantumprogram(self, version_file):
         """Test whether we can load QuantumProgram for given serialization version.
 
         Test files are taken from test_quantumprogram files."""
 
         path = Path(__file__).parent
-        loaded_program = QuantumProgram.read(path / version_file, migrate_legacy_fns=True)
+        loaded_program = QuantumProgram.read(
+            path / version_file, migrate_legacy_fns=True
+        )
 
         assert isinstance(loaded_program, QuantumProgram)
         assert loaded_program.name == "Prep minus, measure X"
@@ -39,10 +47,10 @@ class TestVersionCompatibility:
 
         loaded_program_results = loaded_program.run(2)
         assert len(loaded_program_results.shot_histories) == 2
-    
+
     def test_function_import_updates(self):
         # This is a real physical circuit instruction apply_fn from version 0
-        test_str="""
+        test_str = """
 from collections.abc import Mapping, Sequence
 import inspect as ins
 import numpy as np
@@ -82,7 +90,7 @@ def apply_fn(
 
     return Frame(data)
 """
-        expected_str="""
+        expected_str = """
 from collections.abc import Mapping, Sequence
 import inspect as ins
 import numpy as np
@@ -135,7 +143,10 @@ def apply_fn(
         # all (their rename is a version 0 entry) -- only PauliFrame, via
         # this test's own override, moves here.
         renamed_loc_change = IMPORT_LOCATION_CHANGES_BY_VERSION[1].copy()
-        renamed_loc_change[("loqs.core.syndrome", "PauliFrame")] = ("loqs.core.recordables.pauliframe", "PauliFrameRenamed")
+        renamed_loc_change[("loqs.core.syndrome", "PauliFrame")] = (
+            "loqs.core.recordables.pauliframe",
+            "PauliFrameRenamed",
+        )
 
         expected_str2 = """
 from collections.abc import Mapping, Sequence
@@ -176,7 +187,9 @@ def apply_fn(
     return Frame(data)
 """
 
-        updated_str2 = Serializable._update_imports(test_str, loc_change=renamed_loc_change)
+        updated_str2 = Serializable._update_imports(
+            test_str, loc_change=renamed_loc_change
+        )
         assert updated_str2 == expected_str2
 
     def test_instruction_label_and_stack_castable_types_rename(self):
@@ -226,7 +239,9 @@ def apply_fn(
             3: {("mod2", "C"): ("mod3", "D")},
         }
         monkeypatch.setattr(
-            serializable_module, "IMPORT_LOCATION_CHANGES_BY_VERSION", fake_table
+            serializable_module,
+            "IMPORT_LOCATION_CHANGES_BY_VERSION",
+            fake_table,
         )
         monkeypatch.setattr(serializable_module, "SERIALIZATION_VERSION", 4)
 
@@ -234,7 +249,9 @@ def apply_fn(
             ("mod0", "A"): ("mod3", "D")
         }
 
-    def test_get_cumulative_changes_handles_missing_table_entry(self, monkeypatch):
+    def test_get_cumulative_changes_handles_missing_table_entry(
+        self, monkeypatch
+    ):
         """A version with no import-location changes at all simply has no
         entry in `IMPORT_LOCATION_CHANGES_BY_VERSION` (not an empty one) --
         `_get_cumulative_changes` must not raise `KeyError` when composing
@@ -246,7 +263,9 @@ def apply_fn(
             4: {("mod2", "B"): ("mod4", "C")},
         }
         monkeypatch.setattr(
-            serializable_module, "IMPORT_LOCATION_CHANGES_BY_VERSION", fake_table
+            serializable_module,
+            "IMPORT_LOCATION_CHANGES_BY_VERSION",
+            fake_table,
         )
         monkeypatch.setattr(serializable_module, "SERIALIZATION_VERSION", 5)
 
@@ -265,7 +284,10 @@ def _decoded_str(value):
 def _find_instruction_by_name(obj, name):
     """Find a raw, undecoded Instruction attr_dict by name inside a decompressed fixture."""
     if isinstance(obj, dict):
-        if obj.get("class") == "Instruction" and _decoded_str(obj.get("name")) == name:
+        if (
+            obj.get("class") == "Instruction"
+            and _decoded_str(obj.get("name")) == name
+        ):
             return obj
         for v in obj.values():
             found = _find_instruction_by_name(v, name)
@@ -382,7 +404,9 @@ class TestMigrateLegacyFnsGate:
         source = data["global_instructions"]["Init Patch 5Q"][
             "_serialized_apply_fn"
         ]
-        assert "PatchDict(" in source  # confirms the fixture predates the rename
+        assert (
+            "PatchDict(" in source
+        )  # confirms the fixture predates the rename
 
         updated = Serializable._update_imports(source, 0)
         assert "PatchDict(" not in updated
@@ -409,12 +433,9 @@ class TestUpdateLegacyConstructions:
 
     def test_noop_at_current_version(self):
         src = 'InstructionLabel("Increment", "L0", (), {"increment_by": 2})\n'
-        assert (
-            serializable_module.Serializable._update_legacy_constructions(
-                src, serializable_module.SERIALIZATION_VERSION
-            )
-            == (src, [])
-        )
+        assert serializable_module.Serializable._update_legacy_constructions(
+            src, serializable_module.SERIALIZATION_VERSION
+        ) == (src, [])
 
     def test_rewrites_a_resolvable_construction(self):
         rewritten, manual_review = (
@@ -488,12 +509,9 @@ class TestUpdateLegacyConstructions:
             "    def apply_fn(patch_label):\n"
             '        return InstructionLabel("Increment", "L0", (), {})\n'
         )
-        assert (
-            serializable_module.Serializable._update_legacy_constructions(
-                src, 0
-            )
-            == (src, [])
-        )
+        assert serializable_module.Serializable._update_legacy_constructions(
+            src, 0
+        ) == (src, [])
 
 
 class TestImportClass:
@@ -514,9 +532,7 @@ class TestImportClass:
         relocated) raises immediately, rather than trying and failing to
         import a location that was never a real replacement."""
         with pytest.raises(ImportError, match="removed in a later"):
-            Serializable._import_class(
-                "loqs.internal.castable", "Castable", 0
-            )
+            Serializable._import_class("loqs.internal.castable", "Castable", 0)
 
     def test_unresolvable_module_raises_a_clear_import_error(self):
         """A module that doesn't exist at all (not a typo in the rename
@@ -526,7 +542,8 @@ class TestImportClass:
         exception type."""
         with pytest.raises(ImportError, match="Class or module not found"):
             Serializable._import_class(
-                "loqs.nonexistent_module", "NonexistentClass",
+                "loqs.nonexistent_module",
+                "NonexistentClass",
                 serializable_module.SERIALIZATION_VERSION,
             )
 
@@ -535,7 +552,8 @@ class TestImportClass:
         `ImportError`, not the raw `AttributeError`."""
         with pytest.raises(ImportError, match="Class or module not found"):
             Serializable._import_class(
-                "loqs.core.syndromelabel", "NonexistentClass",
+                "loqs.core.syndromelabel",
+                "NonexistentClass",
                 serializable_module.SERIALIZATION_VERSION,
             )
 
@@ -712,5 +730,3 @@ class TestInstructionLabelDirectLegacyConstruction:
 
         with pytest.raises(TypeError, match="can't be remapped"):
             InstructionLabel("SomeInstructionName", "L0", (), {})
-
-

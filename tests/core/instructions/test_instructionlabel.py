@@ -11,10 +11,13 @@ class TestInstructionLabel:
     def setup_class(cls):
         def apply_fn():
             pass
+
         cls.ins = Instruction(apply_fn, name="test")  # type: ignore
 
     def test_init_rejects_bad_instruction_type(self):
-        with pytest.raises(TypeError, match="instruction must be an Instruction or str"):
+        with pytest.raises(
+            TypeError, match="instruction must be an Instruction or str"
+        ):
             InstructionLabel(3)  # type: ignore
 
     def test_init_bare_label(self):
@@ -54,10 +57,14 @@ class TestInstructionLabel:
 
     def test_from_raw_bare_str_and_instruction(self):
         assert InstructionLabel.from_raw("Label") == InstructionLabel("Label")
-        assert InstructionLabel.from_raw(self.ins) == InstructionLabel(self.ins)
+        assert InstructionLabel.from_raw(self.ins) == InstructionLabel(
+            self.ins
+        )
 
     def test_from_raw_one_tuple(self):
-        assert InstructionLabel.from_raw(("Label",)) == InstructionLabel("Label")
+        assert InstructionLabel.from_raw(("Label",)) == InstructionLabel(
+            "Label"
+        )
 
     def test_from_raw_two_tuple(self):
         assert InstructionLabel.from_raw(("Label", "L0")) == InstructionLabel(
@@ -65,7 +72,11 @@ class TestInstructionLabel:
         )
 
     def test_from_raw_dict(self):
-        d = {"instruction": "Label", "patch_label": "L0", "flagged_check": "XZIIZ"}
+        d = {
+            "instruction": "Label",
+            "patch_label": "L0",
+            "flagged_check": "XZIIZ",
+        }
         assert InstructionLabel.from_raw(d) == InstructionLabel(
             "Label", patch_label="L0", flagged_check="XZIIZ"
         )
@@ -78,13 +89,19 @@ class TestInstructionLabel:
         # The old fixed-position tuple format is no longer supported --
         # use the dict form instead.
         with pytest.raises(TypeError, match="Tuples longer than 2 elements"):
-            InstructionLabel.from_raw(("Label", "L0", (), {"flagged_check": "XZIIZ"}))
+            InstructionLabel.from_raw(
+                ("Label", "L0", (), {"flagged_check": "XZIIZ"})
+            )
 
     def test_from_raw_rejects_long_tuples_points_to_loqs_migrate(self):
         with pytest.raises(TypeError, match="loqs-migrate"):
-            InstructionLabel.from_raw(("Label", "L0", (), {"flagged_check": "XZIIZ"}))
+            InstructionLabel.from_raw(
+                ("Label", "L0", (), {"flagged_check": "XZIIZ"})
+            )
 
-    def test_legacy_positional_with_bare_string_instruction_points_to_loqs_migrate(self):
+    def test_legacy_positional_with_bare_string_instruction_points_to_loqs_migrate(
+        self,
+    ):
         # A bare instruction name can't be remapped without an already-
         # resolved Instruction's param_priorities -- this is a hard
         # failure, not a warn-and-remap, unlike the Instruction-object case.
@@ -112,4 +129,8 @@ class TestInstructionLabel:
         ilbl = InstructionLabel("Label", patch_label="L0")
         ilbl["error_injections"] = [(0, "Gxpi", 3)]
         assert ilbl["error_injections"] == [(0, "Gxpi", 3)]
-        assert set(ilbl.keys()) == {"instruction", "patch_label", "error_injections"}
+        assert set(ilbl.keys()) == {
+            "instruction",
+            "patch_label",
+            "error_injections",
+        }

@@ -4,6 +4,7 @@ import pytest
 
 from loqs.tools import qectools
 
+
 class TestQECTools:
 
     def test_compose_pstrs(self):
@@ -36,14 +37,14 @@ class TestQECTools:
         for i, (pstr, outcome) in enumerate(tests):
             # We can also test weight-1 error generation
             if i > 0:
-                assert pstr == w1_errors[i-1]
+                assert pstr == w1_errors[i - 1]
 
             # Test we get expected outcome
             syndrome = qectools.get_syndrome_from_stabilizers_and_pstr(
                 stabilizers, pstr
             )
             assert syndrome == outcome
-    
+
     def test_5Q_unflagged_LUTs(self):
         data_errors = qectools.get_weight_1_errors(5)
         stabilizers = ["XZZXI", "IXZZX", "XIXZZ", "ZXIXZ"]
@@ -71,15 +72,21 @@ class TestQECTools:
             "0100": "IIIIZ",
         }
         assert unflagged_lookup_table == expected_lookup_table
-    
+
     def test_5Q_hook_error_generation(self):
         XZZXI_hook_errors = qectools.get_hook_errors_in_flagged_check("XZZXI")
 
         # These should match Fig 2d in arXiv:1705.02329
         # Also 1a in Error Correction Procedure in Section II in same paper
         assert XZZXI_hook_errors == [
-            "IIZXI", "IXZXI", "IYZXI", "IZZXI",
-            "IIIXI", "IIXXI", "IIYXI", "IIZXI",
+            "IIZXI",
+            "IXZXI",
+            "IYZXI",
+            "IZZXI",
+            "IIIXI",
+            "IIXXI",
+            "IIYXI",
+            "IIZXI",
         ]
 
         # We can also do 2a in Error Correction Procedure in Section II
@@ -93,11 +100,16 @@ class TestQECTools:
             qectools.compose_pstrs(IXZZX_hook_errors[1], "XIXZZ"),
             qectools.compose_pstrs(IXZZX_hook_errors[3], "IXZZX"),
             IXZZX_hook_errors[7],
-            IXZZX_hook_errors[6]
+            IXZZX_hook_errors[6],
         ]
         assert reordered_hook_errors == [
-            "IIIIX", "IXXII", "IIIXX", "XIIIY",
-            "IXIII", "IIIZX", "IIIYX"
+            "IIIIX",
+            "IXXII",
+            "IIIXX",
+            "XIIIY",
+            "IXIII",
+            "IIIZX",
+            "IIIYX",
         ]
 
         # We can also test for reordered checks
@@ -105,9 +117,6 @@ class TestQECTools:
         # in the adaptive measurement of arXiv:1705.02329
         # Specifically, this is from Appendix B.2.1
         XZIIZ_hook_errors = qectools.get_hook_errors_in_flagged_check(
-            "XZIIZ", check_order=[4, 0, 1])
-        assert XZIIZ_hook_errors == ["IZIII","XZIII","YZIII","ZZIII"]
-        
-        
-
-
+            "XZIIZ", check_order=[4, 0, 1]
+        )
+        assert XZIIZ_hook_errors == ["IZIII", "XZIII", "YZIII", "ZZIII"]

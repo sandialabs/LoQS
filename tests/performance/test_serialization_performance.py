@@ -22,7 +22,9 @@ from loqs.core.instructions.instruction import Instruction
 class PerformanceTestConfig:
     """Configuration for performance tests."""
 
-    def __init__(self, name, num_frames, array_size, use_caching=True, repeat_every=3):
+    def __init__(
+        self, name, num_frames, array_size, use_caching=True, repeat_every=3
+    ):
         self.name = name
         self.num_frames = num_frames
         self.array_size = array_size
@@ -30,19 +32,30 @@ class PerformanceTestConfig:
         self.repeat_every = repeat_every
 
     def __str__(self):
-        return (f"{self.name}: {self.num_frames} frames, array_size={self.array_size}")
+        return f"{self.name}: {self.num_frames} frames, array_size={self.array_size}"
 
 
-@pytest.mark.parametrize("config", [
-    # Small dataset
-    PerformanceTestConfig("small", num_frames=5, array_size=50, use_caching=True),
-    # Medium dataset
-    PerformanceTestConfig("medium", num_frames=10, array_size=100, use_caching=True),
-    # Large dataset (but keep runtime reasonable)
-    PerformanceTestConfig("large", num_frames=20, array_size=200, use_caching=True),
-    # Extra-large dataset
-    PerformanceTestConfig("x-large", num_frames=40, array_size=300, use_caching=True),
-])
+@pytest.mark.parametrize(
+    "config",
+    [
+        # Small dataset
+        PerformanceTestConfig(
+            "small", num_frames=5, array_size=50, use_caching=True
+        ),
+        # Medium dataset
+        PerformanceTestConfig(
+            "medium", num_frames=10, array_size=100, use_caching=True
+        ),
+        # Large dataset (but keep runtime reasonable)
+        PerformanceTestConfig(
+            "large", num_frames=20, array_size=200, use_caching=True
+        ),
+        # Extra-large dataset
+        PerformanceTestConfig(
+            "x-large", num_frames=40, array_size=300, use_caching=True
+        ),
+    ],
+)
 def test_serialization_performance(config):
     """Test serialization performance for different dataset sizes."""
 
@@ -63,19 +76,24 @@ def test_serialization_performance(config):
     # Report results
     print(f"JSON:  {json_time:.3f}s, {json_size/json_factor:.2f} {json_unit}")
     print(f"HDF5: {hdf5_time:.3f}s, {hdf5_size/hdf5_factor:.2f} {hdf5_unit}")
-    print(f"HDF5 benefits: {json_size/hdf5_size:.2f}x size reduction, {json_time/hdf5_time:.2f}x faster")
-    
+    print(
+        f"HDF5 benefits: {json_size/hdf5_size:.2f}x size reduction, {json_time/hdf5_time:.2f}x faster"
+    )
+
     # Verify deserialization works correctly
     if config.name == "small":
         verify_deserialization(history)
 
 
-@pytest.mark.parametrize("config", [
-    PerformanceTestConfig(r"4% repeated", 50, 200, repeat_every=25),
-    PerformanceTestConfig(r"10% repeated", 50, 200, repeat_every=5),
-    PerformanceTestConfig(r"50% repeated", 50, 200, repeat_every=2),
-    PerformanceTestConfig(r"100% repeated", 50, 200, repeat_every=1)
-])
+@pytest.mark.parametrize(
+    "config",
+    [
+        PerformanceTestConfig(r"4% repeated", 50, 200, repeat_every=25),
+        PerformanceTestConfig(r"10% repeated", 50, 200, repeat_every=5),
+        PerformanceTestConfig(r"50% repeated", 50, 200, repeat_every=2),
+        PerformanceTestConfig(r"100% repeated", 50, 200, repeat_every=1),
+    ],
+)
 def test_caching_performance(config):
     """Test object caching efficiency by comparing with and without caching."""
 
@@ -94,33 +112,56 @@ def test_caching_performance(config):
     json_time, json_size = _test_json_serialization(history, cache_config)
 
     # Test JSON serialization without caching
-    json_no_cache_time, json_no_cache_size = _test_json_serialization(history, no_cache_config)
+    json_no_cache_time, json_no_cache_size = _test_json_serialization(
+        history, no_cache_config
+    )
 
     # Test HDF5 serialization with caching
     hdf5_time, hdf5_size = _test_hdf5_serialization(history, cache_config)
 
     # Test HDF5 serialization without caching
-    hdf5_no_cache_time, hdf5_no_cache_size = _test_hdf5_serialization(history, no_cache_config)
-
+    hdf5_no_cache_time, hdf5_no_cache_size = _test_hdf5_serialization(
+        history, no_cache_config
+    )
 
     json_factor, json_unit = _get_print_factor_unit(json_size)
-    json_no_cache_factor, json_no_cache_unit = _get_print_factor_unit(json_no_cache_size)
+    json_no_cache_factor, json_no_cache_unit = _get_print_factor_unit(
+        json_no_cache_size
+    )
     hdf5_factor, hdf5_unit = _get_print_factor_unit(hdf5_size)
-    hdf5_no_cache_factor, hdf5_no_cache_unit = _get_print_factor_unit(hdf5_no_cache_size)
+    hdf5_no_cache_factor, hdf5_no_cache_unit = _get_print_factor_unit(
+        hdf5_no_cache_size
+    )
 
-    print(f"JSON (with caching):  {json_time:.3f}s, {json_size/json_factor:.1f} {json_unit}")
-    print(f"JSON (no caching):   {json_no_cache_time:.3f}s, {json_no_cache_size/json_no_cache_factor:.1f} {json_no_cache_unit}")
-    print(f"HDF5 (with caching): {hdf5_time:.3f}s, {hdf5_size/hdf5_factor:.1f} {hdf5_unit}")
-    print(f"HDF5 (no caching):  {hdf5_no_cache_time:.3f}s, {hdf5_no_cache_size/hdf5_no_cache_factor:.1f} {hdf5_no_cache_unit}")
+    print(
+        f"JSON (with caching):  {json_time:.3f}s, {json_size/json_factor:.1f} {json_unit}"
+    )
+    print(
+        f"JSON (no caching):   {json_no_cache_time:.3f}s, {json_no_cache_size/json_no_cache_factor:.1f} {json_no_cache_unit}"
+    )
+    print(
+        f"HDF5 (with caching): {hdf5_time:.3f}s, {hdf5_size/hdf5_factor:.1f} {hdf5_unit}"
+    )
+    print(
+        f"HDF5 (no caching):  {hdf5_no_cache_time:.3f}s, {hdf5_no_cache_size/hdf5_no_cache_factor:.1f} {hdf5_no_cache_unit}"
+    )
 
     # Calculate caching benefits
-    json_caching_benefit = json_no_cache_size / json_size if json_size > 0 else 1.0
-    hdf5_caching_benefit = hdf5_no_cache_size / hdf5_size if hdf5_size > 0 else 1.0
+    json_caching_benefit = (
+        json_no_cache_size / json_size if json_size > 0 else 1.0
+    )
+    hdf5_caching_benefit = (
+        hdf5_no_cache_size / hdf5_size if hdf5_size > 0 else 1.0
+    )
     json_speedup = json_no_cache_time / json_time if json_time > 0 else 1.0
     hdf5_speedup = hdf5_no_cache_time / hdf5_time if hdf5_time > 0 else 1.0
 
-    print(f"JSON caching stats: {json_caching_benefit:.1f}x size reduction, {json_speedup:.1f}x faster")
-    print(f"HDF5 caching stats: {hdf5_caching_benefit:.1f}x size reduction, {hdf5_speedup:.1f}x faster")
+    print(
+        f"JSON caching stats: {json_caching_benefit:.1f}x size reduction, {json_speedup:.1f}x faster"
+    )
+    print(
+        f"HDF5 caching stats: {hdf5_caching_benefit:.1f}x size reduction, {hdf5_speedup:.1f}x faster"
+    )
 
     # Verify deserialization works correctly
     if config.name == r"4% repeated":
@@ -138,8 +179,8 @@ def create_test_history(num_frames, array_size):
             "metadata": {
                 "frame_id": i,
                 "timestamp": time.time(),
-                "description": f"Test frame {i}"
-            }
+                "description": f"Test frame {i}",
+            },
         }
         frames.append(Frame(data))
 
@@ -152,7 +193,13 @@ def create_history_with_repeated_objects(config):
     def apply_fn(x):
         return Frame()
 
-    inst = Instruction(apply_fn, data={"array": np.random.random((config.array_size, config.array_size))}, name="Test")
+    inst = Instruction(
+        apply_fn,
+        data={
+            "array": np.random.random((config.array_size, config.array_size))
+        },
+        name="Test",
+    )
 
     # Create some reusable objects
     shared_frame = Frame({"shared": "data", "inst": inst})
@@ -163,10 +210,7 @@ def create_history_with_repeated_objects(config):
         if i % config.repeat_every == 0:
             frames.append(shared_frame)  # Repeat this frame
         else:
-            frames.append(Frame({
-                "unique_id": i,
-                "unique_inst": inst.copy()
-            }))
+            frames.append(Frame({"unique_id": i, "unique_inst": inst.copy()}))
 
     return History(frames)
 
@@ -181,7 +225,9 @@ def _test_json_serialization(history, config):
             # Time the serialization
             start_time = time.time()
 
-            history.write(temp_file, format="json", use_caching=config.use_caching)
+            history.write(
+                temp_file, format="json", use_caching=config.use_caching
+            )
 
             json_time = time.time() - start_time
 
@@ -203,9 +249,11 @@ def _test_hdf5_serialization(history, config):
         try:
             # Time the serialization
             start_time = time.time()
-            
-            history.write(temp_file, format="hdf5", use_caching=config.use_caching)
-            
+
+            history.write(
+                temp_file, format="hdf5", use_caching=config.use_caching
+            )
+
             hdf5_time = time.time() - start_time
 
             # Get file size
@@ -216,13 +264,14 @@ def _test_hdf5_serialization(history, config):
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
 
+
 def _get_print_factor_unit(size):
     factor = 1024
     unit = "KB"
-    if size/factor > 1024:
+    if size / factor > 1024:
         factor *= 1024
         unit = "MB"
-    if size/factor > 1024:
+    if size / factor > 1024:
         factor *= 1024
         unit = "GB"
     return factor, unit
@@ -232,7 +281,7 @@ def verify_deserialization(history):
     """Verify that deserialization works correctly for JSON format."""
 
     # Test JSON deserialization
-    
+
     with tf.NamedTemporaryFile(suffix=".json") as temp:
         temp_file = temp.name
 
@@ -244,7 +293,9 @@ def verify_deserialization(history):
             # Basic sanity checks
             assert len(loaded_json) == len(history)
             # Frame uses _data attribute
-            assert str(loaded_json[0]._data.keys()) == str(history[0]._data.keys())
+            assert str(loaded_json[0]._data.keys()) == str(
+                history[0]._data.keys()
+            )
         finally:
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
@@ -259,12 +310,12 @@ def verify_deserialization(history):
             # Basic sanity checks
             assert len(loaded_hdf5) == len(history)
             # Frame uses _data attribute
-            assert str(loaded_hdf5[0]._data.keys()) == str(history[0]._data.keys())
+            assert str(loaded_hdf5[0]._data.keys()) == str(
+                history[0]._data.keys()
+            )
         finally:
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
-
-
 
 
 if __name__ == "__main__":
@@ -287,7 +338,7 @@ if __name__ == "__main__":
         PerformanceTestConfig(r"4% repeated", 50, 200, repeat_every=25),
         PerformanceTestConfig(r"10% repeated", 50, 200, repeat_every=5),
         PerformanceTestConfig(r"50% repeated", 50, 200, repeat_every=2),
-        PerformanceTestConfig(r"100% repeated", 50, 200, repeat_every=1)
+        PerformanceTestConfig(r"100% repeated", 50, 200, repeat_every=1),
     ]
     for config in cache_test_configs:
         test_caching_performance(config)

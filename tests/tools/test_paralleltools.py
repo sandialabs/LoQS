@@ -400,9 +400,7 @@ class TestExecutorSpecAndParallelStrategySerialization:
         assert loaded.exec_backend == "loky"
         assert loaded.kwargs == {"max_workers": 3}
 
-    def test_parallel_strategy_round_trips_with_none_executors(
-        self, tmp_path
-    ):
+    def test_parallel_strategy_round_trips_with_none_executors(self, tmp_path):
         strategy = ParallelStrategy(n_program_chunks=2)
         path = tmp_path / "strategy.json"
         strategy.write(path)
@@ -411,9 +409,7 @@ class TestExecutorSpecAndParallelStrategySerialization:
         assert loaded.shot_executor is None
         assert loaded.n_program_chunks == 2
 
-    def test_parallel_strategy_round_trips_with_executor_spec(
-        self, tmp_path
-    ):
+    def test_parallel_strategy_round_trips_with_executor_spec(self, tmp_path):
         strategy = ParallelStrategy(
             program_executor=ExecutorSpec(
                 exec_backend="loky", kwargs={"max_workers": 2}
@@ -532,10 +528,13 @@ class TestParallelStrategyDescribe:
             shot_executor=loky.get_reusable_executor(max_workers=3)
         )
         description = strategy.describe()
-        assert description == "program axis: serial\nshot axis: loky(max_workers=3)"
+        assert (
+            description
+            == "program axis: serial\nshot axis: loky(max_workers=3)"
+        )
 
     def test_no_items_omits_program_chunk_rows_needing_items(self):
-        """"# of program chunks" only needs n_program_chunks (or
+        """ "# of program chunks" only needs n_program_chunks (or
         program_executor being chunked at all), not items -- but
         "# of programs/chunk" genuinely needs a real item count, so only
         that row is omitted."""
@@ -840,7 +839,11 @@ def _profiling_work_fn(strategy: ParallelStrategy) -> list[int]:
         time.sleep(0.15)
         return [x * 2 for x in items]
     chunks = strategy.make_chunks(items)
-    return [x for chunk in strategy.dispatch(_double_chunk_slow, chunks) for x in chunk]
+    return [
+        x
+        for chunk in strategy.dispatch(_double_chunk_slow, chunks)
+        for x in chunk
+    ]
 
 
 class _FakeMemInfo:
@@ -1088,7 +1091,9 @@ class TestProfileStrategies:
     def test_repeats_defaults_to_one(self):
         pytest.importorskip("psutil")
         results = profile_strategies(
-            _profiling_work_fn, {"serial": ParallelStrategy()}, sample_interval=0.02
+            _profiling_work_fn,
+            {"serial": ParallelStrategy()},
+            sample_interval=0.02,
         )
         assert len(results["serial"].chunk_stats) == 1
         assert results["serial"].wall_time_std == 0.0
@@ -1110,7 +1115,9 @@ class TestProfileStrategies:
                 sample_interval=5.0,
             )
 
-    def test_reuse_slurm_allocation_requires_a_real_allocation(self, monkeypatch):
+    def test_reuse_slurm_allocation_requires_a_real_allocation(
+        self, monkeypatch
+    ):
         monkeypatch.delenv("SLURM_JOB_ID", raising=False)
         with pytest.raises(RuntimeError, match="SLURM_JOB_ID"):
             profile_strategies(
@@ -1142,7 +1149,9 @@ class TestProfileStrategies:
         assert len(calls) == 4  # 1 warmup + 3 real, timed repeats
         assert len(results["serial"].chunk_stats) == 3
 
-    def test_warmup_true_for_chunked_strategy_excludes_warmup_chunk_stats(self):
+    def test_warmup_true_for_chunked_strategy_excludes_warmup_chunk_stats(
+        self,
+    ):
         loky = pytest.importorskip("loky")
         strategy = ParallelStrategy(
             program_executor=loky.get_reusable_executor(max_workers=1),
@@ -1349,10 +1358,14 @@ class TestFormatProfileTable:
                 wall_time_std=0.0,
                 chunk_stats=[
                     ChunkResourceStats(
-                        peak_memory_mb=100.0, mean_cpu_percent=50.0, num_samples=5
+                        peak_memory_mb=100.0,
+                        mean_cpu_percent=50.0,
+                        num_samples=5,
                     ),
                     ChunkResourceStats(
-                        peak_memory_mb=200.0, mean_cpu_percent=150.0, num_samples=5
+                        peak_memory_mb=200.0,
+                        mean_cpu_percent=150.0,
+                        num_samples=5,
                     ),
                 ],
             ),
@@ -1362,7 +1375,9 @@ class TestFormatProfileTable:
         assert "100.0" in table  # mean CPU% of 50 and 150
 
     def test_speedup_column_dashes_when_none(self):
-        results = {"serial": ProfileResult(wall_time_mean=1.0, wall_time_std=0.0)}
+        results = {
+            "serial": ProfileResult(wall_time_mean=1.0, wall_time_std=0.0)
+        }
         table = format_profile_table(results)
         assert "speedup" in table
         assert "--" in table
@@ -1407,7 +1422,9 @@ class TestPlotProfileResults:
                 wall_time_std=0.1,
                 chunk_stats=[
                     ChunkResourceStats(
-                        peak_memory_mb=100.0, mean_cpu_percent=50.0, num_samples=5
+                        peak_memory_mb=100.0,
+                        mean_cpu_percent=50.0,
+                        num_samples=5,
                     )
                 ],
             ),
@@ -1493,17 +1510,20 @@ class TestParallelStrategyNShotBatches:
     def test_n_shot_batches_field_in_serialize_attrs(self):
         """Verify n_shot_batches is included in _SERIALIZE_ATTRS."""
         from loqs.tools.paralleltools import ParallelStrategy
+
         assert "n_shot_batches" in ParallelStrategy._SERIALIZE_ATTRS
 
     def test_n_shot_batches_field_default_none(self):
         """Verify n_shot_batches defaults to None."""
         from loqs.tools.paralleltools import ParallelStrategy
+
         strategy = ParallelStrategy()
         assert strategy.n_shot_batches is None
 
     def test_n_shot_batches_field_explicit_value(self):
         """Verify n_shot_batches can be set explicitly."""
         from loqs.tools.paralleltools import ParallelStrategy
+
         strategy = ParallelStrategy(n_shot_batches=5)
         assert strategy.n_shot_batches == 5
 

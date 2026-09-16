@@ -25,7 +25,10 @@ class TestManualReviewItemLocation:
 
 class TestFormatManualReviewBlock:
     def test_heading_and_rule_bracket_the_items(self):
-        items = [ManualReviewItem(line=1, message="first"), ManualReviewItem(line=2, message="second")]
+        items = [
+            ManualReviewItem(line=1, message="first"),
+            ManualReviewItem(line=2, message="second"),
+        ]
         block = format_manual_review_block("some/file.py", items)
         lines = block.splitlines()
         assert lines[0] == lines[2] == "=" * 88
@@ -84,14 +87,18 @@ class TestFormatRewriteBlock:
     def test_heading_and_rule_bracket_the_items(self):
         items = [
             RewriteItem(line=1, message="PatchDict -> PatchLayout"),
-            RewriteItem(line=25, message="RepTuple(...) -> UnitaryGateRep(...)"),
+            RewriteItem(
+                line=25, message="RepTuple(...) -> UnitaryGateRep(...)"
+            ),
         ]
         block = format_rewrite_block("some/file.py", items)
         lines = block.splitlines()
         assert lines[0] == lines[2] == "=" * 88
         assert lines[1] == "some/file.py"
         assert lines[3] == "REWRITE Line 1: PatchDict -> PatchLayout"
-        assert lines[4] == "REWRITE Line 25: RepTuple(...) -> UnitaryGateRep(...)"
+        assert (
+            lines[4] == "REWRITE Line 25: RepTuple(...) -> UnitaryGateRep(...)"
+        )
 
 
 class TestRemapRewrites:
@@ -118,19 +125,27 @@ class TestAnnotateManualReview:
         assert lines[2] == "y = 2"
 
     def test_mentions_v1_2_as_the_transition_point(self):
-        annotated, _ = annotate_manual_review("y = 2\n", [ManualReviewItem(line=1, message="m")])
+        annotated, _ = annotate_manual_review(
+            "y = 2\n", [ManualReviewItem(line=1, message="m")]
+        )
         assert "1.2" in annotated
 
     def test_comment_matches_the_flagged_line_indentation(self):
         source = "if True:\n    y = 2\n"
-        annotated, _ = annotate_manual_review(source, [ManualReviewItem(line=2, message="m")])
+        annotated, _ = annotate_manual_review(
+            source, [ManualReviewItem(line=2, message="m")]
+        )
         comment_line = annotated.splitlines()[1]
         assert comment_line.startswith("    #")
 
     def test_wraps_long_messages_to_at_most_two_lines(self):
         message = " ".join(["word"] * 60)  # much longer than the wrap width
-        annotated, _ = annotate_manual_review("y = 2\n", [ManualReviewItem(line=1, message=message)])
-        comment_lines = [l for l in annotated.splitlines() if l.startswith("#")]
+        annotated, _ = annotate_manual_review(
+            "y = 2\n", [ManualReviewItem(line=1, message=message)]
+        )
+        comment_lines = [
+            l for l in annotated.splitlines() if l.startswith("#")
+        ]
         assert len(comment_lines) == 2
 
     def test_returned_manual_review_points_at_the_shifted_code_line(self):
@@ -158,7 +173,9 @@ class TestAnnotateManualReview:
         items = [ManualReviewItem(line=99, message="out of range")]
         annotated, remapped = annotate_manual_review(source, items)
         assert annotated == source
-        assert remapped[0].line == 100  # still shifted by its own would-be comment count
+        assert (
+            remapped[0].line == 100
+        )  # still shifted by its own would-be comment count
 
     def test_empty_review_list_is_a_no_op(self):
         annotated, remapped = annotate_manual_review("x = 1\n", [])

@@ -59,7 +59,11 @@ except ImportError:
 
 
 def _depolarizing_kraus_ops(p: float) -> list[tuple[np.ndarray, None]]:
-    X, Y, Z = STANDARD_GATE_UNITARIES["X"], STANDARD_GATE_UNITARIES["Y"], STANDARD_GATE_UNITARIES["Z"]
+    X, Y, Z = (
+        STANDARD_GATE_UNITARIES["X"],
+        STANDARD_GATE_UNITARIES["Y"],
+        STANDARD_GATE_UNITARIES["Z"],
+    )
     return [
         (np.sqrt(1 - 3 * p / 4) * np.eye(2), None),
         (np.sqrt(p / 4) * X, None),
@@ -68,7 +72,9 @@ def _depolarizing_kraus_ops(p: float) -> list[tuple[np.ndarray, None]]:
     ]
 
 
-def _amplitude_damping_kraus_ops(gamma: float) -> list[tuple[np.ndarray, None]]:
+def _amplitude_damping_kraus_ops(
+    gamma: float,
+) -> list[tuple[np.ndarray, None]]:
     A0 = np.array([[1, 0], [0, np.sqrt(1 - gamma)]])
     A1 = np.array([[0, np.sqrt(gamma)], [0, 0]])
     return [(A0, None), (A1, None)]
@@ -263,7 +269,9 @@ class TestPTMToKraus:
         monkeypatch.setattr(
             conversion_module, "_choi_kraus_operators", lambda ptm, n: []
         )
-        ptm_rep = _unitary_to_ptm(UnitaryGateRep(STANDARD_GATE_UNITARIES["H"], ("Q0",)))
+        ptm_rep = _unitary_to_ptm(
+            UnitaryGateRep(STANDARD_GATE_UNITARIES["H"], ("Q0",))
+        )
         with pytest.raises(RepConstructionError):
             _ptm_to_kraus(ptm_rep)
 
@@ -274,7 +282,9 @@ class TestPTMToUnitary:
         ptm_rep = _unitary_to_ptm(UnitaryGateRep(H, ("Q0",)))
         result = _ptm_to_unitary(ptm_rep)
         assert isinstance(result, UnitaryGateRep)
-        assert np.allclose(result.unitary, H) or np.allclose(result.unitary, -H)
+        assert np.allclose(result.unitary, H) or np.allclose(
+            result.unitary, -H
+        )
 
     def test_fails_for_non_unitary_channel(self):
         ptm_rep = _kraus_to_ptm(
@@ -297,7 +307,9 @@ class TestPTMToUnitary:
             "_choi_kraus_operators",
             lambda ptm, n: [non_unitary],
         )
-        ptm_rep = _unitary_to_ptm(UnitaryGateRep(STANDARD_GATE_UNITARIES["H"], ("Q0",)))
+        ptm_rep = _unitary_to_ptm(
+            UnitaryGateRep(STANDARD_GATE_UNITARIES["H"], ("Q0",))
+        )
         with pytest.raises(RepConstructionError):
             _ptm_to_unitary(ptm_rep)
 
@@ -308,7 +320,9 @@ class TestPTMToUnitary:
         with pytest.raises(RepConstructionError):
             _ptm_to_unitary(ptm_rep)
 
-    def test_unitarity_check_abstol_none_skips_check_but_not_structural_one(self):
+    def test_unitarity_check_abstol_none_skips_check_but_not_structural_one(
+        self,
+    ):
         """`unitarity_check_abstol=None` accepts a single non-unitary Choi
         term, but the "exactly one term" structural check still applies."""
         ptm_rep = _kraus_to_ptm(
@@ -343,7 +357,9 @@ class TestKrausToUnitary:
 
     def test_unitarity_check_abstol_none_skips_check(self):
         non_unitary = np.eye(2) * 0.5
-        rep = KrausGateRep([(non_unitary, 0.25)], ("Q0",), tp_check_abstol=None)
+        rep = KrausGateRep(
+            [(non_unitary, 0.25)], ("Q0",), tp_check_abstol=None
+        )
         result = _kraus_to_unitary(rep, unitarity_check_abstol=None)
         assert isinstance(result, UnitaryGateRep)
         assert np.array_equal(result.unitary, non_unitary)
@@ -388,7 +404,9 @@ class TestPTMQSimSuperoperatorRoundTrip:
         mine = _ptm_to_qsim_superoperator(ptm_rep).superop
 
         qsim1 = list(_qsim_basis(1))
-        qbasis_obj = ExplicitBasis(qsim1, ["a", "b", "c", "d"], name="qsim1", longname="q")
+        qbasis_obj = ExplicitBasis(
+            qsim1, ["a", "b", "c", "d"], name="qsim1", longname="q"
+        )
         theirs = bt.change_basis(
             ptm_rep.ptm, pygsti.BuiltinBasis("pp", 4), qbasis_obj
         )
@@ -519,9 +537,13 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
             zp = ZBasisProjectionInstrumentRep(reset, True, ("Q0",))
             od = _zbasis_projection_to_outcome_operation_dict(zp)
             for seed in range(10):
-                s1 = SVState(np.array([1.0, 1.0]) / np.sqrt(2), ["Q0"], seed=seed)
+                s1 = SVState(
+                    np.array([1.0, 1.0]) / np.sqrt(2), ["Q0"], seed=seed
+                )
                 out1 = s1.apply_reps_inplace([zp])
-                s2 = SVState(np.array([1.0, 1.0]) / np.sqrt(2), ["Q0"], seed=seed)
+                s2 = SVState(
+                    np.array([1.0, 1.0]) / np.sqrt(2), ["Q0"], seed=seed
+                )
                 out2 = s2.apply_reps_inplace([od])
                 assert out1["Q0"] == out2["Q0"]
                 assert np.allclose(s1.state, s2.state)
@@ -542,7 +564,10 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
     def test_fails_for_non_projector_outcome_operator(self):
         X = STANDARD_GATE_UNITARIES["X"]
         od = OutcomeOperationDictInstrumentRep(
-            {0: UnitaryGateRep(np.eye(2), ("Q0",)), 1: UnitaryGateRep(X, ("Q0",))},
+            {
+                0: UnitaryGateRep(np.eye(2), ("Q0",)),
+                1: UnitaryGateRep(X, ("Q0",)),
+            },
             True,
             ("Q0",),
         )
@@ -559,7 +584,10 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
 
     def test_fails_for_non_unitarygaterep_outcome_operator(self):
         od = OutcomeOperationDictInstrumentRep(
-            {0: PTMGateRep(np.eye(4), ("Q0",)), 1: UnitaryGateRep(np.eye(2), ("Q0",))},
+            {
+                0: PTMGateRep(np.eye(4), ("Q0",)),
+                1: UnitaryGateRep(np.eye(2), ("Q0",)),
+            },
             True,
             ("Q0",),
         )
@@ -575,7 +603,10 @@ class TestZBasisProjectionOutcomeOperationDictRoundTrip:
         even = UnitaryGateRep(np.diag([1.0, 0, 0, 1.0]), ("Q0", "Q1"))
         odd = UnitaryGateRep(np.diag([0, 1.0, 1.0, 0]), ("Q0", "Q1"))
         od = OutcomeOperationDictInstrumentRep(
-            {"even": even, "odd": odd}, True, ("Q0", "Q1"), outcome_qubits="synd"
+            {"even": even, "odd": odd},
+            True,
+            ("Q0", "Q1"),
+            outcome_qubits="synd",
         )
         assert od.outcome_qubits == ("synd",)
         with pytest.raises(RepConstructionError):
@@ -801,6 +832,7 @@ class TestAcceptedKwargs:
         """No `OperationRep.__init__`/converter currently declares
         `**kwargs`, so this branch isn't reachable via `convert` -- test
         it directly against a synthetic function instead."""
+
         def f(a, **kwargs):
             pass
 
@@ -838,7 +870,9 @@ class TestConvert:
         result = convert(rep, QSimSuperopGateRep)
         assert isinstance(result, QSimSuperopGateRep)
 
-    def test_multi_target_hop_picks_shortest_path_regardless_of_list_order(self):
+    def test_multi_target_hop_picks_shortest_path_regardless_of_list_order(
+        self,
+    ):
         """Unlike the raw-payload direct-match case (which uses list
         order as a priority), hopping from an already-typed instance
         picks whichever target has the *shortest* path -- a later,

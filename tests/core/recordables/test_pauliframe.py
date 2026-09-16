@@ -1,10 +1,10 @@
- 
 import pytest
 
 from loqs.core.recordables import PauliFrame
 
+
 class TestPauliFrame:
-    
+
     def _check(self, pf, pstr):
         assert pf.qubit_labels == ["Q0", "Q1", "Q2", "Q3"]
         assert pf.pauli_frame == list(pstr)
@@ -18,7 +18,7 @@ class TestPauliFrame:
 
         pf3 = PauliFrame(pf2)
         self._check(pf3, "IXYZ")
-        
+
         pf4 = PauliFrame(pf2, "ZYXI")
         self._check(pf4, "ZYXI")
 
@@ -31,7 +31,7 @@ class TestPauliFrame:
 
         pf6 = PauliFrame(["Q0", "Q1", "Q2", "Q3"])
         self._check(pf6, "IIII")
-    
+
     def test_getters(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
         assert pf.num_qubits == 4
@@ -41,16 +41,16 @@ class TestPauliFrame:
 
         Z_bits = [pf.get_bit("Z", q) for q in pf.qubit_labels]
         assert Z_bits == [0, 0, 1, 1]
-    
+
     def test_map(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
-        
+
         pf2 = pf.map_frame({"I": "Z", "X": "Y", "Y": "X", "Z": "I"})
         self._check(pf2, "ZYXI")
-    
+
     def test_update_from_pauli_str(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
-        
+
         pf2 = pf.update_from_pauli_str("IIII")
         self._check(pf2, "IXYZ")
 
@@ -59,13 +59,13 @@ class TestPauliFrame:
 
         pf4 = pf.update_from_pauli_str("YYYY")
         self._check(pf4, "YZIX")
-        
+
         pf5 = pf.update_from_pauli_str("ZZZZ")
         self._check(pf5, "ZYXI")
 
     def test_update_from_clifford_conjugation(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
-        
+
         pf2 = pf.update_from_clifford_conjugation("IXYZ")
         self._check(pf2, "IXYZ")
 
@@ -83,7 +83,7 @@ class TestPauliFrame:
 
     def test_update_from_transversal_clifford(self):
         pf = PauliFrame(["Q0", "Q1", "Q2", "Q3"], "IXYZ")
-        
+
         pf2 = pf.update_from_transversal_clifford("I")
         self._check(pf2, "IXYZ")
 
@@ -92,7 +92,7 @@ class TestPauliFrame:
 
         pf4 = pf.update_from_transversal_clifford("Y")
         self._check(pf4, "IXYZ")
-        
+
         pf5 = pf.update_from_transversal_clifford("Z")
         self._check(pf5, "IXYZ")
 

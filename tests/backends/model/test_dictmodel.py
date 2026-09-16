@@ -92,9 +92,7 @@ class TestConstruction:
 
         model = DictNoiseModel.from_model(PyGSTiNoiseModel())
         assert ("X", ("Q0",)) in model.gate_dict
-        assert isinstance(
-            model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
-        )
+        assert isinstance(model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep)
         assert ("M", ("Q0",)) in model.inst_dict
         assert isinstance(
             model.inst_dict[("M", ("Q0",))], ZBasisProjectionInstrumentRep
@@ -104,16 +102,15 @@ class TestConstruction:
 class TestGateDispatch:
     def test_ndarray_uses_gaterep_array_cast_rep(self):
         model = DictNoiseModel(
-            {("X", ("Q0",)): _UNITARY_1Q}, {},
+            {("X", ("Q0",)): _UNITARY_1Q},
+            {},
             gaterep_array_cast_rep=UnitaryGateRep,
         )
         assert isinstance(model.gate_dict[("X", ("Q0",))], UnitaryGateRep)
 
     def test_ndarray_default_cast_rep_is_qsim_superoperator(self):
         model = DictNoiseModel({("X", ("Q0",)): np.eye(4)}, {})
-        assert isinstance(
-            model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
-        )
+        assert isinstance(model.gate_dict[("X", ("Q0",))], QSimSuperopGateRep)
 
     def test_str_becomes_stim_circuit_str(self):
         model = DictNoiseModel(
@@ -131,9 +128,12 @@ class TestGateDispatch:
         assert isinstance(rep, KrausGateRep)
         assert len(rep.kraus_operators) == 2
 
-    def test_probabilistic_stim_sequence_becomes_probabilistic_stim_operations(self):
+    def test_probabilistic_stim_sequence_becomes_probabilistic_stim_operations(
+        self,
+    ):
         model = DictNoiseModel(
-            {("X", ("Q0",)): _PROB_STIM_SEQ}, {},
+            {("X", ("Q0",)): _PROB_STIM_SEQ},
+            {},
             gatereps=[ProbabilisticStimGateRep],
         )
         rep = model.gate_dict[("X", ("Q0",))]
@@ -149,13 +149,18 @@ class TestGateDispatch:
         rep = StimCircuitGateRep("X 0", ("Q0",))
         with pytest.raises(AssertionError, match="not provided gatereps"):
             DictNoiseModel(
-                {("X", ("Q0",)): rep}, {},
+                {("X", ("Q0",)): rep},
+                {},
                 gatereps=[QSimSuperopGateRep],
             )
 
     def test_sequence_matching_no_gaterep_raises(self):
-        with pytest.raises(Exception, match="does not match any known rep class"):
-            DictNoiseModel({("X", ("Q0",)): ("not", "a", "valid", "shape")}, {})
+        with pytest.raises(
+            Exception, match="does not match any known rep class"
+        ):
+            DictNoiseModel(
+                {("X", ("Q0",)): ("not", "a", "valid", "shape")}, {}
+            )
 
 
 class TestInstrumentDispatch:
@@ -176,7 +181,8 @@ class TestInstrumentDispatch:
         # pre_op/post_op payloads are deliberately distinct so a test
         # failure would show if they got swapped.
         model = DictNoiseModel(
-            {}, {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q_ALT)},
+            {},
+            {("M", ("Q0",)): (_SUPEROP_1Q, _SUPEROP_1Q_ALT)},
             gatereps=[QSimSuperopGateRep],
             instreps=[ZBasisPrePostInstrumentRep],
             instrep_cast_reset=0,
@@ -196,13 +202,15 @@ class TestInstrumentDispatch:
             AssertionError, match="ZBasisPrePostInstrumentRep not passed"
         ):
             DictNoiseModel(
-                {}, {("M", ("Q0",)): (_UNITARY_1Q, _UNITARY_1Q)},
+                {},
+                {("M", ("Q0",)): (_UNITARY_1Q, _UNITARY_1Q)},
                 instreps=[ZBasisProjectionInstrumentRep],
             )
 
     def test_mapping_becomes_outcome_operation_dict(self):
         model = DictNoiseModel(
-            {}, {("M", ("Q0",)): {0: _SUPEROP_1Q, 1: _SUPEROP_1Q}},
+            {},
+            {("M", ("Q0",)): {0: _SUPEROP_1Q, 1: _SUPEROP_1Q}},
             gatereps=[QSimSuperopGateRep],
             instreps=[OutcomeOperationDictInstrumentRep],
         )
@@ -211,16 +219,17 @@ class TestInstrumentDispatch:
         assert rep.include_outcome is True
         assert set(rep.outcome_ops.keys()) == {0, 1}
         assert all(
-            isinstance(v, QSimSuperopGateRep)
-            for v in rep.outcome_ops.values()
+            isinstance(v, QSimSuperopGateRep) for v in rep.outcome_ops.values()
         )
 
     def test_outcome_operation_dict_without_instrep_declared_raises(self):
         with pytest.raises(
-            AssertionError, match="OutcomeOperationDictInstrumentRep not passed"
+            AssertionError,
+            match="OutcomeOperationDictInstrumentRep not passed",
         ):
             DictNoiseModel(
-                {}, {("M", ("Q0",)): {0: _UNITARY_1Q, 1: _UNITARY_1Q}},
+                {},
+                {("M", ("Q0",)): {0: _UNITARY_1Q, 1: _UNITARY_1Q}},
                 instreps=[ZBasisProjectionInstrumentRep],
             )
 
@@ -233,7 +242,8 @@ class TestInstrumentDispatch:
         rep = StimCircuitInstrumentRep("M 0", ("Q0",))
         with pytest.raises(AssertionError, match="reptype not in instreps"):
             DictNoiseModel(
-                {}, {("M", ("Q0",)): rep},
+                {},
+                {("M", ("Q0",)): rep},
                 instreps=[ZBasisProjectionInstrumentRep],
             )
 
@@ -303,7 +313,10 @@ class TestDictModelFixtureRoundTrip:
 
     def test_decodes_to_dictnoisemodel_with_correct_content(self, decoded):
         assert isinstance(decoded, DictNoiseModel)
-        assert set(decoded.gate_dict.keys()) == {("X", ("Q0",)), ("KRAUS", ("Q0",))}
+        assert set(decoded.gate_dict.keys()) == {
+            ("X", ("Q0",)),
+            ("KRAUS", ("Q0",)),
+        }
         assert set(decoded.inst_dict.keys()) == {("M", ("Q0",))}
         assert isinstance(
             decoded.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
@@ -319,7 +332,9 @@ class TestDictModelFixtureRoundTrip:
             QSimSuperopGateRep,
             KrausGateRep,
         ]
-        assert decoded.output_instrument_reps == [ZBasisProjectionInstrumentRep]
+        assert decoded.output_instrument_reps == [
+            ZBasisProjectionInstrumentRep
+        ]
 
 
 class TestDictModelV2FixtureRoundTrip:
@@ -343,7 +358,10 @@ class TestDictModelV2FixtureRoundTrip:
 
     def test_decodes_to_dictnoisemodel_with_correct_content(self, decoded):
         assert type(decoded) is DictNoiseModel
-        assert set(decoded.gate_dict.keys()) == {("X", ("Q0",)), ("KRAUS", ("Q0",))}
+        assert set(decoded.gate_dict.keys()) == {
+            ("X", ("Q0",)),
+            ("KRAUS", ("Q0",)),
+        }
         assert set(decoded.inst_dict.keys()) == {("M", ("Q0",))}
         assert isinstance(
             decoded.gate_dict[("X", ("Q0",))], QSimSuperopGateRep
@@ -353,10 +371,14 @@ class TestDictModelV2FixtureRoundTrip:
             decoded.inst_dict[("M", ("Q0",))], ZBasisProjectionInstrumentRep
         )
         assert decoded.output_gate_reps == [QSimSuperopGateRep, KrausGateRep]
-        assert decoded.output_instrument_reps == [ZBasisProjectionInstrumentRep]
+        assert decoded.output_instrument_reps == [
+            ZBasisProjectionInstrumentRep
+        ]
 
 
-@pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.skipif(
+    NO_STIM, reason="Skipping STIM backend tests due to failed import"
+)
 class TestDictModelStimV2FixtureRoundTrip:
     """Round-trip `dictmodel_stim_v2.{json,h5}` -- the STIM-flavored
     counterpart of `TestDictModelV2FixtureRoundTrip` above, built directly
@@ -376,7 +398,9 @@ class TestDictModelStimV2FixtureRoundTrip:
         assert type(decoded) is DictNoiseModel
         assert set(decoded.gate_dict.keys()) == {"X", "H", "CNOT"}
         assert decoded.gate_dict["CNOT"].circuit_str == "CNOT 0 1"
-        assert isinstance(decoded.inst_dict["M"], ZBasisProjectionInstrumentRep)
+        assert isinstance(
+            decoded.inst_dict["M"], ZBasisProjectionInstrumentRep
+        )
 
     def test_get_reps_works_on_decoded_model(self, decoded):
         circuit = STIMPhysicalCircuit("X 0\nM 0", ["Q0"])
@@ -388,7 +412,9 @@ class TestDictModelStimV2FixtureRoundTrip:
         assert isinstance(reps[1], ZBasisProjectionInstrumentRep)
 
 
-@pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.skipif(
+    NO_STIM, reason="Skipping STIM backend tests due to failed import"
+)
 class TestSTIMGetReps:
     """`DictNoiseModel.get_reps`'s `STIMPhysicalCircuit`-registered
     implementation (formerly `STIMDictNoiseModel.get_reps`)."""
@@ -425,9 +451,7 @@ class TestSTIMGetReps:
         resolve when the input circuit uses the name STIM itself
         normalizes to (`CX`)."""
         gate_dict = {
-            ("CNOT", ("Q0", "Q1")): StimCircuitGateRep(
-                "CX 0 1", ("Q0", "Q1")
-            ),
+            ("CNOT", ("Q0", "Q1")): StimCircuitGateRep("CX 0 1", ("Q0", "Q1")),
         }
         model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("CNOT 0 1", ["Q0", "Q1"])
@@ -468,7 +492,8 @@ class TestSTIMGetReps:
             "M": ZBasisProjectionInstrumentRep(None, True, ("Q0",)),
         }
         model = DictNoiseModel(
-            gate_dict, inst_dict,
+            gate_dict,
+            inst_dict,
             gatereps=[StimCircuitGateRep],
             instreps=[StimCircuitInstrumentRep, ZBasisProjectionInstrumentRep],
         )
@@ -493,7 +518,8 @@ class TestSTIMGetReps:
     def test_warnings_for_measure_noise(self):
         inst_dict = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
         model = DictNoiseModel(
-            {}, inst_dict,
+            {},
+            inst_dict,
             instreps=[StimCircuitInstrumentRep, ZBasisProjectionInstrumentRep],
         )
         circuit = STIMPhysicalCircuit("M(0.1) 0", ["Q0"])
@@ -614,7 +640,9 @@ class TestSTIMGetReps:
         gate_dict = {"X": StimCircuitGateRep("X", ("Q0",))}
         model = DictNoiseModel(gate_dict, {}, gatereps=[StimCircuitGateRep])
         circuit = STIMPhysicalCircuit("X 0\nX 1\nX 2", ["Q0", "Q1", "Q2"])
-        with pytest.raises(ValueError, match="must already reference its own qubit"):
+        with pytest.raises(
+            ValueError, match="must already reference its own qubit"
+        ):
             model.get_reps(
                 circuit, [StimCircuitGateRep], [ZBasisProjectionInstrumentRep]
             )
@@ -682,7 +710,9 @@ class TestSTIMGetReps:
         assert {r.qubit_labels for r in y_reps} == {("Q1",), ("Q3",)}
 
 
-@pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.skipif(
+    NO_STIM, reason="Skipping STIM backend tests due to failed import"
+)
 class TestMergeCommonRep:
     """Directly test `_merge_common_rep`, the module-level helper that
     merges generic (name-only) dict entries across multiple qubits."""
@@ -728,7 +758,9 @@ class TestMergeCommonRep:
         assert merged.qubit_labels == ("Q0", "Q1")
 
 
-@pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.skipif(
+    NO_STIM, reason="Skipping STIM backend tests due to failed import"
+)
 class TestAddCommandAliases:
     def test_adds_aliased_key_alongside_original(self):
         d = {"CNOT": "value"}
@@ -743,7 +775,9 @@ class TestAddCommandAliases:
         assert ("CX", ("Q0", "Q1")) in d
 
 
-@pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.skipif(
+    NO_STIM, reason="Skipping STIM backend tests due to failed import"
+)
 class TestSTIMDictNoiseModelDecodeRedirect:
     """`STIMDictNoiseModel` no longer exists as a real class (v1.2) --
     decoding an old `class: "STIMDictNoiseModel"`-tagged file redirects
@@ -792,7 +826,9 @@ class TestSTIMDictNoiseModelDecodeRedirect:
         assert isinstance(reps[1], ZBasisProjectionInstrumentRep)
 
 
-@pytest.mark.skipif(NO_STIM, reason="Skipping STIM backend tests due to failed import")
+@pytest.mark.skipif(
+    NO_STIM, reason="Skipping STIM backend tests due to failed import"
+)
 class TestSTIMDictNoiseModelLegacyShim:
     """Live pre-1.2 `STIMDictNoiseModel(...)` construction (as opposed to
     decoding old data -- see `TestSTIMDictNoiseModelDecodeRedirect`) is
@@ -805,7 +841,9 @@ class TestSTIMDictNoiseModelLegacyShim:
 
         assert STIMDictNoiseModel is not DictNoiseModel
 
-    def test_construction_from_dict_pair_warns_and_returns_dictnoisemodel(self):
+    def test_construction_from_dict_pair_warns_and_returns_dictnoisemodel(
+        self,
+    ):
         from loqs.backends.model.stimdictmodel import STIMDictNoiseModel
 
         with pytest.warns(DeprecationWarning, match="STIMDictNoiseModel"):
@@ -815,7 +853,10 @@ class TestSTIMDictNoiseModelLegacyShim:
         assert isinstance(model.gate_dict["H"], StimCircuitGateRep)
         assert isinstance(model.gate_dict["CX"], StimCircuitGateRep)
         assert isinstance(model.inst_dict["M"], StimCircuitInstrumentRep)
-        assert model.output_gate_reps == [StimCircuitGateRep, ProbabilisticStimGateRep]
+        assert model.output_gate_reps == [
+            StimCircuitGateRep,
+            ProbabilisticStimGateRep,
+        ]
         assert model.output_instrument_reps == [StimCircuitInstrumentRep]
 
     def test_get_reps_works_end_to_end(self):

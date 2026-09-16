@@ -16,10 +16,11 @@ try:
 except ImportError:
     pass
 
+
 @contextmanager
 def temp_path(*, suffix=""):
     fd, path = tempfile.mkstemp(suffix=suffix)
-    os.close(fd) # Windows runner compatibility
+    os.close(fd)  # Windows runner compatibility
     try:
         yield path
     finally:
@@ -27,6 +28,7 @@ def temp_path(*, suffix=""):
             os.unlink(path)
         except FileNotFoundError:
             pass
+
 
 @pytest.fixture
 def make_temp_path():
@@ -37,7 +39,7 @@ def make_temp_path():
 
         with make_temp_path(suffix=".json") as p:
             <process with temppath p>
-        
+
         ...
     """
     return temp_path
