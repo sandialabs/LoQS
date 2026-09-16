@@ -167,7 +167,7 @@ print(example_program.default_noise_model)
 ## Running the sweep
 
 `run` builds and executes one `QuantumProgram` per strength, extracts a `(failure_rate, stderr)`
-pair from each using the same per-shot pass/fail convention as `fttools.test_program_output`
+pair from each using the same per-shot pass/fail convention as `FaultInjectionRunner.reduce_program_outcomes`
 (`collect_shot_data_args`/`expected_outcomes`), and returns a single `NoiseSweepResult` covering
 the whole sweep.
 

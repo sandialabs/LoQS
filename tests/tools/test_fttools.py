@@ -1,10 +1,5 @@
 """Tester for loqs.tools.fttools"""
 
-import functools
-import multiprocessing as mp
-import sys
-import time
-
 import numpy as np
 import pytest
 
@@ -18,11 +13,6 @@ from loqs.core.instructions.instruction import Instruction
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools import fttools
 from loqs.tools.paralleltools import ParallelStrategy
-
-from _shared_checkpoint_test_helpers import (
-    _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
-)
 
 
 def _build_circuit_program():
@@ -245,7 +235,7 @@ class TestRunDiscreteErrorInjectedPrograms:
         assert failed == [program, program]
         assert "Failed 2 programs!" in capsys.readouterr().out
 
-    def test_finalize_summary_suppressed_when_show_progress_false(
+    def test_build_output_summary_suppressed_when_show_progress_false(
         self, capsys
     ):
         """FaultInjectionRunner._build_output suppresses summary prints when show_progress=False."""
@@ -387,6 +377,37 @@ class TestFaultInjectionRunnerCheckpointing:
         assert (item_shot_ckpt / custom_filename).exists()
         assert not (item_shot_ckpt / "results.h5").exists()
 
+    def test_resume_mismatched_keep_shot_results_force_resume_works(
+        self, tmp_path
+    ):
+        """force_resume=True bypasses a keep_shot_results mismatch."""
+        program = _build_counter_program()
+        ckpt = tmp_path / "checkpoint"
+        shot_ckpt = tmp_path / "shot_checkpoint"
+
+        runner1 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            keep_shot_results=False,
+            shot_checkpoint=False,
+        )
+        runner1.run()
+
+        runner2 = fttools.FaultInjectionRunner(
+            errored_programs=[program, program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            keep_shot_results=True,
+            shot_checkpoint=True,
+            shot_checkpoint_dir=shot_ckpt,
+            force_resume=True,
+        )
+        failed2 = runner2.run()
+        assert failed2 == []
+
 
 class TestRunKwargsPassthrough:
     """Test run_kwargs passthrough in FaultInjectionRunner."""
@@ -508,3 +529,77 @@ class TestHistoryDataCollectorWithDict:
 
         # Loaded instance should have the same collector
         assert loaded.collect_shot_data_args == [collector]
+
+
+class TestFaultInjectionRunnerHooks:
+    """Direct unit tests of FaultInjectionRunner's own derived build_program/
+    reduce_program_outcomes/CHKPT_SUBDIR_PREFIX hook implementations, in
+    isolation from MultiProgramRunner's generic dispatch/checkpoint/resume/
+    parallel machinery -- that generic behavior is covered once, generically,
+    in test_multiprogramrunner.py."""
+
+    def test_chkpt_subdir_prefix_is_fault(self):
+        """FaultInjectionRunner.CHKPT_SUBDIR_PREFIX should be "fault"."""
+        assert fttools.FaultInjectionRunner.CHKPT_SUBDIR_PREFIX == "fault"
+
+    def test_build_program_returns_item_at_index(self):
+        """build_program returns the errored_programs entry at the given
+        index directly, with no transformation."""
+        program_a = _build_counter_program()
+        program_b = _build_counter_program()
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program_a, program_b],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+        )
+        assert runner.build_program(0) is program_a
+        assert runner.build_program(1) is program_b
+
+    def test_reduce_program_outcomes_true_on_match(self):
+        """reduce_program_outcomes returns True when every shot matches
+        the expected outcome."""
+        program = _build_counter_program()
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+        )
+        program_results = program.run(num_shots=1, verbose=False)
+        assert runner.reduce_program_outcomes(program_results) is True
+
+    def test_reduce_program_outcomes_false_on_mismatch(self):
+        """reduce_program_outcomes returns False as soon as any shot
+        mismatches the expected outcome."""
+        program = _build_counter_program()
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[999],
+            num_shots=1,
+        )
+        program_results = program.run(num_shots=1, verbose=False)
+        assert runner.reduce_program_outcomes(program_results) is False
+
+    def test_build_output_treats_none_result_as_failed(self):
+        """A None result entry (an incomplete run) is treated as failed by
+        ordinary Python truthiness in _build_output, and triggers
+        build_output's own incomplete-run warning."""
+        program_ok = _build_counter_program()
+        program_incomplete = _build_counter_program()
+        runner = fttools.FaultInjectionRunner(
+            errored_programs=[program_ok, program_incomplete],
+            collect_shot_data_args=[("counter", -1)],
+            expected_outcomes=[1],
+            num_shots=1,
+        )
+        ordered_results = [(program_ok, True), (program_incomplete, None)]
+
+        with pytest.warns(UserWarning, match="None result"):
+            failed = runner.build_output(ordered_results)
+
+        assert failed == [program_incomplete]
+
+        # _build_output alone (no warning layer) applies the same truthiness.
+        assert runner._build_output(ordered_results) == [program_incomplete]

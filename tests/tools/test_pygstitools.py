@@ -293,6 +293,42 @@ class TestEdesignRunnerHooks:
         assert ds[s.circs[0]].counts[("0",)] == 1
         assert ds[s.circs[1]].counts[("1",)] == 1
 
+    def test_build_program_before_run_does_not_cache_stale_positional_map(
+        self, trivial_counter_setup, tmp_path
+    ):
+        """A stray build_program() call before .run() ever executes must not
+        permanently cache a positional index<->circuit mapping: once a real,
+        non-positional index_map later becomes available, _circuit_for_index
+        must rebuild its cache rather than keep serving the stale one."""
+        s = trivial_counter_setup
+        runner = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=[("counter", -1)],
+            checkpoint=True,
+            item_checkpoint_dir=tmp_path,
+            program_kwargs=s.program_kwargs,
+        )
+
+        # Stray call before .run() ever executes: index_map is still None
+        # here, so _circuit_for_index falls back to positional caching.
+        runner.build_program(0)
+        assert runner._circuits_by_index[0] is s.circs[0]
+
+        # Simulate what .run() would later populate: a real, non-positional
+        # index_map (still a valid bijection, just not position-matching).
+        runner.index_map = {
+            s.circs[0].str: 1,
+            s.circs[1].str: 0,
+        }
+
+        # Without the fix, this returns the stale positionally-cached
+        # circs[0] (wrong -- the index_map says index 0 resolves to circs[1]).
+        resolved = runner._circuit_for_index(0)
+        assert resolved is s.circs[1]
+
     def test_reduce_program_outcomes_produces_count_dict(
         self, trivial_counter_setup
     ):

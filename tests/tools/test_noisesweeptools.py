@@ -1,19 +1,15 @@
 """Tester for loqs.tools.noisesweeptools"""
 
-import functools
 import inspect
-import multiprocessing as mp
 import sys
-import time
 import warnings
 
 import numpy as np
 import pytest
 
-from loqs.core import Frame, Instruction, ProgramResults, QuantumProgram
+from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.backends.state import NumpyStatevectorQuantumState
-from loqs.tools import noisesweeptools, paralleltools
-from loqs.tools.multiprogramrunner import _checkpoint_subdir_for_prefix
+from loqs.tools import paralleltools
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
@@ -21,12 +17,6 @@ from loqs.tools.noisesweeptools import (
     plot_noise_sweep,
 )
 from loqs.tools.paralleltools import ParallelStrategy
-
-from _shared_checkpoint_test_helpers import (
-    _build_shot_executor,
-    _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
-)
 
 
 # ---------------------------------------------------------------------------

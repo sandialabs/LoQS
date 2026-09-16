@@ -18,7 +18,7 @@ from typing import Any, ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.core import ProgramResults, QuantumProgram
+from loqs.core import QuantumProgram
 
 from loqs.core.historydatacollector import (
     HistoryDataCollector,
@@ -397,7 +397,7 @@ def build_discrete_error_injection_programs(
     return errored_programs
 
 
-class FaultInjectionRunner(MultiProgramRunner):
+class FaultInjectionRunner(MultiProgramRunner[QuantumProgram]):
     """Runner for testing discrete-error-injected programs with checkpoint/resume.
 
     Encapsulates all configuration needed to test error-injected programs,

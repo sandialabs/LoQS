@@ -78,7 +78,7 @@ def _build_program_for_circuit(
 
 def _collect_program_outcomes(
     program_results: ProgramResults,
-    collect_shot_data_args: list[HistoryDataCollectorLike],
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
 ) -> list[str]:
     """Extract one outcome-label string per shot from a single program's results.
 
@@ -98,11 +98,11 @@ def _collect_program_outcomes(
 
 def _checkpoint_provenance_comment(
     num_shots: int,
-    normalized_collect_shot_data_args: list[HistoryDataCollector],
+    normalized_collect_shot_data_args: Sequence[HistoryDataCollector],
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> str:
     """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
-    on-disk `DataSet`, a human-readable provenance record (config-mismatch
+    `DataSet`, a human-readable provenance record (config-mismatch
     detection on resume happens separately, via `MultiProgramRunner`'s own
     `runner.h5` snapshot). `num_shots` is stored as a plain `repr()` string;
     `normalized_collect_shot_data_args` is expected already normalized (via
@@ -122,7 +122,7 @@ def _checkpoint_provenance_comment(
     )
 
 
-class EdesignRunner(MultiProgramRunner):
+class EdesignRunner(MultiProgramRunner[Circuit]):
     """Runner for simulating edesign circuits into a DataSet with crash recovery.
 
     Encapsulates all configuration needed to simulate an edesign, including
@@ -149,7 +149,9 @@ class EdesignRunner(MultiProgramRunner):
         physical_model: ExplicitOpModel,
         physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
         num_shots: int,
-        collect_shot_data_args: list[HistoryDataCollectorLike] | None = None,
+        collect_shot_data_args: (
+            Sequence[HistoryDataCollectorLike] | None
+        ) = None,
         item_checkpoint_dir: str | Path | None = None,
         checkpoint: bool = False,
         resume: bool = False,
@@ -186,7 +188,7 @@ class EdesignRunner(MultiProgramRunner):
         self.physical_model = physical_model
         self.physical_to_logical = physical_to_logical
         self.num_shots = num_shots
-        self.collect_shot_data_args = (
+        self.collect_shot_data_args: Sequence[HistoryDataCollectorLike] = (
             collect_shot_data_args
             if collect_shot_data_args is not None
             else [("logical_measurement", -1)]
@@ -195,6 +197,7 @@ class EdesignRunner(MultiProgramRunner):
         self.items = edesign.all_circuits_needing_data
         self.item_key_fn = (lambda c: c.str) if checkpoint else None
         self._circuits_by_index: dict[int, Circuit] | None = None
+        self._circuits_by_index_is_positional: bool = False
 
     def _get_encoding_attr(
         self, attr: str, ignore_no_serialize_flags: bool = False
@@ -282,10 +285,19 @@ class EdesignRunner(MultiProgramRunner):
         match position in `self.items` across a resume where
         `edesign.all_circuits_needing_data`'s own ordering may have
         shifted. Cached after first use since `self.items`/`index_map`
-        don't change mid-dispatch.
+        don't change mid-dispatch -- except when the cache was built
+        while `index_map` was still `None` (a stray `build_program()`
+        call before `.run()`), in which case it's rebuilt once a real,
+        non-positional `index_map` becomes available.
         """
-        if self._circuits_by_index is None:
+        if self._circuits_by_index is None or (
+            self._circuits_by_index_is_positional
+            and self.index_map is not None
+        ):
             self._circuits_by_index = {}
+            self._circuits_by_index_is_positional = (
+                self.item_key_fn is None or self.index_map is None
+            )
             for pos, circ in enumerate(self.items):
                 if self.item_key_fn is not None and self.index_map is not None:
                     idx = self.index_map.get(self.item_key_fn(circ), pos)

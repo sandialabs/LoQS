@@ -18,7 +18,7 @@ import itertools
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from tqdm import tqdm
 
@@ -83,7 +83,7 @@ def _verify_final_completeness(
                 )
 
 
-class MultiProgramRunner(Serializable):
+class MultiProgramRunner(Serializable, Generic[T]):
     """Base class for crash-recoverable program runners bundling config fields
     and a template-method `run()` for checkpoint/resume/progress.
 
@@ -92,6 +92,8 @@ class MultiProgramRunner(Serializable):
     `resume` flags, applied against `item_checkpoint_dir`'s own on-disk state
     according to a 4-case state machine (see `run()`).
     """
+
+    items: Sequence[T]
 
     _SERIALIZE_ATTRS = [
         "parallel_strategy",
@@ -381,14 +383,12 @@ class MultiProgramRunner(Serializable):
                         _reset_empty_groups_format_dict_attr(f, attr_name)
 
         self._run_dispatch(
-            items=self.items,
             precomputed_indices=precomputed_indices,
         )
         return self.build_output(self._ordered_reduced_results())
 
     def _run_dispatch(
         self,
-        items: Sequence[T],
         precomputed_indices: Sequence[int] | None,
     ) -> None:
         """Dispatch item processing with checkpoint/resume/progress tracking:
@@ -396,7 +396,7 @@ class MultiProgramRunner(Serializable):
         final completion verification in original item order."""
         # Item indexing/identity
         items_with_index = _resolve_items_with_index(
-            items, precomputed_indices
+            self.items, precomputed_indices
         )
 
         # Read prior progress (union of runner.h5 and worker files)
@@ -427,7 +427,9 @@ class MultiProgramRunner(Serializable):
         pbar = None
         shots_pbar = None
         if self.show_progress:
-            pbar = tqdm(total=len(items), initial=len(done), desc=self._desc())
+            pbar = tqdm(
+                total=len(self.items), initial=len(done), desc=self._desc()
+            )
 
         # Shots bar: parallel dispatch + checkpointing only, gated on
         # self.show_progress like the items pbar above.
@@ -447,7 +449,7 @@ class MultiProgramRunner(Serializable):
         if show_shots_bar:
             assert num_shots_for_progress is not None
             shots_pbar = tqdm(
-                total=len(items) * num_shots_for_progress,
+                total=len(self.items) * num_shots_for_progress,
                 initial=len(done) * num_shots_for_progress,
                 desc="Shots",
             )
@@ -735,16 +737,11 @@ class MultiProgramRunner(Serializable):
     @property
     def _normalized_collect_shot_data_args(
         self,
-    ) -> (
-        tuple[HistoryDataCollector, ...]
-        | HistoryDataCollector
-        | list[HistoryDataCollector]
-    ):
+    ) -> tuple[HistoryDataCollector, ...]:
         """Canonical form of collect_shot_data_args (a plain sequence of one
         or more collector specs), used only for resume mismatch comparison so
         a differently-spelled-but-equivalent spec doesn't spuriously fail
-        resume. A subclass whose own field can also be a single bare spec
-        overrides this."""
+        resume."""
         raw_args = getattr(self, "collect_shot_data_args", ())
         return tuple(HistoryDataCollector.from_raw(c) for c in raw_args)
 
@@ -795,6 +792,16 @@ def _checkpoint_subdir_for_prefix(
     return Path(shot_checkpoint_dir) / f"{prefix}_{index}"
 
 
+def _is_sweep_callable(value: Any) -> bool:
+    """Whether `value` should be treated as a per-item callable rather than a fixed value.
+
+    Plain `callable(value)` is not sufficient on its own: classes are themselves callable in
+    Python (calling a class constructs an instance), so a fixed value that happens to be a
+    class would otherwise be misclassified as "a callable to invoke with the item."
+    """
+    return callable(value) and not isinstance(value, type)
+
+
 def _shared_item_worker(
     item: Any,
     index: int,
@@ -823,11 +830,7 @@ def _shared_item_worker(
     program = build_program(index)
 
     resolved_run_kwargs = {
-        key: (
-            value(item)
-            if callable(value) and not isinstance(value, type)
-            else value
-        )
+        key: (value(item) if _is_sweep_callable(value) else value)
         for key, value in run_kwargs.items()
     }
     resolved_run_kwargs.setdefault("verbose", False)
@@ -1355,7 +1358,7 @@ def _resolve_kept_program_results(
     index : int
         The item index.
     shot_checkpoint_subdir : Callable[[int], Path | None] | None
-        Hook method returning per-item checkpoint directory, or None.
+        Callable returning the per-item checkpoint directory, or None.
     in_memory_pr : Any
         The in-memory ProgramResults from process_item, or None.
     results_filename : str, optional

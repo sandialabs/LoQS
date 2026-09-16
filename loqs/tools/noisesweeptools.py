@@ -19,7 +19,6 @@ noise model and instruction stack entirely up to the caller.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-import copy
 import math
 from pathlib import Path
 import re
@@ -49,7 +48,7 @@ from loqs.tools.paralleltools import (
 )
 from loqs.tools.multiprogramrunner import (
     MultiProgramRunner,
-    _checkpoint_subdir_for_prefix,
+    _is_sweep_callable,
 )
 
 # Every QuantumProgram.__init__ parameter except `default_base_seed`, which NoiseSweepRunner
@@ -66,16 +65,6 @@ _QUANTUM_PROGRAM_PARAM_NAMES = (
     "override_global_instructions",
     "name",
 )
-
-
-def _is_sweep_callable(value: Any) -> bool:
-    """Whether `value` should be treated as a per-point callable rather than a fixed value.
-
-    Plain `callable(value)` is not sufficient on its own: classes are themselves callable in
-    Python (calling a class constructs an instance), so a fixed `state_type=SomeQuantumStateClass`
-    value would otherwise be misclassified as "a callable to invoke with the strength."
-    """
-    return callable(value) and not isinstance(value, type)
 
 
 def _resolve_value(value: Any, strength: Any) -> Any:
@@ -116,7 +105,7 @@ def _compute_failure_rate(
 ) -> tuple[float, float]:
     """Compute `(failure_rate, stderr)` for one sweep point.
 
-    Uses the same per-shot pass/fail convention as `fttools.test_program_output`: a shot "fails"
+    Uses the same per-shot pass/fail convention as `FaultInjectionRunner.reduce_program_outcomes`: a shot "fails"
     if any of the `collect_shot_data_args`/`expected_outcomes` pairs mismatches for that shot.
     `stderr` is the usual binomial-proportion standard error, `sqrt(p * (1 - p) / num_shots)`.
     """
@@ -132,7 +121,7 @@ def _compute_failure_rate(
     return failure_rate, stderr
 
 
-class NoiseSweepRunner(MultiProgramRunner):
+class NoiseSweepRunner(MultiProgramRunner[Any]):
     """Builds and runs one `QuantumProgram` per value in a range of noise-parameter values.
 
     RNG seeding is controlled entirely here (`base_seed + index * seed_stride`), never touched by
@@ -263,7 +252,7 @@ class NoiseSweepRunner(MultiProgramRunner):
             Expected outcome value(s) for pass/fail determination. Required (no default).
 
         verbose:
-            Whether to print per-point progress messages (default True).
+            Forwarded to each point's `QuantumProgram.run()` call as its own `verbose` argument (default True).
 
         metadata:
             Free-form metadata dict stored with the final `NoiseSweepResult`.
@@ -589,7 +578,9 @@ class NoiseSweepRunner(MultiProgramRunner):
         seed = self.base_seed + index * self._resolved_seed_stride
         return QuantumProgram(default_base_seed=seed, **resolved)
 
-    def reduce_program_outcomes(self, program_results):
+    def reduce_program_outcomes(
+        self, program_results: Any
+    ) -> tuple[float, float]:
         """Reduce one sweep point's shot outcomes to (failure_rate, stderr)."""
         return _compute_failure_rate(
             program_results,
@@ -598,7 +589,9 @@ class NoiseSweepRunner(MultiProgramRunner):
             self.num_shots,
         )
 
-    def _build_output(self, ordered_results):
+    def _build_output(
+        self, ordered_results: list[tuple[Any, Any]]
+    ) -> NoiseSweepResult:
         """Build the final NoiseSweepResult from (strength, (failure_rate, stderr)) pairs."""
         failure_rates = [
             result[0] if result is not None else None
