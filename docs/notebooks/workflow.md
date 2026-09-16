@@ -4,7 +4,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.19.4
 kernelspec:
   display_name: Python 3
   language: python
@@ -123,7 +123,7 @@ program = QuantumProgram(
 
 We execute the program by calling the `run()` function. In this case, let's run it more than once - we can run it 20 times by specifying `num_shots=20` to the `run()` function.
 
-`run()` returns a [](api:ProgramResults) object, so we need to capture that return value to look at what happened during execution.
+`run()` returns a [ProgramResults](api:ProgramResults) object, so we need to capture that return value to look at what happened during execution.
 
 ```{code-cell} ipython3
 # And now we can run it for real!
@@ -240,7 +240,7 @@ Any object that is derived from `loqs.internal.Serializable` can be easily seria
 
 Deserialization is just as simple, and follows a similar API with reverse functions: `from_serialization` creates the object from a JSON-able dict, `loads` creates the object from the string version of the dict, `load` creates the object from a file pointer, and `read` creates the object from a filename/path.
 
-Note that a `QuantumProgram` and its [](api:ProgramResults) (the object returned by `run()`) are serialized independently of one another: a `QuantumProgram` only stores the *definition* of the program (its instruction stack, noise model, RNG seed, etc.), not any shot data, while a `ProgramResults` only stores the shot histories (plus a reference back to the program that produced them). So if you want to persist both the program and its results, you need to save both objects.
+Note that a `QuantumProgram` and its [ProgramResults](api:ProgramResults) (the object returned by `run()`) are serialized independently of one another: a `QuantumProgram` only stores the *definition* of the program (its instruction stack, noise model, RNG seed, etc.), not any shot data, while a `ProgramResults` only stores the shot histories (plus a reference back to the program that produced them). So if you want to persist both the program and its results, you need to save both objects.
 
 ```{code-cell} ipython3
 # Note that this can take some time (~10 seconds)

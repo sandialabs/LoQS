@@ -181,18 +181,11 @@ The MyST Markdown is great for generating documentation for Sphinx, but less int
 For users with a local copy of the codebase or developers creating tutorials,
 it can be convenient to work with the Jupyter notebook instead or switch back and forth between the two formats.
 
-Luckily, conversion can be easily accomplished:
+For the tutorial notebooks under `docs/notebooks/`, use `loqs-nb-sync` to convert between the two formats -- this command is installed automatically alongside LoQS when you install the `docs` extra:
 
 ```
-jupytext --to ipynb <file>.md # Convert from MyST Markdown to a Jupyter notebook
-jupytext --to myst <file>.ipynb # Convert from a Jupyter notebook to MyST Markdown
+loqs-nb-sync to-ipynb <file>.md # Convert from MyST Markdown to a working Jupyter notebook
+loqs-nb-sync to-md <file>.ipynb # Sync edits back to MyST Markdown
 ```
 
-Once the paired notebooks are created, changes can be easily propagated between the two:
-
-```
-jupytext --sync <file>.ipynb
-```
-
-Note that only the MyST Markdown will be commited to the repo,
-so make sure to convert/sync to the MyST Markdown version of the file to save your work.
+Note that only the MyST Markdown will be commited to the repo, so make sure to sync back to the MyST Markdown version of the file to save your work. Always use `loqs-nb-sync` for both directions -- converting or syncing these notebooks any other way can leave broken links in the result.

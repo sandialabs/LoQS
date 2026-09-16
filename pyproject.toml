@@ -43,6 +43,7 @@ classifiers = [
 
 [project.scripts]
 loqs-migrate = "loqs.tools.migrate.cli:main"
+loqs-nb-sync = "docs_scripts.notebook_sync:main"
 
 [project.optional-dependencies]
 parallel = [
@@ -78,6 +79,7 @@ docs = [
     "mkdocstrings==1.0.3",
     "mkdocstrings-python==2.0.3",
     "nbclient",
+    "nbformat",
     "pymdown-extensions~=10.21.2",
     "pypandoc==1.17",
     "pypandoc-binary==1.17",

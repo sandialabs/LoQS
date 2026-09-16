@@ -95,8 +95,6 @@ logicals[:5]
 assert all(l0 == l1 for l0, l1 in logicals)
 ```
 
-+++
-
 ## 2. Ancilla-mediated joint parity (non-fault-tolerant)
 
 Sometimes a full entangling gate is more than you need -- often a single joint *parity* measurement is enough (e.g. one round of a distance-3 repetition code across two logical qubits). `build_joint_parity_zz_instruction`/`build_joint_parity_xx_instruction` measure `Z_L(A) Z_L(B)` (or `X_L(A) X_L(B)`) directly with a single bare ancilla: six `Gcnot`s copy each patch's `Z_L` support onto the ancilla (prepared in $\ket{0}$), which is then measured and reset.
@@ -186,8 +184,6 @@ Same odd parity as before, and the destructive per-patch readouts agree with it 
 assert all(p[0] == 1 for p in parity)
 assert all(l0 ^ l1 == 1 for l0, l1 in logicals)
 ```
-
-+++
 
 ## 4. Bell pair preparation via a single M_ZZ merge
 

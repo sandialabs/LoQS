@@ -30,12 +30,18 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 # Inline Markdown links: [text](api:Target) or [](api:Target)
-_API_LINK_RE = re.compile(r"\[(?P<text>[^\]]*)\]\(\s*api:(?P<target>[^)\s]+)\s*\)")
+_API_LINK_RE = re.compile(
+    r"\[(?P<text>[^\]]*)\]\(\s*api:(?P<target>[^)\s]+)\s*\)"
+)
 
 # Reference-style: [text][api:Target] or [][api:Target]
-_API_REF_RE = re.compile(r"\[(?P<text>[^\]]*)\]\[\s*api:(?P<target>[^\]\s]+)\s*\]")
+_API_REF_RE = re.compile(
+    r"\[(?P<text>[^\]]*)\]\[\s*api:(?P<target>[^\]\s]+)\s*\]"
+)
+
+# Resolved links: [display](url)
+_RESOLVED_LINK_RE = re.compile(r"\[(?P<display>[^\]]*)\]\((?P<url>[^)\s]+)\)")
 
 
 def normalize_target(t: str) -> str:
@@ -143,7 +149,9 @@ class ApiInventory:
         # Exact FQN
         if t.startswith("loqs."):
             if t not in self.objects:
-                raise KeyError(f"Unresolved api target (no such API object): {t}")
+                raise KeyError(
+                    f"Unresolved api target (no such API object): {t}"
+                )
             return t
 
         # Exact suffix match
@@ -186,7 +194,7 @@ class ApiInventory:
             fqn = self.resolve_fqn(target)
         except KeyError:
             return default
-        return (self.kinds.get(fqn) or default)
+        return self.kinds.get(fqn) or default
 
     def resolve_mounted_url(self, target: str, *, prefix: str = "") -> str:
         """
@@ -222,7 +230,9 @@ def resolve_api_target_url(
         return external_api_url(t)
 
 
-def build_suffix_index(objects: dict[str, str], *, package: str = "loqs") -> dict[str, list[str]]:
+def build_suffix_index(
+    objects: dict[str, str], *, package: str = "loqs"
+) -> dict[str, list[str]]:
     """
     Build suffix_index mapping from progressive suffixes to matching FQNs.
 
@@ -253,7 +263,9 @@ def build_suffix_index(objects: dict[str, str], *, package: str = "loqs") -> dic
     return out
 
 
-def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page_src: str = "") -> str:
+def rewrite_api_links(
+    markdown: str, inv: ApiInventory, *, url_prefix: str, page_src: str = ""
+) -> str:
     """
     Rewrite api: links in Markdown into real URLs.
 
@@ -295,7 +307,11 @@ def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page
                 display = base
         else:
             display = raw_text
-            if display.startswith("`") and display.endswith("`") and len(display) >= 2:
+            if (
+                display.startswith("`")
+                and display.endswith("`")
+                and len(display) >= 2
+            ):
                 display = display[1:-1].strip()
 
         display = display.strip() or fqn.split(".")[-1]
@@ -310,3 +326,52 @@ def rewrite_api_links(markdown: str, inv: ApiInventory, *, url_prefix: str, page
 
     out = _API_LINK_RE.sub(repl_inline, out)
     return out
+
+
+def unrewrite_api_links(
+    markdown: str, inv: ApiInventory, *, url_prefix: str
+) -> str:
+    """
+    Reverse `rewrite_api_links`: turn a resolved `[<display>](<url_prefix>/.../#<fqn>)`
+    link back into `[<display>](api:<fqn>)` shorthand, for round-tripping notebook
+    edits back into the tracked MyST source. Only links whose URL starts with
+    *url_prefix* and whose trailing `#<fragment>` names a real inventory object are
+    reversed; anything else (including ordinary external links) is left untouched.
+    """
+
+    def repl(m: re.Match) -> str:
+        url = m.group("url")
+        if not url.startswith(url_prefix) or "#" not in url:
+            return m.group(0)
+        fqn = url.rsplit("#", 1)[-1]
+        if fqn not in inv.objects:
+            return m.group(0)
+
+        display = m.group("display")
+        if (
+            display.startswith("`")
+            and display.endswith("`")
+            and len(display) >= 2
+        ):
+            display = display[1:-1]
+        kind = (inv.kinds.get(fqn) or "").lower()
+        if kind in {"function", "method"} and display.endswith("()"):
+            display = display[:-2]
+
+        # Find the shortest suffix that uniquely resolves to this FQN, so
+        # the shorthand stays close to what a human author would write.
+        target_suffix = fqn
+        parts = fqn.split(".")
+        # Methods/properties keep at least "Class.member"; anything else
+        # (classes, functions) may resolve down to a bare name.
+        min_components = 2 if kind in {"method", "property"} else 1
+        for i in range(len(parts) - min_components, 0, -1):
+            suffix = ".".join(parts[i:])
+            hits = inv.suffix_index.get(suffix, [])
+            if hits == [fqn]:
+                target_suffix = suffix
+                break
+
+        return f"[{display}](api:{target_suffix})"
+
+    return _RESOLVED_LINK_RE.sub(repl, markdown)

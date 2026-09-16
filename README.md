@@ -82,10 +82,12 @@ Note that the first launch may take up to 5-10 minutes to build the Binder envir
 
 ### Contributing Interactive Notebooks
 
-The easiest way to modify and add interactive notebooks is to use Jupytext.
+The easiest way to modify and add interactive notebooks is to use `loqs-nb-sync`, a command-line tool that's automatically installed alongside LoQS when you install the `docs` extra (`pip install ".[docs]"`).
 
 1. Navigate to `docs/notebooks`, where all interactive notebooks are kept as Markdown for easy source control.
-1. Generate the corresponding Jupyter notebook via `jupytext --to ipynb <target_to_edit>.md`
-1. Edit the notebooks, e.g. `jupyter lab` to start a server, edit, and save.
-1. Sync them back to Markdown via `jupytext --to myst <target_to_edit>.md`
+1. Generate a working Jupyter notebook via `loqs-nb-sync to-ipynb <target_to_edit>.md`.
+1. Edit the notebook, e.g. `jupyter lab` to start a server, edit, and save.
+1. Sync your edits back to Markdown via `loqs-nb-sync to-md <target_to_edit>.ipynb`.
 1. Commit your changes!
+
+Always use `loqs-nb-sync` for both directions -- converting or syncing these notebooks any other way can leave broken links in the result.

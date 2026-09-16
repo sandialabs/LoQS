@@ -342,7 +342,7 @@ run_and_report_program(create_noiseless_leakage_program, d=3)
 
 ## Stage 3: Noisy leakage CZ modeling
 
-Now we construct a post-gate leakage channel -- each qutrit independently has some probability of leaking from $|1\rangle$ to $|2\rangle$ -- and compose it with the perfect $9 \times 9$ noiseless `CZ` using [](api:KrausGateRep.compose).
+Now we construct a post-gate leakage channel -- each qutrit independently has some probability of leaking from $|1\rangle$ to $|2\rangle$ -- and compose it with the perfect $9 \times 9$ noiseless `CZ` using [compose](api:KrausGateRep.compose).
 
 This simulates physical post-gate noise acting on the qutrit CZ gate.
 
