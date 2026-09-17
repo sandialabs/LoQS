@@ -206,7 +206,7 @@ def expand_type_aliases(type_s: str, aliases: dict[str, str]) -> str:
     return s
 
 
-def module_public_api(
+def module_public_api(  # noqa: C901 -- many branches over AST statement types extracting and scoring public API members
     py_file: Path,
 ) -> tuple[list[str], list[str], list[dict]]:
     try:
@@ -439,7 +439,7 @@ def class_var_info_map_from_ast(
     return out
 
 
-def class_var_rows_with_mro(
+def class_var_rows_with_mro(  # noqa: C901 -- nested MRO traversal reconciling and merging base and derived class attributes
     derived_py_file: Path, cls_obj: type
 ) -> list[dict]:
     derived_ident = qualname_to_ident(cls_obj)
@@ -517,7 +517,7 @@ def class_var_rows_with_mro(
     return sorted(merged.values(), key=var_sort_key)
 
 
-def property_rows_from_introspection(
+def property_rows_from_introspection(  # noqa: C901 -- nested MRO fallback loops extracting property type annotations and docstrings
     cls_obj: type, *, owner_ident: str, aliases: dict[str, str]
 ) -> list[dict]:
     """

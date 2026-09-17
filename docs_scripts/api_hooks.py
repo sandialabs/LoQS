@@ -450,7 +450,7 @@ def _extract_balanced_div(html: str, start: int) -> tuple[str, int] | None:
     return html[start:pos], pos
 
 
-def _rewrite_inherited_return_types(
+def _rewrite_inherited_return_types(  # noqa: C901 -- many defensive-validation and regex-substitution branches resolving inherited return types
     html: str,
     *,
     derived: str,

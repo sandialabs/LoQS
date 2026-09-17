@@ -35,7 +35,7 @@ from docs_scripts.ref_introspect import (
 )
 
 
-def render_inline_md(
+def render_inline_md(  # noqa: C901 -- many branches across markdown/HTML formatting modes and identifier-token target resolution
     text: str,
     link_names: set[str] | None = None,
     *,
