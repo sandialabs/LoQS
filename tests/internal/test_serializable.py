@@ -627,7 +627,7 @@ class TestSerializableNestedData:
         assert loaded_obj.data["string"] == "hello"
         assert loaded_obj.data["integer"] == 42
         assert loaded_obj.data["float"] == 3.14
-        assert loaded_obj.data["boolean"] == True
+        assert loaded_obj.data["boolean"] is True
         assert loaded_obj.data["none"] is None
         assert loaded_obj.data["list"] == [1, "two", 3.0, None]
         assert loaded_obj.data["tuple"] == (1, 2, 3)

@@ -414,7 +414,7 @@ class TestEncoderParameterized:
             # Test boolean (must stay a bool, not be coerced to int --
             # `bool` is a subclass of `int` in Python)
             encoded_bool = JSONEncoder.encode_primitive(True)
-            assert encoded_bool == True
+            assert encoded_bool is True
             assert type(encoded_bool) is bool
 
             # Test None
@@ -521,7 +521,7 @@ class TestEncoderParameterized:
                 "version": SERIALIZATION_VERSION,
             }
             decoded_bool = JSONEncoder.decode_primitive(encoded_bool)
-            assert decoded_bool == True
+            assert decoded_bool is True
 
             # Test None
             encoded_none = {
@@ -599,7 +599,7 @@ class TestEncoderParameterized:
                     assert isinstance(root_group, h5py.Group)
                     # HDF5 stores primitives as attributes directly, not in a subgroup
                     decoded = HDF5Encoder.decode_primitive(root_group)
-                    assert decoded == True
+                    assert decoded is True
                     assert type(decoded) is bool
 
                 # Test special characters
@@ -643,9 +643,7 @@ class TestEncoderParameterized:
             with make_temp_path(suffix=".h5") as temp_file:
                 with h5py.File(temp_file, "w") as h5_file:
                     root_group = h5_file.create_group("root")
-                    hdf5_encoded_group = HDF5Encoder.encode_uncached_obj(
-                        obj, h5_group=root_group
-                    )
+                    HDF5Encoder.encode_uncached_obj(obj, h5_group=root_group)
 
                 with h5py.File(temp_file, "r") as h5_file:
                     root_group = h5_file["root"]

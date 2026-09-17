@@ -144,7 +144,7 @@ class TestAnnotateManualReview:
             "y = 2\n", [ManualReviewItem(line=1, message=message)]
         )
         comment_lines = [
-            l for l in annotated.splitlines() if l.startswith("#")
+            line for line in annotated.splitlines() if line.startswith("#")
         ]
         assert len(comment_lines) == 2
 

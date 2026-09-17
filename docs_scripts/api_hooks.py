@@ -429,7 +429,6 @@ def _extract_balanced_div(html: str, start: int) -> tuple[str, int] | None:
     if not m:
         return None
 
-    i = start
     end = start + m.end()
     depth = 1
     pos = end
