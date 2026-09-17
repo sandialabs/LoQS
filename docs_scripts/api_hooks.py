@@ -29,6 +29,7 @@ import html as _html
 import inspect
 import re
 from pathlib import Path
+from typing import Any
 
 from docs_scripts.api_inventory import ApiInventory, resolve_api_target_url
 
@@ -523,6 +524,7 @@ def _rewrite_inherited_return_types(  # noqa: C901 -- many defensive-validation 
         #   - the rendered Returns-table cell points to the exact base owner class
         # That combination is the self-type case we want to rewrite.
 
+        derived_meth: Any | None = None
         raw = cls_obj.__dict__.get(meth_name)
         if isinstance(raw, staticmethod):
             derived_meth = raw.__func__

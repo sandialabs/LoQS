@@ -244,6 +244,8 @@ def write_mkdocstrings_block(
 
     if members is False:
         f.write("      members: false\n")
+    elif members is True:
+        f.write("      members: true\n")
     else:
         f.write("      members:\n")
         for m in members:
