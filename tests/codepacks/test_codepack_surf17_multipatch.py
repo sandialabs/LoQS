@@ -18,7 +18,7 @@ from loqs.backends import (
     StimCircuitGateRep,
     UnitaryGateRep,
 )
-from loqs.core import PatchGeometry, QuantumProgram
+from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
 from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.codepacks import codepack_surf17_multipatch as multipatch
@@ -56,7 +56,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
-        stack,
+        InstructionStack(stack),
         default_noise_model=model,
         state_type=STIMQuantumState,
         patch_types={"SURF": code},
@@ -190,28 +190,30 @@ class TestTwoPatchFoundations:
             model_backend=DictNoiseModel,
         )
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch SURF",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            ("Zero Prep", "L0"),
-            ("Syndrome Extraction", "L0"),  # index 3 (round 1)
-            ("Syndrome Extraction", "L0"),  # index 4 (round 2)
-            ("Syndrome Extraction", "L0"),  # index 5 (round 3)
-            ("Decoder", "L0"),
-            {
-                "instruction": "FT Logical Z Measure",
-                "patch_label": "L0",
-                "reference_round_mode_Z": "clean_diff",
-            },
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("Zero Prep", "L0"),
+                ("Syndrome Extraction", "L0"),  # index 3 (round 1)
+                ("Syndrome Extraction", "L0"),  # index 4 (round 2)
+                ("Syndrome Extraction", "L0"),  # index 5 (round 3)
+                ("Decoder", "L0"),
+                {
+                    "instruction": "FT Logical Z Measure",
+                    "patch_label": "L0",
+                    "reference_round_mode_Z": "clean_diff",
+                },
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,
@@ -450,45 +452,47 @@ class TestTransversalCnot:
         )
         cnot_book = multipatch.build_cnot_bookkeeping_instruction("L0", "L1")
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(all_q),
-                "qubit_labels": all_q,
-            },
-            {
-                "instruction": "Init Patch SURF",
-                "new_patch_label": "L0",
-                "qubits": q0,
-            },
-            {
-                "instruction": "Init Patch SURF",
-                "new_patch_label": "L1",
-                "qubits": q1,
-            },
-            ("Zero Prep", "L0"),
-            ("Zero Prep", "L1"),
-            ("Syndrome Extraction", "L0"),  # 5 <- inject
-            ("Syndrome Extraction", "L0"),  # 6
-            ("Syndrome Extraction", "L0"),  # 7
-            ("Decoder", "L0"),  # 8
-            ("Syndrome Extraction", "L1"),  # 9 <- inject
-            ("Syndrome Extraction", "L1"),  # 10
-            ("Syndrome Extraction", "L1"),  # 11
-            ("Decoder", "L1"),  # 12
-            (cnot_circ, None),  # 13 <- inject (weight-1 and weight-2)
-            (cnot_book, None),  # 14
-            ("Syndrome Extraction", "L0"),  # 15 <- inject
-            ("Syndrome Extraction", "L0"),  # 16
-            ("Syndrome Extraction", "L0"),  # 17
-            ("Decoder", "L0"),  # 18
-            ("Syndrome Extraction", "L1"),  # 19
-            ("Syndrome Extraction", "L1"),  # 20
-            ("Syndrome Extraction", "L1"),  # 21
-            ("Decoder", "L1"),  # 22
-            ("FT Logical Z Measure", "L0"),  # 23
-            ("FT Logical Z Measure", "L1"),  # 24
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(all_q),
+                    "qubit_labels": all_q,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": q0,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L1",
+                    "qubits": q1,
+                },
+                ("Zero Prep", "L0"),
+                ("Zero Prep", "L1"),
+                ("Syndrome Extraction", "L0"),  # 5 <- inject
+                ("Syndrome Extraction", "L0"),  # 6
+                ("Syndrome Extraction", "L0"),  # 7
+                ("Decoder", "L0"),  # 8
+                ("Syndrome Extraction", "L1"),  # 9 <- inject
+                ("Syndrome Extraction", "L1"),  # 10
+                ("Syndrome Extraction", "L1"),  # 11
+                ("Decoder", "L1"),  # 12
+                (cnot_circ, None),  # 13 <- inject (weight-1 and weight-2)
+                (cnot_book, None),  # 14
+                ("Syndrome Extraction", "L0"),  # 15 <- inject
+                ("Syndrome Extraction", "L0"),  # 16
+                ("Syndrome Extraction", "L0"),  # 17
+                ("Decoder", "L0"),  # 18
+                ("Syndrome Extraction", "L1"),  # 19
+                ("Syndrome Extraction", "L1"),  # 20
+                ("Syndrome Extraction", "L1"),  # 21
+                ("Decoder", "L1"),  # 22
+                ("FT Logical Z Measure", "L0"),  # 23
+                ("FT Logical Z Measure", "L1"),  # 24
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,

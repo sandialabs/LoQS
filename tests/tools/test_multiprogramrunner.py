@@ -92,7 +92,7 @@ def _track_shot_executor(item, index, *, shot_executor, **kwargs):
     return item * 2
 
 
-_track_shot_executor.calls = []
+setattr(_track_shot_executor, "calls", [])
 
 
 class _SimpleDoubleRunner(MultiProgramRunner):

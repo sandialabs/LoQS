@@ -12,7 +12,7 @@ from loqs.backends import (
     STIMQuantumState,
 )
 from loqs.backends.reps import StimCircuitGateRep, UnitaryGateRep
-from loqs.core import QuantumProgram
+from loqs.core import InstructionStack, QuantumProgram
 from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.tools import fttools
 
@@ -58,20 +58,22 @@ class TestSurf17Codepack:
             "FT Logical Z Measure" if basis == "Z" else "FT Logical X Measure"
         )
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch SURF",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            (prep_inst, "L0"),
-            (meas_inst, "L0"),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                (prep_inst, "L0"),
+                (meas_inst, "L0"),
+            ]
+        )
 
         return QuantumProgram(
             stack,
@@ -154,7 +156,9 @@ class TestSurf17Codepack:
             stack.append(g)
         stack.append((meas_inst, "L0"))
 
-        program = QuantumProgram.from_quantum_program(ref_program, stack)
+        program = QuantumProgram.from_quantum_program(
+            ref_program, InstructionStack(stack)
+        )
         program_results = program.run()
         assert (
             program_results.collect_shot_data("logical_measurement", -1)[0]
@@ -198,24 +202,26 @@ class TestSurf17Codepack:
             model_backend=model_backend,
         )
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch SURF",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            ("Zero Prep" if basis == "Z" else "Plus Prep", "L0"),
-            ("Syndrome Extraction", "L0"),  # index 3 (inject here)
-            ("Syndrome Extraction", "L0"),  # index 4
-            ("Syndrome Extraction", "L0"),  # index 5
-            ("Decoder", "L0"),
-            (f"FT Logical {basis} Measure", "L0"),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("Zero Prep" if basis == "Z" else "Plus Prep", "L0"),
+                ("Syndrome Extraction", "L0"),  # index 3 (inject here)
+                ("Syndrome Extraction", "L0"),  # index 4
+                ("Syndrome Extraction", "L0"),  # index 5
+                ("Decoder", "L0"),
+                (f"FT Logical {basis} Measure", "L0"),
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,
@@ -272,21 +278,23 @@ class TestSurf17Codepack:
             model_backend=model_backend,
         )
 
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch SURF",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            ("Zero Prep", "L0"),
-            ("Raw Z Data Measure", "L0"),  # index 3
-            ("FT Z logical parity calculation", "L0"),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("Zero Prep", "L0"),
+                ("Raw Z Data Measure", "L0"),  # index 3
+                ("FT Z logical parity calculation", "L0"),
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,

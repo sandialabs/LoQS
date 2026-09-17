@@ -28,7 +28,7 @@ from loqs.backends.reps import (
 from loqs.backends import ListPhysicalCircuit, DictNoiseModel
 from loqs.backends import QSimQuantumState as QSimState
 from loqs.backends import STIMQuantumState as STIMState
-from loqs.core import QuantumProgram, QECCode
+from loqs.core import QuantumProgram, QECCode, InstructionStack
 from loqs.core.instructions import builders
 
 
@@ -71,16 +71,22 @@ class TestIntegratedNoise:
             instreps=[ZBasisProjectionInstrumentRep],
         )
 
-        stack_Zbasis = [
-            {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]},
-            {
-                "instruction": "Init Patch 1Q",
-                "new_patch_label": "L0",
-                "qubits": ["Q0"],
-            },
-            ("I0", "L0"),
-            ("Mz0", "L0"),
-        ]
+        stack_Zbasis = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 1,
+                    "qubit_labels": ["Q0"],
+                },
+                {
+                    "instruction": "Init Patch 1Q",
+                    "new_patch_label": "L0",
+                    "qubits": ["Q0"],
+                },
+                ("I0", "L0"),
+                ("Mz0", "L0"),
+            ]
+        )
 
         program_qsim = QuantumProgram(
             stack_Zbasis,
@@ -105,18 +111,24 @@ class TestIntegratedNoise:
         assert abs(Counter(outs)[1] - 50) < 10
 
         # Also test QuantumSim in the X basis
-        stack_Xbasis = [
-            {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]},
-            {
-                "instruction": "Init Patch 1Q",
-                "new_patch_label": "L0",
-                "qubits": ["Q0"],
-            },
-            ("H0", "L0"),
-            ("I0", "L0"),
-            ("H0", "L0"),
-            ("Mz0", "L0"),
-        ]
+        stack_Xbasis = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": 1,
+                    "qubit_labels": ["Q0"],
+                },
+                {
+                    "instruction": "Init Patch 1Q",
+                    "new_patch_label": "L0",
+                    "qubits": ["Q0"],
+                },
+                ("H0", "L0"),
+                ("I0", "L0"),
+                ("H0", "L0"),
+                ("Mz0", "L0"),
+            ]
+        )
         program_qsim_Xbasis = QuantumProgram.from_quantum_program(
             program_qsim, stack_Xbasis
         )
@@ -240,25 +252,27 @@ class TestIntegratedNoise:
             instreps=[ZBasisProjectionInstrumentRep],
         )
 
-        stack_Zbasis = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch 3Q",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            ("X0", "L0"),  # Start qubit 0 in 1
-            ("H2", "L0"),  # Start qubit 2 in +
-            ("X1", "L0"),
-            ("I1", "L0"),
-            ("Mz1", "L0"),
-            ("Mz0", "L0"),  # Verify qubit 0 still in 1 in Z basis
-            ("Mx2", "L0"),  # Verify qubit 1 still in 0 in X basis
-        ]
+        stack_Zbasis = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch 3Q",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("X0", "L0"),  # Start qubit 0 in 1
+                ("H2", "L0"),  # Start qubit 2 in +
+                ("X1", "L0"),
+                ("I1", "L0"),
+                ("Mz1", "L0"),
+                ("Mz0", "L0"),  # Verify qubit 0 still in 1 in Z basis
+                ("Mx2", "L0"),  # Verify qubit 1 still in 0 in X basis
+            ]
+        )
 
         ## QUANTUMSIM
         program_qsim = QuantumProgram(
@@ -299,25 +313,27 @@ class TestIntegratedNoise:
         check(program_results_qsim, expected0s[0])
 
         # We can test in prep X, meas Z basis also
-        stack_Zprep_Xbasis = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch 3Q",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            ("X0", "L0"),  # Start qubit 0 in 1
-            ("H2", "L0"),  # Start qubit 2 in +
-            ("H1", "L0"),
-            ("I1", "L0"),
-            ("Mz1", "L0"),
-            ("Mz0", "L0"),  # Verify qubit 0 still in 1 in Z basis
-            ("Mx2", "L0"),  # Verify qubit 1 still in 0 in X basis
-        ]
+        stack_Zprep_Xbasis = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch 3Q",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("X0", "L0"),  # Start qubit 0 in 1
+                ("H2", "L0"),  # Start qubit 2 in +
+                ("H1", "L0"),
+                ("I1", "L0"),
+                ("Mz1", "L0"),
+                ("Mz0", "L0"),  # Verify qubit 0 still in 1 in Z basis
+                ("Mx2", "L0"),  # Verify qubit 1 still in 0 in X basis
+            ]
+        )
         program_qsim_Zprep_Xbasis = QuantumProgram.from_quantum_program(
             program_qsim, stack_Zprep_Xbasis
         )
@@ -328,25 +344,27 @@ class TestIntegratedNoise:
         check(program_results_qsim_Zprep_Xbasis, expected0s[1])
 
         # We can test in X basis also
-        stack_Xbasis = [
-            {
-                "instruction": "Init State",
-                "state": len(qubits),
-                "qubit_labels": qubits,
-            },
-            {
-                "instruction": "Init Patch 3Q",
-                "new_patch_label": "L0",
-                "qubits": qubits,
-            },
-            ("X0", "L0"),  # Start qubit 0 in 1
-            ("H2", "L0"),  # Start qubit 2 in +
-            ("H1", "L0"),
-            ("I1", "L0"),
-            ("Mx1", "L0"),
-            ("Mz0", "L0"),  # Verify qubit 0 still in 1 in Z basis
-            ("Mx2", "L0"),  # Verify qubit 1 still in 0 in X basis
-        ]
+        stack_Xbasis = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch 3Q",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("X0", "L0"),  # Start qubit 0 in 1
+                ("H2", "L0"),  # Start qubit 2 in +
+                ("H1", "L0"),
+                ("I1", "L0"),
+                ("Mx1", "L0"),
+                ("Mz0", "L0"),  # Verify qubit 0 still in 1 in Z basis
+                ("Mx2", "L0"),  # Verify qubit 1 still in 0 in X basis
+            ]
+        )
         program_qsim_Xbasis = QuantumProgram.from_quantum_program(
             program_qsim, stack_Xbasis
         )
@@ -453,7 +471,7 @@ class TestIntegratedNoise:
     def _create_model_dicts(qubits: list[str], gaterep: type[GateRep]):
         assert gaterep in [QSimSuperopGateRep, StimCircuitGateRep]
 
-        gate_dict = {}
+        gate_dict: dict[tuple[str, tuple[str, ...]], np.ndarray | str] = {}
         if gaterep is QSimSuperopGateRep:
             for q in qubits:
                 gate_dict[("Gi", (q,))] = np.eye(4)

@@ -11,7 +11,7 @@ from loqs.backends import (
     STIMQuantumState,
     StimCircuitGateRep,
 )
-from loqs.core import PatchGeometry, QuantumProgram
+from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
@@ -70,7 +70,7 @@ def make_program(stack, all_qubits, code=None):
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
-        stack,
+        InstructionStack(stack),
         default_noise_model=model,
         state_type=STIMQuantumState,
         patch_types={"Steane": code},

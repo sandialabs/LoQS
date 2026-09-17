@@ -14,7 +14,7 @@ from loqs.internal.encoder.hdf5encoder import (
     _encode_collapsed_children,
 )
 from loqs.internal.serializable import Serializable, SERIALIZATION_VERSION
-from loqs.types import NDArray, SPSArray
+from loqs.types import NDArray
 
 
 class MockSerializable(Serializable):
@@ -851,7 +851,7 @@ class TestComprehensiveArrayEncoding:
 
                 # Verify
                 if sps.issparse(arr):
-                    assert isinstance(decoded, SPSArray)
+                    assert sps.issparse(decoded)
                     assert np.allclose(decoded.toarray(), arr.toarray())
                 else:
                     assert isinstance(decoded, NDArray)

@@ -19,7 +19,7 @@ from loqs.backends import (
     UnitaryGateRep,
 )
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.core import PatchGeometry, QuantumProgram
+from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_surf17_surgery as surgery
 from loqs.codepacks import codepack_surf17_multipatch as multipatch
@@ -88,7 +88,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
-        stack,
+        InstructionStack(stack),
         default_noise_model=model,
         state_type=STIMQuantumState,
         patch_types={"SURF": code},
@@ -150,22 +150,24 @@ class TestSyndromeRowOrdering:
             err_inst = builders.build_physical_circuit_instruction(
                 err_circ, name="probe error"
             )
-            stack = [
-                {
-                    "instruction": "Init State",
-                    "state": len(qubits),
-                    "qubit_labels": qubits,
-                },
-                {
-                    "instruction": "Init Patch SURF",
-                    "new_patch_label": "L0",
-                    "qubits": qubits,
-                },
-                (prep, "L0"),
-                (err_inst, "L0"),
-                ("Syndrome Extraction", "L0"),
-                ("Decoder", "L0"),
-            ]
+            stack = InstructionStack(
+                [
+                    {
+                        "instruction": "Init State",
+                        "state": len(qubits),
+                        "qubit_labels": qubits,
+                    },
+                    {
+                        "instruction": "Init Patch SURF",
+                        "new_patch_label": "L0",
+                        "qubits": qubits,
+                    },
+                    (prep, "L0"),
+                    (err_inst, "L0"),
+                    ("Syndrome Extraction", "L0"),
+                    ("Decoder", "L0"),
+                ]
+            )
             program = QuantumProgram(
                 stack,
                 default_noise_model=model,
@@ -1167,19 +1169,21 @@ class TestSurgeryDenseSmoke:
             mode="simple",
             num_merge_rounds=2,
         )
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(all_q),
-                "qubit_labels": all_q,
-            },
-            *geometry.init_patch_entries("SURF"),
-            ("Zero Prep", "L0"),
-            ("Zero Prep", "L1"),
-            ("QEC", "L0"),
-            ("QEC", "L1"),
-            (zz, None),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(all_q),
+                    "qubit_labels": all_q,
+                },
+                *geometry.init_patch_entries("SURF"),
+                ("Zero Prep", "L0"),
+                ("Zero Prep", "L1"),
+                ("QEC", "L0"),
+                ("QEC", "L1"),
+                (zz, None),
+            ]
+        )
         code = codepack_surf17.create_qec_code(layout=layout, num_qec_rounds=2)
         model = codepack_surf17.create_ideal_model(
             all_q,

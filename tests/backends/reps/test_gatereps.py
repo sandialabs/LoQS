@@ -277,7 +277,10 @@ class TestKrausGateRepDedup:
             expected.kraus_operators, actual.kraus_operators
         ):
             assert np.allclose(ek, ak)
-            assert np.allclose(ep, ap)
+            if ep is None or ap is None:
+                assert ep is None and ap is None
+            else:
+                assert np.allclose(ep, ap)
 
     def test_dedup_simple_duplicate(self):
         rep = KrausGateRep(
@@ -325,7 +328,10 @@ class TestKrausGateRepCompose:
             expected.kraus_operators, actual.kraus_operators
         ):
             assert np.allclose(ek, ak)
-            assert np.allclose(ep, ap)
+            if ep is None or ap is None:
+                assert ep is None and ap is None
+            else:
+                assert np.allclose(ep, ap)
 
     def test_compose_with_unitary_gaterep(self):
         X = np.array([[0, 1], [1, 0]])
