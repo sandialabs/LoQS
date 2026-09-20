@@ -1,7 +1,5 @@
 """Tester for loqs.tools.qectools"""
 
-import pytest
-
 from loqs.tools import qectools
 
 

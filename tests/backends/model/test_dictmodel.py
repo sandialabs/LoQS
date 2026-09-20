@@ -12,8 +12,6 @@ import pytest
 from loqs.backends.circuit.listcircuit import ListPhysicalCircuit
 from loqs.backends.model.dictmodel import DictNoiseModel, add_command_aliases
 from loqs.backends.reps import (
-    GateRep,
-    InstrumentRep,
     KrausGateRep,
     ProbabilisticStimGateRep,
     QSimSuperopGateRep,
@@ -38,7 +36,7 @@ _KRAUS_SEQ = ((_TP_K0, None), (_TP_K1, None))
 _PROB_STIM_SEQ = (("X 0", 0.5), ("Y 0", 0.5))
 
 try:
-    import stim
+    import stim  # noqa: F401 -- import itself is the skip-guard for missing stim
     from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
 
     NO_STIM = False

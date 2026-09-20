@@ -25,7 +25,6 @@ non-inherited method docs, and centralizes the identity remapping in this file.
 
 from __future__ import annotations
 
-import html as _html
 import inspect
 import re
 from pathlib import Path

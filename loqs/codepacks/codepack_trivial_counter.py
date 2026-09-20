@@ -11,17 +11,9 @@ This implementation provides a simple counter-like behavior where a "state"
 value can be incremented. This is purely for demonstration and testing purposes.
 """
 
-from collections.abc import Sequence
-from typing import Mapping
-from loqs.backends.model.basemodel import (
-    BaseNoiseModel,
-    GateRep,
-    InstrumentRep,
-)
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
-from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
 
 
 def create_qec_code():

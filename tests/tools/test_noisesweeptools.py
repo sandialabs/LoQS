@@ -4,7 +4,6 @@ import functools
 import inspect
 import multiprocessing as mp
 import sys
-import time
 import warnings
 
 import numpy as np
@@ -25,7 +24,6 @@ from loqs.tools.paralleltools import ParallelStrategy
 from _shared_checkpoint_test_helpers import (
     _build_shot_executor,
     _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
 )
 
 # ---------------------------------------------------------------------------

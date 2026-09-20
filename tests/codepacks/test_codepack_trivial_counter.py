@@ -1,8 +1,6 @@
 """Tester for loqs.codepacks.codepack_trivial_counter"""
 
-import pytest
-
-from loqs.core import Frame, Instruction, QuantumProgram
+from loqs.core import Frame, Instruction
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 
 

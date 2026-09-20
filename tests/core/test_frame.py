@@ -1,6 +1,5 @@
 """Tester for loqs.core.frame"""
 
-import os
 import pytest
 import h5py
 

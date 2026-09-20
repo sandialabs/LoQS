@@ -14,7 +14,6 @@ from collections.abc import Hashable, Mapping
 import json
 import re
 import warnings
-import numpy as np
 from typing import ClassVar, Sequence, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
 from loqs.backends._pygsti_gatenames import gatename_pygsti_safe_renames
@@ -34,7 +33,6 @@ from loqs.backends.reps import (
     convert as convert_rep,
 )
 from loqs.internal.legacy import legacy_name_hint
-from loqs.internal.serializable import Serializable
 
 # Conditional imports for PyGSTi
 if TYPE_CHECKING:
@@ -61,7 +59,10 @@ else:
     )
     from pygsti.evotypes import Evotype
     from pygsti.modelmembers.modelmember import ModelMember
-    from pygsti.modelmembers.operations import EmbeddedOp, DenseOperator
+    from pygsti.modelmembers.operations import (  # noqa: F401 -- used only in this module's own doctest examples
+        EmbeddedOp,
+        DenseOperator,
+    )
     from pygsti.models import Model, ExplicitOpModel, ImplicitOpModel
 
 

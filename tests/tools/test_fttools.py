@@ -3,7 +3,6 @@
 import functools
 import multiprocessing as mp
 import sys
-import time
 
 import numpy as np
 import pytest
@@ -22,7 +21,6 @@ from loqs.tools.paralleltools import ParallelStrategy
 from _shared_checkpoint_test_helpers import (
     _build_shot_executor,
     _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
 )
 
 

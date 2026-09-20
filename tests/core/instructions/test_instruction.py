@@ -4,7 +4,7 @@ import warnings
 
 from loqs.core.frame import Frame
 from loqs.core.instructions import Instruction
-from loqs.core.instructions.instruction import DEFAULT_PRIORITIES, KwargDict
+from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
 
 
 class TestInstruction:

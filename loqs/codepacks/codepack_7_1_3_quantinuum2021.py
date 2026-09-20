@@ -17,7 +17,6 @@ Thus, we will have 10 qubits total: 7 data and 3 auxiliary.
 """
 
 from collections.abc import Sequence
-import copy
 import itertools
 from typing import Mapping
 import numpy as np
@@ -41,10 +40,8 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.recordables import QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchlayout import PatchLayout
-import loqs.tools.qectools as qt
 
 
 def create_qec_code(

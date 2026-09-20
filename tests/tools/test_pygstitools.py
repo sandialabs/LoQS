@@ -6,7 +6,6 @@ import gc
 import multiprocessing as mp
 import re
 import sys
-import time
 import weakref
 
 import pytest
@@ -32,7 +31,6 @@ from loqs.tools.pygstitools import (
 from _shared_checkpoint_test_helpers import (
     _build_shot_executor,
     _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
 )
 
 

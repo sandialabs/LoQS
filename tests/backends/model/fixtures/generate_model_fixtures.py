@@ -42,7 +42,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.stimdictmodel import STIMDictNoiseModel
 from loqs.backends.reps import GateRep, InstrumentRep, RepTuple

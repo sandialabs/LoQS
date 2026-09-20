@@ -17,10 +17,9 @@ from loqs.backends import (
     STIMQuantumState,
 )
 from loqs.backends.reps import QSimSuperopGateRep, StimCircuitGateRep
-from loqs.core import Frame, Instruction, InstructionStack, QuantumProgram
+from loqs.core import InstructionStack, QuantumProgram
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.core.instructions import builders
-from loqs.core.recordables import MeasurementOutcomes
 from loqs.tools import fttools
 
 

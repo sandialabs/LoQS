@@ -19,8 +19,6 @@ import loqs.backends as backends_module
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
 from loqs.backends.reps import (
-    GateRep,
-    InstrumentRep,
     KrausGateRep,
     PTMGateRep,
     QSimSuperopGateRep,

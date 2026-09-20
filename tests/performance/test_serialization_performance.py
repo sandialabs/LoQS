@@ -13,7 +13,6 @@ import os
 import time
 import numpy as np
 import pytest
-import h5py
 
 from loqs.core import Frame, History
 from loqs.core.instructions.instruction import Instruction

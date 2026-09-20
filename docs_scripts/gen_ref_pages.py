@@ -51,7 +51,8 @@ def api_page_url(mod_parts: tuple[str, ...]) -> str:
     return "/" + "/".join(mod_parts) + "/"
 
 
-def main() -> None:  # noqa: C901 -- nested loops over files, classes, and methods with branching introspection merging
+# C901: nested loops over files, classes, and methods with branching introspection merging
+def main() -> None:  # noqa: C901
     nav = mkdocs_gen_files.Nav()
     inv_objects: dict[str, str] = {}
     inv_kinds: dict[str, str] = {}

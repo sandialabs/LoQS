@@ -26,9 +26,6 @@ from typing import (
     cast,
 )
 
-if TYPE_CHECKING:
-    from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-
 from loqs.backends.circuit import BasePhysicalCircuit, ListPhysicalCircuit
 from loqs.backends.model import BaseNoiseModel
 from loqs.backends.reps import (
@@ -39,7 +36,6 @@ from loqs.backends.reps import (
     ProbabilisticStimGateRep,
     PTMGateRep,
     QSimSuperopGateRep,
-    RepConstructionError,
     StimCircuitGateRep,
     StimCircuitInstrumentRep,
     StimCircuitPayloadMixin,
@@ -53,7 +49,6 @@ from loqs.backends.reps.legacy import (
     upgrade_legacy_gaterep_tag,
     upgrade_legacy_instrumentrep_tag,
 )
-from loqs.internal.serializable import Serializable
 
 # `STIMPhysicalCircuit` is used opportunistically, not required: `dictmodel`
 # doesn't need `stim` to be installed for the `ListPhysicalCircuit` case,

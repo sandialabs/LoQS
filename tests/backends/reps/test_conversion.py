@@ -19,7 +19,6 @@ from loqs.backends.reps import (
 from loqs.backends.reps.conversion import (
     _accepted_kwargs,
     _change_basis,
-    _choi_kraus_operators,
     _extract_permutation_entry,
     _is_identity_gaterep,
     _outcome_operation_dict_to_zbasis_projection,
@@ -51,7 +50,7 @@ except ImportError:
     NO_PYGSTI = True
 
 try:
-    import stim
+    import stim  # noqa: F401 -- import itself is the skip-guard for missing stim
 
     NO_STIM = False
 except ImportError:

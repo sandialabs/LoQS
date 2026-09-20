@@ -31,7 +31,6 @@ from loqs.backends.reps import (
     is_rep_compatible,
 )
 from loqs.backends.state import BaseQuantumState, OutcomeDict
-from loqs.internal.serializable import Serializable
 from loqs.types import NDArray
 
 T = TypeVar("T", bound="NumpyStatevectorQuantumState")

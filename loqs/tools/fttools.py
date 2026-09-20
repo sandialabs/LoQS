@@ -18,7 +18,7 @@ from typing import Any
 
 from loqs.backends.circuit import BasePhysicalCircuit
 from loqs.backends.circuit.pygsticircuit import PyGSTiPhysicalCircuit
-from loqs.core import ProgramResults, QuantumProgram
+from loqs.core import QuantumProgram
 from loqs.core.executors import SubmitExecutor
 from loqs.core.historydatacollector import (
     HistoryDataCollector,

@@ -5,7 +5,6 @@ from unittest import mock
 import pytest
 
 from loqs.backends import ListPhysicalCircuit as PhysCirc
-from loqs.internal.serializable import Serializable
 
 
 class TestListPhysicalCircuit:

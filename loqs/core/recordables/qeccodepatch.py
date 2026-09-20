@@ -18,7 +18,6 @@ from loqs.core.recordables.pauliframe import (
     PauliFrameLike,
 )
 from loqs.internal.displayable import Displayable
-from loqs.internal.serializable import Serializable
 
 if TYPE_CHECKING:
     # Can import for typechecking without circular import issue

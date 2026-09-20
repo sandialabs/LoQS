@@ -1,6 +1,5 @@
 """Complete parameterized tests for JSONEncoder and HDF5Encoder classes."""
 
-import os
 import numpy as np
 import scipy.sparse as sps
 import pytest

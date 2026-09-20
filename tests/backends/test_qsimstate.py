@@ -1,9 +1,5 @@
 """Tester for loqs.backends.state.qsimstate"""
 
-import os
-import tempfile
-import json
-
 import mock
 import numpy as np
 import pytest
