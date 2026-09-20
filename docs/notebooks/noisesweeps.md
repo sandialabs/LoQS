@@ -189,6 +189,16 @@ result_z = runner.run()
 result_z.failure_rates
 ```
 
+The runner also captures wall-clock timing information for each item in the sweep and for each shot within each item:
+
+```{code-cell} ipython3
+# item_wall_clock_times maps sweep point index to total wall-clock duration for that point
+print(f"Item wall-clock times (by sweep point): {runner.item_wall_clock_times}")
+
+# shot_wall_clock_times maps sweep point index to a nested dict of shot index -> duration
+print(f"Number of sweep points with shot timing data: {len(runner.shot_wall_clock_times)}")
+```
+
 ```{code-cell} ipython3
 result_z.stderrs
 ```

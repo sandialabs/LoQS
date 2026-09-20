@@ -14,7 +14,7 @@ from __future__ import annotations
 import random
 import time
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, ClassVar
 from pathlib import Path
 import h5py
@@ -38,9 +38,12 @@ from typing import TYPE_CHECKING, Iterable
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
+    filter_unmerged_dict_attr_entries,
     get_dict_attr_value,
     get_dict_attr_group,
     get_dict_attr_keys,
+    read_checkpoint_dict_attr_union,
+    read_checkpoint_dict_attr_union_keys,
 )
 
 if TYPE_CHECKING:
@@ -57,7 +60,7 @@ def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
     """Navigate from a checkpoint file (or subgroup) to its actual object's encoded group.
 
     Handles both file layouts:
-    - Bootstrap path (_write_shot_entries): Top-level is directly the object group
+    - Bootstrap path (_write_streamed_dict_entries): Top-level is directly the object group
       (Serializable_1 with encode_type).
     - Fresh envelope path (_write_results_snapshot_if_fresh): Top-level is a
       wrapper (/root with version attr), contains the object group.
@@ -112,6 +115,20 @@ def _reset_empty_groups_format_dict_attr(
         del group[attr_name]
 
 
+def _normalize_decoded_int_keyed_dict(
+    raw: dict[Any, Any], value_cast: Callable[[Any], Any] | None = None
+) -> dict[int, Any]:
+    """Convert a decoded dict's string keys back to ints (HDF5/JSON encode
+    int dict keys as strings), optionally casting each value via
+    `value_cast`. Returns `raw` unchanged if it's empty or its keys aren't
+    all digit strings already."""
+    if raw and all(isinstance(k, str) and k.isdigit() for k in raw.keys()):
+        if value_cast is None:
+            return {int(k): v for k, v in raw.items()}
+        return {int(k): value_cast(v) for k, v in raw.items()}
+    return raw
+
+
 class ProgramResults(Displayable):
     """A container for the results of a quantum program execution.
 
@@ -124,6 +141,7 @@ class ProgramResults(Displayable):
 
     _SERIALIZE_ATTRS = [
         "shot_histories",
+        "shot_wall_clock_times",
         "_unwritten_shots",
         "name",
         "parent_program",
@@ -132,20 +150,31 @@ class ProgramResults(Displayable):
         "_results_filename",
     ]
 
-    # `_write_shot_entries`/`merge_dict_attr` navigate directly into this
-    # attr's raw HDF5 structure (dict -> keys/values -> iterable, one group
-    # per shot) to append new shots cheaply, bypassing the normal recursive
-    # decode entirely -- HDF5's array-free-subtree collapse would silently
-    # break that navigation whenever a batch of shots happens to have no
-    # array anywhere in it (e.g. an all-classical program with no quantum
-    # state), so this attr is exempted from collapse.
+    # Each streamed dict attr, paired with its own `value_use_dataset` flag
+    # for `merge_dict_attr`: `shot_histories`' `History` values are never
+    # native HDF5 scalars (always groups), while `shot_wall_clock_times`'
+    # plain `float` values are, so they use the compact dataset format.
+    _STREAMED_DICT_ATTRS: ClassVar[tuple[tuple[str, bool], ...]] = (
+        ("shot_histories", False),
+        ("shot_wall_clock_times", True),
+    )
+
+    # `_write_streamed_dict_entries`/`merge_dict_attr` navigate directly
+    # into these attrs' raw HDF5 structure (dict -> keys/values ->
+    # iterable, one group per shot) to append new shots cheaply, bypassing
+    # the normal recursive decode entirely -- HDF5's array-free-subtree
+    # collapse would silently break that navigation whenever a batch of
+    # shots happens to have no array anywhere in it (e.g. an all-classical
+    # program with no quantum state), so both attrs are exempted from
+    # collapse.
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
-        {"shot_histories"}
+        name for name, _ in _STREAMED_DICT_ATTRS
     )
 
     def __init__(
         self,
         shot_histories: dict[int, History] | None = None,
+        shot_wall_clock_times: dict[int, float] | None = None,
         name: str = "(Unnamed program results)",
         parent_program: "QuantumProgram | str | Path | None" = None,
         checkpoint_enabled: bool = False,
@@ -162,6 +191,11 @@ class ProgramResults(Displayable):
         shot_histories:
             A dictionary mapping shot indices to History objects.
             Defaults to None, which initializes an empty dict.
+
+        shot_wall_clock_times:
+            A dictionary mapping shot indices to each shot's wall-clock
+            execution duration in seconds. Defaults to None, which
+            initializes an empty dict.
 
         name:
             Name for logging
@@ -192,6 +226,12 @@ class ProgramResults(Displayable):
             shot_histories if shot_histories is not None else {}
         )
         """Record of shot [](api:History) objects, mapped by shot index."""
+
+        self.shot_wall_clock_times = (
+            shot_wall_clock_times if shot_wall_clock_times is not None else {}
+        )
+        """Record of each shot's wall-clock execution duration in seconds,
+        mapped by shot index."""
 
         self._unwritten_shots: set[int] = set()
         """Set of shot indices that have not been written to checkpoint files yet."""
@@ -404,10 +444,10 @@ class ProgramResults(Displayable):
     def _write_results_snapshot_if_fresh(self) -> None:
         """Write the entire ProgramResults (including nested parent_program) to
         results.h5 only if that file doesn't already exist. The written
-        (empty) shot_histories attribute is then reset so a later
-        merge_dict_attr call establishes it fresh in the correct storage
-        format. Then update self.parent_program to point to results.h5 (as
-        a string path).
+        (empty) shot_histories and shot_wall_clock_times attributes are then
+        reset so a later merge_dict_attr call establishes each fresh in the
+        correct storage format. Then update self.parent_program to point to
+        results.h5 (as a string path).
         """
         # Set default checkpoint_dir if needed
         if self._checkpoint_dir is None:
@@ -422,12 +462,12 @@ class ProgramResults(Displayable):
         # a resuming call not re-derive a fresh config from a possibly-different self)
         if not results_path.exists():
             Serializable.write(self, results_path, format="hdf5")
-            _retry_hdf5_write(
-                results_path,
-                lambda f: _reset_empty_groups_format_dict_attr(
-                    f, "shot_histories"
-                ),
-            )
+
+            def _reset_skeletons(f: h5py.File) -> None:
+                for attr_name, _ in self._STREAMED_DICT_ATTRS:
+                    _reset_empty_groups_format_dict_attr(f, attr_name)
+
+            _retry_hdf5_write(results_path, _reset_skeletons)
 
         # Always reassign parent_program to the results.h5 path (whether or not
         # we just wrote it), so _build_encode_cache_from_parent_program works
@@ -460,7 +500,12 @@ class ProgramResults(Displayable):
             # just continue without the cache - it's not critical for functionality
             pass
 
-    def add_shot(self, shot_index: int, history: HistoryLike) -> None:
+    def add_shot(
+        self,
+        shot_index: int,
+        history: HistoryLike,
+        wall_clock_time: float | None = None,
+    ) -> None:
         """Add a shot history to the results.
 
         Parameters
@@ -469,10 +514,16 @@ class ProgramResults(Displayable):
             The index of the shot to add.
         history:
             The History object for the shot.
+        wall_clock_time:
+            The shot's wall-clock execution duration in seconds. If None
+            (the default), no entry is recorded for this shot in
+            `shot_wall_clock_times`.
         """
         history = History(history)
         self.shot_histories[shot_index] = history
         self._unwritten_shots.add(shot_index)
+        if wall_clock_time is not None:
+            self.shot_wall_clock_times[shot_index] = wall_clock_time
 
     def collect_shot_data(
         self,
@@ -625,16 +676,20 @@ class ProgramResults(Displayable):
         # written before any shot data existed can have this attribute
         # reset, awaiting the first real write to establish its storage
         # format); treat that the same as an explicitly empty dict.
-        # Convert string keys back to integers if needed.
-        shot_histories = attr_dict.get("shot_histories") or {}
-        if shot_histories and all(
-            isinstance(k, str) and k.isdigit() for k in shot_histories.keys()
-        ):
-            # Convert string keys to integers
-            shot_histories = {int(k): v for k, v in shot_histories.items()}
+        shot_histories = _normalize_decoded_int_keyed_dict(
+            attr_dict.get("shot_histories") or {}
+        )
+
+        # shot_wall_clock_times gets the same string-key-to-int treatment as
+        # shot_histories above, plus a value-to-float cast (its values are
+        # plain floats rather than Serializable objects already typed).
+        shot_wall_clock_times = _normalize_decoded_int_keyed_dict(
+            attr_dict.get("shot_wall_clock_times") or {}, value_cast=float
+        )
 
         obj = cls(
             shot_histories=shot_histories,
+            shot_wall_clock_times=shot_wall_clock_times,
             name=attr_dict["name"],
             parent_program=attr_dict["parent_program"],
             num_shots=attr_dict.get("num_shots"),
@@ -734,47 +789,74 @@ class ProgramResults(Displayable):
         shot_indices:
             List of shot indices to write to the checkpoint.
         """
-        # Prepare data to write - create a dict of unwritten shots
-        unwritten_shot_histories = {}
+        # Prepare data to write - one dict of unwritten entries per streamed
+        # attr, built in a single pass over shot_indices.
+        unwritten_by_attr: dict[str, dict[int, Any]] = {
+            attr_name: {} for attr_name, _ in self._STREAMED_DICT_ATTRS
+        }
         for shot_index in shot_indices:
-            if shot_index in self.shot_histories:
-                unwritten_shot_histories[shot_index] = self.shot_histories[
-                    shot_index
-                ]
+            for attr_name, _ in self._STREAMED_DICT_ATTRS:
+                attr_value = getattr(self, attr_name)
+                if shot_index in attr_value:
+                    unwritten_by_attr[attr_name][shot_index] = attr_value[
+                        shot_index
+                    ]
 
-        if not unwritten_shot_histories:
+        # Nothing to write only if every streamed attr has nothing
+        # unwritten -- checking `shot_histories` alone would miss a shot
+        # whose wall-clock time was recorded without ever getting a
+        # history entry (not possible via today's `add_shot`, but not
+        # something this generalized check should assume stays true).
+        if not any(unwritten_by_attr.values()):
             return  # No data to write
 
         # Write to HDF5 file using standard Serializable encoding, retrying
         # with backoff since a concurrent reader (e.g. a driver's progress
-        # poll) may transiently hold this same file's lock.
-        _retry_hdf5_write(
-            filename,
-            lambda f: self._write_shot_entries(
-                f, unwritten_shot_histories.items()
-            ),
-        )
+        # poll) may transiently hold this same file's lock; both dict
+        # attributes write inside the same retry so they stay consistent.
+        def _write(f: h5py.File) -> None:
+            for attr_name, value_use_dataset in self._STREAMED_DICT_ATTRS:
+                self._write_streamed_dict_entries(
+                    f,
+                    attr_name,
+                    value_use_dataset,
+                    unwritten_by_attr[attr_name].items(),
+                )
 
-    def _write_shot_entries(
-        self, h5_file: h5py.File, entries: Iterable[tuple[int, History]]
+        _retry_hdf5_write(filename, _write)
+
+    def _write_streamed_dict_entries(
+        self,
+        h5_file: h5py.File,
+        attr_name: str,
+        value_use_dataset: bool,
+        entries: Iterable[tuple[int, Any]],
     ) -> None:
-        """Stream shot entries into an HDF5 file's shot_histories dict
-        attribute, creating it fresh or extending it, without ever
-        materializing more than one entry in memory at a time.
+        """Stream entries into an HDF5 file's `attr_name` streamed dict
+        attribute (one of `_STREAMED_DICT_ATTRS`), creating it fresh or
+        extending it, without ever materializing more than one entry in
+        memory at a time.
 
         Parameters
         ----------
         h5_file:
             Open HDF5 file object in 'a' mode.
+        attr_name:
+            Name of the streamed dict attribute to write into.
+        value_use_dataset:
+            Whether this attribute's values are native HDF5 scalars (the
+            compact dataset format) rather than groups -- see
+            `_STREAMED_DICT_ATTRS`.
         entries:
-            An iterable of (shot_index: int, history: History) pairs to append.
+            An iterable of (shot_index: int, value) pairs to append.
         """
         if len(h5_file.keys()) == 0:
             # Bootstrap an empty ProgramResults shell, then drop the empty
-            # shot_histories skeleton it leaves behind -- the generic
+            # skeleton every streamed dict attr is left with -- the generic
             # encoder always writes an empty dict attribute in "groups"
             # format, which would otherwise prevent the merge_dict_attr
-            # call below from picking "dataset" format for shot-index keys.
+            # call below from picking "dataset" format for its shot-index
+            # keys.
             Serializable.encode(
                 ProgramResults(shot_histories={}),
                 format="hdf5",
@@ -782,155 +864,25 @@ class ProgramResults(Displayable):
                 encode_cache=self._checkpoint_encode_cache,
             )
             root_group = _resolve_checkpoint_object_group(h5_file)
-            if "shot_histories" in root_group:
-                del root_group["shot_histories"]
+            for streamed_attr_name, _ in self._STREAMED_DICT_ATTRS:
+                if streamed_attr_name in root_group:
+                    del root_group[streamed_attr_name]
 
         # Resolve to the actual object group, handling both fresh-envelope
         # and bootstrap-created file layouts.
         root_group = _resolve_checkpoint_object_group(h5_file)
 
-        # Shot-index keys stay a compact dataset (plain ints); History
-        # values are never native scalars, so always end up as groups.
+        # Shot-index keys always stay a compact dataset (plain ints);
+        # whether values do too depends on the attribute (see
+        # `_STREAMED_DICT_ATTRS`).
         merge_dict_attr(
             root_group,
-            "shot_histories",
+            attr_name,
             entries,
             encode_cache=self._checkpoint_encode_cache,
             key_use_dataset=True,
-            value_use_dataset=False,
+            value_use_dataset=value_use_dataset,
         )
-
-    @staticmethod
-    def _load_done_shots(
-        checkpoint_dir: Path, results_filename: str = "results.h5"
-    ) -> dict[int, HistoryLike]:
-        """Scan checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
-        decode each, and return the union of their shot_histories.
-        Explicitly skips *.tmp files (stale leftovers from a crash).
-
-        Parameters
-        ----------
-        checkpoint_dir:
-            Directory to scan for checkpoint files.
-        results_filename:
-            Filename for the canonical results checkpoint file.
-            Defaults to "results.h5".
-
-        Returns
-        -------
-        dict[int, HistoryLike]
-            Union of all shot_histories found, mapping shot index to History.
-            Returns empty dict if no checkpoints exist yet.
-        """
-        done: dict[int, HistoryLike] = {}
-
-        # First, read results.h5 if it exists
-        results_file = checkpoint_dir / results_filename
-        if results_file.exists():
-            try:
-                with h5py.File(results_file, "r") as f:
-                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                    loaded = Serializable.decode(
-                        f, format="hdf5", decode_cache=decode_cache
-                    )
-                    if (
-                        isinstance(loaded, ProgramResults)
-                        and loaded.shot_histories
-                    ):
-                        done.update(loaded.shot_histories)
-            except (
-                BlockingIOError,
-                OSError,
-                KeyError,
-                ValueError,
-                RuntimeError,
-            ):
-                pass  # Skip if we can't read this file
-
-        # Then, read every worker_*_checkpoint.h5 (sorted, no .tmp files)
-        worker_files = sorted(
-            f
-            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
-            if not f.name.endswith(".tmp")
-        )
-        for worker_file in worker_files:
-            try:
-                with h5py.File(worker_file, "r") as f:
-                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                    loaded = Serializable.decode(
-                        f, format="hdf5", decode_cache=decode_cache
-                    )
-                    if (
-                        isinstance(loaded, ProgramResults)
-                        and loaded.shot_histories
-                    ):
-                        done.update(loaded.shot_histories)
-            except (
-                BlockingIOError,
-                OSError,
-                KeyError,
-                ValueError,
-                RuntimeError,
-            ):
-                pass  # Skip if we can't read this file
-
-        return done
-
-    @staticmethod
-    def _load_done_shot_indices(
-        checkpoint_dir: Path, results_filename: str = "results.h5"
-    ) -> set[int]:
-        """Scan checkpoint files for shot indices without decoding History values.
-
-        Scans checkpoint_dir for results.h5 and every worker_*_checkpoint.h5,
-        reading only the shot_histories keys (not their values), and returns
-        the union of those indices. Uses get_dict_attr_keys for this cheap,
-        key-only scan that avoids decoding any History data even when
-        resuming with lazy_loading=True.
-        Explicitly skips *.tmp files (stale leftovers from a crash).
-
-        Parameters
-        ----------
-        checkpoint_dir : Path
-            Directory to scan for checkpoint files.
-        results_filename:
-            Filename for the canonical results checkpoint file.
-            Defaults to "results.h5".
-
-        Returns
-        -------
-        set[int]
-            Unique shot indices found across all checkpoint files.
-            Returns empty set if no checkpoints exist yet.
-        """
-        checkpoint_dir = Path(checkpoint_dir)
-        done_indices: set[int] = set()
-
-        # First, read indices from results.h5 if it exists
-        results_file = checkpoint_dir / results_filename
-        if results_file.exists():
-            try:
-                with h5py.File(results_file, "r") as f:
-                    keys = get_dict_attr_keys(f, "shot_histories")
-                    done_indices.update(keys)
-            except (BlockingIOError, OSError, KeyError):
-                pass  # Skip if we can't read this file
-
-        # Then, read indices from every worker_*_checkpoint.h5 (sorted, no .tmp)
-        worker_files = sorted(
-            f
-            for f in checkpoint_dir.glob("worker_*_checkpoint.h5")
-            if not f.name.endswith(".tmp")
-        )
-        for worker_file in worker_files:
-            try:
-                with h5py.File(worker_file, "r") as f:
-                    keys = get_dict_attr_keys(f, "shot_histories")
-                    done_indices.update(keys)
-            except (BlockingIOError, OSError, KeyError):
-                pass  # Skip if we can't read this file
-
-        return done_indices
 
     @staticmethod
     def _count_done_shots(
@@ -957,8 +909,11 @@ class ProgramResults(Displayable):
             Returns 0 if no checkpoints exist yet.
         """
         return len(
-            ProgramResults._load_done_shot_indices(
-                checkpoint_dir, results_filename
+            read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                results_filename,
+                "worker_*_checkpoint.h5",
+                "shot_histories",
             )
         )
 
@@ -1007,6 +962,18 @@ class ProgramResults(Displayable):
             Path to the checkpoint file to load.
         """
 
+        def _merge_loaded_dict_attr(loaded_dict, target_dict, on_each=None):
+            """Merge `loaded_dict`'s entries into `target_dict`, skipping
+            any key already present in `target_dict`. `on_each`, if given,
+            is invoked for every loaded key regardless of whether it was
+            newly merged -- used by `shot_histories` to also clear a
+            just-loaded shot's `_unwritten_shots` membership."""
+            for shot_index, value in loaded_dict.items():
+                if shot_index not in target_dict:
+                    target_dict[shot_index] = value
+                if on_each is not None:
+                    on_each(shot_index)
+
         def _load(f: h5py.File) -> None:
             # Use standard Serializable decoding to load the ProgramResults.
             # A ResolvingDecodeCache is required since a shot may reference
@@ -1038,19 +1005,26 @@ class ProgramResults(Displayable):
             ):
                 self.max_frame_limit = loaded_results.max_frame_limit
 
-            # Merge the loaded shot histories into our current results
+            # Merge the loaded shot histories into our current results,
+            # keeping track of which shots are already checkpointed (only
+            # add shots we don't already have in memory; don't add to
+            # unwritten_shots since it's already checkpointed).
             if loaded_results.shot_histories:
-                # Merge shot histories, keeping track of which shots are already checkpointed
-                for (
-                    shot_index,
-                    history,
-                ) in loaded_results.shot_histories.items():
-                    # Only add shots that we don't already have in memory
-                    if shot_index not in self.shot_histories:
-                        self.shot_histories[shot_index] = history
-                    # Don't add to unwritten_shots since it's already checkpointed
-                    if shot_index in self._unwritten_shots:
-                        self._unwritten_shots.remove(shot_index)
+                _merge_loaded_dict_attr(
+                    loaded_results.shot_histories,
+                    self.shot_histories,
+                    on_each=self._unwritten_shots.discard,
+                )
+
+            # Merge the loaded wall-clock times the same way, independent
+            # of shot_histories (a shot may have one but not the other) --
+            # no _unwritten_shots bookkeeping here, since that set is
+            # scoped to shot_histories only.
+            if loaded_results.shot_wall_clock_times:
+                _merge_loaded_dict_attr(
+                    loaded_results.shot_wall_clock_times,
+                    self.shot_wall_clock_times,
+                )
 
         _retry_hdf5_read(filename, _load)
 
@@ -1112,19 +1086,29 @@ class ProgramResults(Displayable):
         def _do_merge(out_f: h5py.File) -> None:
             for worker_file in worker_files:
                 # Read already-merged keys from output_file so we can skip
-                # duplicates and avoid corrupt entries on a retry
-                already_merged = set()
-                try:
-                    keys = get_dict_attr_keys(out_f, "shot_histories")
-                    already_merged.update(keys)
-                except (BlockingIOError, OSError, KeyError):
-                    # output_file might not have shot_histories yet on first call
-                    pass
+                # duplicates and avoid corrupt entries on a retry -- tracked
+                # separately per attribute (keyed by name, so there's no
+                # ambiguity about which set belongs to which attr), since a
+                # shot's History and its wall-clock time are two
+                # independent dict attrs that could in principle merge out
+                # of lockstep across retries.
+                already_merged_by_attr: dict[str, set[int]] = {}
+                for attr_name, _ in self._STREAMED_DICT_ATTRS:
+                    already_merged_keys: set[int] = set()
+                    try:
+                        keys = get_dict_attr_keys(out_f, attr_name)
+                        already_merged_keys.update(keys)
+                    except (BlockingIOError, OSError, KeyError):
+                        # output_file might not have this attr yet on first call
+                        pass
+                    already_merged_by_attr[attr_name] = already_merged_keys
 
                 # Stream only new entries from this worker file
                 try:
                     self._merge_worker_into_output(
-                        worker_file, out_f, already_merged
+                        worker_file,
+                        out_f,
+                        already_merged_by_attr,
                     )
                 except (BlockingIOError, OSError, KeyError):
                     # Skip a truncated/corrupted worker file, leaving it for a
@@ -1148,7 +1132,13 @@ class ProgramResults(Displayable):
 
             def _init(out_f: h5py.File) -> None:
                 if len(out_f.keys()) == 0:
-                    self._write_shot_entries(out_f, iter(()))
+                    for (
+                        attr_name,
+                        value_use_dataset,
+                    ) in self._STREAMED_DICT_ATTRS:
+                        self._write_streamed_dict_entries(
+                            out_f, attr_name, value_use_dataset, iter(())
+                        )
 
             _retry_hdf5_write(output_file, _init)
 
@@ -1158,14 +1148,18 @@ class ProgramResults(Displayable):
         self,
         worker_file: Path,
         out_h5_file: h5py.File,
-        already_merged: set[int],
+        already_merged_by_attr: dict[str, set[int]] | None = None,
     ) -> None:
         """Merge one worker's checkpoint file into the output file, skipping
         any shot indices already present in the output (deduplication safety
         for crash-recovery retries).
 
         Streams one shot at a time via iter_dict_attr_entries, so peak
-        memory is bounded to a single shot.
+        memory is bounded to a single shot. `shot_wall_clock_times` merges
+        the same way as `shot_histories`, except its dataset-format values
+        are read in one bulk pass rather than decoded per shot (see
+        `iter_dict_attr_entries`'s own dataset-format branch), so merging
+        it never triggers an extra `History` decode.
 
         Parameters
         ----------
@@ -1173,35 +1167,41 @@ class ProgramResults(Displayable):
             Path to the worker checkpoint file to read.
         out_h5_file:
             Already-open, writable HDF5 file to merge this worker's shots into.
-        already_merged:
-            Set of shot indices already present in out_h5_file's
-            shot_histories. Any entry from the worker file whose key is in
-            this set is skipped.
+        already_merged_by_attr:
+            Mapping from each `_STREAMED_DICT_ATTRS` attribute name to the
+            set of shot indices already present for that attribute in
+            out_h5_file. Any worker-file entry whose key is in the
+            corresponding set is skipped. An attribute missing from this
+            dict (or the dict itself being `None`) defaults to an empty
+            set, i.e. nothing pre-merged for that attribute.
         """
+        already_merged_by_attr = {
+            attr_name: (already_merged_by_attr or {}).get(attr_name, set())
+            for attr_name, _ in self._STREAMED_DICT_ATTRS
+        }
 
         def _do_merge(in_f: h5py.File) -> None:
             if len(in_f.keys()) == 0:
                 return
 
             in_root_group = _resolve_checkpoint_object_group(in_f)
-            # Fresh decode_cache per worker file, matching this file's own scope --
-            # not a cache shared across separate worker files.
-            # Use a generator expression (not a list comprehension) to filter lazily,
-            # so entries are decoded and written one at a time, with peak memory
-            # bounded to a single shot even when filtering duplicates.
-            entries = (
-                (key, value)
-                for key, value in iter_dict_attr_entries(
+            for attr_name, value_use_dataset in self._STREAMED_DICT_ATTRS:
+                # Fresh decode_cache per attribute, matching this file's own
+                # scope -- not a cache shared across separate worker files
+                # (or across the two attributes of the same worker file).
+                entries = filter_unmerged_dict_attr_entries(
                     in_root_group,
-                    "shot_histories",
+                    attr_name,
+                    already_merged_by_attr[attr_name],
                     decode_cache=ResolvingDecodeCache(
                         root=in_f, format="hdf5"
                     ),
                 )
-                if key not in already_merged
-            )
-            # Consumed fully here, while `in_f` is still open.
-            self._write_shot_entries(out_h5_file, entries)
+                if entries is not None:
+                    # Consumed fully here, while `in_f` is still open.
+                    self._write_streamed_dict_entries(
+                        out_h5_file, attr_name, value_use_dataset, entries
+                    )
 
         _retry_hdf5_read(worker_file, _do_merge)
 

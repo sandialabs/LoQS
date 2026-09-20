@@ -14,7 +14,7 @@ from __future__ import annotations
 import copy
 import functools
 import h5py
-import itertools
+import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -24,6 +24,7 @@ from tqdm import tqdm
 
 from loqs.core.historydatacollector import HistoryDataCollector
 from loqs.core.programresults import (
+    _normalize_decoded_int_keyed_dict,
     _resolve_checkpoint_object_group,
     _reset_empty_groups_format_dict_attr,
 )
@@ -36,9 +37,12 @@ from loqs.internal import (
 )
 from loqs.internal.serializable import Serializable, ResolvingDecodeCache
 from loqs.internal.streamingmerge import (
+    filter_unmerged_dict_attr_entries,
     get_dict_attr_keys,
     merge_dict_attr,
     iter_dict_attr_entries,
+    read_checkpoint_dict_attr_union,
+    read_checkpoint_dict_attr_union_keys,
 )
 from loqs.tools.paralleltools import (
     ParallelStrategy,
@@ -90,7 +94,10 @@ class MultiProgramRunner(Serializable, Generic[T]):
     Subclasses implement hook methods to define their specific work logic.
     Checkpoint/resume behavior is controlled by explicit `checkpoint` and
     `resume` flags, applied against `item_checkpoint_dir`'s own on-disk state
-    according to a 4-case state machine (see `run()`).
+    according to a 4-case state machine (see `run()`). Once `run()` completes,
+    `item_wall_clock_times`/`shot_wall_clock_times` are populated as instance
+    attributes recording each item's/shot's own wall-clock duration (see their
+    own attribute docstrings for the exact mapping).
     """
 
     items: Sequence[T]
@@ -108,6 +115,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
         "_reduced_results",
         "keep_shot_results",
         "_program_results",
+        "item_wall_clock_times",
+        "shot_wall_clock_times",
         "poll_interval",
         "show_progress",
         "runner_filename",
@@ -115,8 +124,28 @@ class MultiProgramRunner(Serializable, Generic[T]):
         "run_kwargs",
     ]
 
+    # (worker-key, runner-key, value_use_dataset) triples for attributes that
+    # must populate on every dispatch, whether or not checkpointing is used.
+    _ALWAYS_MERGED_ATTRS: ClassVar[tuple[tuple[str, str, bool], ...]] = (
+        ("results", "_reduced_results", False),
+        ("item_wall_clock_times", "item_wall_clock_times", True),
+        ("shot_wall_clock_times", "shot_wall_clock_times", False),
+    )
+
+    # (worker-key, runner-key, value_use_dataset) triples: "results"/
+    # "_program_results" keep their worker-vs-runner name split; the two
+    # timing attrs share one name. item_wall_clock_times is a plain float
+    # (dataset format); shot_wall_clock_times is a nested dict, so it needs
+    # the general Serializable dict encoder instead (groups format).
+    # "_program_results" is the sole disk-only exception -- it never
+    # populates in memory without checkpointing, unlike the always-merged set.
+    _STREAMED_DICT_ATTRS: ClassVar[tuple[tuple[str, str, bool], ...]] = (
+        _ALWAYS_MERGED_ATTRS
+        + (("_program_results", "_program_results", False),)
+    )
+
     _NO_COLLAPSE_ATTRS: ClassVar[frozenset[str]] = frozenset(
-        {"_reduced_results", "_program_results"}
+        runner_key for _, runner_key, _ in _STREAMED_DICT_ATTRS
     )
 
     CHKPT_SUBDIR_PREFIX: ClassVar[str] = "item"
@@ -158,6 +187,12 @@ class MultiProgramRunner(Serializable, Generic[T]):
         self._reduced_results: dict[int, Any] = {}
         self.keep_shot_results = keep_shot_results
         self._program_results: dict[int, Any] = {}
+        self.item_wall_clock_times: dict[int, float] = {}
+        """Total wall-clock duration for processing each item,
+        mapped by item index."""
+
+        self.shot_wall_clock_times: dict[int, dict[int, float]] = {}
+        """Wall-clock duration for each shot, nested by item index then shot index."""
         self.poll_interval = poll_interval
         self.show_progress = show_progress
         self.runner_filename = runner_filename
@@ -207,6 +242,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
         index_map = attr_dict.pop("index_map", None)
         reduced_results = attr_dict.pop("_reduced_results", None)
         program_results = attr_dict.pop("_program_results", None)
+        item_wall_clock_times = attr_dict.pop("item_wall_clock_times", None)
+        shot_wall_clock_times = attr_dict.pop("shot_wall_clock_times", None)
         # Reconstruct with constructor parameters only
         obj = super()._from_decoded_attrs(attr_dict)
         # Restore internal state directly on the instance
@@ -216,6 +253,23 @@ class MultiProgramRunner(Serializable, Generic[T]):
         )
         obj._program_results = (
             program_results if program_results is not None else {}
+        )
+        obj.item_wall_clock_times = (
+            _normalize_decoded_int_keyed_dict(
+                item_wall_clock_times, value_cast=float
+            )
+            if item_wall_clock_times is not None
+            else {}
+        )
+        obj.shot_wall_clock_times = (
+            _normalize_decoded_int_keyed_dict(
+                shot_wall_clock_times,
+                value_cast=lambda inner: _normalize_decoded_int_keyed_dict(
+                    inner, value_cast=float
+                ),
+            )
+            if shot_wall_clock_times is not None
+            else {}
         )
         # Auto-set resume=True when deserializing a checkpoint-enabled runner:
         # if checkpoint=True and item_checkpoint_dir exists, we're implicitly resuming
@@ -276,10 +330,15 @@ class MultiProgramRunner(Serializable, Generic[T]):
         (d) `checkpoint=True`, `resume=True`, no on-disk state: raise
             `ValueError` (nothing to resume from).
 
-        For both cases (a) and (c), `_reduced_results`, `_program_results`, and
-        `index_map` are seeded from stored state before `runner.h5` is written,
-        then `runner.h5` is updated with the full prior state. Progress and
+        For both cases (a) and (c), `_reduced_results`, `_program_results`,
+        `item_wall_clock_times`, `shot_wall_clock_times`, and `index_map` are
+        seeded from stored state before `runner.h5` is written, then
+        `runner.h5` is updated with the full prior state. Progress and
         done-detection is driven by `_read_done_union` on subsequent work.
+        When checkpointing, `_run_dispatch` populates `item_wall_clock_times`/
+        `shot_wall_clock_times` directly from the consolidated on-disk state
+        once dispatch completes; without checkpointing, it merges them
+        in-memory from each item's own dispatch result instead.
         """
         stored = None
         if self.checkpoint:
@@ -341,6 +400,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 assert isinstance(stored, MultiProgramRunner)
                 self._reduced_results = dict(stored._reduced_results)
                 self._program_results = dict(stored._program_results)
+                self.item_wall_clock_times = dict(stored.item_wall_clock_times)
+                self.shot_wall_clock_times = dict(stored.shot_wall_clock_times)
                 if self.index_map is None:
                     self.index_map = (
                         dict(stored.index_map)
@@ -355,7 +416,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
             # the wrong ("groups") format, so the first real merge_dict_attr
             # call for it establishes the correct format instead.
             with h5py.File(runner_path, "a") as f:
-                for attr_name in ("_reduced_results", "_program_results"):
+                for attr_name in self._NO_COLLAPSE_ATTRS:
                     _reset_empty_groups_format_dict_attr(f, attr_name)
 
         # Pre-assign indices via item_key_fn, adopting the persisted map
@@ -379,7 +440,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 # This write may again re-serialize an as-yet-empty dict
                 # attribute in the wrong format; reset it the same way.
                 with h5py.File(index_map_path, "a") as f:
-                    for attr_name in ("_reduced_results", "_program_results"):
+                    for attr_name in self._NO_COLLAPSE_ATTRS:
                         _reset_empty_groups_format_dict_attr(f, attr_name)
 
         self._run_dispatch(
@@ -477,7 +538,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
 
         try:
             # Dispatch
-            newly_computed: dict[int, Any] = {}
+            newly_computed: dict[int, dict[str, Any]] = {}
             if not remaining:
                 # Nothing to do, skip dispatch
                 pass
@@ -530,15 +591,21 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     runner_filename=self.runner_filename,
                     delete_originals=True,
                 )
-                # Read final results from the union of runner.h5 and any
-                # remaining worker files. This one-shot final-assembly pass has
-                # no next poll tick, so surviving lock conflicts propagate.
-                final_done = _read_done_union(
-                    self.item_checkpoint_dir,
-                    runner_filename=self.runner_filename,
-                    attr_name="results",
-                    retry_on_conflict=True,
-                )
+                # Read every always-merged attribute from disk directly into
+                # its own runner-side attribute; a lock conflict here
+                # propagates, since this one-shot pass has no next poll tick.
+                for worker_key, runner_key, _ in self._ALWAYS_MERGED_ATTRS:
+                    setattr(
+                        self,
+                        runner_key,
+                        _read_done_union(
+                            self.item_checkpoint_dir,
+                            runner_filename=self.runner_filename,
+                            attr_name=worker_key,
+                            retry_on_conflict=True,
+                        ),
+                    )
+                final_done = self._reduced_results
                 # Handle _program_results if keep_shot_results is enabled
                 if self.keep_shot_results:
                     if self.lazy_loading:
@@ -565,14 +632,17 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             retry_on_conflict=True,
                         )
             else:
-                # No checkpointing, combine prior done + newly computed
+                # No checkpointing: merge each _ALWAYS_MERGED_ATTRS value out
+                # of the aux dicts below, since nothing was written to disk.
                 final_done = done.copy()
                 final_done.update(newly_computed)
-
-            # `build_output` and `_ordered_reduced_results` read from
-            # `_reduced_results`; sync it from the authoritative `final_done`
-            # set, since a subclass's on_item_done callback may not populate it.
-            self._reduced_results.update(final_done)
+                for _, runner_key, _ in self._ALWAYS_MERGED_ATTRS:
+                    getattr(self, runner_key).update(
+                        {
+                            index: aux[runner_key]
+                            for index, aux in final_done.items()
+                        }
+                    )
 
             _verify_final_completeness(
                 items_with_index,
@@ -596,11 +666,13 @@ class MultiProgramRunner(Serializable, Generic[T]):
         Creates a ProgramResults configured to load shots from the runner.h5's
         own `_program_results` dict attribute at the given index, with
         lazy_loading=True. `num_shots`/`max_frame_limit` are forwarded from
-        this runner (genuine per-runner scalars); `parent_program`/`name` are
-        genuinely per-item, so they aren't set here directly -- instead,
-        `_set_nested_shot_source` marks them unresolved, and `ProgramResults`'
-        own `name`/`parent_program` properties lazily resolve each one from
-        this same nested source the first time a caller actually reads it.
+        this runner (genuine per-runner scalars), and `shot_wall_clock_times`
+        is forwarded from this runner's own already-populated per-item timing
+        data; `parent_program`/`name` are genuinely per-item, so they aren't
+        set here directly -- instead, `_set_nested_shot_source` marks them
+        unresolved, and `ProgramResults`' own `name`/`parent_program`
+        properties lazily resolve each one from this same nested source the
+        first time a caller actually reads it.
 
         Parameters
         ----------
@@ -619,6 +691,9 @@ class MultiProgramRunner(Serializable, Generic[T]):
         pr = ProgramResults(
             num_shots=getattr(self, "num_shots", None),
             max_frame_limit=self.run_kwargs.get("max_frame_limit"),
+            shot_wall_clock_times=dict(
+                self.shot_wall_clock_times.get(index, {})
+            ),
             lazy_loading=True,
         )
         pr._set_nested_shot_source(runner_file, index)
@@ -825,8 +900,12 @@ def _shared_item_worker(
 
     Builds a program for the given index, runs it with resolved kwargs, reduces
     the program results, and optionally keeps shot results. Handles checkpoint
-    setup when needed.
+    setup when needed. Returns a dict keyed by `"_reduced_results"`,
+    `"item_wall_clock_times"` (this entire body's own wall-clock duration),
+    and `"shot_wall_clock_times"` (per-shot wall-clock times), plus
+    `"program_results"` when `keep_shot_results` is True.
     """
+    item_start_time = time.perf_counter()
     program = build_program(index)
 
     resolved_run_kwargs = {
@@ -860,12 +939,25 @@ def _shared_item_worker(
 
     program_results = program.run(**resolved_run_kwargs)
     reduced_result = reduce_program_outcomes(program_results)
+    item_wall_clock_time = time.perf_counter() - item_start_time
+    # Copy now, since program_results may be discarded below. Falls back to
+    # {} for a test double or other stand-in that doesn't carry this attr.
+    shot_wall_clock_times = dict(
+        getattr(program_results, "shot_wall_clock_times", None) or {}
+    )
+
+    aux = {
+        "_reduced_results": reduced_result,
+        "item_wall_clock_times": item_wall_clock_time,
+        "shot_wall_clock_times": shot_wall_clock_times,
+    }
 
     if keep_shot_results:
-        return reduced_result, program_results
+        aux["program_results"] = program_results
+        return aux
 
     del program, program_results
-    return reduced_result
+    return aux
 
 
 def _assign_indices_with_keys(
@@ -916,37 +1008,13 @@ def _read_worker_files(
     dict[int, Any]
         Merged {index: result} dict from all worker files.
     """
-    done: dict[int, Any] = {}
-    for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
-
-        def _read(f: h5py.File) -> None:
-            # A shared decode_cache is required across this loop so that
-            # a Serializable value referenced by more than one entry (a
-            # ProgramResults sharing a parent QuantumProgram, say) decodes
-            # to the same real object everywhere, rather than an
-            # unresolved DeferredRef past its first occurrence.
-            decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-            for key, value in iter_dict_attr_entries(
-                f, attr_name, decode_cache=decode_cache
-            ):
-                done[key] = value
-
-        try:
-            if retry_on_conflict:
-                _retry_hdf5_read(worker_file, _read)
-            else:
-                with h5py.File(worker_file, "r") as f:
-                    _read(f)
-        except KeyError:
-            # Missing attribute or file corruption; skip this file for now.
-            continue
-        except (BlockingIOError, OSError):
-            if retry_on_conflict:
-                raise
-            # Transient lock conflict; skip this file for now, it will be
-            # retried on the next poll tick.
-            continue
-    return done
+    return read_checkpoint_dict_attr_union(
+        checkpoint_dir,
+        None,
+        "worker_*_runner.h5",
+        attr_name,
+        retry_on_conflict=retry_on_conflict,
+    )
 
 
 def _read_done_union(
@@ -956,8 +1024,8 @@ def _read_done_union(
     retry_on_conflict: bool = False,
 ) -> dict[int, Any]:
     """Compute the union of runner.h5's consolidated dict attribute and all
-    worker_*_runner.h5 files' matching attributes, mirroring the pattern of
-    ProgramResults._load_done_shots.
+    worker_*_runner.h5 files' matching attributes, via the shared
+    read_checkpoint_dict_attr_union primitive.
 
     Reads from runner.h5's own state first (if it exists), then merges in any
     entries from worker files, with worker file entries taking precedence on
@@ -985,53 +1053,24 @@ def _read_done_union(
         Union of all entries from runner.h5 and all worker files.
         Returns empty dict if no checkpoints exist.
     """
-    done: dict[int, Any] = {}
-
-    # First, read runner.h5's consolidated state if it exists
-    runner_path = checkpoint_dir / runner_filename
-    if runner_path.exists():
-        # Map "results" (the dict attribute name) to "_reduced_results"
-        # (the internal attribute name in runner.h5)
-        runner_attr_name = (
-            "_reduced_results" if attr_name == "results" else attr_name
-        )
-
-        def _read(f: h5py.File) -> None:
-            # A shared decode_cache is required across this loop so that
-            # a Serializable value referenced by more than one entry (a
-            # ProgramResults sharing a parent QuantumProgram, say) decodes
-            # to the same real object everywhere, rather than an
-            # unresolved DeferredRef past its first occurrence.
-            decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-            for key, value in iter_dict_attr_entries(
-                f, runner_attr_name, decode_cache=decode_cache
-            ):
-                done[key] = value
-
-        try:
-            if retry_on_conflict:
-                _retry_hdf5_read(runner_path, _read)
-            else:
-                with h5py.File(runner_path, "r") as f:
-                    _read(f)
-        except KeyError:
-            # Missing attribute or file corruption; fall back to worker files
-            pass
-        except (BlockingIOError, OSError):
-            if retry_on_conflict:
-                raise
-            # Transient lock; fall back to worker files
-            pass
-
-    # Then, read every worker_*_runner.h5 (worker entries override runner.h5 if
-    # there's a key collision, which shouldn't happen normally but ensures
-    # freshest data if both exist)
-    for key, value in _read_worker_files(
+    canonical_attr_name = (
+        "_reduced_results" if attr_name == "results" else None
+    )
+    done: dict[int, Any] = read_checkpoint_dict_attr_union(
         checkpoint_dir,
-        attr_name=attr_name,
+        runner_filename,
+        None,
+        attr_name,
+        canonical_attr_name=canonical_attr_name,
         retry_on_conflict=retry_on_conflict,
-    ).items():
-        done[key] = value
+    )
+    done.update(
+        _read_worker_files(
+            checkpoint_dir,
+            attr_name=attr_name,
+            retry_on_conflict=retry_on_conflict,
+        )
+    )
 
     return done
 
@@ -1049,63 +1088,17 @@ def _read_done_union_keys(
     `retry_on_conflict` semantics as `_read_done_union`; returns an empty
     set if no checkpoints exist.
     """
-    keys: set[int] = set()
-
-    # First, read runner.h5's consolidated state if it exists
-    runner_path = checkpoint_dir / runner_filename
-    if runner_path.exists():
-        # Map "results" (the dict attribute name) to "_reduced_results"
-        # (the internal attribute name in runner.h5)
-        runner_attr_name = (
-            "_reduced_results" if attr_name == "results" else attr_name
-        )
-
-        def _read(f: h5py.File) -> None:
-            keys.update(
-                get_dict_attr_keys(
-                    _get_runner_object_group(f), runner_attr_name
-                )
-            )
-
-        try:
-            if retry_on_conflict:
-                _retry_hdf5_read(runner_path, _read)
-            else:
-                with h5py.File(runner_path, "r") as f:
-                    _read(f)
-        except KeyError:
-            # Missing attribute or file corruption; fall back to worker files
-            pass
-        except (BlockingIOError, OSError):
-            if retry_on_conflict:
-                raise
-            # Transient lock; fall back to worker files
-            pass
-
-    # Then, read every worker_*_runner.h5 (same union semantics as
-    # _read_done_union; key presence is unaffected by which file it came from)
-    for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
-
-        def _read_worker(f: h5py.File) -> None:
-            keys.update(get_dict_attr_keys(f, attr_name))
-
-        try:
-            if retry_on_conflict:
-                _retry_hdf5_read(worker_file, _read_worker)
-            else:
-                with h5py.File(worker_file, "r") as f:
-                    _read_worker(f)
-        except KeyError:
-            # Missing attribute or file corruption; skip this file for now.
-            continue
-        except (BlockingIOError, OSError):
-            if retry_on_conflict:
-                raise
-            # Transient lock conflict; skip this file for now, it will be
-            # retried on the next poll tick.
-            continue
-
-    return keys
+    canonical_attr_name = (
+        "_reduced_results" if attr_name == "results" else None
+    )
+    return read_checkpoint_dict_attr_union_keys(
+        checkpoint_dir,
+        runner_filename,
+        "worker_*_runner.h5",
+        attr_name,
+        canonical_attr_name=canonical_attr_name,
+        retry_on_conflict=retry_on_conflict,
+    )
 
 
 def _get_runner_object_group(f: h5py.File) -> h5py.Group:
@@ -1118,63 +1111,6 @@ def _get_existing_dict_keys(obj_grp: h5py.Group, attr_name: str) -> set[int]:
     return set(get_dict_attr_keys(obj_grp, attr_name))
 
 
-def _merge_dict_attr_from_worker(
-    in_f: Any,
-    out_root: Any,
-    in_attr_name: str,
-    out_attr_name: str,
-    decode_cache: Any,
-    existing_keys: set[int],
-) -> None:
-    """Stream-merge one dict attribute from worker file to runner.h5.
-
-    Filters out keys already present in runner.h5 to avoid duplicates,
-    peeks the first entry to determine if there's anything to merge,
-    then streams the full sequence to merge_dict_attr.
-
-    Parameters
-    ----------
-    in_f : h5py.File
-        Open worker file for reading.
-    out_root : h5py.Group
-        Open runner.h5 object group for writing.
-    in_attr_name : str
-        Name of dict attribute to read from in_f (e.g. "results", "_program_results").
-    out_attr_name : str
-        Name of dict attribute to merge into in out_root (may differ from in_attr_name).
-    decode_cache : ResolvingDecodeCache
-        Shared decode cache for cross-attr Serializable references.
-    existing_keys : set[int]
-        Set of keys already merged; modified in-place to track new keys.
-    """
-    if in_attr_name not in in_f:
-        return
-
-    def _filtered_gen():
-        """Stream entries, skipping already-merged keys."""
-        for key, value in iter_dict_attr_entries(
-            in_f, in_attr_name, decode_cache=decode_cache
-        ):
-            if key not in existing_keys:
-                existing_keys.add(key)
-                yield (key, value)
-
-    # Peek first entry to determine if there's anything to merge
-    gen = _filtered_gen()
-    first_entry = next(gen, None)
-    if first_entry is not None:
-        # Reconstruct full sequence and stream to merge_dict_attr
-        entries = itertools.chain([first_entry], gen)
-        merge_dict_attr(
-            out_root,
-            out_attr_name,
-            entries,
-            encode_cache={},
-            key_use_dataset=True,
-            value_use_dataset=False,
-        )
-
-
 def _consolidate_worker_files(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
@@ -1184,11 +1120,13 @@ def _consolidate_worker_files(
     delete worker files once merged.
 
     Streams one item at a time from worker files into runner.h5's object group,
-    keeping memory bounded. Merges both "results" (stored as "_reduced_results")
-    and "_program_results" attributes. Skips indices already present in
-    runner.h5 to avoid duplicate entries on resume. Deletes each worker file
-    only once its entries are confirmed merged (crash-safe: a crashed merge
-    self-heals on retry since the worker file is still present).
+    keeping memory bounded. Merges every attribute in
+    `MultiProgramRunner._STREAMED_DICT_ATTRS` ("results" stored as
+    "_reduced_results", plus "_program_results", "item_wall_clock_times", and
+    "shot_wall_clock_times"). Skips indices already present in runner.h5 to
+    avoid duplicate entries on resume. Deletes each worker file only once its
+    entries are confirmed merged (crash-safe: a crashed merge self-heals on
+    retry since the worker file is still present).
 
     Parameters
     ----------
@@ -1204,24 +1142,21 @@ def _consolidate_worker_files(
     if not runner_path.exists():
         return
 
-    # Track existing keys in runner.h5 to avoid duplicates
-    existing_reduced_results_keys: set[int] = set()
-    existing_program_results_keys: set[int] = set()
+    # Track existing keys in runner.h5 to avoid duplicates, one set per
+    # runner-side attribute name.
+    existing_keys: dict[str, set[int]] = {}
     runner_is_empty = False
 
     def _read_existing_keys(out_f: h5py.File) -> None:
-        nonlocal runner_is_empty
-        nonlocal existing_reduced_results_keys, existing_program_results_keys
+        nonlocal runner_is_empty, existing_keys
         if len(out_f.keys()) == 0:
             runner_is_empty = True
             return
         out_root = _get_runner_object_group(out_f)
-        existing_reduced_results_keys = _get_existing_dict_keys(
-            out_root, "_reduced_results"
-        )
-        existing_program_results_keys = _get_existing_dict_keys(
-            out_root, "_program_results"
-        )
+        existing_keys = {
+            runner_key: _get_existing_dict_keys(out_root, runner_key)
+            for _, runner_key, _ in MultiProgramRunner._STREAMED_DICT_ATTRS
+        }
 
     _retry_hdf5_write(runner_path, _read_existing_keys)
     if runner_is_empty:
@@ -1236,32 +1171,35 @@ def _consolidate_worker_files(
             def _read_and_merge_worker(in_f: h5py.File) -> None:
                 def _merge_worker_into_runner(out_f: h5py.File) -> None:
                     out_root = _get_runner_object_group(out_f)
-                    # A shared decode_cache is required across both branches
-                    # below so that Serializable values referenced by entries
-                    # in either "results" or "_program_results" decode to the
-                    # same real object everywhere, rather than unresolved
-                    # DeferredRefs past their first occurrence.
+                    # A shared decode_cache is required across every
+                    # attribute below so that a Serializable value
+                    # referenced by entries in more than one attribute
+                    # decodes to the same real object everywhere, rather
+                    # than an unresolved DeferredRef past its first
+                    # occurrence.
                     decode_cache = ResolvingDecodeCache(
                         root=in_f, format="hdf5"
                     )
-                    # Merge "results" (stored as "_reduced_results" in runner.h5)
-                    _merge_dict_attr_from_worker(
-                        in_f,
-                        out_root,
-                        "results",
-                        "_reduced_results",
-                        decode_cache,
-                        existing_reduced_results_keys,
-                    )
-                    # Merge "_program_results" if present
-                    _merge_dict_attr_from_worker(
-                        in_f,
-                        out_root,
-                        "_program_results",
-                        "_program_results",
-                        decode_cache,
-                        existing_program_results_keys,
-                    )
+                    for (
+                        worker_key,
+                        runner_key,
+                        value_use_dataset,
+                    ) in MultiProgramRunner._STREAMED_DICT_ATTRS:
+                        entries = filter_unmerged_dict_attr_entries(
+                            in_f,
+                            worker_key,
+                            existing_keys[runner_key],
+                            decode_cache=decode_cache,
+                        )
+                        if entries is not None:
+                            merge_dict_attr(
+                                out_root,
+                                runner_key,
+                                entries,
+                                encode_cache={},
+                                key_use_dataset=True,
+                                value_use_dataset=value_use_dataset,
+                            )
 
                 _retry_hdf5_write(runner_path, _merge_worker_into_runner)
 
@@ -1288,6 +1226,7 @@ def _write_dict_entry_with_retry(
     attr_name: str,
     index: int,
     value: Any,
+    value_use_dataset: bool = False,
 ) -> None:
     """Write a single entry to a dict attribute in a worker file with retry logic.
 
@@ -1304,6 +1243,9 @@ def _write_dict_entry_with_retry(
         The key for the entry.
     value : Any
         The value to store.
+    value_use_dataset : bool, optional
+        Forwarded to `merge_dict_attr` (only consulted if this attribute
+        doesn't already exist in the worker file). Default False.
     """
     _retry_hdf5_write(
         worker_file_path,
@@ -1313,7 +1255,7 @@ def _write_dict_entry_with_retry(
             [(index, value)],
             encode_cache={},
             key_use_dataset=True,
-            value_use_dataset=False,
+            value_use_dataset=value_use_dataset,
         ),
     )
 
@@ -1405,10 +1347,18 @@ def _process_and_checkpoint_item(
     shot_checkpoint_subdir: Callable[[int], Path | None] | None,
     item_checkpoint_dir: Path | None,
     results_filename: str = "results.h5",
-) -> Any:
-    """Call process_item, unpack result, and checkpoint to worker file.
+) -> dict[str, Any]:
+    """Call process_item, checkpoint its result to a worker file, and return
+    a dict for the caller to thread upward.
 
-    Returns the unpacked result.
+    When checkpointing, everything is already durable on disk, so only
+    `{"_reduced_results": ...}` is returned (the sole key `on_item_done`
+    reads); otherwise the full `_ALWAYS_MERGED_ATTRS` runner-side mapping is
+    returned for the no-checkpoint branch's own in-memory merge.
+    `process_item`'s own `"program_results"` entry (when `keep_shot_results`)
+    is checkpointed to the worker file directly below but excluded either
+    way, to avoid forwarding a lazy-loading `ProgramResults`'s open HDF5
+    handle across a pickle boundary in the parallel case.
 
     Parameters
     ----------
@@ -1420,7 +1370,7 @@ def _process_and_checkpoint_item(
     if keep_shot_results:
         extra_kwargs["keep_shot_results"] = True
 
-    raw_return = process_item(
+    aux = process_item(
         item,
         index,
         shot_executor=shot_executor,
@@ -1428,22 +1378,15 @@ def _process_and_checkpoint_item(
         **extra_kwargs,
     )
 
-    # Unpack result and optional ProgramResults based on keep_shot_results
-    if keep_shot_results:
-        result, in_memory_pr = raw_return
-    else:
-        result = raw_return
+    in_memory_pr = aux.get("program_results")
 
     # Checkpoint result to worker file
     if item_checkpoint_dir is not None:
         worker_file_path = (
             item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
         )
-        _write_dict_entry_with_retry(
-            worker_file_path, "results", index, result
-        )
-
-        # If keep_shot_results is enabled, retrieve and write ProgramResults
+        # If keep_shot_results is enabled, retrieve ProgramResults
+        pr = None
         if keep_shot_results:
             pr = _resolve_kept_program_results(
                 index,
@@ -1451,12 +1394,33 @@ def _process_and_checkpoint_item(
                 in_memory_pr,
                 results_filename=results_filename,
             )
-            if pr is not None:
-                _write_dict_entry_with_retry(
-                    worker_file_path, "_program_results", index, pr
-                )
+        for (
+            worker_key,
+            runner_key,
+            value_use_dataset,
+        ) in MultiProgramRunner._ALWAYS_MERGED_ATTRS:
+            _write_dict_entry_with_retry(
+                worker_file_path,
+                worker_key,
+                index,
+                aux[runner_key],
+                value_use_dataset=value_use_dataset,
+            )
+        if keep_shot_results and pr is not None:
+            _write_dict_entry_with_retry(
+                worker_file_path,
+                "_program_results",
+                index,
+                pr,
+                value_use_dataset=False,
+            )
 
-    return result
+    if item_checkpoint_dir is not None:
+        return {"_reduced_results": aux["_reduced_results"]}
+    return {
+        runner_key: aux[runner_key]
+        for _, runner_key, _ in MultiProgramRunner._ALWAYS_MERGED_ATTRS
+    }
 
 
 def _run_serial(
@@ -1470,8 +1434,10 @@ def _run_serial(
     keep_shot_results: bool = False,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
     results_filename: str = "results.h5",
-) -> dict[int, Any]:
-    """Execute remaining items serially. Returns {index: result} for in-memory results.
+) -> dict[int, dict[str, Any]]:
+    """Execute remaining items serially. Returns {index: aux} for in-memory
+    results, where each `aux` is the dict returned by
+    `_process_and_checkpoint_item` (reduced result plus timing attributes).
 
     Parameters
     ----------
@@ -1488,10 +1454,10 @@ def _run_serial(
         if parallel_strategy is not None
         else None
     )
-    results_dict: dict[int, Any] = {}
+    results_dict: dict[int, dict[str, Any]] = {}
 
     for index, item in remaining:
-        result = _process_and_checkpoint_item(
+        aux = _process_and_checkpoint_item(
             process_item,
             item,
             index,
@@ -1504,10 +1470,10 @@ def _run_serial(
             results_filename=results_filename,
         )
 
-        results_dict[index] = result
+        results_dict[index] = aux
 
         if on_item_done is not None:
-            on_item_done(index, item, result)
+            on_item_done(index, item, aux["_reduced_results"])
 
         if pbar is not None:
             pbar.update(1)
@@ -1623,10 +1589,12 @@ def _run_parallel(
     shots_pbar: Any = None,
     num_shots_for_progress: int | None = None,
     results_filename: str = "results.h5",
-) -> dict[int, Any]:
+) -> dict[int, dict[str, Any]]:
     """Execute remaining items in parallel with checkpointing and polling.
 
-    Returns {index: result} for in-memory results (when no checkpointing).
+    Returns {index: aux} for in-memory results (when no checkpointing), where
+    each `aux` is the dict returned by `_process_and_checkpoint_item`
+    (reduced result plus timing attributes).
 
     Parameters
     ----------
@@ -1746,16 +1714,21 @@ def _run_parallel(
         on_poll()
 
     # Build newly_computed dict from chunk results (fallback/safety net when no checkpointing)
-    newly_computed: dict[int, Any] = {}
+    newly_computed: dict[int, dict[str, Any]] = {}
     for chunk_results in chunk_results_list:
-        for index, result in chunk_results:
-            newly_computed[index] = result
+        for index, aux in chunk_results:
+            newly_computed[index] = aux
 
     # For any items not already observed via worker file polling (i.e., when item_checkpoint_dir
     # is None), invoke on_item_done now so callers can collect results via the callback
-    for index, result in newly_computed.items():
+    for index, aux in newly_computed.items():
         _mark_observed_and_notify(
-            index, result, observed_indices, items_map, on_item_done, pbar
+            index,
+            aux["_reduced_results"],
+            observed_indices,
+            items_map,
+            on_item_done,
+            pbar,
         )
 
     return newly_computed
@@ -1771,10 +1744,12 @@ def _generic_chunk_worker(
     keep_shot_results: bool = False,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None = None,
     results_filename: str = "results.h5",
-) -> list[tuple[int, Any]]:
+) -> list[tuple[int, dict[str, Any]]]:
     """Worker function for parallel execution of a chunk.
 
-    Returns list of (index, result) tuples.
+    Returns a list of (index, aux) pairs, where each `aux` is the dict
+    returned by `_process_and_checkpoint_item` (reduced result plus timing
+    attributes).
 
     Parameters
     ----------
@@ -1793,7 +1768,7 @@ def _generic_chunk_worker(
             )
             _write_current_item_index_with_retry(worker_file_path, index)
 
-        result = _process_and_checkpoint_item(
+        aux = _process_and_checkpoint_item(
             process_item,
             item,
             index,
@@ -1806,6 +1781,6 @@ def _generic_chunk_worker(
             results_filename=results_filename,
         )
 
-        results.append((index, result))
+        results.append((index, aux))
 
     return results

@@ -419,6 +419,7 @@ with tempfile.TemporaryDirectory() as checkpoint_dir:
         verbose=False,
     )
     print(f"in-memory shots right after run(): {len(results.shot_histories)}")
+    print(f"wall-clock times available: {len(results.shot_wall_clock_times)}")
 
     # The consolidated checkpoint is an ordinary, single-writer checkpoint,
     # readable the same way regardless of how many workers wrote it.
@@ -439,6 +440,8 @@ shot from the returned [ProgramResults](api:ProgramResults)'s own in-memory
 value holds only the yet-unwritten tail once checkpointing is active --
 pass `lazy_loading=False` to keep every shot in memory regardless,
 or reload the full set from disk via `load_checkpoint()` as above.
+Note that `shot_wall_clock_times` is NOT affected by `lazy_loading` --
+it stays fully populated in memory regardless of checkpointing.
 
 ### Resuming after a crash
 

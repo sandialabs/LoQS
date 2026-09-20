@@ -339,6 +339,85 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         # on_item_done should have been called for all 10 items (3 replayed + 7 new)
         assert len(runner2.on_item_done_calls) == 10
 
+    def test_crash_and_resume_preserves_item_and_shot_wall_clock_times(
+        self, tmp_path
+    ):
+        """A resumed run's `item_wall_clock_times`/`shot_wall_clock_times`
+        must cover every item, including the ones completed before the
+        simulated crash (merged into `runner.h5` from the first run's own
+        worker file) and not only the ones completed directly by the second,
+        resuming run -- proving the merge survives the resume boundary."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(10))
+
+        # First run: crash after 3 items
+        runner1 = _TrackingRunner(
+            items,
+            process_fn=_raise_after_n, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            max_count=3,
+        )
+
+        with pytest.raises(RuntimeError, match="Simulated crash"):
+            runner1.run()
+
+        # Second run: resume with normal function on same checkpoint dir
+        runner2 = _TrackingRunner(
+            items,
+            process_fn=_count_and_double, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+        )
+        results = runner2.run()
+
+        assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+
+        # Every item -- both the 3 completed before the crash and the 7
+        # completed only after resuming -- should have a wall-clock entry.
+        assert set(runner2.item_wall_clock_times.keys()) == set(range(len(items)))
+        for value in runner2.item_wall_clock_times.values():
+            assert isinstance(value, float)
+            assert value > 0
+
+        assert set(runner2.shot_wall_clock_times.keys()) == set(range(len(items)))
+        for shot_times in runner2.shot_wall_clock_times.values():
+            assert isinstance(shot_times, dict)
+            assert len(shot_times) > 0
+            for value in shot_times.values():
+                assert isinstance(value, float)
+                assert value > 0
+
+    def test_resume_after_full_completion_preserves_item_and_shot_wall_clock_times(
+        self, tmp_path
+    ):
+        """A resumed run whose own `runner.h5` already had consolidated
+        `item_wall_clock_times`/`shot_wall_clock_times` from a prior, fully
+        completed session must not silently lose that data just because
+        every item is already done and no new dispatch work happens to
+        repopulate it. Unlike `test_crash_and_resume_preserves_item_and_shot_wall_clock_times`
+        above, the first run here never crashes, so its worker file is
+        actually consolidated into `runner.h5` -- the resume-seed block's
+        `self.write(runner_path)` then truncates that consolidated state
+        before the second run's own (no-op) dispatch has any worker-file
+        data left to re-merge it from."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(5))
+
+        runner1 = _TrackingRunner(
+            items,
+            process_fn=_count_and_double, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+        )
+        runner1.run()
+
+        assert set(runner1.item_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner1.shot_wall_clock_times.keys()) == set(range(len(items)))
+
+        runner2 = _TrackingRunner(
+            items,
+            process_fn=_count_and_double, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+        )
+        runner2.run()
+
+        assert set(runner2.item_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner2.shot_wall_clock_times.keys()) == set(range(len(items)))
+
 
 class TestMultiProgramRunnerParallel:
     """Tests for parallel execution with checkpointing."""
@@ -456,6 +535,144 @@ class TestMultiProgramRunnerParallel:
         # The important test is that the final results are correct
         assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 
+    def test_parallel_resume_preserves_item_and_shot_wall_clock_times(
+        self, tmp_path
+    ):
+        """A parallel resumed run's `item_wall_clock_times`/
+        `shot_wall_clock_times` must cover every item, including the ones
+        manually seeded as already-done via `_seed_partial_worker_file`
+        (mirroring the manual-seed-then-resume convention of
+        `test_parallel_resume_from_partial_run` above, since no test in
+        this file ever triggers a real mid-flight `loky` crash) and not
+        only the ones the resuming run actually processes -- the parallel
+        counterpart of `test_crash_and_resume_preserves_item_and_shot_wall_clock_times`."""
+        loky = pytest.importorskip("loky")
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = list(range(10))
+
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=3,
+        )
+
+        runner1 = _TrackingDoubleRunner(
+            items, checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
+        )
+
+        # Manually create a partial completion scenario by manually seeding
+        # the worker files after creating runner.h5.
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        runner1.write(checkpoint_dir / "runner.h5")
+        _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
+
+        runner2 = _TrackingDoubleRunner(
+            items, checkpoint=True, resume=True,
+            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
+        )
+        results = runner2.run()
+
+        assert results == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+
+        # Every item -- both the 3 manually seeded as already done and the
+        # 7 this run actually processed -- should have a wall-clock entry.
+        assert set(runner2.item_wall_clock_times.keys()) == set(range(len(items)))
+        for value in runner2.item_wall_clock_times.values():
+            assert isinstance(value, float)
+            assert value > 0
+
+        assert set(runner2.shot_wall_clock_times.keys()) == set(range(len(items)))
+        for shot_times in runner2.shot_wall_clock_times.values():
+            assert isinstance(shot_times, dict)
+            assert len(shot_times) > 0
+            for value in shot_times.values():
+                assert isinstance(value, float)
+                assert value > 0
+
+
+class TestItemAndShotWallClockTimes:
+    """Tests for `MultiProgramRunner.item_wall_clock_times` and
+    `.shot_wall_clock_times`, populated during `.run()` from each item's
+    own per-item worker-body duration and its `ProgramResults.shot_wall_clock_times`,
+    respectively."""
+
+    @pytest.mark.parametrize("parallel", [False, True])
+    @pytest.mark.parametrize("checkpoint", [False, True])
+    def test_populates_item_and_shot_wall_clock_times(
+        self, tmp_path, checkpoint, parallel
+    ):
+        """A run populates `item_wall_clock_times` with exactly one positive
+        float per item index, and `shot_wall_clock_times` with exactly one
+        per-item dict per item index, each keyed by every shot index that
+        item actually ran -- across all four combinations of serial/parallel
+        dispatch and checkpointed/non-checkpointed execution."""
+        items = list(range(4))
+        num_shots = 3
+
+        run_kwargs = {"num_shots": num_shots, "max_frame_limit": 1_000_000}
+        checkpoint_dir = tmp_path / "checkpoints" if checkpoint else None
+
+        strategy = None
+        if parallel:
+            loky = pytest.importorskip("loky")
+            strategy = ParallelStrategy(
+                program_executor=loky.get_reusable_executor(max_workers=2),
+                n_program_chunks=2,
+            )
+
+        runner = _SleepingRunner(
+            items,
+            sleep_time=0.02,
+            checkpoint=checkpoint,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
+            run_kwargs=run_kwargs,
+        )
+        runner.run()
+
+        assert set(runner.item_wall_clock_times.keys()) == set(range(len(items)))
+        for value in runner.item_wall_clock_times.values():
+            assert isinstance(value, float)
+            assert value > 0
+
+        assert set(runner.shot_wall_clock_times.keys()) == set(range(len(items)))
+        for shot_times in runner.shot_wall_clock_times.values():
+            assert set(shot_times.keys()) == set(range(num_shots))
+            for value in shot_times.values():
+                assert isinstance(value, float)
+                assert value > 0
+
+    def test_item_and_shot_wall_clock_times_json_round_trip(self, tmp_path):
+        """`item_wall_clock_times` (flat `dict[int, float]`) and
+        `shot_wall_clock_times` (nested `dict[int, dict[int, float]]`) must
+        both round-trip through `.write()`/`.read()` with every outer and
+        inner key restored as `int`, not the `str` that JSON/HDF5 use to
+        encode int dict keys."""
+        runner = _SimpleDoubleRunner([1, 2, 3], checkpoint=False)
+        runner.item_wall_clock_times = {0: 1.5, 1: 2.5, 2: 3.5}
+        runner.shot_wall_clock_times = {
+            0: {0: 1.5, 1: 2.5},
+            1: {0: 3.5},
+            2: {0: 4.5, 1: 5.5, 2: 6.5},
+        }
+
+        for suffix in (".json", ".h5"):
+            path = tmp_path / f"runner{suffix}"
+            runner.write(path)
+            restored = _SimpleDoubleRunner.read(path)
+
+            for outer_key, value in restored.item_wall_clock_times.items():
+                assert isinstance(outer_key, int)
+                assert isinstance(value, float)
+            assert restored.item_wall_clock_times == runner.item_wall_clock_times
+
+            for outer_key, inner in restored.shot_wall_clock_times.items():
+                assert isinstance(outer_key, int)
+                for inner_key, value in inner.items():
+                    assert isinstance(inner_key, int)
+                    assert isinstance(value, float)
+            assert restored.shot_wall_clock_times == runner.shot_wall_clock_times
+
 
 class TestConcurrentWorkerWrites:
     """Tests for concurrent writing to worker files."""
@@ -528,7 +745,13 @@ class TestParallelToolsOnPollCallback:
 
 
 def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
-    """Seed a checkpoint directory with partial worker file results."""
+    """Seed a checkpoint directory with partial worker file results, plus
+    synthetic `item_wall_clock_times`/`shot_wall_clock_times` entries for
+    the same indices (mirroring
+    `test_consolidation_merges_item_and_shot_wall_clock_times`'s own
+    seeding style), so a resume test can confirm both timing attributes
+    cover a manually-seeded "already done" item, not just the ones the
+    resuming run actually processes."""
     worker_file_path = (
         checkpoint_dir / f"worker_{worker_id()}_runner.h5"
     )
@@ -540,6 +763,20 @@ def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
                 f,
                 "results",
                 [(index, index * 2)],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+            merge_dict_attr(
+                f,
+                "item_wall_clock_times",
+                [(index, 0.5 + index)],
+                key_use_dataset=True,
+                value_use_dataset=True,
+            )
+            merge_dict_attr(
+                f,
+                "shot_wall_clock_times",
+                [(index, {0: 0.1 + index})],
                 key_use_dataset=True,
                 value_use_dataset=False,
             )
@@ -1616,6 +1853,12 @@ class TestKeepShotResults:
         result = runner.run()
         assert result == [2, 4, 6]
 
+        # `_run_dispatch` populates these two attrs directly from disk once
+        # a checkpointed run completes; confirmed here alongside the
+        # lazy-proxy check below.
+        assert len(runner.item_wall_clock_times) == 3
+        assert len(runner.shot_wall_clock_times) == 3
+
         # Verify _program_results was populated with lazy ProgramResults
         assert len(runner._program_results) == 3
         for index in [0, 1, 2]:
@@ -1624,6 +1867,10 @@ class TestKeepShotResults:
             pr = runner._program_results[index]
             assert pr._nested_source_file is not None
             assert pr._nested_source_index == index
+            # The lazy proxy's shot_wall_clock_times must resolve from the
+            # runner's own per-item timing data, not its constructor default.
+            assert pr.shot_wall_clock_times
+            assert pr.shot_wall_clock_times == runner.shot_wall_clock_times[index]
 
         # Verify shots can be retrieved and collected lazily from runner.h5
         # (index 1 corresponds to item value 2: num_increments=2, increment_by=2, counter=4)
@@ -2805,21 +3052,22 @@ class TestWorkerFileConsolidation:
         `RuntimeError` naming the missing index when `lazy_loading=True`.
         """
         import loqs.tools.multiprogramrunner as multiprogramrunner_module
+        import loqs.internal.streamingmerge as streamingmerge_module
 
         checkpoint_dir = tmp_path / "ckpt"
         missing_index = 1
 
-        real_get_dict_attr_keys = multiprogramrunner_module.get_dict_attr_keys
+        real_get_dict_attr_keys = streamingmerge_module.get_dict_attr_keys
 
         def get_dict_attr_keys_dropping_program_result(
             parent_group, attr_name, decode_cache=None
         ):
             """Drop one key whenever `_program_results` is queried, to
             simulate a genuinely-missing entry; any other attribute name is
-            read through unaffected. A planned fix is expected to route this
-            lookup through a dedicated new helper instead of this function
-            directly -- once that lands, this monkeypatch target may need to
-            move to that new helper instead.
+            read through unaffected. This patches
+            `streamingmerge.get_dict_attr_keys` directly, since that's where
+            `read_checkpoint_dict_attr_union_keys` (the helper
+            `_read_done_union_keys` delegates to) actually calls it.
             """
             keys = real_get_dict_attr_keys(
                 parent_group, attr_name, decode_cache=decode_cache
@@ -2829,7 +3077,7 @@ class TestWorkerFileConsolidation:
             return keys
 
         monkeypatch.setattr(
-            multiprogramrunner_module,
+            streamingmerge_module,
             "get_dict_attr_keys",
             get_dict_attr_keys_dropping_program_result,
         )
@@ -2849,6 +3097,67 @@ class TestWorkerFileConsolidation:
             match=f"Item {missing_index} is missing from.*_program_results",
         ):
             runner.run()
+
+    def test_consolidation_merges_item_and_shot_wall_clock_times(
+        self, tmp_path
+    ):
+        """`_consolidate_worker_files` must merge worker files'
+        `item_wall_clock_times`/`shot_wall_clock_times` entries into
+        `runner.h5`, the same way it already merges `results`/
+        `_program_results`. Writes synthetic worker files directly via
+        `merge_dict_attr` (bypassing `.run()` entirely) and calls
+        `_consolidate_worker_files` directly, then reads `runner.h5` back
+        to confirm both attributes actually made it across.
+        """
+        from loqs.tools.multiprogramrunner import _consolidate_worker_files
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Bare runner.h5 with valid object-group structure to merge into.
+        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # Two worker files, each with one item's worth of synthetic timing
+        # data: item_wall_clock_times as a plain float (dataset-format),
+        # shot_wall_clock_times as a nested dict[int, float] (groups-format,
+        # since a dataset can't hold a nested value).
+        for i in range(2):
+            worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
+            with h5py.File(worker_file, "a") as f:
+                merge_dict_attr(
+                    f, "item_wall_clock_times", [(i, 0.5 + i)],
+                    key_use_dataset=True, value_use_dataset=True,
+                )
+                merge_dict_attr(
+                    f, "shot_wall_clock_times", [(i, {0: 0.1 + i, 1: 0.2 + i})],
+                    key_use_dataset=True, value_use_dataset=False,
+                )
+
+        # Single final-assembly consolidation pass, mirroring run()'s one-shot call.
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
+        )
+
+        with h5py.File(runner_path, "r") as f:
+            item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
+            shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
+
+        # CORRECT/desired behavior: both new attributes should have been
+        # merged from the worker files into runner.h5. This fails against
+        # today's unfixed code, since _consolidate_worker_files only knows
+        # about "results"/"_program_results" and silently ignores every
+        # other worker-file attribute.
+        assert item_times == {0: 0.5, 1: 1.5}, (
+            "item_wall_clock_times entries are missing from runner.h5: "
+            "_consolidate_worker_files doesn't yet know to merge this attribute."
+        )
+        assert shot_times == {0: {0: 0.1, 1: 0.2}, 1: {0: 1.1, 1: 1.2}}, (
+            "shot_wall_clock_times entries are missing from runner.h5: "
+            "_consolidate_worker_files doesn't yet know to merge this attribute."
+        )
 
 
 # Module-level test classes for decode_cache regression tests.
@@ -3186,10 +3495,10 @@ class TestDecodeCache:
                     written_count[0] += 1
 
         # Patch both iter_dict_attr_entries (read side) and _stream_into_existing_dict_attr
-        import loqs.tools.multiprogramrunner as mpr_module
-
         with unittest.mock.patch.object(
-            mpr_module, "iter_dict_attr_entries", side_effect=spy_iter_dict_attr_entries
+            streamingmerge,
+            "iter_dict_attr_entries",
+            side_effect=spy_iter_dict_attr_entries,
         ), unittest.mock.patch.object(
             streamingmerge,
             "_stream_into_existing_dict_attr",

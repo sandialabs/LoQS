@@ -16,6 +16,7 @@ from concurrent.futures import as_completed
 import copy
 import math
 from pathlib import Path
+import time
 from typing import ClassVar, Literal, TypeVar, cast
 import warnings
 
@@ -44,6 +45,10 @@ from loqs.core.recordables.patchlayout import PatchLayoutLike
 from loqs.core.programresults import ProgramResults
 from loqs.internal import Displayable, pin_worker_threads, worker_id
 from loqs.internal.legacy import legacy_name_hint
+from loqs.internal.streamingmerge import (
+    read_checkpoint_dict_attr_union,
+    read_checkpoint_dict_attr_union_keys,
+)
 
 T = TypeVar("T", bound="QuantumProgram")
 
@@ -467,7 +472,7 @@ class QuantumProgram(Displayable):
         num_shots: int,
         results_filename: str = "results.h5",
         lazy_loading: bool = True,
-    ) -> tuple[list[int], int, dict]:
+    ) -> tuple[list[int], int, dict, dict[int, float]]:
         """Scan `checkpoint_dir` for already-checkpointed shots and return
         missing indices, done count, and optionally the decoded History data.
 
@@ -492,26 +497,46 @@ class QuantumProgram(Displayable):
 
         Returns
         -------
-        tuple[list[int], int, dict]
+        tuple[list[int], int, dict, dict[int, float]]
             remaining: sorted list of shot indices still needing computation.
             num_done: count of already-checkpointed shots.
             done_data: {index: History} dict (empty if lazy_loading=True,
                 otherwise the decoded History for each checkpointed shot).
+            done_wall_clock_times: {index: float} dict of wall-clock times,
+                populated in both branches regardless of lazy_loading.
         """
         if lazy_loading:
             # Cheap path: scan keys without decoding History values
-            done_indices = ProgramResults._load_done_shot_indices(
-                checkpoint_dir, results_filename
+            done_indices = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                results_filename,
+                "worker_*_checkpoint.h5",
+                "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done_indices)
-            return remaining, len(done_indices), {}
+            done_wall_clock_times = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                results_filename,
+                "worker_*_checkpoint.h5",
+                "shot_wall_clock_times",
+            )
+            return remaining, len(done_indices), {}, done_wall_clock_times
         else:
             # Full decode path: recover History data for in-memory re-population
-            done = ProgramResults._load_done_shots(
-                checkpoint_dir, results_filename
+            done = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                results_filename,
+                "worker_*_checkpoint.h5",
+                "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done.keys())
-            return remaining, len(done), done
+            done_wall_clock_times = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                results_filename,
+                "worker_*_checkpoint.h5",
+                "shot_wall_clock_times",
+            )
+            return remaining, len(done), done, done_wall_clock_times
 
     def _run_serial_checkpointed(
         self,
@@ -532,8 +557,12 @@ class QuantumProgram(Displayable):
                 if self.default_base_seed is None
                 else self.default_base_seed + i
             )
+            start_time = time.perf_counter()
             result = QuantumProgram._run_shot(self, max_frame_limit, seed, i)
-            program_results.add_shot(i, result)
+            wall_clock_time = time.perf_counter() - start_time
+            program_results.add_shot(
+                i, result, wall_clock_time=wall_clock_time
+            )
             pbar.update(1)
             if (
                 len(program_results.get_unwritten_shots())
@@ -583,9 +612,13 @@ class QuantumProgram(Displayable):
             for batch_indices in batches
         }
         for future in as_completed(futures_to_batch):
-            batch_shots = future.result()
+            batch_shots, batch_wall_clock_times = future.result()
             for shot_index, history in batch_shots.items():
-                program_results.add_shot(shot_index, history)
+                program_results.add_shot(
+                    shot_index,
+                    history,
+                    wall_clock_time=batch_wall_clock_times.get(shot_index),
+                )
             program_results.mark_shots_checkpointed(list(batch_shots.keys()))
             pbar.update(len(batch_shots))
 
@@ -682,7 +715,7 @@ class QuantumProgram(Displayable):
     ) -> ProgramResults:
         """Execute some shots of this [](api:QuantumProgram).
 
-        This returns a [](api:ProgramResults) object containing the shot histories.
+        This returns a [](api:ProgramResults) object containing the shot histories and wall-clock timing metadata.
 
         Parameters
         ----------
@@ -765,7 +798,10 @@ class QuantumProgram(Displayable):
             longer holding every shot in memory; evicted shots can still be
             read back via [](api:ProgramResults.load_checkpoint) or
             [](api:ProgramResults.get_shot_history)). Set to `False` to keep
-            every shot in memory regardless of checkpointing. Has no effect
+            every shot in memory regardless of checkpointing. Note that
+            [](api:ProgramResults.shot_wall_clock_times) is NOT evicted like
+            `shot_histories` is -- it stays fully populated in memory
+            regardless of `lazy_loading` or checkpointing. Has no effect
             when `checkpoint` is `False`.
 
         force_resume:
@@ -794,7 +830,9 @@ class QuantumProgram(Displayable):
         Returns
         -------
         ProgramResults
-            A [](api:ProgramResults) object containing the shot histories.
+            A [](api:ProgramResults) object containing the shot histories and
+            [](api:ProgramResults.shot_wall_clock_times) (wall-clock timing
+            metadata for each shot).
         """
 
         # State machine validation: explicit checkpoint/resume flags
@@ -858,9 +896,11 @@ class QuantumProgram(Displayable):
                     disable=not verbose,
                     total=num_shots,
                 ):
+                    start_time = time.perf_counter()
                     result = QuantumProgram._run_shot(*task)
+                    wall_clock_time = time.perf_counter() - start_time
                     program_results.add_shot(
-                        task[3], result
+                        task[3], result, wall_clock_time=wall_clock_time
                     )  # task[3] is shot index
             else:
                 # Dispatch shots in batches (resolved_n_shot_batches is
@@ -893,9 +933,15 @@ class QuantumProgram(Displayable):
                     disable=not verbose,
                 ) as pbar:
                     for future in as_completed(futures_to_batch):
-                        batch_shots = future.result()
+                        batch_shots, batch_wall_clock_times = future.result()
                         for shot_index, history in batch_shots.items():
-                            program_results.add_shot(shot_index, history)
+                            program_results.add_shot(
+                                shot_index,
+                                history,
+                                wall_clock_time=batch_wall_clock_times.get(
+                                    shot_index
+                                ),
+                            )
                         pbar.update(len(batch_shots))
 
             return program_results
@@ -914,11 +960,17 @@ class QuantumProgram(Displayable):
         # prior interrupted call hadn't already durably checkpointed.
         assert resolved_checkpoint_dir is not None
         assert checkpoint_batch_size is not None
-        remaining, num_done, done_data = self._load_remaining_shots(
-            resolved_checkpoint_dir, num_shots, results_filename, lazy_loading
+        remaining, num_done, done_data, done_wall_clock_times = (
+            self._load_remaining_shots(
+                resolved_checkpoint_dir,
+                num_shots,
+                results_filename,
+                lazy_loading,
+            )
         )
         if not lazy_loading:
             program_results.shot_histories.update(done_data)
+        program_results.shot_wall_clock_times.update(done_wall_clock_times)
 
         with tqdm(
             total=num_shots, desc=f"Program {self.name}", disable=not verbose
@@ -968,7 +1020,7 @@ class QuantumProgram(Displayable):
         max_frame_limit: int,
         shot_specs: list[tuple[int | None, int]],
         checkpoint_dir: str | Path | None,
-    ) -> dict[int, HistoryLike]:
+    ) -> tuple[dict[int, HistoryLike], dict[int, float]]:
         pin_worker_threads()
 
         # A throwaway ProgramResults scoped to just this batch -- lazy
@@ -976,10 +1028,14 @@ class QuantumProgram(Displayable):
         # about to return to the driver.
         batch_results = ProgramResults(lazy_loading=False)
         for seed, shot_index in shot_specs:
+            start_time = time.perf_counter()
             history = QuantumProgram._run_shot(
                 program, max_frame_limit, seed, shot_index
             )
-            batch_results.add_shot(shot_index, history)
+            wall_clock_time = time.perf_counter() - start_time
+            batch_results.add_shot(
+                shot_index, history, wall_clock_time=wall_clock_time
+            )
 
         # Only checkpoint if a checkpoint_dir was provided; when None, this
         # is the non-checkpointed parallel path and no disk I/O happens.
@@ -988,7 +1044,10 @@ class QuantumProgram(Displayable):
                 checkpoint_dir=checkpoint_dir, worker_id=worker_id()
             )
 
-        return dict(batch_results.shot_histories)
+        return (
+            dict(batch_results.shot_histories),
+            dict(batch_results.shot_wall_clock_times),
+        )
 
     # Static for more efficient parallel data movement
     @staticmethod
