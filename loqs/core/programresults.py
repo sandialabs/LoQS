@@ -42,7 +42,6 @@ from loqs.internal.streamingmerge import (
     get_dict_attr_value,
     get_dict_attr_group,
     get_dict_attr_keys,
-    read_checkpoint_dict_attr_union,
     read_checkpoint_dict_attr_union_keys,
 )
 
@@ -596,8 +595,6 @@ class ProgramResults(Displayable):
         (e.g. live progress polling) expect a partial list as a normal
         result, not a bug to retry away.
         """
-        from loqs.internal.streamingmerge import get_dict_attr_keys
-
         max_attempts = 5 if expected_num_shots is not None else 1
 
         def _read_until_enough(filename: Path, read_fn) -> list[int] | None:

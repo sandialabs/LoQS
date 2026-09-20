@@ -2976,10 +2976,9 @@ class TestWorkerFileConsolidation:
             checkpoint_dir, runner_filename="runner.h5", attr_name="_program_results"
         )
 
-        # CORRECT/desired behavior: a transient lock on one worker file
-        # should not cause silent data loss -- worker 1's entry should still
-        # be present in _program_results with its correct value. This fails
-        # against today's unfixed code, since the entry is actually dropped.
+        # Verify that a transient lock on one worker file does not cause
+        # silent data loss -- worker 1's entry should be present in
+        # _program_results with its correct value.
         assert 1 in program_results, (
             "Worker 1's _program_results entry is missing: a transient lock "
             "during final assembly silently dropped it instead of being "
@@ -3145,11 +3144,8 @@ class TestWorkerFileConsolidation:
             item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
             shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
 
-        # CORRECT/desired behavior: both new attributes should have been
-        # merged from the worker files into runner.h5. This fails against
-        # today's unfixed code, since _consolidate_worker_files only knows
-        # about "results"/"_program_results" and silently ignores every
-        # other worker-file attribute.
+        # Verify that both new attributes are correctly merged from the worker
+        # files into runner.h5.
         assert item_times == {0: 0.5, 1: 1.5}, (
             "item_wall_clock_times entries are missing from runner.h5: "
             "_consolidate_worker_files doesn't yet know to merge this attribute."

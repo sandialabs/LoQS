@@ -254,6 +254,36 @@ class TestSimulateDatasetForEdesignCheckpointing:
             == set(s.edesign.all_circuits_needing_data)
         )
 
+    def test_item_key_fn_is_picklable(self, trivial_counter_setup, tmp_path):
+        """Regression test: item_key_fn and snapshot bound methods must be picklable.
+
+        Raw pickle-based parallel backends (e.g. mpi4py.futures.MPIPoolExecutor,
+        unlike loky/submitit which use cloudpickle) fail on unpicklable local
+        lambdas. Confirms both the bare item_key_fn and the MultiProgramRunner
+        _static_kwargs-style snapshot-then-pickle path (runner_snapshot.build_program)
+        are picklable.
+        """
+        import pickle
+
+        s = trivial_counter_setup
+        runner = EdesignRunner(
+            edesign=s.edesign,
+            physical_model=s.model,
+            physical_to_logical=s.physical_to_logical,
+            num_shots=1,
+            collect_shot_data_args=[("counter", -1)],
+            item_checkpoint_dir=tmp_path / "ckpt",
+            checkpoint=True,
+        )
+
+        # item_key_fn must be picklable (a module-level function, not a local lambda)
+        pickle.dumps(runner.item_key_fn)
+
+        import copy
+
+        runner_snapshot = copy.copy(runner)
+        pickle.dumps(runner_snapshot.build_program)
+
 
 class TestEdesignRunnerHooks:
     """Direct unit tests of EdesignRunner's own derived build_program/

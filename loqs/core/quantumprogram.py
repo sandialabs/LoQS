@@ -476,7 +476,7 @@ class QuantumProgram(Displayable):
         """Scan `checkpoint_dir` for already-checkpointed shots and return
         missing indices, done count, and optionally the decoded History data.
 
-        When lazy_loading=True, uses a cheap key-only scan (get_dict_attr_keys)
+        When lazy_loading=True, uses a cheap key-only scan (read_checkpoint_dict_attr_union_keys)
         to avoid decoding any History values since the decoded data would be
         discarded immediately (lazy loading evicts checkpointed shots from
         memory anyway). When lazy_loading=False, fully decodes all History data
@@ -505,6 +505,12 @@ class QuantumProgram(Displayable):
             done_wall_clock_times: {index: float} dict of wall-clock times,
                 populated in both branches regardless of lazy_loading.
         """
+        done_wall_clock_times = read_checkpoint_dict_attr_union(
+            checkpoint_dir,
+            results_filename,
+            "worker_*_checkpoint.h5",
+            "shot_wall_clock_times",
+        )
         if lazy_loading:
             # Cheap path: scan keys without decoding History values
             done_indices = read_checkpoint_dict_attr_union_keys(
@@ -514,12 +520,6 @@ class QuantumProgram(Displayable):
                 "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done_indices)
-            done_wall_clock_times = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                results_filename,
-                "worker_*_checkpoint.h5",
-                "shot_wall_clock_times",
-            )
             return remaining, len(done_indices), {}, done_wall_clock_times
         else:
             # Full decode path: recover History data for in-memory re-population
@@ -530,12 +530,6 @@ class QuantumProgram(Displayable):
                 "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done.keys())
-            done_wall_clock_times = read_checkpoint_dict_attr_union(
-                checkpoint_dir,
-                results_filename,
-                "worker_*_checkpoint.h5",
-                "shot_wall_clock_times",
-            )
             return remaining, len(done), done, done_wall_clock_times
 
     def _run_serial_checkpointed(

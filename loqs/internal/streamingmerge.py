@@ -925,7 +925,7 @@ def read_checkpoint_dict_attr_union(
     consolidation paths. Reads the specified dict attribute from a canonical
     checkpoint file (if it exists), then from every sorted worker checkpoint
     file, decoding entries incrementally via iter_dict_attr_entries without
-    materializing the entire dictionary in memory.
+    materializing individual file contents simultaneously in memory.
 
     Parameters
     ----------

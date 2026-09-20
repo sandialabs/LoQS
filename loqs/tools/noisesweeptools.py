@@ -259,7 +259,7 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
 
         run_kwargs:
             Additional keyword arguments to forward to `QuantumProgram.run()`, as a dict
-            rather than `**kwargs`. Replaces the old `**run_kwargs` catch-all.
+            rather than `**kwargs`.
 
         item_checkpoint_dir, checkpoint, resume, force_resume, parallel_strategy,
         shot_checkpoint, shot_checkpoint_dir, lazy_loading, keep_shot_results,

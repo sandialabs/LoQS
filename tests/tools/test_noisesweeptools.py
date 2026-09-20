@@ -402,8 +402,8 @@ class TestRunParallel:
         finally:
             NoiseSweepRunner.build_program = real_build_program
 
-        # No automatic disk write anymore -- read the partial state (indices 0
-        # and 1) from the worker_*_runner.h5 files directly.
+        # Read the partial state (indices 0 and 1) from the worker_*_runner.h5
+        # files directly.
         from loqs.tools.multiprogramrunner import _read_worker_files
         completed = _read_worker_files(item_checkpoint_dir)
         assert len(completed) == 2  # Only 0 and 1 completed
@@ -1013,8 +1013,7 @@ class TestNoiseSweepRunnerHooks:
         self, tmp_path
     ):
         """_build_output builds a NoiseSweepResult from (strength, (failure_rate,
-        stderr)) pairs and never writes to disk (no automatic checkpoint like the
-        old _finalize did), even when item_checkpoint_dir is set."""
+        stderr)) pairs without writing to disk, even when item_checkpoint_dir is set."""
         runner = make_runner(
             [0.1, 0.2, 0.3],
             seed_stride=10,

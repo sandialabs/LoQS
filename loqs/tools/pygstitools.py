@@ -52,6 +52,11 @@ except ImportError as e:
 
 
 ## EDESIGN CONVERSION TOOLS
+def _circuit_str_key(c: Circuit) -> str:
+    """Key function for EdesignRunner's item_key_fn: a circuit's own string representation."""
+    return c.str
+
+
 def _build_program_for_circuit(
     circ: Circuit,
     physical_model: ExplicitOpModel,
@@ -101,10 +106,10 @@ def _checkpoint_provenance_comment(
     normalized_collect_shot_data_args: Sequence[HistoryDataCollector],
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> str:
-    """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
-    `DataSet`, a human-readable provenance record (config-mismatch
-    detection on resume happens separately, via `MultiProgramRunner`'s own
-    `runner.h5` snapshot). `num_shots` is stored as a plain `repr()` string;
+    """Build the `#`-prefixed comment header for a provenance record embedded
+    in an `EdesignRunner`'s in-memory `DataSet` (config-mismatch detection on
+    resume happens separately, via `MultiProgramRunner`'s own `runner.h5`
+    snapshot). `num_shots` is stored as a plain `repr()` string;
     `normalized_collect_shot_data_args` is expected already normalized (via
     `_normalized_collect_shot_data_args`) so its repr is canonical regardless of
     spelling; `physical_to_logical`'s own top-level key order is incidental, so
@@ -114,7 +119,7 @@ def _checkpoint_provenance_comment(
     p2l_repr_map = {repr(k): repr(v) for k, v in physical_to_logical.items()}
     return "\n".join(
         [
-            "Checkpoint written by loqs.tools.pygstitools.EdesignRunner.",
+            "Provenance record embedded in loqs.tools.pygstitools.EdesignRunner result.",
             f"num_shots = {num_shots!r}",
             f"collect_shot_data_args = {normalized_collect_shot_data_args!r}",
             f"physical_to_logical = {p2l_repr_map!r}",
@@ -195,7 +200,7 @@ class EdesignRunner(MultiProgramRunner[Circuit]):
         )
         self.program_kwargs = program_kwargs or {}
         self.items = edesign.all_circuits_needing_data
-        self.item_key_fn = (lambda c: c.str) if checkpoint else None
+        self.item_key_fn = _circuit_str_key if checkpoint else None
         self._circuits_by_index: dict[int, Circuit] | None = None
         self._circuits_by_index_is_positional: bool = False
 

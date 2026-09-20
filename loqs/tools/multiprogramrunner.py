@@ -584,8 +584,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
             # Final assembly - consolidate worker files and read union of
             # runner.h5 and any remaining worker files
             if self.item_checkpoint_dir is not None:
-                # Always consolidate worker files (both "results" and
-                # "_program_results"), then delete them once merged
+                # Always consolidate all worker-file attributes (per
+                # _STREAMED_DICT_ATTRS), then delete them once merged
                 _consolidate_worker_files(
                     self.item_checkpoint_dir,
                     runner_filename=self.runner_filename,
@@ -772,7 +772,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
         return ordered
 
     def _static_kwargs(self) -> dict[str, Any]:
-        """Return dict of static kwargs to pass to process_item."""
+        """Return dict of static kwargs to pass to _shared_item_worker."""
         runner_snapshot = copy.copy(self)
         runner_snapshot.parallel_strategy = None
         return {

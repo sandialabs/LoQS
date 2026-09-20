@@ -2045,6 +2045,7 @@ class TestResumeCheckpointing:
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
 
+            import loqs.core.programresults as programresults_module
             import loqs.internal.streamingmerge as streamingmerge_module
 
             real_get_dict_attr_keys = streamingmerge_module.get_dict_attr_keys
@@ -2057,7 +2058,7 @@ class TestResumeCheckpointing:
                 return real_get_dict_attr_keys(*args, **kwargs)
 
             monkeypatch.setattr(
-                streamingmerge_module,
+                programresults_module,
                 "get_dict_attr_keys",
                 flaky_get_dict_attr_keys,
             )
