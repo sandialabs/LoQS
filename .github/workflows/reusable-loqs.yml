@@ -76,16 +76,12 @@ jobs:
   
     - name: Linting
       run: |
-        # Format check, allow failure
-        python -m black --check loqs || true
-        
-        # Standard PEP8, allowed to fail since exit-zero treats all errors as warnings
-        python -m flake8 loqs --exit-zero --statistics
-    
+        python -m black --check loqs docs_scripts tests
+        python -m flake8 loqs docs_scripts tests --statistics
+
     - name: Type checking
       run: |
-        # Allow to fail
-        python -m mypy loqs || true
+        python -m mypy loqs docs_scripts tests
     
     - name: Docstring tests
       if: ${{ inputs.loqs-optional == 'all' }}
