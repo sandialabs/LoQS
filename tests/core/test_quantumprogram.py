@@ -1080,7 +1080,7 @@ class TestResumeFromCheckpoint:
                 )
                 history = History()
                 history.append(Frame({"counter": shot_idx + 1}))
-                results_worker.add_shot(shot_idx, history)
+                results_worker.add_shot(shot_idx, history, wall_clock_time=0.05)
                 results_worker.checkpoint(
                     checkpoint_dir=checkpoint_dir,
                     worker_id=f"w{shot_idx}"
@@ -1115,6 +1115,12 @@ class TestResumeFromCheckpoint:
 
                 # Verify consolidated results.h5 exists
                 assert (checkpoint_dir / "results.h5").exists()
+
+                # Verify shot_wall_clock_times covers all 6 shots with positive floats
+                assert set(results.shot_wall_clock_times.keys()) == {0, 1, 2, 3, 4, 5}
+                for wall_clock_time in results.shot_wall_clock_times.values():
+                    assert isinstance(wall_clock_time, float)
+                    assert wall_clock_time > 0
             finally:
                 executor.shutdown(wait=True)
 

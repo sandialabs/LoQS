@@ -673,6 +673,40 @@ class TestItemAndShotWallClockTimes:
                     assert isinstance(value, float)
             assert restored.shot_wall_clock_times == runner.shot_wall_clock_times
 
+    def test_item_and_shot_wall_clock_times_survive_array_free_subtree_collapse(
+        self, tmp_path
+    ):
+        """`item_wall_clock_times`/`shot_wall_clock_times` must keep their
+        real dict/keys/values/iterable HDF5 structure -- not folded into
+        HDF5's array-free-subtree collapse blob -- even though every item's
+        value is a plain scalar (or a nested dict of plain scalars) with no
+        array anywhere, mirroring `test_programresults.py`'s
+        `test_checkpoint_append_structure_survives_array_free_shots_for_wall_clock_times`
+        but at the `MultiProgramRunner` consolidation level."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        items = [1, 2, 3]
+
+        runner = _SimpleDoubleRunner(
+            items,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            run_kwargs={"num_shots": 2, "max_frame_limit": 1_000_000},
+        )
+        runner.run()
+
+        runner_path = checkpoint_dir / "runner.h5"
+        with h5py.File(runner_path, "r") as f:
+            obj_root = _resolve_checkpoint_object_group(f)
+
+            assert isinstance(obj_root["item_wall_clock_times"], h5py.Group)
+            item_values_iterable = obj_root["item_wall_clock_times"]["dict"]["values"]["iterable"]
+            assert item_values_iterable.attrs["storage_format"] == "dataset"
+
+            assert isinstance(obj_root["shot_wall_clock_times"], h5py.Group)
+            shot_values_iterable = obj_root["shot_wall_clock_times"]["dict"]["values"]["iterable"]
+            assert shot_values_iterable.attrs["storage_format"] == "groups"
+            assert {"0", "1", "2"} <= set(shot_values_iterable.keys())
+
 
 class TestConcurrentWorkerWrites:
     """Tests for concurrent writing to worker files."""
@@ -697,9 +731,11 @@ class TestConcurrentWorkerWrites:
             )
 
         # Verify every entry was written
-        from loqs.tools.multiprogramrunner import _read_worker_files
+        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
 
-        done = _read_worker_files(checkpoint_dir)
+        done = read_checkpoint_dict_attr_union(
+            checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
         assert len(done) == num_workers * entries_per_worker
         for worker_id_base in range(num_workers):
             for i in range(entries_per_worker):
@@ -1069,17 +1105,19 @@ class TestParallelDispatchAndPollingRegressions:
         )
 
     def test_worker_file_reads_skip_keyerror_corruption(self, tmp_path):
-        """_read_worker_files, _consolidate_worker_files, and
+        """read_checkpoint_dict_attr_union, _consolidate_worker_files, and
         _poll_one_worker_file each skip a worker file whose keys dataset
         lists an entry (e.g. key "1") that has no corresponding value group
         -- the shape a crash mid-append leaves behind -- rather than raising
         KeyError, while still reading every healthy file normally."""
         from loqs.tools.multiprogramrunner import (
-            _read_worker_files,
             _poll_one_worker_file,
             _consolidate_worker_files,
         )
-        from loqs.internal.streamingmerge import merge_dict_attr
+        from loqs.internal.streamingmerge import (
+            merge_dict_attr,
+            read_checkpoint_dict_attr_union,
+        )
 
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
@@ -1110,9 +1148,11 @@ class TestParallelDispatchAndPollingRegressions:
                 value_use_dataset=False,
             )
 
-        # _read_worker_files: the corrupted file's key 1 (missing value
-        # group) is skipped; the healthy file's key 2 is still read.
-        done = _read_worker_files(checkpoint_dir)
+        # read_checkpoint_dict_attr_union: the corrupted file's key 1 (missing
+        # value group) is skipped; the healthy file's key 2 is still read.
+        done = read_checkpoint_dict_attr_union(
+            checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
         assert 2 in done, "Healthy file's result should be read"
         assert 1 not in done, "Corrupted key 1 (missing value group) should not be in results"
 
@@ -1143,7 +1183,9 @@ class TestParallelDispatchAndPollingRegressions:
         )
 
         # Verify healthy file was merged into runner.h5
-        done_after = _read_worker_files(checkpoint_dir)
+        done_after = read_checkpoint_dict_attr_union(
+            checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
         assert 2 in done_after, "Healthy file should be merged after consolidation"
 
     def test_consolidate_worker_files_skips_truncated_file(self, tmp_path):
@@ -1197,8 +1239,10 @@ class TestParallelDispatchAndPollingRegressions:
         )
 
         # Verify the good file was merged (can read from runner.h5)
-        from loqs.tools.multiprogramrunner import _read_worker_files
-        done = _read_worker_files(checkpoint_dir)
+        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
+        done = read_checkpoint_dict_attr_union(
+            checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
         assert 1 in done, "Healthy worker file should be merged into runner.h5"
         assert done[1] == "value_1"
 
@@ -1660,21 +1704,25 @@ class TestRetryHdf5Write:
 
         return flaky_file
 
-    def test_write_dict_entry_with_retry_uses_widened_default_budget(
+    def test_write_item_checkpoint_entries_with_retry_uses_widened_default_budget(
         self, tmp_path, monkeypatch
     ):
-        """`_write_dict_entry_with_retry`'s own default `max_retries` should
-        forward the real, widened default retry budget of `_retry_hdf5_write`
-        rather than silently clamping it to a smaller one. A transient lock
-        that clears after 6 opens exceeds a clamped budget of 5 but is
-        comfortably within the real default of 8.
+        """`_write_item_checkpoint_entries_with_retry`'s own default
+        `max_retries` should forward the real, widened default retry budget
+        of `_retry_hdf5_write` rather than silently clamping it to a smaller
+        one. A transient lock that clears after 6 opens exceeds a clamped
+        budget of 5 but is comfortably within the real default of 8.
         """
-        from loqs.tools.multiprogramrunner import _write_dict_entry_with_retry
+        from loqs.tools.multiprogramrunner import (
+            _write_item_checkpoint_entries_with_retry,
+        )
 
         target = tmp_path / "widened_retry_dict_target.h5"
         monkeypatch.setattr(h5py, "File", self._make_flaky_file(target))
 
-        _write_dict_entry_with_retry(target, "results", 0, "value_0")
+        _write_item_checkpoint_entries_with_retry(
+            target, 0, [("results", "value_0", False)]
+        )
 
         with h5py.File(target, "r") as f:
             entries = dict(iter_dict_attr_entries(f, "results"))
@@ -1697,6 +1745,80 @@ class TestRetryHdf5Write:
 
         with h5py.File(target, "r") as f:
             assert f.attrs["current_item_index"] == 7
+
+
+class TestProcessAndCheckpointItemAtomicity:
+    """`_process_and_checkpoint_item` must checkpoint one item's results via
+    a single retry-wrapped HDF5 write transaction, not one separate
+    transaction per attribute -- a crash between separate calls could
+    otherwise leave `results` durably written while the timing attributes
+    are permanently lost after resume."""
+
+    @pytest.mark.parametrize("keep_shot_results", [False, True])
+    def test_process_and_checkpoint_item_writes_checkpoint_entries_in_one_transaction(
+        self, tmp_path, monkeypatch, keep_shot_results
+    ):
+        """Count real `_retry_hdf5_write` calls (still delegating to the
+        genuine implementation, so the actual write still happens) while
+        `_process_and_checkpoint_item` processes one item, for both
+        `keep_shot_results=False` (3 attributes today: `results`,
+        `item_wall_clock_times`, `shot_wall_clock_times`) and
+        `keep_shot_results=True` with a real non-`None` resolved
+        `ProgramResults` (4 attributes today, the above plus
+        `_program_results`)."""
+        from loqs.tools import multiprogramrunner as mpr_module
+        from loqs.tools.multiprogramrunner import _process_and_checkpoint_item
+
+        item_checkpoint_dir = tmp_path / "ckpt"
+        item_checkpoint_dir.mkdir()
+
+        def stub_process_item(
+            item, index, *, shot_executor=None, n_shot_batches=None, **kwargs
+        ):
+            aux = {
+                "_reduced_results": item * 2,
+                "item_wall_clock_times": 0.001,
+                "shot_wall_clock_times": {0: 0.0005},
+            }
+            if kwargs.get("keep_shot_results"):
+                # A real ProgramResults; the in-memory fallback (no
+                # shot_checkpoint_subdir) returns it as-is.
+                aux["program_results"] = _make_synthetic_program_results(
+                    index, shot_count=1
+                )
+            return aux
+
+        real_retry_hdf5_write = mpr_module._retry_hdf5_write
+        call_count = {"n": 0}
+
+        def counting_retry_hdf5_write(worker_file_path, write_fn, max_retries=8):
+            call_count["n"] += 1
+            return real_retry_hdf5_write(
+                worker_file_path, write_fn, max_retries=max_retries
+            )
+
+        monkeypatch.setattr(
+            mpr_module, "_retry_hdf5_write", counting_retry_hdf5_write
+        )
+
+        _process_and_checkpoint_item(
+            stub_process_item,
+            item=5,
+            index=0,
+            static_kwargs={},
+            shot_executor=None,
+            n_shot_batches=None,
+            keep_shot_results=keep_shot_results,
+            shot_checkpoint_subdir=None,
+            item_checkpoint_dir=item_checkpoint_dir,
+        )
+
+        assert call_count["n"] == 1, (
+            "Expected exactly one retry-wrapped HDF5 write transaction for "
+            f"one item's checkpoint, got {call_count['n']} -- checkpointing "
+            "an item's attributes via multiple separate transactions risks "
+            "leaving them inconsistent after a crash between calls."
+        )
 
 
 class TestIndexMapPersistence:
@@ -1975,9 +2097,10 @@ class TestKeepShotResults:
             assert len(pr.shot_histories) == 5
 
     def test_keep_shot_results_write_read_round_trip(self, tmp_path):
-        """Writing and reading back a runner with keep_shot_results=True preserves the setting."""
+        """Writing and reading back a runner with keep_shot_results=True preserves
+        the setting and the ability to lazily read shot data for every kept item."""
         checkpoint_dir = tmp_path / "checkpoint"
-        runner_file = checkpoint_dir / "runner.h5"
+        output_file = tmp_path / "output.h5"
 
         # Create a runner with keep_shot_results=True
         runner1 = _SimpleDoubleRunner(
@@ -1986,19 +2109,35 @@ class TestKeepShotResults:
             shot_checkpoint=True,
             keep_shot_results=True,
         )
+        runner1.num_shots = 3  # Set num_shots for real program execution
 
         # Verify the setting is True before we write
         assert runner1.keep_shot_results is True
 
-        # Run and write to disk
+        # Run, then write to a distinct output file (never the checkpoint
+        # file itself, which write()'s own truncating open would destroy).
         runner1.run()
-        runner1.write(runner_file)
+        runner1.write(output_file)
 
         # Read it back WITHOUT re-passing keep_shot_results
-        runner2 = _SimpleDoubleRunner.read(runner_file)
+        runner2 = _SimpleDoubleRunner.read(output_file)
 
         # Verify that the setting was restored from disk
         assert runner2.keep_shot_results is True
+
+        # Lazy shot access must survive the round trip: each kept entry's
+        # nested-source pointer must relink to the on-disk checkpoint file.
+        assert len(runner2._program_results) == 2
+        for index in [0, 1]:
+            pr = runner2._program_results[index]
+            assert (
+                pr._nested_source_file
+                == runner2.item_checkpoint_dir / runner2.runner_filename
+            )
+            assert pr._nested_source_index == index
+            assert pr.get_shot_history(0) is not None
+            data = pr.collect_shot_data("counter", -1)
+            assert len(data) == 3
 
     def test_keep_shot_results_with_shot_checkpoint_parallel_lazy(self, tmp_path):
         """keep_shot_results with lazy_loading=True works under parallel dispatch."""
@@ -2642,7 +2781,7 @@ class TestShotProgressBar:
         with patch("loqs.tools.multiprogramrunner.tqdm", side_effect=TqdmSpy):
             with patch.object(
                 mpr_module,
-                "_read_worker_files",
+                "_read_done_union",
                 side_effect=read_with_preseeded_done,
             ):
                 runner = _ShotProgressTestRunner(
@@ -3155,6 +3294,144 @@ class TestWorkerFileConsolidation:
             "_consolidate_worker_files doesn't yet know to merge this attribute."
         )
 
+    def test_consolidate_worker_files_recovers_out_of_lockstep_merge_results_first(
+        self, tmp_path
+    ):
+        """`results`/`item_wall_clock_times`/`shot_wall_clock_times` are
+        three independent dict-attr entries, each merged via its own
+        per-attribute key tracking during `_consolidate_worker_files` -- so
+        a crash between merging one and the other two for the same item is
+        a real, reachable on-disk state. Seeds `runner.h5`'s resolved
+        object group with item 0 already merged into `_reduced_results` (a
+        "canonical" value) but not yet into
+        `item_wall_clock_times`/`shot_wall_clock_times` (simulating a crash
+        after merging one attribute but before the other two), then a
+        worker file with item 0 present in all three attributes under
+        different ("worker") values. Confirms `_consolidate_worker_files`
+        recovers correctly: the already-merged `_reduced_results` entry is
+        left untouched (not overwritten by the worker file's own copy of
+        the same item), while the two missing timing entries are merged in
+        from the worker file. Mirrors `test_programresults.py`'s
+        `test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first`."""
+        from loqs.tools.multiprogramrunner import _consolidate_worker_files
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Bare runner.h5 with valid object-group structure to merge into.
+        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # _reduced_results already merged for item 0; the two timing attrs
+        # seeded empty (only entry presence distinguishes "not merged").
+        with h5py.File(runner_path, "a") as f:
+            out_root = _resolve_checkpoint_object_group(f)
+            merge_dict_attr(
+                out_root, "_reduced_results", [(0, "canonical")],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+            merge_dict_attr(
+                out_root, "item_wall_clock_times", [],
+                key_use_dataset=True, value_use_dataset=True,
+            )
+            merge_dict_attr(
+                out_root, "shot_wall_clock_times", [],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+
+        # Worker file: item 0 present in all three attributes, worker values.
+        worker_file = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            merge_dict_attr(
+                f, "results", [(0, "worker")],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+            merge_dict_attr(
+                f, "item_wall_clock_times", [(0, 9.9)],
+                key_use_dataset=True, value_use_dataset=True,
+            )
+            merge_dict_attr(
+                f, "shot_wall_clock_times", [(0, {0: 1.1, 1: 2.2})],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
+        )
+
+        with h5py.File(runner_path, "r") as f:
+            reduced_results = dict(iter_dict_attr_entries(f, "_reduced_results"))
+            item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
+            shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
+
+        assert reduced_results == {0: "canonical"}
+        assert item_times == {0: 9.9}
+        assert shot_times == {0: {0: 1.1, 1: 2.2}}
+
+    def test_consolidate_worker_files_recovers_out_of_lockstep_merge_wall_clock_times_first(
+        self, tmp_path
+    ):
+        """Reverse direction of
+        `test_consolidate_worker_files_recovers_out_of_lockstep_merge_results_first`:
+        `item_wall_clock_times`/`shot_wall_clock_times` are already merged
+        for item 0 while `_reduced_results` isn't yet. Confirms the missing
+        entry merges in from the worker file while the two already-merged
+        timing entries stay untouched."""
+        from loqs.tools.multiprogramrunner import _consolidate_worker_files
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        with h5py.File(runner_path, "a") as f:
+            out_root = _resolve_checkpoint_object_group(f)
+            merge_dict_attr(
+                out_root, "_reduced_results", [],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+            merge_dict_attr(
+                out_root, "item_wall_clock_times", [(0, 2.5)],
+                key_use_dataset=True, value_use_dataset=True,
+            )
+            merge_dict_attr(
+                out_root, "shot_wall_clock_times", [(0, {0: 0.5, 1: 0.6})],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+
+        worker_file = checkpoint_dir / "worker_0_runner.h5"
+        with h5py.File(worker_file, "a") as f:
+            merge_dict_attr(
+                f, "results", [(0, "worker")],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+            merge_dict_attr(
+                f, "item_wall_clock_times", [(0, 99.9)],
+                key_use_dataset=True, value_use_dataset=True,
+            )
+            merge_dict_attr(
+                f, "shot_wall_clock_times", [(0, {0: 9.1, 1: 9.2})],
+                key_use_dataset=True, value_use_dataset=False,
+            )
+
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
+        )
+
+        with h5py.File(runner_path, "r") as f:
+            reduced_results = dict(iter_dict_attr_entries(f, "_reduced_results"))
+            item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
+            shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
+
+        assert reduced_results == {0: "worker"}
+        assert item_times == {0: 2.5}
+        assert shot_times == {0: {0: 0.5, 1: 0.6}}
+
 
 # Module-level test classes for decode_cache regression tests.
 # These must be defined at module scope so Serializable can find them during deserialization.
@@ -3187,17 +3464,18 @@ class TestDecodeCache:
     (not a DeferredRef placeholder) when read via the fixed code paths.
     """
 
-    def test_read_worker_files_shared_reference_decode_cache(self, tmp_path):
-        """Regression test for _read_worker_files decode_cache fix.
+    def test_read_checkpoint_dict_attr_union_shared_reference_decode_cache(
+        self, tmp_path
+    ):
+        """Regression test for read_checkpoint_dict_attr_union's decode_cache fix.
 
         Verifies that when a worker file contains 2+ entries sharing a
         common Serializable reference (a parent object), reading them via
-        _read_worker_files decodes the shared object to the same real object
-        both times, not a DeferredRef on the second occurrence.
-
-        Exercises the fix in _read_worker_files's shared decode_cache handling.
+        read_checkpoint_dict_attr_union decodes the shared object to the
+        same real object both times, not a DeferredRef on the second
+        occurrence.
         """
-        from loqs.tools.multiprogramrunner import _read_worker_files
+        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
         from loqs.internal.serializable import DeferredRef
 
         checkpoint_dir = tmp_path / "checkpoints"
@@ -3222,8 +3500,10 @@ class TestDecodeCache:
                 value_use_dataset=False,
             )
 
-        # Read them back via _read_worker_files (the fixed code path)
-        done = _read_worker_files(checkpoint_dir, attr_name="results")
+        # Read them back via read_checkpoint_dict_attr_union (the fixed code path)
+        done = read_checkpoint_dict_attr_union(
+            checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
 
         # Both entries should be present
         assert 100 in done and 101 in done
@@ -3310,8 +3590,8 @@ class TestDecodeCache:
         # Read back both attributes using a shared decode_cache, mirroring
         # how a real caller like _read_done_union reads them.
         with h5py.File(runner_path, "r") as f:
-            from loqs.tools.multiprogramrunner import _get_runner_object_group
-            runner_root = _get_runner_object_group(f)
+            from loqs.core.programresults import _resolve_checkpoint_object_group
+            runner_root = _resolve_checkpoint_object_group(f)
             decode_cache = {}  # Shared across both branches
             reduced_results = dict(
                 iter_dict_attr_entries(runner_root, "_reduced_results",

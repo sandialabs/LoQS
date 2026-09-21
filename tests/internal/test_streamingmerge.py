@@ -2,12 +2,17 @@
 
 import pytest
 import h5py
+import tempfile
+from pathlib import Path
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
     get_dict_attr_value,
     get_dict_attr_group,
     get_dict_attr_keys,
+    filter_unmerged_dict_attr_entries,
+    read_checkpoint_dict_attr_union,
+    read_checkpoint_dict_attr_union_keys,
 )
 from loqs.internal.serializable import Serializable
 
@@ -985,3 +990,502 @@ class TestDecodeCacheForwardingKeysResolution:
                 f"Keys and values must stay in sync; keys has {len(keys_after)} entries "
                 f"but values has {len(keys_from_entries)} entries"
             )
+
+
+class TestFilterUnmergedDictAttrEntries:
+    """Tests for filter_unmerged_dict_attr_entries function."""
+
+    def test_filter_entries_not_in_merged_set(self, make_temp_path):
+        """Test that entries are yielded when their keys are not in already_merged_keys."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(1, "a"), (2, "b"), (3, "c")]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                already_merged = {1}  # Only key 1 was merged
+                result = filter_unmerged_dict_attr_entries(
+                    h5_file, "test_dict", already_merged
+                )
+                assert result is not None
+                result_list = list(result)
+                assert len(result_list) == 2
+                assert result_list[0] == (2, "b")
+                assert result_list[1] == (3, "c")
+
+    def test_filter_updates_merged_set(self, make_temp_path):
+        """Test that already_merged_keys is updated in place with yielded keys."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(1, "a"), (2, "b"), (3, "c")]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                already_merged = {1}
+                result = filter_unmerged_dict_attr_entries(
+                    h5_file, "test_dict", already_merged
+                )
+                # Consume the generator
+                list(result)
+                # Verify already_merged was updated
+                assert already_merged == {1, 2, 3}
+
+    def test_filter_returns_none_when_all_merged(self, make_temp_path):
+        """Test that None is returned when all entries are already merged."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [(1, "a"), (2, "b")]
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                already_merged = {1, 2}  # All keys already merged
+                result = filter_unmerged_dict_attr_entries(
+                    h5_file, "test_dict", already_merged
+                )
+                assert result is None
+
+    def test_filter_returns_none_when_attr_not_found(self, make_temp_path):
+        """Test that None is returned when the attribute doesn't exist."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                pass  # Empty file
+
+            with h5py.File(temp_file, "r") as h5_file:
+                already_merged = set()
+                result = filter_unmerged_dict_attr_entries(
+                    h5_file, "nonexistent", already_merged
+                )
+                assert result is None
+
+    def test_filter_decode_cache_is_forwarded(self, make_temp_path):
+        """Test that decode_cache is forwarded to iter_dict_attr_entries."""
+        with make_temp_path(suffix=".h5") as temp_file:
+            with h5py.File(temp_file, "w") as h5_file:
+                entries = [
+                    (1, MockSerializable("obj_1", 100)),
+                    (2, MockSerializable("obj_2", 200)),
+                ]
+                encode_cache = {}
+                merge_dict_attr(
+                    h5_file,
+                    "test_dict",
+                    entries,
+                    encode_cache=encode_cache,
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            with h5py.File(temp_file, "r") as h5_file:
+                decode_cache = {}
+                already_merged = set()
+                result = filter_unmerged_dict_attr_entries(
+                    h5_file,
+                    "test_dict",
+                    already_merged,
+                    decode_cache=decode_cache,
+                )
+                # Consume the generator
+                list(result)
+                # Verify decode_cache was populated (used during decoding)
+                assert len(decode_cache) > 0
+
+
+class TestReadCheckpointDictAttrUnion:
+    """Tests for read_checkpoint_dict_attr_union function."""
+
+    def test_union_canonical_and_worker_files(self, make_temp_path):
+        """Test merging dict entries from canonical and worker checkpoint files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create canonical file
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(1, "from_canonical"), (2, "also_canonical")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Create worker files
+            worker1_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker1_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(2, "from_worker_1"), (3, "new_from_worker_1")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            worker2_path = checkpoint_dir / "worker_2_checkpoint.h5"
+            with h5py.File(worker2_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(3, "from_worker_2"), (4, "new_from_worker_2")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read union
+            result = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+            )
+
+            # Worker files should take precedence on collision
+            assert result[1] == "from_canonical"  # Only in canonical
+            assert result[2] == "from_worker_1"   # Canonical overridden by worker
+            assert result[3] == "from_worker_2"   # Later worker overrides earlier
+            assert result[4] == "new_from_worker_2"  # Only in latest worker
+
+    def test_union_worker_only_when_no_canonical(self, make_temp_path):
+        """Test that worker-only scan works when canonical_filename is None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create only worker files (no canonical)
+            worker1_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker1_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(1, "worker_1_val"), (2, "shared_val_1")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            worker2_path = checkpoint_dir / "worker_2_checkpoint.h5"
+            with h5py.File(worker2_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(2, "worker_2_val"), (3, "new_val")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read union with no canonical
+            result = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                canonical_filename=None,  # No canonical file
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+            )
+
+            assert result[1] == "worker_1_val"
+            assert result[2] == "worker_2_val"  # Later worker wins
+            assert result[3] == "new_val"
+
+    def test_union_canonical_only_when_no_worker_glob(self, make_temp_path):
+        """Test that canonical-only scan works when worker_glob is None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create only canonical file
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(1, "val_1"), (2, "val_2")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Also create a worker file (should be ignored)
+            worker_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(3, "should_be_ignored")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read with no worker glob
+            result = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob=None,  # No worker files
+                attr_name="results",
+            )
+
+            assert result == {1: "val_1", 2: "val_2"}
+            assert 3 not in result  # Worker file was ignored
+
+    def test_canonical_attr_name_remap(self, make_temp_path):
+        """Test that canonical_attr_name parameter remaps the canonical file's attribute name."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create canonical file with differently-named attribute
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "_reduced_results",  # Different name in canonical
+                    [(1, "canonical_val")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Create worker file with standard name
+            worker_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",  # Standard name in worker
+                    [(2, "worker_val")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read with canonical_attr_name remap
+            result = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",  # Standard name for workers
+                canonical_attr_name="_reduced_results",  # Remap for canonical
+            )
+
+            assert result[1] == "canonical_val"  # From canonical with remapped name
+            assert result[2] == "worker_val"     # From worker
+
+    def test_empty_directories_return_empty_dict(self, make_temp_path):
+        """Test that empty directory returns empty dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+            result = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+            )
+            assert result == {}
+
+
+class TestReadCheckpointDictAttrUnionKeys:
+    """Tests for read_checkpoint_dict_attr_union_keys function."""
+
+    def test_keys_union_across_files(self, make_temp_path):
+        """Test keys-only union across canonical and worker files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create canonical file
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(1, "a"), (2, "b")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Create worker file
+            worker_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(2, "x"), (3, "y")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read keys union
+            result = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+            )
+
+            assert result == {1, 2, 3}
+
+    def test_keys_only_no_values_decoded(self, make_temp_path):
+        """Test that values are not decoded when reading keys union."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create file with a value that would fail if decoded
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                # Create dict with groups format to hold arbitrary objects
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [
+                        (1, MockSerializable("obj_1", 100)),
+                        (2, MockSerializable("obj_2", 200)),
+                    ],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Now corrupt one of the value groups to make it un-decodable
+            with h5py.File(canonical_path, "a") as h5_file:
+                dict_group = h5_file["results"]["dict"]["values"]["iterable"]
+                # Delete the second value group to corrupt it
+                del dict_group["1"]
+
+            # keys-only read should still succeed (no attempt to decode values)
+            result = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob=None,
+                attr_name="results",
+            )
+
+            assert result == {1, 2}
+
+    def test_keys_union_worker_only(self, make_temp_path):
+        """Test keys-only union with workers only (no canonical)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create worker files
+            worker1_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker1_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(1, "a"), (2, "b")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            worker2_path = checkpoint_dir / "worker_2_checkpoint.h5"
+            with h5py.File(worker2_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(2, "x"), (3, "y")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read keys union with no canonical
+            result = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                canonical_filename=None,
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+            )
+
+            assert result == {1, 2, 3}
+
+    def test_keys_canonical_only(self, make_temp_path):
+        """Test keys-only read with canonical file only (no workers)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create canonical file
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(1, "a"), (2, "b"), (3, "c")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Create a worker file (should be ignored)
+            worker_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(4, "d")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read with no worker glob
+            result = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob=None,
+                attr_name="results",
+            )
+
+            assert result == {1, 2, 3}
+            assert 4 not in result  # Worker was ignored
+
+    def test_keys_canonical_attr_name_remap(self, make_temp_path):
+        """Test canonical_attr_name remap for keys-only union."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+
+            # Create canonical file with differently-named attribute
+            canonical_path = checkpoint_dir / "canonical.h5"
+            with h5py.File(canonical_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "_reduced_results",
+                    [(1, "a"), (2, "b")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Create worker file
+            worker_path = checkpoint_dir / "worker_1_checkpoint.h5"
+            with h5py.File(worker_path, "w") as h5_file:
+                merge_dict_attr(
+                    h5_file,
+                    "results",
+                    [(2, "x"), (3, "y")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+
+            # Read keys with canonical_attr_name remap
+            result = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+                canonical_attr_name="_reduced_results",
+            )
+
+            assert result == {1, 2, 3}
+
+    def test_keys_empty_directory_returns_empty_set(self, make_temp_path):
+        """Test that empty directory returns empty set."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir)
+            result = read_checkpoint_dict_attr_union_keys(
+                checkpoint_dir,
+                canonical_filename="canonical.h5",
+                worker_glob="worker_*_checkpoint.h5",
+                attr_name="results",
+            )
+            assert result == set()

@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Iterable
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
     iter_dict_attr_entries,
-    filter_unmerged_dict_attr_entries,
+    merge_worker_checkpoint_file,
     get_dict_attr_value,
     get_dict_attr_group,
     get_dict_attr_keys,
@@ -1151,12 +1151,10 @@ class ProgramResults(Displayable):
         any shot indices already present in the output (deduplication safety
         for crash-recovery retries).
 
-        Streams one shot at a time via iter_dict_attr_entries, so peak
-        memory is bounded to a single shot. `shot_wall_clock_times` merges
-        the same way as `shot_histories`, except its dataset-format values
-        are read in one bulk pass rather than decoded per shot (see
-        `iter_dict_attr_entries`'s own dataset-format branch), so merging
-        it never triggers an extra `History` decode.
+        Thin wrapper around `merge_worker_checkpoint_file` (fresh decode cache
+        per attribute; identical worker/output attribute names). Re-raises as
+        `OSError` on failure, since `consolidate_checkpoints` relies on an
+        exception propagating here to leave a failed worker file undeleted.
 
         Parameters
         ----------
@@ -1171,36 +1169,34 @@ class ProgramResults(Displayable):
             corresponding set is skipped. An attribute missing from this
             dict (or the dict itself being `None`) defaults to an empty
             set, i.e. nothing pre-merged for that attribute.
+
+        Raises
+        ------
+        OSError
+            If `merge_worker_checkpoint_file` reports failure (a
+            retry-exhausted lock conflict, or corruption/a missing
+            attribute in `worker_file`).
         """
         already_merged_by_attr = {
             attr_name: (already_merged_by_attr or {}).get(attr_name, set())
             for attr_name, _ in self._STREAMED_DICT_ATTRS
         }
-
-        def _do_merge(in_f: h5py.File) -> None:
-            if len(in_f.keys()) == 0:
-                return
-
-            in_root_group = _resolve_checkpoint_object_group(in_f)
-            for attr_name, value_use_dataset in self._STREAMED_DICT_ATTRS:
-                # Fresh decode_cache per attribute, matching this file's own
-                # scope -- not a cache shared across separate worker files
-                # (or across the two attributes of the same worker file).
-                entries = filter_unmerged_dict_attr_entries(
-                    in_root_group,
-                    attr_name,
-                    already_merged_by_attr[attr_name],
-                    decode_cache=ResolvingDecodeCache(
-                        root=in_f, format="hdf5"
-                    ),
-                )
-                if entries is not None:
-                    # Consumed fully here, while `in_f` is still open.
-                    self._write_streamed_dict_entries(
-                        out_h5_file, attr_name, value_use_dataset, entries
-                    )
-
-        _retry_hdf5_read(worker_file, _do_merge)
+        merged = merge_worker_checkpoint_file(
+            worker_file,
+            target=out_h5_file,
+            streamed_attrs=[
+                (name, name, use_dataset)
+                for name, use_dataset in self._STREAMED_DICT_ATTRS
+            ],
+            already_merged_keys=already_merged_by_attr,
+            delete_original=False,
+            shared_decode_cache=False,
+            write_entry_fn=self._write_streamed_dict_entries,
+        )
+        if not merged:
+            raise OSError(
+                f"Failed to merge worker checkpoint file {worker_file}"
+            )
 
     def get_shot_history(self, shot_index: int) -> History | None:
         """Get a shot history, potentially loading from checkpoint if lazy loading is enabled.

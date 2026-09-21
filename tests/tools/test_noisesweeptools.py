@@ -341,6 +341,31 @@ class TestRun:
             f"Expected [True, True] with default verbose, got {seen_verbose_values}"
         )
 
+    def test_wall_clock_timing_attributes(self):
+        """item_wall_clock_times and shot_wall_clock_times are populated after run()."""
+        strengths = [0.0, 0.1, 0.2]
+        runner = make_runner(
+            strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False
+        )
+        runner.run()
+
+        # item_wall_clock_times: dict[int, float] with one entry per strength
+        assert set(runner.item_wall_clock_times.keys()) == {0, 1, 2}
+        for item_time in runner.item_wall_clock_times.values():
+            assert isinstance(item_time, float)
+            assert item_time > 0
+
+        # shot_wall_clock_times: dict[int, dict[int, float]]
+        # same item indices, each with per-shot timing dict
+        assert set(runner.shot_wall_clock_times.keys()) == {0, 1, 2}
+        for shot_times_dict in runner.shot_wall_clock_times.values():
+            assert isinstance(shot_times_dict, dict)
+            assert len(shot_times_dict) == 10  # num_shots=10
+            for shot_idx, shot_time in shot_times_dict.items():
+                assert isinstance(shot_idx, int)
+                assert isinstance(shot_time, float)
+                assert shot_time > 0
+
 
 class TestRunParallel:
     """`NoiseSweepRunner.run`'s `parallel` (a
@@ -404,8 +429,10 @@ class TestRunParallel:
 
         # Read the partial state (indices 0 and 1) from the worker_*_runner.h5
         # files directly.
-        from loqs.tools.multiprogramrunner import _read_worker_files
-        completed = _read_worker_files(item_checkpoint_dir)
+        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
+        completed = read_checkpoint_dict_attr_union(
+            item_checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
         assert len(completed) == 2  # Only 0 and 1 completed
         assert 0 in completed
         assert 1 in completed

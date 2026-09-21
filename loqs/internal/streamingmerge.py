@@ -21,7 +21,7 @@ import h5py
 import itertools
 import numpy as np
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.serializable import Serializable
@@ -316,6 +316,151 @@ def filter_unmerged_dict_attr_entries(
     if first_entry is None:
         return None
     return itertools.chain([first_entry], gen)
+
+
+def merge_worker_checkpoint_file(
+    worker_file: Path,
+    target: h5py.File | Path,
+    streamed_attrs: Sequence[tuple[str, str, bool]],
+    already_merged_keys: dict[str, set[Any]],
+    *,
+    delete_original: bool = True,
+    shared_decode_cache: bool = True,
+    write_entry_fn: (
+        Callable[[h5py.File, str, bool, Iterable[tuple[Any, Any]]], None]
+        | None
+    ) = None,
+) -> bool:
+    """Merge one worker checkpoint file's streamed dict attributes into a
+    canonical target file.
+
+    Generalizes the per-worker merge step shared by `MultiProgramRunner`'s
+    consolidation (`target` given as a `Path`, a fresh write lock acquired
+    on it per worker file, one decode cache shared across all attributes)
+    and `ProgramResults`' consolidation (`target` given as an already-open
+    `h5py.File` held across the whole run, a fresh decode cache allocated
+    per attribute). Reads `worker_file` via `_retry_hdf5_read`; if it is
+    empty, treats it as already merged with nothing to do. Each worker
+    attribute is read directly off the open worker file (not pre-resolved
+    via `_resolve_checkpoint_object_group`), since `iter_dict_attr_entries`
+    already navigates single-child wrapper groups by attribute name --
+    required since a `MultiProgramRunner` worker file's dict attributes sit
+    directly at file root with no `Serializable`-encoded wrapper, unlike a
+    `ProgramResults` worker file's bootstrapped envelope.
+
+    Parameters
+    ----------
+    worker_file : Path
+        Path to the worker checkpoint file to read and merge.
+    target : h5py.File | Path
+        Canonical file to merge into. If a `Path`, this function opens and
+        closes its own write transaction (via `_retry_hdf5_write`) scoped
+        to just this one worker file's merge. If an already-open
+        `h5py.File`, it is used directly with no new lock acquired -- the
+        caller is assumed to already be holding it open across the whole
+        consolidation.
+    streamed_attrs : Sequence[tuple[str, str, bool]]
+        `(worker_attr, canonical_attr, value_use_dataset)` triples naming
+        each dict attribute to merge, its corresponding name on the
+        canonical side (may differ from `worker_attr`), and whether its
+        values use dataset storage format.
+    already_merged_keys : dict[str, set[Any]]
+        Mapping from each `canonical_attr` in `streamed_attrs` to the set
+        of keys already merged for it. Must already contain an entry
+        (possibly an empty set) for every such `canonical_attr` before
+        calling this function -- unlike `filter_unmerged_dict_attr_entries`,
+        this function never default-populates a missing entry. Mutated in
+        place as entries are merged.
+    delete_original : bool, optional
+        If True (default), unlink `worker_file` once its entries are
+        confirmed merged, swallowing `OSError` if it's already gone. Left
+        in place if False, or if the merge fails.
+    shared_decode_cache : bool, optional
+        If True (default), allocate one `ResolvingDecodeCache` before the
+        attribute loop and reuse it for every attribute -- required when a
+        Serializable value referenced by entries in more than one attribute
+        must decode to the same real object everywhere. If False, allocate
+        a fresh cache inside the loop, once per attribute.
+    write_entry_fn : Callable[[h5py.File, str, bool, Iterable[tuple[Any, Any]]], None] | None, optional
+        If given, called as `write_entry_fn(out_f, canonical_attr,
+        value_use_dataset, entries)` to write each attribute's unmerged
+        entries. If None (default), entries are written via `merge_dict_attr`
+        directly against `_resolve_checkpoint_object_group(out_f)`.
+
+    Returns
+    -------
+    bool
+        True on success -- including the empty-worker-file no-op case, and
+        an attribute genuinely absent from `worker_file` (skipped, not an
+        error). False if a `BlockingIOError`, `OSError`, or `KeyError` was
+        raised anywhere in the read/merge/write sequence -- a
+        retry-exhausted lock conflict, or actual corruption -- in which
+        case the worker file is left in place, never deleted.
+    """
+    from loqs.core.programresults import _resolve_checkpoint_object_group
+    from loqs.internal import _retry_hdf5_read, _retry_hdf5_write
+    from loqs.internal.serializable import ResolvingDecodeCache
+
+    try:
+
+        def _read_and_merge(in_f: h5py.File) -> None:
+            if len(in_f.keys()) == 0:
+                return
+
+            shared_cache = (
+                ResolvingDecodeCache(root=in_f, format="hdf5")
+                if shared_decode_cache
+                else None
+            )
+
+            def _merge_into(out_f: h5py.File) -> None:
+                for (
+                    worker_attr,
+                    canonical_attr,
+                    value_use_dataset,
+                ) in streamed_attrs:
+                    decode_cache = (
+                        shared_cache
+                        if shared_decode_cache
+                        else ResolvingDecodeCache(root=in_f, format="hdf5")
+                    )
+                    entries = filter_unmerged_dict_attr_entries(
+                        in_f,
+                        worker_attr,
+                        already_merged_keys[canonical_attr],
+                        decode_cache=decode_cache,
+                    )
+                    if entries is None:
+                        continue
+                    if write_entry_fn is not None:
+                        write_entry_fn(
+                            out_f, canonical_attr, value_use_dataset, entries
+                        )
+                    else:
+                        merge_dict_attr(
+                            _resolve_checkpoint_object_group(out_f),
+                            canonical_attr,
+                            entries,
+                            encode_cache={},
+                            key_use_dataset=True,
+                            value_use_dataset=value_use_dataset,
+                        )
+
+            if isinstance(target, Path):
+                _retry_hdf5_write(target, _merge_into)
+            else:
+                _merge_into(target)
+
+        _retry_hdf5_read(worker_file, _read_and_merge)
+    except (BlockingIOError, OSError, KeyError):
+        return False
+
+    if delete_original:
+        try:
+            worker_file.unlink()
+        except OSError:
+            pass
+    return True
 
 
 def _stream_into_new_dict_attr(

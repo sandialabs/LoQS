@@ -5,7 +5,6 @@ test_fttools.py -- consolidated from three near-identical copies."""
 import time
 
 from loqs.core import QuantumProgram
-from loqs.tools.multiprogramrunner import _read_worker_files
 
 
 def _build_shot_executor():
