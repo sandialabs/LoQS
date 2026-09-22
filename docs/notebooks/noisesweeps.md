@@ -167,7 +167,7 @@ print(example_program.default_noise_model)
 ## Running the sweep
 
 `run` builds and executes one `QuantumProgram` per strength, extracts a `(failure_rate, stderr)`
-pair from each using the same per-shot pass/fail convention as `fttools.test_program_output`
+pair from each using the same per-shot pass/fail convention as `FaultInjectionRunner.reduce_program_outcomes`
 (`collect_shot_data_args`/`expected_outcomes`), and returns a single `NoiseSweepResult` covering
 the whole sweep.
 
@@ -187,6 +187,16 @@ runner = NoiseSweepRunner(
 
 result_z = runner.run()
 result_z.failure_rates
+```
+
+The runner also captures wall-clock timing information for each item in the sweep and for each shot within each item:
+
+```{code-cell} ipython3
+# item_wall_clock_times maps sweep point index to total wall-clock duration for that point
+print(f"Item wall-clock times (by sweep point): {runner.item_wall_clock_times}")
+
+# shot_wall_clock_times maps sweep point index to a nested dict of shot index -> duration
+print(f"Number of sweep points with shot timing data: {len(runner.shot_wall_clock_times)}")
 ```
 
 ```{code-cell} ipython3
@@ -362,8 +372,9 @@ Large sweeps (many strengths, many shots each) can take a while, and it would be
 all progress if the process is interrupted partway through. Passing `checkpoint=True` and
 `item_checkpoint_dir` to the constructor checkpoints each completed point's result into
 `item_checkpoint_dir` immediately, so no completed work is lost on a crash -- the human-readable
-`NoiseSweepResult` itself (and its `result.h5` export) is only written once, at the very end of a
-successful run. To resume from a checkpoint, construct a new `NoiseSweepRunner` via
+`NoiseSweepResult` itself is only ever built once the sweep completes, and is not written to disk
+automatically (see 'Saving and reloading a `NoiseSweepResult`' above if you want to persist it
+yourself). To resume from a checkpoint, construct a new `NoiseSweepRunner` via
 `from_noise_sweep_runner` (or with the same config) with `resume=True`, pointing to the same
 `item_checkpoint_dir` -- already-completed points are recognized and skipped entirely, with at
 most one point's worth of shots repeated even if interrupted mid-point.

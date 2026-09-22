@@ -11,6 +11,7 @@ This implementation provides a simple counter-like behavior where a "state"
 value can be incremented. This is purely for demonstration and testing purposes.
 """
 
+import time
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
@@ -43,6 +44,12 @@ def create_qec_code():
         """Apply function to initialize the state."""
         return Frame({"counter": initial_value})
 
+    # Define a sleep instruction
+    def sleep_apply_fn(duration: float, counter: int | None = None) -> Frame:
+        """Apply function for the sleep instruction."""
+        time.sleep(duration)
+        return Frame({"counter": counter})
+
     instructions["Increment"] = Instruction(
         increment_apply_fn,
         data={"increment_by": 1},
@@ -54,6 +61,13 @@ def create_qec_code():
         init_counter_apply_fn,
         data={"initial_value": 0},
         name="Initialize counter",
+    )
+
+    instructions["Sleep"] = Instruction(
+        sleep_apply_fn,
+        data={"duration": 0.0, "counter": None},
+        param_priorities={"counter": ["history[-1]", "instruction"]},
+        name="Sleep for duration",
     )
 
     code = QECCode(instructions, qubits, data_qubits, "Trivial Counter Code")

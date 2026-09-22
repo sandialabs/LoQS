@@ -132,6 +132,13 @@ results = program.run(num_shots=20)
 
 The individual `History` objects are now available in the `results.shot_histories` member variable, a `dict` keyed by (non-negative) shot index -- so unlike a `list`, negative indices like `-1` aren't supported.
 
+Wall-clock timing information for each shot is also available in `results.shot_wall_clock_times`, which maps shot index to execution duration in seconds.
+
+```{code-cell} ipython3
+# Show the wall-clock timing for each shot
+results.shot_wall_clock_times
+```
+
 For example, we could print out the `History` corresponding to the last shot just to get a sense for what this object looks like.
 
 ```{code-cell} ipython3

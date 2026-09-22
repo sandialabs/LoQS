@@ -327,6 +327,80 @@ class TestExecutorParallelism:
             real_executor.shutdown(wait=True)
 
 
+class TestShotWallClockTimes:
+    """`QuantumProgram.run()` populates `ProgramResults.shot_wall_clock_times`
+    with a real, positive per-shot duration across all three internal
+    dispatch paths: serial non-checkpointed, serial checkpointed, and
+    parallel via a `shot_executor`."""
+
+    def _build_counter_program(self):
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        stack = [
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            {"instruction": "Init Counter From Seed"},
+            {
+                "instruction": "Increment",
+                "patch_label": "L0",
+                "increment_by": 1,
+            },
+        ]
+        return QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            global_instructions={
+                "Init Counter From Seed": _SEED_COUNTER_INSTRUCTION
+            },
+            default_base_seed=0,
+            name="shot wall clock times test",
+        )
+
+    @pytest.mark.parametrize(
+        "mode, checkpointed",
+        [
+            ("serial", False),
+            ("serial", True),
+            ("parallel", False),
+        ],
+        ids=[
+            "serial_non_checkpointed",
+            "serial_checkpointed",
+            "parallel_via_shot_executor",
+        ],
+    )
+    def test_populates_shot_wall_clock_times(
+        self, tmp_path, mode, checkpointed
+    ):
+        num_shots = 4
+        run_kwargs = {"num_shots": num_shots, "verbose": False}
+
+        if checkpointed:
+            run_kwargs["checkpoint"] = True
+            run_kwargs["checkpoint_dir"] = tmp_path / "checkpoints"
+            run_kwargs["checkpoint_batch_size"] = 2
+            run_kwargs["lazy_loading"] = False
+        if mode == "parallel":
+            loky = pytest.importorskip("loky")
+            run_kwargs["shot_executor"] = loky.get_reusable_executor(
+                max_workers=2
+            )
+
+        results = self._build_counter_program().run(**run_kwargs)
+
+        assert set(results.shot_wall_clock_times.keys()) == set(
+            range(num_shots)
+        )
+        for value in results.shot_wall_clock_times.values():
+            assert isinstance(value, float)
+            assert value > 0
+
+
 class TestResolveInstructionLegacyNameHint:
     """`_resolve_instruction`'s "not found" errors hint at the "Iz" ->
     "Imrz" v1.2 rename when that's the name that failed to resolve --
@@ -974,6 +1048,123 @@ class TestResumeFromCheckpoint:
             # All shots should now be in memory with lazy_loading=False
             assert len(results2.shot_histories) == 4
 
+    def test_resume_restores_shot_wall_clock_times_lazy_loading_true(
+        self, monkeypatch
+    ):
+        """A resumed call with lazy_loading=True must recover the wall-clock
+        time for every shot, not just the ones actually recomputed after
+        the crash. Unlike `shot_histories`, `shot_wall_clock_times` is
+        never evicted under lazy loading, so it is expected to always be
+        fully populated once a run (including a resumed one) completes."""
+        import tempfile
+
+        program = self._build_seeded_counter_program()
+
+        compute_count_1 = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _count_compute_calls_1(self, max_frame_limit, seed, shot_index):
+            compute_count_1["n"] += 1
+            if compute_count_1["n"] > 2:
+                raise RuntimeError("Simulated crash during first run")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+
+            # First run: compute 4 shots with lazy loading, but interrupt after 2
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _count_compute_calls_1
+            )
+            with pytest.raises(RuntimeError, match="Simulated crash"):
+                program.run(
+                    num_shots=4,
+                    checkpoint=True,
+                    checkpoint_batch_size=2,
+                    checkpoint_dir=checkpoint_dir,
+                    lazy_loading=True,
+                    verbose=False,
+                )
+            monkeypatch.undo()
+
+            # Resume with lazy loading still enabled: first 2 shots recovered
+            # from checkpoint, remaining 2 recomputed
+            results = program.run(
+                num_shots=4,
+                checkpoint=True,
+                resume=True,
+                checkpoint_batch_size=2,
+                checkpoint_dir=checkpoint_dir,
+                lazy_loading=True,
+                verbose=False,
+            )
+
+            # shot_wall_clock_times must cover all 4 shots -- not just the 2
+            # actually recomputed in this resumed run.
+            assert set(results.shot_wall_clock_times.keys()) == {0, 1, 2, 3}
+            for wall_clock_time in results.shot_wall_clock_times.values():
+                assert isinstance(wall_clock_time, float)
+                assert wall_clock_time > 0
+
+    def test_resume_restores_shot_wall_clock_times_lazy_loading_false(
+        self, monkeypatch
+    ):
+        """A resumed call with lazy_loading=False must also recover the
+        wall-clock time for every shot, not just the ones actually
+        recomputed after the crash. Unlike `shot_histories`, which is
+        deliberately re-populated in this branch, `shot_wall_clock_times`
+        must be restored the same way regardless of the lazy_loading value
+        used for the resuming call itself."""
+        import tempfile
+
+        program = self._build_seeded_counter_program()
+
+        compute_count_1 = {"n": 0}
+        original_run_shot = QuantumProgram._run_shot
+
+        def _count_compute_calls_1(self, max_frame_limit, seed, shot_index):
+            compute_count_1["n"] += 1
+            if compute_count_1["n"] > 2:
+                raise RuntimeError("Simulated crash during first run")
+            return original_run_shot(self, max_frame_limit, seed, shot_index)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+
+            # First run: compute 4 shots with lazy loading, but interrupt after 2
+            monkeypatch.setattr(
+                QuantumProgram, "_run_shot", _count_compute_calls_1
+            )
+            with pytest.raises(RuntimeError, match="Simulated crash"):
+                program.run(
+                    num_shots=4,
+                    checkpoint=True,
+                    checkpoint_batch_size=2,
+                    checkpoint_dir=checkpoint_dir,
+                    lazy_loading=True,
+                    verbose=False,
+                )
+            monkeypatch.undo()
+
+            # Resume with lazy loading disabled: first 2 shots recovered
+            # from checkpoint, remaining 2 recomputed
+            results = program.run(
+                num_shots=4,
+                checkpoint=True,
+                resume=True,
+                checkpoint_batch_size=2,
+                checkpoint_dir=checkpoint_dir,
+                lazy_loading=False,
+                verbose=False,
+            )
+
+            # shot_wall_clock_times must cover all 4 shots -- not just the 2
+            # actually recomputed in this resumed run.
+            assert set(results.shot_wall_clock_times.keys()) == {0, 1, 2, 3}
+            for wall_clock_time in results.shot_wall_clock_times.values():
+                assert isinstance(wall_clock_time, float)
+                assert wall_clock_time > 0
+
     def test_resume_with_loky_executor_and_non_contiguous_gaps(self):
         """Resume with loky executor: stage non-contiguous done-shot gaps,
         verify only missing shots are computed, and consolidation occurs."""
@@ -1005,7 +1196,9 @@ class TestResumeFromCheckpoint:
                 )
                 history = History()
                 history.append(Frame({"counter": shot_idx + 1}))
-                results_worker.add_shot(shot_idx, history)
+                results_worker.add_shot(
+                    shot_idx, history, wall_clock_time=0.05
+                )
                 results_worker.checkpoint(
                     checkpoint_dir=checkpoint_dir, worker_id=f"w{shot_idx}"
                 )
@@ -1041,6 +1234,19 @@ class TestResumeFromCheckpoint:
 
                 # Verify consolidated results.h5 exists
                 assert (checkpoint_dir / "results.h5").exists()
+
+                # Verify shot_wall_clock_times covers all 6 shots with positive floats
+                assert set(results.shot_wall_clock_times.keys()) == {
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                }
+                for wall_clock_time in results.shot_wall_clock_times.values():
+                    assert isinstance(wall_clock_time, float)
+                    assert wall_clock_time > 0
             finally:
                 executor.shutdown(wait=True)
 
@@ -1260,7 +1466,7 @@ class TestResumeFromCheckpoint:
             with unittest.mock.patch.object(
                 Serializable, "decode", side_effect=decode_trap
             ):
-                remaining, num_done, done_data = (
+                remaining, num_done, done_data, done_wall_clock_times = (
                     QuantumProgram._load_remaining_shots(
                         checkpoint_dir, num_shots=5, lazy_loading=True
                     )
@@ -1270,6 +1476,8 @@ class TestResumeFromCheckpoint:
                 assert remaining == []
                 assert num_done == 5
                 assert done_data == {}
+                # No wall_clock_time was ever recorded for these shots.
+                assert done_wall_clock_times == {}
 
     def test_load_remaining_shots_normal_mode_populates_done_data(self):
         """Verify _load_remaining_shots with lazy_loading=False decodes History data.
@@ -1292,7 +1500,7 @@ class TestResumeFromCheckpoint:
             pr.checkpoint(checkpoint_dir=checkpoint_dir)
 
             # Call with lazy_loading=False
-            remaining, num_done, done_data = (
+            remaining, num_done, done_data, done_wall_clock_times = (
                 QuantumProgram._load_remaining_shots(
                     checkpoint_dir, num_shots=5, lazy_loading=False
                 )
@@ -1306,6 +1514,8 @@ class TestResumeFromCheckpoint:
             # Each value should be a History object
             for idx in [0, 1, 2]:
                 assert isinstance(done_data[idx], History)
+            # No wall_clock_time was ever recorded for these shots.
+            assert done_wall_clock_times == {}
 
 
 class TestResolveShotBatching:

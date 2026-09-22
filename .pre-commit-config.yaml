@@ -12,7 +12,7 @@ repos:
     hooks:
     - id: mypy
       name: mypy
-      entry: mypy loqs docs_scripts tests
+      entry: mypy loqs tests
       language: system
       pass_filenames: false
       types: [python]

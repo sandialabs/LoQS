@@ -17,6 +17,11 @@ from loqs.core.programresults import (
     ProgramResults,
     _resolve_checkpoint_object_group,
 )
+from loqs.internal.streamingmerge import (
+    iter_dict_attr_entries,
+    read_checkpoint_dict_attr_union,
+    read_checkpoint_dict_attr_union_keys,
+)
 from loqs.core.history import History
 from loqs.core import Frame
 from loqs.internal.serializable import Serializable
@@ -41,7 +46,7 @@ def _build_reference_before_source_checkpoint(
     """
     with h5py.File(path, "a") as f:
         # Bootstrap a valid ProgramResults envelope, mirroring
-        # `_write_shot_entries`'s own bootstrap, then drop its empty
+        # `_write_streamed_dict_entries`'s own bootstrap, then drop its empty
         # shot_histories skeleton so a custom one can be built by hand.
         Serializable.encode(
             ProgramResults(shot_histories={}),
@@ -147,6 +152,22 @@ class TestProgramResults:
         assert len(results.shot_histories) == 2
         assert 1 in results.shot_histories
         assert 1 in results._unwritten_shots
+
+        # Shots 0/1 were added without wall_clock_time, so they must be
+        # entirely absent from shot_wall_clock_times, not None-valued.
+        assert 0 not in results.shot_wall_clock_times
+        assert 1 not in results.shot_wall_clock_times
+
+        # A shot added with wall_clock_time populates shot_wall_clock_times
+        # with that exact value, independent of shot_histories.
+        history3 = History()
+        frame3 = Frame({"test_key3": "test_value3"})
+        history3.append(frame3)
+
+        results.add_shot(2, history3, wall_clock_time=1.23)
+        assert len(results.shot_histories) == 3
+        assert results.shot_wall_clock_times[2] == 1.23
+        assert len(results.shot_wall_clock_times) == 1
 
     def test_collect_shot_data(self):
         """Test collecting data from multiple shots."""
@@ -292,6 +313,36 @@ class TestProgramResults:
             assert len(history_1) == 1
             assert history_1[0]["shot_id"] == 1
             assert history_1[0]["data"] == "data_1"
+
+    def test_checkpoint_round_trip_shot_wall_clock_times(self):
+        """`shot_wall_clock_times` survives a full checkpoint write/read
+        cycle exactly like `shot_histories` already does -- correct `int`
+        keys and `float` values after `load_checkpoint`."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            results = ProgramResults(name="Wall Clock Checkpoint Test")
+
+            for i in range(5):
+                history = History()
+                frame = Frame({"shot_id": i})
+                history.append(frame)
+                results.add_shot(i, history, wall_clock_time=float(i) * 0.1)
+
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+            new_results = ProgramResults()
+            new_results.load_checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id="w0"
+            )
+
+            assert len(new_results.shot_wall_clock_times) == 5
+            assert all(
+                isinstance(k, int) for k in new_results.shot_wall_clock_times
+            )
+            for i in range(5):
+                value = new_results.shot_wall_clock_times[i]
+                assert isinstance(value, float)
+                assert abs(value - float(i) * 0.1) < 1e-9
 
     def test_checkpoint_with_no_worker_id_uses_canonical_filename(self):
         """`worker_id=None` (the single-writer case) writes/reads the
@@ -595,6 +646,59 @@ class TestProgramResults:
                 checkpoint_dir=checkpoint_dir, worker_id="w0"
             )
             assert set(new_results.shot_histories.keys()) == set(range(6))
+
+    def test_checkpoint_append_structure_survives_array_free_shots_for_wall_clock_times(
+        self,
+    ):
+        """`shot_wall_clock_times` must keep its real dict/keys/values/iterable
+        HDF5 structure -- not folded into HDF5's array-free-subtree collapse
+        blob -- even though every entry is a plain float with no array
+        anywhere, mirroring `test_checkpoint_append_structure_survives_array_free_shots`
+        above but for `shot_wall_clock_times` instead of `shot_histories`."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            results = ProgramResults(name="All-classical")
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+            for i in range(3):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history, wall_clock_time=float(i) + 0.1)
+
+            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+            checkpoint_file = next(checkpoint_dir.glob("*.h5"))
+            with h5py.File(checkpoint_file, "r") as f:
+                root_group = f[list(f.keys())[0]]
+                assert isinstance(
+                    root_group["shot_wall_clock_times"], h5py.Group
+                )
+                dict_group = root_group["shot_wall_clock_times"]["dict"]
+                keys_iterable = dict_group["keys"]["iterable"]
+                values_iterable = dict_group["values"]["iterable"]
+                assert keys_iterable.attrs["storage_format"] == "dataset"
+                assert values_iterable.attrs["storage_format"] == "dataset"
+                assert set(keys_iterable["data"][()].tolist()) == {0, 1, 2}
+
+            # Append a second, also array-free batch to confirm the fast
+            # append path works end to end, not just on the first checkpoint.
+            for i in range(3, 6):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history, wall_clock_time=float(i) + 0.1)
+
+            results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+
+            new_results = ProgramResults()
+            new_results.load_checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id="w0"
+            )
+            assert set(new_results.shot_wall_clock_times.keys()) == set(
+                range(6)
+            )
+            for i in range(6):
+                assert new_results.shot_wall_clock_times[i] == pytest.approx(
+                    float(i) + 0.1
+                )
 
     def test_checkpoint_with_empty_results(self):
         """Test checkpointing with empty ProgramResults."""
@@ -975,9 +1079,16 @@ class TestProgramResults:
 
     def test_consolidate_checkpoints_with_dedup_lazily_pulls_entries(self):
         """Consolidation with deduplication (crash-recovery retry case) must
-        pull entries from `iter_dict_attr_entries` one at a time and write
-        each as soon as it's decoded, never decoding the whole worker file's
-        shots before writing any of them.
+        pull `shot_histories` entries from `iter_dict_attr_entries` one at a
+        time and write each as soon as it's decoded, never decoding the
+        whole worker file's shots before writing any of them.
+
+        Scoped specifically to `shot_histories`: this test's fixture never
+        passes `wall_clock_time` to `add_shot`, so `shot_wall_clock_times`
+        stays empty throughout and the shared `_write_streamed_dict_entries`
+        spy below only wraps its one-at-a-time counting behavior for
+        `shot_histories`, passing straight through to the real method for
+        any other attr.
 
         Uses 10 shots with a strict duplicate/new alternation (evens already
         merged into the output, odds new) so a single `next()` pull can never
@@ -987,7 +1098,7 @@ class TestProgramResults:
         [2, 4, 6, 8, 10]. An eager implementation that decodes everything
         before writing anything would instead show [10, 10, 10, 10, 10].
         """
-        import loqs.core.programresults as programresults_module
+        import loqs.internal.streamingmerge as streamingmerge_module
 
         num_shots = 10
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1021,7 +1132,7 @@ class TestProgramResults:
             )
 
             real_iter_dict_attr_entries = (
-                programresults_module.iter_dict_attr_entries
+                streamingmerge_module.iter_dict_attr_entries
             )
             decoded_count = [0]
 
@@ -1039,28 +1150,42 @@ class TestProgramResults:
                     decoded_count[0] += 1
                     yield key, value
 
-            real_write_shot_entries = ProgramResults._write_shot_entries
+            real_write_streamed_dict_entries = (
+                ProgramResults._write_streamed_dict_entries
+            )
             decoded_count_at_write = []
 
-            def spy_write_shot_entries(self, h5_file, entries):
-                """Manually pull entries one at a time (never a bulk for-loop
-                over a pre-materialized list), writing each via its own
-                single-item real _write_shot_entries call and recording
-                decoded_count at the moment of each write."""
+            def spy_write_streamed_dict_entries(
+                self, h5_file, attr_name, value_use_dataset, entries
+            ):
+                """For shot_histories specifically, manually pull entries one
+                at a time (never a bulk for-loop over a pre-materialized
+                list), writing each via its own single-item real
+                _write_streamed_dict_entries call and recording
+                decoded_count at the moment of each write. Any other attr
+                (shot_wall_clock_times, empty in this test's fixture) passes
+                straight through to the real method unmodified."""
+                if attr_name != "shot_histories":
+                    real_write_streamed_dict_entries(
+                        self, h5_file, attr_name, value_use_dataset, entries
+                    )
+                    return
                 for entry in entries:
-                    real_write_shot_entries(self, h5_file, [entry])
+                    real_write_streamed_dict_entries(
+                        self, h5_file, attr_name, value_use_dataset, [entry]
+                    )
                     decoded_count_at_write.append(decoded_count[0])
 
             with (
                 unittest.mock.patch.object(
-                    programresults_module,
+                    streamingmerge_module,
                     "iter_dict_attr_entries",
                     spy_iter_dict_attr_entries,
                 ),
                 unittest.mock.patch.object(
                     ProgramResults,
-                    "_write_shot_entries",
-                    spy_write_shot_entries,
+                    "_write_streamed_dict_entries",
+                    spy_write_streamed_dict_entries,
                 ),
             ):
                 consolidator2 = ProgramResults()
@@ -1080,6 +1205,113 @@ class TestProgramResults:
             reloaded = ProgramResults()
             reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert set(reloaded.shot_histories.keys()) == set(range(num_shots))
+
+    def test_consolidate_checkpoints_shot_wall_clock_times_no_extra_history_decodes(
+        self,
+    ):
+        """Consolidating a worker file's `shot_wall_clock_times` (a
+        dataset-format dict value, unlike `shot_histories`' groups-format
+        `History` values) must not add any extra `History` decode calls
+        beyond what merging `shot_histories` itself already needs.
+
+        Unlike `shot_histories`, whose groups-format values are decoded one
+        at a time via `Serializable.decode`, a dataset-format value side is
+        read in a single bulk read (see `iter_dict_attr_entries`'s own
+        dataset-format branch in `loqs/internal/streamingmerge.py`) since
+        native scalars are cheap regardless of count -- so asserting "at
+        most one shot materialized per decode call" (the `shot_histories`
+        technique in `test_consolidate_checkpoints_memory_bounded_decode`
+        above) doesn't apply here and would be the wrong property to
+        assert. The real risk this guards against instead: a naive
+        implementation that decodes the *entire* worker `ProgramResults`
+        object just to pull out `shot_wall_clock_times`, silently
+        re-materializing every shot's real `History` payload a second
+        time.
+
+        This is measured relative to a same-shots baseline rather than a
+        hardcoded per-shot multiplier, since decoding a single groups-format
+        `History` entry is a pre-existing, architecture-level property of
+        `Serializable.decode`/`HDF5Encoder` that costs more than one raw
+        decode call per shot for reasons unrelated to this feature (a
+        root-group single-child unwrap step) -- baking that exact multiplier
+        into this test would make it a fragile proxy for the actual
+        property under test, rather than testing it directly.
+        """
+        num_shots = 20
+
+        def _consolidate_and_count_history_decodes(add_wall_clock_time):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                checkpoint_dir = Path(temp_dir) / "checkpoints"
+
+                results = ProgramResults(
+                    name="Wall Clock Memory Test", lazy_loading=False
+                )
+                for i in range(num_shots):
+                    history = History()
+                    history.append(
+                        Frame({"shot_id": i, "array": np.array([i, i + 1])})
+                    )
+                    if add_wall_clock_time:
+                        results.add_shot(
+                            i, history, wall_clock_time=float(i) * 0.01
+                        )
+                    else:
+                        results.add_shot(i, history)
+                results.checkpoint(
+                    checkpoint_dir=checkpoint_dir, worker_id="w0"
+                )
+
+                real_decode = Serializable.decode
+                history_decode_count = [0]
+
+                def spy_decode(encoded, format="hdf5", decode_cache=None):
+                    result = real_decode(
+                        encoded, format=format, decode_cache=decode_cache
+                    )
+                    if isinstance(result, History):
+                        history_decode_count[0] += 1
+                    return result
+
+                consolidator = ProgramResults()
+                with unittest.mock.patch.object(
+                    Serializable, "decode", side_effect=spy_decode
+                ):
+                    consolidator.consolidate_checkpoints(
+                        checkpoint_dir=checkpoint_dir,
+                        delete_originals=False,
+                    )
+
+                if add_wall_clock_time:
+                    reloaded = ProgramResults()
+                    reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+                    assert set(reloaded.shot_wall_clock_times.keys()) == set(
+                        range(num_shots)
+                    )
+                    for i in range(num_shots):
+                        assert (
+                            abs(
+                                reloaded.shot_wall_clock_times[i]
+                                - float(i) * 0.01
+                            )
+                            < 1e-9
+                        )
+
+                return history_decode_count[0]
+
+        baseline_count = _consolidate_and_count_history_decodes(
+            add_wall_clock_time=False
+        )
+        wall_clock_count = _consolidate_and_count_history_decodes(
+            add_wall_clock_time=True
+        )
+
+        assert wall_clock_count == baseline_count, (
+            f"Expected merging shot_wall_clock_times to add zero extra "
+            f"History decode calls relative to a shot_histories-only "
+            f"baseline of {baseline_count}, but saw {wall_clock_count} -- "
+            f"merging shot_wall_clock_times must not add any extra "
+            f"History decodes."
+        )
 
     def test_load_checkpoint_restores_metadata_fields(self):
         """When loading from a checkpoint file, metadata fields (name,
@@ -1481,9 +1713,163 @@ class TestResumeCheckpointing:
             for i in range(4):
                 assert i in final_results2.shot_histories
 
+    def test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first(
+        self,
+    ):
+        """`shot_histories` and `shot_wall_clock_times` are two independent
+        dict-attr entries, each merged via its own `already_merged_by_attr`
+        key tracking during consolidation -- so a crash between merging one
+        and the other for the same shot is a real, reachable on-disk state.
+        Seeds a worker file with both attributes for shot 0 (via
+        `merge_dict_attr` directly, mirroring
+        `test_consolidation_merges_item_and_shot_wall_clock_times` in
+        `test_multiprogramrunner.py`), and a canonical `results.h5` already
+        carrying `shot_histories` for shot 0 but not yet
+        `shot_wall_clock_times` (simulating a crash after the first
+        attribute merged but before the second did). Confirms
+        `consolidate_checkpoints` recovers correctly: the already-merged
+        `shot_histories` entry is left untouched (not overwritten by the
+        worker file's own copy of the same shot), while the missing
+        `shot_wall_clock_times` entry is merged in from the worker file."""
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+            checkpoint_dir.mkdir()
+
+            # shot_histories already merged for shot 0; shot_wall_clock_times
+            # seeded empty (only entry presence distinguishes "not merged").
+            canonical_history = History()
+            canonical_history.append(Frame({"source": "canonical"}))
+            with h5py.File(checkpoint_dir / "results.h5", "a") as f:
+                merge_dict_attr(
+                    f,
+                    "shot_histories",
+                    [(0, canonical_history)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+                merge_dict_attr(
+                    f,
+                    "shot_wall_clock_times",
+                    [],
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            # Worker file: both attributes present for shot 0.
+            worker_history = History()
+            worker_history.append(Frame({"source": "worker"}))
+            with h5py.File(
+                checkpoint_dir / "worker_w0_checkpoint.h5", "a"
+            ) as f:
+                merge_dict_attr(
+                    f,
+                    "shot_histories",
+                    [(0, worker_history)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+                merge_dict_attr(
+                    f,
+                    "shot_wall_clock_times",
+                    [(0, 1.5)],
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            consolidated = ProgramResults()
+            consolidated.consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir, delete_originals=True
+            )
+
+            # Read back via iter_dict_attr_entries, not load_checkpoint: this
+            # hand-built file lacks the full Serializable envelope
+            # load_checkpoint expects (see test_multiprogramrunner.py's
+            # analogous test for the same readback style).
+            with h5py.File(checkpoint_dir / "results.h5", "r") as f:
+                histories = dict(iter_dict_attr_entries(f, "shot_histories"))
+                wall_clock_times = dict(
+                    iter_dict_attr_entries(f, "shot_wall_clock_times")
+                )
+
+            assert set(histories.keys()) == {0}
+            assert histories[0][0]["source"] == "canonical"
+            assert set(wall_clock_times.keys()) == {0}
+            assert wall_clock_times[0] == pytest.approx(1.5)
+
+    def test_consolidate_checkpoints_recovers_out_of_lockstep_merge_wall_clock_times_first(
+        self,
+    ):
+        """Reverse direction of
+        `test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first`:
+        `shot_wall_clock_times` is already merged for shot 0 while
+        `shot_histories` isn't yet. Confirms the missing entry merges in
+        from the worker file while the already-merged one stays
+        untouched."""
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+            checkpoint_dir.mkdir()
+
+            with h5py.File(checkpoint_dir / "results.h5", "a") as f:
+                merge_dict_attr(
+                    f,
+                    "shot_histories",
+                    [],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+                merge_dict_attr(
+                    f,
+                    "shot_wall_clock_times",
+                    [(0, 2.5)],
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            worker_history = History()
+            worker_history.append(Frame({"source": "worker"}))
+            with h5py.File(
+                checkpoint_dir / "worker_w0_checkpoint.h5", "a"
+            ) as f:
+                merge_dict_attr(
+                    f,
+                    "shot_histories",
+                    [(0, worker_history)],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+                merge_dict_attr(
+                    f,
+                    "shot_wall_clock_times",
+                    [(0, 9.9)],
+                    key_use_dataset=True,
+                    value_use_dataset=True,
+                )
+
+            consolidated = ProgramResults()
+            consolidated.consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir, delete_originals=True
+            )
+
+            # Read back directly via iter_dict_attr_entries -- see the
+            # matching comment in the histories-first test above.
+            with h5py.File(checkpoint_dir / "results.h5", "r") as f:
+                histories = dict(iter_dict_attr_entries(f, "shot_histories"))
+                wall_clock_times = dict(
+                    iter_dict_attr_entries(f, "shot_wall_clock_times")
+                )
+
+            assert set(histories.keys()) == {0}
+            assert histories[0][0]["source"] == "worker"
+            assert set(wall_clock_times.keys()) == {0}
+            assert wall_clock_times[0] == pytest.approx(2.5)
+
     def test_load_done_shots_returns_union_from_checkpoint_and_workers(self):
-        """_load_done_shots returns the union of shots from results.h5
-        and all worker_*_checkpoint.h5 files."""
+        """read_checkpoint_dict_attr_union returns the union of shots
+        from results.h5 and all worker_*_checkpoint.h5 files."""
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             checkpoint_dir.mkdir()
@@ -1508,13 +1894,65 @@ class TestResumeCheckpointing:
                 )
 
             # Load done shots
-            done = ProgramResults._load_done_shots(checkpoint_dir)
+            done = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                "results.h5",
+                "worker_*_checkpoint.h5",
+                "shot_histories",
+            )
             assert len(done) == 6
             for i in range(6):
                 assert i in done
 
+    def test_load_done_shot_wall_clock_times_returns_union_from_checkpoint_and_workers(
+        self,
+    ):
+        """read_checkpoint_dict_attr_union is attribute-name-agnostic, so it
+        must also correctly union `shot_wall_clock_times` (not just
+        `shot_histories`) across a canonical results.h5 and worker
+        checkpoint files. This is a direct-coverage test for that
+        attribute, not a regression test for any known bug."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "checkpoints"
+            checkpoint_dir.mkdir()
+
+            # Write to results.h5
+            results_main = ProgramResults(lazy_loading=False)
+            for i in range(3):
+                history = History()
+                history.append(Frame({"source": "main", "idx": i}))
+                results_main.add_shot(
+                    i, history, wall_clock_time=float(i) + 0.1
+                )
+            results_main.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            # Write to a worker file
+            results_worker = ProgramResults(lazy_loading=False)
+            for i in range(3, 6):
+                history = History()
+                history.append(Frame({"source": "worker", "idx": i}))
+                results_worker.add_shot(
+                    i, history, wall_clock_time=float(i) + 0.5
+                )
+            results_worker.checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id="w0"
+            )
+
+            # Load the union of shot_wall_clock_times across both files
+            wall_clock_times = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                "results.h5",
+                "worker_*_checkpoint.h5",
+                "shot_wall_clock_times",
+            )
+            assert set(wall_clock_times.keys()) == {0, 1, 2, 3, 4, 5}
+            for i in range(3):
+                assert wall_clock_times[i] == pytest.approx(float(i) + 0.1)
+            for i in range(3, 6):
+                assert wall_clock_times[i] == pytest.approx(float(i) + 0.5)
+
     def test_load_done_shots_resolves_reference_before_source(self):
-        """_load_done_shots must decode with a
+        """read_checkpoint_dict_attr_union must decode with a
         `ResolvingDecodeCache`, not a bare dict, so a "reference" node
         physically stored before its own "source" node still resolves
         correctly instead of raising `RuntimeError`.
@@ -1531,7 +1969,12 @@ class TestResumeCheckpointing:
                 checkpoint_dir / "results.h5", source_index=1, copy_index=0
             )
 
-            done = ProgramResults._load_done_shots(checkpoint_dir)
+            done = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                "results.h5",
+                "worker_*_checkpoint.h5",
+                "shot_histories",
+            )
 
             assert set(done.keys()) == {0, 1}
             for shot_index, history in done.items():
@@ -1554,7 +1997,7 @@ class TestResumeCheckpointing:
             output_file = Path(temp_dir) / "results.h5"
             results = ProgramResults()
             with h5py.File(output_file, "a") as out_f:
-                results._merge_worker_into_output(worker_file, out_f, set())
+                results._merge_worker_into_output(worker_file, out_f, {})
 
             merged = ProgramResults()
             merged.load_checkpoint(checkpoint_dir=temp_dir)
@@ -1725,6 +2168,7 @@ class TestResumeCheckpointing:
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
 
+            import loqs.core.programresults as programresults_module
             import loqs.internal.streamingmerge as streamingmerge_module
 
             real_get_dict_attr_keys = streamingmerge_module.get_dict_attr_keys
@@ -1737,7 +2181,7 @@ class TestResumeCheckpointing:
                 return real_get_dict_attr_keys(*args, **kwargs)
 
             monkeypatch.setattr(
-                streamingmerge_module,
+                programresults_module,
                 "get_dict_attr_keys",
                 flaky_get_dict_attr_keys,
             )
@@ -2048,8 +2492,8 @@ class TestResumeCheckpointing:
         Confirmed two ways: (1) `Serializable.decode` is never called with
         the `shot_histories` group (or anything under it) as its source,
         which a naive "just decode the whole nested object" implementation
-        would trip; (2) `get_dict_attr_value`/`iter_dict_attr_entries` --
-        the per-shot streaming helpers -- are never called either."""
+        would trip; (2) `get_dict_attr_value`, the per-shot streaming helper
+        actually reachable from this code path, is never called either."""
         with tempfile.TemporaryDirectory() as temp_dir:
             parent_path = self._build_nested_source_with_name_and_parent(
                 temp_dir
@@ -2073,9 +2517,6 @@ class TestResumeCheckpointing:
                 unittest.mock.patch.object(
                     programresults_module, "get_dict_attr_value"
                 ) as mock_get_value,
-                unittest.mock.patch.object(
-                    programresults_module, "iter_dict_attr_entries"
-                ) as mock_iter_entries,
             ):
                 assert nested_pr.name == "RealName"
 
@@ -2086,7 +2527,6 @@ class TestResumeCheckpointing:
                 f"{decoded_source_names}"
             )
             mock_get_value.assert_not_called()
-            mock_iter_entries.assert_not_called()
 
     def test_lazy_name_resolution_reads_file_only_once(self):
         """A second read of an already-resolved lazy attribute must not
@@ -2199,6 +2639,45 @@ class TestResumeCheckpointing:
             assert isinstance(decoded, ProgramResults)
             assert decoded.name == "RoundTripName"
             assert decoded.parent_program == "RoundTripProgram"
+
+    def test_shot_wall_clock_times_survive_serialization_round_trip(self):
+        """`shot_wall_clock_times` round-trips through a whole-object
+        `Serializable.encode`/`.decode` cycle in both `json` and `hdf5`
+        formats, exactly like `shot_histories` already does above."""
+        for format_name in ("json", "hdf5"):
+            results = ProgramResults(name="Wall Clock Serialization Test")
+            for i in range(3):
+                history = History()
+                history.append(Frame({"marker": i}))
+                results.add_shot(i, history, wall_clock_time=float(i) + 0.5)
+
+            if format_name == "hdf5":
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    h5_path = Path(temp_dir) / "roundtrip.h5"
+                    with h5py.File(h5_path, "w") as h5_file:
+                        root_group = h5_file.create_group("root")
+                        encoded = Serializable.encode(
+                            results,
+                            format=format_name,
+                            h5_group=root_group,
+                            reset_encode_id=True,
+                        )
+                        decoded = Serializable.decode(
+                            encoded, format=format_name
+                        )
+            else:
+                encoded = Serializable.encode(
+                    results, format=format_name, reset_encode_id=True
+                )
+                decoded = Serializable.decode(encoded, format=format_name)
+
+            assert isinstance(decoded, ProgramResults)
+            assert len(decoded.shot_wall_clock_times) == 3
+            for i in range(3):
+                assert i in decoded.shot_wall_clock_times
+                value = decoded.shot_wall_clock_times[i]
+                assert isinstance(value, float)
+                assert abs(value - (float(i) + 0.5)) < 1e-9
 
     def test_count_done_shots_returns_correct_count(self):
         """Verify _count_done_shots returns the correct number of done shots."""
@@ -2317,12 +2796,12 @@ class TestResumeCheckpointing:
             assert count == 3
 
     def test_load_done_shot_indices_no_decoding_of_history_values(self):
-        """Verify _load_done_shot_indices never decodes History values.
+        """Verify read_checkpoint_dict_attr_union_keys never decodes History values.
 
-        This trap test ensures that _load_done_shot_indices uses the cheap
-        key-only scan (get_dict_attr_keys) and never attempts to decode
-        History values, even when the checkpoint file contains real shot data
-        that would normally be decoded. Uses the same technique as
+        This trap test ensures that read_checkpoint_dict_attr_union_keys uses
+        the cheap key-only scan (get_dict_attr_keys) and never attempts to
+        decode History values, even when the checkpoint file contains real
+        shot data that would normally be decoded. Uses the same technique as
         test_count_done_shots_no_decoding_of_history_values.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2349,18 +2828,21 @@ class TestResumeCheckpointing:
                 ]
                 if len(decode_frames) > 1:
                     # Recursive decode: a History value being decoded inside
-                    # a parent. Should NOT happen in _load_done_shot_indices.
+                    # a parent. Should NOT happen here.
                     raise AssertionError(
-                        "_load_done_shot_indices should not decode History values; "
-                        "nested Serializable.decode detected"
+                        "read_checkpoint_dict_attr_union_keys should not decode "
+                        "History values; nested Serializable.decode detected"
                     )
                 return original_decode(*args, **kwargs)
 
             with unittest.mock.patch.object(
                 Serializable, "decode", side_effect=decode_trap
             ):
-                indices = ProgramResults._load_done_shot_indices(
-                    checkpoint_dir
+                indices = read_checkpoint_dict_attr_union_keys(
+                    checkpoint_dir,
+                    "results.h5",
+                    "worker_*_checkpoint.h5",
+                    "shot_histories",
                 )
                 # If we get here without an AssertionError, the method
                 # successfully avoided decoding any History values.
@@ -2425,11 +2907,12 @@ class TestResumeCheckpointing:
                 assert isinstance(stored.shot_histories[i], History)
 
     def test_load_done_shots_fresh_envelope_no_silent_failure(self):
-        """_load_done_shots finds fresh-envelope shots.
+        """read_checkpoint_dict_attr_union finds fresh-envelope shots.
 
-        Tests that _load_done_shots correctly reports already-checkpointed shots
-        from a fresh-envelope file (created via _write_results_snapshot_if_fresh),
-        not silently returning an empty dict due to a swallowed exception.
+        Tests that read_checkpoint_dict_attr_union correctly reports
+        already-checkpointed shots from a fresh-envelope file (created via
+        _write_results_snapshot_if_fresh), not silently returning an empty
+        dict due to a swallowed exception.
         """
         from loqs.core.quantumprogram import QuantumProgram
         from loqs.codepacks import codepack_trivial_counter as trivial_codepack
@@ -2466,7 +2949,12 @@ class TestResumeCheckpointing:
 
             # A fresh-envelope checkpoint must report its shots as done, not
             # an empty dict (which would defeat resume).
-            done_shots = ProgramResults._load_done_shots(checkpoint_dir)
+            done_shots = read_checkpoint_dict_attr_union(
+                checkpoint_dir,
+                "results.h5",
+                "worker_*_checkpoint.h5",
+                "shot_histories",
+            )
             assert len(done_shots) == 3
             for i in range(3):
                 assert i in done_shots
@@ -2582,7 +3070,9 @@ class TestResumeCheckpointing:
         # Now stream a real shot entry in, via the same method a real run
         # uses to checkpoint shots.
         with h5py.File(checkpoint_dir / "results.h5", "a") as f:
-            results._write_shot_entries(f, [(0, History())])
+            results._write_streamed_dict_entries(
+                f, "shot_histories", False, [(0, History())]
+            )
 
         # Verify shot_histories key-side storage_format is 'dataset'
         with h5py.File(checkpoint_dir / "results.h5", "r") as f:

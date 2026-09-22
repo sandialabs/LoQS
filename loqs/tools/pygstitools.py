@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import base64
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 import io
 from pathlib import Path
@@ -21,7 +21,7 @@ import subprocess
 from subprocess import CalledProcessError
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import tarfile
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from loqs.core import ProgramResults, QuantumProgram
 from loqs.core.historydatacollector import (
@@ -36,7 +36,6 @@ from loqs.tools.paralleltools import (
 )
 from loqs.tools.multiprogramrunner import (
     MultiProgramRunner,
-    _checkpoint_subdir_for_prefix,
 )
 
 try:
@@ -44,7 +43,6 @@ try:
     from pygsti.baseobjs import Label
     from pygsti.circuits import Circuit
     from pygsti.data import DataSet
-    from pygsti.io import write_dataset
     from pygsti.protocols import ExperimentDesign
     from pygsti.models import ExplicitOpModel
 except ImportError as e:
@@ -54,6 +52,11 @@ except ImportError as e:
 
 
 ## EDESIGN CONVERSION TOOLS
+def _circuit_str_key(c: Circuit) -> str:
+    """Key function for EdesignRunner's item_key_fn: a circuit's own string representation."""
+    return c.str
+
+
 def _build_program_for_circuit(
     circ: Circuit,
     physical_model: ExplicitOpModel,
@@ -80,148 +83,51 @@ def _build_program_for_circuit(
 
 def _collect_program_outcomes(
     program_results: ProgramResults,
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ),
+    collect_shot_data_args: Sequence[HistoryDataCollectorLike],
 ) -> list[str]:
     """Extract one outcome-label string per shot from a single program's results.
 
-    Used by `EdesignRunner`, and shared by any other
-    caller that needs to turn one program's raw shot results into outcome
-    labels. A single recipe (cast via [](api:HistoryDataCollector.from_raw))
-    returns its `collect` output unchanged; a `list` of recipes instead makes
-    one `collect` call per entry and joins each shot's per-entry values, in
-    list order, into a single combined outcome string.
+    One `collect` call per entry in `collect_shot_data_args` (cast via
+    [](api:HistoryDataCollector.from_raw)), joining each shot's per-entry
+    values, in list order, into a single combined outcome string.
     """
-    if isinstance(collect_shot_data_args, list):
-        per_collector_shot_values = [
-            HistoryDataCollector.from_raw(c).collect(program_results)
-            for c in collect_shot_data_args
-        ]
-        return [
-            "".join(str(v) for v in shot_values)
-            for shot_values in zip(*per_collector_shot_values)
-        ]
-    return HistoryDataCollector.from_raw(collect_shot_data_args).collect(
-        program_results
-    )
-
-
-def _run_one_circuit(
-    circ: Circuit,
-    index: int,
-    *,
-    shot_executor: Any | None,
-    n_shot_batches: int | None,
-    physical_model: ExplicitOpModel,
-    label_to_logical: Mapping[Label, list[InstructionLabelLike]],
-    num_shots: int,
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ),
-    max_frame_limit: int,
-    program_kwargs: dict,
-    shot_checkpoint_dir: str | Path | None,
-    checkpoint: bool,
-    force_resume: bool,
-    lazy_loading: bool,
-    results_filename: str,
-    keep_shot_results: bool = False,
-) -> dict[tuple, int] | tuple[dict[tuple, int], Any]:
-    """Build, run, and reduce one circuit to a count dict.
-
-    When `keep_shot_results=False` (default), returns the count_dict for this
-    circuit. The circuit itself is passed separately by `MultiProgramRunner._run_dispatch`
-    and available to `on_item_done` via its `item` parameter.
-
-    When `keep_shot_results=True`, returns (count_dict, program_results) instead.
-    """
-    program = _build_program_for_circuit(
-        circ, physical_model, label_to_logical, **program_kwargs
-    )
-    checkpoint_dir = (
-        _checkpoint_subdir_for_prefix(shot_checkpoint_dir, "circ", index)
-        if shot_checkpoint_dir is not None
-        else None
-    )
-    run_kwargs: dict[str, Any] = {
-        "max_frame_limit": max_frame_limit,
-        "shot_executor": shot_executor,
-        "n_shot_batches": n_shot_batches,
-        "verbose": False,
-        "lazy_loading": lazy_loading,
-        "force_resume": force_resume,
-        "results_filename": results_filename,
-    }
-    if checkpoint:
-        run_kwargs["checkpoint"] = True
-        run_kwargs["resume"] = (
-            checkpoint_dir is not None
-            and (checkpoint_dir / results_filename).exists()
-        )
-        run_kwargs["checkpoint_dir"] = checkpoint_dir
-    program_results = program.run(num_shots, **run_kwargs)
-    outcomes = _collect_program_outcomes(
-        program_results, collect_shot_data_args
-    )
-    counts = Counter(outcomes)
-    count_dict = {(str(k),): v for k, v in counts.items()}
-
-    if keep_shot_results:
-        return count_dict, program_results
-
-    del program, program_results
-    return count_dict
-
-
-def _normalize_collect_shot_data_args(
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ),
-) -> HistoryDataCollector | list[HistoryDataCollector]:
-    """Cast `collect_shot_data_args` through [](api:HistoryDataCollector.from_raw)
-    (recursively, for the `list` case), so its `repr()` is canonical regardless
-    of how it was originally spelled (e.g. a tuple vs. an equivalent explicit
-    `HistoryDataCollector`). Used only for checkpoint provenance/comparison,
-    not for actual shot collection.
-    """
-    if isinstance(collect_shot_data_args, list):
-        return [
-            HistoryDataCollector.from_raw(c) for c in collect_shot_data_args
-        ]
-    return HistoryDataCollector.from_raw(collect_shot_data_args)
+    per_collector_shot_values = [
+        HistoryDataCollector.from_raw(c).collect(program_results)
+        for c in collect_shot_data_args
+    ]
+    return [
+        "".join(str(v) for v in shot_values)
+        for shot_values in zip(*per_collector_shot_values)
+    ]
 
 
 def _checkpoint_provenance_comment(
     num_shots: int,
-    collect_shot_data_args: (
-        HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-    ),
+    normalized_collect_shot_data_args: Sequence[HistoryDataCollector],
     physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
 ) -> str:
-    """Build the `#`-prefixed comment header for an `EdesignRunner` checkpoint's
-    on-disk `DataSet`, a human-readable provenance record (config-mismatch
-    detection on resume happens separately, via `MultiProgramRunner`'s own
-    `runner.h5` snapshot). `num_shots` is stored as a plain `repr()` string;
-    `collect_shot_data_args` is first normalized via
-    `_normalize_collect_shot_data_args` so its repr is canonical regardless of
+    """Build the `#`-prefixed comment header for a provenance record embedded
+    in an `EdesignRunner`'s in-memory `DataSet` (config-mismatch detection on
+    resume happens separately, via `MultiProgramRunner`'s own `runner.h5`
+    snapshot). `num_shots` is stored as a plain `repr()` string;
+    `normalized_collect_shot_data_args` is expected already normalized (via
+    `_normalized_collect_shot_data_args`) so its repr is canonical regardless of
     spelling; `physical_to_logical`'s own top-level key order is incidental, so
     its leaves are repr'd individually into a literal-evaluable `dict[str, str]`
     instead of repr'ing the whole (possibly non-literal-valued) mapping.
     """
-    normalized_args = _normalize_collect_shot_data_args(collect_shot_data_args)
     p2l_repr_map = {repr(k): repr(v) for k, v in physical_to_logical.items()}
     return "\n".join(
         [
-            "Checkpoint written by loqs.tools.pygstitools.EdesignRunner.",
+            "Provenance record embedded in loqs.tools.pygstitools.EdesignRunner result.",
             f"num_shots = {num_shots!r}",
-            f"collect_shot_data_args = {normalized_args!r}",
+            f"collect_shot_data_args = {normalized_collect_shot_data_args!r}",
             f"physical_to_logical = {p2l_repr_map!r}",
         ]
     )
 
 
-class EdesignRunner(MultiProgramRunner):
+class EdesignRunner(MultiProgramRunner[Circuit]):
     """Runner for simulating edesign circuits into a DataSet with crash recovery.
 
     Encapsulates all configuration needed to simulate an edesign, including
@@ -231,13 +137,14 @@ class EdesignRunner(MultiProgramRunner):
     flags applied against on-disk state -- see `MultiProgramRunner.run`.
     """
 
+    CHKPT_SUBDIR_PREFIX: ClassVar[str] = "circ"
+
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "edesign",
         "physical_model",
         "physical_to_logical",
         "num_shots",
         "collect_shot_data_args",
-        "max_frame_limit",
         "program_kwargs",
     ]
 
@@ -248,13 +155,12 @@ class EdesignRunner(MultiProgramRunner):
         physical_to_logical: Mapping[str | tuple, list[InstructionLabelLike]],
         num_shots: int,
         collect_shot_data_args: (
-            HistoryDataCollectorLike | list[HistoryDataCollectorLike]
-        ) = ("logical_measurement", -1),
+            Sequence[HistoryDataCollectorLike] | None
+        ) = None,
         item_checkpoint_dir: str | Path | None = None,
         checkpoint: bool = False,
         resume: bool = False,
         force_resume: bool = False,
-        max_frame_limit: int = 100,
         parallel_strategy: ParallelStrategy | None = None,
         shot_checkpoint: bool = False,
         shot_checkpoint_dir: str | Path | None = None,
@@ -265,6 +171,7 @@ class EdesignRunner(MultiProgramRunner):
         show_progress: bool = True,
         runner_filename: str = "runner.h5",
         results_filename: str = "results.h5",
+        run_kwargs: dict[str, Any] | None = None,
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
@@ -280,14 +187,22 @@ class EdesignRunner(MultiProgramRunner):
             show_progress=show_progress,
             runner_filename=runner_filename,
             results_filename=results_filename,
+            run_kwargs=run_kwargs,
         )
         self.edesign = edesign
         self.physical_model = physical_model
         self.physical_to_logical = physical_to_logical
         self.num_shots = num_shots
-        self.collect_shot_data_args = collect_shot_data_args
-        self.max_frame_limit = max_frame_limit
+        self.collect_shot_data_args: Sequence[HistoryDataCollectorLike] = (
+            collect_shot_data_args
+            if collect_shot_data_args is not None
+            else [("logical_measurement", -1)]
+        )
         self.program_kwargs = program_kwargs or {}
+        self.items = edesign.all_circuits_needing_data
+        self.item_key_fn = _circuit_str_key if checkpoint else None
+        self._circuits_by_index: dict[int, Circuit] | None = None
+        self._circuits_by_index_is_positional: bool = False
 
     def _get_encoding_attr(
         self, attr: str, ignore_no_serialize_flags: bool = False
@@ -331,9 +246,8 @@ class EdesignRunner(MultiProgramRunner):
                 attr_dict["physical_model"]
             )
 
-        # Decode edesign: dispatch based on how it was encoded, which depended on
-        # item_checkpoint_dir at encode time. If item_checkpoint_dir was None,
-        # edesign was base64-tar-encoded; otherwise it's a directory path string.
+        # Decode edesign based on how it was encoded (mirrors _get_encoding_attr's
+        # own item_checkpoint_dir check): base64-tar if it was None, else a directory path.
         if attr_dict.get("edesign") is not None:
             edesign_value = attr_dict["edesign"]
             # Check item_checkpoint_dir to determine encoding: mirrors the encode-time
@@ -357,103 +271,72 @@ class EdesignRunner(MultiProgramRunner):
 
         return cast("EdesignRunner", super()._from_decoded_attrs(attr_dict))
 
-    def _get_items(self) -> Sequence:
-        """Return circuits needing data."""
-        return self.edesign.all_circuits_needing_data
-
-    def _item_key_fn(self) -> Callable[[Circuit], str] | None:
-        """Use circuit string representation as stable identity when checkpointing."""
-        if self.checkpoint:
-            return lambda c: c.str
-        return None
-
-    def _process_item_fn(self) -> Callable:
-        """Return the _run_one_circuit function."""
-        return _run_one_circuit
-
-    def _static_kwargs(self) -> dict[str, Any]:
-        """Return static kwargs for _run_one_circuit."""
+    def build_program(self, index: int) -> QuantumProgram:
+        """Build the QuantumProgram for the circuit assigned to `index`."""
+        circ = self._circuit_for_index(index)
         label_to_logical = {
             Label(k): v for k, v in self.physical_to_logical.items()
         }
-        return {
-            "physical_model": self.physical_model,
-            "label_to_logical": label_to_logical,
-            "num_shots": self.num_shots,
-            "collect_shot_data_args": self.collect_shot_data_args,
-            "max_frame_limit": self.max_frame_limit,
-            "program_kwargs": self.program_kwargs,
-            "shot_checkpoint_dir": self.shot_checkpoint_dir,
-            "checkpoint": self.shot_checkpoint,
-            "force_resume": self.force_resume,
-            "lazy_loading": self.lazy_loading,
-            "results_filename": self.results_filename,
-        }
-
-    def _finalize(self) -> Any:
-        """Build and return the final DataSet from `_reduced_results`.
-
-        Iterates through circuits in original order, mapping each to its
-        index via `index_map` (if set), looks up its count_dict in
-        `_reduced_results`, and adds it to a fresh DataSet. Sets the
-        DataSet's comment via `_checkpoint_provenance_comment` if
-        checkpointing is enabled, and writes it once to disk if
-        `item_checkpoint_dir` is set.
-        """
-        # Build the final DataSet
-        n_keys = (
-            len(self.collect_shot_data_args)
-            if isinstance(self.collect_shot_data_args, list)
-            else 1
+        return _build_program_for_circuit(
+            circ, self.physical_model, label_to_logical, **self.program_kwargs
         )
+
+    def _circuit_for_index(self, index: int) -> Circuit:
+        """Reverse-lookup the circuit assigned to a given checkpoint index.
+
+        Mirrors the base class's own item/index pairing in
+        `_ordered_reduced_results`, inverted: `build_program` is only
+        handed an index, and `item_key_fn`'s indices don't necessarily
+        match position in `self.items` across a resume where
+        `edesign.all_circuits_needing_data`'s own ordering may have
+        shifted. Cached after first use since `self.items`/`index_map`
+        don't change mid-dispatch -- except when the cache was built
+        while `index_map` was still `None` (a stray `build_program()`
+        call before `.run()`), in which case it's rebuilt once a real,
+        non-positional `index_map` becomes available.
+        """
+        if self._circuits_by_index is None or (
+            self._circuits_by_index_is_positional
+            and self.index_map is not None
+        ):
+            self._circuits_by_index = {}
+            self._circuits_by_index_is_positional = (
+                self.item_key_fn is None or self.index_map is None
+            )
+            for pos, circ in enumerate(self.items):
+                if self.item_key_fn is not None and self.index_map is not None:
+                    idx = self.index_map.get(self.item_key_fn(circ), pos)
+                else:
+                    idx = pos
+                self._circuits_by_index[idx] = circ
+        return self._circuits_by_index[index]
+
+    def reduce_program_outcomes(self, program_results: Any) -> Any:
+        """Reduce one circuit's shot outcomes to a {(label,): count} dict."""
+        outcomes = _collect_program_outcomes(
+            program_results, self.collect_shot_data_args
+        )
+        counts = Counter(outcomes)
+        return {(str(k),): v for k, v in counts.items()}
+
+    def _build_output(self, ordered_results: list[tuple[Any, Any]]) -> Any:
+        """Build the final DataSet from (circuit, count_dict) pairs."""
+        n_keys = len(self.collect_shot_data_args)
         ds = DataSet()
         ds.add_std_nqubit_outcome_labels(n_keys)
-
-        # Iterate through circuits in original order
-        for pos, circ in enumerate(self._get_items()):
-            # Determine index: use index_map if set, else plain position
-            if self.index_map is not None:
-                index = self.index_map[circ.str]
-            else:
-                index = pos
-
-            # Get count_dict from _reduced_results
-            if index in self._reduced_results:
-                count_dict = self._reduced_results[index]
+        for circ, count_dict in ordered_results:
+            if count_dict is not None:
                 ds.add_count_dict(circ, count_dict)
-
-        # Set comment if checkpointing is enabled
-        if self.item_checkpoint_dir is not None:
-            ds.comment = _checkpoint_provenance_comment(
-                self.num_shots,
-                self.collect_shot_data_args,
-                self.physical_to_logical,
-            )
-            # Write dataset once to disk
-            dataset_path = self.item_checkpoint_dir / "dataset.txt"
-            dataset_path.parent.mkdir(parents=True, exist_ok=True)
-            write_dataset(
-                str(dataset_path),
-                ds,
-                fixed_column_mode=False,
-                with_times=False,
-            )
-
+        ds.comment = _checkpoint_provenance_comment(
+            self.num_shots,
+            self._normalized_collect_shot_data_args,
+            self.physical_to_logical,
+        )
         return ds
 
     def _desc(self) -> str:
         """Return description for progress bar."""
         return "Simulating circuits"
-
-    @property
-    def _normalized_collect_shot_data_args(
-        self,
-    ) -> HistoryDataCollector | list[HistoryDataCollector]:
-        """Canonical form of `collect_shot_data_args`, used only for resume
-        mismatch comparison (never for actual shot collection or storage) so
-        two differently-spelled-but-equivalent specs don't spuriously fail resume.
-        """
-        return _normalize_collect_shot_data_args(self.collect_shot_data_args)
 
     def _mismatch_check_fields(self) -> list[str]:
         """Return fields to check for resume mismatch."""
@@ -461,13 +344,8 @@ class EdesignRunner(MultiProgramRunner):
             "num_shots",
             "_normalized_collect_shot_data_args",
             "physical_to_logical",
-            "max_frame_limit",
             "keep_shot_results",
         ]
-
-    def _shot_checkpoint_subdir_prefix(self) -> str | None:
-        """circ_{index}"""
-        return "circ"
 
 
 ## BEGIN VISUALIZATION TOOLS

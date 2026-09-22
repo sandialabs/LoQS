@@ -18,8 +18,10 @@ streaming operations over large, multi-entry dictionaries.
 from __future__ import annotations
 
 import h5py
+import itertools
 import numpy as np
-from typing import Any, Iterable, Iterator
+from pathlib import Path
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.serializable import Serializable
@@ -262,6 +264,203 @@ def get_dict_attr_keys(
     return _read_iterable_side(
         keys_iterable_group, storage_format, decode_cache=decode_cache
     )
+
+
+def filter_unmerged_dict_attr_entries(
+    source_group: h5py.Group,
+    attr_name: str,
+    already_merged_keys: set[Any],
+    decode_cache: dict | None = None,
+) -> Iterator[tuple[Any, Any]] | None:
+    """Yield (key, value) entries from `source_group`'s `attr_name` dict
+    attribute whose key isn't already in `already_merged_keys`, mutating
+    `already_merged_keys` in place to include every yielded key -- so a
+    caller accumulating this set across multiple source groups gets it
+    updated for free.
+
+    Returns `None` if there's nothing new to merge, rather than an empty
+    iterator, so a caller can skip invoking any write at all for a source
+    with nothing new (checked via peeking the first filtered entry before
+    returning).
+
+    Parameters
+    ----------
+    source_group : h5py.Group
+        The HDF5 group holding the dict attribute to filter entries from.
+    attr_name : str
+        Name of the dict attribute.
+    already_merged_keys : set[Any]
+        Keys to skip. Mutated in place to include every key this call
+        yields.
+    decode_cache : dict | None, optional
+        Cache for decoding operations (passed to `iter_dict_attr_entries`).
+        Default is None.
+
+    Returns
+    -------
+    Iterator[tuple[Any, Any]] | None
+        A lazy iterator of the unmerged (key, value) pairs, or `None` if
+        every entry's key was already in `already_merged_keys`.
+    """
+
+    def _filtered() -> Iterator[tuple[Any, Any]]:
+        for key, value in iter_dict_attr_entries(
+            source_group, attr_name, decode_cache=decode_cache
+        ):
+            if key not in already_merged_keys:
+                already_merged_keys.add(key)
+                yield key, value
+
+    gen = _filtered()
+    first_entry = next(gen, None)
+    if first_entry is None:
+        return None
+    return itertools.chain([first_entry], gen)
+
+
+def merge_worker_checkpoint_file(
+    worker_file: Path,
+    target: h5py.File | Path,
+    streamed_attrs: Sequence[tuple[str, str, bool]],
+    already_merged_keys: dict[str, set[Any]],
+    *,
+    delete_original: bool = True,
+    shared_decode_cache: bool = True,
+    write_entry_fn: (
+        Callable[[h5py.File, str, bool, Iterable[tuple[Any, Any]]], None]
+        | None
+    ) = None,
+) -> bool:
+    """Merge one worker checkpoint file's streamed dict attributes into a
+    canonical target file.
+
+    Generalizes the per-worker merge step shared by `MultiProgramRunner`'s
+    consolidation (`target` given as a `Path`, a fresh write lock acquired
+    on it per worker file, one decode cache shared across all attributes)
+    and `ProgramResults`' consolidation (`target` given as an already-open
+    `h5py.File` held across the whole run, a fresh decode cache allocated
+    per attribute). Reads `worker_file` via `_retry_hdf5_read`; if it is
+    empty, treats it as already merged with nothing to do. Each worker
+    attribute is read directly off the open worker file (not pre-resolved
+    via `_resolve_checkpoint_object_group`), since `iter_dict_attr_entries`
+    already navigates single-child wrapper groups by attribute name --
+    required since a `MultiProgramRunner` worker file's dict attributes sit
+    directly at file root with no `Serializable`-encoded wrapper, unlike a
+    `ProgramResults` worker file's bootstrapped envelope.
+
+    Parameters
+    ----------
+    worker_file : Path
+        Path to the worker checkpoint file to read and merge.
+    target : h5py.File | Path
+        Canonical file to merge into. If a `Path`, this function opens and
+        closes its own write transaction (via `_retry_hdf5_write`) scoped
+        to just this one worker file's merge. If an already-open
+        `h5py.File`, it is used directly with no new lock acquired -- the
+        caller is assumed to already be holding it open across the whole
+        consolidation.
+    streamed_attrs : Sequence[tuple[str, str, bool]]
+        `(worker_attr, canonical_attr, value_use_dataset)` triples naming
+        each dict attribute to merge, its corresponding name on the
+        canonical side (may differ from `worker_attr`), and whether its
+        values use dataset storage format.
+    already_merged_keys : dict[str, set[Any]]
+        Mapping from each `canonical_attr` in `streamed_attrs` to the set
+        of keys already merged for it. Must already contain an entry
+        (possibly an empty set) for every such `canonical_attr` before
+        calling this function -- unlike `filter_unmerged_dict_attr_entries`,
+        this function never default-populates a missing entry. Mutated in
+        place as entries are merged.
+    delete_original : bool, optional
+        If True (default), unlink `worker_file` once its entries are
+        confirmed merged, swallowing `OSError` if it's already gone. Left
+        in place if False, or if the merge fails.
+    shared_decode_cache : bool, optional
+        If True (default), allocate one `ResolvingDecodeCache` before the
+        attribute loop and reuse it for every attribute -- required when a
+        Serializable value referenced by entries in more than one attribute
+        must decode to the same real object everywhere. If False, allocate
+        a fresh cache inside the loop, once per attribute.
+    write_entry_fn : Callable[[h5py.File, str, bool, Iterable[tuple[Any, Any]]], None] | None, optional
+        If given, called as `write_entry_fn(out_f, canonical_attr,
+        value_use_dataset, entries)` to write each attribute's unmerged
+        entries. If None (default), entries are written via `merge_dict_attr`
+        directly against `_resolve_checkpoint_object_group(out_f)`.
+
+    Returns
+    -------
+    bool
+        True on success -- including the empty-worker-file no-op case, and
+        an attribute genuinely absent from `worker_file` (skipped, not an
+        error). False if a `BlockingIOError`, `OSError`, or `KeyError` was
+        raised anywhere in the read/merge/write sequence -- a
+        retry-exhausted lock conflict, or actual corruption -- in which
+        case the worker file is left in place, never deleted.
+    """
+    from loqs.core.programresults import _resolve_checkpoint_object_group
+    from loqs.internal import _retry_hdf5_read, _retry_hdf5_write
+    from loqs.internal.serializable import ResolvingDecodeCache
+
+    try:
+
+        def _read_and_merge(in_f: h5py.File) -> None:
+            if len(in_f.keys()) == 0:
+                return
+
+            shared_cache = (
+                ResolvingDecodeCache(root=in_f, format="hdf5")
+                if shared_decode_cache
+                else None
+            )
+
+            def _merge_into(out_f: h5py.File) -> None:
+                for (
+                    worker_attr,
+                    canonical_attr,
+                    value_use_dataset,
+                ) in streamed_attrs:
+                    decode_cache = (
+                        shared_cache
+                        if shared_decode_cache
+                        else ResolvingDecodeCache(root=in_f, format="hdf5")
+                    )
+                    entries = filter_unmerged_dict_attr_entries(
+                        in_f,
+                        worker_attr,
+                        already_merged_keys[canonical_attr],
+                        decode_cache=decode_cache,
+                    )
+                    if entries is None:
+                        continue
+                    if write_entry_fn is not None:
+                        write_entry_fn(
+                            out_f, canonical_attr, value_use_dataset, entries
+                        )
+                    else:
+                        merge_dict_attr(
+                            _resolve_checkpoint_object_group(out_f),
+                            canonical_attr,
+                            entries,
+                            encode_cache={},
+                            key_use_dataset=True,
+                            value_use_dataset=value_use_dataset,
+                        )
+
+            if isinstance(target, Path):
+                _retry_hdf5_write(target, _merge_into)
+            else:
+                _merge_into(target)
+
+        _retry_hdf5_read(worker_file, _read_and_merge)
+    except (BlockingIOError, OSError, KeyError):
+        return False
+
+    if delete_original:
+        try:
+            worker_file.unlink()
+        except OSError:
+            pass
+    return True
 
 
 def _stream_into_new_dict_attr(
@@ -852,3 +1051,228 @@ def get_dict_attr_group(
 
     # Return the raw group for the indexed entry
     return values_iterable_group[str(index)]
+
+
+def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for canonical read and worker scan with conflict retry
+    checkpoint_dir: Path,
+    canonical_filename: str | None,
+    worker_glob: str | None,
+    attr_name: str,
+    canonical_attr_name: str | None = None,
+    retry_on_conflict: bool = False,
+) -> dict:
+    """Scan checkpoint_dir for a dict-shaped attribute union across canonical
+    and worker checkpoint files, merging entries with worker files winning on
+    key collision.
+
+    This generalizes the checkpoint-dir canonical-plus-worker-files union scan
+    pattern used by both ProgramResults and MultiProgramRunner's resume/
+    consolidation paths. Reads the specified dict attribute from a canonical
+    checkpoint file (if it exists), then from every sorted worker checkpoint
+    file, decoding entries incrementally via iter_dict_attr_entries without
+    materializing individual file contents simultaneously in memory.
+
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory to scan for checkpoint files.
+    canonical_filename : str | None
+        Filename for the canonical checkpoint file (e.g. "results.h5" or
+        "runner.h5"). If None, the canonical-file read is skipped entirely.
+    worker_glob : str | None
+        Glob pattern for worker checkpoint files relative to checkpoint_dir
+        (e.g. "worker_*_checkpoint.h5" or "worker_*_runner.h5"). If None,
+        the worker-file scan is skipped entirely.
+    attr_name : str
+        Name of the dict attribute to read from worker files (and from the
+        canonical file unless canonical_attr_name is given).
+    canonical_attr_name : str | None, optional
+        Attribute name to use when reading the canonical file, if different
+        from attr_name (e.g. "results" maps to "_reduced_results" in
+        MultiProgramRunner's runner.h5). Default is None (use attr_name).
+    retry_on_conflict : bool, optional
+        If True, retry a transient HDF5 lock conflict via _retry_hdf5_read
+        and let a conflict that survives the retry budget propagate rather
+        than being silently skipped. Default False (live-polling behavior).
+
+    Returns
+    -------
+    dict
+        Merged dictionary from all checkpoint files, with entries from later
+        (worker) files taking precedence on key collision. Returns empty dict
+        if no checkpoints exist.
+
+    Raises
+    ------
+    BlockingIOError, OSError
+        On a lock conflict that survives the retry budget (only if
+        retry_on_conflict=True); silently skipped otherwise.
+    """
+    from loqs.internal.serializable import ResolvingDecodeCache
+    from loqs.internal import _retry_hdf5_read
+
+    done: dict = {}
+    resolved_canonical_attr_name = (
+        canonical_attr_name if canonical_attr_name is not None else attr_name
+    )
+
+    # First, read canonical file if it exists
+    if canonical_filename is not None:
+        canonical_path = checkpoint_dir / canonical_filename
+        if canonical_path.exists():
+
+            def _read_canonical(f: h5py.File) -> None:
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                for key, value in iter_dict_attr_entries(
+                    f, resolved_canonical_attr_name, decode_cache=decode_cache
+                ):
+                    done[key] = value
+
+            try:
+                if retry_on_conflict:
+                    _retry_hdf5_read(canonical_path, _read_canonical)
+                else:
+                    with h5py.File(canonical_path, "r") as f:
+                        _read_canonical(f)
+            except KeyError:
+                pass  # Attribute missing or file corruption; skip
+            except (BlockingIOError, OSError):
+                if retry_on_conflict:
+                    raise
+                pass  # Transient lock conflict; skip
+
+    # Then, read every worker file (sorted, excluding .tmp files)
+    if worker_glob is not None:
+        for worker_file in sorted(
+            f
+            for f in checkpoint_dir.glob(worker_glob)
+            if not f.name.endswith(".tmp")
+        ):
+
+            def _read_worker(f: h5py.File) -> None:
+                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                for key, value in iter_dict_attr_entries(
+                    f, attr_name, decode_cache=decode_cache
+                ):
+                    done[key] = value
+
+            try:
+                if retry_on_conflict:
+                    _retry_hdf5_read(worker_file, _read_worker)
+                else:
+                    with h5py.File(worker_file, "r") as f:
+                        _read_worker(f)
+            except KeyError:
+                continue  # Attribute missing or file corruption; skip
+            except (BlockingIOError, OSError):
+                if retry_on_conflict:
+                    raise
+                continue  # Transient lock conflict; skip
+
+    return done
+
+
+def read_checkpoint_dict_attr_union_keys(
+    checkpoint_dir: Path,
+    canonical_filename: str | None,
+    worker_glob: str | None,
+    attr_name: str,
+    canonical_attr_name: str | None = None,
+    retry_on_conflict: bool = False,
+) -> set:
+    """Scan checkpoint_dir for dict-attribute keys union (no value decoding).
+
+    Key-only sibling of read_checkpoint_dict_attr_union: returns the union of
+    keys present in a canonical checkpoint file and all worker checkpoint files,
+    without decoding any values. This is a cheap operation useful for
+    determining which items have been completed without the cost of decoding
+    their full entry values.
+
+    Parameters
+    ----------
+    checkpoint_dir : Path
+        Directory to scan for checkpoint files.
+    canonical_filename : str | None
+        Filename for the canonical checkpoint file. If None, the
+        canonical-file read is skipped entirely.
+    worker_glob : str | None
+        Glob pattern for worker checkpoint files. If None, the worker-file
+        scan is skipped entirely.
+    attr_name : str
+        Name of the dict attribute to read from worker files (and from the
+        canonical file unless canonical_attr_name is given).
+    canonical_attr_name : str | None, optional
+        Attribute name to use when reading the canonical file, if different
+        from attr_name. Default is None (use attr_name).
+    retry_on_conflict : bool, optional
+        If True, retry a transient HDF5 lock conflict via _retry_hdf5_read
+        and let a conflict that survives the retry budget propagate rather
+        than being silently skipped. Default False (live-polling behavior).
+
+    Returns
+    -------
+    set
+        Union of all keys found across all checkpoint files. Returns empty set
+        if no checkpoints exist.
+
+    Raises
+    ------
+    BlockingIOError, OSError
+        On a lock conflict that survives the retry budget (only if
+        retry_on_conflict=True); silently skipped otherwise.
+    """
+    from loqs.internal import _retry_hdf5_read
+
+    keys: set = set()
+    resolved_canonical_attr_name = (
+        canonical_attr_name if canonical_attr_name is not None else attr_name
+    )
+
+    # First, read canonical file if it exists
+    if canonical_filename is not None:
+        canonical_path = checkpoint_dir / canonical_filename
+        if canonical_path.exists():
+
+            def _read_canonical(f: h5py.File) -> None:
+                keys.update(
+                    get_dict_attr_keys(f, resolved_canonical_attr_name)
+                )
+
+            try:
+                if retry_on_conflict:
+                    _retry_hdf5_read(canonical_path, _read_canonical)
+                else:
+                    with h5py.File(canonical_path, "r") as f:
+                        _read_canonical(f)
+            except KeyError:
+                pass  # Attribute missing or file corruption; skip
+            except (BlockingIOError, OSError):
+                if retry_on_conflict:
+                    raise
+                pass  # Transient lock conflict; skip
+
+    # Then, read every worker file (sorted, excluding .tmp files)
+    if worker_glob is not None:
+        for worker_file in sorted(
+            f
+            for f in checkpoint_dir.glob(worker_glob)
+            if not f.name.endswith(".tmp")
+        ):
+
+            def _read_worker(f: h5py.File) -> None:
+                keys.update(get_dict_attr_keys(f, attr_name))
+
+            try:
+                if retry_on_conflict:
+                    _retry_hdf5_read(worker_file, _read_worker)
+                else:
+                    with h5py.File(worker_file, "r") as f:
+                        _read_worker(f)
+            except KeyError:
+                continue  # Attribute missing or file corruption; skip
+            except (BlockingIOError, OSError):
+                if retry_on_conflict:
+                    raise
+                continue  # Transient lock conflict; skip
+
+    return keys

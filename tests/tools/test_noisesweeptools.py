@@ -1,18 +1,15 @@
 """Tester for loqs.tools.noisesweeptools"""
 
-import functools
 import inspect
-import multiprocessing as mp
 import sys
 import warnings
 
 import numpy as np
 import pytest
 
-from loqs.core import Frame, Instruction, ProgramResults, QuantumProgram
+from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.backends.state import NumpyStatevectorQuantumState
-from loqs.tools import noisesweeptools, paralleltools
-from loqs.tools.multiprogramrunner import _checkpoint_subdir_for_prefix
+from loqs.tools import paralleltools
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
@@ -20,11 +17,6 @@ from loqs.tools.noisesweeptools import (
     plot_noise_sweep,
 )
 from loqs.tools.paralleltools import ParallelStrategy
-
-from _shared_checkpoint_test_helpers import (
-    _build_shot_executor,
-    _crash_once_and_log_shots,
-)
 
 # ---------------------------------------------------------------------------
 # A tiny, Frame-only synthetic "codepack" used to exercise NoiseSweepRunner
@@ -368,6 +360,31 @@ class TestRun:
             True,
         ], f"Expected [True, True] with default verbose, got {seen_verbose_values}"
 
+    def test_wall_clock_timing_attributes(self):
+        """item_wall_clock_times and shot_wall_clock_times are populated after run()."""
+        strengths = [0.0, 0.1, 0.2]
+        runner = make_runner(
+            strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False
+        )
+        runner.run()
+
+        # item_wall_clock_times: dict[int, float] with one entry per strength
+        assert set(runner.item_wall_clock_times.keys()) == {0, 1, 2}
+        for item_time in runner.item_wall_clock_times.values():
+            assert isinstance(item_time, float)
+            assert item_time > 0
+
+        # shot_wall_clock_times: dict[int, dict[int, float]]
+        # same item indices, each with per-shot timing dict
+        assert set(runner.shot_wall_clock_times.keys()) == {0, 1, 2}
+        for shot_times_dict in runner.shot_wall_clock_times.values():
+            assert isinstance(shot_times_dict, dict)
+            assert len(shot_times_dict) == 10  # num_shots=10
+            for shot_idx, shot_time in shot_times_dict.items():
+                assert isinstance(shot_idx, int)
+                assert isinstance(shot_time, float)
+                assert shot_time > 0
+
 
 class TestRunParallel:
     """`NoiseSweepRunner.run`'s `parallel` (a
@@ -378,88 +395,6 @@ class TestRunParallel:
     construction-time validation (mutual exclusion, `n_program_chunks`/
     `shot_executor` requirements) is covered directly in
     test_paralleltools.py, not duplicated here."""
-
-    def test_loky_program_executor_matches_serial_result(self):
-        loky = pytest.importorskip("loky")
-        strengths = [0.0, 0.1, 0.2, 0.9]
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-
-        serial = make_runner(
-            strengths, seed_stride=20, base_seed=7, num_shots=10, verbose=False
-        ).run()
-        parallel = make_runner(
-            strengths,
-            seed_stride=20,
-            base_seed=7,
-            num_shots=10,
-            verbose=False,
-            parallel_strategy=strategy,
-        ).run()
-
-        assert parallel.failure_rates == serial.failure_rates
-        assert parallel.stderrs == serial.stderrs
-
-    def test_debug_executor_matches_serial_result(self, tmp_path):
-        """Uses submitit's in-process DebugExecutor rather than a real
-        `cluster="local"` subprocess: a real subprocess can only unpickle
-        a worker function/runner it can import by dotted path, which this
-        test module's own `NoiseSweepRunner` (holding a reference to the
-        test-module-local `FLIP_COIN` instruction) isn't."""
-        submitit = pytest.importorskip("submitit")
-        strengths = [0.0, 0.1, 0.2, 0.9]
-        strategy = ParallelStrategy(
-            program_executor=submitit.DebugExecutor(folder=tmp_path),
-            n_program_chunks=2,
-        )
-
-        serial = make_runner(
-            strengths, seed_stride=20, base_seed=7, num_shots=10, verbose=False
-        ).run()
-        parallel = make_runner(
-            strengths,
-            seed_stride=20,
-            base_seed=7,
-            num_shots=10,
-            verbose=False,
-            parallel_strategy=strategy,
-        ).run()
-
-        assert parallel.failure_rates == serial.failure_rates
-        assert parallel.stderrs == serial.stderrs
-
-    @pytest.mark.skip(
-        reason="Hybrid parallelism with loky and shot_executor hits resource limits in containerized environments with limited process/thread capacity."
-    )
-    def test_hybrid_program_and_shot_executor_matches_serial_result(self):
-        """program_executor (across sweep points) and shot_executor
-        (within each point's own shots) nested together -- the real
-        hybrid parallelism this stage adds, replacing the old guardrail
-        that just rejected this combination."""
-        loky = pytest.importorskip("loky")
-        strengths = [0.0, 0.1, 0.2, 0.9]
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-            shot_executor=_build_shot_executor,
-        )
-
-        serial = make_runner(
-            strengths, seed_stride=20, base_seed=7, num_shots=10, verbose=False
-        ).run()
-        parallel = make_runner(
-            strengths,
-            seed_stride=20,
-            base_seed=7,
-            num_shots=10,
-            verbose=False,
-            parallel_strategy=strategy,
-        ).run()
-
-        assert parallel.failure_rates == serial.failure_rates
-        assert parallel.stderrs == serial.stderrs
 
     def test_legacy_run_kwargs_executor_now_fails_naturally(self):
         """`run_kwargs["executor"]` is no longer special-cased at all --
@@ -476,48 +411,6 @@ class TestRunParallel:
         )
         with pytest.raises(TypeError, match="executor"):
             runner.run()
-
-    def test_result_written_once_at_finalize_not_incrementally(self, tmp_path):
-        """Verifies that result.h5 is written exactly once, at the end of
-        the run in `_finalize()`, regardless of how many parallel batches
-        were dispatched -- never incrementally per item or per batch during
-        dispatch itself."""
-        loky = pytest.importorskip("loky")
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-        runner = make_runner(
-            [0.0, 0.1, 0.2, 0.3],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            parallel_strategy=strategy,
-        )
-
-        write_calls = []
-        real_write = NoiseSweepResult.write
-
-        def counting_write(self, path):
-            write_calls.append(path)
-            return real_write(self, path)
-
-        NoiseSweepResult.write = counting_write
-        try:
-            runner.run()
-        finally:
-            NoiseSweepResult.write = real_write
-
-        assert len(write_calls) == 1
-
-        # Verify the final result is complete (all sweep points processed)
-        final_result = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
-        assert final_result.is_complete
-        assert None not in final_result.failure_rates
-        assert len(final_result.failure_rates) == 4
 
     def test_resume_only_dispatches_missing_points_and_matches_uninterrupted(
         self, tmp_path
@@ -558,11 +451,15 @@ class TestRunParallel:
         finally:
             NoiseSweepRunner.build_program = real_build_program
 
-        # result.h5 is only written in _finalize, so read the partial state
-        # (indices 0 and 1) from the worker_*_runner.h5 files directly.
-        from loqs.tools.multiprogramrunner import _read_worker_files
+        # Read the partial state (indices 0 and 1) from the worker_*_runner.h5
+        # files directly.
+        from loqs.internal.streamingmerge import (
+            read_checkpoint_dict_attr_union,
+        )
 
-        completed = _read_worker_files(item_checkpoint_dir)
+        completed = read_checkpoint_dict_attr_union(
+            item_checkpoint_dir, None, "worker_*_runner.h5", "results"
+        )
         assert len(completed) == 2  # Only 0 and 1 completed
         assert 0 in completed
         assert 1 in completed
@@ -603,93 +500,6 @@ class TestRunParallel:
         assert (
             None not in final_result.failure_rates
         )  # Final result has no None
-
-    def test_keep_shot_results_parallel(self, tmp_path):
-        """NoiseSweepRunner with keep_shot_results=True works under parallel dispatch."""
-        loky = pytest.importorskip("loky")
-
-        strengths = [0.0, 0.1, 0.2]
-        item_checkpoint_dir = tmp_path / "item_ckpt"
-        shot_checkpoint_dir = tmp_path / "shot_ckpt"
-
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-
-        runner = make_runner(
-            strengths,
-            seed_stride=20,
-            base_seed=7,
-            num_shots=10,
-            verbose=False,
-            parallel_strategy=strategy,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
-        )
-        result = runner.run()
-
-        # Verify the sweep result is correct/complete
-        assert result.is_complete
-        assert len(result.failure_rates) == len(strengths)
-        assert all(fr is not None for fr in result.failure_rates)
-
-        # Verify _program_results has one entry per sweep point
-        assert len(runner._program_results) == len(strengths)
-        for sweep_index in range(len(strengths)):
-            assert sweep_index in runner._program_results
-            pr = runner._program_results[sweep_index]
-            # Verify correct shot count
-            assert len(pr.shot_histories) == 10
-
-    def test_keep_shot_results_parallel_forces_checkpoint_read_write_race(
-        self, tmp_path
-    ):
-        """Same mechanism as test_keep_shot_results_parallel, but with an
-        aggressively short poll_interval so the driver's shots-progress
-        poll (reading each item's results.h5) collides with a worker's own
-        checkpoint flush (appending to that same file) on essentially every
-        batch, rather than relying on natural timing to hit the race only
-        occasionally."""
-        loky = pytest.importorskip("loky")
-
-        strengths = [0.0, 0.1, 0.2, 0.3]
-        item_checkpoint_dir = tmp_path / "item_ckpt"
-        shot_checkpoint_dir = tmp_path / "shot_ckpt"
-
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-
-        runner = make_runner(
-            strengths,
-            seed_stride=30,
-            base_seed=7,
-            num_shots=30,
-            verbose=False,
-            parallel_strategy=strategy,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
-            poll_interval=0.001,
-        )
-        result = runner.run()
-
-        assert result.is_complete
-        assert len(result.failure_rates) == len(strengths)
-        assert all(fr is not None for fr in result.failure_rates)
-        assert len(runner._program_results) == len(strengths)
-        for sweep_index in range(len(strengths)):
-            pr = runner._program_results[sweep_index]
-            assert len(pr.shot_histories) == 30
 
 
 class TestResume:
@@ -756,192 +566,6 @@ class TestResume:
         assert final_result.failure_rates == uninterrupted_result.failure_rates
         assert final_result.stderrs == uninterrupted_result.stderrs
         assert final_result.is_complete
-
-    def test_run_without_item_checkpoint_dir_succeeds(self):
-        # Resume is auto-detected from item_checkpoint_dir's on-disk state;
-        # without one, run() has nothing to resume from and just succeeds.
-        runner = make_runner(
-            [0.0, 0.1], seed_stride=5, num_shots=5, verbose=False
-        )
-        result = runner.run()
-        assert result.is_complete
-
-    def test_resume_mismatched_strengths_raises(self, tmp_path):
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1, 0.2],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(ValueError, match="strengths"):
-            runner2.run()
-
-    def test_resume_mismatched_collect_shot_data_args_raises(self, tmp_path):
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=[
-                ("failed", 0)
-            ],  # Different from COLLECT_SHOT_DATA_ARGS
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(ValueError, match="collect_shot_data_args"):
-            runner2.run()
-
-    def test_resume_mismatched_expected_outcomes_raises(self, tmp_path):
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=[True],  # Different from EXPECTED_OUTCOMES
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(ValueError, match="expected_outcomes"):
-            runner2.run()
-
-    def test_resume_mismatched_num_shots_raises(self, tmp_path):
-        """Mismatched num_shots on resume raises ValueError naming the field."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=10,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=8,  # Different from runner1's num_shots
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=10,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(ValueError, match="num_shots"):
-            runner2.run()
-
-    def test_resume_mismatched_base_seed_raises(self, tmp_path):
-        """Mismatched base_seed on resume raises ValueError naming the field."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            base_seed=0,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,
-            base_seed=99,  # Different from runner1's base_seed
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(ValueError, match="base_seed"):
-            runner2.run()
-
-    def test_resume_mismatched_seed_stride_raises(self, tmp_path):
-        """Mismatched seed_stride on resume raises ValueError naming the field."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            base_seed=0,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=50,  # Different from runner1's seed_stride
-            base_seed=0,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(ValueError, match="seed_stride"):
-            runner2.run()
 
     def test_resume_with_default_seed_stride_resolving_to_num_shots(
         self, tmp_path
@@ -1031,278 +655,6 @@ class TestResume:
         with pytest.raises(ValueError, match="seed_stride"):
             runner2.run()
 
-    def test_resume_mismatched_keep_shot_results_raises(self, tmp_path):
-        """A resumed call with a different keep_shot_results than the
-        checkpoint was written with is a hard error naming that field."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            keep_shot_results=False,
-            shot_checkpoint=False,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            keep_shot_results=True,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-        )
-        with pytest.raises(ValueError, match="keep_shot_results"):
-            runner2.run()
-
-    def test_resume_mismatched_keep_shot_results_force_resume_works(
-        self, tmp_path
-    ):
-        """force_resume=True bypasses a keep_shot_results mismatch."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            keep_shot_results=False,
-            shot_checkpoint=False,
-        )
-        runner1.run()
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            keep_shot_results=True,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            force_resume=True,
-        )
-        result2 = runner2.run()
-        assert result2.is_complete
-
-    def test_item_checkpoint_dir_first_run_without_resume_completes(
-        self, tmp_path
-    ):
-        """A fresh run (no resume=True) with item_checkpoint_dir set completes normally and writes a complete result.h5."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner = make_runner(
-            [0.0, 0.1, 0.2],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner.run()
-        loaded = NoiseSweepResult.read(item_checkpoint_dir / "result.h5")
-        assert loaded.is_complete
-
-    def test_custom_runner_filename_checkpoint_and_resume(self, tmp_path):
-        """A custom runner_filename is correctly written, read back on
-        resume, and the default runner.h5 is not created."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        custom_runner_file = "custom_runner.h5"
-
-        # First run with custom runner_filename
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            runner_filename=custom_runner_file,
-        )
-        result1 = runner1.run()
-        assert result1.is_complete
-
-        # Verify custom file exists and default does not
-        assert (item_checkpoint_dir / custom_runner_file).exists()
-        assert not (item_checkpoint_dir / "runner.h5").exists()
-
-        # Resume with the same custom runner_filename
-        runner2 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            runner_filename=custom_runner_file,
-        )
-        result2 = runner2.run()
-
-        assert result2.failure_rates == result1.failure_rates
-        assert result2.stderrs == result1.stderrs
-        assert result2.is_complete
-
-    def test_resume_true_without_checkpoint_raises(self):
-        """resume=True requires checkpoint=True, raises ValueError."""
-        with pytest.raises(
-            ValueError, match="resume=True requires checkpoint=True"
-        ):
-            make_runner([0.0, 0.1], resume=True, checkpoint=False)
-
-    def test_checkpoint_without_resume_raises_when_content_exists(
-        self, tmp_path
-    ):
-        """State machine case (b): checkpoint=True, resume=False, but
-        on-disk state already exists raises ValueError."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-
-        # First run: create a genuine checkpoint
-        first = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        first.run()
-
-        # Verify runner.h5 exists
-        assert (item_checkpoint_dir / "runner.h5").exists()
-
-        # Second run: attempt to run again with checkpoint=True but
-        # resume=False should raise
-        second = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            resume=False,
-        )
-        with pytest.raises(
-            ValueError,
-            match="contains an existing checkpoint.*Pass resume=True",
-        ):
-            second.run()
-
-    def test_resume_true_with_empty_checkpoint_dir_raises(self, tmp_path):
-        """State machine case (d): resume=True with checkpoint=True but
-        no on-disk state raises ValueError (nothing to resume from)."""
-        item_checkpoint_dir = tmp_path / "nonexistent_dir"
-
-        # Attempt to resume from a nonexistent dir
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(
-            ValueError,
-            match="is empty or nonexistent.*nothing to resume from",
-        ):
-            runner.run()
-
-        # Also test with an empty-but-existent dir
-        item_checkpoint_dir.mkdir(parents=True)
-        runner2 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(
-            ValueError,
-            match="is empty or nonexistent.*nothing to resume from",
-        ):
-            runner2.run()
-
-    def test_existing_content_without_runner_h5_raises(self, tmp_path):
-        """Content that isn't a recognized NoiseSweepRunner checkpoint (no
-        runner.h5) is never silently overwritten or continued."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        item_checkpoint_dir.mkdir()
-        (item_checkpoint_dir / "unrelated.txt").write_text("not a checkpoint")
-
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        with pytest.raises(FileExistsError):
-            runner.run()
-
-    def test_resume_with_equivalent_collect_shot_data_args_succeeds(
-        self, tmp_path
-    ):
-        """Resume succeeds when collect_shot_data_args is passed as an
-        equivalent-but-differently-typed spec (e.g. tuple vs list)."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        # Run with tuple form
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            collect_shot_data_args=[("failed", -1)],
-        )
-        runner1.run()
-
-        # Resume with an equivalent literal HistoryDataCollector.
-        from loqs.core.historydatacollector import HistoryDataCollector
-
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=[
-                HistoryDataCollector(key="failed", indices=-1)
-            ],
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=5,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        # Should not raise despite the differently-typed collect_shot_data_args.
-        result = runner2.run()
-        assert result is not None
-
     def test_resume_with_equivalent_expected_outcomes_succeeds(self, tmp_path):
         """Resume succeeds when expected_outcomes is passed as an
         equivalent-but-differently-typed sequence (e.g. list vs tuple)."""
@@ -1336,49 +688,6 @@ class TestResume:
         # Should not raise despite differently-typed expected_outcomes
         result = runner2.run()
         assert result is not None
-
-    def test_mismatch_error_contains_public_names_not_private(self, tmp_path):
-        """Error message for mismatch contains public field names like
-        'collect_shot_data_args' and 'seed_stride', not private names like
-        '_normalized_collect_shot_data_args' or '_resolved_seed_stride'."""
-        item_checkpoint_dir = tmp_path / "sweep_checkpoint"
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        runner1.run()
-
-        # Try to resume with a genuinely mismatched seed_stride
-        runner2 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=5,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=10,  # Different from original 5
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-        )
-        try:
-            runner2.run()
-            pytest.fail("Should have raised ValueError")
-        except ValueError as e:
-            msg = str(e)
-            # Must contain public name "seed_stride"
-            assert (
-                "seed_stride" in msg
-            ), f"Expected 'seed_stride' in error message: {msg}"
-            # Must NOT contain private name "_resolved_seed_stride"
-            assert (
-                "_resolved_seed_stride" not in msg
-            ), f"Error message must not leak private name '_resolved_seed_stride': {msg}"
 
 
 class TestFromNoiseSweepRunner:
@@ -1739,731 +1048,6 @@ class TestNoiseSweepRunnerShotCheckpointing:
     `shot_checkpoint`, `shot_checkpoint_dir`, and `lazy_loading`
     parameters."""
 
-    def test_shot_checkpoint_without_shot_checkpoint_dir_raises(self):
-        """shot_checkpoint=True given without shot_checkpoint_dir is a
-        configuration error, not something that's silently ignored."""
-        with pytest.raises(ValueError, match="shot_checkpoint_dir"):
-            make_runner(
-                [0.0, 0.1],
-                num_shots=10,
-                shot_checkpoint=True,
-            )
-
-    def test_serial_shot_checkpoint_creates_per_point_subdirs(self, tmp_path):
-        """A serial (no parallel) run with shot_checkpoint=True and a real
-        shot_checkpoint_dir produces per-point subdirectories under it, one
-        per sweep point, each containing checkpoint files that can be loaded
-        via ProgramResults.load_checkpoint."""
-        shot_ckpt_dir = tmp_path / "shot_checkpoints"
-        shot_ckpt_dir.mkdir()
-
-        runner = make_runner(
-            [0.0, 0.1],
-            num_shots=10,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading=False,
-        )
-
-        result = runner.run()
-
-        # Confirm the sweep completed successfully
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-        # Confirm per-point subdirs exist and contain checkpoints
-        subdirs = list(shot_ckpt_dir.iterdir())
-        assert (
-            len(subdirs) == 2
-        ), f"Expected 2 point subdirs, got {len(subdirs)}: {subdirs}"
-
-        for index in range(len(runner.strengths)):
-            point_subdir = _checkpoint_subdir_for_prefix(
-                shot_ckpt_dir, "point", index
-            )
-            assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
-
-            # Confirm the checkpoint file exists and can load the right number of shots
-            checkpoint_file = point_subdir / "results.h5"
-            assert (
-                checkpoint_file.exists()
-            ), f"Missing checkpoint: {checkpoint_file}"
-
-            loaded_results = ProgramResults()
-            loaded_results.load_checkpoint(checkpoint_dir=point_subdir)
-            assert len(loaded_results.shot_histories) == 10
-
-    def test_parallel_shot_checkpoint_prevents_point_collision(self, tmp_path):
-        """A parallel run with parallel.n_program_chunks=1 (one worker processes
-        both points sequentially) and shot_checkpoint_dir set confirms the
-        per-point subdirectory scheme actually prevents collisions despite
-        sharing one worker/hostname_pid."""
-        loky = pytest.importorskip("loky")
-        shot_ckpt_dir = tmp_path / "shot_checkpoints"
-        shot_ckpt_dir.mkdir()
-
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=1),
-            n_program_chunks=1,
-            shot_executor=_build_shot_executor,
-            n_shot_batches=10,
-        )
-
-        runner = make_runner(
-            [0.0, 0.1],
-            num_shots=10,
-            parallel_strategy=strategy,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading=False,
-        )
-
-        result = runner.run()
-
-        # Confirm the sweep completed successfully
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-        # Confirm both point subdirs exist independently
-        subdirs = list(shot_ckpt_dir.iterdir())
-        assert len(subdirs) == 2
-
-        for index in range(len(runner.strengths)):
-            point_subdir = _checkpoint_subdir_for_prefix(
-                shot_ckpt_dir, "point", index
-            )
-            assert point_subdir.exists(), f"Missing subdir: {point_subdir}"
-            checkpoint_file = point_subdir / "results.h5"
-            assert (
-                checkpoint_file.exists()
-            ), f"Missing checkpoint: {checkpoint_file}"
-
-            # Confirm the checkpoint can be loaded with the right number of shots
-            loaded_results = ProgramResults()
-            loaded_results.load_checkpoint(checkpoint_dir=point_subdir)
-            assert len(loaded_results.shot_histories) == 10
-
-    def test_checkpoint_dir_in_run_kwargs_conflicts_with_shot_checkpoint_dir(
-        self,
-    ):
-        """Passing checkpoint_dir directly via run_kwargs while
-        shot_checkpoint_dir is also set raises ValueError (the two
-        mechanisms conflict)."""
-        with pytest.raises(ValueError, match="checkpoint_dir"):
-            make_runner(
-                [0.0, 0.1],
-                num_shots=10,
-                shot_checkpoint_dir="/tmp/dummy",
-                run_kwargs={"checkpoint_dir": "/tmp/also_dummy"},
-            )
-
-    def test_keep_shot_results_end_to_end(self, tmp_path):
-        """NoiseSweepRunner with keep_shot_results=True retains full
-        ProgramResults objects for each sweep point in runner._program_results,
-        accessible after the run completes."""
-        item_checkpoint_dir = tmp_path / "checkpoint"
-
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=10,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_checkpoint",
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,  # Disable lazy loading for now
-        )
-        result = runner.run()
-
-        # After run completes, runner._program_results should be populated
-        assert len(runner._program_results) == 2
-        assert 0 in runner._program_results
-        assert 1 in runner._program_results
-
-        # Each retained ProgramResults should have the expected shot data
-        for index in [0, 1]:
-            pr = runner._program_results[index]
-            assert isinstance(pr, ProgramResults)
-            assert len(pr.shot_histories) == 5
-
-        # The returned result itself should be complete (independent of keep_shot_results)
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-    def test_keep_shot_results_lazy_max_frame_limit_resolves_real_value(
-        self, tmp_path
-    ):
-        """A kept lazy ProgramResults' `.max_frame_limit` resolves to the
-        real, non-default value actually used for that point's own
-        `QuantumProgram.run()` call (threaded here via `run_kwargs`, the
-        only production path `NoiseSweepRunner` has to reach it), not the
-        `None` that `getattr(self, "max_frame_limit", None)` would fall
-        back to since `NoiseSweepRunner` has no `max_frame_limit` field of
-        its own."""
-        item_checkpoint_dir = tmp_path / "checkpoint"
-        real_max_frame_limit = (
-            55  # Deliberately not QuantumProgram.run's own default of 100.
-        )
-
-        runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=10,
-            num_shots=5,
-            verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_checkpoint",
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=True,  # Default; exercises the lazy-resolution path.
-            run_kwargs={"max_frame_limit": real_max_frame_limit},
-        )
-        result = runner.run()
-
-        assert result.is_complete
-        assert len(runner._program_results) == 2
-        for index in [0, 1]:
-            pr = runner._program_results[index]
-            assert pr.max_frame_limit == real_max_frame_limit
-
-    def test_resume_cascades_into_point_partial_shot_checkpoint(
-        self, monkeypatch, tmp_path
-    ):
-        """When a sweep point crashes partway through its own shot-level
-        checkpoint, a runner-level resume must cascade the resume flag down to
-        that point's own QuantumProgram.run() call, causing it to resume from its
-        partial shot checkpoint rather than recomputing all shots from scratch.
-        This differs from tests that only cover points that hadn't started
-        shot-level work at all."""
-        from loqs.core.quantumprogram import QuantumProgram
-
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt.mkdir()
-        shot_ckpt.mkdir()
-
-        # First run: simulate a crash partway through the second point's own
-        # shot work (2 points, 6 shots each, so we'll interrupt at shot 9)
-        compute_count = {"n": 0}
-        original_run_shot = QuantumProgram._run_shot
-
-        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
-            compute_count["n"] += 1
-            # Crash after 9 shots total (completing all of point 0's 6 shots,
-            # and 2 of point 1's 6 shots)
-            if compute_count["n"] > 9:
-                raise RuntimeError("Simulated crash mid-dispatch")
-            return original_run_shot(self, max_frame_limit, seed, shot_index)
-
-        with pytest.raises(RuntimeError, match="Simulated crash"):
-            monkeypatch.setattr(
-                QuantumProgram, "_run_shot", _run_shot_with_interrupt
-            )
-            runner = make_runner(
-                [0.0, 0.1],
-                num_shots=6,
-                checkpoint=True,
-                item_checkpoint_dir=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                # n_shot_batches=3 -> checkpoint_batch_size=2, so a crash
-                # mid-batch drops the incomplete batch, not just the shot.
-                parallel_strategy=ParallelStrategy(n_shot_batches=3),
-                lazy_loading=False,
-                verbose=False,
-            )
-            runner.run()
-
-        # Verify: point 0's shot checkpoint should be complete (6 shots)
-        point0_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 0)
-        assert point0_shot_ckpt.exists()
-        point0_results = ProgramResults()
-        point0_results.load_checkpoint(point0_shot_ckpt)
-        assert len(point0_results.shot_histories) == 6
-
-        # Verify: point 1's shot checkpoint should be partial (2 of 6 shots)
-        point1_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 1)
-        assert point1_shot_ckpt.exists()
-        point1_results_partial = ProgramResults()
-        point1_results_partial.load_checkpoint(point1_shot_ckpt)
-        assert len(point1_results_partial.shot_histories) == 2
-
-        # Second run: item-level resume should cascade down to point 1's
-        # own QuantumProgram.run() call, resuming its partial checkpoint.
-        monkeypatch.undo()
-        compute_count_on_resume = {"n": 0}
-
-        original_run_shot_2 = QuantumProgram._run_shot
-
-        def _count_compute_calls_resume(
-            self, max_frame_limit, seed, shot_index
-        ):
-            compute_count_on_resume["n"] += 1
-            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
-
-        monkeypatch.setattr(
-            QuantumProgram, "_run_shot", _count_compute_calls_resume
-        )
-
-        runner2 = make_runner(
-            [0.0, 0.1],
-            num_shots=6,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_ckpt,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            parallel_strategy=ParallelStrategy(n_shot_batches=3),
-            lazy_loading=False,
-            verbose=False,
-        )
-        result = runner2.run()
-
-        monkeypatch.undo()
-
-        # Verify: the results are fully correct (both points complete)
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-        # Only point 1's 4 missing shots should be recomputed, not all 6
-        # (which would mean it was redone from scratch instead of resumed).
-        assert compute_count_on_resume["n"] == 4
-
-    def test_real_parallel_worker_crash_resume_recomputes_only_missing_shots(
-        self, tmp_path
-    ):
-        """A real `loky` worker process crashing mid-point (after 2 of 6
-        shots) during real item-level parallel dispatch: the runner-level
-        resume must cascade into that point's own partial shot checkpoint,
-        recomputing only its missing shots, while the sibling point
-        (dispatched to the other real worker, uninterrupted) is never
-        redispatched at all. Closes the gap left by
-        test_loky_program_executor_matches_serial_result and friends,
-        which never crash a real worker process mid-shot."""
-        loky = pytest.importorskip("loky")
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        strategy = ParallelStrategy(
-            program_executor=loky.get_reusable_executor(max_workers=2),
-            n_program_chunks=2,
-        )
-
-        manager = mp.Manager()
-        crash_triggered = manager.dict()
-        shot_log = manager.list()
-        call_log = manager.list()
-
-        original_run_one_sweep_point = noisesweeptools._run_one_sweep_point
-        noisesweeptools._run_one_sweep_point = functools.partial(
-            _crash_once_and_log_shots,
-            original_fn=original_run_one_sweep_point,
-            crash_index=1,
-            shots_before_crash=2,
-            wait_for_index=0,
-            item_checkpoint_dir=item_ckpt,
-            crash_triggered=crash_triggered,
-            shot_log=shot_log,
-            call_log=call_log,
-        )
-        try:
-            with pytest.raises(
-                RuntimeError, match="Simulated real-worker crash"
-            ):
-                make_runner(
-                    [0.0, 0.1],
-                    num_shots=6,
-                    checkpoint=True,
-                    item_checkpoint_dir=item_ckpt,
-                    shot_checkpoint=True,
-                    shot_checkpoint_dir=shot_ckpt,
-                    parallel_strategy=strategy,
-                    lazy_loading=False,
-                    verbose=False,
-                ).run()
-
-            shots_before_resume = list(shot_log)
-            calls_before_resume = list(call_log)
-
-            result = make_runner(
-                [0.0, 0.1],
-                num_shots=6,
-                checkpoint=True,
-                resume=True,
-                item_checkpoint_dir=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                parallel_strategy=strategy,
-                lazy_loading=False,
-                verbose=False,
-            ).run()
-        finally:
-            noisesweeptools._run_one_sweep_point = original_run_one_sweep_point
-
-        # Point 1 crashed after exactly 2 shots; point 0 completed all 6.
-        assert sorted(shot for i, shot in shots_before_resume if i == 1) == [
-            0,
-            1,
-        ]
-        assert sorted(shot for i, shot in shots_before_resume if i == 0) == [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-        ]
-
-        # Resume recomputes exactly point 1's 4 missing shots; point 0's
-        # shots are never recomputed.
-        shots_during_resume = list(shot_log)[len(shots_before_resume) :]
-        assert sorted(shot for i, shot in shots_during_resume if i == 1) == [
-            2,
-            3,
-            4,
-            5,
-        ]
-        assert [shot for i, shot in shots_during_resume if i == 0] == []
-
-        # Point 0 is dispatched exactly once (the crash run); point 1
-        # exactly twice (crash + resume).
-        assert calls_before_resume.count(0) == 1
-        assert list(call_log).count(0) == 1
-        assert list(call_log).count(1) == 2
-
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-    def test_resume_does_not_cascade_raise_for_point_with_no_shot_checkpoint(
-        self, monkeypatch, tmp_path
-    ):
-        """When a sweep point has no shot-level checkpoint results.h5,
-        a runner-level resume must not cascade resume=True down to that point's
-        QuantumProgram.run() call, avoiding the case (d) ValueError
-        ("resume=True with no on-disk state"). Instead, resume=False is passed,
-        and the point is redone from scratch and completes successfully."""
-        from loqs.core.quantumprogram import QuantumProgram
-
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt.mkdir()
-        shot_ckpt.mkdir()
-
-        # First run: complete point 0, then crash on point 1's first shot
-        # before its checkpoint batch can flush.
-        compute_count = {"n": 0}
-        original_run_shot = QuantumProgram._run_shot
-
-        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
-            compute_count["n"] += 1
-            # Crash at shot 10 (point 1's first shot, after point 0's 9)
-            if compute_count["n"] >= 10:
-                raise RuntimeError("Simulated crash mid-point-1")
-            return original_run_shot(self, max_frame_limit, seed, shot_index)
-
-        with pytest.raises(RuntimeError, match="mid-point-1"):
-            monkeypatch.setattr(
-                QuantumProgram, "_run_shot", _run_shot_with_interrupt
-            )
-            runner = make_runner(
-                [0.0, 0.1],
-                num_shots=9,
-                checkpoint=True,
-                item_checkpoint_dir=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                lazy_loading=False,
-                verbose=False,
-            )
-            runner.run()
-
-        monkeypatch.undo()
-
-        # Manually verify/set up the precondition: point 0 complete,
-        # point 1 subdirectory exists but may or may not have results.h5
-        point0_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 0)
-        assert point0_shot_ckpt.exists()
-        point0_results = ProgramResults()
-        point0_results.load_checkpoint(point0_shot_ckpt)
-        assert len(point0_results.shot_histories) == 9
-
-        # If point 1's results.h5 exists, remove it to simulate the case where
-        # point 1's batch didn't complete before the crash
-        point1_shot_ckpt = _checkpoint_subdir_for_prefix(shot_ckpt, "point", 1)
-        point1_results_file = point1_shot_ckpt / "results.h5"
-        if point1_results_file.exists():
-            point1_results_file.unlink()
-
-        # Ensure the precondition is met: point 1 has no results.h5
-        assert (
-            not point1_results_file.exists()
-        ), "Precondition setup failed: point 1 results.h5 should be removed"
-
-        # Second run: resume should complete successfully without raising case (d).
-        # The cascading logic checks for results.h5; since it doesn't exist,
-        # resume=False is passed to point 1's QuantumProgram.run().
-        runner2 = make_runner(
-            [0.0, 0.1],
-            num_shots=9,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_ckpt,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            lazy_loading=False,
-            verbose=False,
-        )
-        result = runner2.run()
-
-        # Verify: the results are fully correct (both points complete)
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-        # Verify: point 1's shot checkpoint now has results.h5 and is complete
-        assert point1_results_file.exists()
-        point1_results_after = ProgramResults()
-        point1_results_after.load_checkpoint(point1_shot_ckpt)
-        assert len(point1_results_after.shot_histories) == 9
-
-    def test_decode_based_crash_recovery_with_keep_shot_results(
-        self, monkeypatch, tmp_path
-    ):
-        """Test genuine decode-based crash recovery with keep_shot_results=True.
-
-        Exercises the actual decode path (`NoiseSweepRunner.read(...).run()`),
-        not just a freshly-constructed runner, since `keep_shot_results` and
-        other fields must survive a real round-trip through
-        `_from_decoded_attrs` for a resumed run to work correctly.
-
-        This test:
-        1. Creates a runner with keep_shot_results=True and checkpointing
-        2. Runs it and crashes mid-way through
-        3. Loads the runner from runner.h5 via NoiseSweepRunner.read()
-        4. Resumes the run
-        5. Verifies the results are complete and program_results are retained
-        """
-        from loqs.core.quantumprogram import QuantumProgram
-
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt.mkdir()
-        shot_ckpt.mkdir()
-
-        # First run: complete point 0, then crash on point 1's first shot
-        compute_count = {"n": 0}
-        original_run_shot = QuantumProgram._run_shot
-
-        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
-            compute_count["n"] += 1
-            # Crash at shot 10 (point 1's first shot, after point 0's 9)
-            if compute_count["n"] >= 10:
-                raise RuntimeError(
-                    "Simulated crash for keep_shot_results test"
-                )
-            return original_run_shot(self, max_frame_limit, seed, shot_index)
-
-        with pytest.raises(RuntimeError, match="keep_shot_results test"):
-            monkeypatch.setattr(
-                QuantumProgram, "_run_shot", _run_shot_with_interrupt
-            )
-            runner = make_runner(
-                [0.0, 0.1],
-                num_shots=9,
-                checkpoint=True,
-                item_checkpoint_dir=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                keep_shot_results=True,
-                lazy_loading=False,
-                verbose=False,
-            )
-            runner.run()
-
-        monkeypatch.undo()
-
-        # Now the critical test: load the runner from runner.h5 and resume
-        # This exercises the bug fix: _from_decoded_attrs must properly restore
-        # keep_shot_results so the mismatch check doesn't raise
-        runner_path = item_ckpt / runner.runner_filename
-        assert runner_path.exists(), "runner.h5 should have been created"
-
-        stored_runner = NoiseSweepRunner.read(runner_path)
-
-        # Verify that keep_shot_results was correctly restored via decode
-        assert stored_runner.keep_shot_results is True, (
-            "keep_shot_results should be True after decode, "
-            "but was reset to False by hand-built cls() constructor"
-        )
-
-        # Resume the run with the decoded runner
-        stored_runner.resume = True
-        result = stored_runner.run()
-
-        # Verify: the results are fully correct (both points complete)
-        assert result.is_complete
-        assert len(result.failure_rates) == 2
-
-        # Verify: _program_results are actually retained in runner.h5
-        stored_runner2 = NoiseSweepRunner.read(runner_path)
-        assert len(stored_runner2._program_results) == 2, (
-            "_program_results should have 2 items, but was reset to {} "
-            "by hand-built cls() constructor"
-        )
-
-    def test_shot_level_force_resume_propagates_to_program_run(self, tmp_path):
-        """force_resume forwarded from NoiseSweepRunner down into each sweep
-        point's own QuantumProgram.run() call bypasses a shot-level config
-        mismatch. No item_checkpoint_dir is used, so the runner's own
-        item-level mismatch check never triggers -- only the per-item worker's
-        own program.run(force_resume=...) call can bypass this."""
-        shot_ckpt = tmp_path / "shot_checkpoint"
-
-        # First run: produce on-disk shot-level checkpoint state for both points.
-        runner1 = make_runner(
-            [0.0, 0.1],
-            seed_stride=10,
-            num_shots=5,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            lazy_loading=False,
-            verbose=False,
-        )
-        result1 = runner1.run()
-        assert result1.is_complete
-
-        # Resuming with a different num_shots is a mismatch QuantumProgram.run()
-        # itself validates; force_resume=False should raise.
-        with pytest.raises(ValueError, match="num_shots"):
-            runner2 = make_runner(
-                [0.0, 0.1],
-                seed_stride=10,
-                num_shots=10,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                lazy_loading=False,
-                verbose=False,
-            )
-            runner2.run()
-
-        # force_resume=True on the runner must reach each point's own
-        # program.run() call to bypass the same mismatch.
-        runner3 = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=10,
-            collect_shot_data_args=COLLECT_SHOT_DATA_ARGS,
-            expected_outcomes=EXPECTED_OUTCOMES,
-            seed_stride=10,
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            force_resume=True,
-            lazy_loading=False,
-            verbose=False,
-        )
-        result3 = runner3.run()
-        assert result3.is_complete
-        assert len(result3.failure_rates) == 2
-
-    def test_custom_results_filename(self, tmp_path, monkeypatch):
-        """A custom results_filename is correctly threaded through to each
-        sweep point's own QuantumProgram.run() call and used for per-point
-        shot-level checkpoints. After an injected mid-run crash leaves point
-        1's own shot checkpoint partial, a resuming run with the same custom
-        filename must detect that prior state and recompute only the single
-        missing shot -- proving resume-detection actually consults the
-        custom filename rather than the default results.h5."""
-        custom_results_file = "custom_results.h5"
-        item_ckpt = tmp_path / "item_checkpoint"
-        shot_ckpt = tmp_path / "shot_checkpoint"
-        item_ckpt.mkdir()
-        shot_ckpt.mkdir()
-
-        # First run: crash after 3 total shots, completing all of point 0's
-        # 2 shots and 1 of point 1's 2 shots.
-        compute_count = {"n": 0}
-        original_run_shot = QuantumProgram._run_shot
-
-        def _run_shot_with_interrupt(self, max_frame_limit, seed, shot_index):
-            compute_count["n"] += 1
-            if compute_count["n"] > 3:
-                raise RuntimeError("Simulated crash mid-dispatch")
-            return original_run_shot(self, max_frame_limit, seed, shot_index)
-
-        with pytest.raises(RuntimeError, match="Simulated crash"):
-            monkeypatch.setattr(
-                QuantumProgram, "_run_shot", _run_shot_with_interrupt
-            )
-            runner = make_runner(
-                [0.0, 0.1],
-                num_shots=2,
-                checkpoint=True,
-                item_checkpoint_dir=item_ckpt,
-                shot_checkpoint=True,
-                shot_checkpoint_dir=shot_ckpt,
-                results_filename=custom_results_file,
-                lazy_loading=False,
-                verbose=False,
-            )
-            runner.run()
-
-        # Verify: point 0's own custom-named checkpoint is complete (2
-        # shots), point 1's is partial (1 shot); default results.h5 is absent.
-        point0_shot_ckpt = shot_ckpt / "point_0"
-        assert (point0_shot_ckpt / custom_results_file).exists()
-        assert not (point0_shot_ckpt / "results.h5").exists()
-        point0_results = ProgramResults(results_filename=custom_results_file)
-        point0_results.load_checkpoint(point0_shot_ckpt)
-        assert len(point0_results.shot_histories) == 2
-
-        point1_shot_ckpt = shot_ckpt / "point_1"
-        assert (point1_shot_ckpt / custom_results_file).exists()
-        assert not (point1_shot_ckpt / "results.h5").exists()
-        point1_results = ProgramResults(results_filename=custom_results_file)
-        point1_results.load_checkpoint(point1_shot_ckpt)
-        assert len(point1_results.shot_histories) == 1
-
-        # Resume (crash injection removed) should detect point 1's partial
-        # state via the custom filename and recompute only its missing shot.
-        monkeypatch.undo()
-        compute_count_on_resume = {"n": 0}
-        original_run_shot_2 = QuantumProgram._run_shot
-
-        def _count_compute_calls_resume(
-            self, max_frame_limit, seed, shot_index
-        ):
-            compute_count_on_resume["n"] += 1
-            return original_run_shot_2(self, max_frame_limit, seed, shot_index)
-
-        monkeypatch.setattr(
-            QuantumProgram, "_run_shot", _count_compute_calls_resume
-        )
-
-        runner2 = make_runner(
-            [0.0, 0.1],
-            num_shots=2,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_ckpt,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            results_filename=custom_results_file,
-            lazy_loading=False,
-            verbose=False,
-        )
-        result2 = runner2.run()
-
-        monkeypatch.undo()
-
-        assert result2.is_complete
-        assert len(result2.failure_rates) == 2
-
-        # Only point 1's 1 missing shot should be recomputed, not both
-        # points' shots from scratch.
-        assert compute_count_on_resume["n"] == 1
-
     def test_from_noise_sweep_runner_with_serialized_callables(self):
         """from_noise_sweep_runner should preserve serialized_callables."""
         env = {}
@@ -2498,32 +1082,90 @@ class TestNoiseSweepRunnerShotCheckpointing:
         program = runner2.build_program(0)
         assert program.default_noise_model == 0.2
 
-    def test_run_kwargs_n_shot_batches_not_clobbered(self):
-        """Explicit n_shot_batches in run_kwargs should not be clobbered."""
-        seen_n_shot_batches = []
 
-        real_run = QuantumProgram.run
+class TestNoiseSweepRunnerHooks:
+    """Direct unit tests of NoiseSweepRunner's own derived reduce_program_outcomes/
+    _build_output/CHKPT_SUBDIR_PREFIX/mismatch-field hook implementations, in
+    isolation from MultiProgramRunner's generic dispatch/checkpoint/resume/parallel
+    machinery -- that generic behavior is covered once, generically, in
+    test_multiprogramrunner.py."""
 
-        def spy_run(self, *args, **kwargs):
-            seen_n_shot_batches.append(kwargs.get("n_shot_batches"))
-            return real_run(self, *args, **kwargs)
-
+    def test_reduce_program_outcomes_computes_failure_rate(self):
+        """reduce_program_outcomes turns one program's shot outcomes into
+        a (failure_rate, stderr) tuple via _compute_failure_rate, independent
+        of any dispatch/checkpoint machinery."""
         runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            run_kwargs={"n_shot_batches": 2},
+            [0.1],
+            seed_stride=20,
+            num_shots=20,
         )
-        try:
-            QuantumProgram.run = spy_run
-            runner.run()
-        finally:
-            QuantumProgram.run = real_run
+        program = runner.build_program(0)
+        program_results = program.run(num_shots=20, verbose=False)
+        failure_rate, stderr = runner.reduce_program_outcomes(program_results)
+        # Both should be numeric values in [0, 1]
+        assert isinstance(failure_rate, float)
+        assert isinstance(stderr, float)
+        assert 0 <= failure_rate <= 1
+        assert 0 <= stderr <= 1
 
-        # Both points should use the explicitly-set n_shot_batches=2,
-        # not be clobbered by ParallelStrategy.n_shot_batches (which is None by default)
-        assert seen_n_shot_batches == [2, 2], (
-            f"n_shot_batches should be [2, 2] but got {seen_n_shot_batches}; "
-            "unconditional n_shot_batches assignment clobbered run_kwargs"
+    def test_build_output_assembles_noise_sweep_result_without_disk_write(
+        self, tmp_path
+    ):
+        """_build_output builds a NoiseSweepResult from (strength, (failure_rate,
+        stderr)) pairs without writing to disk, even when item_checkpoint_dir is set.
+        """
+        runner = make_runner(
+            [0.1, 0.2, 0.3],
+            seed_stride=10,
+            num_shots=10,
+            item_checkpoint_dir=tmp_path / "ckpt",
+            checkpoint=True,
+        )
+        # Build hand-crafted ordered_results: (strength, (failure_rate, stderr)) pairs
+        ordered_results = [
+            (0.1, (0.1, 0.05)),
+            (0.2, (0.2, 0.06)),
+            (0.3, None),  # Incomplete point
+        ]
+        result = runner._build_output(ordered_results)
+        assert isinstance(result, NoiseSweepResult)
+        assert result.failure_rates == [0.1, 0.2, None]
+        assert result.stderrs == [0.05, 0.06, None]
+        assert result.strengths == [0.1, 0.2, 0.3]
+        # Verify no result.h5 file was created
+        assert not (tmp_path.exists() and any(tmp_path.glob("**/result.h5")))
+
+    def test_chkpt_subdir_prefix_is_point(self):
+        """NoiseSweepRunner.CHKPT_SUBDIR_PREFIX should be "point"."""
+        assert NoiseSweepRunner.CHKPT_SUBDIR_PREFIX == "point"
+
+    def test_mismatch_check_fields_lists_expected_fields(self):
+        """_mismatch_check_fields returns the expected set of fields for resume
+        consistency checking."""
+        runner = make_runner(
+            [0.1],
+            seed_stride=10,
+            num_shots=10,
+        )
+        fields = runner._mismatch_check_fields()
+        assert fields == [
+            "strengths",
+            "base_seed",
+            "_resolved_seed_stride",
+            "num_shots",
+            "_normalized_collect_shot_data_args",
+            "expected_outcomes",
+            "keep_shot_results",
+        ]
+
+    def test_mismatch_field_display_name_maps_resolved_seed_stride(self):
+        """_mismatch_field_display_name maps internal field names to public names."""
+        runner = make_runner(
+            [0.1],
+            seed_stride=10,
+            num_shots=10,
+        )
+        assert (
+            runner._mismatch_field_display_name("_resolved_seed_stride")
+            == "seed_stride"
         )
