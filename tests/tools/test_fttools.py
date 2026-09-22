@@ -3,7 +3,6 @@
 import functools
 import multiprocessing as mp
 import sys
-import time
 
 import numpy as np
 import pytest
@@ -22,7 +21,6 @@ from loqs.tools.paralleltools import ParallelStrategy
 from _shared_checkpoint_test_helpers import (
     _build_shot_executor,
     _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
 )
 
 
@@ -34,7 +32,9 @@ def _build_circuit_program():
     """
     circ = PyGSTiPhysicalCircuit([("Gh", "Q0")], qubit_labels=["Q0", "Q1"])
     circ = circ.append([("Gcnot", "Q0", "Q1")])
-    inst = builders.build_physical_circuit_instruction(circuit=circ, name="Circuit")
+    inst = builders.build_physical_circuit_instruction(
+        circuit=circ, name="Circuit"
+    )
     program = QuantumProgram(
         instruction_stack=[{"instruction": "Circuit"}],
         global_instructions={"Circuit": inst},
@@ -50,8 +50,16 @@ def _build_counter_program():
     qubits = ["Q0"]
     ideal_model = trivial_codepack.create_ideal_model(qubits)
     stack = [
-        {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
-        {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        {
+            "instruction": "Init Patch Trivial",
+            "new_patch_label": "L0",
+            "qubits": qubits,
+        },
+        {
+            "instruction": "Init Counter",
+            "patch_label": "L0",
+            "initial_value": 0,
+        },
         {"instruction": "Increment", "patch_label": "L0", "increment_by": 1},
     ]
     return QuantumProgram(
@@ -83,7 +91,10 @@ class TestBuildDiscreteErrorInjectionProgramForCombo:
             program, 0, [(2, "Gxpi", 0), (2, "Gzpi", 1)]
         )
         new_label = new_program.instruction_stack[0]
-        assert new_label["error_injections"] == [(2, "Gxpi", 0), (2, "Gzpi", 1)]
+        assert new_label["error_injections"] == [
+            (2, "Gxpi", 0),
+            (2, "Gzpi", 1),
+        ]
         assert "Gxpi" in new_program.name and "Gzpi" in new_program.name
 
     def test_empty_error_injections_uses_placeholder_layer_in_name(self):
@@ -141,7 +152,9 @@ class TestPauliPropagation:
         assert total == 4
         assert len(representatives) <= total
 
-    def test_prune_error_combos_falls_back_to_unpruned_without_stim(self, monkeypatch):
+    def test_prune_error_combos_falls_back_to_unpruned_without_stim(
+        self, monkeypatch
+    ):
         _, _, circ = _build_circuit_program()
         monkeypatch.setattr(
             fttools, "is_stim_pauli_propagation_available", lambda: False
@@ -173,8 +186,10 @@ class TestBuildPrunedDiscreteErrorInjectionPrograms:
 
     def test_returns_fewer_or_equal_programs_than_total(self):
         program, inst, _ = _build_circuit_program()
-        programs, total = fttools.build_pruned_discrete_error_injection_programs(
-            program, inst, 0, ["Gxpi", "Gzpi"], post_twoq_gates=False
+        programs, total = (
+            fttools.build_pruned_discrete_error_injection_programs(
+                program, inst, 0, ["Gxpi", "Gzpi"], post_twoq_gates=False
+            )
         )
         assert total == 6
         assert 0 < len(programs) <= total
@@ -189,6 +204,7 @@ class TestBuildDiscreteErrorInjectionPrograms:
 
         def apply_fn():
             pass
+
         bad_inst = Instruction(apply_fn, data={}, name="bad")
 
         with pytest.raises(ValueError, match="Key 'circuit' not available"):
@@ -329,9 +345,7 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             "something fixable from LoQS's side."
         ),
     )
-    def test_submitit_program_executor_matches_serial_result(
-        self, tmp_path
-    ):
+    def test_submitit_program_executor_matches_serial_result(self, tmp_path):
         submitit = pytest.importorskip("submitit")
         program = _build_counter_program()
         strategy = ParallelStrategy(
@@ -463,7 +477,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         failed = runner.run()
 
@@ -473,7 +489,9 @@ class TestFaultInjectionRunnerCheckpointing:
         assert (ckpt / "runner.h5").exists()
         assert self._read_completed_indices(ckpt) == {0, 1}
 
-    def test_existing_checkpoint_with_matching_config_auto_resumes(self, tmp_path):
+    def test_existing_checkpoint_with_matching_config_auto_resumes(
+        self, tmp_path
+    ):
         """Resumed call with matching config continues from checkpoint."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
@@ -483,7 +501,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -493,7 +513,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
         )
         failed2 = runner2.run()
         assert failed2 == []
@@ -509,7 +532,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         with pytest.raises(FileExistsError):
             runner.run()
@@ -525,7 +550,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=partial_programs,
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -545,7 +572,10 @@ class TestFaultInjectionRunnerCheckpointing:
                 errored_programs=[program, program],
                 collect_shot_data_args=[("counter", -1)],
                 expected_outcomes=[1],
-                num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+                num_shots=1,
+                checkpoint=True,
+                resume=True,
+                item_checkpoint_dir=ckpt,
             )
             failed2 = runner2.run()
             assert failed2 == []
@@ -565,7 +595,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -587,7 +619,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
         )
         failed2 = runner2.run()
         assert failed2 == []
@@ -603,7 +638,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
 
         # Patch _run_one_program to crash at index 1
@@ -643,7 +680,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         runner1.run()
 
@@ -652,7 +691,9 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=2,  # Different!
-            checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
         )
         with pytest.raises(ValueError, match="num_shots"):
             runner2.run()
@@ -666,7 +707,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         runner1.run()
 
@@ -674,7 +717,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", 0)],  # Different!
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
         )
         with pytest.raises(ValueError, match="collect_shot_data_args"):
             runner2.run()
@@ -688,7 +734,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         runner1.run()
 
@@ -696,7 +744,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[999],  # Different!
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
         )
         with pytest.raises(ValueError, match="expected_outcomes"):
             runner2.run()
@@ -710,7 +761,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -721,7 +774,9 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=2,  # Different, but forced
-            checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
             force_resume=True,
         )
         failed2 = runner2.run()
@@ -738,7 +793,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
             keep_shot_results=False,
             shot_checkpoint=False,
         )
@@ -748,7 +805,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
             keep_shot_results=True,
             shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
@@ -768,7 +828,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
             keep_shot_results=False,
             shot_checkpoint=False,
         )
@@ -778,7 +840,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
             keep_shot_results=True,
             shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
@@ -845,7 +910,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=5, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+            num_shots=5,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_checkpoint",
             shot_checkpoint=True,
             keep_shot_results=True,
@@ -860,6 +927,7 @@ class TestFaultInjectionRunnerCheckpointing:
 
         # Each retained ProgramResults should have the expected shot data
         from loqs.core import ProgramResults
+
         for index in [0, 1]:
             pr = runner._program_results[index]
             assert isinstance(pr, ProgramResults)
@@ -868,7 +936,9 @@ class TestFaultInjectionRunnerCheckpointing:
         # Both programs should have succeeded (not in failed list)
         assert failed == []
 
-    def test_resume_cascades_into_program_partial_shot_checkpoint(self, tmp_path, monkeypatch):
+    def test_resume_cascades_into_program_partial_shot_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
         """When a program crashes partway through its own shot-level
         checkpoint, a runner-level resume must cascade the resume flag down to
         that program's own QuantumProgram.run() call, causing it to resume from
@@ -920,6 +990,7 @@ class TestFaultInjectionRunnerCheckpointing:
 
         # Verify: program 0's shot checkpoint should be complete (6 shots)
         from loqs.core import ProgramResults
+
         prog0_shot_ckpt = shot_ckpt / "fault_0"
         assert prog0_shot_ckpt.exists()
         prog0_results = ProgramResults()
@@ -940,7 +1011,9 @@ class TestFaultInjectionRunnerCheckpointing:
 
         original_run_shot_2 = QuantumProgram._run_shot
 
-        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+        def _count_compute_calls_resume(
+            self, max_frame_limit, seed, shot_index
+        ):
             compute_count_on_resume["n"] += 1
             return original_run_shot_2(self, max_frame_limit, seed, shot_index)
 
@@ -1051,19 +1124,28 @@ class TestFaultInjectionRunnerCheckpointing:
 
         # Program 1 crashed after exactly 2 shots; program 0 completed
         # all 6.
-        assert sorted(
-            shot for i, shot in shots_before_resume if i == 1
-        ) == [0, 1]
-        assert sorted(
-            shot for i, shot in shots_before_resume if i == 0
-        ) == [0, 1, 2, 3, 4, 5]
+        assert sorted(shot for i, shot in shots_before_resume if i == 1) == [
+            0,
+            1,
+        ]
+        assert sorted(shot for i, shot in shots_before_resume if i == 0) == [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+        ]
 
         # Resume recomputes exactly program 1's 4 missing shots; program
         # 0's shots are never recomputed.
         shots_during_resume = list(shot_log)[len(shots_before_resume) :]
-        assert sorted(
-            shot for i, shot in shots_during_resume if i == 1
-        ) == [2, 3, 4, 5]
+        assert sorted(shot for i, shot in shots_during_resume if i == 1) == [
+            2,
+            3,
+            4,
+            5,
+        ]
         assert [shot for i, shot in shots_during_resume if i == 0] == []
 
         # Program 0 is dispatched exactly once (the crash run); program
@@ -1126,6 +1208,7 @@ class TestFaultInjectionRunnerCheckpointing:
         # Manually verify/set up the precondition: program 0 complete,
         # program 1 subdirectory exists but may or may not have results.h5
         from loqs.core import ProgramResults
+
         prog0_shot_ckpt = shot_ckpt / "fault_0"
         assert prog0_shot_ckpt.exists()
         prog0_results = ProgramResults()
@@ -1140,9 +1223,9 @@ class TestFaultInjectionRunnerCheckpointing:
             prog1_results_file.unlink()
 
         # Ensure the precondition is met: program 1 has no results.h5
-        assert not prog1_results_file.exists(), (
-            "Precondition setup failed: program 1 results.h5 should be removed"
-        )
+        assert (
+            not prog1_results_file.exists()
+        ), "Precondition setup failed: program 1 results.h5 should be removed"
 
         # Second run: resume should complete successfully without raising case (d).
         # The cascading logic checks for results.h5; since it doesn't exist,
@@ -1225,7 +1308,9 @@ class TestFaultInjectionRunnerCheckpointing:
                 checkpoint=False,
             )
 
-    def test_checkpoint_without_resume_raises_when_content_exists(self, tmp_path):
+    def test_checkpoint_without_resume_raises_when_content_exists(
+        self, tmp_path
+    ):
         """State machine case (b): checkpoint=True, resume=False, but
         on-disk state already exists raises ValueError."""
         program = _build_counter_program()
@@ -1337,9 +1422,7 @@ class TestFaultInjectionRunnerCheckpointing:
         result = runner2.run()
         assert result is not None
 
-    def test_resume_with_equivalent_expected_outcomes_succeeds(
-        self, tmp_path
-    ):
+    def test_resume_with_equivalent_expected_outcomes_succeeds(self, tmp_path):
         """Resume succeeds when expected_outcomes is passed as an
         equivalent-but-differently-typed sequence."""
         program = _build_counter_program()
@@ -1486,7 +1569,9 @@ class TestProgramOutput:
                 checkpoint_dir=None,
             )
 
-    def test_fault_injection_runner_with_custom_results_filename(self, tmp_path):
+    def test_fault_injection_runner_with_custom_results_filename(
+        self, tmp_path
+    ):
         """FaultInjectionRunner threads results_filename through shot checkpoints."""
         program = _build_counter_program()
         shot_ckpt = tmp_path / "shot_checkpoint"
@@ -1513,7 +1598,9 @@ class TestProgramOutput:
 class TestRunKwargsPassthrough:
     """Test run_kwargs passthrough in FaultInjectionRunner and test_program_output."""
 
-    def test_run_kwargs_roundtrips_via_serialization(self, tmp_path, make_temp_path):
+    def test_run_kwargs_roundtrips_via_serialization(
+        self, tmp_path, make_temp_path
+    ):
         """FaultInjectionRunner with run_kwargs serializes and deserializes correctly."""
         program = _build_counter_program()
         item_ckpt = tmp_path / "item_checkpoint"
@@ -1536,21 +1623,23 @@ class TestRunKwargsPassthrough:
 
     def test_checkpoint_dir_in_run_kwargs_conflicts_with_shot_checkpoint_dir(
         self, tmp_path
-     ):
-         """Raises ValueError when checkpoint_dir appears in both places."""
-         program = _build_counter_program()
-         shot_ckpt = tmp_path / "shot_ckpt"
+    ):
+        """Raises ValueError when checkpoint_dir appears in both places."""
+        program = _build_counter_program()
+        shot_ckpt = tmp_path / "shot_ckpt"
 
-         with pytest.raises(ValueError, match="checkpoint_dir in run_kwargs conflicts"):
-             fttools.FaultInjectionRunner(
-                 errored_programs=[program],
-                 collect_shot_data_args=[("counter", -1)],
-                 expected_outcomes=[1],
-                 num_shots=1,
-                 shot_checkpoint=True,
-                 shot_checkpoint_dir=shot_ckpt,
-                 run_kwargs={"checkpoint_dir": shot_ckpt},
-             )
+        with pytest.raises(
+            ValueError, match="checkpoint_dir in run_kwargs conflicts"
+        ):
+            fttools.FaultInjectionRunner(
+                errored_programs=[program],
+                collect_shot_data_args=[("counter", -1)],
+                expected_outcomes=[1],
+                num_shots=1,
+                shot_checkpoint=True,
+                shot_checkpoint_dir=shot_ckpt,
+                run_kwargs={"checkpoint_dir": shot_ckpt},
+            )
 
     def test_run_kwargs_passed_to_program_run(self, tmp_path):
         """test_program_output forwards run_kwargs to QuantumProgram.run()."""
@@ -1595,7 +1684,7 @@ class TestRunKwargsPassthrough:
 
 
 def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
-    """"Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
+    """ "Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
     rng = np.random.default_rng(seed)
     return Frame({"failed": bool(rng.random() < fail_prob)})
 
@@ -1607,7 +1696,9 @@ class TestHistoryDataCollectorWithDict:
     """Tests that a literal HistoryDataCollector instance can be used directly
     in collect_shot_data_args and survives checkpointing/serialization."""
 
-    def test_literal_history_data_collector_in_runner_serialize(self, tmp_path, make_temp_path):
+    def test_literal_history_data_collector_in_runner_serialize(
+        self, tmp_path, make_temp_path
+    ):
         """FaultInjectionRunner accepts a literal HistoryDataCollector instance."""
         from loqs.core.historydatacollector import HistoryDataCollector
 
@@ -1634,7 +1725,9 @@ class TestHistoryDataCollectorWithDict:
         # Loaded instance should have the same collector
         assert loaded.collect_shot_data_args == [collector]
 
-    def test_literal_history_data_collector_in_noisesweep(self, tmp_path, make_temp_path):
+    def test_literal_history_data_collector_in_noisesweep(
+        self, tmp_path, make_temp_path
+    ):
         """NoiseSweepRunner accepts a literal HistoryDataCollector instance."""
         from loqs.core.historydatacollector import HistoryDataCollector
         from loqs.tools.noisesweeptools import NoiseSweepRunner

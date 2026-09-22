@@ -7,14 +7,14 @@ from loqs.core.syndromelabel import SyndromeLabel
 
 class TestSyndromeLabel:
 
-    def _check(self, l, ql, fi, oi):
-        assert l.qubit_label == ql
-        assert l.frame_idx == fi
-        assert l.outcome_idx == oi
+    def _check(self, label, ql, fi, oi):
+        assert label.qubit_label == ql
+        assert label.frame_idx == fi
+        assert label.outcome_idx == oi
 
     def test_init(self):
-        l = SyndromeLabel("Q0", 1, 2)
-        self._check(l, "Q0", 1, 2)
+        l1 = SyndromeLabel("Q0", 1, 2)
+        self._check(l1, "Q0", 1, 2)
 
         l2 = SyndromeLabel.from_raw(("Q0", 1, 2))
         self._check(l2, "Q0", 1, 2)
@@ -36,11 +36,11 @@ class TestSyndromeLabel:
 
         # An already-built SyndromeLabel is returned as a value-equal
         # instance (not necessarily the same object).
-        l8 = SyndromeLabel.from_raw(l)
+        l8 = SyndromeLabel.from_raw(l1)
         self._check(l8, "Q0", 1, 2)
 
         with pytest.raises(TypeError):
-            SyndromeLabel() # type: ignore
+            SyndromeLabel()  # type: ignore
 
     @pytest.mark.parametrize("format", ["json", "hdf5"])
     def test_syndrome_label_serialization(self, format, make_temp_path):
@@ -48,7 +48,7 @@ class TestSyndromeLabel:
         # Test with all parameters
         label = SyndromeLabel("Q5", 10, 3)
 
-        with make_temp_path(suffix=f'.{format}') as f_path:
+        with make_temp_path(suffix=f".{format}") as f_path:
             label.write(f_path)
             loaded_label = SyndromeLabel.read(f_path)
             self._check(loaded_label, "Q5", 10, 3)

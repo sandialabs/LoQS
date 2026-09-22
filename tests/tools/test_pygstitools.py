@@ -6,7 +6,6 @@ import gc
 import multiprocessing as mp
 import re
 import sys
-import time
 import weakref
 
 import pytest
@@ -32,7 +31,6 @@ from loqs.tools.pygstitools import (
 from _shared_checkpoint_test_helpers import (
     _build_shot_executor,
     _crash_once_and_log_shots,
-    _wait_for_index_checkpointed,
 )
 
 
@@ -112,7 +110,8 @@ def trivial_counter_setup():
 class TestPipelineWithMultiplePatches:
     """`EdesignRunner` against a real two-patch [[7,1,3]] program, confirming
     `frame_filter` picks out each patch's own `"FT Logical Z Measure"` output
-    correctly regardless of the composite instruction's internal frame count."""
+    correctly regardless of the composite instruction's internal frame count.
+    """
 
     @staticmethod
     def _steane_qubits(suffix: str) -> list[str]:
@@ -158,7 +157,9 @@ class TestPipelineWithMultiplePatches:
             qubit_labels=phys_qubits,
             availability={"Gi": [(q,) for q in phys_qubits]},
         )
-        physical_model = create_explicit_model(pspec, ideal_gate_type="full unitary")
+        physical_model = create_explicit_model(
+            pspec, ideal_gate_type="full unitary"
+        )
         circ = Circuit([], line_labels=phys_qubits)
         edesign = ExperimentDesign([circ])
 
@@ -448,7 +449,9 @@ class TestSimulateDatasetForEdesignCheckpointing:
         s.simulate(ckpt=ckpt, collect_shot_data_args=("counter", -1))
 
         # Resume with dict form (semantically identical, differently spelled)
-        ds = s.simulate(ckpt=ckpt, collect_shot_data_args={"key": "counter", "indices": -1})
+        ds = s.simulate(
+            ckpt=ckpt, collect_shot_data_args={"key": "counter", "indices": -1}
+        )
 
         # Verify both circuits' results are correct
         assert ds[s.circs[0]].counts[("0",)] == 1
@@ -458,7 +461,8 @@ class TestSimulateDatasetForEdesignCheckpointing:
         self, trivial_counter_setup, tmp_path
     ):
         """Verify that genuinely different (non-equivalent) collect_shot_data_args
-        values still correctly raise on resume, not just semantically-equivalent ones."""
+        values still correctly raise on resume, not just semantically-equivalent ones.
+        """
         s = trivial_counter_setup
         ckpt = tmp_path / "checkpoint"
         # Run with ("counter", -1)
@@ -485,13 +489,13 @@ class TestSimulateDatasetForEdesignCheckpointing:
         except ValueError as e:
             msg = str(e)
             # Must contain public name "collect_shot_data_args"
-            assert "collect_shot_data_args" in msg, (
-                f"Expected 'collect_shot_data_args' in error message: {msg}"
-            )
+            assert (
+                "collect_shot_data_args" in msg
+            ), f"Expected 'collect_shot_data_args' in error message: {msg}"
             # Must NOT contain private name "_normalized_collect_shot_data_args"
-            assert "_normalized_collect_shot_data_args" not in msg, (
-                f"Error message must not leak private name '_normalized_collect_shot_data_args': {msg}"
-            )
+            assert (
+                "_normalized_collect_shot_data_args" not in msg
+            ), f"Error message must not leak private name '_normalized_collect_shot_data_args': {msg}"
 
     def test_resume_mismatched_physical_to_logical_raises(
         self, trivial_counter_setup, tmp_path
@@ -551,9 +555,8 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         # Assert edesign is not None and is equivalent
         assert runner2.edesign is not None
-        assert (
-            set(runner2.edesign.all_circuits_needing_data)
-            == set(s.edesign.all_circuits_needing_data)
+        assert set(runner2.edesign.all_circuits_needing_data) == set(
+            s.edesign.all_circuits_needing_data
         )
 
         # Assert calling .run() on the round-tripped runner succeeds
@@ -588,9 +591,8 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         # Assert edesign is not None and is equivalent
         assert runner2.edesign is not None
-        assert (
-            set(runner2.edesign.all_circuits_needing_data)
-            == set(s.edesign.all_circuits_needing_data)
+        assert set(runner2.edesign.all_circuits_needing_data) == set(
+            s.edesign.all_circuits_needing_data
         )
 
     def test_resume_mismatched_keep_shot_results_raises(
@@ -687,7 +689,9 @@ class TestSimulateDatasetForEdesignCheckpointing:
         assert ds[s.circs[0]].counts[("0",)] == 2
         assert ds[s.circs[1]].counts[("1",)] == 2
 
-    def test_resume_true_without_checkpoint_raises(self, trivial_counter_setup):
+    def test_resume_true_without_checkpoint_raises(
+        self, trivial_counter_setup
+    ):
         """resume=True requires checkpoint=True, raises ValueError."""
         s = trivial_counter_setup
         with pytest.raises(
@@ -850,6 +854,7 @@ class TestSimulateDatasetForEdesignParallel:
         # Verify both circuits are persisted in the dataset checkpoint file
         assert (ckpt / "dataset.txt").exists()
         from pygsti.io import read_dataset
+
         persisted_ds = read_dataset(str(ckpt / "dataset.txt"), verbosity=0)
         assert len(persisted_ds) == 2
         assert s.circs[0] in persisted_ds
@@ -934,9 +939,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         # Confirm per-circuit subdirs exist and contain checkpoints using the
         # new circ_{index} naming scheme
         subdirs = list(shot_ckpt_dir.iterdir())
-        assert len(subdirs) == 2, (
-            f"Expected 2 circuit subdirs, got {len(subdirs)}: {subdirs}"
-        )
+        assert (
+            len(subdirs) == 2
+        ), f"Expected 2 circuit subdirs, got {len(subdirs)}: {subdirs}"
         assert set(d.name for d in subdirs) == {"circ_0", "circ_1"}
 
         # Verify each circuit's checkpoint subdirectory by index
@@ -946,7 +951,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
             # Confirm the checkpoint file exists and can load the right number of shots
             checkpoint_file = circ_subdir / "results.h5"
-            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+            assert (
+                checkpoint_file.exists()
+            ), f"Missing checkpoint: {checkpoint_file}"
 
             loaded_results = ProgramResults()
             loaded_results.load_checkpoint(checkpoint_dir=circ_subdir)
@@ -992,7 +999,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             circ_subdir = shot_ckpt_dir / f"circ_{circuit_index}"
             assert circ_subdir.exists(), f"Missing subdir: {circ_subdir}"
             checkpoint_file = circ_subdir / "results.h5"
-            assert checkpoint_file.exists(), f"Missing checkpoint: {checkpoint_file}"
+            assert (
+                checkpoint_file.exists()
+            ), f"Missing checkpoint: {checkpoint_file}"
 
             # Confirm the checkpoint can be loaded with the right number of shots
             loaded_results = ProgramResults()
@@ -1002,7 +1011,6 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
     def test_resume_cascades_into_item_partial_shot_checkpoint(
         self, trivial_counter_setup, tmp_path, monkeypatch
     ):
-
         """When an item (circuit) crashes partway through its own shot-level
         checkpoint, a runner-level resume must cascade the resume flag down to
         that item's own QuantumProgram.run() call, causing it to resume from its
@@ -1067,7 +1075,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
 
         original_run_shot_2 = QuantumProgram._run_shot
 
-        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+        def _count_compute_calls_resume(
+            self, max_frame_limit, seed, shot_index
+        ):
             compute_count_on_resume["n"] += 1
             return original_run_shot_2(self, max_frame_limit, seed, shot_index)
 
@@ -1161,19 +1171,28 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             pygstitools._run_one_circuit = original_run_one_circuit
 
         # Item 1 crashed after exactly 2 shots; item 0 completed all 6.
-        assert sorted(
-            shot for i, shot in shots_before_resume if i == 1
-        ) == [0, 1]
-        assert sorted(
-            shot for i, shot in shots_before_resume if i == 0
-        ) == [0, 1, 2, 3, 4, 5]
+        assert sorted(shot for i, shot in shots_before_resume if i == 1) == [
+            0,
+            1,
+        ]
+        assert sorted(shot for i, shot in shots_before_resume if i == 0) == [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+        ]
 
         # Resume recomputes exactly item 1's 4 missing shots; item 0's
         # shots are never recomputed.
         shots_during_resume = list(shot_log)[len(shots_before_resume) :]
-        assert sorted(
-            shot for i, shot in shots_during_resume if i == 1
-        ) == [2, 3, 4, 5]
+        assert sorted(shot for i, shot in shots_during_resume if i == 1) == [
+            2,
+            3,
+            4,
+            5,
+        ]
         assert [shot for i, shot in shots_during_resume if i == 0] == []
 
         # Item 0 is dispatched exactly once (the crash run); item 1
@@ -1241,9 +1260,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
             circ1_results_file.unlink()
 
         # Ensure the precondition is met: circuit 1 has no results.h5
-        assert not circ1_results_file.exists(), (
-            "Precondition setup failed: circuit 1 results.h5 should be removed"
-        )
+        assert (
+            not circ1_results_file.exists()
+        ), "Precondition setup failed: circuit 1 results.h5 should be removed"
 
         # Second run: resume should complete successfully without raising case (d).
         # The cascading logic checks for results.h5; since it doesn't exist,
@@ -1266,7 +1285,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         circ1_results_after.load_checkpoint(circ1_shot_ckpt)
         assert len(circ1_results_after.shot_histories) == 3
 
-    def test_keep_shot_results_end_to_end(self, trivial_counter_setup, tmp_path):
+    def test_keep_shot_results_end_to_end(
+        self, trivial_counter_setup, tmp_path
+    ):
         """EdesignRunner with keep_shot_results=True consolidates per-circuit ProgramResults."""
         s = trivial_counter_setup
         item_checkpoint_dir = tmp_path / "item_ckpt"
@@ -1443,7 +1464,9 @@ class TestSimulateDatasetForEdesignShotCheckpointing:
         compute_count_on_resume = {"n": 0}
         original_run_shot_2 = QuantumProgram._run_shot
 
-        def _count_compute_calls_resume(self, max_frame_limit, seed, shot_index):
+        def _count_compute_calls_resume(
+            self, max_frame_limit, seed, shot_index
+        ):
             compute_count_on_resume["n"] += 1
             return original_run_shot_2(self, max_frame_limit, seed, shot_index)
 

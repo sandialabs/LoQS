@@ -14,7 +14,6 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from functools import singledispatchmethod
-import h5py
 import numpy as np
 from typing import ClassVar, TypeAlias, TypeVar, TYPE_CHECKING, Any
 
@@ -30,10 +29,6 @@ from loqs.backends.reps import (
     is_rep_compatible,
 )
 from loqs.backends.state import BaseQuantumState, OutcomeDict
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
-from loqs.internal.encoder.jsonencoder import JSONEncoder
-from loqs.internal.serializable import Serializable
-from loqs.types import Float
 
 # Conditional imports for STIM
 if TYPE_CHECKING:

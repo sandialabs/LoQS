@@ -51,7 +51,9 @@ class TestObjectBuilderInstruction:
         # fall back to their constructor defaults. This used to crash with
         # an IndexError from the history[-1] lookup on the empty initial
         # history (or a RuntimeError once history was non-empty)
-        program = self._build_program(_Widget, {"instruction": "Init Thing", "size": 3})
+        program = self._build_program(
+            _Widget, {"instruction": "Init Thing", "size": 3}
+        )
         results = program.run()
         widget = results.shot_histories[0][-1]["thing"]
         assert widget.size == 3
@@ -71,7 +73,9 @@ class TestObjectBuilderInstruction:
         # A required constructor param that no source provides must still
         # fail loudly (via the object builder's construction error), not
         # silently produce a broken object
-        program = self._build_program(_Broken, {"instruction": "Init Thing", "size": 3})
+        program = self._build_program(
+            _Broken, {"instruction": "Init Thing", "size": 3}
+        )
         with pytest.raises(ValueError, match="Failed to create object"):
             program.run()
 
@@ -79,7 +83,9 @@ class TestObjectBuilderInstruction:
         # SVState's kraus_sampling/contraction are ordinary
         # positional-or-keyword params with defaults: absent from the label
         # they must default, present in the label kwargs they must apply
-        stack = [{"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}]
+        stack = [
+            {"instruction": "Init State", "state": 1, "qubit_labels": ["Q0"]}
+        ]
         program = QuantumProgram(
             stack, state_type=SVState, name="init state defaults"
         )
@@ -112,7 +118,9 @@ class TestCompositeInstruction:
     """
 
     def _leaf(self):
-        return Instruction(apply_fn=_leaf_apply_needing_model, data={}, name="leaf")
+        return Instruction(
+            apply_fn=_leaf_apply_needing_model, data={}, name="leaf"
+        )
 
     def test_param_priorities_include_nested_instructions_keys(self):
         composite = builders.build_composite_instruction(
@@ -175,11 +183,20 @@ class TestCompositeInstruction:
 class TestPatchBuilderAndRemoverInstructions:
 
     def _code(self):
-        return QECCode(instructions={}, template_qubits=["q0"], template_data_qubits=["q0"])
+        return QECCode(
+            instructions={},
+            template_qubits=["q0"],
+            template_data_qubits=["q0"],
+        )
 
     def test_builder_creates_first_patch_from_none(self):
         inst = builders.build_patch_builder_instruction(self._code())
-        f = inst.apply(new_patch_label="L0", qubits=["Q0"], qec_code=self._code(), patches=None)
+        f = inst.apply(
+            new_patch_label="L0",
+            qubits=["Q0"],
+            qec_code=self._code(),
+            patches=None,
+        )
         patches = f["patches"]
         assert isinstance(patches, PatchLayout)
         assert patches["L0"].qubits == ["Q0"]
@@ -189,14 +206,24 @@ class TestPatchBuilderAndRemoverInstructions:
         inst = builders.build_patch_builder_instruction(code)
         patches = PatchLayout({"L0": code.create_patch(["Q0"])})
         with pytest.raises(AssertionError):
-            inst.apply(new_patch_label="L1", qubits=["Q0"], qec_code=code, patches=patches)
+            inst.apply(
+                new_patch_label="L1",
+                qubits=["Q0"],
+                qec_code=code,
+                patches=patches,
+            )
 
     def test_builder_rejects_duplicate_label(self):
         code = self._code()
         inst = builders.build_patch_builder_instruction(code)
         patches = PatchLayout({"L0": code.create_patch(["Q0"])})
         with pytest.raises(AssertionError):
-            inst.apply(new_patch_label="L0", qubits=["Q1"], qec_code=code, patches=patches)
+            inst.apply(
+                new_patch_label="L0",
+                qubits=["Q1"],
+                qec_code=code,
+                patches=patches,
+            )
 
     def test_remover_removes_patch(self):
         code = self._code()

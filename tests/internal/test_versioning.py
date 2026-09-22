@@ -3,7 +3,10 @@
 import pytest
 
 import loqs.internal.versioning as versioning_module
-from loqs.internal.serializable import DecodableVersionError, SERIALIZATION_VERSION
+from loqs.internal.serializable import (
+    DecodableVersionError,
+    SERIALIZATION_VERSION,
+)
 from loqs.internal.versioning import _ALL_VERSIONED_DECODERS, VersionedDecoder
 
 

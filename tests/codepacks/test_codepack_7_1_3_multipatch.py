@@ -11,7 +11,7 @@ from loqs.backends import (
     STIMQuantumState,
     StimCircuitGateRep,
 )
-from loqs.core import PatchGeometry, QuantumProgram
+from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
@@ -70,7 +70,7 @@ def make_program(stack, all_qubits, code=None):
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
-        stack,
+        InstructionStack(stack),
         default_noise_model=model,
         state_type=STIMQuantumState,
         patch_types={"Steane": code},
@@ -386,13 +386,19 @@ class TestExhaustiveFaultInjectionAcrossCx:
         )
         runner = fttools.FaultInjectionRunner(
             errored_programs=injected,
-            collect_shot_data_args=[{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
+            collect_shot_data_args=[
+                {
+                    "key": "logical_measurement",
+                    "indices": "all",
+                    "strip_none_entries": True,
+                }
+            ],
             expected_outcomes=[[0, 0]],
         )
         failed = runner.run()
-        assert len(failed) == 0, (
-            f"{len(failed)} pre-gate fault(s) not corrected"
-        )
+        assert (
+            len(failed) == 0
+        ), f"{len(failed)} pre-gate fault(s) not corrected"
 
     def test_weight2_post_gate_correlated_faults(self):
         """Every correlated weight-2 fault after each of the CX's 7 Gcnots."""
@@ -406,10 +412,16 @@ class TestExhaustiveFaultInjectionAcrossCx:
         )
         runner = fttools.FaultInjectionRunner(
             errored_programs=injected,
-            collect_shot_data_args=[{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
+            collect_shot_data_args=[
+                {
+                    "key": "logical_measurement",
+                    "indices": "all",
+                    "strip_none_entries": True,
+                }
+            ],
             expected_outcomes=[[0, 0]],
         )
         failed = runner.run()
-        assert len(failed) == 0, (
-            f"{len(failed)} post-gate fault(s) not corrected"
-        )
+        assert (
+            len(failed) == 0
+        ), f"{len(failed)} post-gate fault(s) not corrected"

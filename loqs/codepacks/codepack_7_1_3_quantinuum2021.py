@@ -17,7 +17,6 @@ Thus, we will have 10 qubits total: 7 data and 3 auxiliary.
 """
 
 from collections.abc import Sequence
-import copy
 import itertools
 from typing import Mapping
 import numpy as np
@@ -41,13 +40,11 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.recordables import QECCodePatch
 from loqs.core.recordables.measurementoutcomes import MeasurementOutcomes
 from loqs.core.recordables.patchlayout import PatchLayout
-import loqs.tools.qectools as qt
 
 
-def create_qec_code(
+def create_qec_code(  # noqa: C901 -- constructs [[7,1,3]] QEC code with multiple conditional paths for state prep, logical gates, and measurements
     ft_state_prep_max_repeats: int = 100,
     include_idles: bool = False,
     gate_durations: dict[str, int | float] | None = None,
@@ -1059,6 +1056,7 @@ def create_ideal_model(  # noqa: C901
         gate_dict = {}
         for gate in gate_names:
             U = standard_unitaries.get(gate, nonstd_unitaries.get(gate))
+            assert U is not None
             num_qubits = int(np.log2(U.shape[0]))
             for qs in itertools.permutations(qubits, r=num_qubits):
                 gate_dict[(gate, qs)] = convert_rep(

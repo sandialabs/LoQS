@@ -127,22 +127,22 @@ class TestProgramResults:
     def test_add_shot(self):
         """Test adding shots to ProgramResults."""
         results = ProgramResults()
-        
+
         # Create a simple history
         history = History()
         frame = Frame({"test_key": "test_value"})
         history.append(frame)
-        
+
         results.add_shot(0, history)
         assert len(results.shot_histories) == 1
         assert 0 in results.shot_histories
         assert 0 in results._unwritten_shots
-        
+
         # Add another shot
         history2 = History()
         frame2 = Frame({"test_key2": "test_value2"})
         history2.append(frame2)
-        
+
         results.add_shot(1, history2)
         assert len(results.shot_histories) == 2
         assert 1 in results.shot_histories
@@ -151,28 +151,33 @@ class TestProgramResults:
     def test_collect_shot_data(self):
         """Test collecting data from multiple shots."""
         results = ProgramResults()
-        
+
         # Create multiple histories with test data
         for i in range(3):
             history = History()
             frame = Frame({"counter": i, "test": f"value_{i}"})
             history.append(frame)
             results.add_shot(i, history)
-        
+
         # Test collecting counter data - use "all" instead of None
-        counter_data = results.collect_shot_data("counter", "all", strip_none_entries=False)
+        counter_data = results.collect_shot_data(
+            "counter", "all", strip_none_entries=False
+        )
         assert len(counter_data) == 3
         # collect_data returns a list of results per shot, each shot has one frame with the counter value
         assert counter_data == [[0], [1], [2]]
-        
+
         # Test collecting test data
-        test_data = results.collect_shot_data("test", "all", strip_none_entries=False)
+        test_data = results.collect_shot_data(
+            "test", "all", strip_none_entries=False
+        )
         assert len(test_data) == 3
         assert test_data == [["value_0"], ["value_1"], ["value_2"]]
 
     def test_collect_shot_data_frame_filter_and_strip_none_entries(self):
         """`frame_filter`/`strip_none_entries` are forwarded to each shot's
-        `History.collect_data` call, not swallowed at the `ProgramResults` level."""
+        `History.collect_data` call, not swallowed at the `ProgramResults` level.
+        """
         results = ProgramResults()
 
         for i in range(3):
@@ -197,14 +202,14 @@ class TestProgramResults:
     def test_mark_shots_as_written(self):
         """Test marking shots as written to checkpoint."""
         results = ProgramResults()
-        
+
         # Add some shots
         for i in range(3):
             history = History()
             results.add_shot(i, history)
-        
+
         assert len(results._unwritten_shots) == 3
-        
+
         # Mark some shots as written
         results.mark_shots_as_written([0, 2])
         assert len(results._unwritten_shots) == 1
@@ -215,16 +220,16 @@ class TestProgramResults:
     def test_get_unwritten_shots(self):
         """Test getting list of unwritten shots."""
         results = ProgramResults()
-        
+
         # Add some shots
         for i in range(3):
             history = History()
             results.add_shot(i, history)
-        
+
         unwritten = results.get_unwritten_shots()
         assert len(unwritten) == 3
         assert set(unwritten) == {0, 1, 2}
-        
+
         # Mark some as written
         results.mark_shots_as_written([1])
         unwritten = results.get_unwritten_shots()
@@ -234,20 +239,22 @@ class TestProgramResults:
     def test_serialization(self):
         """Test ProgramResults serialization and deserialization."""
         results = ProgramResults(name="Test Serialization")
-        
+
         # Add some shots
         for i in range(2):
             history = History()
             frame = Frame({"test": f"value_{i}"})
             history.append(frame)
             results.add_shot(i, history)
-        
+
         # Test encoding using Serializable.encode
-        encoded = Serializable.encode(results, format="json", reset_encode_id=True)
+        encoded = Serializable.encode(
+            results, format="json", reset_encode_id=True
+        )
         assert "shot_histories" in encoded
         assert "_unwritten_shots" in encoded
         assert "name" in encoded
-        
+
         # Test decoding using Serializable.decode
         decoded_results = Serializable.decode(encoded, format="json")
         assert isinstance(decoded_results, ProgramResults)
@@ -345,7 +352,9 @@ class TestProgramResults:
     def test_lazy_loading(self):
         """Test lazy loading functionality."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            results = ProgramResults(name="Lazy Loading Test", max_memory_shots=2)
+            results = ProgramResults(
+                name="Lazy Loading Test", max_memory_shots=2
+            )
 
             for i in range(5):
                 history = History()
@@ -389,7 +398,9 @@ class TestProgramResults:
                     frame = Frame({"batch": batch_idx, "shot": shot_in_batch})
                     history.append(frame)
                     results.add_shot(shot_index, history)
-                results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+                results.checkpoint(
+                    checkpoint_dir=checkpoint_dir, worker_id="w0"
+                )
 
             assert len(results._unwritten_shots) == 0
 
@@ -450,13 +461,15 @@ class TestProgramResults:
 
             for i in range(3):
                 history = History()
-                frame = Frame({
-                    "int_data": i,
-                    "float_data": float(i) * 1.5,
-                    "string_data": f"string_{i}",
-                    "bool_data": i % 2 == 0,
-                    "array_data": np.array([i, i+1, i+2])
-                })
+                frame = Frame(
+                    {
+                        "int_data": i,
+                        "float_data": float(i) * 1.5,
+                        "string_data": f"string_{i}",
+                        "bool_data": i % 2 == 0,
+                        "array_data": np.array([i, i + 1, i + 2]),
+                    }
+                )
                 history.append(frame)
                 results.add_shot(i, history)
 
@@ -474,14 +487,14 @@ class TestProgramResults:
                 history = new_results.shot_histories[i]
                 frame = history[0]
                 assert frame["int_data"] == i
-                assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6 # type: ignore
+                assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6  # type: ignore
                 assert frame["string_data"] == f"string_{i}"
                 assert frame["bool_data"] == (i % 2 == 0)
                 array_data = frame["array_data"]
                 if isinstance(array_data, list):
-                    assert array_data == [i, i+1, i+2]
+                    assert array_data == [i, i + 1, i + 2]
                 else:
-                    assert np.array_equal(array_data, np.array([i, i+1, i+2])) # type: ignore
+                    assert np.array_equal(array_data, np.array([i, i + 1, i + 2]))  # type: ignore
 
     def test_checkpoint_error_handling(self):
         """Loading from / consolidating an empty or non-existent checkpoint
@@ -593,7 +606,10 @@ class TestProgramResults:
             results.checkpoint(checkpoint_dir=checkpoint_dir)
 
             # Verify no checkpoint files were created
-            assert not checkpoint_dir.exists() or len(list(checkpoint_dir.glob("*.h5"))) == 0
+            assert (
+                not checkpoint_dir.exists()
+                or len(list(checkpoint_dir.glob("*.h5"))) == 0
+            )
 
             # Load from empty checkpoint - should not raise errors
             results.load_checkpoint(checkpoint_dir=checkpoint_dir)
@@ -610,7 +626,9 @@ class TestProgramResults:
                 for i in range(2):
                     global_shot_idx = worker_id * 2 + i
                     history = History()
-                    frame = Frame({"worker": worker_id, "shot": global_shot_idx})
+                    frame = Frame(
+                        {"worker": worker_id, "shot": global_shot_idx}
+                    )
                     history.append(frame)
                     results.add_shot(global_shot_idx, history)
                 results.checkpoint(
@@ -625,7 +643,9 @@ class TestProgramResults:
                 checkpoint_dir=checkpoint_dir, delete_originals=True
             )
 
-            remaining_worker_files = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
+            remaining_worker_files = list(
+                checkpoint_dir.glob("worker_*_checkpoint.h5")
+            )
             assert len(remaining_worker_files) == 0
 
             assert output_file.exists()
@@ -633,214 +653,263 @@ class TestProgramResults:
             consolidated_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert len(consolidated_results.shot_histories) == 4
 
-
     def test_comprehensive_serialization(self, make_temp_path):
         """Test comprehensive ProgramResults serialization with different formats and edge cases."""
-        
+
         def test_serialization_format(format_name):
             """Test serialization for a specific format."""
             results = ProgramResults(name="Comprehensive Serialization Test")
-            
+
             # Add shots with various data types to test complex serialization
             for i in range(3):
                 history = History()
-                frame = Frame({
-                    "int_data": i,
-                    "float_data": float(i) * 1.5,
-                    "string_data": f"test_string_{i}",
-                    "bool_data": i % 2 == 0,
-                    "list_data": [i, i+1, i+2],
-                    "dict_data": {"nested": f"value_{i}", "number": i}
-                })
+                frame = Frame(
+                    {
+                        "int_data": i,
+                        "float_data": float(i) * 1.5,
+                        "string_data": f"test_string_{i}",
+                        "bool_data": i % 2 == 0,
+                        "list_data": [i, i + 1, i + 2],
+                        "dict_data": {"nested": f"value_{i}", "number": i},
+                    }
+                )
                 history.append(frame)
                 results.add_shot(i, history)
-            
+
             # Mark some shots as written to test _unwritten_shots serialization
             results.mark_shots_as_written([1])
-            
+
             if format_name == "hdf5":
                 # For HDF5, handle everything in one file context
                 with make_temp_path(suffix=".h5") as temp_path:
-                    with h5py.File(temp_path, 'w') as h5_file:
-                        root_group = h5_file.create_group('root')
-                        
+                    with h5py.File(temp_path, "w") as h5_file:
+                        root_group = h5_file.create_group("root")
+
                         # Test encoding
-                        encoded = Serializable.encode(results, format=format_name, h5_group=root_group, reset_encode_id=True)
-                        
+                        encoded = Serializable.encode(
+                            results,
+                            format=format_name,
+                            h5_group=root_group,
+                            reset_encode_id=True,
+                        )
+
                         # Verify all expected attributes are present
                         assert isinstance(encoded, h5py.Group)
                         assert "encode_type" in encoded.attrs
                         assert encoded.attrs["encode_type"] == "Serializable"
                         assert "class" in encoded.attrs
                         assert encoded.attrs["class"] == "ProgramResults"
-                        
+
                         # Test decoding
-                        decoded_results = Serializable.decode(encoded, format=format_name)
+                        decoded_results = Serializable.decode(
+                            encoded, format=format_name
+                        )
                         assert isinstance(decoded_results, ProgramResults)
-                        
+
                         # Verify decoded object has correct properties
-                        assert decoded_results.name == "Comprehensive Serialization Test"
+                        assert (
+                            decoded_results.name
+                            == "Comprehensive Serialization Test"
+                        )
                         assert len(decoded_results.shot_histories) == 3
-                        assert len(decoded_results._unwritten_shots) == 2  # Only shots 0 and 2 should be unwritten
+                        assert (
+                            len(decoded_results._unwritten_shots) == 2
+                        )  # Only shots 0 and 2 should be unwritten
                         assert 0 in decoded_results._unwritten_shots
                         assert 2 in decoded_results._unwritten_shots
                         assert 1 not in decoded_results._unwritten_shots
-                        
+
                         # Verify shot data is preserved correctly
                         for i in range(3):
                             assert i in decoded_results.shot_histories
                             history = decoded_results.shot_histories[i]
                             assert len(history) == 1
                             frame = history[0]
-                            
+
                             assert frame["int_data"] == i
-                            assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6 # type: ignore
+                            assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6  # type: ignore
                             assert frame["string_data"] == f"test_string_{i}"
                             assert frame["bool_data"] == (i % 2 == 0)
-                            assert frame["list_data"] == [i, i+1, i+2]
-                            assert frame["dict_data"] == {"nested": f"value_{i}", "number": i}
-                        
+                            assert frame["list_data"] == [i, i + 1, i + 2]
+                            assert frame["dict_data"] == {
+                                "nested": f"value_{i}",
+                                "number": i,
+                            }
+
                         # Test round-trip serialization
-                        re_encoded = Serializable.encode(decoded_results, format=format_name, h5_group=root_group, reset_encode_id=False) # False to avoid key collision
-                        re_decoded = Serializable.decode(re_encoded, format=format_name)
+                        re_encoded = Serializable.encode(
+                            decoded_results,
+                            format=format_name,
+                            h5_group=root_group,
+                            reset_encode_id=False,
+                        )  # False to avoid key collision
+                        re_decoded = Serializable.decode(
+                            re_encoded, format=format_name
+                        )
                         assert isinstance(re_decoded, ProgramResults)
-                        
-                        assert re_decoded.name == "Comprehensive Serialization Test"
+
+                        assert (
+                            re_decoded.name
+                            == "Comprehensive Serialization Test"
+                        )
                         assert len(re_decoded.shot_histories) == 3
                         assert len(re_decoded._unwritten_shots) == 2
             else:
                 # Test encoding
-                encoded = Serializable.encode(results, format=format_name, reset_encode_id=True)
-                
+                encoded = Serializable.encode(
+                    results, format=format_name, reset_encode_id=True
+                )
+
                 # Verify all expected attributes are present
                 assert "shot_histories" in encoded
                 assert "_unwritten_shots" in encoded
                 assert "name" in encoded
-                
+
                 # Verify the data structure
                 assert isinstance(encoded, dict)
                 assert encoded["encode_type"] == "Serializable"
                 assert encoded["class"] == "ProgramResults"
                 assert encoded["module"] == "loqs.core.programresults"
-                
+
                 # Test decoding
-                decoded_results = Serializable.decode(encoded, format=format_name)
+                decoded_results = Serializable.decode(
+                    encoded, format=format_name
+                )
                 assert isinstance(decoded_results, ProgramResults)
-                
+
                 # Verify decoded object has correct properties
-                assert decoded_results.name == "Comprehensive Serialization Test"
+                assert (
+                    decoded_results.name == "Comprehensive Serialization Test"
+                )
                 assert len(decoded_results.shot_histories) == 3
-                assert len(decoded_results._unwritten_shots) == 2  # Only shots 0 and 2 should be unwritten
+                assert (
+                    len(decoded_results._unwritten_shots) == 2
+                )  # Only shots 0 and 2 should be unwritten
                 assert 0 in decoded_results._unwritten_shots
                 assert 2 in decoded_results._unwritten_shots
                 assert 1 not in decoded_results._unwritten_shots
-                
+
                 # Verify shot data is preserved correctly
                 for i in range(3):
                     assert i in decoded_results.shot_histories
                     history = decoded_results.shot_histories[i]
                     assert len(history) == 1
                     frame = history[0]
-                    
+
                     assert frame["int_data"] == i
-                    assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6 # type: ignore
+                    assert abs(frame["float_data"] - (float(i) * 1.5)) < 1e-6  # type: ignore
                     assert frame["string_data"] == f"test_string_{i}"
                     assert frame["bool_data"] == (i % 2 == 0)
-                    assert frame["list_data"] == [i, i+1, i+2]
-                    assert frame["dict_data"] == {"nested": f"value_{i}", "number": i}
-                
+                    assert frame["list_data"] == [i, i + 1, i + 2]
+                    assert frame["dict_data"] == {
+                        "nested": f"value_{i}",
+                        "number": i,
+                    }
+
                 # Test round-trip serialization
-                re_encoded = Serializable.encode(decoded_results, format=format_name, reset_encode_id=True)
-                re_decoded = Serializable.decode(re_encoded, format=format_name)
+                re_encoded = Serializable.encode(
+                    decoded_results, format=format_name, reset_encode_id=True
+                )
+                re_decoded = Serializable.decode(
+                    re_encoded, format=format_name
+                )
                 assert isinstance(re_decoded, ProgramResults)
-                
+
                 assert re_decoded.name == "Comprehensive Serialization Test"
                 assert len(re_decoded.shot_histories) == 3
                 assert len(re_decoded._unwritten_shots) == 2
-        
+
         test_serialization_format("json")
         test_serialization_format("hdf5")
 
     def test_serialization_edge_cases(self):
         """Test serialization edge cases and error conditions."""
-        
+
         # Test empty ProgramResults
         empty_results = ProgramResults()
-        encoded = Serializable.encode(empty_results, format="json", reset_encode_id=True)
+        encoded = Serializable.encode(
+            empty_results, format="json", reset_encode_id=True
+        )
         decoded = Serializable.decode(encoded, format="json")
         assert isinstance(decoded, ProgramResults)
-        
+
         assert decoded.name == "(Unnamed program results)"
         assert len(decoded.shot_histories) == 0
         assert len(decoded._unwritten_shots) == 0
-        
+
         # Test ProgramResults with only unwritten shots
         results = ProgramResults(name="Unwritten Only")
         for i in range(2):
             history = History()
             history.append(Frame({"test": i}))
             results.add_shot(i, history)
-        
-        encoded = Serializable.encode(results, format="json", reset_encode_id=True)
+
+        encoded = Serializable.encode(
+            results, format="json", reset_encode_id=True
+        )
         decoded = Serializable.decode(encoded, format="json")
         assert isinstance(decoded, ProgramResults)
-        
+
         assert len(decoded._unwritten_shots) == 2
         assert 0 in decoded._unwritten_shots
         assert 1 in decoded._unwritten_shots
-        
+
         # Test ProgramResults with only written shots (all marked as written)
         results = ProgramResults(name="Written Only")
         for i in range(2):
             history = History()
             history.append(Frame({"test": i}))
             results.add_shot(i, history)
-        
+
         results.mark_shots_as_written([0, 1])
-        
-        encoded = Serializable.encode(results, format="json", reset_encode_id=True)
+
+        encoded = Serializable.encode(
+            results, format="json", reset_encode_id=True
+        )
         decoded = Serializable.decode(encoded, format="json")
         assert isinstance(decoded, ProgramResults)
-        
+
         assert len(decoded._unwritten_shots) == 0
         assert len(decoded.shot_histories) == 2
 
     def test_serialization_with_file_io(self):
         """Test serialization using file I/O methods."""
-        
+
         def test_file_io_format(format_name, file_extension):
             """Test file I/O for a specific format."""
             results = ProgramResults(name="File IO Test")
-            
+
             # Add some test data
             for i in range(2):
                 history = History()
                 frame = Frame({"file_test": f"value_{i}"})
                 history.append(frame)
                 results.add_shot(i, history)
-            
+
             with tempfile.TemporaryDirectory() as temp_dir:
                 file_path = Path(temp_dir) / f"test_results.{file_extension}"
-                
+
                 # Write to file
                 results.write(file_path, format=format_name)
-                
+
                 # Verify file exists
                 assert file_path.exists()
-                
+
                 # Read from file
-                loaded_results = Serializable.read(file_path, format=format_name)
+                loaded_results = Serializable.read(
+                    file_path, format=format_name
+                )
                 assert isinstance(loaded_results, ProgramResults)
-                
+
                 # Verify loaded data
                 assert loaded_results.name == "File IO Test"
                 assert len(loaded_results.shot_histories) == 2
                 assert len(loaded_results._unwritten_shots) == 2
-                
+
                 for i in range(2):
                     history = loaded_results.shot_histories[i]
                     assert history[0]["file_test"] == f"value_{i}"
-        
+
         # Test different file formats
         test_file_io_format("json", "json")
         test_file_io_format("json.gz", "json.gz")
@@ -855,9 +924,7 @@ class TestProgramResults:
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
 
-            results = ProgramResults(
-                name="Memory Test", lazy_loading=False
-            )
+            results = ProgramResults(name="Memory Test", lazy_loading=False)
             for i in range(num_shots):
                 history = History()
                 history.append(
@@ -889,7 +956,9 @@ class TestProgramResults:
 
             # Every decode call must materialize at most one shot's History
             # at a time, never the whole file's shot_histories dict at once.
-            assert decoded_shot_counts, "Serializable.decode was never spied on"
+            assert (
+                decoded_shot_counts
+            ), "Serializable.decode was never spied on"
             assert max(decoded_shot_counts) == 1, (
                 f"Expected every decode call to materialize at most one "
                 f"shot at a time, but saw counts {decoded_shot_counts} -- "
@@ -902,9 +971,7 @@ class TestProgramResults:
 
             reloaded = ProgramResults()
             reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(reloaded.shot_histories.keys()) == set(
-                range(num_shots)
-            )
+            assert set(reloaded.shot_histories.keys()) == set(range(num_shots))
 
     def test_consolidate_checkpoints_with_dedup_lazily_pulls_entries(self):
         """Consolidation with deduplication (crash-recovery retry case) must
@@ -984,14 +1051,17 @@ class TestProgramResults:
                     real_write_shot_entries(self, h5_file, [entry])
                     decoded_count_at_write.append(decoded_count[0])
 
-            with unittest.mock.patch.object(
-                programresults_module,
-                "iter_dict_attr_entries",
-                spy_iter_dict_attr_entries,
-            ), unittest.mock.patch.object(
-                ProgramResults,
-                "_write_shot_entries",
-                spy_write_shot_entries,
+            with (
+                unittest.mock.patch.object(
+                    programresults_module,
+                    "iter_dict_attr_entries",
+                    spy_iter_dict_attr_entries,
+                ),
+                unittest.mock.patch.object(
+                    ProgramResults,
+                    "_write_shot_entries",
+                    spy_write_shot_entries,
+                ),
             ):
                 consolidator2 = ProgramResults()
                 consolidator2.consolidate_checkpoints(
@@ -1009,9 +1079,7 @@ class TestProgramResults:
             # Verify the consolidation actually worked (all shots present)
             reloaded = ProgramResults()
             reloaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
-            assert set(reloaded.shot_histories.keys()) == set(
-                range(num_shots)
-            )
+            assert set(reloaded.shot_histories.keys()) == set(range(num_shots))
 
     def test_load_checkpoint_restores_metadata_fields(self):
         """When loading from a checkpoint file, metadata fields (name,
@@ -1078,9 +1146,7 @@ class TestConcurrentCheckpointing:
 
             # Every worker got its own file -- no shared-file contention,
             # and therefore nothing for two processes to race over.
-            worker_files = list(
-                checkpoint_dir.glob("worker_*_checkpoint.h5")
-            )
+            worker_files = list(checkpoint_dir.glob("worker_*_checkpoint.h5"))
             assert len(worker_files) == num_workers
 
             consolidated = ProgramResults()
@@ -1103,7 +1169,8 @@ class TestParentProgramFileWriting:
     """Test parent program file writing with correct checkpoint_dir handling."""
 
     @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
+        os.getenv("CI", "false") == "true",
+        reason="Requires QuantumProgram dependencies",
     )
     def test_parent_program_writes_to_specified_checkpoint_dir(self, tmp_path):
         """Regression test: results.h5 (containing the whole ProgramResults)
@@ -1121,9 +1188,21 @@ class TestParentProgramFileWriting:
         ideal_model = trivial_codepack.create_ideal_model(qubits)
 
         stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
-            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            {
+                "instruction": "Init Counter",
+                "patch_label": "L0",
+                "initial_value": 0,
+            },
         ]
 
         program = QuantumProgram(
@@ -1131,7 +1210,7 @@ class TestParentProgramFileWriting:
             default_noise_model=ideal_model,
             state_type=QSimQuantumState,
             patch_types={"Trivial": trivial_code},
-            name="Test program for parent file writing"
+            name="Test program for parent file writing",
         )
 
         # Create ProgramResults with explicit checkpoint_dir
@@ -1151,7 +1230,8 @@ class TestParentProgramFileWriting:
         assert results_file.name == "results.h5"
 
     @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
+        os.getenv("CI", "false") == "true",
+        reason="Requires QuantumProgram dependencies",
     )
     def test_parent_program_reuses_existing_results_h5(self, tmp_path):
         """When results.h5 already exists, a second ProgramResults construction
@@ -1168,9 +1248,21 @@ class TestParentProgramFileWriting:
         ideal_model = trivial_codepack.create_ideal_model(qubits)
 
         stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
-            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            {
+                "instruction": "Init Counter",
+                "patch_label": "L0",
+                "initial_value": 0,
+            },
         ]
 
         program = QuantumProgram(
@@ -1178,7 +1270,7 @@ class TestParentProgramFileWriting:
             default_noise_model=ideal_model,
             state_type=QSimQuantumState,
             patch_types={"Trivial": trivial_code},
-            name="Test program for results.h5 reuse"
+            name="Test program for results.h5 reuse",
         )
 
         checkpoint_dir = tmp_path / "collide_test"
@@ -1212,7 +1304,8 @@ class TestParentProgramFileWriting:
         assert mtime1 == mtime2
 
     @pytest.mark.skipif(
-        os.getenv("CI", "false") == "true", reason="Requires QuantumProgram dependencies"
+        os.getenv("CI", "false") == "true",
+        reason="Requires QuantumProgram dependencies",
     )
     def test_checkpoint_encode_cache_references_shared_parent_program(
         self, tmp_path
@@ -1234,9 +1327,21 @@ class TestParentProgramFileWriting:
         qubits = ["Q0"]
         ideal_model = trivial_codepack.create_ideal_model(qubits)
         stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
-            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            {
+                "instruction": "Init Counter",
+                "patch_label": "L0",
+                "initial_value": 0,
+            },
         ]
         program = QuantumProgram(
             stack,
@@ -1303,7 +1408,8 @@ class TestParentProgramFileWriting:
         program_sources = [
             n
             for n in cache_nodes
-            if n.get("class") == "QuantumProgram" and n.get("cache_type") == "source"
+            if n.get("class") == "QuantumProgram"
+            and n.get("cache_type") == "source"
         ]
         assert len(program_sources) == 1, (
             "Expected exactly one QuantumProgram source node (parent_program "
@@ -1397,7 +1503,9 @@ class TestResumeCheckpointing:
                     history = History()
                     history.append(Frame({"source": f"worker{w}", "idx": i}))
                     results_w.add_shot(i, history)
-                results_w.checkpoint(checkpoint_dir=checkpoint_dir, worker_id=f"w{w}")
+                results_w.checkpoint(
+                    checkpoint_dir=checkpoint_dir, worker_id=f"w{w}"
+                )
 
             # Load done shots
             done = ProgramResults._load_done_shots(checkpoint_dir)
@@ -1634,9 +1742,7 @@ class TestResumeCheckpointing:
                 flaky_get_dict_attr_keys,
             )
 
-            indices = pr_read._get_available_shot_indices(
-                expected_num_shots=2
-            )
+            indices = pr_read._get_available_shot_indices(expected_num_shots=2)
             assert indices == [0, 1]
             assert call_count["n"] > 2
 
@@ -1669,9 +1775,7 @@ class TestResumeCheckpointing:
                 streamingmerge_module, "get_dict_attr_keys", always_stale
             )
 
-            indices = pr_read._get_available_shot_indices(
-                expected_num_shots=2
-            )
+            indices = pr_read._get_available_shot_indices(expected_num_shots=2)
             assert indices == [0, 1]
 
     def test_load_shot_from_checkpoint_retries_transient_key_error_then_succeeds(
@@ -1821,9 +1925,9 @@ class TestResumeCheckpointing:
 
             # Verify only shot 5's own subtree was decoded: every decoded
             # group must live at or below shot 5's own iterable entry.
-            assert decoded_group_names, (
-                "Expected at least one h5py.Group to be decoded for shot 5"
-            )
+            assert (
+                decoded_group_names
+            ), "Expected at least one h5py.Group to be decoded for shot 5"
             shot_index_pattern = re.compile(
                 r"/shot_histories/dict/values/iterable/(\d+)(?:/|$)"
             )
@@ -1962,13 +2066,17 @@ class TestResumeCheckpointing:
                     decoded_source_names.append(source.name)
                 return real_decode(source, *args, **kwargs)
 
-            with unittest.mock.patch.object(
-                Serializable, "decode", side_effect=spy_decode
-            ), unittest.mock.patch.object(
-                programresults_module, "get_dict_attr_value"
-            ) as mock_get_value, unittest.mock.patch.object(
-                programresults_module, "iter_dict_attr_entries"
-            ) as mock_iter_entries:
+            with (
+                unittest.mock.patch.object(
+                    Serializable, "decode", side_effect=spy_decode
+                ),
+                unittest.mock.patch.object(
+                    programresults_module, "get_dict_attr_value"
+                ) as mock_get_value,
+                unittest.mock.patch.object(
+                    programresults_module, "iter_dict_attr_entries"
+                ) as mock_iter_entries,
+            ):
                 assert nested_pr.name == "RealName"
 
             assert not any(
@@ -2115,7 +2223,9 @@ class TestResumeCheckpointing:
                 history = History()
                 history.append(Frame({"index": i}))
                 pr2.add_shot(i, history)
-            pr2.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="test_worker")
+            pr2.checkpoint(
+                checkpoint_dir=checkpoint_dir, worker_id="test_worker"
+            )
 
             # Count should now be 7 (union of both files)
             count = ProgramResults._count_done_shots(checkpoint_dir)
@@ -2154,7 +2264,9 @@ class TestResumeCheckpointing:
 
                 stack = traceback.extract_stack()
                 # Count how many times Serializable.decode appears in the stack.
-                decode_frames = [f for f in stack if "Serializable.decode" in f.line]
+                decode_frames = [
+                    f for f in stack if "Serializable.decode" in f.line
+                ]
                 if len(decode_frames) > 1:
                     # This is a recursive decode (a History value being decoded
                     # inside a parent decode). This should NOT happen in _count_done_shots.
@@ -2232,7 +2344,9 @@ class TestResumeCheckpointing:
 
                 stack = traceback.extract_stack()
                 # Count how many times Serializable.decode appears in the stack.
-                decode_frames = [f for f in stack if "Serializable.decode" in f.line]
+                decode_frames = [
+                    f for f in stack if "Serializable.decode" in f.line
+                ]
                 if len(decode_frames) > 1:
                     # Recursive decode: a History value being decoded inside
                     # a parent. Should NOT happen in _load_done_shot_indices.
@@ -2245,7 +2359,9 @@ class TestResumeCheckpointing:
             with unittest.mock.patch.object(
                 Serializable, "decode", side_effect=decode_trap
             ):
-                indices = ProgramResults._load_done_shot_indices(checkpoint_dir)
+                indices = ProgramResults._load_done_shot_indices(
+                    checkpoint_dir
+                )
                 # If we get here without an AssertionError, the method
                 # successfully avoided decoding any History values.
                 assert indices == {0, 1, 2, 3, 4}
@@ -2356,7 +2472,9 @@ class TestResumeCheckpointing:
                 assert i in done_shots
                 assert isinstance(done_shots[i], History)
 
-    def test_consolidate_into_already_populated_results_h5_is_memory_bounded(self):
+    def test_consolidate_into_already_populated_results_h5_is_memory_bounded(
+        self,
+    ):
         """Consolidating a worker file into an already-populated results.h5
         must decode shots one at a time, even with prior content to read
         past -- combining the fresh-empty-output and already-populated-
@@ -2367,9 +2485,7 @@ class TestResumeCheckpointing:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
 
             # First consolidation: create initial results.h5 with some shots
-            results1 = ProgramResults(
-                name="Batch 1", lazy_loading=False
-            )
+            results1 = ProgramResults(name="Batch 1", lazy_loading=False)
             for i in range(num_shots_batch1):
                 history = History()
                 history.append(
@@ -2393,10 +2509,10 @@ class TestResumeCheckpointing:
             )
 
             # Second consolidation: create a second worker file with more shots
-            results2 = ProgramResults(
-                name="Batch 2", lazy_loading=False
-            )
-            for i in range(num_shots_batch1, num_shots_batch1 + num_shots_batch2):
+            results2 = ProgramResults(name="Batch 2", lazy_loading=False)
+            for i in range(
+                num_shots_batch1, num_shots_batch1 + num_shots_batch2
+            ):
                 history = History()
                 history.append(
                     Frame({"shot_id": i, "array": np.array([i, i + 1])})
@@ -2429,7 +2545,9 @@ class TestResumeCheckpointing:
 
             # Memory-boundedness: every decode call in this second pass must
             # materialize at most one shot, despite results.h5's prior content.
-            assert decoded_shot_counts, "Serializable.decode was never spied on"
+            assert (
+                decoded_shot_counts
+            ), "Serializable.decode was never spied on"
             assert max(decoded_shot_counts) == 1, (
                 f"Expected every decode call to materialize at most one "
                 f"shot at a time, but saw counts {decoded_shot_counts} -- "
@@ -2542,7 +2660,17 @@ class TestResumeCheckpointing:
         # Verify all shots are now present
         result2 = ProgramResults()
         result2.load_checkpoint(checkpoint_dir=checkpoint_dir)
-        assert set(result2.shot_histories.keys()) == {0, 1, 2, 3, 4, 5, 6, 7, 8}
+        assert set(result2.shot_histories.keys()) == {
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+        }
 
     def test_merge_worker_into_output_retries_transient_lock_then_succeeds(
         self, tmp_path, monkeypatch

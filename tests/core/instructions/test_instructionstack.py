@@ -2,7 +2,11 @@
 
 import pytest
 
-from loqs.core.instructions import Instruction, InstructionLabel, InstructionStack
+from loqs.core.instructions import (
+    Instruction,
+    InstructionLabel,
+    InstructionStack,
+)
 
 
 class TestInstructionStack:
@@ -11,6 +15,7 @@ class TestInstructionStack:
     def setup_class(cls):
         def apply_fn():
             pass
+
         ins = Instruction(apply_fn, name="test")  # type: ignore
 
         cls.ilbl1 = ("Label", "L0")
@@ -50,7 +55,12 @@ class TestInstructionStack:
 
     def test_init_with_multipatch_label(self):
         s = InstructionStack(
-            [{"instruction": "CNOT Bookkeeping", "patch_labels": {"ctrl": "L0", "tgt": "L1"}}]
+            [
+                {
+                    "instruction": "CNOT Bookkeeping",
+                    "patch_labels": {"ctrl": "L0", "tgt": "L1"},
+                }
+            ]
         )
         assert len(s) == 1
         assert s[0].get("patch_label") is None

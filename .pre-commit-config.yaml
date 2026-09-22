@@ -8,4 +8,11 @@ repos:
     rev: 7.3.0
     hooks:
     - id: flake8
-      exclude: 'tests/'
+-   repo: local
+    hooks:
+    - id: mypy
+      name: mypy
+      entry: mypy loqs docs_scripts tests
+      language: system
+      pass_filenames: false
+      types: [python]

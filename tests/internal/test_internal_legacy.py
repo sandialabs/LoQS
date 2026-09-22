@@ -36,8 +36,12 @@ class TestInstallLegacyModule:
             assert not Path(dotted_name.replace(".", "/") + ".py").exists()
         finally:
             sys.modules.pop(dotted_name, None)
-            if hasattr(sys.modules["loqs.internal"], "_test_fake_legacy_module"):
-                delattr(sys.modules["loqs.internal"], "_test_fake_legacy_module")
+            if hasattr(
+                sys.modules["loqs.internal"], "_test_fake_legacy_module"
+            ):
+                delattr(
+                    sys.modules["loqs.internal"], "_test_fake_legacy_module"
+                )
 
     def test_double_registration_asserts(self):
         dotted_name = "loqs.internal._test_fake_legacy_module_2"
@@ -47,8 +51,12 @@ class TestInstallLegacyModule:
                 install_legacy_module(dotted_name, {})
         finally:
             sys.modules.pop(dotted_name, None)
-            if hasattr(sys.modules["loqs.internal"], "_test_fake_legacy_module_2"):
-                delattr(sys.modules["loqs.internal"], "_test_fake_legacy_module_2")
+            if hasattr(
+                sys.modules["loqs.internal"], "_test_fake_legacy_module_2"
+            ):
+                delattr(
+                    sys.modules["loqs.internal"], "_test_fake_legacy_module_2"
+                )
 
 
 class _Replacement:
@@ -87,7 +95,9 @@ class TestMakeLegacyConstructionShim:
             Shim()
 
     def test_hard_fail_mode_custom_message(self):
-        Shim = make_legacy_construction_shim("OldName", message="completely removed")
+        Shim = make_legacy_construction_shim(
+            "OldName", message="completely removed"
+        )
         with pytest.raises(TypeError, match="completely removed"):
             Shim()
 
@@ -137,7 +147,10 @@ class TestDeprecated:
 
         with pytest.warns(DeprecationWarning) as record:
             old_func()
-        assert str(record[0].message) == "old_func is deprecated; use new_func instead."
+        assert (
+            str(record[0].message)
+            == "old_func is deprecated; use new_func instead."
+        )
 
     def test_deprecation_info_stored_on_wrapper(self):
         @deprecated("new_func", note="A note.")
@@ -251,7 +264,10 @@ class TestInstallLegacyModuleAliasesForRelocations:
     def test_unimportable_new_location_is_skipped_gracefully(self):
         old_module = "loqs.internal._test_fake_reloc_a"
         table = {
-            (old_module, "join"): ("loqs.internal._does_not_exist_at_all", "join")
+            (old_module, "join"): (
+                "loqs.internal._does_not_exist_at_all",
+                "join",
+            )
         }
         try:
             install_legacy_module_aliases_for_relocations(table)

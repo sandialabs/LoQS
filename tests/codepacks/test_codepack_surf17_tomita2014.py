@@ -12,7 +12,7 @@ from loqs.backends import (
     STIMQuantumState,
 )
 from loqs.backends.reps import StimCircuitGateRep, UnitaryGateRep
-from loqs.core import QuantumProgram
+from loqs.core import InstructionStack, QuantumProgram
 from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.tools import fttools
 
@@ -20,7 +20,13 @@ from loqs.tools import fttools
 class TestSurf17Codepack:
 
     @staticmethod
-    def _create_program(circuit_backend, model_backend, state_backend, layout: Literal["surf17", "surf13", "surf10"] = "surf17", basis="Z"):
+    def _create_program(
+        circuit_backend,
+        model_backend,
+        state_backend,
+        layout: Literal["surf17", "surf13", "surf10"] = "surf17",
+        basis="Z",
+    ):
         code_surf = codepack_surf17.create_qec_code(
             layout=layout,
             circuit_backend=circuit_backend,
@@ -29,9 +35,13 @@ class TestSurf17Codepack:
         if layout == "surf10":
             qubits = [f"D{i}" for i in range(9)] + ["A9"]
         elif layout == "surf13":
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 13)
+            ]
         else:
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 17)
+            ]
 
         gaterep = UnitaryGateRep
         ideal_model = codepack_surf17.create_ideal_model(
@@ -44,14 +54,26 @@ class TestSurf17Codepack:
         patch_types = {"SURF": code_surf}
 
         prep_inst = "Zero Prep" if basis == "Z" else "Plus Prep"
-        meas_inst = "FT Logical Z Measure" if basis == "Z" else "FT Logical X Measure"
+        meas_inst = (
+            "FT Logical Z Measure" if basis == "Z" else "FT Logical X Measure"
+        )
 
-        stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
-            (prep_inst, "L0"),
-            (meas_inst, "L0"),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                (prep_inst, "L0"),
+                (meas_inst, "L0"),
+            ]
+        )
 
         return QuantumProgram(
             stack,
@@ -62,18 +84,25 @@ class TestSurf17Codepack:
         )
 
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
-    @pytest.mark.parametrize("workflow", [
-        # Z-basis tests
-        ("Z", [], 0),                                       # Prep 0, measure Z -> 0
-        ("Z", [("X", "L0")], 1),                             # Prep 0, apply X, measure Z -> 1
-        ("Z", [("QEC", "L0")], 0),                           # Prep 0, QEC, measure Z -> 0
-        # X-basis tests
-        ("X", [], 0),                                       # Prep +, measure X -> 0
-        ("X", [("Z", "L0")], 1),                             # Prep +, apply Z, measure X -> 1
-        ("X", [("QEC", "L0")], 0),                           # Prep +, QEC, measure X -> 0
-        # H gate tests
-        ("Z", [("H", "L0")], 0),                             # Prep 0, apply H (becomes +), measure X -> 0
-    ])
+    @pytest.mark.parametrize(
+        "workflow",
+        [
+            # Z-basis tests
+            ("Z", [], 0),  # Prep 0, measure Z -> 0
+            ("Z", [("X", "L0")], 1),  # Prep 0, apply X, measure Z -> 1
+            ("Z", [("QEC", "L0")], 0),  # Prep 0, QEC, measure Z -> 0
+            # X-basis tests
+            ("X", [], 0),  # Prep +, measure X -> 0
+            ("X", [("Z", "L0")], 1),  # Prep +, apply Z, measure X -> 1
+            ("X", [("QEC", "L0")], 0),  # Prep +, QEC, measure X -> 0
+            # H gate tests
+            (
+                "Z",
+                [("H", "L0")],
+                0,
+            ),  # Prep 0, apply H (becomes +), measure X -> 0
+        ],
+    )
     def test_workflow(self, layout, workflow):
         circuit_backend = PyGSTiPhysicalCircuit
         model_backend = DictNoiseModel
@@ -95,25 +124,46 @@ class TestSurf17Codepack:
         if layout == "surf10":
             qubits = [f"D{i}" for i in range(9)] + ["A9"]
         elif layout == "surf13":
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 13)
+            ]
         else:
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 17)
+            ]
 
         prep_inst = "Zero Prep" if prep_basis == "Z" else "Plus Prep"
-        meas_inst = "FT Logical Z Measure" if meas_basis == "Z" else "FT Logical X Measure"
+        meas_inst = (
+            "FT Logical Z Measure"
+            if meas_basis == "Z"
+            else "FT Logical X Measure"
+        )
 
         stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch SURF",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
             (prep_inst, "L0"),
         ]
         for g in gates:
             stack.append(g)
         stack.append((meas_inst, "L0"))
 
-        program = QuantumProgram.from_quantum_program(ref_program, stack)
+        program = QuantumProgram.from_quantum_program(
+            ref_program, InstructionStack(stack)
+        )
         program_results = program.run()
-        assert program_results.collect_shot_data("logical_measurement", -1)[0] == expected
+        assert (
+            program_results.collect_shot_data("logical_measurement", -1)[0]
+            == expected
+        )
 
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
     @pytest.mark.parametrize("basis", ["Z", "X"])
@@ -138,9 +188,13 @@ class TestSurf17Codepack:
         if layout == "surf10":
             qubits = [f"D{i}" for i in range(9)] + ["A9"]
         elif layout == "surf13":
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 13)
+            ]
         else:
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 17)
+            ]
 
         ideal_model = codepack_surf17.create_ideal_model(
             qubits,
@@ -148,16 +202,26 @@ class TestSurf17Codepack:
             model_backend=model_backend,
         )
 
-        stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
-            ("Zero Prep" if basis == "Z" else "Plus Prep", "L0"),
-            ("Syndrome Extraction", "L0"),  # index 3 (inject here)
-            ("Syndrome Extraction", "L0"),  # index 4
-            ("Syndrome Extraction", "L0"),  # index 5
-            ("Decoder", "L0"),
-            (f"FT Logical {basis} Measure", "L0"),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("Zero Prep" if basis == "Z" else "Plus Prep", "L0"),
+                ("Syndrome Extraction", "L0"),  # index 3 (inject here)
+                ("Syndrome Extraction", "L0"),  # index 4
+                ("Syndrome Extraction", "L0"),  # index 5
+                ("Decoder", "L0"),
+                (f"FT Logical {basis} Measure", "L0"),
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,
@@ -167,11 +231,15 @@ class TestSurf17Codepack:
             name="QEC FT Test",
         )
 
-        noise_injected_programs = fttools.build_discrete_error_injection_programs(
-            base_program=base_program,
-            instruction_to_analyze=code_surf.instructions["Syndrome Extraction"],
-            stack_idx_to_modify=3,
-            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+        noise_injected_programs = (
+            fttools.build_discrete_error_injection_programs(
+                base_program=base_program,
+                instruction_to_analyze=code_surf.instructions[
+                    "Syndrome Extraction"
+                ],
+                stack_idx_to_modify=3,
+                error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+            )
         )
 
         runner = fttools.FaultInjectionRunner(
@@ -196,9 +264,13 @@ class TestSurf17Codepack:
         if layout == "surf10":
             qubits = [f"D{i}" for i in range(9)] + ["A9"]
         elif layout == "surf13":
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 13)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 13)
+            ]
         else:
-            qubits = [f"D{i}" for i in range(9)] + [f"A{i}" for i in range(9, 17)]
+            qubits = [f"D{i}" for i in range(9)] + [
+                f"A{i}" for i in range(9, 17)
+            ]
 
         ideal_model = codepack_surf17.create_ideal_model(
             qubits,
@@ -206,13 +278,23 @@ class TestSurf17Codepack:
             model_backend=model_backend,
         )
 
-        stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
-            ("Zero Prep", "L0"),
-            ("Raw Z Data Measure", "L0"),  # index 3
-            ("FT Z logical parity calculation", "L0"),
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("Zero Prep", "L0"),
+                ("Raw Z Data Measure", "L0"),  # index 3
+                ("FT Z logical parity calculation", "L0"),
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,
@@ -222,11 +304,15 @@ class TestSurf17Codepack:
             name="Measurement FT Test",
         )
 
-        noise_injected_programs = fttools.build_discrete_error_injection_programs(
-            base_program=base_program,
-            instruction_to_analyze=code_surf.instructions["Raw Z Data Measure"],
-            stack_idx_to_modify=3,
-            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+        noise_injected_programs = (
+            fttools.build_discrete_error_injection_programs(
+                base_program=base_program,
+                instruction_to_analyze=code_surf.instructions[
+                    "Raw Z Data Measure"
+                ],
+                stack_idx_to_modify=3,
+                error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
+            )
         )
 
         runner = fttools.FaultInjectionRunner(
@@ -265,8 +351,15 @@ class TestSurf17IdleLayout:
     # each data qubit's idle count is 7 minus how many of the 8 checks
     # touch it with a real gate.
     SURF17_IDLE_COUNTS = {
-        "D0": 5, "D1": 4, "D2": 5, "D3": 4, "D4": 3,
-        "D5": 4, "D6": 5, "D7": 4, "D8": 5,
+        "D0": 5,
+        "D1": 4,
+        "D2": 5,
+        "D3": 4,
+        "D4": 3,
+        "D5": 4,
+        "D6": 5,
+        "D7": 4,
+        "D8": 5,
     }
 
     # surf13's own self-padded schedule runs X and Z checks in 2 sequential
@@ -274,8 +367,15 @@ class TestSurf17IdleLayout:
     # round, so it accumulates roughly double the idle time -- this is
     # exactly the discrepancy idle_layout="surf17" (below) is meant to fix.
     SURF13_SELF_IDLE_COUNTS = {
-        "D0": 10, "D1": 9, "D2": 10, "D3": 9, "D4": 8,
-        "D5": 9, "D6": 10, "D7": 9, "D8": 10,
+        "D0": 10,
+        "D1": 9,
+        "D2": 10,
+        "D3": 9,
+        "D4": 8,
+        "D5": 9,
+        "D6": 10,
+        "D7": 9,
+        "D8": 10,
     }
 
     def test_no_idle_layout_omits_idles(self):
@@ -287,14 +387,18 @@ class TestSurf17IdleLayout:
 
     def test_self_idle_layout_surf17(self):
         code = codepack_surf17.create_qec_code(
-            layout="surf17", idle_layout="surf17", circuit_backend=PyGSTiPhysicalCircuit
+            layout="surf17",
+            idle_layout="surf17",
+            circuit_backend=PyGSTiPhysicalCircuit,
         )
         counts = _per_qubit_idle_counts(code)
         assert counts == self.SURF17_IDLE_COUNTS
 
     def test_self_idle_layout_surf13(self):
         code = codepack_surf17.create_qec_code(
-            layout="surf13", idle_layout="surf13", circuit_backend=PyGSTiPhysicalCircuit
+            layout="surf13",
+            idle_layout="surf13",
+            circuit_backend=PyGSTiPhysicalCircuit,
         )
         counts = _per_qubit_idle_counts(code)
         assert counts == self.SURF13_SELF_IDLE_COUNTS
@@ -302,7 +406,9 @@ class TestSurf17IdleLayout:
     @pytest.mark.parametrize("layout", ["surf10", "surf13"])
     def test_borrow_idle_layout_from_surf17(self, layout):
         code = codepack_surf17.create_qec_code(
-            layout=layout, idle_layout="surf17", circuit_backend=PyGSTiPhysicalCircuit
+            layout=layout,
+            idle_layout="surf17",
+            circuit_backend=PyGSTiPhysicalCircuit,
         )
         counts = _per_qubit_idle_counts(code)
         assert counts == self.SURF17_IDLE_COUNTS
@@ -310,25 +416,29 @@ class TestSurf17IdleLayout:
     def test_surf10_cannot_self_supply_idle_layout(self):
         with pytest.raises(ValueError):
             codepack_surf17.create_qec_code(
-                layout="surf10", idle_layout="surf10",
+                layout="surf10",
+                idle_layout="surf10",
                 circuit_backend=PyGSTiPhysicalCircuit,
             )
 
     def test_cannot_borrow_from_more_serialized_layout(self):
         with pytest.raises(ValueError):
             codepack_surf17.create_qec_code(
-                layout="surf17", idle_layout="surf10",
+                layout="surf17",
+                idle_layout="surf10",
                 circuit_backend=PyGSTiPhysicalCircuit,
             )
         with pytest.raises(ValueError):
             codepack_surf17.create_qec_code(
-                layout="surf13", idle_layout="surf10",
+                layout="surf13",
+                idle_layout="surf10",
                 circuit_backend=PyGSTiPhysicalCircuit,
             )
 
     def test_unknown_idle_layout_raises(self):
         with pytest.raises(ValueError):
             codepack_surf17.create_qec_code(
-                layout="surf17", idle_layout="surf99",  # type: ignore
+                layout="surf17",
+                idle_layout="surf99",  # type: ignore
                 circuit_backend=PyGSTiPhysicalCircuit,
             )

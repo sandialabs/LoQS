@@ -39,7 +39,7 @@ from loqs.backends.reps import (
 )
 from loqs.backends.model.dictmodel import DictNoiseModel
 from loqs.backends.model.pygstimodel import PyGSTiNoiseModel
-from loqs.core import Instruction, QECCode, History
+from loqs.core import Instruction, QECCode
 from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import KwargDict
@@ -54,7 +54,7 @@ from loqs.core.syndromelabel import SyndromeLabel
 import loqs.tools.qectools as qt
 
 
-def create_qec_code(
+def create_qec_code(  # noqa: C901 -- constructs [[5,1,3]] QEC code with multiple conditional paths for state prep, logical gates, and measurements
     ft_state_prep_max_repeats: int = 100,
     include_idles: bool = False,
     gate_durations: dict[str, int | float] | None = None,
@@ -699,6 +699,7 @@ def create_ideal_model(  # noqa: C901
         gate_dict = {}
         for gate in gate_names:
             U = standard_unitaries.get(gate, nonstd_unitaries.get(gate))
+            assert U is not None
             num_qubits = int(np.log2(U.shape[0]))
             for qs in itertools.permutations(qubits, r=num_qubits):
                 gate_dict[(gate, qs)] = convert_rep(

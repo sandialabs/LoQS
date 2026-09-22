@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-import h5py
 from typing import ClassVar, Literal, TypeAlias, TypeVar, overload
 import textwrap
 

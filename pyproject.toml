@@ -74,7 +74,7 @@ docs = [
     "mkdocs-gen-files~=0.6.1",
     "mkdocs-include-markdown-plugin~=7.3.0",
     "mkdocs-literate-nav~=0.6.3",
-    "mkdocs-material==9.7.6",
+    "mkdocs-material==9.7.7",
     "mkdocs-simple-hooks~=0.1.5",
     "mkdocstrings==1.0.3",
     "mkdocstrings-python==2.0.3",
@@ -116,6 +116,7 @@ exclude=["docs*", "tests*"]
 line-length = 79 # Match PEP8
 include = '\.pyi?$'
 required-version = "26.3.1"
+target-version = ["py311"]
 force-exclude = '''
 /(
       \.git
@@ -124,7 +125,7 @@ force-exclude = '''
     | \.tox
     | \.vscode
     | docs
-    | tests
+    | tests/tools/migrate_fixtures
     | venv
 )/
 '''

@@ -25,13 +25,12 @@ non-inherited method docs, and centralizes the identity remapping in this file.
 
 from __future__ import annotations
 
-import html as _html
 import inspect
 import re
 from pathlib import Path
+from typing import Any
 
 from docs_scripts.api_inventory import ApiInventory, resolve_api_target_url
-
 
 MARK_RE = re.compile(
     r"<!--\s*API_METHOD\s+owner=([^\s]+)\s+member=([^\s]+)\s*-->",
@@ -43,22 +42,38 @@ MODULE_MEMBERS_MARK_RE = re.compile(
     re.IGNORECASE,
 )
 
-TOC_REMOVE_RE = re.compile(r"<!--\s*API_TOC_REMOVE\s+([^>]+?)\s*-->", re.IGNORECASE)
-INHERITED_MARK_RE = re.compile(r"<!--\s*API_INHERITED_HEADING\s+([^\s]+)\s*-->")
+TOC_REMOVE_RE = re.compile(
+    r"<!--\s*API_TOC_REMOVE\s+([^>]+?)\s*-->", re.IGNORECASE
+)
+INHERITED_MARK_RE = re.compile(
+    r"<!--\s*API_INHERITED_HEADING\s+([^\s]+)\s*-->"
+)
 
 INHERITED_RENDER_MARK_RE = re.compile(
     r'<!--\s*API_INHERITED_RENDER\s+derived="(?P<derived>[^"]+)"\s+base="(?P<base>[^"]+)"\s+owner="(?P<owner>[^"]+)"\s*-->',
     re.IGNORECASE,
 )
 
-DOC_CLASS_OPEN_RE = re.compile(r'<div class="doc doc-object doc-class"[^>]*>', re.IGNORECASE)
-DOC_MODULE_OPEN_RE = re.compile(r'<div class="doc doc-object doc-module"[^>]*>', re.IGNORECASE)
-DOC_FUNCTION_OPEN_RE = re.compile(r'<div class="doc doc-object doc-function"[^>]*>', re.IGNORECASE)
+DOC_CLASS_OPEN_RE = re.compile(
+    r'<div class="doc doc-object doc-class"[^>]*>', re.IGNORECASE
+)
+DOC_MODULE_OPEN_RE = re.compile(
+    r'<div class="doc doc-object doc-module"[^>]*>', re.IGNORECASE
+)
+DOC_FUNCTION_OPEN_RE = re.compile(
+    r'<div class="doc doc-object doc-function"[^>]*>', re.IGNORECASE
+)
 
-CONTENTS_FIRST_OPEN_RE = re.compile(r'<div class="doc doc-contents first"[^>]*>', re.IGNORECASE)
-CHILDREN_OPEN_RE = re.compile(r'<div class="doc doc-children"[^>]*>', re.IGNORECASE)
+CONTENTS_FIRST_OPEN_RE = re.compile(
+    r'<div class="doc doc-contents first"[^>]*>', re.IGNORECASE
+)
+CHILDREN_OPEN_RE = re.compile(
+    r'<div class="doc doc-children"[^>]*>', re.IGNORECASE
+)
 
-LEADING_P_RE = re.compile(r"^\s*<p\b[^>]*>.*?</p>\s*", re.IGNORECASE | re.DOTALL)
+LEADING_P_RE = re.compile(
+    r"^\s*<p\b[^>]*>.*?</p>\s*", re.IGNORECASE | re.DOTALL
+)
 CLASS_TOC_ANCHOR_RE = re.compile(r'<a\s+id="[^"]*"\s*></a>\s*', re.IGNORECASE)
 LEADING_HIGHLIGHT_RE = re.compile(
     r'^\s*<div class="highlight"[^>]*>.*?</div>\s*',
@@ -112,12 +127,18 @@ def _find(pat: re.Pattern, s: str, start: int = 0) -> re.Match | None:
 def _load_inventory(config) -> ApiInventory:
     inv_path = Path(config["docs_dir"]) / "_api_inventory.json"
     if not inv_path.exists():
-        raise RuntimeError(f"API inventory not found at {inv_path} (expected during API build).")
+        raise RuntimeError(
+            f"API inventory not found at {inv_path} (expected during API build)."
+        )
     return ApiInventory.load(inv_path)
 
 
 def _strip_intro_from_block(block: str) -> str:
-    m_doc = _find(DOC_CLASS_OPEN_RE, block, 0) or _find(DOC_MODULE_OPEN_RE, block, 0) or _find(DOC_FUNCTION_OPEN_RE, block, 0)
+    m_doc = (
+        _find(DOC_CLASS_OPEN_RE, block, 0)
+        or _find(DOC_MODULE_OPEN_RE, block, 0)
+        or _find(DOC_FUNCTION_OPEN_RE, block, 0)
+    )
     if not m_doc:
         return block
 
@@ -132,7 +153,11 @@ def _strip_intro_from_block(block: str) -> str:
     pre = block[m_doc.end() : m_contents.start()]
     pre = CLASS_TOC_ANCHOR_RE.sub("", pre)
 
-    prefix = block[: m_doc.end()] + pre + block[m_contents.start() : m_contents.end()]
+    prefix = (
+        block[: m_doc.end()]
+        + pre
+        + block[m_contents.start() : m_contents.end()]
+    )
 
     mid = block[m_contents.end() : m_children.start()]
     while True:
@@ -213,7 +238,9 @@ def _strip_dead_fnref_links(html: str) -> str:
     )
 
 
-def _italicize_inherited_in_right_toc(html: str, inherited_anchors: set[str]) -> str:
+def _italicize_inherited_in_right_toc(
+    html: str, inherited_anchors: set[str]
+) -> str:
     if not inherited_anchors:
         return html
 
@@ -232,7 +259,11 @@ def _italicize_inherited_in_right_toc(html: str, inherited_anchors: set[str]) ->
         if anchor not in inherited_anchors:
             return m2.group(0)
         label = anchor.rsplit(".", 1)[-1]
-        return m2.group(1) + f'<span class="api-inherited-toc">{label}</span>' + m2.group(3)
+        return (
+            m2.group(1)
+            + f'<span class="api-inherited-toc">{label}</span>'
+            + m2.group(3)
+        )
 
     frag2 = TOC_LINK_TEXT_RE.sub(repl, frag)
     return html[: m.start(1)] + frag2 + html[m.end(1) :]
@@ -260,7 +291,9 @@ def _rewrite_constructor_labels(html: str) -> str:
 
     out = re.sub(
         r'(<a[^>]*href="#(?P<anchor>[^"]+__init__)"[^>]*>\s*<span class="md-ellipsis">)\s*__init__\s*(</span>)',
-        lambda m: m.group(1) + f"{_constructor_class_name_from_anchor(m.group('anchor'))}" + m.group(3),
+        lambda m: m.group(1)
+        + f"{_constructor_class_name_from_anchor(m.group('anchor'))}"
+        + m.group(3),
         out,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -270,6 +303,7 @@ def _rewrite_constructor_labels(html: str) -> str:
 def get_rtd_prefix() -> str:
     import os
     from urllib.parse import urlparse
+
     canonical_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
     if canonical_url:
         path = urlparse(canonical_url).path.rstrip("/")
@@ -281,6 +315,7 @@ def get_rtd_prefix() -> str:
 def on_config(config):
     import os
     from urllib.parse import urlparse
+
     canonical_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
     if canonical_url:
         rtd_path = urlparse(canonical_url).path.rstrip("/")
@@ -289,13 +324,17 @@ def on_config(config):
     return config
 
 
-def _rewrite_rendered_api_links(output: str, inv: ApiInventory, *, src: str) -> str:
+def _rewrite_rendered_api_links(
+    output: str, inv: ApiInventory, *, src: str
+) -> str:
     rtd_prefix = get_rtd_prefix()
     ref_prefix = f"{rtd_prefix}/reference" if rtd_prefix else "/reference"
 
     def repl(m: re.Match) -> str:
         target = m.group("target").strip()
-        url = resolve_api_target_url(inv, target, src=src, prefix=ref_prefix, allow_external=True)
+        url = resolve_api_target_url(
+            inv, target, src=src, prefix=ref_prefix, allow_external=True
+        )
 
         body = (m.group("body") or "").strip()
         if not body:
@@ -306,11 +345,11 @@ def _rewrite_rendered_api_links(output: str, inv: ApiInventory, *, src: str) -> 
                 body = base
 
         # Detect whether this <a> is already inside an outer <code>...</code> wrapper.
-        before = output[max(0, m.start() - 64):m.start()]
-        after = output[m.end():min(len(output), m.end() + 64)]
-        inside_outer_code = bool(re.search(r"<code>[^<>]*?$", before, flags=re.IGNORECASE)) and bool(
-            re.search(r"^[^<>]*?</code>", after, flags=re.IGNORECASE)
-        )
+        before = output[max(0, m.start() - 64) : m.start()]
+        after = output[m.end() : min(len(output), m.end() + 64)]
+        inside_outer_code = bool(
+            re.search(r"<code>[^<>]*?$", before, flags=re.IGNORECASE)
+        ) and bool(re.search(r"^[^<>]*?</code>", after, flags=re.IGNORECASE))
 
         if "<" not in body and ">" not in body:
             name = body
@@ -372,7 +411,10 @@ def _rewrite_citations(output: str) -> str:
         if not keys:
             return m.group(0)
 
-        links = [f'<a class="citation" href="{ref_prefix}/bib/#fn:{k}">{k}</a>' for k in keys]
+        links = [
+            f'<a class="citation" href="{ref_prefix}/bib/#fn:{k}">{k}</a>'
+            for k in keys
+        ]
         return "[" + "; ".join(links) + "]"
 
     return CITE_BRACKET_RE.sub(repl, output)
@@ -387,7 +429,6 @@ def _extract_balanced_div(html: str, start: int) -> tuple[str, int] | None:
     if not m:
         return None
 
-    i = start
     end = start + m.end()
     depth = 1
     pos = end
@@ -408,7 +449,7 @@ def _extract_balanced_div(html: str, start: int) -> tuple[str, int] | None:
     return html[start:pos], pos
 
 
-def _rewrite_inherited_return_types(
+def _rewrite_inherited_return_types(  # noqa: C901 -- many defensive-validation and regex-substitution branches resolving inherited return types
     html: str,
     *,
     derived: str,
@@ -460,7 +501,7 @@ def _rewrite_inherited_return_types(
         after_arrow = base_signature_html[arrow_idx:]
 
         m_ret = re.search(
-            r'<span[^>]*>(?P<ret>[A-Za-z_][A-Za-z0-9_]*)</span>',
+            r"<span[^>]*>(?P<ret>[A-Za-z_][A-Za-z0-9_]*)</span>",
             after_arrow,
             flags=re.IGNORECASE,
         )
@@ -471,7 +512,7 @@ def _rewrite_inherited_return_types(
         if not base_ret_name:
             return html
 
-        # Resolve the base signature return name as a TypeVar on the owner module.        
+        # Resolve the base signature return name as a TypeVar on the owner module.
         tv_obj = getattr(owner_mod, base_ret_name, None)
         if tv_obj is None:
             return html
@@ -482,6 +523,7 @@ def _rewrite_inherited_return_types(
         #   - the rendered Returns-table cell points to the exact base owner class
         # That combination is the self-type case we want to rewrite.
 
+        derived_meth: Any | None = None
         raw = cls_obj.__dict__.get(meth_name)
         if isinstance(raw, staticmethod):
             derived_meth = raw.__func__
@@ -511,7 +553,9 @@ def _rewrite_inherited_return_types(
                 obj = getattr(mod, ann_text, None)
                 if obj is not None:
                     obj_mod = getattr(obj, "__module__", "") or ""
-                    obj_qual = getattr(obj, "__qualname__", "") or getattr(obj, "__name__", "")
+                    obj_qual = getattr(obj, "__qualname__", "") or getattr(
+                        obj, "__name__", ""
+                    )
                     if obj_mod.startswith("loqs") and obj_qual:
                         derived_target = f"{obj_mod}.{obj_qual}"
                         derived_label = obj_qual.split(".")[-1]
@@ -522,7 +566,9 @@ def _rewrite_inherited_return_types(
                 return html
         else:
             mod_name = getattr(ann, "__module__", "") or ""
-            qual_name = getattr(ann, "__qualname__", "") or getattr(ann, "__name__", "")
+            qual_name = getattr(ann, "__qualname__", "") or getattr(
+                ann, "__name__", ""
+            )
             if not qual_name:
                 return html
             if mod_name == "builtins" and qual_name == "NoneType":
@@ -538,17 +584,17 @@ def _rewrite_inherited_return_types(
         pattern = re.compile(
             rf'(<tr class="doc-section-item">.*?<td>\s*<code>\s*)'
             rf'<a(?P<pre>[^>]*?)href="[^"]*{re.escape(owner_href_suffix)}"(?P<post>[^>]*)>'
-            rf'(?P<label>.*?)'
-            rf'</a>'
-            rf'(\s*</code>\s*</td>)',
+            rf"(?P<label>.*?)"
+            rf"</a>"
+            rf"(\s*</code>\s*</td>)",
             flags=re.IGNORECASE | re.DOTALL,
         )
 
         def repl(m: re.Match) -> str:
             return (
-                f'{m.group(1)}'
+                f"{m.group(1)}"
                 f'<a href="api:{derived_target}">{derived_label}</a>'
-                f'{m.group(5)}'
+                f"{m.group(5)}"
             )
 
         return pattern.sub(repl, html)
@@ -595,8 +641,18 @@ def _rewrite_inherited_render_blocks(output: str) -> str:
         block = INHERITED_RENDER_MARK_RE.sub("", block, count=1)
 
         # Remove explicit anchors that would create duplicate autorefs targets.
-        block = re.sub(rf'<a\s+id="{re.escape(owner)}"\s*></a>\s*', "", block, flags=re.IGNORECASE)
-        block = re.sub(rf'<a\s+id="{re.escape(base)}"\s*></a>\s*', "", block, flags=re.IGNORECASE)
+        block = re.sub(
+            rf'<a\s+id="{re.escape(owner)}"\s*></a>\s*',
+            "",
+            block,
+            flags=re.IGNORECASE,
+        )
+        block = re.sub(
+            rf'<a\s+id="{re.escape(base)}"\s*></a>\s*',
+            "",
+            block,
+            flags=re.IGNORECASE,
+        )
 
         # Also remove any rendered base-class heading anchor that mkdocstrings may have
         # emitted for the inherited owner class. This is the main source of duplicate
@@ -672,7 +728,9 @@ def _rewrite_inherited_render_blocks(output: str) -> str:
             last = end
             continue
 
-        extracted_contents = _extract_balanced_div(func_block, m_contents.start())
+        extracted_contents = _extract_balanced_div(
+            func_block, m_contents.start()
+        )
         if not extracted_contents:
             last = end
             continue
@@ -722,6 +780,7 @@ def _extract_inherited_toc_remove_anchors(output: str) -> set[str]:
         if base:
             anchors.add(base)
     return anchors
+
 
 def _rewrite_table_doc_parbreaks(html: str) -> str:
     """

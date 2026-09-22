@@ -18,7 +18,6 @@ from collections.abc import Iterator, Mapping
 from typing import TypeAlias, TypeVar
 
 from loqs.internal import Displayable
-from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="Frame")
 

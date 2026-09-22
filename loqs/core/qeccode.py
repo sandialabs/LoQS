@@ -17,7 +17,6 @@ from loqs.core.instructions import Instruction
 from loqs.core.recordables.pauliframe import PauliFrameLike
 from loqs.core.recordables.qeccodepatch import QECCodePatch
 from loqs.internal import Displayable
-from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="QECCode")
 

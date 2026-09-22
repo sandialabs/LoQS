@@ -25,7 +25,7 @@ from loqs.internal.serializable import (
     Encoded,
     IncorrectDecodableTypeError,
 )
-from loqs.types import NDArray, SPSArray
+from loqs.types import NDArray
 from loqs.internal import Serializable, SERIALIZATION_VERSION
 from loqs.internal.encoder import BaseEncoder
 from loqs.internal.encoder.baseencoder import copy_cached_reference

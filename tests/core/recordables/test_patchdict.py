@@ -46,7 +46,9 @@ class TestPatchDictConstructionShim:
 
 class TestPatchDictImportPath:
     def test_import_succeeds_with_no_real_file(self):
-        from loqs.core.recordables.patchdict import PatchDict as ImportedPatchDict
+        from loqs.core.recordables.patchdict import (
+            PatchDict as ImportedPatchDict,
+        )
 
         assert ImportedPatchDict is PatchDict
         assert not Path("loqs/core/recordables/patchdict.py").exists()
