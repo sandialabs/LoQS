@@ -17,6 +17,7 @@ import h5py
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
 
@@ -50,6 +51,142 @@ from loqs.tools.paralleltools import (
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+@dataclass
+class CheckpointConfig(Serializable):
+    """Bundles `MultiProgramRunner`'s checkpoint/execution-control settings
+    into a single object, reused by every `loqs.tools` runner that inherits
+    from `MultiProgramRunner`. `item_checkpoint`/`shot_checkpoint` are
+    derived read-only properties (not separate stored fields) computed from
+    whether the corresponding directory is set, since the two were always
+    required to agree with each other.
+
+    Parameters
+    ----------
+    item_checkpoint_dir : str | Path | None
+        Directory to checkpoint per-item results to. Setting this to a
+        non-`None` value is what turns on item checkpointing
+        (`item_checkpoint`); coerced to a `Path` if given as a `str`.
+    resume : bool
+        Whether to resume from an existing checkpoint at
+        `item_checkpoint_dir` rather than starting fresh. Requires
+        `item_checkpoint` to be set.
+    force_resume : bool
+        Whether to bypass a resume-time mismatch check between this
+        config's own domain-specific parameters and a stored checkpoint's.
+    shot_checkpoint_dir : str | Path | None
+        Directory to checkpoint per-shot results to. Setting this to a
+        non-`None` value is what turns on shot checkpointing
+        (`shot_checkpoint`); coerced to a `Path` if given as a `str`.
+    lazy_loading : bool
+        Whether checkpointed shot results are loaded lazily from disk on
+        access rather than eagerly into memory.
+    keep_shot_results : bool
+        Whether per-shot results are retained (read back from disk) rather
+        than discarded once each item completes. Requires both
+        `item_checkpoint` and `shot_checkpoint` to be set.
+    poll_interval : float
+        Polling interval (seconds) used while waiting on dispatched work.
+    show_progress : bool
+        Whether to display a progress bar while running.
+    runner_filename : str
+        Filename used for the runner's own on-disk checkpoint state, under
+        `item_checkpoint_dir`.
+    results_filename : str
+        Filename used for each item's own on-disk shot checkpoint, under
+        `shot_checkpoint_dir`.
+    """
+
+    _SERIALIZE_ATTRS = [
+        "item_checkpoint_dir",
+        "resume",
+        "force_resume",
+        "shot_checkpoint_dir",
+        "lazy_loading",
+        "keep_shot_results",
+        "poll_interval",
+        "show_progress",
+        "runner_filename",
+        "results_filename",
+    ]
+
+    item_checkpoint_dir: str | Path | None = None
+    resume: bool = False
+    force_resume: bool = False
+    shot_checkpoint_dir: str | Path | None = None
+    lazy_loading: bool = True
+    keep_shot_results: bool = False
+    poll_interval: float = 1.0
+    show_progress: bool = True
+    runner_filename: str = "runner.h5"
+    results_filename: str = "results.h5"
+
+    def __post_init__(self) -> None:
+        if self.item_checkpoint_dir is not None:
+            self.item_checkpoint_dir = Path(self.item_checkpoint_dir)
+        if self.shot_checkpoint_dir is not None:
+            self.shot_checkpoint_dir = Path(self.shot_checkpoint_dir)
+
+        if self.resume and not self.item_checkpoint:
+            raise ValueError(
+                "resume=True requires item_checkpoint_dir to be set"
+            )
+        if self.keep_shot_results and not self.item_checkpoint:
+            raise ValueError(
+                "keep_shot_results requires item_checkpoint_dir to be set"
+            )
+        if self.keep_shot_results and not self.shot_checkpoint:
+            raise ValueError(
+                "keep_shot_results requires shot_checkpoint_dir to be set "
+                "(and shot_checkpoint), so kept results are read back from "
+                "each item's own on-disk shot checkpoint rather than held "
+                "fully in memory for every item at once"
+            )
+
+    @property
+    def item_checkpoint(self) -> bool:
+        return self.item_checkpoint_dir is not None
+
+    @property
+    def shot_checkpoint(self) -> bool:
+        return self.shot_checkpoint_dir is not None
+
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        if attr in ("item_checkpoint_dir", "shot_checkpoint_dir"):
+            val = getattr(self, attr)
+            return str(val) if val is not None else None
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    def __str__(self) -> str:
+        lines = ["CheckpointConfig:"]
+        if self.item_checkpoint:
+            lines += [
+                "\tItem checkpointing:\ton",
+                f"\t\tCheckpoint directory:\t{self.item_checkpoint_dir}",
+                f"\t\tResume from checkpoint:\t{self.resume}",
+                f"\t\tForce resume:\t{self.force_resume}",
+                f"\t\tRunner file:\t{self.runner_filename}",
+            ]
+        else:
+            lines.append("\tItem checkpointing:\toff")
+        if self.shot_checkpoint:
+            lines += [
+                "\tShot checkpointing:\ton",
+                f"\t\tCheckpoint directory:\t{self.shot_checkpoint_dir}",
+                f"\t\tKeep shot results:\t{self.keep_shot_results}",
+                f"\t\tLazy loading:\t{self.lazy_loading}",
+                f"\t\tResults file:\t{self.results_filename}",
+            ]
+        else:
+            lines.append("\tShot checkpointing:\toff")
+        lines += [
+            f"\tPoll interval:\t{self.poll_interval}s",
+            f"\tShow progress:\t{self.show_progress}",
+        ]
+        return "\n".join(lines)
 
 
 def _resolve_items_with_index(
