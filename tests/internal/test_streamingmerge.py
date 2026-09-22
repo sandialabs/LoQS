@@ -87,9 +87,7 @@ class TestMergeDictAttr:
                 )
 
                 # Verify all entries are present and in order
-                result = list(
-                    iter_dict_attr_entries(h5_file, "test_dict")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "test_dict"))
                 assert result == [
                     (1, "a"),
                     (2, "b"),
@@ -101,9 +99,9 @@ class TestMergeDictAttr:
         """Test all four combinations of key/value dataset flags."""
         combinations = [
             (False, False),  # both groups
-            (True, False),   # keys dataset, values groups
-            (False, True),   # keys groups, values dataset
-            (True, True),    # both dataset
+            (True, False),  # keys dataset, values groups
+            (False, True),  # keys groups, values dataset
+            (True, True),  # both dataset
         ]
 
         for key_ds, value_ds in combinations:
@@ -119,7 +117,10 @@ class TestMergeDictAttr:
                     else:
                         # Both groups format can hold anything
                         entries = [
-                            (MockSerializable("x", 1), MockSerializable("y", 2)),
+                            (
+                                MockSerializable("x", 1),
+                                MockSerializable("y", 2),
+                            ),
                             (
                                 MockSerializable("p", 3),
                                 MockSerializable("q", 4),
@@ -134,9 +135,7 @@ class TestMergeDictAttr:
                         value_use_dataset=value_ds,
                     )
 
-                    result = list(
-                        iter_dict_attr_entries(h5_file, "test_dict")
-                    )
+                    result = list(iter_dict_attr_entries(h5_file, "test_dict"))
                     assert len(result) == len(entries)
                     for orig, decoded in zip(entries, result):
                         assert decoded == orig
@@ -158,9 +157,7 @@ class TestMergeDictAttr:
                     value_use_dataset=False,
                 )
 
-                result = list(
-                    iter_dict_attr_entries(h5_file, "test_dict")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "test_dict"))
                 assert result == entries
 
     def test_lazy_decoding_one_entry_at_a_time(self, make_temp_path):
@@ -238,9 +235,7 @@ class TestMergeDictAttr:
                     )
 
                 # Verify the file wasn't corrupted by re-reading
-                result = list(
-                    iter_dict_attr_entries(h5_file, "test_dict")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "test_dict"))
                 # Should still have original entries
                 assert len(result) == 2
 
@@ -248,9 +243,7 @@ class TestMergeDictAttr:
         """Test that iter_dict_attr_entries on a nonexistent attr yields nothing."""
         with make_temp_path(suffix=".h5") as temp_file:
             with h5py.File(temp_file, "w") as h5_file:
-                result = list(
-                    iter_dict_attr_entries(h5_file, "nonexistent")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "nonexistent"))
                 assert result == []
 
     def test_empty_dict_roundtrip(self, make_temp_path):
@@ -263,9 +256,7 @@ class TestMergeDictAttr:
                 )
 
                 # Iterate (should yield nothing)
-                result = list(
-                    iter_dict_attr_entries(h5_file, "empty_dict")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "empty_dict"))
                 assert result == []
 
     def test_append_to_empty_dict(self, make_temp_path):
@@ -291,9 +282,7 @@ class TestMergeDictAttr:
         """Test that insertion order is preserved across multiple appends."""
         with make_temp_path(suffix=".h5") as temp_file:
             with h5py.File(temp_file, "w") as h5_file:
-                merge_dict_attr(
-                    h5_file, "dict", [(5, "five"), (3, "three")]
-                )
+                merge_dict_attr(h5_file, "dict", [(5, "five"), (3, "three")])
                 merge_dict_attr(h5_file, "dict", [(1, "one"), (4, "four")])
                 merge_dict_attr(h5_file, "dict", [(2, "two")])
 
@@ -322,9 +311,7 @@ class TestMergeDictAttr:
                     encode_cache={},
                 )
 
-                result = list(
-                    iter_dict_attr_entries(h5_file, "complex_dict")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "complex_dict"))
                 assert len(result) == 2
                 assert result[0][0] == key1
                 assert result[0][1] == val1
@@ -348,9 +335,7 @@ class TestMergeDictAttr:
                     value_use_dataset=False,
                 )
 
-                result = list(
-                    iter_dict_attr_entries(h5_file, "mixed_dict")
-                )
+                result = list(iter_dict_attr_entries(h5_file, "mixed_dict"))
                 assert len(result) == 3
                 assert result[0] == (1, "string")
                 assert result[1] == (2, 3.14)
@@ -441,9 +426,7 @@ class TestMergeDictAttr:
 
                 # Try to append a longer string (7 chars exceeds width of 4)
                 with pytest.raises(ValueError) as exc_info:
-                    merge_dict_attr(
-                        h5_file, "dict", [(2, "toolong")]
-                    )
+                    merge_dict_attr(h5_file, "dict", [(2, "toolong")])
 
                 assert "length" in str(exc_info.value).lower()
                 assert "width" in str(exc_info.value).lower()
@@ -452,7 +435,9 @@ class TestMergeDictAttr:
                 result = list(iter_dict_attr_entries(h5_file, "dict"))
                 assert len(result) == 1
 
-    def test_fresh_creation_value_failure_no_orphaned_key(self, make_temp_path):
+    def test_fresh_creation_value_failure_no_orphaned_key(
+        self, make_temp_path
+    ):
         """Test that value-side failure during fresh dict creation with dataset
         values leaves no orphaned key -- keys and values counts must match."""
         with make_temp_path(suffix=".h5") as temp_file:
@@ -460,7 +445,7 @@ class TestMergeDictAttr:
                 # Create with int keys and int values (both dataset format)
                 # Feed an early valid value, then an incompatible value to trigger failure
                 entries = [
-                    (1, 10),    # Valid int value, establishes dataset format
+                    (1, 10),  # Valid int value, establishes dataset format
                     (2, "bad"),  # String value incompatible with int dataset
                 ]
                 with pytest.raises(TypeError):
@@ -493,8 +478,7 @@ class TestIterDictAttrEntriesStartIndex:
             with h5py.File(temp_file, "w") as h5_file:
                 # Create dict with 5 entries (groups format for values)
                 entries = [
-                    (i, MockSerializable(f"obj_{i}", i * 10))
-                    for i in range(5)
+                    (i, MockSerializable(f"obj_{i}", i * 10)) for i in range(5)
                 ]
                 merge_dict_attr(
                     h5_file, "test_dict", entries, key_use_dataset=True
@@ -535,9 +519,7 @@ class TestIterDictAttrEntriesStartIndex:
             with h5py.File(temp_file, "r") as h5_file:
                 # Iterate from index 2 onward
                 result = list(
-                    iter_dict_attr_entries(
-                        h5_file, "test_dict", start_index=2
-                    )
+                    iter_dict_attr_entries(h5_file, "test_dict", start_index=2)
                 )
 
             # We should get entries 2, 3, 4
@@ -579,8 +561,7 @@ class TestIterDictAttrEntriesStartIndex:
             with h5py.File(temp_file, "w") as h5_file:
                 # Create dict with 5 entries (groups format for values)
                 entries = [
-                    (i, MockSerializable(f"obj_{i}", i * 10))
-                    for i in range(5)
+                    (i, MockSerializable(f"obj_{i}", i * 10)) for i in range(5)
                 ]
                 merge_dict_attr(
                     h5_file, "test_dict", entries, key_use_dataset=True
@@ -640,7 +621,9 @@ class TestIterDictAttrEntriesStartIndex:
 
             with h5py.File(temp_file, "r") as h5_file:
                 result = list(
-                    iter_dict_attr_entries(h5_file, "test_dict", start_index=10)
+                    iter_dict_attr_entries(
+                        h5_file, "test_dict", start_index=10
+                    )
                 )
                 assert len(result) == 0
 
@@ -827,8 +810,7 @@ class TestGetDictAttrGroup:
         with make_temp_path(suffix=".h5") as temp_file:
             with h5py.File(temp_file, "w") as h5_file:
                 entries = [
-                    (i, MockSerializable(f"obj_{i}", i * 10))
-                    for i in range(5)
+                    (i, MockSerializable(f"obj_{i}", i * 10)) for i in range(5)
                 ]
                 merge_dict_attr(
                     h5_file,
@@ -913,7 +895,9 @@ class TestDecodeCacheForwardingKeysResolution:
             decode_cache = {}
             with h5py.File(temp_file, "r") as h5_file:
                 entries = list(
-                    iter_dict_attr_entries(h5_file, "shared_dict", decode_cache=decode_cache)
+                    iter_dict_attr_entries(
+                        h5_file, "shared_dict", decode_cache=decode_cache
+                    )
                 )
 
             # Verify we got two entries
@@ -946,7 +930,8 @@ class TestDecodeCacheForwardingKeysResolution:
         self, make_temp_path
     ):
         """When a new value's type mismatches an established dataset format,
-        the entry is rejected and keys/values stay in sync (no partial write)."""
+        the entry is rejected and keys/values stay in sync (no partial write).
+        """
         with make_temp_path(suffix=".h5") as temp_file:
             # Create a dict with int keys and int values in dataset format
             with h5py.File(temp_file, "w") as h5_file:
@@ -966,7 +951,8 @@ class TestDecodeCacheForwardingKeysResolution:
             # Attempt to merge a new entry with mismatched value type (string instead of int)
             with h5py.File(temp_file, "a") as h5_file:
                 with pytest.raises(
-                    TypeError, match="Cannot append str to dataset of integer dtype"
+                    TypeError,
+                    match="Cannot append str to dataset of integer dtype",
                 ):
                     merge_dict_attr(
                         h5_file,
@@ -983,9 +969,10 @@ class TestDecodeCacheForwardingKeysResolution:
                 # Extract just the keys from the entries
                 keys_from_entries = [k for k, v in values_after]
 
-            assert keys_after == [1, 2], (
-                f"Keys should remain [1, 2] after failed merge, but got {keys_after}"
-            )
+            assert keys_after == [
+                1,
+                2,
+            ], f"Keys should remain [1, 2] after failed merge, but got {keys_after}"
             assert len(keys_after) == len(keys_from_entries), (
                 f"Keys and values must stay in sync; keys has {len(keys_after)} entries "
                 f"but values has {len(keys_from_entries)} entries"

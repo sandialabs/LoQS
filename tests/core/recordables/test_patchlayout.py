@@ -85,7 +85,9 @@ class TestPatchLayout:
                 "L1": code.create_patch(["D1", "A1"]),
             }
         )
-        layout.set_relation(PatchRelation({"a": "L0", "b": "L1"}, data={"m": 1}))
+        layout.set_relation(
+            PatchRelation({"a": "L0", "b": "L1"}, data={"m": 1})
+        )
         assert layout.get_relation("L0", "L1") is not None
 
         del layout["L0"]
@@ -97,7 +99,9 @@ class TestPatchLayout:
         code = QECCode({}, ["Q0", "Q1"], ["Q0"])
         original = PatchLayout({"L0": code.create_patch(["D0", "A0"])})
         original["L1"] = code.create_patch(["D1", "A1"])
-        original.set_relation(PatchRelation({"a": "L0", "b": "L1"}, data={"m": 1}))
+        original.set_relation(
+            PatchRelation({"a": "L0", "b": "L1"}, data={"m": 1})
+        )
 
         copied = original.copy()
         copied.get_relation("L0", "L1").data["m"] = 2
@@ -112,7 +116,9 @@ class TestPatchLayout:
             }
         )
         layout.set_relation(
-            PatchRelation({"a": "L0", "b": "L1"}, data={"seam_qubits": ["S0", "S1"]})
+            PatchRelation(
+                {"a": "L0", "b": "L1"}, data={"seam_qubits": ["S0", "S1"]}
+            )
         )
 
         with make_temp_path(suffix=".json") as tmp_path:
@@ -135,7 +141,9 @@ class TestPatchLayout:
             }
         )
         layout.set_relation(
-            PatchRelation({"a": "L0", "b": "L1"}, data={"seam_qubits": ["S0", "S1"]})
+            PatchRelation(
+                {"a": "L0", "b": "L1"}, data={"seam_qubits": ["S0", "S1"]}
+            )
         )
 
         with make_temp_path(suffix=f".{format}") as tmp_path:

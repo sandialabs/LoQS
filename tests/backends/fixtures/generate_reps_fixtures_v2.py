@@ -81,7 +81,9 @@ def build_flat_rep_fixtures() -> dict[str, object]:
     `generate_reps_fixtures.py`'s v1 coverage member-for-member.
     """
     preop = UnitaryGateRep(_UNITARY_1Q, QUBITS_1Q)
-    postop = UnitaryGateRep(_K0, QUBITS_1Q)  # any unitary-shaped array is fine here
+    postop = UnitaryGateRep(
+        _K0, QUBITS_1Q
+    )  # any unitary-shaped array is fine here
 
     outcome_0 = PTMGateRep(_PTM_1Q, QUBITS_1Q)
     outcome_1 = QSimSuperopGateRep(_QSIM_SUPEROP_1Q, QUBITS_1Q)

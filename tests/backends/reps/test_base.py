@@ -66,7 +66,9 @@ class TestWithQubits:
         assert retargeted is not rep
         assert retargeted.qubit_labels == ("Q1",)
         assert rep.qubit_labels == ("Q0",)  # original untouched
-        assert np.array_equal(retargeted.unitary, np.eye(2))  # payload preserved
+        assert np.array_equal(
+            retargeted.unitary, np.eye(2)
+        )  # payload preserved
 
     def test_single_qubit_str_is_wrapped(self):
         rep = StimCircuitGateRep("X 0", ())
@@ -150,10 +152,14 @@ class TestStimCircuitPayloadMixin:
         assert isinstance(StimCircuitGateRep("X 0"), StimCircuitPayloadMixin)
 
     def test_stim_circuit_instrumentrep_is_a_mixin_instance(self):
-        assert isinstance(StimCircuitInstrumentRep("M 0"), StimCircuitPayloadMixin)
+        assert isinstance(
+            StimCircuitInstrumentRep("M 0"), StimCircuitPayloadMixin
+        )
 
     def test_non_stim_circuit_reps_are_not_mixin_instances(self):
-        assert not isinstance(UnitaryGateRep(np.eye(2)), StimCircuitPayloadMixin)
+        assert not isinstance(
+            UnitaryGateRep(np.eye(2)), StimCircuitPayloadMixin
+        )
 
     def test_mixin_does_not_unify_gaterep_and_instrumentrep_dispatch(self):
         """The mixin is purely a shared-mechanics helper; `StimCircuitGateRep`

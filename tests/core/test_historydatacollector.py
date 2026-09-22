@@ -68,7 +68,9 @@ class TestFromRaw:
 
     def test_two_tuple(self):
         hdc = HistoryDataCollector.from_raw(("logical_measurement", -4))
-        assert hdc == HistoryDataCollector(key="logical_measurement", indices=-4)
+        assert hdc == HistoryDataCollector(
+            key="logical_measurement", indices=-4
+        )
 
     def test_mapping(self):
         hdc = HistoryDataCollector.from_raw(
@@ -91,7 +93,9 @@ class TestFromRaw:
         assert HistoryDataCollector.from_raw(hdc) is hdc
 
     def test_list_rejected(self):
-        with pytest.raises(TypeError, match="list combines several collectors"):
+        with pytest.raises(
+            TypeError, match="list combines several collectors"
+        ):
             HistoryDataCollector.from_raw(["logical_measurement", "counter"])
 
     def test_unsupported_type_rejected(self):

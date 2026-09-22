@@ -409,7 +409,9 @@ def _build_joint_parity_instruction(
 
     if basis == "ZZ":
         # Ancilla starts in |0>; each data qubit copies its Z value onto it
-        layers = [[("Gcnot", d, ancilla)] for d in supports_a + supports_b]
+        layers: list[list[tuple[str, str, str]] | list[tuple[str, str]]] = [
+            [("Gcnot", d, ancilla)] for d in supports_a + supports_b
+        ]
         layers.append([("Imrz", ancilla)])
     else:
         # Ancilla in |+>; X_L X_L phase kicks back onto the ancilla

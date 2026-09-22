@@ -1,5 +1,24 @@
 [flake8]
-ignore = E203, E266, E501, W503, F403, F401
+ignore = E203, E226, E266, E501, W503
 max-line-length = 79
 max-complexity = 18
-select = B,C,E,F,W,T4,B9
+select = C,E,F,W
+extend-exclude = migrate_fixtures
+per-file-ignores =
+    *__init__.py: F401
+    tests/backends/model/test_pygstimodel.py: E402
+    tests/backends/test_noise_integrated.py: E402
+    tests/backends/test_pygsticircuit.py: E402
+    tests/backends/test_qsimstate.py: E402
+    tests/backends/test_stimstate.py: E402
+    tests/codepacks/test_codepack_5_1_3_quantinuum.py: E402
+    tests/codepacks/test_codepack_7_1_3_multipatch.py: E402
+    tests/codepacks/test_codepack_7_1_3_quantinuum.py: E402
+    tests/codepacks/test_codepack_surf17_multipatch.py: E402
+    tests/codepacks/test_codepack_surf17_surgery.py: E402
+    tests/codepacks/test_codepack_surf17_tomita2014.py: E402
+    tests/core/test_quantumprogram.py: E402
+    tests/internal/test_version_compatibility.py: W293, E402
+    tests/tools/test_fttools.py: E402
+    tests/tools/test_pygstitools.py: E402
+    tests/tools/test_qsimtools.py: E402

@@ -154,7 +154,10 @@ class TestLegacyGaterepValueUpgrade:
 
     def test_passthrough_for_non_legacy_values(self):
         assert upgrade_legacy_gaterep_tag(UnitaryGateRep) is UnitaryGateRep
-        assert upgrade_legacy_gaterep_tag("not a legacy tag") == "not a legacy tag"
+        assert (
+            upgrade_legacy_gaterep_tag("not a legacy tag")
+            == "not a legacy tag"
+        )
 
     def test_upgrades_every_legacy_gaterep_value(self):
         from loqs.backends.reps.legacy import (
@@ -212,7 +215,10 @@ class TestLegacyGaterepValueUpgrade:
         """`upgrade_legacy_instrumentrep_tag` is the `_instreps`-context
         equivalent of `upgrade_legacy_gaterep_tag` -- a bare int here must
         resolve as an `InstrumentRep`-family legacy value instead."""
-        assert upgrade_legacy_instrumentrep_tag(1) is ZBasisProjectionInstrumentRep
+        assert (
+            upgrade_legacy_instrumentrep_tag(1)
+            is ZBasisProjectionInstrumentRep
+        )
         assert upgrade_legacy_instrumentrep_tag(4) is StimCircuitInstrumentRep
 
     def test_upgrade_legacy_instrumentrep_tag_passthrough(self):
@@ -304,7 +310,9 @@ class TestLegacyValueDecoding:
 
 
 class TestMisformedLegacyDecode:
-    def test_operationrep_from_decoded_attrs_rejects_unrecognized_reptype(self):
+    def test_operationrep_from_decoded_attrs_rejects_unrecognized_reptype(
+        self,
+    ):
         from loqs.internal.serializable import MisformedDecodableError
 
         with pytest.raises(MisformedDecodableError):

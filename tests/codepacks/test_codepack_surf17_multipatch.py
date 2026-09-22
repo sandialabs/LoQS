@@ -18,7 +18,7 @@ from loqs.backends import (
     StimCircuitGateRep,
     UnitaryGateRep,
 )
-from loqs.core import PatchGeometry, QuantumProgram
+from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
 from loqs.core.recordables.pauliframe import PauliFrame
 from loqs.codepacks import codepack_surf17_tomita2014 as codepack_surf17
 from loqs.codepacks import codepack_surf17_multipatch as multipatch
@@ -56,7 +56,7 @@ def make_stim_program(layout, stack, all_qubits, num_qec_rounds=3):
         model_backend=DictNoiseModel,
     )
     return QuantumProgram(
-        stack,
+        InstructionStack(stack),
         default_noise_model=model,
         state_type=STIMQuantumState,
         patch_types={"SURF": code},
@@ -81,9 +81,21 @@ class TestTwoPatchFoundations:
         all_q = q0 + q1
 
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
+            {
+                "instruction": "Init Patch SURF",
+                "new_patch_label": "L0",
+                "qubits": q0,
+            },
+            {
+                "instruction": "Init Patch SURF",
+                "new_patch_label": "L1",
+                "qubits": q1,
+            },
             ("Zero Prep", "L0"),
             ("Plus Prep", "L1"),
             ("QEC", "L0"),
@@ -120,7 +132,7 @@ class TestTwoPatchFoundations:
     @pytest.mark.parametrize("layout", ["surf17", "surf13", "surf10"])
     @pytest.mark.parametrize("basis", ["Z", "X"])
     def test_reference_round_noiseless(self, layout, basis):
-        """"clean_diff" mode is still deterministic when noiseless.
+        """ "clean_diff" mode is still deterministic when noiseless.
 
         Prep matches the measurement basis here, so round 0 is actually
         deterministic; "clean_diff" mode (drop round 0 as its own detector,
@@ -132,8 +144,16 @@ class TestTwoPatchFoundations:
         ref_kwarg = {f"reference_round_mode_{basis}": "clean_diff"}
 
         stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
+            {
+                "instruction": "Init State",
+                "state": len(qubits),
+                "qubit_labels": qubits,
+            },
+            {
+                "instruction": "Init Patch SURF",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
             (prep, "L0"),
             ("QEC", "L0"),
             {"instruction": meas, "patch_label": "L0", **ref_kwarg},
@@ -170,20 +190,30 @@ class TestTwoPatchFoundations:
             model_backend=DictNoiseModel,
         )
 
-        stack = [
-            {"instruction": "Init State", "state": len(qubits), "qubit_labels": qubits},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": qubits},
-            ("Zero Prep", "L0"),
-            ("Syndrome Extraction", "L0"),  # index 3 (round 1)
-            ("Syndrome Extraction", "L0"),  # index 4 (round 2)
-            ("Syndrome Extraction", "L0"),  # index 5 (round 3)
-            ("Decoder", "L0"),
-            {
-                "instruction": "FT Logical Z Measure",
-                "patch_label": "L0",
-                "reference_round_mode_Z": "clean_diff",
-            },
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                ("Zero Prep", "L0"),
+                ("Syndrome Extraction", "L0"),  # index 3 (round 1)
+                ("Syndrome Extraction", "L0"),  # index 4 (round 2)
+                ("Syndrome Extraction", "L0"),  # index 5 (round 3)
+                ("Decoder", "L0"),
+                {
+                    "instruction": "FT Logical Z Measure",
+                    "patch_label": "L0",
+                    "reference_round_mode_Z": "clean_diff",
+                },
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,
@@ -273,8 +303,9 @@ class TestPairwiseCnotFrameConjugation:
         assert new_t.pauli_frame == ["X", "Z", "Z", "X"]
 
 
-def two_patch_cnot_stack(layout, prep_ctrl, prep_tgt, meas, meas_kwargs,
-                         after_prep=()):
+def two_patch_cnot_stack(
+    layout, prep_ctrl, prep_tgt, meas, meas_kwargs, after_prep=()
+):
     """Stack: preps, QEC, transversal CNOT L0->L1, QEC, FT measures."""
     q0 = layout_qubits(layout, "_0")
     q1 = layout_qubits(layout, "_1")
@@ -284,7 +315,11 @@ def two_patch_cnot_stack(layout, prep_ctrl, prep_tgt, meas, meas_kwargs,
     )
     cnot = multipatch.build_transversal_cnot_instruction(geometry)
     stack = [
-        {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+        {
+            "instruction": "Init State",
+            "state": len(all_q),
+            "qubit_labels": all_q,
+        },
         *geometry.init_patch_entries("SURF"),
         (prep_ctrl, "L0"),
         (prep_tgt, "L1"),
@@ -417,33 +452,47 @@ class TestTransversalCnot:
         )
         cnot_book = multipatch.build_cnot_bookkeeping_instruction("L0", "L1")
 
-        stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L0", "qubits": q0},
-            {"instruction": "Init Patch SURF", "new_patch_label": "L1", "qubits": q1},
-            ("Zero Prep", "L0"),
-            ("Zero Prep", "L1"),
-            ("Syndrome Extraction", "L0"),  # 5 <- inject
-            ("Syndrome Extraction", "L0"),  # 6
-            ("Syndrome Extraction", "L0"),  # 7
-            ("Decoder", "L0"),  # 8
-            ("Syndrome Extraction", "L1"),  # 9 <- inject
-            ("Syndrome Extraction", "L1"),  # 10
-            ("Syndrome Extraction", "L1"),  # 11
-            ("Decoder", "L1"),  # 12
-            (cnot_circ, None),  # 13 <- inject (weight-1 and weight-2)
-            (cnot_book, None),  # 14
-            ("Syndrome Extraction", "L0"),  # 15 <- inject
-            ("Syndrome Extraction", "L0"),  # 16
-            ("Syndrome Extraction", "L0"),  # 17
-            ("Decoder", "L0"),  # 18
-            ("Syndrome Extraction", "L1"),  # 19
-            ("Syndrome Extraction", "L1"),  # 20
-            ("Syndrome Extraction", "L1"),  # 21
-            ("Decoder", "L1"),  # 22
-            ("FT Logical Z Measure", "L0"),  # 23
-            ("FT Logical Z Measure", "L1"),  # 24
-        ]
+        stack = InstructionStack(
+            [
+                {
+                    "instruction": "Init State",
+                    "state": len(all_q),
+                    "qubit_labels": all_q,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L0",
+                    "qubits": q0,
+                },
+                {
+                    "instruction": "Init Patch SURF",
+                    "new_patch_label": "L1",
+                    "qubits": q1,
+                },
+                ("Zero Prep", "L0"),
+                ("Zero Prep", "L1"),
+                ("Syndrome Extraction", "L0"),  # 5 <- inject
+                ("Syndrome Extraction", "L0"),  # 6
+                ("Syndrome Extraction", "L0"),  # 7
+                ("Decoder", "L0"),  # 8
+                ("Syndrome Extraction", "L1"),  # 9 <- inject
+                ("Syndrome Extraction", "L1"),  # 10
+                ("Syndrome Extraction", "L1"),  # 11
+                ("Decoder", "L1"),  # 12
+                (cnot_circ, None),  # 13 <- inject (weight-1 and weight-2)
+                (cnot_book, None),  # 14
+                ("Syndrome Extraction", "L0"),  # 15 <- inject
+                ("Syndrome Extraction", "L0"),  # 16
+                ("Syndrome Extraction", "L0"),  # 17
+                ("Decoder", "L0"),  # 18
+                ("Syndrome Extraction", "L1"),  # 19
+                ("Syndrome Extraction", "L1"),  # 20
+                ("Syndrome Extraction", "L1"),  # 21
+                ("Decoder", "L1"),  # 22
+                ("FT Logical Z Measure", "L0"),  # 23
+                ("FT Logical Z Measure", "L1"),  # 24
+            ]
+        )
 
         base_program = QuantumProgram(
             stack,
@@ -486,7 +535,13 @@ class TestTransversalCnot:
             )
             runner = fttools.FaultInjectionRunner(
                 errored_programs=injected,
-                collect_shot_data_args=[{"key": "logical_measurement", "indices": "all", "strip_none_entries": True}],
+                collect_shot_data_args=[
+                    {
+                        "key": "logical_measurement",
+                        "indices": "all",
+                        "strip_none_entries": True,
+                    }
+                ],
                 expected_outcomes=[[0, 0]],
             )
             failed = runner.run()
@@ -519,7 +574,11 @@ def bell_joint_parity_stack(layout, ancilla="Qanc", ft_measures=False):
     zz = multipatch.build_joint_parity_zz_instruction(parity_geometry, ancilla)
     xx = multipatch.build_joint_parity_xx_instruction(parity_geometry, ancilla)
     stack = [
-        {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+        {
+            "instruction": "Init State",
+            "state": len(all_q),
+            "qubit_labels": all_q,
+        },
         *cnot_geometry.init_patch_entries("SURF"),
         ("Plus Prep", "L0"),
         ("Zero Prep", "L1"),
@@ -563,7 +622,11 @@ class TestJointParity:
         )
         zz = multipatch.build_joint_parity_zz_instruction(geometry, ancilla)
         stack = [
-            {"instruction": "Init State", "state": len(all_q), "qubit_labels": all_q},
+            {
+                "instruction": "Init State",
+                "state": len(all_q),
+                "qubit_labels": all_q,
+            },
             *geometry.init_patch_entries("SURF"),
             ("Zero Prep", "L0"),
             ("Zero Prep", "L1"),

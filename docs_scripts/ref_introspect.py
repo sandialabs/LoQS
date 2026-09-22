@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 K_MODULE = "module"
 K_CLASS = "class"
 K_FUNCTION = "function"
@@ -63,7 +62,7 @@ _ALL_CAPS_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def var_sort_key(row: dict) -> tuple[int, int | str, str]:
-    name = (row.get("name") or "")
+    name = row.get("name") or ""
     sort_value = (row.get("sort_value") or "").strip()
 
     if sort_value:
@@ -72,7 +71,11 @@ def var_sort_key(row: dict) -> tuple[int, int | str, str]:
         except Exception:
             pass
 
-    return (1 if _ALL_CAPS_RE.fullmatch(name) else 2, name.lower(), name.lower())
+    return (
+        1 if _ALL_CAPS_RE.fullmatch(name) else 2,
+        name.lower(),
+        name.lower(),
+    )
 
 
 def unparse(node: ast.AST | None) -> str:
@@ -88,7 +91,11 @@ def doc_hint_from_next_stmt(body: list[ast.stmt], i: int) -> str:
     if i + 1 >= len(body):
         return ""
     nxt = body[i + 1]
-    if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Constant) and isinstance(nxt.value.value, str):
+    if (
+        isinstance(nxt, ast.Expr)
+        and isinstance(nxt.value, ast.Constant)
+        and isinstance(nxt.value.value, str)
+    ):
         return nxt.value.value.strip().splitlines()[0]
     return ""
 
@@ -199,7 +206,9 @@ def expand_type_aliases(type_s: str, aliases: dict[str, str]) -> str:
     return s
 
 
-def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
+def module_public_api(  # noqa: C901 -- many branches over AST statement types extracting and scoring public API members
+    py_file: Path,
+) -> tuple[list[str], list[str], list[dict]]:
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
         aliases = collect_import_aliases(tree)
@@ -214,7 +223,11 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
         if i + 1 >= len(body):
             return ""
         nxt = body[i + 1]
-        if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Constant) and isinstance(nxt.value.value, str):
+        if (
+            isinstance(nxt, ast.Expr)
+            and isinstance(nxt.value, ast.Constant)
+            and isinstance(nxt.value.value, str)
+        ):
             return nxt.value.value.strip()
         return ""
 
@@ -223,18 +236,26 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
             classes.append(node.name)
 
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public_method(node.name):
+        elif isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and _is_public_method(node.name):
             funcs.append(node.name)
 
         elif isinstance(node, ast.Assign):
             doc = _full_doc_from_next_stmt(body, i)
-            value_s = unparse(node.value).strip() if node.value is not None else ""
+            value_s = (
+                unparse(node.value).strip() if node.value is not None else ""
+            )
 
             typevar_bound = ""
-            if is_typevar_call(node.value) and isinstance(node.value, ast.Call):
+            if is_typevar_call(node.value) and isinstance(
+                node.value, ast.Call
+            ):
                 for kw in node.value.keywords:
                     if kw.arg == "bound":
-                        typevar_bound = expand_type_aliases(unparse(kw.value).strip(), aliases).strip("'\"")
+                        typevar_bound = expand_type_aliases(
+                            unparse(kw.value).strip(), aliases
+                        ).strip("'\"")
                         break
 
             for tgt in node.targets:
@@ -254,10 +275,21 @@ def module_public_api(py_file: Path) -> tuple[list[str], list[str], list[dict]]:
                     )
 
         elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
+            if isinstance(node.target, ast.Name) and _is_public_var(
+                node.target.id
+            ):
                 doc = _full_doc_from_next_stmt(body, i)
-                ann_s = expand_type_aliases(unparse(node.annotation).strip(), aliases)
-                value_s = expand_type_aliases(unparse(node.value).strip() if node.value is not None else "", aliases)
+                ann_s = expand_type_aliases(
+                    unparse(node.annotation).strip(), aliases
+                )
+                value_s = expand_type_aliases(
+                    (
+                        unparse(node.value).strip()
+                        if node.value is not None
+                        else ""
+                    ),
+                    aliases,
+                )
 
                 is_alias = is_typealias_ann(node.annotation)
                 kind = K_TYPE_ALIAS if is_alias else K_VARIABLE
@@ -324,7 +356,9 @@ def classvar_inner(type_s: str) -> str:
     return inner or s
 
 
-def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: str) -> dict[str, dict]:
+def class_var_info_map_from_ast(
+    py_file: Path, class_name: str, *, owner_ident: str
+) -> dict[str, dict]:
     try:
         tree = ast.parse(py_file.read_text(encoding="utf-8", errors="ignore"))
         aliases = collect_import_aliases(tree)
@@ -335,7 +369,11 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
         if i + 1 >= len(body):
             return ""
         nxt = body[i + 1]
-        if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Constant) and isinstance(nxt.value.value, str):
+        if (
+            isinstance(nxt, ast.Expr)
+            and isinstance(nxt.value, ast.Constant)
+            and isinstance(nxt.value.value, str)
+        ):
             return nxt.value.value.strip()
         return ""
 
@@ -359,7 +397,9 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
     for i, node in enumerate(body):
         if isinstance(node, ast.Assign):
             doc = _full_doc_from_next_stmt(body, i)
-            value_s = unparse(node.value).strip() if node.value is not None else ""
+            value_s = (
+                unparse(node.value).strip() if node.value is not None else ""
+            )
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and _is_public_var(tgt.id):
                     out[tgt.id] = {
@@ -372,10 +412,21 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
                     }
 
         elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and _is_public_var(node.target.id):
+            if isinstance(node.target, ast.Name) and _is_public_var(
+                node.target.id
+            ):
                 doc = _full_doc_from_next_stmt(body, i)
-                ann_s = expand_type_aliases(unparse(node.annotation).strip(), aliases)
-                value_s = expand_type_aliases(unparse(node.value).strip() if node.value is not None else "", aliases)
+                ann_s = expand_type_aliases(
+                    unparse(node.annotation).strip(), aliases
+                )
+                value_s = expand_type_aliases(
+                    (
+                        unparse(node.value).strip()
+                        if node.value is not None
+                        else ""
+                    ),
+                    aliases,
+                )
                 out[node.target.id] = {
                     "name": node.target.id,
                     "type": ann_s,
@@ -388,9 +439,13 @@ def class_var_info_map_from_ast(py_file: Path, class_name: str, *, owner_ident: 
     return out
 
 
-def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
+def class_var_rows_with_mro(  # noqa: C901 -- nested MRO traversal reconciling and merging base and derived class attributes
+    derived_py_file: Path, cls_obj: type
+) -> list[dict]:
     derived_ident = qualname_to_ident(cls_obj)
-    derived_map = class_var_info_map_from_ast(derived_py_file, cls_obj.__name__, owner_ident=derived_ident)
+    derived_map = class_var_info_map_from_ast(
+        derived_py_file, cls_obj.__name__, owner_ident=derived_ident
+    )
 
     inherited_map: dict[str, dict] = {}
 
@@ -414,7 +469,9 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
             continue
 
         base_ident = qualname_to_ident(base)
-        base_map = class_var_info_map_from_ast(base_file, base.__name__, owner_ident=base_ident)
+        base_map = class_var_info_map_from_ast(
+            base_file, base.__name__, owner_ident=base_ident
+        )
         if not base_map:
             continue
 
@@ -422,11 +479,20 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
             brow = base_map.get(name)
             if not brow:
                 continue
-            if not (drow.get("doc") or "").strip() and (brow.get("doc") or "").strip():
+            if (
+                not (drow.get("doc") or "").strip()
+                and (brow.get("doc") or "").strip()
+            ):
                 drow["doc"] = brow["doc"]
-            if not (drow.get("type") or "").strip() and (brow.get("type") or "").strip():
+            if (
+                not (drow.get("type") or "").strip()
+                and (brow.get("type") or "").strip()
+            ):
                 drow["type"] = brow["type"]
-            if not (drow.get("value") or "").strip() and (brow.get("value") or "").strip():
+            if (
+                not (drow.get("value") or "").strip()
+                and (brow.get("value") or "").strip()
+            ):
                 drow["value"] = brow["value"]
 
         def score_row(r: dict) -> tuple[int, int, int]:
@@ -451,7 +517,9 @@ def class_var_rows_with_mro(derived_py_file: Path, cls_obj: type) -> list[dict]:
     return sorted(merged.values(), key=var_sort_key)
 
 
-def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases: dict[str, str]) -> list[dict]:
+def property_rows_from_introspection(  # noqa: C901 -- nested MRO fallback loops extracting property type annotations and docstrings
+    cls_obj: type, *, owner_ident: str, aliases: dict[str, str]
+) -> list[dict]:
     """
     Build member-variable rows for @property descriptors.
     """
@@ -481,10 +549,15 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
                     if base is object:
                         continue
                     base_prop = getattr(base, "__dict__", {}).get(name)
-                    if not isinstance(base_prop, property) or base_prop.fget is None:
+                    if (
+                        not isinstance(base_prop, property)
+                        or base_prop.fget is None
+                    ):
                         continue
                     try:
-                        base_ann = inspect.signature(base_prop.fget).return_annotation
+                        base_ann = inspect.signature(
+                            base_prop.fget
+                        ).return_annotation
                     except (TypeError, ValueError):
                         base_ann = inspect.Signature.empty
                     if base_ann is inspect.Signature.empty:
@@ -492,13 +565,19 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
                     if isinstance(base_ann, str):
                         typ = base_ann
                     else:
-                        typ = getattr(base_ann, "__name__", None) or str(base_ann)
+                        typ = getattr(base_ann, "__name__", None) or str(
+                            base_ann
+                        )
                     type_owner = base
                     break
         typ = expand_type_aliases(typ, aliases)
 
         kind = "*read-only property*" if val.fset is None else "*property*"
-        is_abstract = bool(getattr(fget, "__isabstractmethod__", False)) if fget is not None else False
+        is_abstract = (
+            bool(getattr(fget, "__isabstractmethod__", False))
+            if fget is not None
+            else False
+        )
         val_s = kind + (" *(abstract)*" if is_abstract else "")
 
         doc = ""
@@ -513,7 +592,10 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
                     if base is object:
                         continue
                     base_prop = getattr(base, "__dict__", {}).get(name)
-                    if not isinstance(base_prop, property) or base_prop.fget is None:
+                    if (
+                        not isinstance(base_prop, property)
+                        or base_prop.fget is None
+                    ):
                         continue
                     bd = inspect.getdoc(base_prop.fget) or ""
                     bd = bd.strip()
@@ -539,7 +621,9 @@ def property_rows_from_introspection(cls_obj: type, *, owner_ident: str, aliases
     return sorted(rows, key=var_sort_key)
 
 
-def inherited_only_methods(cls_obj: type, *, declared: set[str]) -> dict[str, tuple[str, str]]:
+def inherited_only_methods(
+    cls_obj: type, *, declared: set[str]
+) -> dict[str, tuple[str, str]]:
     """
     Return mapping: member_name -> (kind, base_ident) for documented methods
     present via inheritance but not declared on cls_obj.__dict__.
@@ -579,7 +663,15 @@ def inherited_only_methods(cls_obj: type, *, declared: set[str]) -> dict[str, tu
             out[name] = (kind, qualname_to_ident(base))
             break
 
-    return dict(sorted(out.items(), key=lambda item: (0 if item[0] == "__init__" else 1, item[0].lower())))
+    return dict(
+        sorted(
+            out.items(),
+            key=lambda item: (
+                0 if item[0] == "__init__" else 1,
+                item[0].lower(),
+            ),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -620,7 +712,9 @@ def class_doc_plan(class_name: str, mod_ident: str) -> ClassDocPlan:
         if not _is_documented_class_method(name):
             continue
 
-        if isinstance(val, (staticmethod, classmethod)) or inspect.isfunction(val):
+        if isinstance(val, (staticmethod, classmethod)) or inspect.isfunction(
+            val
+        ):
             methods.append(name)
         else:
             continue
@@ -630,7 +724,9 @@ def class_doc_plan(class_name: str, mod_ident: str) -> ClassDocPlan:
             doc_owner = cls
         owner_override[name] = qualname_to_ident(doc_owner)
 
-    methods.sort(key=lambda name: (0 if name == "__init__" else 1, name.lower()))
+    methods.sort(
+        key=lambda name: (0 if name == "__init__" else 1, name.lower())
+    )
 
     declared = set(getattr(cls, "__dict__", {}).keys())
     inherited_missing = inherited_only_methods(cls, declared=declared)

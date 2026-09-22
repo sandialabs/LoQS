@@ -1,4 +1,5 @@
 """Tester for loqs.tools.qsimtools"""
+
 import pytest
 
 # loqs.backends.state.qsimstate imports quantumsim eagerly, so this whole
@@ -64,8 +65,8 @@ class TestQSimTools:
         #
         state = QSimState(2, ["Q0", "Q1"])
 
-        xpi2_ptm   = _ptm.rotate_x_ptm(angle=np.pi/2)
-        cphase_ptm = _ptm.double_kraus_to_ptm(np.diag([1,1,1,-1]))
+        xpi2_ptm = _ptm.rotate_x_ptm(angle=np.pi / 2)
+        cphase_ptm = _ptm.double_kraus_to_ptm(np.diag([1, 1, 1, -1]))
         state.state.apply_ptm("Q0", xpi2_ptm)
         state.state.apply_ptm("Q1", xpi2_ptm)
         state.state.apply_two_ptm("Q0", "Q1", cphase_ptm)
@@ -113,7 +114,7 @@ class TestQSimTools:
         # TODO: check correctness of phases return value
         return
 
-    @pytest.mark.skip(reason='known failure with get_state_prob_phases')
+    @pytest.mark.skip(reason="known failure with get_state_prob_phases")
     def test_print_state_probs_phases(self, capsys):
         """Test print_state_probs_phases function."""
         # Create a simple |0> state
@@ -126,4 +127,3 @@ class TestQSimTools:
         captured = capsys.readouterr()
         assert captured.out.strip()  # Should not be empty
         assert "Q0" in captured.out  # Should contain qubit info
-

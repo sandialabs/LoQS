@@ -35,7 +35,7 @@ from docs_scripts.ref_introspect import (
 )
 
 
-def render_inline_md(
+def render_inline_md(  # noqa: C901 -- many branches across markdown/HTML formatting modes and identifier-token target resolution
     text: str,
     link_names: set[str] | None = None,
     *,
@@ -79,7 +79,10 @@ def render_inline_md(
         if not doc:
             return ""
 
-        paras = [" ".join(line.strip() for line in p.splitlines() if line.strip()) for p in doc.split("\n\n")]
+        paras = [
+            " ".join(line.strip() for line in p.splitlines() if line.strip())
+            for p in doc.split("\n\n")
+        ]
         doc = "<br><br>".join(p for p in paras if p)
 
         doc = re.sub(
@@ -105,7 +108,10 @@ def render_inline_md(
     # Special-case TypeVar(...) so we only link the bound target and do not let
     # the generic token pass incorrectly link the TypeVar name itself.
     if s.startswith("TypeVar(") and "bound=" in s:
-        m = re.search(r"bound=(?P<quote>['\"]?)(?P<bound>[A-Za-z_][A-Za-z0-9_\.]*)(?P=quote)", s)
+        m = re.search(
+            r"bound=(?P<quote>['\"]?)(?P<bound>[A-Za-z_][A-Za-z0-9_\.]*)(?P=quote)",
+            s,
+        )
         if m:
             quote = m.group("quote") or ""
             bound = m.group("bound")
@@ -125,7 +131,9 @@ def render_inline_md(
 
             if html_code:
                 if target is not None:
-                    replacement = f"bound={quote}{_html_link(target, bound_name)}{quote}"
+                    replacement = (
+                        f"bound={quote}{_html_link(target, bound_name)}{quote}"
+                    )
                 elif url is not None:
                     replacement = f"bound={quote}{_html_external(url, bound_name)}{quote}"
                 else:
@@ -135,7 +143,9 @@ def render_inline_md(
                 return f"<code>{out}</code>"
 
             if target is not None:
-                replacement = f"bound={quote}[`{bound_name}`](api:{target}){quote}"
+                replacement = (
+                    f"bound={quote}[`{bound_name}`](api:{target}){quote}"
+                )
             elif url is not None:
                 replacement = f"bound={quote}[`{bound_name}`]({url}){quote}"
             else:
@@ -162,7 +172,7 @@ def render_inline_md(
     found_link = False
 
     for m in token_re.finditer(s):
-        prefix = s[last:m.start()]
+        prefix = s[last : m.start()]
         if prefix:
             parts.append(prefix)
 
@@ -234,12 +244,16 @@ def write_mkdocstrings_block(
 
     if members is False:
         f.write("      members: false\n")
+    elif members is True:
+        f.write("      members: true\n")
     else:
         f.write("      members:\n")
         for m in members:
             f.write(f"        - {m}\n")
 
-    f.write(f"      inherited_members: {'true' if inherited_members else 'false'}\n")
+    f.write(
+        f"      inherited_members: {'true' if inherited_members else 'false'}\n"
+    )
     f.write("\n")
 
 
@@ -278,7 +292,7 @@ def write_class_members_table(
         if (r.get("owner") or "") != derived_ident:
             name_cell += "<br><em>(inherited)</em>"
 
-        typ_raw = (r.get("type") or "")
+        typ_raw = r.get("type") or ""
         typ = render_inline_md(
             classvar_inner(typ_raw).replace("\n", " ").replace("|", "\\|"),
             link_names=link_names,
@@ -295,10 +309,14 @@ def write_class_members_table(
             val_s = "*unset*"
         else:
             val_s_raw = str(val).replace("\n", " ").strip()
-            val_s = val_s_raw if "*" in val_s_raw else render_inline_md(
-                val_s_raw.replace("|", "\\|"),
-                link_names=link_names,
-                local_targets=local_targets,
+            val_s = (
+                val_s_raw
+                if "*" in val_s_raw
+                else render_inline_md(
+                    val_s_raw.replace("|", "\\|"),
+                    link_names=link_names,
+                    local_targets=local_targets,
+                )
             )
 
         doc = render_inline_md(r.get("doc") or "", prose=True)
@@ -311,7 +329,9 @@ def write_class_intro(f, cls_ident: str) -> None:
     """
     Emit the class intro block, explicitly including `__init__`.
     """
-    write_mkdocstrings_block(f, cls_ident, members=["__init__"], inherited_members=False)
+    write_mkdocstrings_block(
+        f, cls_ident, members=["__init__"], inherited_members=False
+    )
 
 
 def write_declared_method_block(
@@ -324,7 +344,9 @@ def write_declared_method_block(
     Emit a declared method block rendered from the derived class object.
     """
     f.write(f"<!-- API_METHOD owner={cls_ident} member={member_name} -->\n\n")
-    write_mkdocstrings_block(f, cls_ident, members=[member_name], inherited_members=False)
+    write_mkdocstrings_block(
+        f, cls_ident, members=[member_name], inherited_members=False
+    )
 
 
 def write_inherited_doc_render_block(
@@ -346,7 +368,12 @@ def write_inherited_doc_render_block(
     f.write(
         f'<!-- API_INHERITED_RENDER derived="{derived_anchor}" base="{base_anchor}" owner="{base_owner_ident}" -->\n\n'
     )
-    write_mkdocstrings_block(f, base_owner_ident, members=[base_member_name], inherited_members=False)
+    write_mkdocstrings_block(
+        f,
+        base_owner_ident,
+        members=[base_member_name],
+        inherited_members=False,
+    )
 
 
 def write_inherited_method_stub(
@@ -375,7 +402,9 @@ def write_inherited_method_stub(
         f.write(f"## {class_display}() {{: #{anchor_id} }}\n\n")
         if base_ident.startswith("loqs."):
             base_class = base_ident.split(".")[-1]
-            f.write(f"Inherited constructor from [`{base_class}()`](api:{base_ident}.{method_name}).\n\n")
+            f.write(
+                f"Inherited constructor from [`{base_class}()`](api:{base_ident}.{method_name}).\n\n"
+            )
         else:
             f.write(f"Inherited constructor from [](api:{base_ident}).\n\n")
         return
@@ -384,7 +413,9 @@ def write_inherited_method_stub(
 
     if base_ident.startswith("loqs."):
         base_link_text = f"{base_ident.split('.')[-1]}.{method_name}"
-        f.write(f"Inherited {kind_label}method from [{base_link_text}](api:{base_ident}.{method_name}).\n\n")
+        f.write(
+            f"Inherited {kind_label}method from [{base_link_text}](api:{base_ident}.{method_name}).\n\n"
+        )
     else:
         f.write(f"Inherited {kind_label}method from [](api:{base_ident}).\n\n")
 
@@ -395,7 +426,13 @@ def write_module_functions_block(f, mod_ident: str, funcs: list[str]) -> None:
 
     for i, fn in enumerate(funcs):
         f.write(f"<!-- API_MODULE_MEMBERS owner={mod_ident} -->\n\n")
-        write_mkdocstrings_block(f, mod_ident, members=[fn], inherited_members=False, heading_level=3)
+        write_mkdocstrings_block(
+            f,
+            mod_ident,
+            members=[fn],
+            inherited_members=False,
+            heading_level=3,
+        )
         if i != len(funcs) - 1:
             f.write("---\n\n")
 
@@ -458,7 +495,7 @@ def write_module_members_table(
             )
 
         doc = render_inline_md(r.get("doc") or "", prose=True)
-        
+
         f.write(f"| {name_cell} | {typ} | {val_s} | {doc} |\n")
     f.write("\n")
 
@@ -481,7 +518,9 @@ def write_module_page(
 
         f.write(f"<!-- API_TOC_REMOVE {mod_ident} -->\n\n")
 
-        write_mkdocstrings_block(f, mod_ident, members=False, inherited_members=False)
+        write_mkdocstrings_block(
+            f, mod_ident, members=False, inherited_members=False
+        )
 
         if classes:
             f.write("## Classes\n\n")
@@ -491,7 +530,15 @@ def write_module_page(
 
         if rows:
             f.write("## Attributes\n\n")
-            write_module_members_table(f, mod_ident, page_url, rows, inv_objects, inv_kinds, link_names)
+            write_module_members_table(
+                f,
+                mod_ident,
+                page_url,
+                rows,
+                inv_objects,
+                inv_kinds,
+                link_names,
+            )
             f.write("\n\n\n")
 
         if funcs:
@@ -520,13 +567,19 @@ def write_class_page(
         f.write(f"# `{title}`\n\n")
 
         if toc_remove_anchors:
-            f.write(f"<!-- API_TOC_REMOVE {' '.join(toc_remove_anchors)} -->\n\n")
+            f.write(
+                f"<!-- API_TOC_REMOVE {' '.join(toc_remove_anchors)} -->\n\n"
+            )
 
         # Special case __init__
         write_class_intro(f, cls_ident)
 
         init_owner = owner_override.get("__init__", cls_ident)
-        if cls_obj is not None and "__init__" in methods and init_owner != cls_ident:
+        if (
+            cls_obj is not None
+            and "__init__" in methods
+            and init_owner != cls_ident
+        ):
             write_inherited_doc_render_block(
                 f,
                 derived_cls_ident=cls_ident,
@@ -560,14 +613,21 @@ def write_class_page(
 
             inherited_method_stubs = inherited_method_stubs or {}
             declared_set = set(other_methods)
-            all_names = sorted(set(other_methods) | set(inherited_method_stubs), key=lambda name: name.lower())
+            all_names = sorted(
+                set(other_methods) | set(inherited_method_stubs),
+                key=lambda name: name.lower(),
+            )
 
             for m in all_names:
                 if m in declared_set:
                     owner = owner_override.get(m, cls_ident)
 
-                    f.write(f"<!-- API_METHOD owner={cls_ident} member={m} -->\n\n")
-                    write_mkdocstrings_block(f, cls_ident, members=[m], inherited_members=False)
+                    f.write(
+                        f"<!-- API_METHOD owner={cls_ident} member={m} -->\n\n"
+                    )
+                    write_mkdocstrings_block(
+                        f, cls_ident, members=[m], inherited_members=False
+                    )
 
                     if cls_obj is not None and owner != cls_ident:
                         write_inherited_doc_render_block(

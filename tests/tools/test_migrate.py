@@ -51,7 +51,9 @@ class TestRewriteRenames:
         rewritten -- doing so would silently invert its meaning (see
         renames.py's module docstring for the real example this
         regression-tests)."""
-        src = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
+        src = FIXTURES.joinpath("renames_before.py").read_text(
+            encoding="utf-8"
+        )
         result = rewrite_renames(src)
         assert "used to construct a `PatchDict` directly" in result.source
 
@@ -77,15 +79,21 @@ class TestRewriteRenames:
         assert result.manual_review == []
 
     def test_deleted_name_flagged_not_guessed(self):
-        src = FIXTURES.joinpath("deleted_name_before.py").read_text(encoding="utf-8")
+        src = FIXTURES.joinpath("deleted_name_before.py").read_text(
+            encoding="utf-8"
+        )
         result = rewrite_renames(src)
         assert result.source == src  # never rewritten, only flagged
         lines = {item.line for item in result.manual_review}
         assert lines == {2, 5}  # the import line and the usage line
 
     def test_matches_golden_fixture(self):
-        before = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("renames_after.py").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("renames_before.py").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("renames_after.py").read_text(
+            encoding="utf-8"
+        )
         result = rewrite_renames(before)
         assert result.source == after
         # RepTuple's import (line 3) and usage (line 6) are left untouched
@@ -180,7 +188,10 @@ class TestMigrateInstructionLabels:
         (`tuple(inst_args or ())`) treats both the same way."""
         src = 'InstructionLabel("Increment", "L0", None, None)\n'
         result = migrate_instruction_labels(src)
-        assert result.source == 'InstructionLabel("Increment", patch_label="L0")\n'
+        assert (
+            result.source
+            == 'InstructionLabel("Increment", patch_label="L0")\n'
+        )
 
     def test_three_tuple_with_string_second_element_is_not_a_candidate(self):
         """A pyGSTi-style circuit-layer gate-label tuple, e.g.
@@ -208,7 +219,10 @@ class TestMigrateInstructionLabels:
         to know what instructions exist."""
         src = 'InstructionLabel(some_instruction, "L0", (), {})\n'
         result = migrate_instruction_labels(src)
-        assert result.source == 'InstructionLabel(some_instruction, patch_label="L0")\n'
+        assert (
+            result.source
+            == 'InstructionLabel(some_instruction, patch_label="L0")\n'
+        )
         assert result.manual_review == []
 
         src = 'InstructionLabel("Nonexistent Instruction", "L0", (), {})\n'
@@ -232,7 +246,9 @@ class TestMigrateInstructionLabels:
             'InstructionLabel("Increment", patch_label="L0", **extra_kwargs)\n'
         )
 
-    def test_bare_tuple_with_non_literal_kwargs_is_spliced_via_double_star(self):
+    def test_bare_tuple_with_non_literal_kwargs_is_spliced_via_double_star(
+        self,
+    ):
         src = '("Increment", "L0", (), extra_kwargs)\n'
         result = migrate_instruction_labels(src)
         assert result.changed
@@ -247,7 +263,9 @@ class TestMigrateInstructionLabels:
         assert not result.changed
         assert "splat call" in result.manual_review[0].message
 
-    def test_colliding_patch_label_kwarg_with_global_resolution_is_flagged(self):
+    def test_colliding_patch_label_kwarg_with_global_resolution_is_flagged(
+        self,
+    ):
         """Pre-1.2, a global instruction (positional patch_label is None)
         could still carry an unrelated `inst_kwargs["patch_label"]` apply_fn
         kwarg -- the modern single `patch_label` key can't represent both,
@@ -258,11 +276,15 @@ class TestMigrateInstructionLabels:
         assert "patch_label" in result.manual_review[0].message
         assert result.manual_review[0].kind == "patch_label_kwarg"
 
-    def test_colliding_patch_label_kwarg_with_per_patch_resolution_is_flagged(self):
+    def test_colliding_patch_label_kwarg_with_per_patch_resolution_is_flagged(
+        self,
+    ):
         """Same collision, but with a real per-patch positional patch_label
         alongside a same-named inst_kwargs entry -- also flagged, since a
         silent merge would arbitrarily pick a winner either way."""
-        src = 'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
+        src = (
+            'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
+        )
         result = migrate_instruction_labels(src)
         assert not result.changed
         assert "patch_label" in result.manual_review[0].message
@@ -279,7 +301,9 @@ class TestMigrateInstructionLabels:
         emitted -- the corresponding Instruction's apply_fn parameter
         still needs the same rename by hand, which this tool can't do."""
         src = 'InstructionLabel("Init Something", None, (), {"patch_label": "L0"})\n'
-        result = migrate_instruction_labels(src, rename_patch_label="new_patch_label")
+        result = migrate_instruction_labels(
+            src, rename_patch_label="new_patch_label"
+        )
         assert result.changed
         assert (
             result.source
@@ -293,8 +317,12 @@ class TestMigrateInstructionLabels:
         """The real, non-colliding positional patch_label (resolution
         scope) is untouched by the rename -- only the colliding
         inst_kwargs entry is renamed."""
-        src = 'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
-        result = migrate_instruction_labels(src, rename_patch_label="new_patch_label")
+        src = (
+            'InstructionLabel("Increment", "L0", (), {"patch_label": "L1"})\n'
+        )
+        result = migrate_instruction_labels(
+            src, rename_patch_label="new_patch_label"
+        )
         assert result.changed
         assert (
             result.source
@@ -303,7 +331,9 @@ class TestMigrateInstructionLabels:
 
     def test_rename_patch_label_in_bare_tuple(self):
         src = 'tup = ("Init Something", None, (), {"patch_label": "L0"})\n'
-        result = migrate_instruction_labels(src, rename_patch_label="new_patch_label")
+        result = migrate_instruction_labels(
+            src, rename_patch_label="new_patch_label"
+        )
         assert result.changed
         assert (
             result.source
@@ -344,8 +374,12 @@ class TestMigrateInstructionLabels:
         assert not twice.changed
 
     def test_matches_golden_fixture(self):
-        before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("labels_before.py").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("labels_after.py").read_text(
+            encoding="utf-8"
+        )
         result = migrate_instruction_labels(before)
         assert result.source == after
         assert len(result.manual_review) == 1
@@ -356,17 +390,20 @@ class TestMigrateInstructionLabels:
         correct line in the *rewritten* output, not the line it was on
         before that collapse happened."""
         src = (
-            'label_kwargs_only = InstructionLabel(\n'
+            "label_kwargs_only = InstructionLabel(\n"
             '    "Increment", "L0", (), {"increment_by": 2}\n'
-            ')\n'
-            'splat_call = InstructionLabel(*label_tuple)\n'
+            ")\n"
+            "splat_call = InstructionLabel(*label_tuple)\n"
         )
         result = migrate_instruction_labels(src)
         assert result.changed
         lines = result.source.splitlines()
         assert len(result.manual_review) == 1
         item = result.manual_review[0]
-        assert lines[item.line - 1] == "splat_call = InstructionLabel(*label_tuple)"
+        assert (
+            lines[item.line - 1]
+            == "splat_call = InstructionLabel(*label_tuple)"
+        )
 
 
 class TestDetectFlaggedPatterns:
@@ -417,19 +454,29 @@ class TestMigrateSource:
         above each remaining flagged line (see `labels_after_annotated.py`
         vs. the lower-level `labels_after.py`), since a confident rewrite
         happened elsewhere in the same file."""
-        before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("labels_after_annotated.py").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("labels_before.py").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("labels_after_annotated.py").read_text(
+            encoding="utf-8"
+        )
         result = migrate_source(before)
         assert result.source == after
 
     def test_matches_golden_fixture_renames(self):
-        before = FIXTURES.joinpath("renames_before.py").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("renames_after_annotated.py").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("renames_before.py").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("renames_after_annotated.py").read_text(
+            encoding="utf-8"
+        )
         result = migrate_source(before)
         assert result.source == after
 
     def test_idempotent_on_already_migrated_source(self):
-        after = FIXTURES.joinpath("labels_after.py").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("labels_after.py").read_text(
+            encoding="utf-8"
+        )
         result = migrate_source(after)
         assert result.source == after
         assert not result.changed
@@ -458,7 +505,9 @@ class TestMigrateSource:
         both the earlier rewrite that collapses a multi-line call onto
         one line, and this pass's own inline `# LOQS-MIGRATE` comments,
         push later lines down and have to be accounted for."""
-        before = FIXTURES.joinpath("labels_before.py").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("labels_before.py").read_text(
+            encoding="utf-8"
+        )
         result = migrate_source(before)
         lines = result.source.splitlines()
         for item in result.manual_review:
@@ -468,13 +517,19 @@ class TestMigrateSource:
 
 class TestMigrateNotebookSource:
     def test_matches_golden_fixture(self):
-        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("notebook_after.md").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.md").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("notebook_after.md").read_text(
+            encoding="utf-8"
+        )
         result = migrate_notebook_source(before)
         assert result.source == after
 
     def test_note_fence_is_never_touched(self):
-        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.md").read_text(
+            encoding="utf-8"
+        )
         result = migrate_notebook_source(before)
         assert (
             'mention of `PatchDict` or `InstructionLabel("Name", "L0", (), {})`'
@@ -485,7 +540,9 @@ class TestMigrateNotebookSource:
         """`docs/notebooks/workflow.md` has a real `:tags: [...]` field
         line; this used to raise a ParserSyntaxError instead of migrating
         the cell."""
-        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.md").read_text(
+            encoding="utf-8"
+        )
         result = migrate_notebook_source(before)
         assert ":tags: [scroll-output]" in result.source
 
@@ -496,7 +553,9 @@ class TestMigrateNotebookSource:
         is neither rewritten nor flagged here. Not a problem for the real
         `docs/notebooks/*.md` today (already fully migrated), but locked
         in as documented, understood behavior rather than a silent gap."""
-        before = FIXTURES.joinpath("notebook_before.md").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.md").read_text(
+            encoding="utf-8"
+        )
         result = migrate_notebook_source(before)
         assert "patches2 = PatchDict()" in result.source
 
@@ -527,20 +586,28 @@ class TestMigrateNotebookSource:
 
 class TestMigrateIpynbSource:
     def test_matches_golden_fixture(self):
-        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
-        after = FIXTURES.joinpath("notebook_after.ipynb").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
+            encoding="utf-8"
+        )
+        after = FIXTURES.joinpath("notebook_after.ipynb").read_text(
+            encoding="utf-8"
+        )
         result = migrate_ipynb_source(before)
         assert result.source == after
         assert result.changed
 
     def test_idempotent_on_already_migrated_source(self):
-        after = FIXTURES.joinpath("notebook_after.ipynb").read_text(encoding="utf-8")
+        after = FIXTURES.joinpath("notebook_after.ipynb").read_text(
+            encoding="utf-8"
+        )
         result = migrate_ipynb_source(after)
         assert result.source == after
         assert not result.changed
 
     def test_markdown_cells_are_never_touched(self):
-        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
+            encoding="utf-8"
+        )
         result = migrate_ipynb_source(before)
         markdown_cell = json.loads(result.source)["cells"][0]
         assert markdown_cell["cell_type"] == "markdown"
@@ -550,20 +617,29 @@ class TestMigrateIpynbSource:
         )
 
     def test_manual_review_items_are_labeled_by_cell(self):
-        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
+            encoding="utf-8"
+        )
         result = migrate_ipynb_source(before)
         assert any(
-            item.cell == 2 and "RepTuple" in item.message for item in result.manual_review
+            item.cell == 2 and "RepTuple" in item.message
+            for item in result.manual_review
         )
         assert any(
-            item.cell == 4 and "splat call" in item.message for item in result.manual_review
+            item.cell == 4 and "splat call" in item.message
+            for item in result.manual_review
         )
 
     def test_explicit_call_and_bare_tuple_both_rewrite_in_a_cell(self):
-        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(encoding="utf-8")
+        before = FIXTURES.joinpath("notebook_before.ipynb").read_text(
+            encoding="utf-8"
+        )
         result = migrate_ipynb_source(before)
         cell_source = "".join(json.loads(result.source)["cells"][3]["source"])
-        assert 'InstructionLabel("Increment", increment_by=2, patch_label="L0")' in cell_source
+        assert (
+            'InstructionLabel("Increment", increment_by=2, patch_label="L0")'
+            in cell_source
+        )
         assert (
             '{"instruction": "Increment", "increment_by": 3, "patch_label": "L0"}'
             in cell_source
@@ -686,7 +762,7 @@ class TestMigrateIpynbSource:
         parseable would eventually succeed on an all-`pass` module, but
         the cell should be left completely untouched and flagged instead
         of silently reduced to that."""
-        bash_script = "%%bash\necho hello\nfor f in *.txt; do cat \"$f\"; done\n"
+        bash_script = '%%bash\necho hello\nfor f in *.txt; do cat "$f"; done\n'
         notebook = {
             "cells": [
                 {
@@ -723,9 +799,9 @@ class TestRenamesTableCoverage:
             if new_loc is None:
                 continue
             new_module, new_name = new_loc
-            assert importlib.util.find_spec(new_module) is not None, (
-                f"{old_key} -> {new_loc}: {new_module!r} has no importable spec"
-            )
+            assert (
+                importlib.util.find_spec(new_module) is not None
+            ), f"{old_key} -> {new_loc}: {new_module!r} has no importable spec"
             try:
                 mod = importlib.import_module(new_module)
             except ImportError:

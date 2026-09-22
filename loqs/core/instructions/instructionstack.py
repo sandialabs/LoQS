@@ -10,17 +10,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-import h5py
+from collections.abc import Sequence
 import textwrap
 from typing import ClassVar, TypeAlias, TypeVar
 
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.core.instructions.instructionlabel import InstructionLabelLike
 from loqs.internal import Displayable
-from loqs.internal.encoder.hdf5encoder import HDF5Encoder
-from loqs.internal.encoder.jsonencoder import JSONEncoder
-from loqs.internal.serializable import Serializable
 
 T = TypeVar("T", bound="InstructionStack")
 

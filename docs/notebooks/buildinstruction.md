@@ -4,7 +4,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.19.4
 kernelspec:
   display_name: Python 3
   language: python
@@ -26,7 +26,7 @@ We will assume general familiarity with almost all `Instrument` functionality.
 
 ## Adaptive Measure Out in the [[5,1,3]] Code
 
-We will show how to take the adaptive measure out scheme from Figure 13 of {cite}`buildinstruction-ryananderson_implementing_2022`, which is reproduced here for convenience.
+We will show how to take the adaptive measure out scheme from Figure 13 of Ryan-Anderson et al. (2022), which is reproduced here for convenience.
 
 TODO: Picture
 
@@ -412,12 +412,3 @@ And voila! We have defined a complicated multistage feed-forward operation by re
 ## What's next?
 
 The natural next step after defining your own instructions is to store them in a `QECCode`, which is what our next tutorial covers.
-
-## References
-
-```{bibliography}
-:labelprefix: buildinstruction
-:keyprefix: buildinstruction-
-:filter: docname in docnames
-:style: unsrt
-```

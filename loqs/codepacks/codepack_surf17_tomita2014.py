@@ -53,7 +53,7 @@ Under 192 single-fault discrete error injections, the PyMatching 3D space-time d
 from collections.abc import Sequence
 import copy
 import itertools
-from typing import Mapping, Literal
+from typing import Literal, Mapping, TypedDict
 import numpy as np
 
 from loqs.backends.circuit.basecircuit import BasePhysicalCircuit
@@ -119,14 +119,14 @@ DEFAULT_IDLE_GATES: dict[int | float, str] = {1: "Gi1Q", 2: "Gi2Q", 3: "GiMCM"}
 # [NW, NE, SW, SE] matching the 7-layer templates' [a, b, c, d]. Shared by
 # codepack_surf17_surgery.py, which additionally substitutes one tile's
 # data slots for its grown-check mechanism.
-X_TILE_DATA = [
+X_TILE_DATA: list[list[str | None]] = [
     [None, None, "D1", "D2"],  # geometric SX1 (H row 1, top boundary)
     ["D0", "D1", "D3", "D4"],  # SX0 (H row 0)
     ["D4", "D5", "D7", "D8"],  # SX2 (H row 2)
     ["D6", "D7", None, None],  # SX3 (H row 3, bottom boundary)
 ]
 X_TILE_ROWS = [1, 0, 2, 3]  # H row measured by each execution tile
-Z_TILE_DATA = [
+Z_TILE_DATA: list[list[str | None]] = [
     [None, "D0", None, "D3"],  # SZ0 (H row 0, left boundary)
     ["D1", "D2", "D4", "D5"],  # SZ1
     ["D3", "D4", "D6", "D7"],  # SZ2
@@ -137,7 +137,17 @@ Z_TILE_ROWS = [0, 1, 2, 3]
 # Auxiliary (ancilla) qubit per execution tile, and how the four tiles of
 # each check type compose into a full syndrome-extraction round, per
 # layout. Shared by codepack_surf17_surgery.py.
-LAYOUT_SE_SPECS = {
+
+
+class LayoutSESpec(TypedDict):
+    """Syndrome-extraction configuration for a surface-17 layout variant."""
+
+    X_aux: list[str]
+    Z_aux: list[str]
+    mode: Literal["parallel", "blocks", "serial"]
+
+
+LAYOUT_SE_SPECS: dict[str, LayoutSESpec] = {
     "surf17": {
         "X_aux": ["A9", "A11", "A14", "A16"],
         "Z_aux": ["A10", "A12", "A13", "A15"],
@@ -257,7 +267,7 @@ def _build_raw_syndrome_extraction_circuit(
         return full_syndrome_circ
 
 
-def create_qec_code(
+def create_qec_code(  # noqa: C901 -- constructs surface-code QEC implementations with extensive branching for multiple layout variants (surf17/13/10)
     layout: Literal["surf17", "surf13", "surf10"] = "surf17",
     idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
@@ -1220,6 +1230,7 @@ def create_ideal_model(
         gate_dict = {}
         for gate in gate_names:
             U = standard_unitaries.get(gate, nonstd_unitaries.get(gate))
+            assert U is not None
             num_qubits = int(np.log2(U.shape[0]))
             for qs in itertools.permutations(qubits, r=num_qubits):
                 gate_dict[(gate, qs)] = convert_rep(

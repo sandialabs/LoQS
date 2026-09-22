@@ -48,8 +48,8 @@ codepack's syndrome-extraction template slot order `[a, b, c, d]`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Literal
+from collections.abc import Iterable, Sequence
+from typing import Literal, TypedDict
 
 import numpy as np
 
@@ -114,7 +114,45 @@ def merged_index(support_elem: tuple[str, int]) -> int:
     raise ValueError(f"Unknown patch tag: {patch}")
 
 
-SEAM_GEOMETRY_ZZ = {
+class SeamNewCheck(TypedDict):
+    """Specification for a new stabilizer check spanning the surgery seam."""
+
+    support: list[tuple[str, int]]
+    tile: list[tuple[str, int] | None]
+
+
+class SeamGrownCheck(TypedDict):
+    """Specification for a boundary check growing across the seam."""
+
+    check_row: int
+    old_support: list[tuple[str, int]]
+    seam_pair: list[tuple[str, int]]
+    support: list[tuple[str, int]]
+    tile: list[tuple[str, int] | None]
+
+
+class SeamGeometry(TypedDict):
+    """Geometric and algebraic specification for a lattice-surgery seam."""
+
+    kind: Literal["ZZ", "XX"]
+    orientation: Literal["vertical", "horizontal"]
+    seam_prep_basis: Literal["X", "Z"]
+    new_check_type: Literal["X", "Z"]
+    new_checks: list[SeamNewCheck]
+    grown_check_type: Literal["X", "Z"]
+    grown_checks: dict[str, SeamGrownCheck]
+    parity_support: list[tuple[str, int]]
+    parity_frame_bit_type: Literal["X", "Z"]
+    telescope_reference_checks: dict[str, list[int]]
+    byproduct_seam_indices: list[int]
+    byproduct_patch: Literal["A", "B"]
+    byproduct_logical: Literal["X", "Z"]
+    byproduct_frame_support: list[int]
+    merged_Z_L: list[tuple[str, int]]
+    merged_X_L: list[tuple[str, int]]
+
+
+SEAM_GEOMETRY_ZZ: SeamGeometry = {
     "kind": "ZZ",
     "orientation": "vertical",  # A rows 0-2, seam row 3, B rows 4-6
     # Seam qubits are prepared in |+> and split-measured in the X basis
@@ -204,7 +242,7 @@ SEAM_GEOMETRY_ZZ = {
     ],
 }
 
-SEAM_GEOMETRY_XX = {
+SEAM_GEOMETRY_XX: SeamGeometry = {
     "kind": "XX",
     "orientation": "horizontal",  # A cols 0-2, seam col 3, B cols 4-6
     # Seam qubits are prepared in |0> and split-measured in the Z basis
@@ -285,7 +323,10 @@ SEAM_GEOMETRY_XX = {
     ],
 }
 
-SEAM_GEOMETRIES = {"ZZ": SEAM_GEOMETRY_ZZ, "XX": SEAM_GEOMETRY_XX}
+SEAM_GEOMETRIES: dict[str, SeamGeometry] = {
+    "ZZ": SEAM_GEOMETRY_ZZ,
+    "XX": SEAM_GEOMETRY_XX,
+}
 
 
 def _support_row(support: Sequence[tuple[str, int]]) -> np.ndarray:
@@ -318,7 +359,7 @@ def build_merged_check_matrices(
     """
     seam_geometry = SEAM_GEOMETRIES[kind]
 
-    def patch_rows(H: np.ndarray, patch: str, grown: dict | None):
+    def patch_rows(H: np.ndarray, patch: str, grown: SeamGrownCheck | None):
         rows = []
         labels = []
         check_type = "X" if H is BASE_H_X else "Z"
@@ -456,11 +497,12 @@ def _build_patch_se_block(
             occ = counter.get(aux, 0)
             counter[aux] = occ + 1
             out[tile_rows[exec_idx]] = (aux, occ)
+    assert block is not None
     return block, labels_X, labels_Z
 
 
 def _build_seam_block(
-    seam_geometry: dict,
+    seam_geometry: SeamGeometry,
     resolve,
     qubits_a: Sequence,
     all_labels: list,
@@ -519,7 +561,7 @@ def _build_reference_se_circuit(
     qubits_a: Sequence,
     qubits_b: Sequence,
     seam_qubits: Sequence,
-    idle_layout: str,
+    idle_layout: Literal["surf17", "surf13", "surf10"],
     circuit_backend: type[BasePhysicalCircuit],
 ):
     """A fully self-padded `se_circuit` for `idle_layout`, reusing the real
@@ -604,7 +646,7 @@ def _surgery_metadata(
     kind: str,
     geometry: PatchGeometry,
     circuit_backend: type[BasePhysicalCircuit],
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
 ) -> dict:
@@ -837,7 +879,7 @@ def _surgery_metadata(
 # ---------------------------------------------------------------------------
 
 
-def pymatching_merged_window_decode(
+def pymatching_merged_window_decode(  # noqa: C901 -- decodes syndrome windows on 3D space-time graph with complex edge construction and matching logic
     H: np.ndarray,
     syndrome_window: Sequence[Sequence[int]],
     prev_round: Sequence[int],
@@ -1199,7 +1241,7 @@ def _merge_bookkeeping_map_qubits_fn(
     return new_kwargs
 
 
-def _split_bookkeeping_apply_fn(
+def _split_bookkeeping_apply_fn(  # noqa: C901 -- manages complex split-patch bookkeeping with parity extraction, frame restoration, and history tracking
     patches: PatchLayout,
     history: History,
     split_outcomes: MeasurementOutcomes,
@@ -1253,7 +1295,8 @@ def _split_bookkeeping_apply_fn(
 
     try:
         last = history[-1]
-        seam_hist = list(last.get(seam_history_key, []) or [])
+        raw_seam = last.get(seam_history_key, [])
+        seam_hist = list(raw_seam) if isinstance(raw_seam, Iterable) else []
     except (IndexError, AttributeError):
         seam_hist = []
     assert seam_hist, (
@@ -1810,7 +1853,7 @@ def build_merge_instruction(
     geometry: PatchGeometry,
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
@@ -1875,7 +1918,7 @@ def build_split_instruction(
     geometry: PatchGeometry,
     mode: str = "simple",
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
@@ -1930,7 +1973,7 @@ def build_surgery_parity_instruction(
     mode: str = "simple",
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
@@ -1972,7 +2015,7 @@ def build_surgery_parity_instruction_sequence(
     mode: str = "ft",
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
@@ -2015,7 +2058,7 @@ def get_surgery_stage_circuits(
     kind: str,
     geometry: PatchGeometry,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
 ) -> dict:
@@ -2148,7 +2191,7 @@ def build_surgery_cnot_sequence(
     num_merge_rounds: int = 3,
     num_post_split_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,
@@ -2237,7 +2280,7 @@ def build_surgery_cnot_sequence(
         anc_patch_label,
         name=f"{base_name} corrections",
     )
-    entries = [
+    entries: list[tuple[object, str | None] | dict[str, str]] = [
         ("Plus Prep", anc_patch_label),
         ("QEC", anc_patch_label),
         (zz, None),
@@ -2411,7 +2454,7 @@ def build_mzz_bell_prep_sequence(
     mode: str = "ft",
     num_merge_rounds: int = 3,
     circuit_backend: type[BasePhysicalCircuit] = PyGSTiPhysicalCircuit,
-    idle_layout: str | None = None,
+    idle_layout: Literal["surf17", "surf13", "surf10"] | None = None,
     gate_durations: dict[str, int | float] | None = None,
     idle_gates: dict[int | float, str] | None = None,
     name: str | None = None,

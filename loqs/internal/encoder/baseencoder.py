@@ -11,7 +11,6 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 import copy
 from typing import Callable, ClassVar
-import h5py
 
 from loqs.internal.serializable import (
     DeferredRef,

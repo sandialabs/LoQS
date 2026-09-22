@@ -53,7 +53,6 @@ from loqs.core.recordables import (
     MeasurementOutcomes,
     PatchLayout,
     PauliFrame,
-    QECCodePatch,
 )
 from loqs.core.syndromelabel import (
     SyndromeLabel,
