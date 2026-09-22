@@ -1145,8 +1145,12 @@ class TestReadCheckpointDictAttrUnion:
 
             # Worker files should take precedence on collision
             assert result[1] == "from_canonical"  # Only in canonical
-            assert result[2] == "from_worker_1"   # Canonical overridden by worker
-            assert result[3] == "from_worker_2"   # Later worker overrides earlier
+            assert (
+                result[2] == "from_worker_1"
+            )  # Canonical overridden by worker
+            assert (
+                result[3] == "from_worker_2"
+            )  # Later worker overrides earlier
             assert result[4] == "new_from_worker_2"  # Only in latest worker
 
     def test_union_worker_only_when_no_canonical(self, make_temp_path):
@@ -1261,8 +1265,10 @@ class TestReadCheckpointDictAttrUnion:
                 canonical_attr_name="_reduced_results",  # Remap for canonical
             )
 
-            assert result[1] == "canonical_val"  # From canonical with remapped name
-            assert result[2] == "worker_val"     # From worker
+            assert (
+                result[1] == "canonical_val"
+            )  # From canonical with remapped name
+            assert result[2] == "worker_val"  # From worker
 
     def test_empty_directories_return_empty_dict(self, make_temp_path):
         """Test that empty directory returns empty dict."""

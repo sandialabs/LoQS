@@ -2,10 +2,6 @@
 tests across test_pygstitools.py, test_noisesweeptools.py, and
 test_fttools.py -- consolidated from three near-identical copies."""
 
-import time
-
-from loqs.core import QuantumProgram
-
 
 def _build_shot_executor():
     """Module-level factory (not a closure) building a fresh loky
@@ -14,6 +10,3 @@ def _build_shot_executor():
     import loky
 
     return loky.get_reusable_executor(max_workers=1)
-
-
-

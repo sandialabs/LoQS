@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING, Iterable
 
 from loqs.internal.streamingmerge import (
     merge_dict_attr,
-    iter_dict_attr_entries,
     merge_worker_checkpoint_file,
     get_dict_attr_value,
     get_dict_attr_group,

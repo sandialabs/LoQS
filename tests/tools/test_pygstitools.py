@@ -93,7 +93,8 @@ def trivial_counter_setup():
 class TestPipelineWithMultiplePatches:
     """`EdesignRunner` against a real two-patch [[7,1,3]] program, confirming
     `frame_filter` picks out each patch's own `"FT Logical Z Measure"` output
-    correctly regardless of the composite instruction's internal frame count."""
+    correctly regardless of the composite instruction's internal frame count.
+    """
 
     @staticmethod
     def _steane_qubits(suffix: str) -> list[str]:
@@ -139,7 +140,9 @@ class TestPipelineWithMultiplePatches:
             qubit_labels=phys_qubits,
             availability={"Gi": [(q,) for q in phys_qubits]},
         )
-        physical_model = create_explicit_model(pspec, ideal_gate_type="full unitary")
+        physical_model = create_explicit_model(
+            pspec, ideal_gate_type="full unitary"
+        )
         circ = Circuit([], line_labels=phys_qubits)
         edesign = ExperimentDesign([circ])
 
@@ -212,9 +215,8 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         # Assert edesign is not None and is equivalent
         assert runner2.edesign is not None
-        assert (
-            set(runner2.edesign.all_circuits_needing_data)
-            == set(s.edesign.all_circuits_needing_data)
+        assert set(runner2.edesign.all_circuits_needing_data) == set(
+            s.edesign.all_circuits_needing_data
         )
 
         # Assert calling .run() on the round-tripped runner succeeds
@@ -249,9 +251,8 @@ class TestSimulateDatasetForEdesignCheckpointing:
 
         # Assert edesign is not None and is equivalent
         assert runner2.edesign is not None
-        assert (
-            set(runner2.edesign.all_circuits_needing_data)
-            == set(s.edesign.all_circuits_needing_data)
+        assert set(runner2.edesign.all_circuits_needing_data) == set(
+            s.edesign.all_circuits_needing_data
         )
 
     def test_item_key_fn_is_picklable(self, trivial_counter_setup, tmp_path):

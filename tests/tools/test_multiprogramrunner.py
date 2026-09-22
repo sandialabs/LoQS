@@ -27,7 +27,6 @@ from loqs.tools.multiprogramrunner import (
     _checkpoint_subdir_for_prefix,
 )
 
-
 # Module-level worker functions for parallel/multiprocessing tests
 
 
@@ -63,19 +62,34 @@ def _raise_after_n(item, index, *, shot_executor, **kwargs):
     return item * 2
 
 
-def _build_counter_program(num_increments, increment_by, name="Trivial counter test program"):
+def _build_counter_program(
+    num_increments, increment_by, name="Trivial counter test program"
+):
     """Build a QuantumProgram via codepack_trivial_counter: an Init Counter
     (starting at 0) followed by num_increments Increment instructions, each
-    adding increment_by -- final counter value is num_increments * increment_by."""
+    adding increment_by -- final counter value is num_increments * increment_by.
+    """
     trivial_code = trivial_codepack.create_qec_code()
     ideal_model = trivial_codepack.create_ideal_model(["Q0"])
     stack = [
-        {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": ["Q0"]},
-        {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        {
+            "instruction": "Init Patch Trivial",
+            "new_patch_label": "L0",
+            "qubits": ["Q0"],
+        },
+        {
+            "instruction": "Init Counter",
+            "patch_label": "L0",
+            "initial_value": 0,
+        },
     ]
     for _ in range(num_increments):
         stack.append(
-            {"instruction": "Increment", "patch_label": "L0", "increment_by": increment_by}
+            {
+                "instruction": "Increment",
+                "patch_label": "L0",
+                "increment_by": increment_by,
+            }
         )
     return QuantumProgram(
         stack,
@@ -92,12 +106,12 @@ def _write_worker_file(args):
 
     items_to_write = []
     for i in range(num_entries):
-        items_to_write.append((worker_id_base * 100 + i, worker_id_base * 1000 + i))
+        items_to_write.append(
+            (worker_id_base * 100 + i, worker_id_base * 1000 + i)
+        )
 
     # Simulate parallel worker file writes (like a real parallel run)
-    worker_file_path = (
-        Path(checkpoint_dir) / f"worker_{worker_id()}_runner.h5"
-    )
+    worker_file_path = Path(checkpoint_dir) / f"worker_{worker_id()}_runner.h5"
     with h5py.File(worker_file_path, "a") as f:
         for index, result in items_to_write:
             merge_dict_attr(
@@ -124,7 +138,11 @@ class _SimpleDoubleRunner(MultiProgramRunner):
     def build_program(self, index):
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign, name=f"Item {index}")
+        return _build_counter_program(
+            num_increments=abs(item),
+            increment_by=2 * sign,
+            name=f"Item {index}",
+        )
 
     def reduce_program_outcomes(self, program_results):
         return program_results.collect_shot_data("counter", -1)[0]
@@ -161,7 +179,16 @@ class _TrackingRunner(MultiProgramRunner):
         "track_calls",
     ]
 
-    def __init__(self, items, process_fn=_double_item, max_count=999, raise_after=None, call_count=None, track_calls=None, **kwargs):
+    def __init__(
+        self,
+        items,
+        process_fn=_double_item,
+        max_count=999,
+        raise_after=None,
+        call_count=None,
+        track_calls=None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.items = items
         # Support legacy process_fn parameter: map _raise_after_n to raise_after behavior
@@ -169,12 +196,14 @@ class _TrackingRunner(MultiProgramRunner):
         if raise_after is not None:
             self.raise_after = raise_after
         else:
-            self.raise_after = None if process_fn != _raise_after_n else max_count
+            self.raise_after = (
+                None if process_fn != _raise_after_n else max_count
+            )
         # Determine if we should track calls (old _count_and_double behavior)
         if track_calls is not None:
             self.track_calls = track_calls
         else:
-            self.track_calls = (process_fn == _count_and_double)
+            self.track_calls = process_fn == _count_and_double
         # call_count may be passed during deserialization
         self.call_count = call_count if call_count is not None else [0]
         self.on_item_done_calls = []
@@ -186,11 +215,15 @@ class _TrackingRunner(MultiProgramRunner):
         # Check for crash simulation on this item
         if self.raise_after is not None:
             if self.call_count[0] > self.raise_after:
-                raise RuntimeError(f"Simulated crash after {self.raise_after} items")
+                raise RuntimeError(
+                    f"Simulated crash after {self.raise_after} items"
+                )
 
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
+        return _build_counter_program(
+            num_increments=abs(item), increment_by=2 * sign
+        )
 
     def reduce_program_outcomes(self, program_results):
         return program_results.collect_shot_data("counter", -1)[0]
@@ -201,6 +234,7 @@ class _TrackingRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         def track(index, item, result):
             self.on_item_done_calls.append((index, item, result))
+
         return track
 
 
@@ -208,7 +242,10 @@ class _SleepingRunner(MultiProgramRunner):
     """Runner that sleeps (via a real Sleep instruction) before returning
     results, for timing tests."""
 
-    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "sleep_time"]
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "sleep_time",
+    ]
 
     def __init__(self, items, sleep_time=0.01, **kwargs):
         super().__init__(**kwargs)
@@ -222,13 +259,29 @@ class _SleepingRunner(MultiProgramRunner):
         trivial_code = trivial_codepack.create_qec_code()
         ideal_model = trivial_codepack.create_ideal_model(["Q0"])
         stack = [
-            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": ["Q0"]},
-            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
-            {"instruction": "Sleep", "patch_label": "L0", "duration": self.sleep_time},
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": ["Q0"],
+            },
+            {
+                "instruction": "Init Counter",
+                "patch_label": "L0",
+                "initial_value": 0,
+            },
+            {
+                "instruction": "Sleep",
+                "patch_label": "L0",
+                "duration": self.sleep_time,
+            },
         ]
         for _ in range(abs(item)):
             stack.append(
-                {"instruction": "Increment", "patch_label": "L0", "increment_by": 2 * sign}
+                {
+                    "instruction": "Increment",
+                    "patch_label": "L0",
+                    "increment_by": 2 * sign,
+                }
             )
         return QuantumProgram(
             stack,
@@ -246,13 +299,17 @@ class _SleepingRunner(MultiProgramRunner):
     def _make_on_item_done(self):
         def track(index, item, result):
             self.timestamps.append(time.time())
+
         return track
 
 
 class _RunnerWithFieldA(MultiProgramRunner):
     """Test runner with field_a in mismatch check."""
 
-    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "field_a"]
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "field_a",
+    ]
 
     def __init__(self, items, field_a=1, **kwargs):
         super().__init__(**kwargs)
@@ -262,7 +319,9 @@ class _RunnerWithFieldA(MultiProgramRunner):
     def build_program(self, index):
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
+        return _build_counter_program(
+            num_increments=abs(item), increment_by=2 * sign
+        )
 
     def reduce_program_outcomes(self, program_results):
         return program_results.collect_shot_data("counter", -1)[0]
@@ -277,7 +336,10 @@ class _RunnerWithFieldA(MultiProgramRunner):
 class _RunnerWithFieldB(MultiProgramRunner):
     """Test runner with field_b in mismatch check (incompatible with _RunnerWithFieldA)."""
 
-    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items", "field_b"]
+    _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
+        "items",
+        "field_b",
+    ]
 
     def __init__(self, items, field_b=2, **kwargs):
         super().__init__(**kwargs)
@@ -287,7 +349,9 @@ class _RunnerWithFieldB(MultiProgramRunner):
     def build_program(self, index):
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
+        return _build_counter_program(
+            num_increments=abs(item), increment_by=2 * sign
+        )
 
     def reduce_program_outcomes(self, program_results):
         return program_results.collect_shot_data("counter", -1)[0]
@@ -310,7 +374,9 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         # First run: crash after 3 items
         runner1 = _TrackingRunner(
             items,
-            process_fn=_raise_after_n, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_raise_after_n,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             max_count=3,
         )
 
@@ -329,7 +395,10 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         # Second run: resume with normal function on same checkpoint dir
         runner2 = _TrackingRunner(
             items,
-            process_fn=_count_and_double, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_count_and_double,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         results = runner2.run()
 
@@ -353,7 +422,9 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         # First run: crash after 3 items
         runner1 = _TrackingRunner(
             items,
-            process_fn=_raise_after_n, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_raise_after_n,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             max_count=3,
         )
 
@@ -363,7 +434,10 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         # Second run: resume with normal function on same checkpoint dir
         runner2 = _TrackingRunner(
             items,
-            process_fn=_count_and_double, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_count_and_double,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         results = runner2.run()
 
@@ -371,12 +445,16 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
 
         # Every item -- both the 3 completed before the crash and the 7
         # completed only after resuming -- should have a wall-clock entry.
-        assert set(runner2.item_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner2.item_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
         for value in runner2.item_wall_clock_times.values():
             assert isinstance(value, float)
             assert value > 0
 
-        assert set(runner2.shot_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner2.shot_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
         for shot_times in runner2.shot_wall_clock_times.values():
             assert isinstance(shot_times, dict)
             assert len(shot_times) > 0
@@ -402,21 +480,34 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
 
         runner1 = _TrackingRunner(
             items,
-            process_fn=_count_and_double, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_count_and_double,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         runner1.run()
 
-        assert set(runner1.item_wall_clock_times.keys()) == set(range(len(items)))
-        assert set(runner1.shot_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner1.item_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
+        assert set(runner1.shot_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
 
         runner2 = _TrackingRunner(
             items,
-            process_fn=_count_and_double, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_count_and_double,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         runner2.run()
 
-        assert set(runner2.item_wall_clock_times.keys()) == set(range(len(items)))
-        assert set(runner2.shot_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner2.item_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
+        assert set(runner2.shot_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
 
 
 class TestMultiProgramRunnerParallel:
@@ -435,7 +526,9 @@ class TestMultiProgramRunnerParallel:
 
         runner = _TrackingRunner(
             items,
-            process_fn=_double_item, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_double_item,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             parallel_strategy=strategy,
         )
         results = runner.run()
@@ -444,7 +537,9 @@ class TestMultiProgramRunnerParallel:
         # After a completed parallel run, worker files should be consolidated
         # into runner.h5 and deleted
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 0  # Worker files deleted after consolidation
+        assert (
+            len(worker_files) == 0
+        )  # Worker files deleted after consolidation
         # Verify all 10 items are now in runner.h5
         runner_path = checkpoint_dir / "runner.h5"
         assert runner_path.exists()
@@ -467,7 +562,9 @@ class TestMultiProgramRunnerParallel:
 
         runner = _SleepingRunner(
             items,
-            sleep_time=0.05, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            sleep_time=0.05,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             parallel_strategy=strategy,
             poll_interval=0.1,
         )
@@ -500,8 +597,11 @@ class TestMultiProgramRunnerParallel:
         )
 
         runner1 = _TrackingDoubleRunner(
-            items, tracked_indices=recorded_indices, checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
+            items,
+            tracked_indices=recorded_indices,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
         )
 
         # Manually create a partial completion scenario by manually seeding
@@ -517,8 +617,12 @@ class TestMultiProgramRunnerParallel:
 
         # Second run: continue from checkpoint. Use the tracking subclass.
         runner2 = _TrackingDoubleRunner(
-            items, tracked_indices=recorded_indices, checkpoint=True, resume=True,
-            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
+            items,
+            tracked_indices=recorded_indices,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
         )
 
         results = runner2.run()
@@ -545,7 +649,8 @@ class TestMultiProgramRunnerParallel:
         `test_parallel_resume_from_partial_run` above, since no test in
         this file ever triggers a real mid-flight `loky` crash) and not
         only the ones the resuming run actually processes -- the parallel
-        counterpart of `test_crash_and_resume_preserves_item_and_shot_wall_clock_times`."""
+        counterpart of `test_crash_and_resume_preserves_item_and_shot_wall_clock_times`.
+        """
         loky = pytest.importorskip("loky")
         checkpoint_dir = tmp_path / "checkpoints"
         items = list(range(10))
@@ -556,8 +661,10 @@ class TestMultiProgramRunnerParallel:
         )
 
         runner1 = _TrackingDoubleRunner(
-            items, checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
+            items,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
         )
 
         # Manually create a partial completion scenario by manually seeding
@@ -567,8 +674,11 @@ class TestMultiProgramRunnerParallel:
         _seed_partial_worker_file(checkpoint_dir, done_indices=[0, 2, 4])
 
         runner2 = _TrackingDoubleRunner(
-            items, checkpoint=True, resume=True,
-            item_checkpoint_dir=checkpoint_dir, parallel_strategy=strategy,
+            items,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
+            parallel_strategy=strategy,
         )
         results = runner2.run()
 
@@ -576,12 +686,16 @@ class TestMultiProgramRunnerParallel:
 
         # Every item -- both the 3 manually seeded as already done and the
         # 7 this run actually processed -- should have a wall-clock entry.
-        assert set(runner2.item_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner2.item_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
         for value in runner2.item_wall_clock_times.values():
             assert isinstance(value, float)
             assert value > 0
 
-        assert set(runner2.shot_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner2.shot_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
         for shot_times in runner2.shot_wall_clock_times.values():
             assert isinstance(shot_times, dict)
             assert len(shot_times) > 0
@@ -630,12 +744,16 @@ class TestItemAndShotWallClockTimes:
         )
         runner.run()
 
-        assert set(runner.item_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner.item_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
         for value in runner.item_wall_clock_times.values():
             assert isinstance(value, float)
             assert value > 0
 
-        assert set(runner.shot_wall_clock_times.keys()) == set(range(len(items)))
+        assert set(runner.shot_wall_clock_times.keys()) == set(
+            range(len(items))
+        )
         for shot_times in runner.shot_wall_clock_times.values():
             assert set(shot_times.keys()) == set(range(num_shots))
             for value in shot_times.values():
@@ -664,14 +782,18 @@ class TestItemAndShotWallClockTimes:
             for outer_key, value in restored.item_wall_clock_times.items():
                 assert isinstance(outer_key, int)
                 assert isinstance(value, float)
-            assert restored.item_wall_clock_times == runner.item_wall_clock_times
+            assert (
+                restored.item_wall_clock_times == runner.item_wall_clock_times
+            )
 
             for outer_key, inner in restored.shot_wall_clock_times.items():
                 assert isinstance(outer_key, int)
                 for inner_key, value in inner.items():
                     assert isinstance(inner_key, int)
                     assert isinstance(value, float)
-            assert restored.shot_wall_clock_times == runner.shot_wall_clock_times
+            assert (
+                restored.shot_wall_clock_times == runner.shot_wall_clock_times
+            )
 
     def test_item_and_shot_wall_clock_times_survive_array_free_subtree_collapse(
         self, tmp_path
@@ -699,11 +821,15 @@ class TestItemAndShotWallClockTimes:
             obj_root = _resolve_checkpoint_object_group(f)
 
             assert isinstance(obj_root["item_wall_clock_times"], h5py.Group)
-            item_values_iterable = obj_root["item_wall_clock_times"]["dict"]["values"]["iterable"]
+            item_values_iterable = obj_root["item_wall_clock_times"]["dict"][
+                "values"
+            ]["iterable"]
             assert item_values_iterable.attrs["storage_format"] == "dataset"
 
             assert isinstance(obj_root["shot_wall_clock_times"], h5py.Group)
-            shot_values_iterable = obj_root["shot_wall_clock_times"]["dict"]["values"]["iterable"]
+            shot_values_iterable = obj_root["shot_wall_clock_times"]["dict"][
+                "values"
+            ]["iterable"]
             assert shot_values_iterable.attrs["storage_format"] == "groups"
             assert {"0", "1", "2"} <= set(shot_values_iterable.keys())
 
@@ -731,7 +857,9 @@ class TestConcurrentWorkerWrites:
             )
 
         # Verify every entry was written
-        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
+        from loqs.internal.streamingmerge import (
+            read_checkpoint_dict_attr_union,
+        )
 
         done = read_checkpoint_dict_attr_union(
             checkpoint_dir, None, "worker_*_runner.h5", "results"
@@ -788,9 +916,7 @@ def _seed_partial_worker_file(checkpoint_dir: Path, done_indices: list[int]):
     seeding style), so a resume test can confirm both timing attributes
     cover a manually-seeded "already done" item, not just the ones the
     resuming run actually processes."""
-    worker_file_path = (
-        checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-    )
+    worker_file_path = checkpoint_dir / f"worker_{worker_id()}_runner.h5"
     from loqs.internal.streamingmerge import merge_dict_attr
 
     with h5py.File(worker_file_path, "a") as f:
@@ -837,7 +963,9 @@ class _ShotProgressTestRunner(MultiProgramRunner):
     def build_program(self, index):
         item = self.items[index]
         sign = 1 if item >= 0 else -1
-        return _build_counter_program(num_increments=abs(item), increment_by=2 * sign)
+        return _build_counter_program(
+            num_increments=abs(item), increment_by=2 * sign
+        )
 
     def reduce_program_outcomes(self, program_results):
         return program_results.collect_shot_data("counter", -1)[0]
@@ -868,12 +996,24 @@ class _CustomFilenameProbeRunner(MultiProgramRunner):
         trivial_code = trivial_codepack.create_qec_code()
         ideal_model = trivial_codepack.create_ideal_model(["Q0"])
         stack = [
-            {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": ["Q0"]},
-            {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": ["Q0"],
+            },
+            {
+                "instruction": "Init Counter",
+                "patch_label": "L0",
+                "initial_value": 0,
+            },
         ]
         for _ in range(abs(item)):
             stack.append(
-                {"instruction": "Increment", "patch_label": "L0", "increment_by": 2 * sign}
+                {
+                    "instruction": "Increment",
+                    "patch_label": "L0",
+                    "increment_by": 2 * sign,
+                }
             )
         self._pending_index = index
         return QuantumProgram(
@@ -924,13 +1064,16 @@ class TestParallelDispatchAndPollingRegressions:
         Root cause: _run_serial hardcoded shot_executor=None instead of
         resolving from the ParallelStrategy.
         """
+
         class _ShotExecutorTracker(MultiProgramRunner):
             _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + ["items"]
 
             def __init__(self, items, run_kwargs_log=None, **kwargs):
                 super().__init__(**kwargs)
                 self.items = items
-                self.run_kwargs_log = run_kwargs_log if run_kwargs_log is not None else []
+                self.run_kwargs_log = (
+                    run_kwargs_log if run_kwargs_log is not None else []
+                )
 
             def build_program(self, index):
                 return _FakeProgram(self.items[index] * 2, self.run_kwargs_log)
@@ -949,7 +1092,11 @@ class TestParallelDispatchAndPollingRegressions:
         )
         runner.run()
         # All calls should receive the sentinel value, not None
-        assert [log["shot_executor"] for log in runner.run_kwargs_log] == ["SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR", "SENTINEL_EXECUTOR"]
+        assert [log["shot_executor"] for log in runner.run_kwargs_log] == [
+            "SENTINEL_EXECUTOR",
+            "SENTINEL_EXECUTOR",
+            "SENTINEL_EXECUTOR",
+        ]
 
     def test_parallel_resume_no_double_on_item_done(self, tmp_path):
         """Parallel resume with on_item_done double-invoked for replayed items.
@@ -969,7 +1116,9 @@ class TestParallelDispatchAndPollingRegressions:
         )
         runner_init = _TrackingRunner(
             list(range(6)),
-            process_fn=_double_item, checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_double_item,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             parallel_strategy=strategy,
         )
         runner_init.write(checkpoint_dir / "runner.h5")
@@ -980,7 +1129,10 @@ class TestParallelDispatchAndPollingRegressions:
         # Now resume from the checkpoint
         runner = _TrackingRunner(
             list(range(6)),
-            process_fn=_double_item, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+            process_fn=_double_item,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
             parallel_strategy=strategy,
         )
         runner.run()
@@ -992,7 +1144,9 @@ class TestParallelDispatchAndPollingRegressions:
 
         # Each index should appear exactly once, not twice
         for idx, count in index_counts.items():
-            assert count == 1, f"Index {idx} was called {count} times (expected 1)"
+            assert (
+                count == 1
+            ), f"Index {idx} was called {count} times (expected 1)"
 
     def test_parallel_without_checkpoint_dir_still_fires_on_item_done(self):
         """A parallel run with item_checkpoint_dir=None still invokes on_item_done
@@ -1014,16 +1168,29 @@ class TestParallelDispatchAndPollingRegressions:
         runner.run()
 
         # on_item_done should have been called once for each item
-        assert len(runner.on_item_done_calls) == 4, f"Expected 4 calls to on_item_done, got {len(runner.on_item_done_calls)}"
+        assert (
+            len(runner.on_item_done_calls) == 4
+        ), f"Expected 4 calls to on_item_done, got {len(runner.on_item_done_calls)}"
 
         # Verify all expected indices were called (order not guaranteed in parallel)
-        called_indices = {call_index for call_index, _, _ in runner.on_item_done_calls}
-        assert called_indices == {0, 1, 2, 3}, f"Not all indices called: {called_indices}"
+        called_indices = {
+            call_index for call_index, _, _ in runner.on_item_done_calls
+        }
+        assert called_indices == {
+            0,
+            1,
+            2,
+            3,
+        }, f"Not all indices called: {called_indices}"
 
         # Verify results are correct for each item
         for call_index, call_item, call_result in runner.on_item_done_calls:
-            assert call_item == call_index, f"Item mismatch for index {call_index}"
-            assert call_result == call_index * 2, f"Result mismatch for index {call_index}"
+            assert (
+                call_item == call_index
+            ), f"Item mismatch for index {call_index}"
+            assert (
+                call_result == call_index * 2
+            ), f"Result mismatch for index {call_index}"
 
     def test_shots_pbar_does_not_double_count_stale_in_flight_item(
         self, tmp_path
@@ -1154,7 +1321,9 @@ class TestParallelDispatchAndPollingRegressions:
             checkpoint_dir, None, "worker_*_runner.h5", "results"
         )
         assert 2 in done, "Healthy file's result should be read"
-        assert 1 not in done, "Corrupted key 1 (missing value group) should not be in results"
+        assert (
+            1 not in done
+        ), "Corrupted key 1 (missing value group) should not be in results"
 
         # _poll_one_worker_file: doesn't crash on the same corruption,
         # consuming what it can before stopping.
@@ -1169,7 +1338,9 @@ class TestParallelDispatchAndPollingRegressions:
             pbar=None,
         )
         # Should consume first entry before hitting corruption
-        assert consumed == 1, "Should consume first entry before hitting corruption"
+        assert (
+            consumed == 1
+        ), "Should consume first entry before hitting corruption"
         assert 0 in observed_indices, "First entry should have been processed"
 
         # _consolidate_worker_files: corrupted file skipped, healthy merged.
@@ -1186,7 +1357,9 @@ class TestParallelDispatchAndPollingRegressions:
         done_after = read_checkpoint_dict_attr_union(
             checkpoint_dir, None, "worker_*_runner.h5", "results"
         )
-        assert 2 in done_after, "Healthy file should be merged after consolidation"
+        assert (
+            2 in done_after
+        ), "Healthy file should be merged after consolidation"
 
     def test_consolidate_worker_files_skips_truncated_file(self, tmp_path):
         """A truncated worker file (raw bytes cut off, so h5py itself
@@ -1239,7 +1412,10 @@ class TestParallelDispatchAndPollingRegressions:
         )
 
         # Verify the good file was merged (can read from runner.h5)
-        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
+        from loqs.internal.streamingmerge import (
+            read_checkpoint_dict_attr_union,
+        )
+
         done = read_checkpoint_dict_attr_union(
             checkpoint_dir, None, "worker_*_runner.h5", "results"
         )
@@ -1393,9 +1569,7 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         runner = _CountingRunner([1, 2, 3], multiplier=2)
         assert runner.run() == [2, 4, 6]
 
-    def test_run_writes_runner_h5_before_dispatch_completes(
-        self, tmp_path
-    ):
+    def test_run_writes_runner_h5_before_dispatch_completes(self, tmp_path):
         """The runner.h5 snapshot must exist as soon as run() starts
         dispatching, not only after it successfully finishes -- otherwise
         a crash mid-dispatch would leave nothing to recover from."""
@@ -1407,7 +1581,10 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
                 return super().build_program(index)
 
         runner = _CheckingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         assert runner.run() == [2, 4, 6]
 
@@ -1418,30 +1595,47 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
 
         with pytest.raises(FileExistsError):
             _CountingRunner(
-                [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+                [1, 2, 3],
+                multiplier=2,
+                checkpoint=True,
+                item_checkpoint_dir=checkpoint_dir,
             ).run()
 
     def test_matching_config_auto_resumes(self, tmp_path):
         """A matching config with existing checkpoint allows resume."""
         checkpoint_dir = tmp_path / "ckpt"
         first = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         assert first.run() == [2, 4, 6]
 
         resumed = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         assert resumed.run() == [2, 4, 6]
 
     def test_mismatched_config_raises(self, tmp_path):
         checkpoint_dir = tmp_path / "ckpt"
         _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         ).run()
 
         mismatched = _CountingRunner(
-            [1, 2, 3], multiplier=3, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=3,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         with pytest.raises(ValueError, match="multiplier"):
             mismatched.run()
@@ -1449,12 +1643,18 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
     def test_force_resume_bypasses_mismatch(self, tmp_path):
         checkpoint_dir = tmp_path / "ckpt"
         _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         ).run()
 
         mismatched = _CountingRunner(
             [1, 2, 3],
-            multiplier=3, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+            multiplier=3,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
             force_resume=True,
         )
         # Already-done items are trusted as-is (their original,
@@ -1469,7 +1669,10 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         _FLAKY_CALL_COUNT["n"] = 0
 
         interrupted = _FlakyRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         with pytest.raises(RuntimeError, match="simulated crash"):
             interrupted.run()
@@ -1490,14 +1693,19 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
                 [1, 2, 3], multiplier=2, resume=True, checkpoint=False
             )
 
-    def test_checkpoint_without_resume_raises_when_content_exists(self, tmp_path):
+    def test_checkpoint_without_resume_raises_when_content_exists(
+        self, tmp_path
+    ):
         """State machine case (b): checkpoint=True, resume=False, but
         on-disk state already exists raises ValueError."""
         checkpoint_dir = tmp_path / "ckpt"
 
         # First run: create a genuine checkpoint
         first = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         first.run()
 
@@ -1507,7 +1715,11 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         # Second run: attempt to run again with checkpoint=True but
         # resume=False should raise
         second = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir, resume=False
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
+            resume=False,
         )
         with pytest.raises(
             ValueError,
@@ -1522,7 +1734,11 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
 
         # Attempt to resume from a nonexistent dir
         runner = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         with pytest.raises(
             ValueError,
@@ -1533,7 +1749,11 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         # Also test with an empty-but-existent dir
         checkpoint_dir.mkdir(parents=True)
         runner2 = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         with pytest.raises(
             ValueError,
@@ -1555,13 +1775,20 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
 
         # First runner creates and checkpoints
         runner1 = _RunnerWithFieldA(
-            [1, 2, 3], field_a=10, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            field_a=10,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         runner1.run()
 
         # Second runner (different subclass with incompatible fields) attempts to resume
         runner2 = _RunnerWithFieldB(
-            [10, 20, 30], field_b=20, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+            [10, 20, 30],
+            field_b=20,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         with pytest.raises(
             TypeError,
@@ -1577,7 +1804,10 @@ class TestMergeReducedResult:
         """_merge_reduced_result appends to _reduced_results in runner.h5."""
         checkpoint_dir = tmp_path / "ckpt"
         runner = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         runner.run()
 
@@ -1606,7 +1836,10 @@ class TestMergeReducedResult:
         is a true no-op: no second disk write, and the first value is kept."""
         checkpoint_dir = tmp_path / "ckpt"
         runner = _CountingRunner(
-            [1, 2, 3], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [1, 2, 3],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         runner.run()
 
@@ -1668,9 +1901,7 @@ class TestRetryHdf5Write:
         assert call_count["n"] == 3
         assert written == [True]
 
-    def test_reraises_after_max_retries_exhausted(
-        self, tmp_path, monkeypatch
-    ):
+    def test_reraises_after_max_retries_exhausted(self, tmp_path, monkeypatch):
         """Every open raises BlockingIOError; once max_retries is
         exhausted, the original error propagates rather than being
         swallowed."""
@@ -1791,7 +2022,9 @@ class TestProcessAndCheckpointItemAtomicity:
         real_retry_hdf5_write = mpr_module._retry_hdf5_write
         call_count = {"n": 0}
 
-        def counting_retry_hdf5_write(worker_file_path, write_fn, max_retries=8):
+        def counting_retry_hdf5_write(
+            worker_file_path, write_fn, max_retries=8
+        ):
             call_count["n"] += 1
             return real_retry_hdf5_write(
                 worker_file_path, write_fn, max_retries=max_retries
@@ -1831,7 +2064,10 @@ class TestIndexMapPersistence:
         checkpoint_dir = tmp_path / "ckpt"
 
         runner1 = _KeyedRunner(
-            [10, 20, 30], multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            [10, 20, 30],
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         assert runner1.run() == [20, 40, 60]
         assert runner1.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
@@ -1839,7 +2075,11 @@ class TestIndexMapPersistence:
         # Resume with a different order and only a subset -- both items
         # are already done, so this only exercises index stability.
         runner2 = _KeyedRunner(
-            [30, 10], multiplier=2, checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir
+            [30, 10],
+            multiplier=2,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         assert runner2.run() == [60, 20]
         assert runner2.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
@@ -1851,7 +2091,10 @@ class TestIndexMapPersistence:
 
         # First run: populate index_map with real data
         runner1 = _KeyedRunner(
-            items, multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            items,
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         result1 = runner1.run()
         assert result1 == [20, 40, 60]
@@ -1880,7 +2123,10 @@ class TestIndexMapPersistence:
         items = [10, 20, 30]
 
         runner1 = _KeyedRunnerFixedSignature(
-            items, multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            items,
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         result1 = runner1.run()
         assert result1 == [20, 40, 60]
@@ -1951,7 +2197,9 @@ class TestKeepShotResults:
         """When keep_shot_results=False (the default), _program_results stays empty."""
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
-            [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             keep_shot_results=False,
         )
         result = runner.run()
@@ -1965,7 +2213,9 @@ class TestKeepShotResults:
         that can resolve shot content on demand."""
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
-            [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             shot_checkpoint=True,
             keep_shot_results=True,
@@ -1992,7 +2242,9 @@ class TestKeepShotResults:
             # The lazy proxy's shot_wall_clock_times must resolve from the
             # runner's own per-item timing data, not its constructor default.
             assert pr.shot_wall_clock_times
-            assert pr.shot_wall_clock_times == runner.shot_wall_clock_times[index]
+            assert (
+                pr.shot_wall_clock_times == runner.shot_wall_clock_times[index]
+            )
 
         # Verify shots can be retrieved and collected lazily from runner.h5
         # (index 1 corresponds to item value 2: num_increments=2, increment_by=2, counter=4)
@@ -2001,14 +2253,18 @@ class TestKeepShotResults:
         assert shot is not None
         data = pr.collect_shot_data("counter", -1)
         assert len(data) == 5
-        assert all(frame_val == 4 for frame_val in data)  # Counter value = item_value * increment_by = 2 * 2
+        assert all(
+            frame_val == 4 for frame_val in data
+        )  # Counter value = item_value * increment_by = 2 * 2
 
     def test_keep_shot_results_lazy_loading_disabled(self, tmp_path):
         """With lazy_loading=False, _program_results contains eager results
         with correct shot content."""
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
-            [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             shot_checkpoint=True,
             keep_shot_results=True,
@@ -2024,7 +2280,9 @@ class TestKeepShotResults:
             assert index in runner._program_results
             # Check that it has shot_histories eagerly loaded
             pr = runner._program_results[index]
-            assert len(pr.shot_histories) == 5  # Real program executed with num_shots=5
+            assert (
+                len(pr.shot_histories) == 5
+            )  # Real program executed with num_shots=5
 
         # Verify shot content through eager loading
         # Index 1 corresponds to item value 2: num_increments=2, increment_by=2, counter=4
@@ -2034,7 +2292,9 @@ class TestKeepShotResults:
             assert shot is not None
             # Verify frame data: real counter program produces "counter" key
             frame_data = shot.collect_data("counter", -1)
-            assert frame_data == 4  # Counter value = item_value * increment_by = 2 * 2
+            assert (
+                frame_data == 4
+            )  # Counter value = item_value * increment_by = 2 * 2
 
     def test_keep_shot_results_resume_preserves(self, tmp_path):
         """Resuming a run with keep_shot_results persists correctly."""
@@ -2043,7 +2303,9 @@ class TestKeepShotResults:
 
         # First run completes all items
         runner1 = _SimpleDoubleRunner(
-            [1, 2, 3], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            [1, 2, 3],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
             shot_checkpoint=True,
             keep_shot_results=True,
@@ -2054,7 +2316,10 @@ class TestKeepShotResults:
 
         # Resume (all items already done)
         runner2 = _SimpleDoubleRunner(
-            [1, 2, 3], checkpoint=True, resume=True, item_checkpoint_dir=checkpoint_dir,
+            [1, 2, 3],
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=shot_checkpoint_dir,
             shot_checkpoint=True,
             keep_shot_results=True,
@@ -2098,13 +2363,16 @@ class TestKeepShotResults:
 
     def test_keep_shot_results_write_read_round_trip(self, tmp_path):
         """Writing and reading back a runner with keep_shot_results=True preserves
-        the setting and the ability to lazily read shot data for every kept item."""
+        the setting and the ability to lazily read shot data for every kept item.
+        """
         checkpoint_dir = tmp_path / "checkpoint"
         output_file = tmp_path / "output.h5"
 
         # Create a runner with keep_shot_results=True
         runner1 = _SimpleDoubleRunner(
-            [1, 2], checkpoint=True, item_checkpoint_dir=checkpoint_dir,
+            [1, 2],
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             shot_checkpoint=True,
             keep_shot_results=True,
@@ -2139,7 +2407,9 @@ class TestKeepShotResults:
             data = pr.collect_shot_data("counter", -1)
             assert len(data) == 3
 
-    def test_keep_shot_results_with_shot_checkpoint_parallel_lazy(self, tmp_path):
+    def test_keep_shot_results_with_shot_checkpoint_parallel_lazy(
+        self, tmp_path
+    ):
         """keep_shot_results with lazy_loading=True works under parallel dispatch."""
         loky = pytest.importorskip("loky")
 
@@ -2187,7 +2457,8 @@ class TestKeepShotResults:
         should be restored, not left at defaults.
 
         This tests the case where in_memory_pr is available (the normal path),
-        and metadata is backfilled from it when the checkpoint doesn't have it."""
+        and metadata is backfilled from it when the checkpoint doesn't have it.
+        """
         checkpoint_dir = tmp_path / "ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
@@ -2273,7 +2544,9 @@ class TestKeepShotResults:
                 "(lazy resolution didn't fetch the real per-item value)"
             )
 
-    def test_keep_shot_results_with_custom_results_filename_serial(self, tmp_path):
+    def test_keep_shot_results_with_custom_results_filename_serial(
+        self, tmp_path
+    ):
         """Custom results_filename with keep_shot_results=True works in serial dispatch."""
         custom_filename = "my_results.h5"
         item_checkpoint_dir = tmp_path / "item_ckpt"
@@ -2301,7 +2574,9 @@ class TestKeepShotResults:
                 "with custom results_filename"
             )
 
-    def test_keep_shot_results_with_custom_results_filename_parallel(self, tmp_path):
+    def test_keep_shot_results_with_custom_results_filename_parallel(
+        self, tmp_path
+    ):
         """Custom results_filename with keep_shot_results=True works in parallel dispatch."""
         loky = pytest.importorskip("loky")
 
@@ -2414,7 +2689,9 @@ class TestKeepShotResults:
             runner.run()
 
         shots_bar_values = [value for _, value in samples]
-        assert shots_bar_values, "Shots bar was never updated with custom filename"
+        assert (
+            shots_bar_values
+        ), "Shots bar was never updated with custom filename"
 
         # True total is len(items) * num_shots = 2 * 5 = 10. The bar must
         # never exceed it, and must end there.
@@ -2460,9 +2737,9 @@ class TestKeepShotResults:
 
         # Should get in_memory_pr because checkpoint is empty/missing
         assert result is not None
-        assert len(result.shot_histories) == 5, (
-            "Should return in_memory_pr with 5 shots when checkpoint is missing"
-        )
+        assert (
+            len(result.shot_histories) == 5
+        ), "Should return in_memory_pr with 5 shots when checkpoint is missing"
         assert result.parent_program == "program_0"
 
 
@@ -2498,7 +2775,9 @@ class TestShotProgressBar:
         with h5py.File(worker_file, "r") as f:
             assert f.attrs["current_item_index"] == 99
 
-    def test_read_worker_current_indices_tolerates_missing_files(self, tmp_path):
+    def test_read_worker_current_indices_tolerates_missing_files(
+        self, tmp_path
+    ):
         """Verify _read_worker_current_indices handles missing/unreadable files."""
         from loqs.tools.multiprogramrunner import _read_worker_current_indices
 
@@ -2576,9 +2855,7 @@ class TestShotProgressBar:
         captured = capsys.readouterr()
         assert "Shot-level progress reporting requires" not in captured.out
 
-    def test_shot_progress_silent_for_serial_dispatch(
-        self, tmp_path, capsys
-    ):
+    def test_shot_progress_silent_for_serial_dispatch(self, tmp_path, capsys):
         """Verify no message is printed for serial dispatch even if hook is non-None."""
         # Serial dispatch (no parallel_strategy)
         runner = _ShotProgressTestRunner(
@@ -2652,9 +2929,7 @@ class TestShotProgressBar:
             shot_checkpoint=True,
             show_progress=False,
         )
-        with patch(
-            "loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy
-        ):
+        with patch("loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy):
             runner.run()
 
         assert "Shots" not in tqdm_calls
@@ -2692,9 +2967,7 @@ class TestShotProgressBar:
             shot_checkpoint_dir=tmp_path / "shot_ckpt",
             show_progress=True,
         )
-        with patch(
-            "loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy
-        ):
+        with patch("loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy):
             runner.run()
 
         assert "Shots" not in tqdm_calls
@@ -2850,7 +3123,9 @@ class TestWorkerFileConsolidation:
 
         # After completion, worker files should be deleted
         worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 0, "Worker files should be deleted after consolidation"
+        assert (
+            len(worker_files) == 0
+        ), "Worker files should be deleted after consolidation"
 
         # All results should be consolidated into runner.h5
         runner_path = checkpoint_dir / "runner.h5"
@@ -2982,9 +3257,7 @@ class TestWorkerFileConsolidation:
         with h5py.File(checkpoint_dir / "runner.h5", "r") as f:
             from loqs.internal.streamingmerge import iter_dict_attr_entries
 
-            final_on_disk = dict(
-                iter_dict_attr_entries(f, "_reduced_results")
-            )
+            final_on_disk = dict(iter_dict_attr_entries(f, "_reduced_results"))
         assert len(final_on_disk) == 6
         assert final_on_disk == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8, 5: 10}
 
@@ -3002,7 +3275,10 @@ class TestWorkerFileConsolidation:
         # First run: completes fully, so its results are consolidated into
         # runner.h5's own _reduced_results attribute.
         runner1 = _CountingRunner(
-            items, multiplier=2, checkpoint=True, item_checkpoint_dir=checkpoint_dir
+            items,
+            multiplier=2,
+            checkpoint=True,
+            item_checkpoint_dir=checkpoint_dir,
         )
         runner1.run()
 
@@ -3078,12 +3354,18 @@ class TestWorkerFileConsolidation:
             worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
             with h5py.File(worker_file, "a") as f:
                 merge_dict_attr(
-                    f, "results", [(i, f"result_{i}")],
-                    key_use_dataset=True, value_use_dataset=False,
+                    f,
+                    "results",
+                    [(i, f"result_{i}")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
                 )
                 merge_dict_attr(
-                    f, "_program_results", [(i, f"program_result_{i}")],
-                    key_use_dataset=True, value_use_dataset=False,
+                    f,
+                    "_program_results",
+                    [(i, f"program_result_{i}")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
                 )
             worker_files.append(worker_file)
 
@@ -3112,7 +3394,9 @@ class TestWorkerFileConsolidation:
         )
 
         program_results = _read_done_union(
-            checkpoint_dir, runner_filename="runner.h5", attr_name="_program_results"
+            checkpoint_dir,
+            runner_filename="runner.h5",
+            attr_name="_program_results",
         )
 
         # Verify that a transient lock on one worker file does not cause
@@ -3144,7 +3428,10 @@ class TestWorkerFileConsolidation:
         real_read_done_union = multiprogramrunner_module._read_done_union
 
         def read_done_union_dropping_program_result(
-            ckpt_dir, runner_filename="runner.h5", attr_name="results", **kwargs
+            ckpt_dir,
+            runner_filename="runner.h5",
+            attr_name="results",
+            **kwargs,
         ):
             """Drop one index from "_program_results" only; "results" is
             read through unaffected and complete. Accepts and forwards
@@ -3189,7 +3476,6 @@ class TestWorkerFileConsolidation:
         the same completeness check for `_program_results` should still raise
         `RuntimeError` naming the missing index when `lazy_loading=True`.
         """
-        import loqs.tools.multiprogramrunner as multiprogramrunner_module
         import loqs.internal.streamingmerge as streamingmerge_module
 
         checkpoint_dir = tmp_path / "ckpt"
@@ -3266,12 +3552,18 @@ class TestWorkerFileConsolidation:
             worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
             with h5py.File(worker_file, "a") as f:
                 merge_dict_attr(
-                    f, "item_wall_clock_times", [(i, 0.5 + i)],
-                    key_use_dataset=True, value_use_dataset=True,
+                    f,
+                    "item_wall_clock_times",
+                    [(i, 0.5 + i)],
+                    key_use_dataset=True,
+                    value_use_dataset=True,
                 )
                 merge_dict_attr(
-                    f, "shot_wall_clock_times", [(i, {0: 0.1 + i, 1: 0.2 + i})],
-                    key_use_dataset=True, value_use_dataset=False,
+                    f,
+                    "shot_wall_clock_times",
+                    [(i, {0: 0.1 + i, 1: 0.2 + i})],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
                 )
 
         # Single final-assembly consolidation pass, mirroring run()'s one-shot call.
@@ -3280,8 +3572,12 @@ class TestWorkerFileConsolidation:
         )
 
         with h5py.File(runner_path, "r") as f:
-            item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
-            shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
+            item_times = dict(
+                iter_dict_attr_entries(f, "item_wall_clock_times")
+            )
+            shot_times = dict(
+                iter_dict_attr_entries(f, "shot_wall_clock_times")
+            )
 
         # Verify that both new attributes are correctly merged from the worker
         # files into runner.h5.
@@ -3312,7 +3608,8 @@ class TestWorkerFileConsolidation:
         left untouched (not overwritten by the worker file's own copy of
         the same item), while the two missing timing entries are merged in
         from the worker file. Mirrors `test_programresults.py`'s
-        `test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first`."""
+        `test_consolidate_checkpoints_recovers_out_of_lockstep_merge_histories_first`.
+        """
         from loqs.tools.multiprogramrunner import _consolidate_worker_files
         from loqs.internal.streamingmerge import merge_dict_attr
 
@@ -3329,32 +3626,50 @@ class TestWorkerFileConsolidation:
         with h5py.File(runner_path, "a") as f:
             out_root = _resolve_checkpoint_object_group(f)
             merge_dict_attr(
-                out_root, "_reduced_results", [(0, "canonical")],
-                key_use_dataset=True, value_use_dataset=False,
+                out_root,
+                "_reduced_results",
+                [(0, "canonical")],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
             merge_dict_attr(
-                out_root, "item_wall_clock_times", [],
-                key_use_dataset=True, value_use_dataset=True,
+                out_root,
+                "item_wall_clock_times",
+                [],
+                key_use_dataset=True,
+                value_use_dataset=True,
             )
             merge_dict_attr(
-                out_root, "shot_wall_clock_times", [],
-                key_use_dataset=True, value_use_dataset=False,
+                out_root,
+                "shot_wall_clock_times",
+                [],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
 
         # Worker file: item 0 present in all three attributes, worker values.
         worker_file = checkpoint_dir / "worker_0_runner.h5"
         with h5py.File(worker_file, "a") as f:
             merge_dict_attr(
-                f, "results", [(0, "worker")],
-                key_use_dataset=True, value_use_dataset=False,
+                f,
+                "results",
+                [(0, "worker")],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
             merge_dict_attr(
-                f, "item_wall_clock_times", [(0, 9.9)],
-                key_use_dataset=True, value_use_dataset=True,
+                f,
+                "item_wall_clock_times",
+                [(0, 9.9)],
+                key_use_dataset=True,
+                value_use_dataset=True,
             )
             merge_dict_attr(
-                f, "shot_wall_clock_times", [(0, {0: 1.1, 1: 2.2})],
-                key_use_dataset=True, value_use_dataset=False,
+                f,
+                "shot_wall_clock_times",
+                [(0, {0: 1.1, 1: 2.2})],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
 
         _consolidate_worker_files(
@@ -3362,9 +3677,15 @@ class TestWorkerFileConsolidation:
         )
 
         with h5py.File(runner_path, "r") as f:
-            reduced_results = dict(iter_dict_attr_entries(f, "_reduced_results"))
-            item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
-            shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
+            reduced_results = dict(
+                iter_dict_attr_entries(f, "_reduced_results")
+            )
+            item_times = dict(
+                iter_dict_attr_entries(f, "item_wall_clock_times")
+            )
+            shot_times = dict(
+                iter_dict_attr_entries(f, "shot_wall_clock_times")
+            )
 
         assert reduced_results == {0: "canonical"}
         assert item_times == {0: 9.9}
@@ -3392,31 +3713,49 @@ class TestWorkerFileConsolidation:
         with h5py.File(runner_path, "a") as f:
             out_root = _resolve_checkpoint_object_group(f)
             merge_dict_attr(
-                out_root, "_reduced_results", [],
-                key_use_dataset=True, value_use_dataset=False,
+                out_root,
+                "_reduced_results",
+                [],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
             merge_dict_attr(
-                out_root, "item_wall_clock_times", [(0, 2.5)],
-                key_use_dataset=True, value_use_dataset=True,
+                out_root,
+                "item_wall_clock_times",
+                [(0, 2.5)],
+                key_use_dataset=True,
+                value_use_dataset=True,
             )
             merge_dict_attr(
-                out_root, "shot_wall_clock_times", [(0, {0: 0.5, 1: 0.6})],
-                key_use_dataset=True, value_use_dataset=False,
+                out_root,
+                "shot_wall_clock_times",
+                [(0, {0: 0.5, 1: 0.6})],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
 
         worker_file = checkpoint_dir / "worker_0_runner.h5"
         with h5py.File(worker_file, "a") as f:
             merge_dict_attr(
-                f, "results", [(0, "worker")],
-                key_use_dataset=True, value_use_dataset=False,
+                f,
+                "results",
+                [(0, "worker")],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
             merge_dict_attr(
-                f, "item_wall_clock_times", [(0, 99.9)],
-                key_use_dataset=True, value_use_dataset=True,
+                f,
+                "item_wall_clock_times",
+                [(0, 99.9)],
+                key_use_dataset=True,
+                value_use_dataset=True,
             )
             merge_dict_attr(
-                f, "shot_wall_clock_times", [(0, {0: 9.1, 1: 9.2})],
-                key_use_dataset=True, value_use_dataset=False,
+                f,
+                "shot_wall_clock_times",
+                [(0, {0: 9.1, 1: 9.2})],
+                key_use_dataset=True,
+                value_use_dataset=False,
             )
 
         _consolidate_worker_files(
@@ -3424,9 +3763,15 @@ class TestWorkerFileConsolidation:
         )
 
         with h5py.File(runner_path, "r") as f:
-            reduced_results = dict(iter_dict_attr_entries(f, "_reduced_results"))
-            item_times = dict(iter_dict_attr_entries(f, "item_wall_clock_times"))
-            shot_times = dict(iter_dict_attr_entries(f, "shot_wall_clock_times"))
+            reduced_results = dict(
+                iter_dict_attr_entries(f, "_reduced_results")
+            )
+            item_times = dict(
+                iter_dict_attr_entries(f, "item_wall_clock_times")
+            )
+            shot_times = dict(
+                iter_dict_attr_entries(f, "shot_wall_clock_times")
+            )
 
         assert reduced_results == {0: "worker"}
         assert item_times == {0: 2.5}
@@ -3439,6 +3784,7 @@ class TestWorkerFileConsolidation:
 
 class _SharedParent(Serializable):
     """Test object that acts as a shared parent for testing shared references."""
+
     _SERIALIZE_ATTRS = ["value"]
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -3448,6 +3794,7 @@ class _SharedParent(Serializable):
 
 class _ItemWithParent(Serializable):
     """Test object with a parent reference, shared across consolidate/poll decode-cache regression tests."""
+
     _SERIALIZE_ATTRS = ["item_id", "parent"]
     _CACHE_ON_SERIALIZE: ClassVar[bool] = True
 
@@ -3475,7 +3822,9 @@ class TestDecodeCache:
         same real object both times, not a DeferredRef on the second
         occurrence.
         """
-        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
+        from loqs.internal.streamingmerge import (
+            read_checkpoint_dict_attr_union,
+        )
         from loqs.internal.serializable import DeferredRef
 
         checkpoint_dir = tmp_path / "checkpoints"
@@ -3490,6 +3839,7 @@ class TestDecodeCache:
         worker_file = checkpoint_dir / "worker_0_runner.h5"
         with h5py.File(worker_file, "a") as f:
             from loqs.internal.streamingmerge import merge_dict_attr
+
             # Use a shared encode_cache so the encoder knows about shared refs
             merge_dict_attr(
                 f,
@@ -3511,19 +3861,24 @@ class TestDecodeCache:
         result2 = done[101]
 
         # Neither should be a DeferredRef
-        assert not isinstance(result1, DeferredRef), \
-            f"Entry 100 decoded to DeferredRef, not {type(result1)}"
-        assert not isinstance(result2, DeferredRef), \
-            f"Entry 101 decoded to DeferredRef, not {type(result2)}"
+        assert not isinstance(
+            result1, DeferredRef
+        ), f"Entry 100 decoded to DeferredRef, not {type(result1)}"
+        assert not isinstance(
+            result2, DeferredRef
+        ), f"Entry 101 decoded to DeferredRef, not {type(result2)}"
 
         # Both should be ItemWithParent with the same parent object
         assert isinstance(result1, _ItemWithParent)
         assert isinstance(result2, _ItemWithParent)
-        assert result1.parent is result2.parent, \
-            "Shared parent should decode to the same object both times"
+        assert (
+            result1.parent is result2.parent
+        ), "Shared parent should decode to the same object both times"
         assert result1.parent.value == 99
 
-    def test_consolidate_worker_files_shared_reference_decode_cache(self, tmp_path):
+    def test_consolidate_worker_files_shared_reference_decode_cache(
+        self, tmp_path
+    ):
         """Regression test for _consolidate_worker_files decode_cache fix.
 
         Verifies that calling the real _consolidate_worker_files function on a
@@ -3552,12 +3907,15 @@ class TestDecodeCache:
         # Create shared parent and items
         shared_parent = _SharedParent(value=77)
         result_item = _ItemWithParent(item_id=10, parent=shared_parent)
-        program_results_item = _ItemWithParent(item_id=20, parent=shared_parent)
+        program_results_item = _ItemWithParent(
+            item_id=20, parent=shared_parent
+        )
 
         # Create worker file with both "results" and "_program_results"
         worker_file = checkpoint_dir / "worker_0_runner.h5"
         with h5py.File(worker_file, "a") as f:
             from loqs.internal.streamingmerge import merge_dict_attr
+
             encode_cache = {}
             merge_dict_attr(
                 f,
@@ -3580,53 +3938,68 @@ class TestDecodeCache:
         assert worker_file.exists()
 
         # Call the real _consolidate_worker_files function
-        _consolidate_worker_files(checkpoint_dir, runner_filename="runner.h5",
-                                  delete_originals=True)
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
+        )
 
         # Verify worker file was deleted (confirms real function executed)
-        assert not worker_file.exists(), \
-            "Worker file should be deleted after consolidation with delete_originals=True"
+        assert (
+            not worker_file.exists()
+        ), "Worker file should be deleted after consolidation with delete_originals=True"
 
         # Read back both attributes using a shared decode_cache, mirroring
         # how a real caller like _read_done_union reads them.
         with h5py.File(runner_path, "r") as f:
-            from loqs.core.programresults import _resolve_checkpoint_object_group
+            from loqs.core.programresults import (
+                _resolve_checkpoint_object_group,
+            )
+
             runner_root = _resolve_checkpoint_object_group(f)
             decode_cache = {}  # Shared across both branches
             reduced_results = dict(
-                iter_dict_attr_entries(runner_root, "_reduced_results",
-                                       decode_cache=decode_cache)
+                iter_dict_attr_entries(
+                    runner_root, "_reduced_results", decode_cache=decode_cache
+                )
             )
             program_results = dict(
-                iter_dict_attr_entries(runner_root, "_program_results",
-                                       decode_cache=decode_cache)
+                iter_dict_attr_entries(
+                    runner_root, "_program_results", decode_cache=decode_cache
+                )
             )
 
         # Both entries should be present and successfully decoded
-        assert 200 in reduced_results, \
-            "Entry 200 should have been consolidated into _reduced_results"
-        assert 300 in program_results, \
-            "Entry 300 should have been consolidated into _program_results"
+        assert (
+            200 in reduced_results
+        ), "Entry 200 should have been consolidated into _reduced_results"
+        assert (
+            300 in program_results
+        ), "Entry 300 should have been consolidated into _program_results"
 
         result1 = reduced_results[200]
         result2 = program_results[300]
 
-        assert not isinstance(result1, DeferredRef), \
-            f"'_reduced_results' entry decoded to DeferredRef, not {type(result1)}"
-        assert not isinstance(result2, DeferredRef), \
-            f"'_program_results' entry decoded to DeferredRef, not {type(result2)}"
+        assert not isinstance(
+            result1, DeferredRef
+        ), f"'_reduced_results' entry decoded to DeferredRef, not {type(result1)}"
+        assert not isinstance(
+            result2, DeferredRef
+        ), f"'_program_results' entry decoded to DeferredRef, not {type(result2)}"
 
         # Verify the entries have valid parent references.
         assert isinstance(result1, _ItemWithParent)
         assert isinstance(result2, _ItemWithParent)
-        assert result1.parent is not None, \
-            "Entry 200 should have a parent reference"
-        assert result2.parent is not None, \
-            "Entry 300 should have a parent reference"
+        assert (
+            result1.parent is not None
+        ), "Entry 200 should have a parent reference"
+        assert (
+            result2.parent is not None
+        ), "Entry 300 should have a parent reference"
         assert result1.parent.value == 77
         assert result2.parent.value == 77
 
-    def test_poll_one_worker_file_shared_reference_decode_cache(self, tmp_path):
+    def test_poll_one_worker_file_shared_reference_decode_cache(
+        self, tmp_path
+    ):
         """Regression test for _poll_one_worker_file decode_cache fix.
 
         Verifies that when polling a worker file for newly-completed entries
@@ -3650,6 +4023,7 @@ class TestDecodeCache:
         worker_file = checkpoint_dir / "worker_0_runner.h5"
         with h5py.File(worker_file, "a") as f:
             from loqs.internal.streamingmerge import merge_dict_attr
+
             merge_dict_attr(
                 f,
                 "results",
@@ -3683,16 +4057,19 @@ class TestDecodeCache:
         result2 = polled_items[1][1]
 
         # Neither should be a DeferredRef
-        assert not isinstance(result1, DeferredRef), \
-            f"First polled item decoded to DeferredRef, not {type(result1)}"
-        assert not isinstance(result2, DeferredRef), \
-            f"Second polled item decoded to DeferredRef, not {type(result2)}"
+        assert not isinstance(
+            result1, DeferredRef
+        ), f"First polled item decoded to DeferredRef, not {type(result1)}"
+        assert not isinstance(
+            result2, DeferredRef
+        ), f"Second polled item decoded to DeferredRef, not {type(result2)}"
 
         # Both should be ItemWithParent with the same parent object
         assert isinstance(result1, _ItemWithParent)
         assert isinstance(result2, _ItemWithParent)
-        assert result1.parent is result2.parent, \
-            "Shared parent should decode to the same object both times"
+        assert (
+            result1.parent is result2.parent
+        ), "Shared parent should decode to the same object both times"
         assert result1.parent.value == 55
 
     def test_consolidate_worker_files_streaming_one_at_a_time(self, tmp_path):
@@ -3745,19 +4122,25 @@ class TestDecodeCache:
         ):
             """Spy on iter_dict_attr_entries: track decoded entries, enforce read-ahead bound."""
             for key, value in real_iter_dict_attr_entries(
-                parent_group, attr_name, decode_cache=decode_cache, start_index=start_index
+                parent_group,
+                attr_name,
+                decode_cache=decode_cache,
+                start_index=start_index,
             ):
                 decoded_count[0] += 1
                 # Enforce: read side never more than 1 ahead of write side for "results"
                 if attr_name == "results":
                     ahead = decoded_count[0] - written_count[0]
-                    assert ahead <= 1, \
-                        f"Read-ahead violation: decoded {decoded_count[0]}, " \
+                    assert ahead <= 1, (
+                        f"Read-ahead violation: decoded {decoded_count[0]}, "
                         f"written {written_count[0]}, ahead by {ahead} (should be ≤1)"
+                    )
                 yield (key, value)
 
         # Save real function reference before patching
-        real_stream_into_existing = streamingmerge._stream_into_existing_dict_attr
+        real_stream_into_existing = (
+            streamingmerge._stream_into_existing_dict_attr
+        )
 
         def spy_stream_into_existing_dict_attr(
             parent_group, attr_name, entries, encode_cache
@@ -3765,20 +4148,25 @@ class TestDecodeCache:
             """Spy on _stream_into_existing_dict_attr: stream one entry at a time, track writes."""
             # Stream one entry at a time, calling real function per entry
             for key, value in entries:
-                real_stream_into_existing(parent_group, attr_name, [(key, value)], encode_cache)
+                real_stream_into_existing(
+                    parent_group, attr_name, [(key, value)], encode_cache
+                )
                 # Increment write count only for _reduced_results
                 if attr_name == "_reduced_results":
                     written_count[0] += 1
 
         # Patch both iter_dict_attr_entries (read side) and _stream_into_existing_dict_attr
-        with unittest.mock.patch.object(
-            streamingmerge,
-            "iter_dict_attr_entries",
-            side_effect=spy_iter_dict_attr_entries,
-        ), unittest.mock.patch.object(
-            streamingmerge,
-            "_stream_into_existing_dict_attr",
-            side_effect=spy_stream_into_existing_dict_attr,
+        with (
+            unittest.mock.patch.object(
+                streamingmerge,
+                "iter_dict_attr_entries",
+                side_effect=spy_iter_dict_attr_entries,
+            ),
+            unittest.mock.patch.object(
+                streamingmerge,
+                "_stream_into_existing_dict_attr",
+                side_effect=spy_stream_into_existing_dict_attr,
+            ),
         ):
             _consolidate_worker_files(
                 checkpoint_dir,
@@ -3787,18 +4175,22 @@ class TestDecodeCache:
             )
 
         # Assert both counters reached their expected values
-        assert decoded_count[0] == 3, \
-            f"Expected 3 entries decoded, got {decoded_count[0]}"
-        assert written_count[0] == 3, \
-            f"Expected 3 entries written, got {written_count[0]}"
+        assert (
+            decoded_count[0] == 3
+        ), f"Expected 3 entries decoded, got {decoded_count[0]}"
+        assert (
+            written_count[0] == 3
+        ), f"Expected 3 entries written, got {written_count[0]}"
 
         # Verify worker file was deleted
-        assert not worker_file.exists(), \
-            "Worker file should be deleted after consolidation"
+        assert (
+            not worker_file.exists()
+        ), "Worker file should be deleted after consolidation"
 
     def test_reduced_results_uses_dataset_storage_format(self, tmp_path):
         """After a fresh MultiProgramRunner checkpoint with real result data,
-        _reduced_results' key-side storage_format should be 'dataset', not 'groups'."""
+        _reduced_results' key-side storage_format should be 'dataset', not 'groups'.
+        """
         checkpoint_dir = tmp_path / "runner_checkpoint"
 
         # Create a simple runner with one item and run it
@@ -3975,11 +4367,15 @@ class TestMultiProgramRunnerRedesignedHooks:
 class TestBaseClassMechanisms:
     """Direct tests for base-class mechanisms (mismatch, normalized args, etc.)."""
 
-    def test_mismatch_field_display_name_maps_normalized_collect_shot_data_args(self):
+    def test_mismatch_field_display_name_maps_normalized_collect_shot_data_args(
+        self,
+    ):
         """_mismatch_field_display_name maps internal field name to public param."""
         runner = _SimpleDoubleRunner([1])
         assert (
-            runner._mismatch_field_display_name("_normalized_collect_shot_data_args")
+            runner._mismatch_field_display_name(
+                "_normalized_collect_shot_data_args"
+            )
             == "collect_shot_data_args"
         )
 
@@ -4017,7 +4413,9 @@ class TestBaseClassMechanisms:
 
     def test_normalized_collect_shot_data_args_tuple_form(self):
         """_normalized_collect_shot_data_args normalizes tuple form."""
-        runner = _ShotDataArgsRunner([1], collect_shot_data_args=[("counter", -1)])
+        runner = _ShotDataArgsRunner(
+            [1], collect_shot_data_args=[("counter", -1)]
+        )
         normalized = runner._normalized_collect_shot_data_args
         assert len(normalized) == 1
         assert isinstance(normalized[0], HistoryDataCollector)
@@ -4051,7 +4449,9 @@ class TestBaseClassMechanisms:
         normalized = runner._normalized_collect_shot_data_args
         assert normalized == ()
 
-    def test_normalized_collect_shot_data_args_equivalence_on_resume(self, tmp_path):
+    def test_normalized_collect_shot_data_args_equivalence_on_resume(
+        self, tmp_path
+    ):
         """Different encodings of equivalent args resume successfully."""
         # Checkpoint with tuple form
         checkpoint_dir = tmp_path / "ckpt2"
@@ -4102,9 +4502,7 @@ class TestBaseClassMechanisms:
                 [1], run_kwargs={"max_frame_limit": 500}
             )
         max_frame_warnings = [
-            w
-            for w in warning_list
-            if "max_frame_limit" in str(w.message)
+            w for w in warning_list if "max_frame_limit" in str(w.message)
         ]
         assert len(max_frame_warnings) == 0
         assert runner.run_kwargs["max_frame_limit"] == 500
@@ -4133,7 +4531,9 @@ class TestBaseClassMechanisms:
 
         assert seen_limits == [5000, 10000, 15000]
 
-    def test_run_kwargs_n_shot_batches_not_clobbered_when_parallel_strategy_n_shot_batches_is_none(self):
+    def test_run_kwargs_n_shot_batches_not_clobbered_when_parallel_strategy_n_shot_batches_is_none(
+        self,
+    ):
         """Explicit n_shot_batches in run_kwargs survives when ParallelStrategy
         doesn't set its own (parallel_strategy=None, the serial default)."""
         seen_n_shot_batches = []
@@ -4253,7 +4653,9 @@ class TestBaseClassMechanisms:
         sys.platform == "win32",
         reason="submitit unconditionally registers a SIGCONT handler, POSIX-only",
     )
-    def test_submitit_program_executor_produces_correct_results(self, tmp_path):
+    def test_submitit_program_executor_produces_correct_results(
+        self, tmp_path
+    ):
         """submitit program executor (in-process DebugExecutor) produces correct results."""
         submitit = pytest.importorskip("submitit")
 
@@ -4349,7 +4751,9 @@ class TestBaseClassMechanisms:
             pr.load_checkpoint(checkpoint_dir=subdir)
             assert len(pr.shot_histories) == 1
 
-    def test_parallel_one_chunk_preserves_per_item_shot_checkpoints(self, tmp_path):
+    def test_parallel_one_chunk_preserves_per_item_shot_checkpoints(
+        self, tmp_path
+    ):
         """Parallel run with n_program_chunks=1 keeps collision-free per-item shot checkpoints."""
         loky = pytest.importorskip("loky")
         from _shared_checkpoint_test_helpers import _build_shot_executor

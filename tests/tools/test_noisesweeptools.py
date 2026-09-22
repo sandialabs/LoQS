@@ -18,7 +18,6 @@ from loqs.tools.noisesweeptools import (
 )
 from loqs.tools.paralleltools import ParallelStrategy
 
-
 # ---------------------------------------------------------------------------
 # A tiny, Frame-only synthetic "codepack" used to exercise NoiseSweepRunner
 # without needing a real physical-circuit backend (stim/quantumsim/pygsti).
@@ -29,7 +28,7 @@ from loqs.tools.paralleltools import ParallelStrategy
 
 
 def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
-    """"Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
+    """ "Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
     rng = np.random.default_rng(seed)
     return Frame({"failed": bool(rng.random() < fail_prob)})
 
@@ -45,7 +44,8 @@ def make_stack(fail_prob):
 def identity_noise_model(strength):
     """A trivial "noise model" callable -- real module-level `def`, not a lambda, since
     lambdas aren't properly supported by NoiseSweepRunner's source-based serialization
-    (`inspect.getsource` returns the whole call-site line for a lambda, not just its body)."""
+    (`inspect.getsource` returns the whole call-site line for a lambda, not just its body).
+    """
     return strength
 
 
@@ -92,17 +92,23 @@ class TestBuildProgram:
         assert program0.name == "point-0.01"
         assert program1.name == "point-0.02"
         # instruction_stack (also callable) should resolve per-point too
-        assert program0.instruction_stack.pop_instruction()[0][
-            "fail_prob"
-        ] == 0.01
+        assert (
+            program0.instruction_stack.pop_instruction()[0]["fail_prob"]
+            == 0.01
+        )
 
     def test_default_base_seed_rejected(self):
         with pytest.raises(TypeError):
             make_runner([0.1], default_base_seed=5)
 
     def test_state_type_fixed_class_is_not_treated_as_callable(self):
-        runner = make_runner([0.1], seed_stride=1, state_type=NumpyStatevectorQuantumState)
-        assert runner._quantum_program_values["state_type"] is NumpyStatevectorQuantumState
+        runner = make_runner(
+            [0.1], seed_stride=1, state_type=NumpyStatevectorQuantumState
+        )
+        assert (
+            runner._quantum_program_values["state_type"]
+            is NumpyStatevectorQuantumState
+        )
         assert "state_type" not in runner._quantum_program_serialized_callables
         program = runner.build_program(0)
         assert program.state_type is NumpyStatevectorQuantumState
@@ -190,7 +196,9 @@ class TestSerialization:
         interactive_fn = env["interactive_fn"]
 
         with pytest.raises(OSError):
-            make_runner([0.1], seed_stride=1, default_noise_model=interactive_fn)
+            make_runner(
+                [0.1], seed_stride=1, default_noise_model=interactive_fn
+            )
 
     def test_non_file_backed_callable_with_override_succeeds(self):
         env = {}
@@ -237,7 +245,9 @@ class TestRun:
 
     def test_monotonic_failure_rate(self):
         strengths = [0.0, 0.2, 0.5, 0.9]
-        runner = make_runner(strengths, seed_stride=500, num_shots=500, verbose=False)
+        runner = make_runner(
+            strengths, seed_stride=500, num_shots=500, verbose=False
+        )
         result = runner.run()
         assert result.failure_rates[0] == 0.0
         # Non-decreasing as strength increases (allow equal for adjacent points)
@@ -278,7 +288,9 @@ class TestRun:
             num_shots=5,
             verbose=False,
             run_kwargs={
-                "max_frame_limit": lambda strength: 10 if strength == 0.0 else 20,
+                "max_frame_limit": lambda strength: (
+                    10 if strength == 0.0 else 20
+                ),
             },
         )
         try:
@@ -302,7 +314,9 @@ class TestRun:
             return real_run(self, *args, **kwargs)
 
         # Test 1: explicit verbose=True should forward True to each point
-        runner1 = make_runner([0.0, 0.1], seed_stride=5, num_shots=5, verbose=True)
+        runner1 = make_runner(
+            [0.0, 0.1], seed_stride=5, num_shots=5, verbose=True
+        )
         seen_verbose_values.clear()
         try:
             QuantumProgram.run = spy_run
@@ -310,12 +324,15 @@ class TestRun:
         finally:
             QuantumProgram.run = real_run
 
-        assert seen_verbose_values == [True, True], (
-            f"Expected [True, True] with verbose=True, got {seen_verbose_values}"
-        )
+        assert seen_verbose_values == [
+            True,
+            True,
+        ], f"Expected [True, True] with verbose=True, got {seen_verbose_values}"
 
         # Test 2: explicit verbose=False should forward False to each point
-        runner2 = make_runner([0.0, 0.1], seed_stride=5, num_shots=5, verbose=False)
+        runner2 = make_runner(
+            [0.0, 0.1], seed_stride=5, num_shots=5, verbose=False
+        )
         seen_verbose_values.clear()
         try:
             QuantumProgram.run = spy_run
@@ -323,9 +340,10 @@ class TestRun:
         finally:
             QuantumProgram.run = real_run
 
-        assert seen_verbose_values == [False, False], (
-            f"Expected [False, False] with verbose=False, got {seen_verbose_values}"
-        )
+        assert seen_verbose_values == [
+            False,
+            False,
+        ], f"Expected [False, False] with verbose=False, got {seen_verbose_values}"
 
         # Test 3: default (no explicit verbose) should forward True
         # (runner defaults verbose=True in its constructor)
@@ -337,9 +355,10 @@ class TestRun:
         finally:
             QuantumProgram.run = real_run
 
-        assert seen_verbose_values == [True, True], (
-            f"Expected [True, True] with default verbose, got {seen_verbose_values}"
-        )
+        assert seen_verbose_values == [
+            True,
+            True,
+        ], f"Expected [True, True] with default verbose, got {seen_verbose_values}"
 
     def test_wall_clock_timing_attributes(self):
         """item_wall_clock_times and shot_wall_clock_times are populated after run()."""
@@ -410,8 +429,13 @@ class TestRunParallel:
         uninterrupted_result = uninterrupted.run()
 
         runner = make_runner(
-            strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False,
-            checkpoint=True, item_checkpoint_dir=item_checkpoint_dir
+            strengths,
+            seed_stride=20,
+            base_seed=1,
+            num_shots=10,
+            verbose=False,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         real_build_program = NoiseSweepRunner.build_program
 
@@ -429,7 +453,10 @@ class TestRunParallel:
 
         # Read the partial state (indices 0 and 1) from the worker_*_runner.h5
         # files directly.
-        from loqs.internal.streamingmerge import read_checkpoint_dict_attr_union
+        from loqs.internal.streamingmerge import (
+            read_checkpoint_dict_attr_union,
+        )
+
         completed = read_checkpoint_dict_attr_union(
             item_checkpoint_dir, None, "worker_*_runner.h5", "results"
         )
@@ -470,11 +497,15 @@ class TestRunParallel:
 
         assert final_result.failure_rates == uninterrupted_result.failure_rates
         assert final_result.is_complete
-        assert None not in final_result.failure_rates  # Final result has no None
+        assert (
+            None not in final_result.failure_rates
+        )  # Final result has no None
 
 
 class TestResume:
-    def test_skips_completed_points_and_matches_uninterrupted_run(self, tmp_path):
+    def test_skips_completed_points_and_matches_uninterrupted_run(
+        self, tmp_path
+    ):
         strengths = [0.0, 0.1, 0.2]
 
         uninterrupted = make_runner(
@@ -487,8 +518,13 @@ class TestResume:
         built_indices = []
         crash_triggered = []
         runner1 = make_runner(
-            strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False,
-            checkpoint=True, item_checkpoint_dir=item_checkpoint_dir
+            strengths,
+            seed_stride=20,
+            base_seed=1,
+            num_shots=10,
+            verbose=False,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         real_build_program = NoiseSweepRunner.build_program
 
@@ -510,8 +546,14 @@ class TestResume:
 
         # Resume with a fresh runner instance built from the same config
         runner2 = make_runner(
-            strengths, seed_stride=20, base_seed=1, num_shots=10, verbose=False,
-            checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir
+            strengths,
+            seed_stride=20,
+            base_seed=1,
+            num_shots=10,
+            verbose=False,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         built_indices.clear()
         NoiseSweepRunner.build_program = spy_build_program
@@ -525,7 +567,9 @@ class TestResume:
         assert final_result.stderrs == uninterrupted_result.stderrs
         assert final_result.is_complete
 
-    def test_resume_with_default_seed_stride_resolving_to_num_shots(self, tmp_path):
+    def test_resume_with_default_seed_stride_resolving_to_num_shots(
+        self, tmp_path
+    ):
         """Resume should succeed when effective seeding is identical: one runner
         uses seed_stride=None (resolves to num_shots), another uses explicit seed_stride
         equal to num_shots."""
@@ -541,7 +585,9 @@ class TestResume:
             base_seed=0,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         runner1.run()
 
@@ -556,15 +602,21 @@ class TestResume:
             base_seed=0,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         # This should NOT raise ValueError about seed_stride mismatch
         result = runner2.run()
         assert result.is_complete
 
-    def test_resume_with_different_resolved_seed_stride_still_raises(self, tmp_path):
+    def test_resume_with_different_resolved_seed_stride_still_raises(
+        self, tmp_path
+    ):
         """Verify that a genuine mismatch in effective seeding (different _resolved_seed_stride)
-        is still caught even though we now check _resolved_seed_stride instead of seed_stride."""
+        is still caught even though we now check _resolved_seed_stride instead of seed_stride.
+        """
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
 
         # First runner: seed_stride=None, which resolves to num_shots=5
@@ -577,7 +629,9 @@ class TestResume:
             base_seed=0,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False, checkpoint=True, item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False,
+            checkpoint=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         runner1.run()
 
@@ -592,15 +646,16 @@ class TestResume:
             base_seed=0,
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            verbose=False, checkpoint=True, resume=True, item_checkpoint_dir=item_checkpoint_dir,
+            verbose=False,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=item_checkpoint_dir,
         )
         # This SHOULD raise ValueError about seed_stride mismatch
         with pytest.raises(ValueError, match="seed_stride"):
             runner2.run()
 
-    def test_resume_with_equivalent_expected_outcomes_succeeds(
-        self, tmp_path
-    ):
+    def test_resume_with_equivalent_expected_outcomes_succeeds(self, tmp_path):
         """Resume succeeds when expected_outcomes is passed as an
         equivalent-but-differently-typed sequence (e.g. list vs tuple)."""
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
@@ -654,12 +709,17 @@ class TestFromNoiseSweepRunner:
         assert copied_runner.num_shots == new_num_shots
         # Check that other fields match the base
         assert copied_runner.strengths == base_runner.strengths
-        assert copied_runner.collect_shot_data_args == base_runner.collect_shot_data_args
+        assert (
+            copied_runner.collect_shot_data_args
+            == base_runner.collect_shot_data_args
+        )
         assert copied_runner.expected_outcomes == base_runner.expected_outcomes
         assert copied_runner.base_seed == base_runner.base_seed
         assert copied_runner.seed_stride == base_runner.seed_stride
 
-    def test_from_noise_sweep_runner_no_overrides_works_end_to_end(self, tmp_path):
+    def test_from_noise_sweep_runner_no_overrides_works_end_to_end(
+        self, tmp_path
+    ):
         """Test that from_noise_sweep_runner with no overrides produces an identical runner."""
         base_runner = make_runner(
             [0.0, 0.1],
@@ -676,7 +736,10 @@ class TestFromNoiseSweepRunner:
         # Verify all fields are identical
         assert copied_runner.strengths == base_runner.strengths
         assert copied_runner.num_shots == base_runner.num_shots
-        assert copied_runner.collect_shot_data_args == base_runner.collect_shot_data_args
+        assert (
+            copied_runner.collect_shot_data_args
+            == base_runner.collect_shot_data_args
+        )
         assert copied_runner.expected_outcomes == base_runner.expected_outcomes
         assert copied_runner.base_seed == base_runner.base_seed
         assert copied_runner.seed_stride == base_runner.seed_stride
@@ -736,8 +799,12 @@ class TestNoiseSweepResult:
     def test_write_read_round_trip_incomplete(self, tmp_path):
         result = NoiseSweepResult(
             strengths=[0.0, 0.1, 0.2],
-            failure_rates=[0.0, None, 0.1],  # Full-length with None placeholder
-            stderrs=[0.01, None, 0.02],     # Full-length with None placeholder
+            failure_rates=[
+                0.0,
+                None,
+                0.1,
+            ],  # Full-length with None placeholder
+            stderrs=[0.01, None, 0.02],  # Full-length with None placeholder
             num_shots=100,
         )
         path = tmp_path / "result.json"
@@ -774,8 +841,12 @@ class TestNoiseSweepResult:
 class TestCompareNoiseSweeps:
     def _make_result(self, strengths, num_completed, num_shots=10):
         # Create full-length arrays with None placeholders for incomplete indices
-        failure_rates = [0.0 if i < num_completed else None for i in range(len(strengths))]
-        stderrs = [0.0 if i < num_completed else None for i in range(len(strengths))]
+        failure_rates = [
+            0.0 if i < num_completed else None for i in range(len(strengths))
+        ]
+        stderrs = [
+            0.0 if i < num_completed else None for i in range(len(strengths))
+        ]
         return NoiseSweepResult(
             strengths=strengths,
             failure_rates=failure_rates,
@@ -926,15 +997,14 @@ class TestPlotNoiseSweep:
         # Verify guide line exists and contains no nan
         assert any(
             "slope=2" in str(getattr(line, "_label", "")) for line in ax.lines
-        ), (
-            "Expected guide line with slope=2 label"
-        )
+        ), "Expected guide line with slope=2 label"
 
         plt.close(fig)
 
     def test_incomplete_points_guide_line_excludes_nan(self):
         """Verify the guide line's x-range is bounded by valid points only, not by an
-        incomplete point's strength value even when that strength is the series' own extreme."""
+        incomplete point's strength value even when that strength is the series' own extreme.
+        """
         pytest.importorskip("matplotlib")
         import matplotlib.pyplot as plt
 
@@ -954,7 +1024,9 @@ class TestPlotNoiseSweep:
             for line in ax.lines
             if getattr(line, "_label", "").startswith("slope")
         ]
-        assert len(guide_lines) > 0, "Expected guide line to be plotted despite incomplete points"
+        assert (
+            len(guide_lines) > 0
+        ), "Expected guide line to be plotted despite incomplete points"
 
         guide_line = guide_lines[0]
         guide_x = guide_line.get_xdata()
@@ -1040,7 +1112,8 @@ class TestNoiseSweepRunnerHooks:
         self, tmp_path
     ):
         """_build_output builds a NoiseSweepResult from (strength, (failure_rate,
-        stderr)) pairs without writing to disk, even when item_checkpoint_dir is set."""
+        stderr)) pairs without writing to disk, even when item_checkpoint_dir is set.
+        """
         runner = make_runner(
             [0.1, 0.2, 0.3],
             seed_stride=10,
@@ -1092,4 +1165,7 @@ class TestNoiseSweepRunnerHooks:
             seed_stride=10,
             num_shots=10,
         )
-        assert runner._mismatch_field_display_name("_resolved_seed_stride") == "seed_stride"
+        assert (
+            runner._mismatch_field_display_name("_resolved_seed_stride")
+            == "seed_stride"
+        )

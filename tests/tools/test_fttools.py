@@ -23,7 +23,9 @@ def _build_circuit_program():
     """
     circ = PyGSTiPhysicalCircuit([("Gh", "Q0")], qubit_labels=["Q0", "Q1"])
     circ = circ.append([("Gcnot", "Q0", "Q1")])
-    inst = builders.build_physical_circuit_instruction(circuit=circ, name="Circuit")
+    inst = builders.build_physical_circuit_instruction(
+        circuit=circ, name="Circuit"
+    )
     program = QuantumProgram(
         instruction_stack=[{"instruction": "Circuit"}],
         global_instructions={"Circuit": inst},
@@ -39,8 +41,16 @@ def _build_counter_program():
     qubits = ["Q0"]
     ideal_model = trivial_codepack.create_ideal_model(qubits)
     stack = [
-        {"instruction": "Init Patch Trivial", "new_patch_label": "L0", "qubits": qubits},
-        {"instruction": "Init Counter", "patch_label": "L0", "initial_value": 0},
+        {
+            "instruction": "Init Patch Trivial",
+            "new_patch_label": "L0",
+            "qubits": qubits,
+        },
+        {
+            "instruction": "Init Counter",
+            "patch_label": "L0",
+            "initial_value": 0,
+        },
         {"instruction": "Increment", "patch_label": "L0", "increment_by": 1},
     ]
     return QuantumProgram(
@@ -72,7 +82,10 @@ class TestBuildDiscreteErrorInjectionProgramForCombo:
             program, 0, [(2, "Gxpi", 0), (2, "Gzpi", 1)]
         )
         new_label = new_program.instruction_stack[0]
-        assert new_label["error_injections"] == [(2, "Gxpi", 0), (2, "Gzpi", 1)]
+        assert new_label["error_injections"] == [
+            (2, "Gxpi", 0),
+            (2, "Gzpi", 1),
+        ]
         assert "Gxpi" in new_program.name and "Gzpi" in new_program.name
 
     def test_empty_error_injections_uses_placeholder_layer_in_name(self):
@@ -130,7 +143,9 @@ class TestPauliPropagation:
         assert total == 4
         assert len(representatives) <= total
 
-    def test_prune_error_combos_falls_back_to_unpruned_without_stim(self, monkeypatch):
+    def test_prune_error_combos_falls_back_to_unpruned_without_stim(
+        self, monkeypatch
+    ):
         _, _, circ = _build_circuit_program()
         monkeypatch.setattr(
             fttools, "is_stim_pauli_propagation_available", lambda: False
@@ -162,8 +177,10 @@ class TestBuildPrunedDiscreteErrorInjectionPrograms:
 
     def test_returns_fewer_or_equal_programs_than_total(self):
         program, inst, _ = _build_circuit_program()
-        programs, total = fttools.build_pruned_discrete_error_injection_programs(
-            program, inst, 0, ["Gxpi", "Gzpi"], post_twoq_gates=False
+        programs, total = (
+            fttools.build_pruned_discrete_error_injection_programs(
+                program, inst, 0, ["Gxpi", "Gzpi"], post_twoq_gates=False
+            )
         )
         assert total == 6
         assert 0 < len(programs) <= total
@@ -178,6 +195,7 @@ class TestBuildDiscreteErrorInjectionPrograms:
 
         def apply_fn():
             pass
+
         bad_inst = Instruction(apply_fn, data={}, name="bad")
 
         with pytest.raises(ValueError, match="Key 'circuit' not available"):
@@ -297,7 +315,9 @@ class TestFaultInjectionRunnerCheckpointing:
 
         return set(_read_done_union(ckpt).keys())
 
-    def test_existing_checkpoint_with_matching_config_auto_resumes(self, tmp_path):
+    def test_existing_checkpoint_with_matching_config_auto_resumes(
+        self, tmp_path
+    ):
         """Resumed call with matching config continues from checkpoint."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
@@ -307,7 +327,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -317,14 +339,15 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
         )
         failed2 = runner2.run()
         assert failed2 == []
 
-    def test_resume_with_equivalent_expected_outcomes_succeeds(
-        self, tmp_path
-    ):
+    def test_resume_with_equivalent_expected_outcomes_succeeds(self, tmp_path):
         """Resume succeeds when expected_outcomes is passed as an
         equivalent-but-differently-typed sequence."""
         program = _build_counter_program()
@@ -354,7 +377,9 @@ class TestFaultInjectionRunnerCheckpointing:
         result = runner2.run()
         assert result is not None
 
-    def test_fault_injection_runner_with_custom_results_filename(self, tmp_path):
+    def test_fault_injection_runner_with_custom_results_filename(
+        self, tmp_path
+    ):
         """FaultInjectionRunner threads results_filename through shot checkpoints."""
         program = _build_counter_program()
         shot_ckpt = tmp_path / "shot_checkpoint"
@@ -389,7 +414,9 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            item_checkpoint_dir=ckpt,
             keep_shot_results=False,
             shot_checkpoint=False,
         )
@@ -399,7 +426,10 @@ class TestFaultInjectionRunnerCheckpointing:
             errored_programs=[program, program],
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
-            num_shots=1, checkpoint=True, resume=True, item_checkpoint_dir=ckpt,
+            num_shots=1,
+            checkpoint=True,
+            resume=True,
+            item_checkpoint_dir=ckpt,
             keep_shot_results=True,
             shot_checkpoint=True,
             shot_checkpoint_dir=shot_ckpt,
@@ -412,7 +442,9 @@ class TestFaultInjectionRunnerCheckpointing:
 class TestRunKwargsPassthrough:
     """Test run_kwargs passthrough in FaultInjectionRunner."""
 
-    def test_run_kwargs_roundtrips_via_serialization(self, tmp_path, make_temp_path):
+    def test_run_kwargs_roundtrips_via_serialization(
+        self, tmp_path, make_temp_path
+    ):
         """FaultInjectionRunner with run_kwargs serializes and deserializes correctly."""
         program = _build_counter_program()
         item_ckpt = tmp_path / "item_checkpoint"
@@ -462,7 +494,7 @@ class TestRunKwargsPassthrough:
 
 
 def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
-    """"Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
+    """ "Fail" a shot with probability `fail_prob`, deterministically from `seed`."""
     rng = np.random.default_rng(seed)
     return Frame({"failed": bool(rng.random() < fail_prob)})
 
@@ -474,7 +506,9 @@ class TestHistoryDataCollectorWithDict:
     """Tests that a literal HistoryDataCollector instance can be used directly
     in collect_shot_data_args and survives checkpointing/serialization."""
 
-    def test_literal_history_data_collector_in_runner_serialize(self, tmp_path, make_temp_path):
+    def test_literal_history_data_collector_in_runner_serialize(
+        self, tmp_path, make_temp_path
+    ):
         """FaultInjectionRunner accepts a literal HistoryDataCollector instance."""
         from loqs.core.historydatacollector import HistoryDataCollector
 
@@ -501,7 +535,9 @@ class TestHistoryDataCollectorWithDict:
         # Loaded instance should have the same collector
         assert loaded.collect_shot_data_args == [collector]
 
-    def test_literal_history_data_collector_in_noisesweep(self, tmp_path, make_temp_path):
+    def test_literal_history_data_collector_in_noisesweep(
+        self, tmp_path, make_temp_path
+    ):
         """NoiseSweepRunner accepts a literal HistoryDataCollector instance."""
         from loqs.core.historydatacollector import HistoryDataCollector
         from loqs.tools.noisesweeptools import NoiseSweepRunner

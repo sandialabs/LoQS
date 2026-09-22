@@ -1053,7 +1053,7 @@ def get_dict_attr_group(
     return values_iterable_group[str(index)]
 
 
-def read_checkpoint_dict_attr_union(
+def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for canonical read and worker scan with conflict retry
     checkpoint_dir: Path,
     canonical_filename: str | None,
     worker_glob: str | None,
