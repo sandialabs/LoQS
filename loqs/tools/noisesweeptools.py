@@ -47,6 +47,7 @@ from loqs.tools.paralleltools import (
     ParallelStrategy,
 )
 from loqs.tools.multiprogramrunner import (
+    CheckpointConfig,
     MultiProgramRunner,
     _is_sweep_callable,
 )
@@ -268,18 +269,18 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         """
         super().__init__(
             parallel_strategy=parallel_strategy,
-            item_checkpoint_dir=item_checkpoint_dir,
-            checkpoint=checkpoint,
-            resume=resume,
-            force_resume=force_resume,
-            shot_checkpoint=shot_checkpoint,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading=lazy_loading,
-            keep_shot_results=keep_shot_results,
-            poll_interval=poll_interval,
-            show_progress=show_progress,
-            runner_filename=runner_filename,
-            results_filename=results_filename,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir,
+                resume=resume,
+                force_resume=force_resume,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                lazy_loading=lazy_loading,
+                keep_shot_results=keep_shot_results,
+                poll_interval=poll_interval,
+                show_progress=show_progress,
+                runner_filename=runner_filename,
+                results_filename=results_filename,
+            ),
             run_kwargs=run_kwargs,
         )
         self.strengths = list(strengths)

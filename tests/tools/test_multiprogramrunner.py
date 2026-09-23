@@ -23,6 +23,7 @@ from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
 from loqs.tools.multiprogramrunner import (
+    CheckpointConfig,
     MultiProgramRunner,
     _checkpoint_subdir_for_prefix,
 )
@@ -375,8 +376,7 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         runner1 = _TrackingRunner(
             items,
             process_fn=_raise_after_n,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             max_count=3,
         )
 
@@ -396,9 +396,9 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         runner2 = _TrackingRunner(
             items,
             process_fn=_count_and_double,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         results = runner2.run()
 
@@ -423,8 +423,7 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         runner1 = _TrackingRunner(
             items,
             process_fn=_raise_after_n,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             max_count=3,
         )
 
@@ -435,9 +434,9 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         runner2 = _TrackingRunner(
             items,
             process_fn=_count_and_double,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         results = runner2.run()
 
@@ -481,8 +480,7 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         runner1 = _TrackingRunner(
             items,
             process_fn=_count_and_double,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         runner1.run()
 
@@ -496,9 +494,9 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         runner2 = _TrackingRunner(
             items,
             process_fn=_count_and_double,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         runner2.run()
 
@@ -527,8 +525,7 @@ class TestMultiProgramRunnerParallel:
         runner = _TrackingRunner(
             items,
             process_fn=_double_item,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             parallel_strategy=strategy,
         )
         results = runner.run()
@@ -563,10 +560,10 @@ class TestMultiProgramRunnerParallel:
         runner = _SleepingRunner(
             items,
             sleep_time=0.05,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir, poll_interval=0.1
+            ),
             parallel_strategy=strategy,
-            poll_interval=0.1,
         )
         results = runner.run()
 
@@ -599,8 +596,7 @@ class TestMultiProgramRunnerParallel:
         runner1 = _TrackingDoubleRunner(
             items,
             tracked_indices=recorded_indices,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             parallel_strategy=strategy,
         )
 
@@ -619,9 +615,9 @@ class TestMultiProgramRunnerParallel:
         runner2 = _TrackingDoubleRunner(
             items,
             tracked_indices=recorded_indices,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
             parallel_strategy=strategy,
         )
 
@@ -662,8 +658,7 @@ class TestMultiProgramRunnerParallel:
 
         runner1 = _TrackingDoubleRunner(
             items,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             parallel_strategy=strategy,
         )
 
@@ -675,9 +670,9 @@ class TestMultiProgramRunnerParallel:
 
         runner2 = _TrackingDoubleRunner(
             items,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
             parallel_strategy=strategy,
         )
         results = runner2.run()
@@ -737,8 +732,7 @@ class TestItemAndShotWallClockTimes:
         runner = _SleepingRunner(
             items,
             sleep_time=0.02,
-            checkpoint=checkpoint,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             parallel_strategy=strategy,
             run_kwargs=run_kwargs,
         )
@@ -766,7 +760,7 @@ class TestItemAndShotWallClockTimes:
         both round-trip through `.write()`/`.read()` with every outer and
         inner key restored as `int`, not the `str` that JSON/HDF5 use to
         encode int dict keys."""
-        runner = _SimpleDoubleRunner([1, 2, 3], checkpoint=False)
+        runner = _SimpleDoubleRunner([1, 2, 3])
         runner.item_wall_clock_times = {0: 1.5, 1: 2.5, 2: 3.5}
         runner.shot_wall_clock_times = {
             0: {0: 1.5, 1: 2.5},
@@ -810,8 +804,7 @@ class TestItemAndShotWallClockTimes:
 
         runner = _SimpleDoubleRunner(
             items,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             run_kwargs={"num_shots": 2, "max_frame_limit": 1_000_000},
         )
         runner.run()
@@ -1053,7 +1046,7 @@ class TestParallelDispatchAndPollingRegressions:
         runner = _SimpleDoubleRunner(
             list(range(5)),
             parallel_strategy=strategy,
-            item_checkpoint_dir=None,
+            config=CheckpointConfig(item_checkpoint_dir=None),
         )
         results = runner.run()
         assert results == [0, 2, 4, 6, 8]
@@ -1088,7 +1081,7 @@ class TestParallelDispatchAndPollingRegressions:
         runner = _ShotExecutorTracker(
             [1, 2, 3],
             parallel_strategy=strategy,
-            item_checkpoint_dir=None,
+            config=CheckpointConfig(item_checkpoint_dir=None),
         )
         runner.run()
         # All calls should receive the sentinel value, not None
@@ -1117,8 +1110,7 @@ class TestParallelDispatchAndPollingRegressions:
         runner_init = _TrackingRunner(
             list(range(6)),
             process_fn=_double_item,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             parallel_strategy=strategy,
         )
         runner_init.write(checkpoint_dir / "runner.h5")
@@ -1130,9 +1122,9 @@ class TestParallelDispatchAndPollingRegressions:
         runner = _TrackingRunner(
             list(range(6)),
             process_fn=_double_item,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
             parallel_strategy=strategy,
         )
         runner.run()
@@ -1163,7 +1155,7 @@ class TestParallelDispatchAndPollingRegressions:
             list(range(4)),
             process_fn=_double_item,
             parallel_strategy=strategy,
-            item_checkpoint_dir=None,
+            config=CheckpointConfig(item_checkpoint_dir=None),
         )
         runner.run()
 
@@ -1248,12 +1240,12 @@ class TestParallelDispatchAndPollingRegressions:
             runner = _ShotProgressTestRunner(
                 [1, 2],
                 num_shots=5,
-                checkpoint=True,
-                item_checkpoint_dir=item_checkpoint_dir,
+                config=CheckpointConfig(
+                    item_checkpoint_dir=item_checkpoint_dir,
+                    shot_checkpoint_dir=shot_checkpoint_dir,
+                    show_progress=True,
+                ),
                 parallel_strategy=strategy,
-                shot_checkpoint_dir=shot_checkpoint_dir,
-                shot_checkpoint=True,
-                show_progress=True,
             )
             runner.run()
 
@@ -1344,7 +1336,7 @@ class TestParallelDispatchAndPollingRegressions:
         assert 0 in observed_indices, "First entry should have been processed"
 
         # _consolidate_worker_files: corrupted file skipped, healthy merged.
-        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner = _SimpleDoubleRunner(items=[])
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
 
@@ -1402,7 +1394,7 @@ class TestParallelDispatchAndPollingRegressions:
             f.truncate(truncate_size)
 
         # Create runner.h5 to consolidate into
-        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner = _SimpleDoubleRunner(items=[])
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
 
@@ -1512,35 +1504,13 @@ class _KeyedRunnerFixedSignature(MultiProgramRunner):
         self,
         items,
         multiplier=2,
-        checkpoint=False,
-        resume=False,
-        item_checkpoint_dir=None,
-        force_resume=False,
         parallel_strategy=None,
-        shot_checkpoint=False,
-        shot_checkpoint_dir=None,
-        lazy_loading=True,
-        keep_shot_results=False,
-        poll_interval=1.0,
-        show_progress=True,
-        runner_filename: str = "runner.h5",
-        results_filename: str = "results.h5",
+        config=None,
         run_kwargs: dict[str, Any] | None = None,
     ):
         super().__init__(
-            checkpoint=checkpoint,
-            resume=resume,
             parallel_strategy=parallel_strategy,
-            item_checkpoint_dir=item_checkpoint_dir,
-            force_resume=force_resume,
-            shot_checkpoint=shot_checkpoint,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading=lazy_loading,
-            keep_shot_results=keep_shot_results,
-            poll_interval=poll_interval,
-            show_progress=show_progress,
-            runner_filename=runner_filename,
-            results_filename=results_filename,
+            config=config,
             run_kwargs=run_kwargs,
         )
         self.items = items
@@ -1583,8 +1553,7 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         runner = _CheckingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         assert runner.run() == [2, 4, 6]
 
@@ -1597,8 +1566,7 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
             _CountingRunner(
                 [1, 2, 3],
                 multiplier=2,
-                checkpoint=True,
-                item_checkpoint_dir=checkpoint_dir,
+                config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             ).run()
 
     def test_matching_config_auto_resumes(self, tmp_path):
@@ -1607,17 +1575,16 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         first = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         assert first.run() == [2, 4, 6]
 
         resumed = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         assert resumed.run() == [2, 4, 6]
 
@@ -1626,16 +1593,15 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         ).run()
 
         mismatched = _CountingRunner(
             [1, 2, 3],
             multiplier=3,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         with pytest.raises(ValueError, match="multiplier"):
             mismatched.run()
@@ -1645,17 +1611,17 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         ).run()
 
         mismatched = _CountingRunner(
             [1, 2, 3],
             multiplier=3,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
-            force_resume=True,
+            config=CheckpointConfig(
+                resume=True,
+                item_checkpoint_dir=checkpoint_dir,
+                force_resume=True,
+            ),
         )
         # Already-done items are trusted as-is (their original,
         # multiplier=2 results), not recomputed under the new multiplier.
@@ -1671,8 +1637,7 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         interrupted = _FlakyRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         with pytest.raises(RuntimeError, match="simulated crash"):
             interrupted.run()
@@ -1685,12 +1650,15 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         assert recovered.run() == [2, 4, 6]
 
     def test_resume_true_without_checkpoint_raises(self):
-        """resume=True requires checkpoint=True, raises ValueError."""
+        """resume=True requires item_checkpoint_dir to be set, raises ValueError."""
         with pytest.raises(
-            ValueError, match="resume=True requires checkpoint=True"
+            ValueError,
+            match="resume=True requires item_checkpoint_dir to be set",
         ):
             _CountingRunner(
-                [1, 2, 3], multiplier=2, resume=True, checkpoint=False
+                [1, 2, 3],
+                multiplier=2,
+                config=CheckpointConfig(resume=True),
             )
 
     def test_checkpoint_without_resume_raises_when_content_exists(
@@ -1704,8 +1672,7 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         first = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         first.run()
 
@@ -1717,9 +1684,9 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         second = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            resume=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir, resume=False
+            ),
         )
         with pytest.raises(
             ValueError,
@@ -1736,9 +1703,9 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         runner = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         with pytest.raises(
             ValueError,
@@ -1751,9 +1718,9 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         runner2 = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         with pytest.raises(
             ValueError,
@@ -1777,8 +1744,7 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         runner1 = _RunnerWithFieldA(
             [1, 2, 3],
             field_a=10,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         runner1.run()
 
@@ -1786,9 +1752,9 @@ class TestMultiProgramRunnerRunAndCrashRecovery:
         runner2 = _RunnerWithFieldB(
             [10, 20, 30],
             field_b=20,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         with pytest.raises(
             TypeError,
@@ -1806,8 +1772,7 @@ class TestMergeReducedResult:
         runner = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         runner.run()
 
@@ -1838,8 +1803,7 @@ class TestMergeReducedResult:
         runner = _CountingRunner(
             [1, 2, 3],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         runner.run()
 
@@ -2066,8 +2030,7 @@ class TestIndexMapPersistence:
         runner1 = _KeyedRunner(
             [10, 20, 30],
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         assert runner1.run() == [20, 40, 60]
         assert runner1.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
@@ -2077,9 +2040,9 @@ class TestIndexMapPersistence:
         runner2 = _KeyedRunner(
             [30, 10],
             multiplier=2,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         assert runner2.run() == [60, 20]
         assert runner2.index_map == {"item_10": 0, "item_20": 1, "item_30": 2}
@@ -2093,8 +2056,7 @@ class TestIndexMapPersistence:
         runner1 = _KeyedRunner(
             items,
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         result1 = runner1.run()
         assert result1 == [20, 40, 60]
@@ -2125,8 +2087,7 @@ class TestIndexMapPersistence:
         runner1 = _KeyedRunnerFixedSignature(
             items,
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         result1 = runner1.run()
         assert result1 == [20, 40, 60]
@@ -2165,7 +2126,8 @@ class TestKeepShotResults:
     def test_keep_shot_results_false_default(self, tmp_path):
         """keep_shot_results defaults to False."""
         runner = _SimpleDoubleRunner(
-            [1, 2, 3], checkpoint=True, item_checkpoint_dir=tmp_path / "ckpt"
+            [1, 2, 3],
+            config=CheckpointConfig(item_checkpoint_dir=tmp_path / "ckpt"),
         )
         assert runner.keep_shot_results is False
 
@@ -2173,11 +2135,11 @@ class TestKeepShotResults:
         """keep_shot_results can be set during construction."""
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=tmp_path / "ckpt",
-            shot_checkpoint=True,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            keep_shot_results=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=tmp_path / "ckpt",
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                keep_shot_results=True,
+            ),
         )
         assert runner.keep_shot_results is True
 
@@ -2188,9 +2150,10 @@ class TestKeepShotResults:
         with pytest.raises(ValueError, match="shot_checkpoint"):
             _SimpleDoubleRunner(
                 [1, 2, 3],
-                checkpoint=True,
-                item_checkpoint_dir=tmp_path / "ckpt",
-                keep_shot_results=True,
+                config=CheckpointConfig(
+                    item_checkpoint_dir=tmp_path / "ckpt",
+                    keep_shot_results=True,
+                ),
             )
 
     def test_keep_shot_results_false_leaves_empty(self, tmp_path):
@@ -2198,9 +2161,10 @@ class TestKeepShotResults:
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            keep_shot_results=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                keep_shot_results=False,
+            ),
         )
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2214,12 +2178,12 @@ class TestKeepShotResults:
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                keep_shot_results=True,
+                lazy_loading=True,
+            ),
         )
         runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
@@ -2263,12 +2227,12 @@ class TestKeepShotResults:
         checkpoint_dir = tmp_path / "ckpt"
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                keep_shot_results=True,
+                lazy_loading=False,
+            ),
         )
         runner.num_shots = 5  # Set num_shots for real program execution
         result = runner.run()
@@ -2304,11 +2268,11 @@ class TestKeepShotResults:
         # First run completes all items
         runner1 = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+            ),
         )
         result1 = runner1.run()
         assert result1 == [2, 4, 6]
@@ -2317,12 +2281,12 @@ class TestKeepShotResults:
         # Resume (all items already done)
         runner2 = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
+            config=CheckpointConfig(
+                resume=True,
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+            ),
         )
         result2 = runner2.run()
         assert result2 == [2, 4, 6]
@@ -2338,12 +2302,12 @@ class TestKeepShotResults:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+                lazy_loading=False,
+            ),
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
@@ -2371,11 +2335,11 @@ class TestKeepShotResults:
         # Create a runner with keep_shot_results=True
         runner1 = _SimpleDoubleRunner(
             [1, 2],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            shot_checkpoint=True,
-            keep_shot_results=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                keep_shot_results=True,
+            ),
         )
         runner1.num_shots = 3  # Set num_shots for real program execution
 
@@ -2418,12 +2382,12 @@ class TestKeepShotResults:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+                lazy_loading=True,
+            ),
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
@@ -2464,12 +2428,12 @@ class TestKeepShotResults:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+                lazy_loading=False,
+            ),
         )
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2505,12 +2469,12 @@ class TestKeepShotResults:
         # (set as attributes since constructor doesn't accept them)
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+                lazy_loading=True,
+            ),
         )
         # Set per-runner metadata that should be forwarded to lazy ProgramResults
         runner.num_shots = 15
@@ -2554,13 +2518,13 @@ class TestKeepShotResults:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
-            results_filename=custom_filename,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+                lazy_loading=False,
+                results_filename=custom_filename,
+            ),
         )
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2586,17 +2550,17 @@ class TestKeepShotResults:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir,
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                keep_shot_results=True,
+                lazy_loading=False,
+                results_filename=custom_filename,
+            ),
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
             ),
-            results_filename=custom_filename,
         )
         result = runner.run()
         assert result == [2, 4, 6]
@@ -2677,14 +2641,14 @@ class TestKeepShotResults:
                 [1, 2],
                 num_shots=5,
                 on_item_done=_track_done,
-                checkpoint=True,
-                item_checkpoint_dir=item_checkpoint_dir,
                 parallel_strategy=strategy,
-                shot_checkpoint_dir=shot_checkpoint_dir,
-                shot_checkpoint=True,
-                show_progress=True,
-                poll_interval=0.05,
-                results_filename=custom_filename,
+                config=CheckpointConfig(
+                    item_checkpoint_dir=item_checkpoint_dir,
+                    shot_checkpoint_dir=shot_checkpoint_dir,
+                    show_progress=True,
+                    poll_interval=0.05,
+                    results_filename=custom_filename,
+                ),
             )
             runner.run()
 
@@ -2749,7 +2713,9 @@ class TestShotProgressBar:
     def test_num_shots_for_progress_hook_returns_num_shots(self):
         """Verify _num_shots_for_progress returns self.num_shots."""
         runner = _ShotProgressTestRunner(
-            [1, 2, 3], num_shots=10, show_progress=False
+            [1, 2, 3],
+            num_shots=10,
+            config=CheckpointConfig(show_progress=False),
         )
         assert runner._num_shots_for_progress() == 10
 
@@ -2821,7 +2787,7 @@ class TestShotProgressBar:
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
-            show_progress=True,
+            config=CheckpointConfig(show_progress=True),
             # shot_checkpoint and shot_checkpoint_dir are NOT set
         )
         runner.run()
@@ -2847,7 +2813,7 @@ class TestShotProgressBar:
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
-            show_progress=False,
+            config=CheckpointConfig(show_progress=False),
             # shot_checkpoint and shot_checkpoint_dir are NOT set
         )
         runner.run()
@@ -2862,7 +2828,7 @@ class TestShotProgressBar:
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=None,
-            show_progress=True,
+            config=CheckpointConfig(show_progress=True),
         )
         runner.run()
 
@@ -2889,7 +2855,7 @@ class TestShotProgressBar:
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
-            show_progress=True,
+            config=CheckpointConfig(show_progress=True),
             # checkpointing not configured
         )
         runner.run()
@@ -2923,11 +2889,11 @@ class TestShotProgressBar:
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
-            checkpoint=True,
-            item_checkpoint_dir=tmp_path / "item_ckpt",
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            shot_checkpoint=True,
-            show_progress=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=tmp_path / "item_ckpt",
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                show_progress=False,
+            ),
         )
         with patch("loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy):
             runner.run()
@@ -2962,10 +2928,10 @@ class TestShotProgressBar:
             [1, 2, 3],
             num_shots=5,
             parallel_strategy=strategy,
-            checkpoint=False,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            show_progress=True,
+            config=CheckpointConfig(
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                show_progress=True,
+            ),
         )
         with patch("loqs.tools.multiprogramrunner.tqdm", side_effect=tqdm_spy):
             runner.run()
@@ -3060,12 +3026,12 @@ class TestShotProgressBar:
                 runner = _ShotProgressTestRunner(
                     [1, 2, 3],
                     num_shots=5,
-                    checkpoint=True,
-                    item_checkpoint_dir=item_checkpoint_dir,
                     parallel_strategy=strategy,
-                    shot_checkpoint_dir=shot_checkpoint_dir,
-                    shot_checkpoint=True,
-                    show_progress=True,
+                    config=CheckpointConfig(
+                        item_checkpoint_dir=item_checkpoint_dir,
+                        shot_checkpoint_dir=shot_checkpoint_dir,
+                        show_progress=True,
+                    ),
                 )
                 with contextlib.suppress(Exception):
                     runner.run()
@@ -3108,8 +3074,7 @@ class TestWorkerFileConsolidation:
         runner = _TrackingRunner(
             items,
             process_fn=_double_item,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         results = runner.run()
 
@@ -3150,8 +3115,7 @@ class TestWorkerFileConsolidation:
         runner1 = _TrackingRunner(
             items,
             process_fn=_double_item,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         results1 = runner1.run()
         assert results1 == [0, 2, 4, 6, 8, 10]
@@ -3166,9 +3130,9 @@ class TestWorkerFileConsolidation:
         runner2 = _TrackingRunner(
             items,
             process_fn=_double_item,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         results2 = runner2.run()
 
@@ -3201,8 +3165,7 @@ class TestWorkerFileConsolidation:
         runner1 = _TrackingRunner(
             items,
             process_fn=_raise_after_n,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             max_count=2,
         )
         with pytest.raises(RuntimeError, match="Simulated crash"):
@@ -3224,9 +3187,9 @@ class TestWorkerFileConsolidation:
         runner2 = _TrackingRunner(
             items,
             process_fn=_raise_after_n,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
             max_count=2,  # Will process items 2,3 then crash on item 4
         )
         with pytest.raises(RuntimeError, match="Simulated crash"):
@@ -3244,9 +3207,9 @@ class TestWorkerFileConsolidation:
         runner3 = _TrackingRunner(
             items,
             process_fn=_count_and_double,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
         results3 = runner3.run()
 
@@ -3277,8 +3240,7 @@ class TestWorkerFileConsolidation:
         runner1 = _CountingRunner(
             items,
             multiplier=2,
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         runner1.run()
 
@@ -3297,9 +3259,9 @@ class TestWorkerFileConsolidation:
         runner2 = _CountingRunner(
             items,
             multiplier=2,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
         )
 
         captured_on_first_write = []
@@ -3344,7 +3306,7 @@ class TestWorkerFileConsolidation:
         checkpoint_dir.mkdir()
 
         # Bare runner.h5 with valid object-group structure to merge into.
-        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner = _SimpleDoubleRunner(items=[])
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
 
@@ -3455,12 +3417,12 @@ class TestWorkerFileConsolidation:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                keep_shot_results=True,
+                lazy_loading=False,
+            ),
         )
 
         with pytest.raises(
@@ -3508,12 +3470,12 @@ class TestWorkerFileConsolidation:
 
         runner = _SimpleDoubleRunner(
             [1, 2, 3],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
-            shot_checkpoint_dir=tmp_path / "shot_ckpt",
-            shot_checkpoint=True,
-            keep_shot_results=True,
-            lazy_loading=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=checkpoint_dir,
+                shot_checkpoint_dir=tmp_path / "shot_ckpt",
+                keep_shot_results=True,
+                lazy_loading=True,
+            ),
         )
 
         with pytest.raises(
@@ -3540,7 +3502,7 @@ class TestWorkerFileConsolidation:
         checkpoint_dir.mkdir()
 
         # Bare runner.h5 with valid object-group structure to merge into.
-        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner = _SimpleDoubleRunner(items=[])
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
 
@@ -3617,7 +3579,7 @@ class TestWorkerFileConsolidation:
         checkpoint_dir.mkdir()
 
         # Bare runner.h5 with valid object-group structure to merge into.
-        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner = _SimpleDoubleRunner(items=[])
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
 
@@ -3706,7 +3668,7 @@ class TestWorkerFileConsolidation:
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
 
-        runner = _SimpleDoubleRunner(items=[], checkpoint=False)
+        runner = _SimpleDoubleRunner(items=[])
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
 
@@ -3899,7 +3861,6 @@ class TestDecodeCache:
         # Create a minimal runner.h5 with valid structure via _SimpleDoubleRunner
         runner = _SimpleDoubleRunner(
             items=[],
-            checkpoint=False,
         )
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
@@ -4094,7 +4055,6 @@ class TestDecodeCache:
         # Create a minimal runner.h5 via _SimpleDoubleRunner
         runner = _SimpleDoubleRunner(
             items=[],
-            checkpoint=False,
         )
         runner_path = checkpoint_dir / "runner.h5"
         runner.write(runner_path, "hdf5")
@@ -4196,8 +4156,7 @@ class TestDecodeCache:
         # Create a simple runner with one item and run it
         runner = _SimpleDoubleRunner(
             items=[5],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         result_list = runner.run()
         assert result_list == [10]
@@ -4352,8 +4311,7 @@ class TestMultiProgramRunnerRedesignedHooks:
         runner = _NewHookRunner(
             items=[7],
             run_kwargs_log=run_kwargs_log,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_checkpoint_dir,
+            config=CheckpointConfig(shot_checkpoint_dir=shot_checkpoint_dir),
         )
 
         runner.run()
@@ -4391,8 +4349,7 @@ class TestBaseClassMechanisms:
         checkpoint_dir.mkdir(parents=True)
         runner1 = _ShotDataArgsRunner(
             [1],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             collect_shot_data_args=[("counter", -1)],
         )
         runner1.run()
@@ -4400,9 +4357,9 @@ class TestBaseClassMechanisms:
         # Try to resume with a different spec
         runner2 = _ShotDataArgsRunner(
             [1],
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
             collect_shot_data_args=[("counter", 0)],
         )
 
@@ -4458,8 +4415,7 @@ class TestBaseClassMechanisms:
         checkpoint_dir.mkdir(parents=True)
         runner1 = _ShotDataArgsRunner(
             [1],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
             collect_shot_data_args=[("counter", -1)],
         )
         runner1.run()
@@ -4467,9 +4423,9 @@ class TestBaseClassMechanisms:
         # Resume with dict form (should succeed, not raise)
         runner2 = _ShotDataArgsRunner(
             [1],
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(
+                resume=True, item_checkpoint_dir=checkpoint_dir
+            ),
             collect_shot_data_args=[{"key": "counter", "indices": -1}],
         )
         result = runner2.run()
@@ -4481,8 +4437,9 @@ class TestBaseClassMechanisms:
         with pytest.raises(ValueError, match="checkpoint_dir.*conflict"):
             _SimpleDoubleRunner(
                 [1],
-                shot_checkpoint=True,
-                shot_checkpoint_dir=tmp_path / "shots",
+                config=CheckpointConfig(
+                    shot_checkpoint_dir=tmp_path / "shots"
+                ),
                 run_kwargs={"checkpoint_dir": tmp_path / "other"},
             )
 
@@ -4568,9 +4525,9 @@ class TestBaseClassMechanisms:
         # First run establishes the on-disk shot checkpoint with num_shots=1.
         runner1 = _CountingRunner(
             [1, 2],
-            item_checkpoint_dir=None,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
+            config=CheckpointConfig(
+                item_checkpoint_dir=None, shot_checkpoint_dir=shot_ckpt_dir
+            ),
         )
         runner1.num_shots = 1
         result1 = runner1.run()
@@ -4580,10 +4537,11 @@ class TestBaseClassMechanisms:
         # QuantumProgram.run() itself raises on the num_shots mismatch.
         runner2 = _CountingRunner(
             [1, 2],
-            item_checkpoint_dir=None,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
-            force_resume=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=None,
+                shot_checkpoint_dir=shot_ckpt_dir,
+                force_resume=False,
+            ),
         )
         runner2.num_shots = 2
         with pytest.raises(ValueError, match="num_shots"):
@@ -4593,10 +4551,11 @@ class TestBaseClassMechanisms:
         # force_resume was actually forwarded into program.run().
         runner3 = _CountingRunner(
             [1, 2],
-            item_checkpoint_dir=None,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
-            force_resume=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=None,
+                shot_checkpoint_dir=shot_ckpt_dir,
+                force_resume=True,
+            ),
         )
         runner3.num_shots = 2
         result3 = runner3.run()
@@ -4609,15 +4568,14 @@ class TestBaseClassMechanisms:
 
     def test_shot_checkpoint_subdir_returns_none_when_disabled(self):
         """_shot_checkpoint_subdir returns None when shot_checkpoint=False."""
-        runner = _SimpleDoubleRunner([1], shot_checkpoint=False)
+        runner = _SimpleDoubleRunner([1])
         assert runner._shot_checkpoint_subdir(3) is None
 
     def test_shot_checkpoint_subdir_returns_path_when_enabled(self, tmp_path):
         """_shot_checkpoint_subdir returns correct path when enabled."""
         runner = _SimpleDoubleRunner(
             [1],
-            shot_checkpoint=True,
-            shot_checkpoint_dir=tmp_path,
+            config=CheckpointConfig(shot_checkpoint_dir=tmp_path),
         )
         subdir = runner._shot_checkpoint_subdir(3)
         assert subdir == tmp_path / "item_3"
@@ -4630,9 +4588,10 @@ class TestBaseClassMechanisms:
         # Run with custom runner_filename
         runner1 = _SimpleDoubleRunner(
             [1],
-            checkpoint=True,
-            item_checkpoint_dir=ckpt_dir,
-            runner_filename="custom_runner.h5",
+            config=CheckpointConfig(
+                item_checkpoint_dir=ckpt_dir,
+                runner_filename="custom_runner.h5",
+            ),
         )
         result1 = runner1.run()
         assert (ckpt_dir / "custom_runner.h5").exists()
@@ -4641,10 +4600,11 @@ class TestBaseClassMechanisms:
         # Resume with same custom runner_filename
         runner2 = _SimpleDoubleRunner(
             [1],
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=ckpt_dir,
-            runner_filename="custom_runner.h5",
+            config=CheckpointConfig(
+                resume=True,
+                item_checkpoint_dir=ckpt_dir,
+                runner_filename="custom_runner.h5",
+            ),
         )
         result2 = runner2.run()
         assert result2 == result1
@@ -4659,12 +4619,11 @@ class TestBaseClassMechanisms:
         """submitit program executor (in-process DebugExecutor) produces correct results."""
         submitit = pytest.importorskip("submitit")
 
-        runner = _CountingRunner(items=[3, -2], checkpoint=False)
+        runner = _CountingRunner(items=[3, -2])
         serial_result = runner.run()
 
         runner_parallel = _CountingRunner(
             items=[3, -2],
-            checkpoint=False,
             # DebugExecutor: AutoExecutor(cluster="local") can't unpickle a
             # test-double class defined in this test module by reference.
             parallel_strategy=ParallelStrategy(
@@ -4680,12 +4639,11 @@ class TestBaseClassMechanisms:
         loky = pytest.importorskip("loky")
         from _shared_checkpoint_test_helpers import _build_shot_executor
 
-        runner = _CountingRunner(items=[2, 3], checkpoint=False)
+        runner = _CountingRunner(items=[2, 3])
         serial_result = runner.run()
 
         runner_hybrid = _CountingRunner(
             items=[2, 3],
-            checkpoint=False,
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
@@ -4702,12 +4660,11 @@ class TestBaseClassMechanisms:
         coverage of the conversion itself)."""
         loky = pytest.importorskip("loky")
 
-        runner = _CountingRunner(items=[2, 3], checkpoint=False)
+        runner = _CountingRunner(items=[2, 3])
         serial_result = runner.run()
 
         runner_hybrid = _CountingRunner(
             items=[2, 3],
-            checkpoint=False,
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=2),
                 n_program_chunks=2,
@@ -4717,19 +4674,14 @@ class TestBaseClassMechanisms:
         hybrid_result = runner_hybrid.run()
         assert hybrid_result == serial_result
 
-    def test_shot_checkpoint_true_without_dir_raises(self):
-        """shot_checkpoint=True without shot_checkpoint_dir raises ValueError."""
-        with pytest.raises(ValueError, match="shot_checkpoint_dir"):
-            _CountingRunner(items=[1], shot_checkpoint=True)
-
     def test_shot_checkpoint_creates_per_item_subdirs(self, tmp_path):
         """Serial run with shot_checkpoint=True creates per-item subdirectories."""
         shot_ckpt_dir = tmp_path / "shots"
         runner = _CountingRunner(
             items=[1, 1],
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                shot_checkpoint_dir=shot_ckpt_dir, lazy_loading=False
+            ),
         )
         result = runner.run()
         assert result == [2, 2]
@@ -4761,9 +4713,9 @@ class TestBaseClassMechanisms:
         shot_ckpt_dir = tmp_path / "shots"
         runner = _CountingRunner(
             items=[2, 2],
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt_dir,
-            lazy_loading=False,
+            config=CheckpointConfig(
+                shot_checkpoint_dir=shot_ckpt_dir, lazy_loading=False
+            ),
             parallel_strategy=ParallelStrategy(
                 program_executor=loky.get_reusable_executor(max_workers=1),
                 n_program_chunks=1,
@@ -4792,9 +4744,10 @@ class TestBaseClassMechanisms:
         runner = _NewHookRunner(
             items=[7],
             run_kwargs_log=run_kwargs_log,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            results_filename="custom_results.h5",
+            config=CheckpointConfig(
+                shot_checkpoint_dir=shot_checkpoint_dir,
+                results_filename="custom_results.h5",
+            ),
         )
 
         runner.run()
@@ -4810,8 +4763,7 @@ class TestBaseClassMechanisms:
 
         runner = _KeyedRunner(
             items=[5],
-            checkpoint=True,
-            item_checkpoint_dir=checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
         )
         result = runner.run()
         assert result == [10]
