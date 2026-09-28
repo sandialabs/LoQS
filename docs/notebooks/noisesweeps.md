@@ -38,6 +38,7 @@ from loqs.tools.noisesweeptools import (
     compare_noise_sweeps,
     plot_noise_sweep,
 )
+from loqs.tools.multiprogramrunner import CheckpointConfig
 ```
 
 ## Setup: a fixed instruction stack, a swept noise model
@@ -326,12 +327,11 @@ runner_with_override = NoiseSweepRunner(
 By default, each sweep point's raw `ProgramResults` (the full per-shot histories) is discarded as
 soon as its failure rate has been extracted -- only the summary `NoiseSweepResult` is kept. If you
 want to dig into the raw shot data later (e.g. to try a different pass/fail criterion without
-re-running anything), construct the `NoiseSweepRunner` with `checkpoint=True`, `keep_shot_results=True`, an
-`item_checkpoint_dir`, and shot-level checkpointing (`shot_checkpoint`/
-`shot_checkpoint_dir`) -- the last of these is required specifically so kept results are read back
-from each point's own on-disk shot checkpoint on demand rather than held fully in memory for every
-point at once. The kept results are accessible via the retained runner instance's
-`_program_results` dict, indexed by point number.
+re-running anything), construct the `NoiseSweepRunner` with a `CheckpointConfig` setting
+`keep_shot_results=True`, an `item_checkpoint_dir`, and shot-level checkpointing (`shot_checkpoint_dir`)
+-- the last of these is required specifically so kept results are read back from each point's own
+on-disk shot checkpoint on demand rather than held fully in memory for every point at once. The kept
+results are accessible via the retained runner instance's `_program_results` dict, indexed by point number.
 
 ```{code-cell} ipython3
 runner_kept = NoiseSweepRunner(
@@ -345,11 +345,11 @@ runner_kept = NoiseSweepRunner(
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
-    checkpoint=True,
-    item_checkpoint_dir="steane_zsweep_kept_shots",
-    shot_checkpoint=True,
-    shot_checkpoint_dir="steane_zsweep_kept_shots_data",
-    keep_shot_results=True,
+    config=CheckpointConfig(
+        item_checkpoint_dir="steane_zsweep_kept_shots",
+        shot_checkpoint_dir="steane_zsweep_kept_shots_data",
+        keep_shot_results=True,
+    ),
 )
 
 result_kept = runner_kept.run()
@@ -369,15 +369,15 @@ Counter(raw_results.collect_shot_data("logical_measurement", -1))
 ## Resuming an interrupted sweep
 
 Large sweeps (many strengths, many shots each) can take a while, and it would be a shame to lose
-all progress if the process is interrupted partway through. Passing `checkpoint=True` and
-`item_checkpoint_dir` to the constructor checkpoints each completed point's result into
+all progress if the process is interrupted partway through. Passing a `CheckpointConfig` with
+`item_checkpoint_dir` set to the constructor checkpoints each completed point's result into
 `item_checkpoint_dir` immediately, so no completed work is lost on a crash -- the human-readable
 `NoiseSweepResult` itself is only ever built once the sweep completes, and is not written to disk
 automatically (see 'Saving and reloading a `NoiseSweepResult`' above if you want to persist it
-yourself). To resume from a checkpoint, construct a new `NoiseSweepRunner` via
-`from_noise_sweep_runner` (or with the same config) with `resume=True`, pointing to the same
-`item_checkpoint_dir` -- already-completed points are recognized and skipped entirely, with at
-most one point's worth of shots repeated even if interrupted mid-point.
+yourself). To resume from a checkpoint, construct a new `NoiseSweepRunner` directly with the same
+arguments plus `resume=True` added to its `config=CheckpointConfig(item_checkpoint_dir=...)` --
+already-completed points are recognized and skipped entirely, with at most one point's worth of
+shots repeated even if interrupted mid-point.
 
 ```{code-cell} ipython3
 resumable_runner = NoiseSweepRunner(
@@ -391,31 +391,42 @@ resumable_runner = NoiseSweepRunner(
     num_shots=20,
     collect_shot_data_args=[("logical_measurement", -1)],
     expected_outcomes=[0],
-    checkpoint=True,
-    item_checkpoint_dir="steane_zsweep_progress",
+    config=CheckpointConfig(item_checkpoint_dir="steane_zsweep_progress"),
 )
 
 result_first_pass = resumable_runner.run()
 result_first_pass.failure_rates
 ```
 
-Resuming from the checkpoint directory is done by constructing a second `NoiseSweepRunner` via
-`from_noise_sweep_runner` with `resume=True` (or by constructing a fresh runner with the same
-config plus `checkpoint=True, resume=True`), pointing to the same `item_checkpoint_dir`. Every
-point already recorded as complete in `steane_zsweep_progress` is recognized and skipped entirely,
-returning instantly without simulating anything:
+Resuming from the checkpoint directory is done by constructing a second `NoiseSweepRunner` with the
+same arguments plus `resume=True` in its `CheckpointConfig`, pointing to the same `item_checkpoint_dir`.
+Every point already recorded as complete in `steane_zsweep_progress` is recognized and skipped
+entirely, returning instantly without simulating anything:
 
 ```{code-cell} ipython3
-result_second_pass = NoiseSweepRunner.from_noise_sweep_runner(resumable_runner, resume=True).run()
+resumed_runner = NoiseSweepRunner(
+    strengths,
+    instruction_stack=stack_z,
+    initial_history=init_history,
+    default_noise_model=build_noise_model,
+    serialized_callables={"default_noise_model": noise_model_source},
+    seed_stride=200,
+    name="Resumable sweep",
+    num_shots=20,
+    collect_shot_data_args=[("logical_measurement", -1)],
+    expected_outcomes=[0],
+    config=CheckpointConfig(item_checkpoint_dir="steane_zsweep_progress", resume=True),
+)
+result_second_pass = resumed_runner.run()
 result_second_pass.failure_rates == result_first_pass.failure_rates
 ```
 
 If a sweep is genuinely interrupted mid-point (say, a crash while running the 3rd of 4 strengths),
 resuming skips the first two points and re-runs the third from scratch, since this example doesn't
-enable shot-level checkpointing (`shot_checkpoint`/`shot_checkpoint_dir`, described above). With
-that enabled, `QuantumProgram.run`'s own checkpoint/resume mechanism lets the third point resume
-from wherever its shots left off instead of restarting them. Either way, this bounds the
-worst-case wasted work to a single sweep point, however large the overall sweep is.
+enable shot-level checkpointing (shot-level checkpointing, described above). With that enabled,
+`QuantumProgram.run`'s own checkpoint/resume mechanism lets the third point resume from wherever
+its shots left off instead of restarting them. Either way, this bounds the worst-case wasted work
+to a single sweep point, however large the overall sweep is.
 
 ## Comparing an in-progress sweep
 

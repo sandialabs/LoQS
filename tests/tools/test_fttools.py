@@ -540,6 +540,7 @@ class TestHistoryDataCollectorWithDict:
     ):
         """NoiseSweepRunner accepts a literal HistoryDataCollector instance."""
         from loqs.core.historydatacollector import HistoryDataCollector
+        from loqs.tools.multiprogramrunner import CheckpointConfig
         from loqs.tools.noisesweeptools import NoiseSweepRunner
 
         item_ckpt = tmp_path / "item_checkpoint"
@@ -553,8 +554,7 @@ class TestHistoryDataCollectorWithDict:
             expected_outcomes=[False, False],
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            checkpoint=True,
-            item_checkpoint_dir=item_ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
         )
         runner.run()
 

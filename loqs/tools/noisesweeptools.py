@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 import math
-from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -190,19 +189,8 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         verbose: bool = True,
         metadata: dict | None = None,
         run_kwargs: dict | None = None,
-        item_checkpoint_dir: str | Path | None = None,
-        checkpoint: bool = False,
-        resume: bool = False,
-        force_resume: bool = False,
+        config: CheckpointConfig | None = None,
         parallel_strategy: ParallelStrategy | None = None,
-        shot_checkpoint: bool = False,
-        shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
-        keep_shot_results: bool = False,
-        poll_interval: float = 1.0,
-        show_progress: bool = True,
-        runner_filename: str = "runner.h5",
-        results_filename: str = "results.h5",
     ) -> None:
         """
         Parameters
@@ -262,25 +250,15 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
             Additional keyword arguments to forward to `QuantumProgram.run()`, as a dict
             rather than `**kwargs`.
 
-        item_checkpoint_dir, checkpoint, resume, force_resume, parallel_strategy,
-        shot_checkpoint, shot_checkpoint_dir, lazy_loading, keep_shot_results,
-        runner_filename, results_filename:
-            See `MultiProgramRunner.__init__` for these inherited configuration fields.
+        config:
+            Checkpoint/execution configuration. See `MultiProgramRunner.__init__` for details.
+
+        parallel_strategy:
+            Parallel execution strategy. See `MultiProgramRunner.__init__` for details.
         """
         super().__init__(
             parallel_strategy=parallel_strategy,
-            config=CheckpointConfig(
-                item_checkpoint_dir=item_checkpoint_dir,
-                resume=resume,
-                force_resume=force_resume,
-                shot_checkpoint_dir=shot_checkpoint_dir,
-                lazy_loading=lazy_loading,
-                keep_shot_results=keep_shot_results,
-                poll_interval=poll_interval,
-                show_progress=show_progress,
-                runner_filename=runner_filename,
-                results_filename=results_filename,
-            ),
+            config=config,
             run_kwargs=run_kwargs,
         )
         self.strengths = list(strengths)
@@ -373,198 +351,6 @@ class NoiseSweepRunner(MultiProgramRunner[Any]):
         attr_dict.pop("_quantum_program_serialized_callables", None)
 
         return cast("NoiseSweepRunner", super()._from_decoded_attrs(attr_dict))
-
-    @classmethod
-    def from_noise_sweep_runner(
-        cls,
-        other: "NoiseSweepRunner",
-        strengths: Sequence[Any] | None = None,
-        base_seed: int | None = None,
-        seed_stride: int | None = None,
-        instruction_stack: (
-            InstructionStackLike | Callable[[Any], InstructionStackLike] | None
-        ) = None,
-        initial_history: (
-            HistoryLike | Callable[[Any], HistoryLike] | None
-        ) = None,
-        default_noise_model: (
-            BaseNoiseModel | str | Callable[[Any], BaseNoiseModel | str] | None
-        ) = None,
-        expiring_state: bool | Callable[[Any], bool] | None = None,
-        global_instructions: (
-            Mapping[str, Instruction]
-            | Callable[[Any], Mapping[str, Instruction]]
-            | None
-        ) = None,
-        state_type: (
-            type[BaseQuantumState]
-            | Callable[[Any], type[BaseQuantumState]]
-            | None
-        ) = None,
-        patch_types: (
-            Mapping[str, QECCode]
-            | Callable[[Any], Mapping[str, QECCode]]
-            | None
-        ) = None,
-        override_global_instructions: (
-            bool | Callable[[Any], bool] | None
-        ) = None,
-        name: str | Callable[[Any], str] | None = None,
-        serialized_callables: Mapping[str, str] | None = None,
-        num_shots: int | None = None,
-        collect_shot_data_args: (
-            Sequence[HistoryDataCollectorLike] | None
-        ) = None,
-        expected_outcomes: Sequence | None = None,
-        verbose: bool | None = None,
-        metadata: dict | None = None,
-        run_kwargs: dict | None = None,
-        checkpoint: bool | None = None,
-        resume: bool | None = None,
-        item_checkpoint_dir: str | Path | None = None,
-        force_resume: bool | None = None,
-        parallel_strategy: ParallelStrategy | None = None,
-        shot_checkpoint: bool | None = None,
-        shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool | None = None,
-        keep_shot_results: bool | None = None,
-        poll_interval: float | None = None,
-        show_progress: bool | None = None,
-        runner_filename: str | None = None,
-        results_filename: str | None = None,
-    ) -> "NoiseSweepRunner":
-        """Create a new NoiseSweepRunner from an existing one with optional overrides.
-
-        Mirrors `QuantumProgram.from_quantum_program`'s copy-with-overrides convention:
-        `None` for any override parameter means "keep `other`'s value," covering every
-        constructor field. Replaces the "call `.run()` twice on one instance with different
-        kwargs" pattern with building a second runner via this method and calling `.run()`
-        on each independently.
-        """
-        return cls(
-            strengths=strengths if strengths is not None else other.strengths,
-            base_seed=base_seed if base_seed is not None else other.base_seed,
-            seed_stride=(
-                seed_stride if seed_stride is not None else other.seed_stride
-            ),
-            instruction_stack=(
-                instruction_stack
-                if instruction_stack is not None
-                else other.instruction_stack
-            ),
-            initial_history=(
-                initial_history
-                if initial_history is not None
-                else other.initial_history
-            ),
-            default_noise_model=(
-                default_noise_model
-                if default_noise_model is not None
-                else other.default_noise_model
-            ),
-            expiring_state=(
-                expiring_state
-                if expiring_state is not None
-                else other.expiring_state
-            ),
-            global_instructions=(
-                global_instructions
-                if global_instructions is not None
-                else other.global_instructions
-            ),
-            state_type=(
-                state_type if state_type is not None else other.state_type
-            ),
-            patch_types=(
-                patch_types if patch_types is not None else other.patch_types
-            ),
-            override_global_instructions=(
-                override_global_instructions
-                if override_global_instructions is not None
-                else other.override_global_instructions
-            ),
-            name=name if name is not None else other.name,
-            serialized_callables=(
-                serialized_callables
-                if serialized_callables is not None
-                else other._quantum_program_serialized_callables
-            ),
-            num_shots=num_shots if num_shots is not None else other.num_shots,
-            collect_shot_data_args=(
-                collect_shot_data_args
-                if collect_shot_data_args is not None
-                else other.collect_shot_data_args
-            ),
-            expected_outcomes=(
-                expected_outcomes
-                if expected_outcomes is not None
-                else other.expected_outcomes
-            ),
-            verbose=verbose if verbose is not None else other.verbose,
-            metadata=metadata if metadata is not None else other.metadata,
-            run_kwargs=(
-                run_kwargs if run_kwargs is not None else other.run_kwargs
-            ),
-            checkpoint=(
-                checkpoint if checkpoint is not None else other.checkpoint
-            ),
-            resume=resume if resume is not None else other.resume,
-            item_checkpoint_dir=(
-                item_checkpoint_dir
-                if item_checkpoint_dir is not None
-                else other.item_checkpoint_dir
-            ),
-            force_resume=(
-                force_resume
-                if force_resume is not None
-                else other.force_resume
-            ),
-            parallel_strategy=(
-                parallel_strategy
-                if parallel_strategy is not None
-                else other.parallel_strategy
-            ),
-            shot_checkpoint=(
-                shot_checkpoint
-                if shot_checkpoint is not None
-                else other.shot_checkpoint
-            ),
-            shot_checkpoint_dir=(
-                shot_checkpoint_dir
-                if shot_checkpoint_dir is not None
-                else other.shot_checkpoint_dir
-            ),
-            lazy_loading=(
-                lazy_loading
-                if lazy_loading is not None
-                else other.lazy_loading
-            ),
-            keep_shot_results=(
-                keep_shot_results
-                if keep_shot_results is not None
-                else other.keep_shot_results
-            ),
-            poll_interval=(
-                poll_interval
-                if poll_interval is not None
-                else other.poll_interval
-            ),
-            show_progress=(
-                show_progress
-                if show_progress is not None
-                else other.show_progress
-            ),
-            runner_filename=(
-                runner_filename
-                if runner_filename is not None
-                else other.runner_filename
-            ),
-            results_filename=(
-                results_filename
-                if results_filename is not None
-                else other.results_filename
-            ),
-        )
 
     def build_program(self, index: int) -> QuantumProgram:
         """Resolve each QuantumProgram-forwarding parameter at `self.strengths[index]` (calling it
