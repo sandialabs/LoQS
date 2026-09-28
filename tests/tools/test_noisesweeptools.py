@@ -10,6 +10,7 @@ import pytest
 from loqs.core import Frame, Instruction, QuantumProgram
 from loqs.backends.state import NumpyStatevectorQuantumState
 from loqs.tools import paralleltools
+from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.noisesweeptools import (
     NoiseSweepResult,
     NoiseSweepRunner,
@@ -416,9 +417,9 @@ class TestRunParallel:
         self, tmp_path
     ):
         """A crash partway through a serial run leaves only its
-        already-completed points persisted; resuming via from_noise_sweep_runner
-        with a parallel strategy re-runs it with parallel dispatch and only
-        dispatches the missing indices."""
+        already-completed points persisted; resuming with a parallel strategy
+        re-runs it with parallel dispatch and only dispatches the missing
+        indices."""
         loky = pytest.importorskip("loky")
         strengths = [0.0, 0.1, 0.2, 0.3]
         item_checkpoint_dir = tmp_path / "sweep_checkpoint"
@@ -434,8 +435,7 @@ class TestRunParallel:
             base_seed=1,
             num_shots=10,
             verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
         )
         real_build_program = NoiseSweepRunner.build_program
 
@@ -481,8 +481,16 @@ class TestRunParallel:
             n_program_chunks=2,
         )
         # Create a new runner with parallel strategy for the retry
-        runner2 = NoiseSweepRunner.from_noise_sweep_runner(
-            runner, parallel_strategy=strategy, resume=True
+        runner2 = make_runner(
+            strengths,
+            seed_stride=20,
+            base_seed=1,
+            num_shots=10,
+            verbose=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir, resume=True
+            ),
+            parallel_strategy=strategy,
         )
         try:
             final_result = runner2.run()
@@ -523,8 +531,7 @@ class TestResume:
             base_seed=1,
             num_shots=10,
             verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
         )
         real_build_program = NoiseSweepRunner.build_program
 
@@ -551,9 +558,9 @@ class TestResume:
             base_seed=1,
             num_shots=10,
             verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir, resume=True
+            ),
         )
         built_indices.clear()
         NoiseSweepRunner.build_program = spy_build_program
@@ -586,8 +593,7 @@ class TestResume:
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
             verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
         )
         runner1.run()
 
@@ -603,9 +609,9 @@ class TestResume:
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
             verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir, resume=True
+            ),
         )
         # This should NOT raise ValueError about seed_stride mismatch
         result = runner2.run()
@@ -630,8 +636,7 @@ class TestResume:
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
             verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
         )
         runner1.run()
 
@@ -647,9 +652,9 @@ class TestResume:
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
             verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir, resume=True
+            ),
         )
         # This SHOULD raise ValueError about seed_stride mismatch
         with pytest.raises(ValueError, match="seed_stride"):
@@ -665,8 +670,7 @@ class TestResume:
             seed_stride=5,
             num_shots=5,
             verbose=False,
-            checkpoint=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(item_checkpoint_dir=item_checkpoint_dir),
             expected_outcomes=[False],
         )
         runner1.run()
@@ -681,100 +685,13 @@ class TestResume:
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
             verbose=False,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=item_checkpoint_dir,
+            config=CheckpointConfig(
+                item_checkpoint_dir=item_checkpoint_dir, resume=True
+            ),
         )
         # Should not raise despite differently-typed expected_outcomes
         result = runner2.run()
         assert result is not None
-
-
-class TestFromNoiseSweepRunner:
-    def test_from_noise_sweep_runner_with_single_override(self, tmp_path):
-        """Test that from_noise_sweep_runner copies all fields except the override."""
-        base_runner = make_runner(
-            [0.0, 0.1, 0.2],
-            seed_stride=20,
-            base_seed=5,
-            num_shots=10,
-            verbose=False,
-        )
-        new_num_shots = 20
-        copied_runner = NoiseSweepRunner.from_noise_sweep_runner(
-            base_runner, num_shots=new_num_shots
-        )
-
-        # Check the override field
-        assert copied_runner.num_shots == new_num_shots
-        # Check that other fields match the base
-        assert copied_runner.strengths == base_runner.strengths
-        assert (
-            copied_runner.collect_shot_data_args
-            == base_runner.collect_shot_data_args
-        )
-        assert copied_runner.expected_outcomes == base_runner.expected_outcomes
-        assert copied_runner.base_seed == base_runner.base_seed
-        assert copied_runner.seed_stride == base_runner.seed_stride
-
-    def test_from_noise_sweep_runner_no_overrides_works_end_to_end(
-        self, tmp_path
-    ):
-        """Test that from_noise_sweep_runner with no overrides produces an identical runner."""
-        base_runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=20,
-            base_seed=1,
-            num_shots=10,
-            verbose=False,
-        )
-        base_result = base_runner.run()
-
-        # Create a copy via from_noise_sweep_runner with zero overrides
-        copied_runner = NoiseSweepRunner.from_noise_sweep_runner(base_runner)
-
-        # Verify all fields are identical
-        assert copied_runner.strengths == base_runner.strengths
-        assert copied_runner.num_shots == base_runner.num_shots
-        assert (
-            copied_runner.collect_shot_data_args
-            == base_runner.collect_shot_data_args
-        )
-        assert copied_runner.expected_outcomes == base_runner.expected_outcomes
-        assert copied_runner.base_seed == base_runner.base_seed
-        assert copied_runner.seed_stride == base_runner.seed_stride
-
-        # Run the copied runner and verify it produces the same result
-        copied_result = copied_runner.run()
-        assert copied_result.failure_rates == base_result.failure_rates
-        assert copied_result.stderrs == base_result.stderrs
-        assert copied_result.is_complete
-
-    def test_from_noise_sweep_runner_preserves_and_overrides_runner_filename(
-        self, tmp_path
-    ):
-        """from_noise_sweep_runner preserves runner_filename by default and
-        correctly applies an explicit override."""
-        custom_file = "my_custom_runner.h5"
-        base_runner = make_runner(
-            [0.0, 0.1],
-            seed_stride=5,
-            num_shots=5,
-            verbose=False,
-            runner_filename=custom_file,
-        )
-        assert base_runner.runner_filename == custom_file
-
-        # Copy with no override should preserve the custom filename
-        copied_runner = NoiseSweepRunner.from_noise_sweep_runner(base_runner)
-        assert copied_runner.runner_filename == custom_file
-
-        # Copy with an explicit override should use the new filename
-        new_file = "another_runner.h5"
-        overridden_runner = NoiseSweepRunner.from_noise_sweep_runner(
-            base_runner, runner_filename=new_file
-        )
-        assert overridden_runner.runner_filename == new_file
 
 
 class TestNoiseSweepResult:
@@ -1042,47 +959,6 @@ class TestPlotNoiseSweep:
         plt.close(fig)
 
 
-class TestNoiseSweepRunnerShotCheckpointing:
-    """Tests for [](api:QuantumProgram.run)'s per-worker HDF5 shot-level
-    checkpointing, threaded through `NoiseSweepRunner.run` via the
-    `shot_checkpoint`, `shot_checkpoint_dir`, and `lazy_loading`
-    parameters."""
-
-    def test_from_noise_sweep_runner_with_serialized_callables(self):
-        """from_noise_sweep_runner should preserve serialized_callables."""
-        env = {}
-        exec("def interactive_fn(strength):\n    return strength\n", env)
-        interactive_fn = env["interactive_fn"]
-
-        runner1 = make_runner(
-            [0.1],
-            seed_stride=1,
-            default_noise_model=interactive_fn,
-            serialized_callables={
-                "default_noise_model": "def interactive_fn(strength):\n    return strength\n"
-            },
-        )
-
-        # from_noise_sweep_runner without explicit serialized_callables should
-        # preserve the original runner's serialized_callables
-        runner2 = NoiseSweepRunner.from_noise_sweep_runner(
-            runner1, strengths=[0.2]
-        )
-
-        # Should NOT raise OSError when trying to serialize/deserialize
-        # (which would happen if serialized_callables was lost)
-        assert (
-            runner2._quantum_program_serialized_callables[
-                "default_noise_model"
-            ]
-            == "def interactive_fn(strength):\n    return strength\n"
-        )
-
-        # Verify build_program works (would fail if callables weren't preserved)
-        program = runner2.build_program(0)
-        assert program.default_noise_model == 0.2
-
-
 class TestNoiseSweepRunnerHooks:
     """Direct unit tests of NoiseSweepRunner's own derived reduce_program_outcomes/
     _build_output/CHKPT_SUBDIR_PREFIX/mismatch-field hook implementations, in
@@ -1118,8 +994,7 @@ class TestNoiseSweepRunnerHooks:
             [0.1, 0.2, 0.3],
             seed_stride=10,
             num_shots=10,
-            item_checkpoint_dir=tmp_path / "ckpt",
-            checkpoint=True,
+            config=CheckpointConfig(item_checkpoint_dir=tmp_path / "ckpt"),
         )
         # Build hand-crafted ordered_results: (strength, (failure_rate, stderr)) pairs
         ordered_results = [

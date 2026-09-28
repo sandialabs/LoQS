@@ -562,6 +562,28 @@ class TestParallelStrategyDescribe:
         assert strategy._resolved_program_executor is None
 
 
+class TestParallelStrategyStr:
+
+    def test_str_equals_describe_for_all_serial(self):
+        strategy = ParallelStrategy()
+        assert str(strategy) == strategy.describe()
+
+    def test_str_equals_describe_with_program_executor(self):
+        loky = pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            program_executor=loky.get_reusable_executor(max_workers=2),
+            n_program_chunks=2,
+        )
+        assert str(strategy) == strategy.describe()
+
+    def test_str_equals_describe_with_shot_executor(self):
+        loky = pytest.importorskip("loky")
+        strategy = ParallelStrategy(
+            shot_executor=loky.get_reusable_executor(max_workers=3)
+        )
+        assert str(strategy) == strategy.describe()
+
+
 class TestWorkerPlan:
     """Direct unit coverage of the pure grouping/padding logic behind
     ParallelStrategy.plot's collapsing -- more precise than parsing

@@ -17,6 +17,7 @@ import h5py
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
 
@@ -50,6 +51,142 @@ from loqs.tools.paralleltools import (
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+@dataclass
+class CheckpointConfig(Serializable):
+    """Bundles `MultiProgramRunner`'s checkpoint/execution-control settings
+    into a single object, reused by every `loqs.tools` runner that inherits
+    from `MultiProgramRunner`. `item_checkpoint`/`shot_checkpoint` are
+    derived read-only properties (not separate stored fields) computed from
+    whether the corresponding directory is set, since the two were always
+    required to agree with each other.
+
+    Parameters
+    ----------
+    item_checkpoint_dir : str | Path | None
+        Directory to checkpoint per-item results to. Setting this to a
+        non-`None` value is what turns on item checkpointing
+        (`item_checkpoint`); coerced to a `Path` if given as a `str`.
+    resume : bool
+        Whether to resume from an existing checkpoint at
+        `item_checkpoint_dir` rather than starting fresh. Requires
+        `item_checkpoint` to be set.
+    force_resume : bool
+        Whether to bypass a resume-time mismatch check between this
+        config's own domain-specific parameters and a stored checkpoint's.
+    shot_checkpoint_dir : str | Path | None
+        Directory to checkpoint per-shot results to. Setting this to a
+        non-`None` value is what turns on shot checkpointing
+        (`shot_checkpoint`); coerced to a `Path` if given as a `str`.
+    lazy_loading : bool
+        Whether checkpointed shot results are loaded lazily from disk on
+        access rather than eagerly into memory.
+    keep_shot_results : bool
+        Whether per-shot results are retained (read back from disk) rather
+        than discarded once each item completes. Requires both
+        `item_checkpoint` and `shot_checkpoint` to be set.
+    poll_interval : float
+        Polling interval (seconds) used while waiting on dispatched work.
+    show_progress : bool
+        Whether to display a progress bar while running.
+    runner_filename : str
+        Filename used for the runner's own on-disk checkpoint state, under
+        `item_checkpoint_dir`.
+    results_filename : str
+        Filename used for each item's own on-disk shot checkpoint, under
+        `shot_checkpoint_dir`.
+    """
+
+    _SERIALIZE_ATTRS = [
+        "item_checkpoint_dir",
+        "resume",
+        "force_resume",
+        "shot_checkpoint_dir",
+        "lazy_loading",
+        "keep_shot_results",
+        "poll_interval",
+        "show_progress",
+        "runner_filename",
+        "results_filename",
+    ]
+
+    item_checkpoint_dir: str | Path | None = None
+    resume: bool = False
+    force_resume: bool = False
+    shot_checkpoint_dir: str | Path | None = None
+    lazy_loading: bool = True
+    keep_shot_results: bool = False
+    poll_interval: float = 1.0
+    show_progress: bool = True
+    runner_filename: str = "runner.h5"
+    results_filename: str = "results.h5"
+
+    def __post_init__(self) -> None:
+        if self.item_checkpoint_dir is not None:
+            self.item_checkpoint_dir = Path(self.item_checkpoint_dir)
+        if self.shot_checkpoint_dir is not None:
+            self.shot_checkpoint_dir = Path(self.shot_checkpoint_dir)
+
+        if self.resume and not self.item_checkpoint:
+            raise ValueError(
+                "resume=True requires item_checkpoint_dir to be set"
+            )
+        if self.keep_shot_results and not self.item_checkpoint:
+            raise ValueError(
+                "keep_shot_results requires item_checkpoint_dir to be set"
+            )
+        if self.keep_shot_results and not self.shot_checkpoint:
+            raise ValueError(
+                "keep_shot_results requires shot_checkpoint_dir to be set "
+                "(and shot_checkpoint), so kept results are read back from "
+                "each item's own on-disk shot checkpoint rather than held "
+                "fully in memory for every item at once"
+            )
+
+    @property
+    def item_checkpoint(self) -> bool:
+        return self.item_checkpoint_dir is not None
+
+    @property
+    def shot_checkpoint(self) -> bool:
+        return self.shot_checkpoint_dir is not None
+
+    def _get_encoding_attr(
+        self, attr: str, ignore_no_serialize_flags: bool = False
+    ) -> Any:
+        if attr in ("item_checkpoint_dir", "shot_checkpoint_dir"):
+            val = getattr(self, attr)
+            return str(val) if val is not None else None
+        return super()._get_encoding_attr(attr, ignore_no_serialize_flags)
+
+    def __str__(self) -> str:
+        lines = ["CheckpointConfig:"]
+        if self.item_checkpoint:
+            lines += [
+                "\tItem checkpointing:\ton",
+                f"\t\tCheckpoint directory:\t{self.item_checkpoint_dir}",
+                f"\t\tResume from checkpoint:\t{self.resume}",
+                f"\t\tForce resume:\t{self.force_resume}",
+                f"\t\tRunner file:\t{self.runner_filename}",
+            ]
+        else:
+            lines.append("\tItem checkpointing:\toff")
+        if self.shot_checkpoint:
+            lines += [
+                "\tShot checkpointing:\ton",
+                f"\t\tCheckpoint directory:\t{self.shot_checkpoint_dir}",
+                f"\t\tKeep shot results:\t{self.keep_shot_results}",
+                f"\t\tLazy loading:\t{self.lazy_loading}",
+                f"\t\tResults file:\t{self.results_filename}",
+            ]
+        else:
+            lines.append("\tShot checkpointing:\toff")
+        lines += [
+            f"\tPoll interval:\t{self.poll_interval}s",
+            f"\tShow progress:\t{self.show_progress}",
+        ]
+        return "\n".join(lines)
 
 
 def _resolve_items_with_index(
@@ -104,10 +241,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
     _SERIALIZE_ATTRS = [
         "parallel_strategy",
         "item_checkpoint_dir",
-        "checkpoint",
         "resume",
         "force_resume",
-        "shot_checkpoint",
         "shot_checkpoint_dir",
         "lazy_loading",
         "index_map",
@@ -152,39 +287,28 @@ class MultiProgramRunner(Serializable, Generic[T]):
     def __init__(
         self,
         parallel_strategy: ParallelStrategy | None = None,
-        item_checkpoint_dir: str | Path | None = None,
-        checkpoint: bool = False,
-        resume: bool = False,
-        force_resume: bool = False,
-        shot_checkpoint: bool = False,
-        shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
-        keep_shot_results: bool = False,
-        poll_interval: float = 1.0,
-        show_progress: bool = True,
-        runner_filename: str = "runner.h5",
-        results_filename: str = "results.h5",
+        config: CheckpointConfig | None = None,
         run_kwargs: dict[str, Any] | None = None,
     ):
         self.parallel_strategy = parallel_strategy
+        if config is None:
+            config = CheckpointConfig()
         self.item_checkpoint_dir = (
-            Path(item_checkpoint_dir)
-            if item_checkpoint_dir is not None
+            Path(config.item_checkpoint_dir)
+            if config.item_checkpoint_dir is not None
             else None
         )
-        self.checkpoint = checkpoint
-        self.resume = resume
-        self.force_resume = force_resume
-        self.shot_checkpoint = shot_checkpoint
+        self.resume = config.resume
+        self.force_resume = config.force_resume
         self.shot_checkpoint_dir = (
-            Path(shot_checkpoint_dir)
-            if shot_checkpoint_dir is not None
+            Path(config.shot_checkpoint_dir)
+            if config.shot_checkpoint_dir is not None
             else None
         )
-        self.lazy_loading = lazy_loading
+        self.lazy_loading = config.lazy_loading
         self.index_map: dict[str, int] | None = None
         self._reduced_results: dict[int, Any] = {}
-        self.keep_shot_results = keep_shot_results
+        self.keep_shot_results = config.keep_shot_results
         self._program_results: dict[int, Any] = {}
         self.item_wall_clock_times: dict[int, float] = {}
         """Total wall-clock duration for processing each item,
@@ -192,10 +316,10 @@ class MultiProgramRunner(Serializable, Generic[T]):
 
         self.shot_wall_clock_times: dict[int, dict[int, float]] = {}
         """Wall-clock duration for each shot, nested by item index then shot index."""
-        self.poll_interval = poll_interval
-        self.show_progress = show_progress
-        self.runner_filename = runner_filename
-        self.results_filename = results_filename
+        self.poll_interval = config.poll_interval
+        self.show_progress = config.show_progress
+        self.runner_filename = config.runner_filename
+        self.results_filename = config.results_filename
         self.item_key_fn: Callable[[Any], str] | None = None
         self.run_kwargs = dict(run_kwargs) if run_kwargs is not None else {}
         if "max_frame_limit" not in self.run_kwargs:
@@ -210,7 +334,31 @@ class MultiProgramRunner(Serializable, Generic[T]):
             raise ValueError(
                 "checkpoint_dir in run_kwargs conflicts with shot_checkpoint_dir; use only one of the two (or leave both unset)."
             )
-        self._validate_checkpoint_kwargs()
+
+    @property
+    def checkpoint(self) -> bool:
+        return self.item_checkpoint_dir is not None
+
+    @property
+    def shot_checkpoint(self) -> bool:
+        return self.shot_checkpoint_dir is not None
+
+    @property
+    def checkpoint_config(self) -> CheckpointConfig:
+        """Rebundles this runner's own unpacked checkpoint/execution-control
+        attributes into a fresh `CheckpointConfig` instance."""
+        return CheckpointConfig(
+            item_checkpoint_dir=self.item_checkpoint_dir,
+            resume=self.resume,
+            force_resume=self.force_resume,
+            shot_checkpoint_dir=self.shot_checkpoint_dir,
+            lazy_loading=self.lazy_loading,
+            keep_shot_results=self.keep_shot_results,
+            poll_interval=self.poll_interval,
+            show_progress=self.show_progress,
+            runner_filename=self.runner_filename,
+            results_filename=self.results_filename,
+        )
 
     def _get_encoding_attr(
         self, attr: str, ignore_no_serialize_flags: bool = False
@@ -225,27 +373,29 @@ class MultiProgramRunner(Serializable, Generic[T]):
     def _from_decoded_attrs(
         cls, attr_dict: Mapping[str, Any]
     ) -> "MultiProgramRunner":
-        """Reconstruct from decoded attributes, converting strings back to Paths."""
+        """Reconstruct from decoded attributes, rebundling the flat checkpoint
+        attributes into a CheckpointConfig before delegating to the
+        constructor."""
         attr_dict = dict(attr_dict)
-        # Convert path strings back to Path objects
-        if attr_dict.get("item_checkpoint_dir") is not None:
-            attr_dict["item_checkpoint_dir"] = Path(
-                attr_dict["item_checkpoint_dir"]
-            )
-        if attr_dict.get("shot_checkpoint_dir") is not None:
-            attr_dict["shot_checkpoint_dir"] = Path(
-                attr_dict["shot_checkpoint_dir"]
-            )
-        # Extract internal fields that are not constructor parameters
-        # (must be set directly on the instance, not passed to __init__)
         index_map = attr_dict.pop("index_map", None)
         reduced_results = attr_dict.pop("_reduced_results", None)
         program_results = attr_dict.pop("_program_results", None)
         item_wall_clock_times = attr_dict.pop("item_wall_clock_times", None)
         shot_wall_clock_times = attr_dict.pop("shot_wall_clock_times", None)
-        # Reconstruct with constructor parameters only
+        config = CheckpointConfig(
+            item_checkpoint_dir=attr_dict.pop("item_checkpoint_dir", None),
+            resume=attr_dict.pop("resume", False),
+            force_resume=attr_dict.pop("force_resume", False),
+            shot_checkpoint_dir=attr_dict.pop("shot_checkpoint_dir", None),
+            lazy_loading=attr_dict.pop("lazy_loading", True),
+            keep_shot_results=attr_dict.pop("keep_shot_results", False),
+            poll_interval=attr_dict.pop("poll_interval", 1.0),
+            show_progress=attr_dict.pop("show_progress", True),
+            runner_filename=attr_dict.pop("runner_filename", "runner.h5"),
+            results_filename=attr_dict.pop("results_filename", "results.h5"),
+        )
+        attr_dict["config"] = config
         obj = super()._from_decoded_attrs(attr_dict)
-        # Restore internal state directly on the instance
         obj.index_map = index_map
         obj._reduced_results = (
             reduced_results if reduced_results is not None else {}
@@ -253,7 +403,6 @@ class MultiProgramRunner(Serializable, Generic[T]):
         obj._program_results = (
             program_results if program_results is not None else {}
         )
-        # Relink nested-shot-source pointers for lazy loading when applicable
         if (
             obj.keep_shot_results
             and obj.lazy_loading
@@ -279,49 +428,10 @@ class MultiProgramRunner(Serializable, Generic[T]):
             if shot_wall_clock_times is not None
             else {}
         )
-        # Auto-set resume=True when deserializing a checkpoint-enabled runner:
-        # if checkpoint=True and item_checkpoint_dir exists, we're implicitly resuming
-        if obj.checkpoint and obj.item_checkpoint_dir is not None:
+        # Auto-set resume=True when deserializing a checkpoint-enabled runner
+        if obj.item_checkpoint_dir is not None:
             obj.resume = True
         return obj
-
-    def _validate_checkpoint_kwargs(self) -> None:
-        """Validate checkpoint-related configuration constraints."""
-        # Bijection: checkpoint and item_checkpoint_dir must agree
-        if self.checkpoint and self.item_checkpoint_dir is None:
-            raise ValueError(
-                "checkpoint=True requires item_checkpoint_dir to be set"
-            )
-        if self.item_checkpoint_dir is not None and not self.checkpoint:
-            raise ValueError(
-                "item_checkpoint_dir is not None requires checkpoint=True"
-            )
-
-        # resume=True requires checkpoint=True
-        if self.resume and not self.checkpoint:
-            raise ValueError("resume=True requires checkpoint=True")
-
-        # Bijection: shot_checkpoint and shot_checkpoint_dir must agree
-        if self.shot_checkpoint and self.shot_checkpoint_dir is None:
-            raise ValueError(
-                "shot_checkpoint=True requires shot_checkpoint_dir to be set"
-            )
-        if self.shot_checkpoint_dir is not None and not self.shot_checkpoint:
-            raise ValueError(
-                "shot_checkpoint_dir is not None requires shot_checkpoint=True"
-            )
-
-        if self.keep_shot_results and self.item_checkpoint_dir is None:
-            raise ValueError(
-                "keep_shot_results requires item_checkpoint_dir to be set"
-            )
-        if self.keep_shot_results and not self.shot_checkpoint:
-            raise ValueError(
-                "keep_shot_results requires shot_checkpoint=True (and "
-                "shot_checkpoint_dir) to be set, so kept results are read "
-                "back from each item's own on-disk shot checkpoint rather "
-                "than held fully in memory for every item at once"
-            )
 
     def run(self) -> Any:
         """Run the program with checkpoint/resume support.
@@ -352,7 +462,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
         if self.checkpoint:
             assert (
                 self.item_checkpoint_dir is not None
-            )  # Validated in _validate_checkpoint_kwargs
+            )  # Enforced by checkpoint property and config validation
             runner_path = self.item_checkpoint_dir / self.runner_filename
             has_content = self.item_checkpoint_dir.exists() and any(
                 self.item_checkpoint_dir.iterdir()

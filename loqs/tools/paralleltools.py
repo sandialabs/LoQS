@@ -716,6 +716,9 @@ class ParallelStrategy(Serializable):
         stats, self._resource_stats = self._resource_stats, []
         return stats
 
+    def __str__(self) -> str:
+        return self.describe()
+
     def describe(
         self,
         items: Sequence[T] | None = None,

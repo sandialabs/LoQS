@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from pathlib import Path
 from typing import Any, ClassVar
 
 from loqs.backends.circuit import BasePhysicalCircuit
@@ -26,7 +25,10 @@ from loqs.core.historydatacollector import (
 )
 from loqs.core.instructions import Instruction, InstructionLabel
 from loqs.tools.paralleltools import ParallelStrategy
-from loqs.tools.multiprogramrunner import MultiProgramRunner
+from loqs.tools.multiprogramrunner import (
+    CheckpointConfig,
+    MultiProgramRunner,
+)
 
 
 def build_discrete_error_injection_program_for_combo(
@@ -403,8 +405,8 @@ class FaultInjectionRunner(MultiProgramRunner[QuantumProgram]):
     Encapsulates all configuration needed to test error-injected programs,
     including parallel/checkpoint settings, in a serializable object that can
     be recovered after a crash via `FaultInjectionRunner.read(runner_path).run()`.
-    Checkpoint/resume behavior is controlled by explicit `checkpoint`/`resume`
-    flags applied against on-disk state -- see `MultiProgramRunner.run`.
+    Checkpoint/resume behavior is controlled by a `CheckpointConfig` (`config=`)
+    applied against on-disk state -- see `MultiProgramRunner.run`.
     """
 
     CHKPT_SUBDIR_PREFIX: ClassVar[str] = "fault"
@@ -424,33 +426,11 @@ class FaultInjectionRunner(MultiProgramRunner[QuantumProgram]):
         num_shots: int = 1,
         run_kwargs: dict | None = None,
         parallel_strategy: ParallelStrategy | None = None,
-        item_checkpoint_dir: str | Path | None = None,
-        checkpoint: bool = False,
-        resume: bool = False,
-        force_resume: bool = False,
-        shot_checkpoint: bool = False,
-        shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
-        keep_shot_results: bool = False,
-        poll_interval: float = 1.0,
-        show_progress: bool = True,
-        runner_filename: str = "runner.h5",
-        results_filename: str = "results.h5",
+        config: CheckpointConfig | None = None,
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
-            item_checkpoint_dir=item_checkpoint_dir,
-            checkpoint=checkpoint,
-            resume=resume,
-            force_resume=force_resume,
-            shot_checkpoint=shot_checkpoint,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading=lazy_loading,
-            keep_shot_results=keep_shot_results,
-            poll_interval=poll_interval,
-            show_progress=show_progress,
-            runner_filename=runner_filename,
-            results_filename=results_filename,
+            config=config,
             run_kwargs=run_kwargs,
         )
         self.errored_programs = errored_programs

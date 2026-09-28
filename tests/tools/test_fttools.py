@@ -12,6 +12,7 @@ from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.tools import fttools
+from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.paralleltools import ParallelStrategy
 
 
@@ -263,7 +264,7 @@ class TestRunDiscreteErrorInjectedPrograms:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            show_progress=False,
+            config=CheckpointConfig(show_progress=False),
         )
         runner.run()
         out = capsys.readouterr().out
@@ -328,8 +329,7 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            item_checkpoint_dir=ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=ckpt),
         )
         failed1 = runner1.run()
         assert failed1 == []
@@ -340,9 +340,7 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=ckpt, resume=True),
         )
         failed2 = runner2.run()
         assert failed2 == []
@@ -358,8 +356,7 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            item_checkpoint_dir=ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=ckpt),
         )
         runner1.run()
 
@@ -369,9 +366,7 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=(1,),  # tuple instead of list
             num_shots=1,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=ckpt, resume=True),
         )
         # Should not raise despite differently-typed expected_outcomes
         result = runner2.run()
@@ -390,9 +385,9 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            results_filename=custom_filename,
+            config=CheckpointConfig(
+                shot_checkpoint_dir=shot_ckpt, results_filename=custom_filename
+            ),
         )
         failed = runner.run()
 
@@ -415,10 +410,9 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            item_checkpoint_dir=ckpt,
-            keep_shot_results=False,
-            shot_checkpoint=False,
+            config=CheckpointConfig(
+                item_checkpoint_dir=ckpt, keep_shot_results=False
+            ),
         )
         runner1.run()
 
@@ -427,13 +421,13 @@ class TestFaultInjectionRunnerCheckpointing:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            resume=True,
-            item_checkpoint_dir=ckpt,
-            keep_shot_results=True,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            force_resume=True,
+            config=CheckpointConfig(
+                item_checkpoint_dir=ckpt,
+                resume=True,
+                keep_shot_results=True,
+                shot_checkpoint_dir=shot_ckpt,
+                force_resume=True,
+            ),
         )
         failed2 = runner2.run()
         assert failed2 == []
@@ -454,8 +448,7 @@ class TestRunKwargsPassthrough:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            item_checkpoint_dir=item_ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
             run_kwargs={"max_frame_limit": 999},
         )
 
@@ -478,11 +471,11 @@ class TestRunKwargsPassthrough:
             collect_shot_data_args=[("counter", -1)],
             expected_outcomes=[1],
             num_shots=2,
-            shot_checkpoint=True,
-            shot_checkpoint_dir=shot_ckpt,
-            checkpoint=True,
-            item_checkpoint_dir=item_ckpt,
-            keep_shot_results=True,
+            config=CheckpointConfig(
+                shot_checkpoint_dir=shot_ckpt,
+                item_checkpoint_dir=item_ckpt,
+                keep_shot_results=True,
+            ),
             run_kwargs={"max_frame_limit": 500},
         )
         failed = runner.run()
@@ -522,8 +515,7 @@ class TestHistoryDataCollectorWithDict:
             collect_shot_data_args=[collector],  # literal, not dict
             expected_outcomes=[1],
             num_shots=1,
-            checkpoint=True,
-            item_checkpoint_dir=item_ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
         )
         runner.run()
 
@@ -553,8 +545,7 @@ class TestHistoryDataCollectorWithDict:
             expected_outcomes=[False, False],
             instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
             global_instructions={"Flip Coin": FLIP_COIN},
-            checkpoint=True,
-            item_checkpoint_dir=item_ckpt,
+            config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
         )
         runner.run()
 

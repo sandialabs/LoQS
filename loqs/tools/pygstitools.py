@@ -35,6 +35,7 @@ from loqs.tools.paralleltools import (
     ParallelStrategy,
 )
 from loqs.tools.multiprogramrunner import (
+    CheckpointConfig,
     MultiProgramRunner,
 )
 
@@ -133,8 +134,8 @@ class EdesignRunner(MultiProgramRunner[Circuit]):
     Encapsulates all configuration needed to simulate an edesign, including
     parallel/checkpoint settings, in a serializable object that can be
     recovered after a crash via `EdesignRunner.read(runner_path).run()`.
-    Checkpoint/resume behavior is controlled by explicit `checkpoint`/`resume`
-    flags applied against on-disk state -- see `MultiProgramRunner.run`.
+    Checkpoint/resume behavior is controlled by a `CheckpointConfig` (`config=`)
+    applied against on-disk state -- see `MultiProgramRunner.run`.
     """
 
     CHKPT_SUBDIR_PREFIX: ClassVar[str] = "circ"
@@ -157,36 +158,14 @@ class EdesignRunner(MultiProgramRunner[Circuit]):
         collect_shot_data_args: (
             Sequence[HistoryDataCollectorLike] | None
         ) = None,
-        item_checkpoint_dir: str | Path | None = None,
-        checkpoint: bool = False,
-        resume: bool = False,
-        force_resume: bool = False,
+        config: CheckpointConfig | None = None,
         parallel_strategy: ParallelStrategy | None = None,
-        shot_checkpoint: bool = False,
-        shot_checkpoint_dir: str | Path | None = None,
-        lazy_loading: bool = True,
-        keep_shot_results: bool = False,
         program_kwargs: dict | None = None,
-        poll_interval: float = 1.0,
-        show_progress: bool = True,
-        runner_filename: str = "runner.h5",
-        results_filename: str = "results.h5",
         run_kwargs: dict[str, Any] | None = None,
     ):
         super().__init__(
             parallel_strategy=parallel_strategy,
-            item_checkpoint_dir=item_checkpoint_dir,
-            checkpoint=checkpoint,
-            resume=resume,
-            force_resume=force_resume,
-            shot_checkpoint=shot_checkpoint,
-            shot_checkpoint_dir=shot_checkpoint_dir,
-            lazy_loading=lazy_loading,
-            keep_shot_results=keep_shot_results,
-            poll_interval=poll_interval,
-            show_progress=show_progress,
-            runner_filename=runner_filename,
-            results_filename=results_filename,
+            config=config,
             run_kwargs=run_kwargs,
         )
         self.edesign = edesign
@@ -200,7 +179,7 @@ class EdesignRunner(MultiProgramRunner[Circuit]):
         )
         self.program_kwargs = program_kwargs or {}
         self.items = edesign.all_circuits_needing_data
-        self.item_key_fn = _circuit_str_key if checkpoint else None
+        self.item_key_fn = _circuit_str_key if self.checkpoint else None
         self._circuits_by_index: dict[int, Circuit] | None = None
         self._circuits_by_index_is_positional: bool = False
 
