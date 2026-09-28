@@ -14,6 +14,7 @@ from loqs.backends import DictNoiseModel, STIMQuantumState, StimCircuitGateRep
 from loqs.core import PatchGeometry
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as steane_codepack
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.tools.multiprogramrunner import CheckpointConfig
 from loqs.tools.pygstitools import EdesignRunner
 
 
@@ -76,9 +77,7 @@ class _TrivialCounterSetup:
             physical_to_logical=self.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=[("counter", -1)],
-            item_checkpoint_dir=ckpt,
-            checkpoint=ckpt is not None,
-            resume=resume,
+            config=CheckpointConfig(item_checkpoint_dir=ckpt, resume=resume),
             program_kwargs=self.program_kwargs,
         )
         kwargs.update(overrides)
@@ -190,22 +189,21 @@ class TestSimulateDatasetForEdesignCheckpointing:
     def test_edesign_roundtrip_without_checkpoint_dir(
         self, trivial_counter_setup, tmp_path
     ):
-        """Writing and reading an EdesignRunner with checkpoint=False
-        (item_checkpoint_dir=None) preserves edesign as bytes tar archive,
+        """Writing and reading an EdesignRunner with no item_checkpoint_dir
+        (checkpoint disabled) preserves edesign as bytes tar archive,
         not just None. The round-tripped runner's edesign is equivalent to
         the original, and calling .run() on it succeeds."""
         s = trivial_counter_setup
         h5_path = tmp_path / "runner.h5"
 
-        # Construct and write runner with checkpoint=False (no checkpoint dir)
+        # Construct and write runner with no item_checkpoint_dir (checkpoint disabled)
         runner1 = EdesignRunner(
             edesign=s.edesign,
             physical_model=s.model,
             physical_to_logical=s.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=[("counter", -1)],
-            item_checkpoint_dir=None,
-            checkpoint=False,
+            config=CheckpointConfig(item_checkpoint_dir=None),
             program_kwargs=s.program_kwargs,
         )
         runner1.write(h5_path)
@@ -227,21 +225,20 @@ class TestSimulateDatasetForEdesignCheckpointing:
     def test_edesign_roundtrip_with_checkpoint_dir_still_works(
         self, trivial_counter_setup, tmp_path
     ):
-        """Writing and reading an EdesignRunner with checkpoint=True and
-        item_checkpoint_dir set still works (uses directory path, not tar)."""
+        """Writing and reading an EdesignRunner with item_checkpoint_dir set
+        still works (uses directory path, not tar)."""
         s = trivial_counter_setup
         ckpt = tmp_path / "checkpoint"
         h5_path = tmp_path / "runner.h5"
 
-        # Construct and write runner with checkpoint=True and checkpoint dir
+        # Construct and write runner with item_checkpoint_dir set
         runner1 = EdesignRunner(
             edesign=s.edesign,
             physical_model=s.model,
             physical_to_logical=s.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=[("counter", -1)],
-            item_checkpoint_dir=ckpt,
-            checkpoint=True,
+            config=CheckpointConfig(item_checkpoint_dir=ckpt),
             program_kwargs=s.program_kwargs,
         )
         runner1.write(h5_path)
@@ -273,8 +270,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
             physical_to_logical=s.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=[("counter", -1)],
-            item_checkpoint_dir=tmp_path / "ckpt",
-            checkpoint=True,
+            config=CheckpointConfig(item_checkpoint_dir=tmp_path / "ckpt"),
         )
 
         # item_key_fn must be picklable (a module-level function, not a local lambda)
@@ -338,8 +334,7 @@ class TestEdesignRunnerHooks:
             physical_to_logical=s.physical_to_logical,
             num_shots=1,
             collect_shot_data_args=[("counter", -1)],
-            checkpoint=True,
-            item_checkpoint_dir=tmp_path,
+            config=CheckpointConfig(item_checkpoint_dir=tmp_path),
             program_kwargs=s.program_kwargs,
         )
 
