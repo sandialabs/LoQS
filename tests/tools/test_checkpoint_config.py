@@ -96,14 +96,15 @@ class TestCheckpointConfigStrOutput:
         assert str(cfg) == expected
 
     def test_str_with_item_checkpointing_enabled(self):
+        ckpt_dir = Path("/tmp/ckpt")
         cfg = CheckpointConfig(
-            item_checkpoint_dir="/tmp/ckpt",
+            item_checkpoint_dir=ckpt_dir,
             resume=True,
         )
         expected = (
             "CheckpointConfig:\n"
             "\tItem checkpointing:\ton\n"
-            "\t\tCheckpoint directory:\t/tmp/ckpt\n"
+            f"\t\tCheckpoint directory:\t{ckpt_dir}\n"
             "\t\tResume from checkpoint:\tTrue\n"
             "\t\tForce resume:\tFalse\n"
             "\t\tRunner file:\trunner.h5\n"
@@ -114,9 +115,11 @@ class TestCheckpointConfigStrOutput:
         assert str(cfg) == expected
 
     def test_str_with_both_checkpointing_enabled(self):
+        item_ckpt_dir = Path("/tmp/item")
+        shot_ckpt_dir = Path("/tmp/shot")
         cfg = CheckpointConfig(
-            item_checkpoint_dir="/tmp/item",
-            shot_checkpoint_dir="/tmp/shot",
+            item_checkpoint_dir=item_ckpt_dir,
+            shot_checkpoint_dir=shot_ckpt_dir,
             resume=True,
             keep_shot_results=True,
             lazy_loading=False,
@@ -124,12 +127,12 @@ class TestCheckpointConfigStrOutput:
         expected = (
             "CheckpointConfig:\n"
             "\tItem checkpointing:\ton\n"
-            "\t\tCheckpoint directory:\t/tmp/item\n"
+            f"\t\tCheckpoint directory:\t{item_ckpt_dir}\n"
             "\t\tResume from checkpoint:\tTrue\n"
             "\t\tForce resume:\tFalse\n"
             "\t\tRunner file:\trunner.h5\n"
             "\tShot checkpointing:\ton\n"
-            "\t\tCheckpoint directory:\t/tmp/shot\n"
+            f"\t\tCheckpoint directory:\t{shot_ckpt_dir}\n"
             "\t\tKeep shot results:\tTrue\n"
             "\t\tLazy loading:\tFalse\n"
             "\t\tResults file:\tresults.h5\n"
