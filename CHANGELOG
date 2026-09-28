@@ -22,6 +22,7 @@
 ### Fixed
 - **STIM/qudit-statevector bugfixes and whole-repo lint compliance (#129, #140, @sserita):** Fixes several latent bugs in STIM-backed circuit execution and qudit statevector construction. The whole repo (`loqs`, `docs_scripts`, `tests`) is now fully `black`/`flake8`/`mypy`-clean, with CI and pre-commit enforcing it instead of silently ignoring failures.
 - **Tutorial notebook rendering on ReadTheDocs (#136, @sserita):** Fixes three distinct MyST-vs-MkDocs rendering failures in `docs/notebooks/*.md` -- swallowed content across `{code-cell}` fences, leaked cell-option syntax, and unrendered `{note}` blocks -- so tutorials display correctly on the built docs site.
+- **`loqs-migrate` rewrites removed `.cast()` calls to `.from_raw()` (#130, @sserita):** `InstructionLabel.cast()`/`SyndromeLabel.cast()` are now confidently rewritten instead of merely flagged, since both have a direct `.from_raw()` replacement; other castable classes remain flag-only.
 
 ## [1.2] - 2026-08-21
 

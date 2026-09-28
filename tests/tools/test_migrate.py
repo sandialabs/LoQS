@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from loqs.tools.migrate import migrate_source
-from loqs.tools.migrate.flags import detect_flagged_patterns
+from loqs.tools.migrate.flags import (
+    detect_flagged_patterns,
+    rewrite_cast_to_from_raw,
+)
 from loqs.tools.migrate.ipynb import migrate_ipynb_source
 from loqs.tools.migrate.labels import migrate_instruction_labels
 from loqs.tools.migrate.notebook import migrate_notebook_source
@@ -438,6 +441,12 @@ class TestDetectFlaggedPatterns:
         src = "stack = some_stack.cast(InstructionStack)\n"
         assert detect_flagged_patterns(src) == []
 
+    def test_instructionlabel_and_syndromelabel_no_longer_flagged(self):
+        """These two now have a confident `.from_raw()` rewrite (see
+        `TestRewriteCastToFromRaw`) instead of being flagged."""
+        src = "a = InstructionLabel.cast(x)\nb = SyndromeLabel.cast(y)\n"
+        assert detect_flagged_patterns(src) == []
+
     def test_no_false_positive_on_unrelated_include_idles_kwarg(self):
         """A real false positive found by testing against this repo's own
         surf17 codepack helpers: several still-current, unrelated
@@ -445,6 +454,50 @@ class TestDetectFlaggedPatterns:
         building functions, never touched by this v1.2 rename."""
         src = "circuit_inst = build_circuit_instruction(include_idles=True)\n"
         assert detect_flagged_patterns(src) == []
+
+
+class TestRewriteCastToFromRaw:
+    def test_rewrites_instructionlabel_cast(self):
+        result = rewrite_cast_to_from_raw("label = InstructionLabel.cast(x)\n")
+        assert result.changed
+        assert result.source == "label = InstructionLabel.from_raw(x)\n"
+        assert result.manual_review == []
+        assert len(result.rewrites) == 1
+
+    def test_rewrites_syndromelabel_cast(self):
+        result = rewrite_cast_to_from_raw("label = SyndromeLabel.cast(x)\n")
+        assert result.changed
+        assert result.source == "label = SyndromeLabel.from_raw(x)\n"
+
+    def test_rewrites_qualified_receiver(self):
+        src = "label = loqs.core.instructions.InstructionLabel.cast(x)\n"
+        result = rewrite_cast_to_from_raw(src)
+        assert result.changed
+        assert (
+            result.source
+            == "label = loqs.core.instructions.InstructionLabel.from_raw(x)\n"
+        )
+
+    def test_no_rewrite_for_flag_only_class(self):
+        """The other 14 classes (e.g. `InstructionStack`) keep their
+        flag-only behavior -- this function only ever touches
+        `InstructionLabel`/`SyndromeLabel`."""
+        src = "stack = InstructionStack.cast(x)\n"
+        result = rewrite_cast_to_from_raw(src)
+        assert not result.changed
+        assert result.source == src
+
+    def test_no_false_positive_on_unrelated_receiver(self):
+        src = "x = some_label.cast(InstructionLabel)\n"
+        result = rewrite_cast_to_from_raw(src)
+        assert not result.changed
+        assert result.source == src
+
+    def test_already_from_raw_is_untouched(self):
+        src = "label = InstructionLabel.from_raw(x)\n"
+        result = rewrite_cast_to_from_raw(src)
+        assert not result.changed
+        assert result.source == src
 
 
 class TestMigrateSource:
@@ -513,6 +566,44 @@ class TestMigrateSource:
         for item in result.manual_review:
             assert 1 <= item.line <= len(lines)
             assert "InstructionLabel" in lines[item.line - 1]
+
+    def test_cast_rewritten_to_from_raw(self):
+        src = "label = InstructionLabel.cast(x)\n"
+        result = migrate_source(src)
+        assert result.changed
+        assert "InstructionLabel.from_raw(x)" in result.source
+        assert not result.manual_review
+
+    def test_syndromelabel_cast_rewritten_to_from_raw(self):
+        src = "label = SyndromeLabel.cast(x)\n"
+        result = migrate_source(src)
+        assert result.changed
+        assert "SyndromeLabel.from_raw(x)" in result.source
+        assert not result.manual_review
+
+    def test_idempotent_on_already_from_raw(self):
+        src = "label = InstructionLabel.from_raw(x)\n"
+        result = migrate_source(src)
+        assert not result.changed
+        assert result.source == src
+        assert not result.manual_review
+
+    def test_cast_rewrite_coexists_with_remaining_flag(self):
+        """A confident `.cast()` -> `.from_raw()` rewrite and a still-flagged
+        `.cast()` call (a class with no `.from_raw()`) in the same file are
+        both reported correctly, with the flag's line number accurate in
+        the final (annotated) source."""
+        src = (
+            "label = InstructionLabel.cast(x)\n"
+            "stack = InstructionStack.cast(y)\n"
+        )
+        result = migrate_source(src)
+        assert result.changed
+        assert "InstructionLabel.from_raw(x)" in result.source
+        assert len(result.manual_review) == 1
+        lines = result.source.splitlines()
+        item = result.manual_review[0]
+        assert "InstructionStack.cast(y)" in lines[item.line - 1]
 
 
 class TestMigrateNotebookSource:

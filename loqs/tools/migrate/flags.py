@@ -7,19 +7,19 @@
 # http://www.apache.org/licenses/LICENSE-2.0 or in the LICENSE file in the root LoQS directory.                     #
 #####################################################################################################################
 
-"""Detect-only patterns: old APIs whose replacement changes meaning, not
-just name, so guessing a rewrite would be dishonest rather than helpful.
+"""Patterns whose replacement is a semantic change or ambiguous.
 
-- `<OldCastableClass>.cast(...)`: removed entirely in v1.2; its
-  replacement depends on which class the call was on
-  (`InstructionStack.cast(x)` -> `InstructionStack(x)`,
-  `InstructionLabel.cast(x)` -> `InstructionLabel.from_raw(x)`), which
-  isn't generally inferable from the call site alone. Scoped to the
-  specific 14 classes that had a real `.cast()` (derived from
-  [](api:RENAMES)'s own `*CastableTypes` entries, not a bare `.cast(`
-  scan), since a bare scan collides with unrelated third-party `.cast()`
-  methods with the exact same name (`pygsti.circuits.Circuit.cast`,
-  `pygsti.evotypes.Evotype.cast`), which aren't LoQS's removed API at all.
+- `<OldCastableClass>.cast(...)`: removed entirely in v1.2. For
+  `InstructionLabel` and `SyndromeLabel`, confidently rewritten to
+  `.from_raw(...)` (same call signature and dispatch semantics). For the
+  other 14 castable classes (`InstructionStack`, `DictModel`, etc.), their
+  replacement is a direct constructor call, not a pure method rename, so
+  those are flagged only. All casting patterns are scoped to the specific
+  classes that had a real `.cast()` (derived from [](api:RENAMES)'s own
+  `*CastableTypes` entries, not a bare `.cast(` scan), since a bare scan
+  collides with unrelated third-party `.cast()` methods with the exact same
+  name (`pygsti.circuits.Circuit.cast`, `pygsti.evotypes.Evotype.cast`),
+  which aren't LoQS's removed API at all.
 - `include_idles=`/`reference_round_Z=`/`reference_round_X=` passed to a
   `create_qec_code(...)`-style call: replaced in v1.2 by `idle_layout=`/
   `reference_round_mode_Z=`/`reference_round_mode_X=`, but these are
@@ -58,7 +58,7 @@ from loqs.tools.migrate.report import (
     RewriteItem,
 )
 
-_CASTABLE_CLASS_NAMES = sorted(
+_ALL_CASTABLE_CLASS_NAMES = sorted(
     {
         old_name[: -len("CastableTypes")]
         for (_, old_name) in RENAMES
@@ -66,11 +66,19 @@ _CASTABLE_CLASS_NAMES = sorted(
     }
 )
 
+# Classes with a confident .from_raw() replacement
+_CAST_TO_FROM_RAW_CLASSES = sorted({"InstructionLabel", "SyndromeLabel"})
+
+# Classes that remain flag-only (constructor call replacement)
+_FLAG_ONLY_CAST_CLASSES = sorted(
+    set(_ALL_CASTABLE_CLASS_NAMES) - set(_CAST_TO_FROM_RAW_CLASSES)
+)
+
 _LINE_PATTERNS: dict[str, re.Pattern] = {
     f"{cls}.cast(...) call (removed in v1.2)": re.compile(
         rf"\b{re.escape(cls)}\.cast\("
     )
-    for cls in _CASTABLE_CLASS_NAMES
+    for cls in _FLAG_ONLY_CAST_CLASSES
 }
 
 # Kept separate from `_LINE_PATTERNS` above: unlike those, this one is
@@ -124,6 +132,37 @@ def rewrite_iz_literal(source: str) -> MigrationResult:
         return f"{quote}Imrz{quote}"
 
     new_source = _IZ_PATTERN.sub(_replace, source)
+    return MigrationResult(
+        source=new_source, changed=bool(rewrites), rewrites=rewrites
+    )
+
+
+def rewrite_cast_to_from_raw(source: str) -> MigrationResult:
+    """Rewrite `InstructionLabel.cast(...)` and `SyndromeLabel.cast(...)` to
+    their `.from_raw(...)` equivalents. These two classes have a confident
+    replacement with the same call signature and dispatch semantics;
+    other castable classes' replacements are direct constructor calls and
+    remain flag-only.
+    """
+    rewrites: list[RewriteItem] = []
+
+    # Build a combined pattern matching either class's .cast( call
+    pattern = re.compile(
+        rf"\b({'|'.join(re.escape(cls) for cls in _CAST_TO_FROM_RAW_CLASSES)})\.cast\("
+    )
+
+    def _replace(match: re.Match) -> str:
+        cls_name = match.group(1)
+        line = source.count("\n", 0, match.start()) + 1
+        rewrites.append(
+            RewriteItem(
+                line=line,
+                message=f"{cls_name}.cast(...) -> {cls_name}.from_raw(...)",
+            )
+        )
+        return f"{cls_name}.from_raw("
+
+    new_source = pattern.sub(_replace, source)
     return MigrationResult(
         source=new_source, changed=bool(rewrites), rewrites=rewrites
     )

@@ -30,8 +30,10 @@ Four independent passes, run in order, together making up [](api:migrate_source)
 3. [](api:loqs.tools.migrate.labels): pre-1.2 positional `InstructionLabel`
    construction, rewritten to modern keyword form.
 4. [](api:loqs.tools.migrate.flags): patterns whose replacement is a
-   semantic change, not a pure rename (`.cast()`, `include_idles=`, an
-   `"Iz"` string) -- flagged by default, never guessed at automatically.
+   semantic change or ambiguous. `InstructionLabel.cast(...)`/
+   `SyndromeLabel.cast(...)` are confidently rewritten to `.from_raw(...)`.
+   Other castable classes' `.cast()` calls, `include_idles=`, and bare
+   `"Iz"` strings are flagged by default, never guessed at automatically.
 
 Two of the above are opt-in exceptions to "never guessed at automatically",
 each gated behind its own [](api:migrate_source) keyword argument (and the
@@ -53,6 +55,7 @@ from __future__ import annotations
 
 from loqs.tools.migrate.flags import (
     detect_flagged_patterns,
+    rewrite_cast_to_from_raw,
     rewrite_iz_literal,
 )
 from loqs.tools.migrate.labels import migrate_instruction_labels
@@ -146,6 +149,7 @@ def migrate_source(
             result.source, rename_patch_label=rename_patch_label
         ),
     )
+    result = _chain(result, rewrite_cast_to_from_raw(result.source))
     if rename_iz:
         result = _chain(result, rewrite_iz_literal(result.source))
     result.manual_review.extend(
