@@ -14,7 +14,6 @@ from __future__ import annotations
 import copy
 import functools
 import h5py
-import inspect
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -376,11 +375,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
     ) -> "MultiProgramRunner":
         """Reconstruct from decoded attributes, rebundling the flat checkpoint
         attributes into a CheckpointConfig before delegating to the
-        constructor. `cls` may be a subclass that hasn't yet migrated its own
-        constructor to accept `config=` (a transitional state during this
-        multi-stage migration, detected via inspect.signature) -- for that
-        case, the config's own fields are unpacked back into flat kwargs
-        instead, matching that subclass's still-flat constructor."""
+        constructor."""
         attr_dict = dict(attr_dict)
         index_map = attr_dict.pop("index_map", None)
         reduced_results = attr_dict.pop("_reduced_results", None)
@@ -399,26 +394,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
             runner_filename=attr_dict.pop("runner_filename", "runner.h5"),
             results_filename=attr_dict.pop("results_filename", "results.h5"),
         )
-        init_params = inspect.signature(cls.__init__).parameters
-        accepts_config = "config" in init_params or any(
-            p.kind is inspect.Parameter.VAR_KEYWORD
-            for p in init_params.values()
-        )
-        if accepts_config:
-            attr_dict["config"] = config
-        else:
-            attr_dict["item_checkpoint_dir"] = config.item_checkpoint_dir
-            attr_dict["checkpoint"] = config.item_checkpoint
-            attr_dict["resume"] = config.resume
-            attr_dict["force_resume"] = config.force_resume
-            attr_dict["shot_checkpoint"] = config.shot_checkpoint
-            attr_dict["shot_checkpoint_dir"] = config.shot_checkpoint_dir
-            attr_dict["lazy_loading"] = config.lazy_loading
-            attr_dict["keep_shot_results"] = config.keep_shot_results
-            attr_dict["poll_interval"] = config.poll_interval
-            attr_dict["show_progress"] = config.show_progress
-            attr_dict["runner_filename"] = config.runner_filename
-            attr_dict["results_filename"] = config.results_filename
+        attr_dict["config"] = config
         obj = super()._from_decoded_attrs(attr_dict)
         obj.index_map = index_map
         obj._reduced_results = (
