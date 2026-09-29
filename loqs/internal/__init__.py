@@ -13,6 +13,7 @@ import os
 import random
 import socket
 import time
+import uuid
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -35,12 +36,29 @@ from .serializable import (
 # Must be after Serializable
 from .displayable import Displayable
 
+_worker_id_cache: tuple[int, str] | None = None
+
 
 def worker_id() -> str:
-    """Return this process's `hostname_pid` worker identity string, used to
-    key per-writer checkpoint files across LoQS's parallel dispatch
-    mechanisms."""
-    return f"{socket.gethostname()}_{os.getpid()}"
+    """Return this process's cached `hostname_pid_suffix` worker identity
+    string, used to key per-writer checkpoint files across LoQS's parallel
+    dispatch mechanisms.
+
+    The suffix is a short UUID4-derived string, appended so that no two
+    workers ever resolve to the same identity even if the OS reuses a PID
+    across process launches on the same host. The result is cached
+    per-process, so multiple call sites within the same worker process
+    always agree -- but the cache is only reused after re-checking
+    `os.getpid()` against the cached PID, so a value cached before a
+    `fork()` is never silently inherited by the child process.
+    """
+    global _worker_id_cache
+    pid = os.getpid()
+    if _worker_id_cache is not None and _worker_id_cache[0] == pid:
+        return _worker_id_cache[1]
+    value = f"{socket.gethostname()}_{pid}_{uuid.uuid4().hex[:8]}"
+    _worker_id_cache = (pid, value)
+    return value
 
 
 def pin_worker_threads() -> None:
