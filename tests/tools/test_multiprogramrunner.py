@@ -386,11 +386,12 @@ class TestMultiProgramRunnerSerialWithCheckpoint:
         # After a crash, the worker file with partial results should still exist
         # (consolidation only happens on successful completion).
         # Verify the partial results are in the worker file.
-        worker_files = list(checkpoint_dir.glob("worker_*_runner.h5"))
-        assert len(worker_files) == 1
-        with h5py.File(worker_files[0], "r") as f:
-            entries = list(iter_dict_attr_entries(f, "results"))
-        assert len(entries) == 3
+        from loqs.tools.multiprogramrunner import _read_done_union
+
+        done = _read_done_union(
+            checkpoint_dir, runner_filename="runner.h5", attr_name="results"
+        )
+        assert len(done) == 3
 
         # Second run: resume with normal function on same checkpoint dir
         runner2 = _TrackingRunner(
@@ -3824,6 +3825,102 @@ class TestWorkerFileConsolidation:
         assert reduced_results == {0: "worker"}
         assert item_times == {0: 2.5}
         assert shot_times == {0: {0: 0.5, 1: 0.6}}
+
+    def test_read_done_union_and_consolidate_mixed_legacy_and_swmr_formats(
+        self, tmp_path
+    ):
+        """Backward-compat regression test for resuming a run that started
+        under pre-fix (legacy `worker_*_runner.h5`, dict attrs at file root)
+        code and continues under post-fix (SWMR ledger + dedicated per-item
+        payload file) code, with both formats present in the same
+        checkpoint directory at once. Item 0 lives entirely in a legacy
+        worker file; item 1 lives in a SWMR ledger file plus its own
+        payload file. Both `_read_done_union` (pre-consolidation) and
+        `_consolidate_worker_files` must account for entries living in
+        either format.
+        """
+        from loqs.internal.streamingmerge import merge_dict_attr
+        from loqs.internal.swmrledger import (
+            mark_ledger_item_done,
+            open_swmr_writer,
+        )
+        from loqs.tools.multiprogramrunner import (
+            _consolidate_worker_files,
+            _ITEM_LEDGER_FIELDS,
+            _read_done_union,
+        )
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Bare runner.h5 with valid object-group structure to merge into.
+        runner = _SimpleDoubleRunner(items=[])
+        runner_path = checkpoint_dir / "runner.h5"
+        runner.write(runner_path, "hdf5")
+
+        # Legacy-format leftover: item 0's dict attrs written directly at
+        # its worker file's own root.
+        legacy_file = checkpoint_dir / "worker_legacy_runner.h5"
+        with h5py.File(legacy_file, "a") as f:
+            merge_dict_attr(
+                f,
+                "results",
+                [(0, "legacy_result")],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+            merge_dict_attr(
+                f,
+                "item_wall_clock_times",
+                [(0, 1.5)],
+                key_use_dataset=True,
+                value_use_dataset=True,
+            )
+
+        # New-format: item 1's SWMR ledger file plus its own payload file.
+        _, ledger_group = open_swmr_writer(
+            checkpoint_dir / "worker_new_runner.h5",
+            fields=_ITEM_LEDGER_FIELDS,
+        )
+        mark_ledger_item_done(ledger_group, 1, 2.5)
+
+        payload_path = checkpoint_dir / "worker_new_item_1_payload.h5"
+        with h5py.File(payload_path, "w") as f:
+            merge_dict_attr(
+                f,
+                "results",
+                [(1, "new_result")],
+                key_use_dataset=True,
+                value_use_dataset=False,
+            )
+            merge_dict_attr(
+                f,
+                "item_wall_clock_times",
+                [(1, 2.5)],
+                key_use_dataset=True,
+                value_use_dataset=True,
+            )
+
+        # Pre-consolidation resume detection: both formats must be visible.
+        done = _read_done_union(
+            checkpoint_dir, runner_filename="runner.h5", attr_name="results"
+        )
+        assert done == {0: "legacy_result", 1: "new_result"}
+
+        # Consolidation folds both source formats into runner.h5 and deletes
+        # every source file (legacy worker file, ledger file, payload file).
+        _consolidate_worker_files(
+            checkpoint_dir, runner_filename="runner.h5", delete_originals=True
+        )
+
+        consolidated = _read_done_union(
+            checkpoint_dir, runner_filename="runner.h5", attr_name="results"
+        )
+        assert consolidated == {0: "legacy_result", 1: "new_result"}
+
+        assert not legacy_file.exists()
+        assert not (checkpoint_dir / "worker_new_runner.h5").exists()
+        assert not payload_path.exists()
 
 
 # Module-level test classes for decode_cache regression tests.

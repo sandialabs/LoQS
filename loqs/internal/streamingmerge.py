@@ -1056,7 +1056,7 @@ def get_dict_attr_group(
 def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for canonical read and worker scan with conflict retry
     checkpoint_dir: Path,
     canonical_filename: str | None,
-    worker_glob: str | None,
+    worker_glob: str | Sequence[str] | None,
     attr_name: str,
     canonical_attr_name: str | None = None,
     retry_on_conflict: bool = False,
@@ -1069,8 +1069,9 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
     pattern used by both ProgramResults and MultiProgramRunner's resume/
     consolidation paths. Reads the specified dict attribute from a canonical
     checkpoint file (if it exists), then from every sorted worker checkpoint
-    file, decoding entries incrementally via iter_dict_attr_entries without
-    materializing individual file contents simultaneously in memory.
+    file matching each given glob pattern, decoding entries incrementally via
+    iter_dict_attr_entries without materializing individual file contents
+    simultaneously in memory.
 
     Parameters
     ----------
@@ -1079,10 +1080,12 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
     canonical_filename : str | None
         Filename for the canonical checkpoint file (e.g. "results.h5" or
         "runner.h5"). If None, the canonical-file read is skipped entirely.
-    worker_glob : str | None
-        Glob pattern for worker checkpoint files relative to checkpoint_dir
-        (e.g. "worker_*_checkpoint.h5" or "worker_*_runner.h5"). If None,
-        the worker-file scan is skipped entirely.
+    worker_glob : str | Sequence[str] | None
+        Glob pattern(s) for worker checkpoint files relative to
+        checkpoint_dir (e.g. "worker_*_checkpoint.h5", or
+        ("worker_*_runner.h5", "worker_*_item_*_payload.h5") to scan two
+        on-disk worker-file shapes in one pass). If None, the worker-file
+        scan is skipped entirely.
     attr_name : str
         Name of the dict attribute to read from worker files (and from the
         canonical file unless canonical_attr_name is given).
@@ -1141,33 +1144,40 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
                     raise
                 pass  # Transient lock conflict; skip
 
-    # Then, read every worker file (sorted, excluding .tmp files)
+    # Then, read every worker file matching each glob pattern (sorted per
+    # pattern, excluding .tmp files).
     if worker_glob is not None:
-        for worker_file in sorted(
-            f
-            for f in checkpoint_dir.glob(worker_glob)
-            if not f.name.endswith(".tmp")
-        ):
+        glob_patterns = (
+            (worker_glob,)
+            if isinstance(worker_glob, str)
+            else tuple(worker_glob)
+        )
+        for pattern in glob_patterns:
+            for worker_file in sorted(
+                f
+                for f in checkpoint_dir.glob(pattern)
+                if not f.name.endswith(".tmp")
+            ):
 
-            def _read_worker(f: h5py.File) -> None:
-                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                for key, value in iter_dict_attr_entries(
-                    f, attr_name, decode_cache=decode_cache
-                ):
-                    done[key] = value
+                def _read_worker(f: h5py.File) -> None:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    for key, value in iter_dict_attr_entries(
+                        f, attr_name, decode_cache=decode_cache
+                    ):
+                        done[key] = value
 
-            try:
-                if retry_on_conflict:
-                    _retry_hdf5_read(worker_file, _read_worker)
-                else:
-                    with h5py.File(worker_file, "r") as f:
-                        _read_worker(f)
-            except KeyError:
-                continue  # Attribute missing or file corruption; skip
-            except (BlockingIOError, OSError):
-                if retry_on_conflict:
-                    raise
-                continue  # Transient lock conflict; skip
+                try:
+                    if retry_on_conflict:
+                        _retry_hdf5_read(worker_file, _read_worker)
+                    else:
+                        with h5py.File(worker_file, "r") as f:
+                            _read_worker(f)
+                except KeyError:
+                    continue  # Attribute missing or file corruption; skip
+                except (BlockingIOError, OSError):
+                    if retry_on_conflict:
+                        raise
+                    continue  # Transient lock conflict; skip
 
     return done
 
@@ -1175,7 +1185,7 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
 def read_checkpoint_dict_attr_union_keys(
     checkpoint_dir: Path,
     canonical_filename: str | None,
-    worker_glob: str | None,
+    worker_glob: str | Sequence[str] | None,
     attr_name: str,
     canonical_attr_name: str | None = None,
     retry_on_conflict: bool = False,
@@ -1183,10 +1193,10 @@ def read_checkpoint_dict_attr_union_keys(
     """Scan checkpoint_dir for dict-attribute keys union (no value decoding).
 
     Key-only sibling of read_checkpoint_dict_attr_union: returns the union of
-    keys present in a canonical checkpoint file and all worker checkpoint files,
-    without decoding any values. This is a cheap operation useful for
-    determining which items have been completed without the cost of decoding
-    their full entry values.
+    keys present in a canonical checkpoint file and all worker checkpoint files
+    matching each given glob pattern, without decoding any values. This is a
+    cheap operation useful for determining which items have been completed
+    without the cost of decoding their full entry values.
 
     Parameters
     ----------
@@ -1195,9 +1205,9 @@ def read_checkpoint_dict_attr_union_keys(
     canonical_filename : str | None
         Filename for the canonical checkpoint file. If None, the
         canonical-file read is skipped entirely.
-    worker_glob : str | None
-        Glob pattern for worker checkpoint files. If None, the worker-file
-        scan is skipped entirely.
+    worker_glob : str | Sequence[str] | None
+        Glob pattern(s) for worker checkpoint files. If None, the
+        worker-file scan is skipped entirely.
     attr_name : str
         Name of the dict attribute to read from worker files (and from the
         canonical file unless canonical_attr_name is given).
@@ -1251,28 +1261,35 @@ def read_checkpoint_dict_attr_union_keys(
                     raise
                 pass  # Transient lock conflict; skip
 
-    # Then, read every worker file (sorted, excluding .tmp files)
+    # Then, read every worker file matching each glob pattern (sorted per
+    # pattern, excluding .tmp files).
     if worker_glob is not None:
-        for worker_file in sorted(
-            f
-            for f in checkpoint_dir.glob(worker_glob)
-            if not f.name.endswith(".tmp")
-        ):
+        glob_patterns = (
+            (worker_glob,)
+            if isinstance(worker_glob, str)
+            else tuple(worker_glob)
+        )
+        for pattern in glob_patterns:
+            for worker_file in sorted(
+                f
+                for f in checkpoint_dir.glob(pattern)
+                if not f.name.endswith(".tmp")
+            ):
 
-            def _read_worker(f: h5py.File) -> None:
-                keys.update(get_dict_attr_keys(f, attr_name))
+                def _read_worker(f: h5py.File) -> None:
+                    keys.update(get_dict_attr_keys(f, attr_name))
 
-            try:
-                if retry_on_conflict:
-                    _retry_hdf5_read(worker_file, _read_worker)
-                else:
-                    with h5py.File(worker_file, "r") as f:
-                        _read_worker(f)
-            except KeyError:
-                continue  # Attribute missing or file corruption; skip
-            except (BlockingIOError, OSError):
-                if retry_on_conflict:
-                    raise
-                continue  # Transient lock conflict; skip
+                try:
+                    if retry_on_conflict:
+                        _retry_hdf5_read(worker_file, _read_worker)
+                    else:
+                        with h5py.File(worker_file, "r") as f:
+                            _read_worker(f)
+                except KeyError:
+                    continue  # Attribute missing or file corruption; skip
+                except (BlockingIOError, OSError):
+                    if retry_on_conflict:
+                        raise
+                    continue  # Transient lock conflict; skip
 
     return keys

@@ -46,7 +46,9 @@ from loqs.internal.streamingmerge import (
 )
 from loqs.internal.swmrledger import (
     mark_ledger_item_done,
+    open_swmr_reader,
     open_swmr_writer,
+    read_swmr_ledger_status,
     update_ledger_in_flight,
 )
 from loqs.tools.paralleltools import (
@@ -1105,6 +1107,26 @@ def _assign_indices_with_keys(
     return items_with_index
 
 
+def _is_new_format_worker_file(worker_file: Path) -> bool:
+    """Whether `worker_file` is a new-format SWMR ledger file (holding a
+    `swmr_ledger` group and no root-level dict attrs of its own) rather than
+    a legacy worker file with dict attrs directly at its own root.
+
+    Opens with `swmr=True` (matching `open_swmr_reader`), since a new-format
+    file's own worker process typically never closes it -- a plain,
+    non-SWMR open would fail cross-process for as long as that writer stays
+    alive, even though nothing is actively being written at that instant.
+    Any read error here is treated as "not new-format", so the caller's own
+    exception handling -- triggered by the same underlying problem when it
+    goes on to actually open the file -- still applies.
+    """
+    try:
+        with h5py.File(worker_file, "r", libver="latest", swmr=True) as f:
+            return "swmr_ledger" in f
+    except (BlockingIOError, OSError):
+        return False
+
+
 def _read_done_union(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
@@ -1112,17 +1134,19 @@ def _read_done_union(
     retry_on_conflict: bool = False,
 ) -> dict[int, Any]:
     """Compute the union of runner.h5's consolidated dict attribute and all
-    worker_*_runner.h5 files' matching attributes, via the shared
-    read_checkpoint_dict_attr_union primitive.
+    worker_*_runner.h5/worker_*_item_*_payload.h5 files' matching attributes,
+    via the shared read_checkpoint_dict_attr_union primitive.
 
     Reads from runner.h5's own state first (if it exists), then merges in any
-    entries from worker files, with worker file entries taking precedence on
-    key collision (same merge semantics as merge_dict_attr).
+    entries from worker files (both a legacy worker file with dict attrs at
+    its own root, and a new-format per-item payload file), with worker file
+    entries taking precedence on key collision (same merge semantics as
+    merge_dict_attr).
 
     Parameters
     ----------
     checkpoint_dir : Path
-        Directory containing runner.h5 and/or worker_*_runner.h5 files.
+        Directory containing runner.h5 and/or worker checkpoint files.
     runner_filename : str, optional
         Name of the runner checkpoint file (default "runner.h5").
     attr_name : str, optional
@@ -1147,7 +1171,7 @@ def _read_done_union(
     return read_checkpoint_dict_attr_union(
         checkpoint_dir,
         runner_filename,
-        "worker_*_runner.h5",
+        ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
         attr_name,
         canonical_attr_name=canonical_attr_name,
         retry_on_conflict=retry_on_conflict,
@@ -1162,10 +1186,10 @@ def _read_done_union_keys(
 ) -> set[int]:
     """Key-only sibling of `_read_done_union`: returns the union of keys
     present in runner.h5's consolidated dict attribute and all
-    worker_*_runner.h5 files' matching attributes, without decoding any
-    values. Same "results" -> "_reduced_results" attribute-name mapping and
-    `retry_on_conflict` semantics as `_read_done_union`; returns an empty
-    set if no checkpoints exist.
+    worker_*_runner.h5/worker_*_item_*_payload.h5 files' matching attributes,
+    without decoding any values. Same "results" -> "_reduced_results"
+    attribute-name mapping and `retry_on_conflict` semantics as
+    `_read_done_union`; returns an empty set if no checkpoints exist.
     """
     canonical_attr_name = (
         "_reduced_results" if attr_name == "results" else None
@@ -1173,7 +1197,7 @@ def _read_done_union_keys(
     return read_checkpoint_dict_attr_union_keys(
         checkpoint_dir,
         runner_filename,
-        "worker_*_runner.h5",
+        ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
         attr_name,
         canonical_attr_name=canonical_attr_name,
         retry_on_conflict=retry_on_conflict,
@@ -1185,12 +1209,15 @@ def _consolidate_worker_files(
     runner_filename: str = "runner.h5",
     delete_originals: bool = True,
 ) -> None:
-    """Consolidate all worker_*_runner.h5 files into runner.h5 and optionally
-    delete worker files once merged. Thin wrapper around
-    `merge_worker_checkpoint_file`, called once per worker file with a fresh
-    write lock on `runner.h5` each time and a shared decode cache across
-    streamed dict attributes. Skips indices already present in runner.h5 to
-    avoid duplicate entries on resume.
+    """Consolidate all worker_*_runner.h5 and worker_*_item_*_payload.h5
+    files into runner.h5 and optionally delete worker files once merged.
+    Thin wrapper around `merge_worker_checkpoint_file`, called once per
+    worker file with a fresh write lock on `runner.h5` each time and a
+    shared decode cache across streamed dict attributes. The same
+    `existing_keys` mapping is shared across both the legacy-file and
+    payload-file passes, so an index already merged from one format is
+    skipped when later seen in the other, avoiding duplicate entries on
+    resume.
     """
     runner_path = checkpoint_dir / runner_filename
     if not runner_path.exists():
@@ -1219,9 +1246,34 @@ def _consolidate_worker_files(
     # Consolidate each worker file and delete it once merged; a
     # retry-exhausted lock conflict is swallowed internally, caught
     # downstream instead by run()'s own final-assembly completeness checks.
+    # A new-format ledger file has no dict attrs to merge (its data lives in
+    # payload files below) and its writer process never closes it, so it's
+    # unlinked directly rather than merged, which would otherwise block.
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
+        if _is_new_format_worker_file(worker_file):
+            if delete_originals:
+                try:
+                    worker_file.unlink()
+                except OSError:
+                    pass
+            continue
         merge_worker_checkpoint_file(
             worker_file,
+            target=runner_path,
+            streamed_attrs=MultiProgramRunner._STREAMED_DICT_ATTRS,
+            already_merged_keys=existing_keys,
+            delete_original=delete_originals,
+            shared_decode_cache=True,
+        )
+
+    # Consolidate each item's own payload file the same way; a new-format
+    # worker's ledger file (above) carries no dict attrs of its own, so its
+    # items' entries only ever show up here.
+    for payload_file in sorted(
+        checkpoint_dir.glob("worker_*_item_*_payload.h5")
+    ):
+        merge_worker_checkpoint_file(
+            payload_file,
             target=runner_path,
             streamed_attrs=MultiProgramRunner._STREAMED_DICT_ATTRS,
             already_merged_keys=existing_keys,
@@ -1547,6 +1599,63 @@ def _mark_observed_and_notify(
             pbar.update(1)
 
 
+def _poll_one_new_format_worker_file(
+    worker_file: Path,
+    consumed_count: int,
+    observed_indices: set[int],
+    items_map: dict[int, Any],
+    on_item_done: Callable[[int, Any, Any], None] | None,
+    pbar: Any,
+) -> int:
+    """New-format sibling of `_poll_one_worker_file`: reads newly-done
+    indices from `worker_file`'s SWMR ledger, notifying for each one by
+    reading its own dedicated `..._item_{index}_payload.h5` file.
+
+    `consumed_count` is incremented by the number of newly-done indices
+    found this call, mirroring the legacy path's own return-value contract
+    so `on_poll()`'s bookkeeping keeps working unchanged for either format.
+    """
+    try:
+        ledger_file, ledger_group = open_swmr_reader(worker_file)
+    except (BlockingIOError, OSError, KeyError):
+        return consumed_count
+    try:
+        status = read_swmr_ledger_status(ledger_group)
+        done_indices = (
+            {i for i, is_done in enumerate(status.done) if is_done}
+            if status.done is not None
+            else set()
+        )
+        worker_id_prefix = worker_file.stem.removesuffix("_runner")
+        for index in sorted(done_indices - observed_indices):
+            payload_path = (
+                worker_file.parent
+                / f"{worker_id_prefix}_item_{index}_payload.h5"
+            )
+            try:
+                with h5py.File(payload_path, "r") as pf:
+                    decode_cache = ResolvingDecodeCache(root=pf, format="hdf5")
+                    for key, value in iter_dict_attr_entries(
+                        pf, "results", start_index=0, decode_cache=decode_cache
+                    ):
+                        consumed_count += 1
+                        _mark_observed_and_notify(
+                            key,
+                            value,
+                            observed_indices,
+                            items_map,
+                            on_item_done,
+                            pbar,
+                        )
+            except (BlockingIOError, OSError, KeyError):
+                # Transient lock conflict, missing attribute, or file
+                # corruption; retry this item's payload on a later poll.
+                continue
+    finally:
+        ledger_file.close()
+    return consumed_count
+
+
 def _poll_one_worker_file(
     worker_file: Path,
     consumed_count: int,
@@ -1558,10 +1667,22 @@ def _poll_one_worker_file(
     """Read this worker file's entries past `consumed_count`, notifying for
     each one, and return the file's updated consumed count.
 
-    A transient HDF5 lock conflict (e.g. the worker itself mid-write) is
-    silently tolerated -- the file is simply retried on the next poll tick,
-    at whichever consumed count it last reached here.
+    Branches on whether `worker_file` is a legacy worker file (dict attrs at
+    its own root) or a new-format SWMR ledger file, delegating the
+    new-format case to `_poll_one_new_format_worker_file`. A transient HDF5
+    lock conflict (e.g. the worker itself mid-write) is silently tolerated
+    -- the file is simply retried on the next poll tick, at whichever
+    consumed count it last reached here.
     """
+    if _is_new_format_worker_file(worker_file):
+        return _poll_one_new_format_worker_file(
+            worker_file,
+            consumed_count,
+            observed_indices,
+            items_map,
+            on_item_done,
+            pbar,
+        )
     try:
         with h5py.File(worker_file, "r") as f:
             # A shared decode_cache is required across this loop so that
@@ -1588,9 +1709,11 @@ def _poll_one_worker_file(
 
 
 def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
-    """Read current_item_index attributes from all worker_*_runner.h5 files.
+    """Read the in-flight item index from all worker_*_runner.h5 files.
 
     Returns the set of item indices currently being processed by any worker.
+    A legacy worker file's `current_item_index` comes from its own file
+    attrs; a new-format worker file's comes from its SWMR ledger instead.
     Silently tolerates missing files or transient HDF5 lock conflicts, which
     is appropriate since the set of workers can change mid-dispatch.
 
@@ -1607,10 +1730,19 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
     in_flight: set[int] = set()
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
         try:
-            with h5py.File(worker_file, "r") as f:
-                if "current_item_index" in f.attrs:
-                    in_flight.add(int(f.attrs["current_item_index"]))
-        except (BlockingIOError, OSError):
+            if _is_new_format_worker_file(worker_file):
+                ledger_file, ledger_group = open_swmr_reader(worker_file)
+                try:
+                    status = read_swmr_ledger_status(ledger_group)
+                    if status.current_item_index is not None:
+                        in_flight.add(status.current_item_index)
+                finally:
+                    ledger_file.close()
+            else:
+                with h5py.File(worker_file, "r") as f:
+                    if "current_item_index" in f.attrs:
+                        in_flight.add(int(f.attrs["current_item_index"]))
+        except (BlockingIOError, OSError, KeyError):
             # Transient lock conflict -- skip this file for now
             continue
     return in_flight
