@@ -1883,89 +1883,36 @@ class TestRetryHdf5Write:
 
         assert call_count["n"] == 3
 
-    def _make_flaky_file(self, target, fail_count=6):
-        """Build an h5py.File monkeypatch replacement that raises
-        BlockingIOError for the first `fail_count` opens of `target`, then
-        behaves normally."""
-        real_file = h5py.File
-        call_count = {"n": 0}
-
-        def flaky_file(path, mode, *args, **kwargs):
-            if Path(path) == target:
-                call_count["n"] += 1
-                if call_count["n"] <= fail_count:
-                    raise BlockingIOError("simulated transient lock")
-            return real_file(path, mode, *args, **kwargs)
-
-        return flaky_file
-
-    def test_write_item_checkpoint_entries_with_retry_uses_widened_default_budget(
-        self, tmp_path, monkeypatch
-    ):
-        """`_write_item_checkpoint_entries_with_retry`'s own default
-        `max_retries` should forward the real, widened default retry budget
-        of `_retry_hdf5_write` rather than silently clamping it to a smaller
-        one. A transient lock that clears after 6 opens exceeds a clamped
-        budget of 5 but is comfortably within the real default of 8.
-        """
-        from loqs.tools.multiprogramrunner import (
-            _write_item_checkpoint_entries_with_retry,
-        )
-
-        target = tmp_path / "widened_retry_dict_target.h5"
-        monkeypatch.setattr(h5py, "File", self._make_flaky_file(target))
-
-        _write_item_checkpoint_entries_with_retry(
-            target, 0, [("results", "value_0", False)]
-        )
-
-        with h5py.File(target, "r") as f:
-            entries = dict(iter_dict_attr_entries(f, "results"))
-        assert entries[0] == "value_0"
-
-    def test_write_current_item_index_with_retry_uses_widened_default_budget(
-        self, tmp_path, monkeypatch
-    ):
-        """Sibling of the above for `_write_current_item_index_with_retry`,
-        confirming its own hardcoded default doesn't clamp the retry budget
-        either."""
-        from loqs.tools.multiprogramrunner import (
-            _write_current_item_index_with_retry,
-        )
-
-        target = tmp_path / "widened_retry_index_target.h5"
-        monkeypatch.setattr(h5py, "File", self._make_flaky_file(target))
-
-        _write_current_item_index_with_retry(target, 7)
-
-        with h5py.File(target, "r") as f:
-            assert f.attrs["current_item_index"] == 7
-
 
 class TestProcessAndCheckpointItemAtomicity:
     """`_process_and_checkpoint_item` must checkpoint one item's results via
-    a single retry-wrapped HDF5 write transaction, not one separate
-    transaction per attribute -- a crash between separate calls could
-    otherwise leave `results` durably written while the timing attributes
-    are permanently lost after resume."""
+    a single payload-file open, not one separate open per attribute -- a
+    crash between separate opens could otherwise leave `results` durably
+    written while the timing attributes are permanently lost after resume."""
 
     @pytest.mark.parametrize("keep_shot_results", [False, True])
     def test_process_and_checkpoint_item_writes_checkpoint_entries_in_one_transaction(
         self, tmp_path, monkeypatch, keep_shot_results
     ):
-        """Count real `_retry_hdf5_write` calls (still delegating to the
-        genuine implementation, so the actual write still happens) while
-        `_process_and_checkpoint_item` processes one item, for both
+        """Count real payload-file opens (still delegating to the genuine
+        `h5py.File`, so the actual write still happens) while
+        `_process_and_checkpoint_item` processes one item, then confirm the
+        payload file holds every expected entry afterward, for both
         `keep_shot_results=False` (3 attributes today: `results`,
         `item_wall_clock_times`, `shot_wall_clock_times`) and
         `keep_shot_results=True` with a real non-`None` resolved
         `ProgramResults` (4 attributes today, the above plus
         `_program_results`)."""
-        from loqs.tools import multiprogramrunner as mpr_module
+        from loqs.internal.swmrledger import open_swmr_writer
         from loqs.tools.multiprogramrunner import _process_and_checkpoint_item
 
         item_checkpoint_dir = tmp_path / "ckpt"
         item_checkpoint_dir.mkdir()
+        _, ledger_group = open_swmr_writer(
+            item_checkpoint_dir / "worker_test_runner.h5",
+            fields=["done", "wall_clock_times"],
+        )
+        payload_path = item_checkpoint_dir / "worker_test_item_0_payload.h5"
 
         def stub_process_item(
             item, index, *, shot_executor=None, n_shot_batches=None, **kwargs
@@ -1983,20 +1930,15 @@ class TestProcessAndCheckpointItemAtomicity:
                 )
             return aux
 
-        real_retry_hdf5_write = mpr_module._retry_hdf5_write
-        call_count = {"n": 0}
+        real_h5py_file = h5py.File
+        open_count = {"n": 0}
 
-        def counting_retry_hdf5_write(
-            worker_file_path, write_fn, max_retries=8
-        ):
-            call_count["n"] += 1
-            return real_retry_hdf5_write(
-                worker_file_path, write_fn, max_retries=max_retries
-            )
+        def counting_h5py_file(path, mode, *args, **kwargs):
+            if Path(path) == payload_path:
+                open_count["n"] += 1
+            return real_h5py_file(path, mode, *args, **kwargs)
 
-        monkeypatch.setattr(
-            mpr_module, "_retry_hdf5_write", counting_retry_hdf5_write
-        )
+        monkeypatch.setattr(h5py, "File", counting_h5py_file)
 
         _process_and_checkpoint_item(
             stub_process_item,
@@ -2007,15 +1949,153 @@ class TestProcessAndCheckpointItemAtomicity:
             n_shot_batches=None,
             keep_shot_results=keep_shot_results,
             shot_checkpoint_subdir=None,
-            item_checkpoint_dir=item_checkpoint_dir,
+            ledger_group=ledger_group,
+            payload_path=payload_path,
         )
 
-        assert call_count["n"] == 1, (
-            "Expected exactly one retry-wrapped HDF5 write transaction for "
-            f"one item's checkpoint, got {call_count['n']} -- checkpointing "
-            "an item's attributes via multiple separate transactions risks "
-            "leaving them inconsistent after a crash between calls."
+        assert open_count["n"] == 1, (
+            "Expected the payload file to be opened exactly once for one "
+            f"item's checkpoint, got {open_count['n']} -- checkpointing an "
+            "item's attributes via multiple separate opens risks leaving "
+            "them inconsistent after a crash between calls."
         )
+
+        with h5py.File(payload_path, "r") as f:
+            assert dict(iter_dict_attr_entries(f, "results")) == {0: 10}
+            assert dict(
+                iter_dict_attr_entries(f, "item_wall_clock_times")
+            ) == {0: pytest.approx(0.001)}
+            assert dict(
+                iter_dict_attr_entries(f, "shot_wall_clock_times")
+            ) == {0: {0: 0.0005}}
+            if keep_shot_results:
+                assert "_program_results" in f
+
+
+class TestItemCheckpointWithLedger:
+    """`_write_item_checkpoint_with_ledger` writes one item's checkpoint
+    entries to a dedicated payload file and marks the item done in the SWMR
+    ledger only once that payload write has fully completed; `_get_worker_
+    ledger` caches its opened ledger group per process per directory."""
+
+    def test_write_item_checkpoint_with_ledger_writes_payload_and_marks_done(
+        self, tmp_path
+    ):
+        """A real ledger plus real entries: the payload file exists and is
+        readable with the expected entries afterward, and the ledger's
+        `done`/`wall_clock_times` reflect the item as done with the correct
+        wall-clock time."""
+        from loqs.internal.swmrledger import (
+            open_swmr_writer,
+            read_swmr_ledger_status,
+        )
+        from loqs.tools.multiprogramrunner import (
+            _write_item_checkpoint_with_ledger,
+        )
+
+        item_checkpoint_dir = tmp_path / "ckpt"
+        item_checkpoint_dir.mkdir()
+        _, ledger_group = open_swmr_writer(
+            item_checkpoint_dir / "worker_test_runner.h5",
+            fields=["done", "wall_clock_times"],
+        )
+        payload_path = item_checkpoint_dir / "worker_test_item_3_payload.h5"
+
+        entries = [
+            ("results", 42, False),
+            ("item_wall_clock_times", 0.25, True),
+        ]
+        _write_item_checkpoint_with_ledger(
+            ledger_group, payload_path, 3, entries, wall_clock_time=0.25
+        )
+
+        assert payload_path.exists()
+        with h5py.File(payload_path, "r") as f:
+            assert dict(iter_dict_attr_entries(f, "results")) == {3: 42}
+            assert dict(
+                iter_dict_attr_entries(f, "item_wall_clock_times")
+            ) == {3: pytest.approx(0.25)}
+
+        status = read_swmr_ledger_status(ledger_group)
+        assert bool(status.done[3]) is True
+        assert status.wall_clock_times[3] == pytest.approx(0.25)
+
+    def test_write_item_checkpoint_with_ledger_does_not_mark_done_on_failure(
+        self, tmp_path, monkeypatch
+    ):
+        """If `merge_dict_attr` raises partway through the payload write
+        (after at least one entry is already written), the exception
+        propagates out of `_write_item_checkpoint_with_ledger` and the
+        ledger's `done` entry for that index stays False -- proving
+        `mark_ledger_item_done` is never reached before the payload file is
+        fully written."""
+        from loqs.internal.swmrledger import (
+            open_swmr_writer,
+            read_swmr_ledger_status,
+        )
+        from loqs.tools import multiprogramrunner as mpr_module
+
+        item_checkpoint_dir = tmp_path / "ckpt"
+        item_checkpoint_dir.mkdir()
+        _, ledger_group = open_swmr_writer(
+            item_checkpoint_dir / "worker_test_runner.h5",
+            fields=["done", "wall_clock_times"],
+        )
+        payload_path = item_checkpoint_dir / "worker_test_item_5_payload.h5"
+
+        real_merge_dict_attr = mpr_module.merge_dict_attr
+        call_count = {"n": 0}
+
+        def flaky_merge_dict_attr(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise RuntimeError("simulated failure partway through")
+            return real_merge_dict_attr(*args, **kwargs)
+
+        monkeypatch.setattr(
+            mpr_module, "merge_dict_attr", flaky_merge_dict_attr
+        )
+
+        entries = [
+            ("results", 1, False),
+            ("item_wall_clock_times", 0.1, True),
+            ("shot_wall_clock_times", {0: 0.05}, False),
+        ]
+
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            mpr_module._write_item_checkpoint_with_ledger(
+                ledger_group, payload_path, 5, entries, wall_clock_time=0.1
+            )
+
+        assert call_count["n"] == 2
+
+        status = read_swmr_ledger_status(ledger_group)
+        done_at_5 = (
+            bool(status.done[5])
+            if status.done is not None and len(status.done) > 5
+            else False
+        )
+        assert done_at_5 is False
+
+    def test_get_worker_ledger_caches_across_calls(self, tmp_path):
+        """A second call with the same `item_checkpoint_dir` (within the
+        same process) returns the identical cached `h5py.Group` object
+        rather than reopening the file."""
+        from loqs.internal.swmrledger import (
+            read_swmr_ledger_status,
+            update_ledger_in_flight,
+        )
+        from loqs.tools.multiprogramrunner import _get_worker_ledger
+
+        item_checkpoint_dir = tmp_path / "ckpt"
+        item_checkpoint_dir.mkdir()
+
+        first = _get_worker_ledger(item_checkpoint_dir)
+        update_ledger_in_flight(first, item_index=7)
+
+        second = _get_worker_ledger(item_checkpoint_dir)
+        assert second is first
+        assert read_swmr_ledger_status(second).current_item_index == 7
 
 
 class TestIndexMapPersistence:
@@ -2720,26 +2800,32 @@ class TestShotProgressBar:
         assert runner._num_shots_for_progress() == 10
 
     def test_current_item_index_round_trip(self, tmp_path):
-        """Verify current_item_index attribute round-trips correctly."""
-        from loqs.tools.multiprogramrunner import (
-            _write_current_item_index_with_retry,
+        """Verify the ledger's `current_item_index` field round-trips
+        correctly via `update_ledger_in_flight`/`read_swmr_ledger_status`."""
+        from loqs.internal.swmrledger import (
+            open_swmr_writer,
+            read_swmr_ledger_status,
+            update_ledger_in_flight,
         )
 
         worker_file = tmp_path / "worker_test_runner.h5"
 
-        # Write current_item_index
-        _write_current_item_index_with_retry(worker_file, 42)
+        _, ledger_group = open_swmr_writer(
+            worker_file,
+            fields=[
+                "current_item_index",
+                "item_shots_done",
+                "item_shots_total",
+            ],
+        )
 
-        # Read it back
-        with h5py.File(worker_file, "r") as f:
-            assert f.attrs["current_item_index"] == 42
+        # Write current_item_index
+        update_ledger_in_flight(ledger_group, item_index=42)
+        assert read_swmr_ledger_status(ledger_group).current_item_index == 42
 
         # Overwrite with new value
-        _write_current_item_index_with_retry(worker_file, 99)
-
-        # Verify it was overwritten
-        with h5py.File(worker_file, "r") as f:
-            assert f.attrs["current_item_index"] == 99
+        update_ledger_in_flight(ledger_group, item_index=99)
+        assert read_swmr_ledger_status(ledger_group).current_item_index == 99
 
     def test_read_worker_current_indices_tolerates_missing_files(
         self, tmp_path
