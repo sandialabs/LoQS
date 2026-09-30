@@ -124,6 +124,21 @@ def _write_worker_file(args):
             )
 
 
+def _no_retry_hdf5_write(path, write_fn, max_retries=8):
+    """Single-attempt stand-in for `_retry_hdf5_write`, so lock contention
+    raises instead of being retried."""
+    with h5py.File(path, "a") as f:
+        write_fn(f)
+
+
+def _init_worker_disable_hdf5_retries():
+    """Worker-process initializer swapping `_no_retry_hdf5_write` into the
+    shot-checkpoint writer's module."""
+    import loqs.core.programresults
+
+    loqs.core.programresults._retry_hdf5_write = _no_retry_hdf5_write
+
+
 # Test runner helpers for checkpoint/resume/parallel tests
 
 
@@ -2786,6 +2801,54 @@ class TestKeepShotResults:
             len(result.shot_histories) == 5
         ), "Should return in_memory_pr with 5 shots when checkpoint is missing"
         assert result.parent_program == "program_0"
+
+    @pytest.mark.slow
+    @pytest.mark.xfail(
+        strict=True,
+        raises=BlockingIOError,
+        reason="shot-level checkpointing is not yet SWMR; reader/writer lock race reproduces once retries are disabled",
+    )
+    def test_keep_shot_results_parallel_forces_checkpoint_read_write_race(
+        self, tmp_path
+    ):
+        """With `poll_interval=0.0`, the driver's shot-progress poll collides
+        with worker checkpoint flushes; worker retries are disabled so the
+        collision surfaces as `BlockingIOError` instead of being absorbed by
+        `_retry_hdf5_write`'s backoff."""
+        loky = pytest.importorskip("loky")
+
+        item_checkpoint_dir = tmp_path / "item_ckpt"
+        shot_checkpoint_dir = tmp_path / "shot_ckpt"
+
+        executor = loky.ProcessPoolExecutor(
+            max_workers=2,
+            initializer=_init_worker_disable_hdf5_retries,
+        )
+        try:
+            strategy = ParallelStrategy(
+                program_executor=executor,
+                n_program_chunks=2,
+            )
+            runner = _SimpleDoubleRunner(
+                [1, 2, 3, 4],
+                config=CheckpointConfig(
+                    item_checkpoint_dir=item_checkpoint_dir,
+                    shot_checkpoint_dir=shot_checkpoint_dir,
+                    keep_shot_results=True,
+                    lazy_loading=False,
+                    poll_interval=0.0,
+                ),
+                parallel_strategy=strategy,
+            )
+            runner.num_shots = 30
+            result = runner.run()
+
+            assert result == [2, 4, 6, 8]
+            assert len(runner._program_results) == 4
+            for index in range(4):
+                assert len(runner._program_results[index].shot_histories) == 30
+        finally:
+            executor.shutdown(wait=True)
 
 
 class TestShotProgressBar:
