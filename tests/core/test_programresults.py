@@ -1355,6 +1355,87 @@ class TestProgramResults:
             assert len(loaded.shot_histories) == 5
 
 
+class TestShotCheckpointBatchWithLedger:
+    """`_write_shot_checkpoint_batch_with_ledger` writes one batch of
+    shots' checkpoint entries to a dedicated payload file and marks every
+    shot in the batch done in the SWMR ledger only once that payload write
+    has fully completed."""
+
+    def test_write_shot_checkpoint_batch_with_ledger_does_not_mark_done_on_failure(
+        self, tmp_path, monkeypatch
+    ):
+        """If `merge_dict_attr` raises partway through a multi-shot batch's
+        payload write, the exception propagates out of
+        `_write_shot_checkpoint_batch_with_ledger` and none of the batch's
+        shots show `done=True` in the ledger afterward -- not even shots
+        whose own entries were already "written" into the payload file
+        before the mocked failure, since the ledger mark loop only runs
+        after the whole `with` block succeeds."""
+        from loqs.internal.swmrledger import (
+            open_swmr_writer,
+            read_swmr_ledger_status,
+        )
+        from loqs.core.programresults import (
+            _write_shot_checkpoint_batch_with_ledger,
+        )
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+        _, ledger_group = open_swmr_writer(
+            checkpoint_dir / "worker_test_checkpoint.h5",
+            fields=["done", "wall_clock_times"],
+        )
+        payload_path = checkpoint_dir / "worker_test_shots_0_payload.h5"
+
+        real_merge_dict_attr = programresults_module.merge_dict_attr
+        call_count = {"n": 0}
+
+        def flaky_merge_dict_attr(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise RuntimeError("simulated failure partway through")
+            return real_merge_dict_attr(*args, **kwargs)
+
+        monkeypatch.setattr(
+            programresults_module, "merge_dict_attr", flaky_merge_dict_attr
+        )
+
+        shot_indices = [0, 1, 2]
+        attr_entries = [
+            (
+                "shot_histories",
+                False,
+                [(0, History()), (1, History()), (2, History())],
+            ),
+            (
+                "shot_wall_clock_times",
+                True,
+                [(0, 0.1), (1, 0.2), (2, 0.3)],
+            ),
+        ]
+        wall_clock_times = {0: 0.1, 1: 0.2, 2: 0.3}
+
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            _write_shot_checkpoint_batch_with_ledger(
+                ledger_group,
+                payload_path,
+                shot_indices,
+                attr_entries,
+                wall_clock_times,
+            )
+
+        assert call_count["n"] == 2
+
+        status = read_swmr_ledger_status(ledger_group)
+        for shot_index in shot_indices:
+            done = (
+                bool(status.done[shot_index])
+                if status.done is not None and len(status.done) > shot_index
+                else False
+            )
+            assert done is False
+
+
 class TestConcurrentCheckpointing:
     """Several genuinely concurrent OS processes, each checkpointing its own
     shots to its own file at the same time, must never corrupt or drop

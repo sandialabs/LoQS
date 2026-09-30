@@ -24,8 +24,13 @@ from loqs.internal import (
     Serializable,
     _retry_hdf5_read,
     _retry_hdf5_write,
+    worker_id as _global_worker_id,
 )
 from loqs.internal.serializable import ResolvingDecodeCache
+from loqs.internal.swmrledger import (
+    mark_ledger_item_done,
+    open_swmr_writer,
+)
 from loqs.core.history import (
     History,
     HistoryLike,
@@ -125,6 +130,92 @@ def _normalize_decoded_int_keyed_dict(
             return {int(k): v for k, v in raw.items()}
         return {int(k): value_cast(v) for k, v in raw.items()}
     return raw
+
+
+_SHOT_LEDGER_CACHE: dict[Path, tuple[h5py.File, h5py.Group]] = {}
+
+
+def _get_shot_worker_ledger(
+    checkpoint_dir: Path, effective_worker_id: str
+) -> h5py.Group:
+    """Return this worker process's shot-level SWMR ledger group for
+    `checkpoint_dir`, opening (and caching) it on first use.
+
+    The underlying `worker_{effective_worker_id}_checkpoint.h5` file is
+    opened once per process per directory via `open_swmr_writer` and never
+    explicitly closed -- every ledger write already flushes immediately,
+    and an unclosed SWMR file left behind by a killed or exited process is
+    safe to reopen.
+    """
+    cached = _SHOT_LEDGER_CACHE.get(checkpoint_dir)
+    if cached is not None:
+        return cached[1]
+
+    ledger_path = (
+        checkpoint_dir / f"worker_{effective_worker_id}_checkpoint.h5"
+    )
+    ledger_file, ledger_group = open_swmr_writer(
+        ledger_path, fields=["done", "wall_clock_times"]
+    )
+    _SHOT_LEDGER_CACHE[checkpoint_dir] = (ledger_file, ledger_group)
+    return ledger_group
+
+
+def _write_shot_checkpoint_batch_with_ledger(
+    ledger_group: h5py.Group,
+    payload_path: Path,
+    shot_indices: list[int],
+    attr_entries: list[tuple[str, bool, list[tuple[int, Any]]]],
+    wall_clock_times: dict[int, float],
+) -> None:
+    """Write one batch of shots' checkpoint entries to its own payload file,
+    then mark every shot in the batch done in the SWMR ledger.
+
+    The payload file is opened fresh (`"w"`), so no retry wrapping is needed
+    -- unlike the old shared-checkpoint-file scheme, no other write can be
+    contending for this exact path. Every shot in `shot_indices` is only
+    marked done after the `with` block closes the payload file, so a
+    `merge_dict_attr` exception partway through never reaches the ledger:
+    no shot in this batch is ever marked done unless the whole batch's
+    payload file is fully written.
+
+    Parameters
+    ----------
+    ledger_group : h5py.Group
+        The worker's shot-level SWMR ledger group, as returned by
+        `_get_shot_worker_ledger`.
+    payload_path : Path
+        Path to this batch's own dedicated payload file.
+    shot_indices : list[int]
+        Every shot index in this batch, marked done once the payload file
+        is fully written.
+    attr_entries : list[tuple[str, bool, list[tuple[int, Any]]]]
+        `(attr_name, value_use_dataset, entries)` triples, one per
+        streamed dict attribute with at least one entry in this batch.
+    wall_clock_times : dict[int, float]
+        Wall-clock duration for each shot in `shot_indices`, recorded in
+        the ledger; a shot missing from this dict is recorded as `nan`.
+    """
+    with h5py.File(payload_path, "w") as payload_file:
+        for attr_name, value_use_dataset, entries in attr_entries:
+            merge_dict_attr(
+                payload_file,
+                attr_name,
+                entries,
+                encode_cache={},
+                key_use_dataset=True,
+                value_use_dataset=value_use_dataset,
+            )
+
+    for shot_index in shot_indices:
+        mark_ledger_item_done(
+            ledger_group,
+            shot_index,
+            wall_clock_times.get(shot_index, float("nan")),
+            auto_flush=False,
+        )
+    ledger_group["done"].flush()
+    ledger_group["wall_clock_times"].flush()
 
 
 class ProgramResults(Displayable):
@@ -720,11 +811,12 @@ class ProgramResults(Displayable):
         worker_id:
             A string identifying which physical writer this file belongs to
             (e.g. `f"{socket.gethostname()}_{os.getpid()}"`), so multiple
-            concurrent writers never open the same file. If None, writes
-            directly to the un-suffixed `results.h5` -- the same filename
-            `consolidate_checkpoints` writes its own merged output under, so
-            a single-writer caller can skip both worker identification and
-            consolidation entirely.
+            concurrent writers never open the same file. If None, this
+            process's own global worker identity (`loqs.internal.worker_id`)
+            is used instead -- even a "serial" shot-execution run may
+            execute inside its own item-worker process under
+            `MultiProgramRunner`'s parallel item dispatch, so it needs the
+            same per-writer isolation as an explicit shot-batch worker.
         """
         if checkpoint_dir is None:
             checkpoint_dir = Path("./checkpoints")
@@ -733,18 +825,47 @@ class ProgramResults(Displayable):
 
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._checkpoint_dir = checkpoint_dir
-        self._worker_id = worker_id
 
         shots_to_checkpoint = self.get_unwritten_shots()
         if not shots_to_checkpoint:
             return  # Nothing to checkpoint
 
-        if worker_id is not None:
-            filename = checkpoint_dir / f"worker_{worker_id}_checkpoint.h5"
-        else:
-            filename = checkpoint_dir / self._results_filename
+        effective_worker_id = (
+            worker_id if worker_id is not None else _global_worker_id()
+        )
+        self._worker_id = effective_worker_id
 
-        self._write_checkpoint_file(filename, shots_to_checkpoint)
+        attr_entries: list[tuple[str, bool, list[tuple[int, Any]]]] = []
+        for attr_name, value_use_dataset in self._STREAMED_DICT_ATTRS:
+            attr_value = getattr(self, attr_name)
+            entries = [
+                (shot_index, attr_value[shot_index])
+                for shot_index in shots_to_checkpoint
+                if shot_index in attr_value
+            ]
+            if entries:
+                attr_entries.append((attr_name, value_use_dataset, entries))
+
+        wall_clock_times = {
+            shot_index: self.shot_wall_clock_times[shot_index]
+            for shot_index in shots_to_checkpoint
+            if shot_index in self.shot_wall_clock_times
+        }
+
+        ledger_group = _get_shot_worker_ledger(
+            checkpoint_dir, effective_worker_id
+        )
+        payload_path = checkpoint_dir / (
+            f"worker_{effective_worker_id}_shots_"
+            f"{min(shots_to_checkpoint)}_payload.h5"
+        )
+        _write_shot_checkpoint_batch_with_ledger(
+            ledger_group,
+            payload_path,
+            shots_to_checkpoint,
+            attr_entries,
+            wall_clock_times,
+        )
         self.mark_shots_as_written(shots_to_checkpoint)
 
         # Implement lazy loading: remove written shots from memory
@@ -770,56 +891,6 @@ class ProgramResults(Displayable):
             for shot_index in shot_indices:
                 if shot_index in self.shot_histories:
                     del self.shot_histories[shot_index]
-
-    def _write_checkpoint_file(
-        self,
-        filename: Path,
-        shot_indices: list[int],
-    ) -> None:
-        """Write checkpoint data to an HDF5 file using standard Serializable encoding.
-
-        Parameters
-        ----------
-        filename:
-            Path to the checkpoint file.
-        shot_indices:
-            List of shot indices to write to the checkpoint.
-        """
-        # Prepare data to write - one dict of unwritten entries per streamed
-        # attr, built in a single pass over shot_indices.
-        unwritten_by_attr: dict[str, dict[int, Any]] = {
-            attr_name: {} for attr_name, _ in self._STREAMED_DICT_ATTRS
-        }
-        for shot_index in shot_indices:
-            for attr_name, _ in self._STREAMED_DICT_ATTRS:
-                attr_value = getattr(self, attr_name)
-                if shot_index in attr_value:
-                    unwritten_by_attr[attr_name][shot_index] = attr_value[
-                        shot_index
-                    ]
-
-        # Nothing to write only if every streamed attr has nothing
-        # unwritten -- checking `shot_histories` alone would miss a shot
-        # whose wall-clock time was recorded without ever getting a
-        # history entry (not possible via today's `add_shot`, but not
-        # something this generalized check should assume stays true).
-        if not any(unwritten_by_attr.values()):
-            return  # No data to write
-
-        # Write to HDF5 file using standard Serializable encoding, retrying
-        # with backoff since a concurrent reader (e.g. a driver's progress
-        # poll) may transiently hold this same file's lock; both dict
-        # attributes write inside the same retry so they stay consistent.
-        def _write(f: h5py.File) -> None:
-            for attr_name, value_use_dataset in self._STREAMED_DICT_ATTRS:
-                self._write_streamed_dict_entries(
-                    f,
-                    attr_name,
-                    value_use_dataset,
-                    unwritten_by_attr[attr_name].items(),
-                )
-
-        _retry_hdf5_write(filename, _write)
 
     def _write_streamed_dict_entries(
         self,
