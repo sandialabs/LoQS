@@ -984,20 +984,21 @@ class _ShotProgressTestRunner(MultiProgramRunner):
 
 
 class _CustomFilenameProbeRunner(MultiProgramRunner):
-    """Mirrors _ShotProgressTestRunner but with a custom results_filename,
-    and item index 1 stays in-flight briefly via a real Sleep instruction."""
+    """Mirrors _ShotProgressTestRunner, but item index 1's shots each run a
+    real Sleep instruction, so that item stays in flight shot by shot."""
 
     _SERIALIZE_ATTRS = MultiProgramRunner._SERIALIZE_ATTRS + [
         "items",
         "num_shots",
     ]
 
+    SLOW_SHOT_SECONDS = 0.3
+
     def __init__(self, items, num_shots=5, on_item_done=None, **kwargs):
         super().__init__(**kwargs)
         self.items = items
         self.num_shots = num_shots
         self._on_item_done = on_item_done
-        self._pending_index = None
 
     def build_program(self, index):
         item = self.items[index]
@@ -1016,6 +1017,14 @@ class _CustomFilenameProbeRunner(MultiProgramRunner):
                 "initial_value": 0,
             },
         ]
+        if index == 1:
+            stack.append(
+                {
+                    "instruction": "Sleep",
+                    "patch_label": "L0",
+                    "duration": self.SLOW_SHOT_SECONDS,
+                }
+            )
         for _ in range(abs(item)):
             stack.append(
                 {
@@ -1024,7 +1033,6 @@ class _CustomFilenameProbeRunner(MultiProgramRunner):
                     "increment_by": 2 * sign,
                 }
             )
-        self._pending_index = index
         return QuantumProgram(
             stack,
             default_noise_model=ideal_model,
@@ -1033,10 +1041,7 @@ class _CustomFilenameProbeRunner(MultiProgramRunner):
         )
 
     def reduce_program_outcomes(self, program_results):
-        result = program_results.collect_shot_data("counter", -1)[0]
-        if self._pending_index == 1:
-            time.sleep(0.5)
-        return result
+        return program_results.collect_shot_data("counter", -1)[0]
 
     def _build_output(self, ordered_results):
         return [result for _, result in ordered_results]
@@ -2674,21 +2679,24 @@ class TestKeepShotResults:
         """Shots progress bar advances correctly with custom results_filename in parallel.
 
         Uses one item per loky worker (n_program_chunks == len(items)), like
-        test_shots_pbar_does_not_double_count_stale_in_flight_item, plus a
-        deliberate delay in the second item's own worker process (after its
-        shot checkpoint is written but before its result is reported back)
-        to force a real window where that item is genuinely "in flight" --
-        checkpointed but not yet marked done -- for long enough that a fast
-        poll_interval reliably samples it. This exercises the on_poll
-        in-flight branch's ProgramResults._count_done_shots(...,
-        results_filename=results_filename) call under a non-default
-        filename: the shots bar must reach the true total while just one of
-        the two items has actually been marked done, crediting the
-        still-in-flight item's already-checkpointed shots read under that
-        same custom filename.
+        test_shots_pbar_does_not_double_count_stale_in_flight_item. The
+        second item's shots each run a real Sleep instruction and, at 5
+        shots, each is its own checkpoint batch, so that item stays in
+        flight while its ledger records its shots one by one. The bar must
+        credit some of those in-flight shots while just one item has been
+        reported done, and must end at the true total under the custom
+        filename.
+
+        The live count must read only SWMR shot ledgers: every driver-side
+        open of a file under the shot checkpoint directory has to be a
+        `worker_*_checkpoint.h5` opened with `swmr=True`, never
+        `results_filename` or a payload file, which workers write without
+        SWMR.
         """
+        import fnmatch
         from unittest.mock import patch
         from tqdm import tqdm as orig_tqdm
+        from loqs.core.programresults import ProgramResults
         from loqs.tools import multiprogramrunner as mpr_module
 
         loky = pytest.importorskip("loky")
@@ -2696,6 +2704,22 @@ class TestKeepShotResults:
         custom_filename = "my_results.h5"
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
+        resolved_shot_dir = shot_checkpoint_dir.resolve()
+        ledger_glob = ProgramResults._WORKER_FILE_GLOBS[0]
+
+        # Every driver-side open under the shot checkpoint directory, as
+        # (file name, swmr flag).
+        shot_dir_opens = []
+        real_h5_file = h5py.File
+
+        class RecordingFile(real_h5_file):
+            def __init__(self, name, *args, **kwargs):
+                path = Path(name).resolve()
+                if resolved_shot_dir in path.parents:
+                    shot_dir_opens.append(
+                        (path.name, kwargs.get("swmr", False))
+                    )
+                super().__init__(name, *args, **kwargs)
 
         # (done_count, shots_bar_value) sampled every time the shots bar
         # changes, so we can check the shots value at the moment only one
@@ -2732,7 +2756,10 @@ class TestKeepShotResults:
             program_executor=loky.get_reusable_executor(max_workers=2),
             n_program_chunks=2,
         )
-        with patch.object(mpr_module, "tqdm", side_effect=TqdmSpy):
+        with (
+            patch.object(mpr_module, "tqdm", side_effect=TqdmSpy),
+            patch.object(h5py, "File", RecordingFile),
+        ):
             runner = _CustomFilenameProbeRunner(
                 [1, 2],
                 num_shots=5,
@@ -2747,6 +2774,14 @@ class TestKeepShotResults:
                 ),
             )
             runner.run()
+
+        assert shot_dir_opens, "the driver never read a shot ledger"
+        for name, swmr in shot_dir_opens:
+            assert fnmatch.fnmatch(name, ledger_glob), (
+                f"driver opened {name} under the shot checkpoint directory; "
+                f"only shot ledgers may be read live -- opens: {shot_dir_opens}"
+            )
+            assert swmr, f"driver opened shot ledger {name} without swmr=True"
 
         shots_bar_values = [value for _, value in samples]
         assert (
@@ -2765,18 +2800,13 @@ class TestKeepShotResults:
             f"{shots_bar_values[-1]} with custom results_filename"
         )
 
-        # The real trap: while item 1 is still sleeping (deliberately, after
-        # its own checkpoint write), only item 0 has actually been reported
-        # done. If the on_poll in-flight branch didn't honor the runner's
-        # own custom results_filename when reading item 1's already-written
-        # checkpoint, it would look for the (nonexistent) default
-        # "results.h5" and report 0 done shots for it, so the bar could
-        # only ever reach 5 (from item 0 alone) at that point, never 10.
-        assert any(done == 1 and value == 10 for done, value in samples), (
-            "Shots bar never reached the true total (10) while only one "
-            "item had been reported done -- the on_poll in-flight branch "
-            "isn't crediting the still-in-flight item's already-checkpointed "
-            f"shots under the custom results_filename -- samples: {samples}"
+        # While item 1's slow shots are still running, only item 0 has been
+        # reported done, contributing 5. Any value above 5 at that point
+        # comes from item 1's shots read live from its shot ledger.
+        assert any(done == 1 and value > 5 for done, value in samples), (
+            "Shots bar never credited the in-flight item's checkpointed "
+            "shots while only one item had been reported done -- "
+            f"samples: {samples}"
         )
 
     def test_resolve_kept_program_results_fallback_to_in_memory(self):
@@ -2803,18 +2833,14 @@ class TestKeepShotResults:
         assert result.parent_program == "program_0"
 
     @pytest.mark.slow
-    @pytest.mark.xfail(
-        strict=True,
-        raises=BlockingIOError,
-        reason="shot-level checkpointing is not yet SWMR; reader/writer lock race reproduces once retries are disabled",
-    )
     def test_keep_shot_results_parallel_forces_checkpoint_read_write_race(
         self, tmp_path
     ):
-        """With `poll_interval=0.0`, the driver's shot-progress poll collides
-        with worker checkpoint flushes; worker retries are disabled so the
-        collision surfaces as `BlockingIOError` instead of being absorbed by
-        `_retry_hdf5_write`'s backoff."""
+        """With `poll_interval=0.0`, the driver polls shot progress as fast
+        as it can while workers flush shot checkpoints, with worker retries
+        disabled so any lock collision would surface as `BlockingIOError`.
+        The driver reads only SWMR shot ledgers while workers write, so the
+        run completes with every shot kept."""
         loky = pytest.importorskip("loky")
 
         item_checkpoint_dir = tmp_path / "item_ckpt"

@@ -4,6 +4,8 @@ import json
 import multiprocessing as mp
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest.mock
 
@@ -23,7 +25,7 @@ from loqs.internal.streamingmerge import (
     read_checkpoint_dict_attr_union_keys,
 )
 from loqs.core.history import History
-from loqs.core import Frame
+from loqs.core import Frame, QuantumProgram
 from loqs.internal.serializable import Serializable
 from loqs.internal.encoder import HDF5Encoder
 
@@ -345,9 +347,12 @@ class TestProgramResults:
                 assert abs(value - float(i) * 0.1) < 1e-9
 
     def test_checkpoint_with_no_worker_id_uses_canonical_filename(self):
-        """`worker_id=None` (the single-writer case) writes/reads the
-        un-suffixed `results.h5` -- the canonical checkpoint filename
-        for single-writer runs."""
+        """`worker_id=None` (the single-writer case) names its transient
+        shot files after `loqs.internal.worker_id()`, and the canonical
+        `results.h5` is produced by consolidation, after which
+        `load_checkpoint(worker_id=None)` reads it."""
+        from loqs.internal import worker_id as global_worker_id
+
         with tempfile.TemporaryDirectory() as temp_dir:
             results = ProgramResults(name="No Worker ID Test")
             history = History()
@@ -357,7 +362,17 @@ class TestProgramResults:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             results.checkpoint(checkpoint_dir=checkpoint_dir)
 
+            wid = global_worker_id()
+            assert not (checkpoint_dir / "results.h5").exists()
+            assert (checkpoint_dir / f"worker_{wid}_checkpoint.h5").exists()
+            assert list(
+                checkpoint_dir.glob(f"worker_{wid}_shots_*_payload.h5")
+            )
+
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
             assert (checkpoint_dir / "results.h5").exists()
+            for pattern in ProgramResults._WORKER_FILE_GLOBS:
+                assert not list(checkpoint_dir.glob(pattern))
 
             new_results = ProgramResults()
             new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
@@ -432,6 +447,14 @@ class TestProgramResults:
             shot_4 = results.get_shot_history(4)
             assert shot_0 is not None
             assert shot_4 is not None
+
+            # Consolidating through this object forgets its deleted
+            # payload, and later reloads read results.h5 instead.
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+            assert results._payload_batches == []
+            shot_2 = results.get_shot_history(2)
+            assert shot_2 is not None
+            assert shot_2[0]["shot_id"] == 2
 
     def test_multiple_checkpoint_calls_append_correctly(self):
         """Each `checkpoint()` call flushes whatever's newly unwritten since
@@ -622,8 +645,9 @@ class TestProgramResults:
                 results.add_shot(i, history)
 
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
-            checkpoint_file = next(checkpoint_dir.glob("*.h5"))
+            checkpoint_file = checkpoint_dir / "results.h5"
             with h5py.File(checkpoint_file, "r") as f:
                 root_group = f[list(f.keys())[0]]
                 assert isinstance(root_group["shot_histories"], h5py.Group)
@@ -633,18 +657,18 @@ class TestProgramResults:
                 assert {"0", "1", "2"} <= set(values_iterable.keys())
 
             # Append a second, also array-free batch to confirm the fast
-            # append path works end to end, not just on the first checkpoint.
+            # append path works end to end, not just on the first checkpoint:
+            # the second consolidation appends into the existing structure.
             for i in range(3, 6):
                 history = History()
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
 
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
+            new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert set(new_results.shot_histories.keys()) == set(range(6))
 
     def test_checkpoint_append_structure_survives_array_free_shots_for_wall_clock_times(
@@ -665,8 +689,9 @@ class TestProgramResults:
                 results.add_shot(i, history, wall_clock_time=float(i) + 0.1)
 
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
-            checkpoint_file = next(checkpoint_dir.glob("*.h5"))
+            checkpoint_file = checkpoint_dir / "results.h5"
             with h5py.File(checkpoint_file, "r") as f:
                 root_group = f[list(f.keys())[0]]
                 assert isinstance(
@@ -680,18 +705,18 @@ class TestProgramResults:
                 assert set(keys_iterable["data"][()].tolist()) == {0, 1, 2}
 
             # Append a second, also array-free batch to confirm the fast
-            # append path works end to end, not just on the first checkpoint.
+            # append path works end to end, not just on the first checkpoint:
+            # the second consolidation appends into the existing structure.
             for i in range(3, 6):
                 history = History()
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history, wall_clock_time=float(i) + 0.1)
 
             results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             new_results = ProgramResults()
-            new_results.load_checkpoint(
-                checkpoint_dir=checkpoint_dir, worker_id="w0"
-            )
+            new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
             assert set(new_results.shot_wall_clock_times.keys()) == set(
                 range(6)
             )
@@ -747,9 +772,11 @@ class TestProgramResults:
                 checkpoint_dir=checkpoint_dir, delete_originals=True
             )
 
-            remaining_worker_files = list(
-                checkpoint_dir.glob("worker_*_checkpoint.h5")
-            )
+            remaining_worker_files = [
+                p
+                for pattern in ProgramResults._WORKER_FILE_GLOBS
+                for p in checkpoint_dir.glob(pattern)
+            ]
             assert len(remaining_worker_files) == 0
 
             assert output_file.exists()
@@ -1436,6 +1463,373 @@ class TestShotCheckpointBatchWithLedger:
             assert done is False
 
 
+def _open_hdf5_file_paths() -> set[Path]:
+    """Resolved paths of every HDF5 file currently open in this process."""
+    return {
+        Path(h5py.h5f.get_name(fid).decode()).resolve()
+        for fid in h5py.h5f.get_obj_ids(types=h5py.h5f.OBJ_FILE)
+    }
+
+
+def _write_prefix_worker_file(
+    path: Path,
+    histories: dict[int, History],
+    wall_clock_times: dict[int, float] | None = None,
+) -> None:
+    """Write a pre-fix shot worker data file, in the layout the pre-SWMR
+    `checkpoint(worker_id=...)` wrote: both streamed dict attrs written by
+    `_write_streamed_dict_entries` into a fresh file."""
+    writer = ProgramResults(lazy_loading=False)
+    with h5py.File(path, "w") as f:
+        writer._write_streamed_dict_entries(
+            f, "shot_histories", False, histories.items()
+        )
+        writer._write_streamed_dict_entries(
+            f, "shot_wall_clock_times", True, (wall_clock_times or {}).items()
+        )
+
+
+class TestMixedFormatShotCheckpoints:
+    """Shot-level reads and consolidation handle pre-fix data files, SWMR
+    ledgers and per-batch payload files side by side in one directory."""
+
+    def test_consolidate_unlinks_only_after_output_closed(self, tmp_path):
+        """`consolidate_checkpoints` merges a pre-fix worker data file and
+        a live writer's payload, then deletes both and the writer's ledger
+        -- but only once the output file is closed, so no source
+        disappears while its merged entries could still be lost."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        legacy_histories = {}
+        for i in range(2):
+            history = History()
+            history.append(Frame({"shot_id": i}))
+            legacy_histories[i] = history
+        legacy_file = checkpoint_dir / "worker_legacy_checkpoint.h5"
+        _write_prefix_worker_file(legacy_file, legacy_histories)
+
+        live = ProgramResults(lazy_loading=False)
+        for i in range(2, 4):
+            history = History()
+            history.append(Frame({"shot_id": i}))
+            live.add_shot(i, history)
+        live.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="live")
+        ledger_file = checkpoint_dir / "worker_live_checkpoint.h5"
+        payload_file = checkpoint_dir / "worker_live_shots_2_payload.h5"
+        assert ledger_file.exists() and payload_file.exists()
+
+        output_file = (checkpoint_dir / "results.h5").resolve()
+        resolved_dir = checkpoint_dir.resolve()
+        real_unlink = Path.unlink
+        unlinked: list[Path] = []
+
+        def spy_unlink(self, *args, **kwargs):
+            resolved = self.resolve()
+            if resolved.parent == resolved_dir:
+                open_paths = _open_hdf5_file_paths()
+                assert (
+                    output_file not in open_paths
+                ), f"{self.name} unlinked while the output file is open"
+                assert (
+                    resolved not in open_paths
+                ), f"{self.name} unlinked while still open in this process"
+                unlinked.append(resolved)
+            return real_unlink(self, *args, **kwargs)
+
+        with unittest.mock.patch.object(Path, "unlink", spy_unlink):
+            ProgramResults().consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir
+            )
+
+        for source in (legacy_file, ledger_file, payload_file):
+            assert not source.exists()
+            assert source.resolve() in unlinked
+        for pattern in ProgramResults._WORKER_FILE_GLOBS:
+            assert not list(checkpoint_dir.glob(pattern))
+        assert not any(
+            key[0] == resolved_dir
+            for key in programresults_module._SHOT_LEDGER_CACHE
+        )
+
+        consolidated = ProgramResults(lazy_loading=False)
+        consolidated.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert set(consolidated.shot_histories) == {0, 1, 2, 3}
+        for i in range(4):
+            assert consolidated.shot_histories[i][0]["shot_id"] == i
+
+    _KILLED_WRITER_SCRIPT = """
+import sys
+import time
+from pathlib import Path
+
+from loqs.core import Frame
+from loqs.core.history import History
+from loqs.core.programresults import _write_shot_checkpoint_batch_with_ledger
+from loqs.internal.swmrledger import open_swmr_writer
+
+checkpoint_dir = Path(sys.argv[1])
+_, ledger_group = open_swmr_writer(
+    checkpoint_dir / "worker_killed_checkpoint.h5",
+    fields=["done", "wall_clock_times"],
+)
+entries = []
+for i in (6, 7):
+    history = History()
+    history.append(Frame({"shot_id": i}))
+    entries.append((i, history))
+_write_shot_checkpoint_batch_with_ledger(
+    ledger_group,
+    checkpoint_dir / "worker_killed_shots_6_payload.h5",
+    [6, 7],
+    [("shot_histories", False, entries)],
+    {},
+)
+print("ready", flush=True)
+time.sleep(600)
+"""
+
+    @staticmethod
+    def _shot_history(i: int) -> History:
+        history = History()
+        history.append(Frame({"shot_id": i}))
+        return history
+
+    def _write_killed_writer_files(self, checkpoint_dir: Path) -> None:
+        """Leave a ledger plus payload (shots 6-7) from a writer process
+        killed with SIGKILL while still holding its ledger open."""
+        loqs_root = Path(programresults_module.__file__).resolve().parents[2]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(loqs_root), env.get("PYTHONPATH", "")]
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", self._KILLED_WRITER_SCRIPT, checkpoint_dir],
+            stdout=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        try:
+            assert proc.stdout is not None
+            assert proc.stdout.readline().strip() == "ready"
+        finally:
+            proc.kill()
+            proc.wait(timeout=30)
+        assert proc.returncode == -9
+
+    def test_mixed_legacy_and_swmr_shot_checkpoints(self, tmp_path):
+        """Every shot-level read sees a pre-fix `results.h5`, a pre-fix
+        worker data file, a live writer's ledger plus payload and a killed
+        writer's ledger plus payload together, and consolidation merges
+        them all and removes every transient file."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        # Pre-fix results.h5: a ProgramResults envelope with shots 0-1,
+        # their wall-clock times, and a non-default name.
+        canonical = ProgramResults(name="mixed run", lazy_loading=False)
+        for i in range(2):
+            canonical.add_shot(
+                i, self._shot_history(i), wall_clock_time=0.5 + i
+            )
+        Serializable.write(
+            canonical, checkpoint_dir / "results.h5", format="hdf5"
+        )
+
+        # Pre-fix worker data file with shots 2-3 (and their wall-clock
+        # times), in the bootstrap layout the pre-fix `checkpoint()` wrote.
+        legacy_file = checkpoint_dir / "worker_legacy_checkpoint.h5"
+        _write_prefix_worker_file(
+            legacy_file,
+            {i: self._shot_history(i) for i in (2, 3)},
+            {2: 2.5, 3: 3.5},
+        )
+
+        # A live writer in this process: ledger plus payload, shots 4-5,
+        # no wall-clock times.
+        live = ProgramResults(lazy_loading=False)
+        for i in (4, 5):
+            live.add_shot(i, self._shot_history(i))
+        live.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="live")
+
+        self._write_killed_writer_files(checkpoint_dir)
+
+        expected_wall_clock = {0: 0.5, 1: 1.5, 2: 2.5, 3: 3.5}
+        try:
+            assert ProgramResults._count_done_shots(checkpoint_dir) == 8
+
+            loaded = ProgramResults(lazy_loading=False)
+            loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert loaded.name == "mixed run"
+            assert set(loaded.shot_histories) == set(range(8))
+            for i in range(8):
+                assert loaded.shot_histories[i][0]["shot_id"] == i
+            assert loaded.shot_wall_clock_times == expected_wall_clock
+            assert all(
+                type(k) is int and type(v) is float
+                for k, v in loaded.shot_wall_clock_times.items()
+            )
+
+            for lazy_loading in (True, False):
+                remaining, num_done, _, _ = (
+                    QuantumProgram._load_remaining_shots(
+                        checkpoint_dir, num_shots=10, lazy_loading=lazy_loading
+                    )
+                )
+                assert remaining == [8, 9]
+                assert num_done == 8
+
+            ProgramResults().consolidate_checkpoints(
+                checkpoint_dir=checkpoint_dir
+            )
+            assert not list(checkpoint_dir.glob("worker_*"))
+
+            consolidated = ProgramResults(lazy_loading=False)
+            consolidated.load_checkpoint(checkpoint_dir=checkpoint_dir)
+            assert set(consolidated.shot_histories) == set(range(8))
+            for i in range(8):
+                assert consolidated.shot_histories[i][0]["shot_id"] == i
+        finally:
+            programresults_module._drop_shot_ledger_cache_entries(
+                checkpoint_dir
+            )
+
+    def test_lazy_reload_falls_back_when_recorded_payload_vanishes(
+        self, tmp_path
+    ):
+        """A recorded payload deleted between its `exists()` check and the
+        open (e.g. by a concurrent consolidation) makes a lazy reload fall
+        back to `results.h5` instead of raising."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        results = ProgramResults()
+        for i in range(2):
+            results.add_shot(i, self._shot_history(i))
+        results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
+        payload_file = checkpoint_dir / "worker_w0_shots_0_payload.h5"
+        assert payload_file.exists()
+
+        ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+        assert not payload_file.exists()
+
+        with unittest.mock.patch.object(
+            results, "_recorded_payload_for_shot", return_value=payload_file
+        ):
+            shot_1 = results.get_shot_history(1)
+        assert shot_1 is not None
+        assert shot_1[0]["shot_id"] == 1
+
+    def test_shot_ledger_cache_drops_unlinked_entries(self, tmp_path):
+        """A cache miss in `_get_shot_worker_ledger` closes and drops every
+        cached ledger whose file no longer exists, so a long-lived worker
+        never keeps a handle open per directory it once served."""
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        worker = "cachetest"
+        key_a = (dir_a.resolve(), worker)
+        key_b = (dir_b.resolve(), worker)
+        cache = programresults_module._SHOT_LEDGER_CACHE
+
+        try:
+            programresults_module._get_shot_worker_ledger(dir_a, worker)
+            stale_file = cache[key_a][0]
+            assert stale_file.id.valid
+            (dir_a / f"worker_{worker}_checkpoint.h5").unlink()
+
+            programresults_module._get_shot_worker_ledger(dir_b, worker)
+
+            assert key_a not in cache
+            assert not stale_file.id.valid
+            assert key_b in cache
+            assert cache[key_b][0].id.valid
+        finally:
+            programresults_module._drop_shot_ledger_cache_entries(dir_a)
+            programresults_module._drop_shot_ledger_cache_entries(dir_b)
+
+
+class TestLiveShotCount:
+    """The live shot count reads only SWMR ledgers, never `results.h5` or a
+    payload file, so polling it can't collide with a writer's non-SWMR
+    writes."""
+
+    def test_count_live_done_shots_reads_only_ledgers(self, tmp_path):
+        """The count is the union of every ledger's `done` bits, and every
+        file it opens is ledger-named and opened with `swmr=True`."""
+        import fnmatch
+
+        from loqs.internal.swmrledger import (
+            mark_ledger_item_done,
+            open_swmr_writer,
+        )
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        def shots(indices) -> ProgramResults:
+            pr = ProgramResults(lazy_loading=False)
+            for i in indices:
+                history = History()
+                history.append(Frame({"shot_id": i}))
+                pr.add_shot(i, history)
+            return pr
+
+        # results.h5 with shots 10-11, left by consolidating a writer.
+        shots((10, 11)).checkpoint(
+            checkpoint_dir=checkpoint_dir, worker_id="old"
+        )
+        ProgramResults().consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+        assert (checkpoint_dir / "results.h5").exists()
+
+        # A pre-fix worker data file with shot 20, at the legacy name.
+        legacy_file = checkpoint_dir / "worker_legacy_checkpoint.h5"
+        _write_prefix_worker_file(legacy_file, shots((20,)).shot_histories)
+
+        # A ledger held open by a writer in this process (done 0-2), plus
+        # its payload with shots 0-2.
+        shots((0, 1, 2)).checkpoint(
+            checkpoint_dir=checkpoint_dir, worker_id="live"
+        )
+        assert (checkpoint_dir / "worker_live_shots_0_payload.h5").exists()
+
+        # A closed ledger whose done bits (2-3) overlap the live one's.
+        closed_file, closed_group = open_swmr_writer(
+            checkpoint_dir / "worker_closed_checkpoint.h5",
+            fields=["done", "wall_clock_times"],
+        )
+        for i in (2, 3):
+            mark_ledger_item_done(closed_group, i, float("nan"))
+        closed_file.close()
+
+        ledger_glob = ProgramResults._WORKER_FILE_GLOBS[0]
+        opens: list[tuple[str, bool]] = []
+        real_file = h5py.File
+
+        class RecordingFile(real_file):
+            def __init__(self, name, *args, **kwargs):
+                opens.append((Path(name).name, kwargs.get("swmr", False)))
+                super().__init__(name, *args, **kwargs)
+
+        try:
+            with unittest.mock.patch.object(h5py, "File", RecordingFile):
+                count = ProgramResults._count_live_done_shots(checkpoint_dir)
+        finally:
+            programresults_module._drop_shot_ledger_cache_entries(
+                checkpoint_dir
+            )
+
+        assert count == 4
+        assert opens
+        opened_names = {name for name, _ in opens}
+        assert {
+            "worker_live_checkpoint.h5",
+            "worker_closed_checkpoint.h5",
+        } <= opened_names
+        for name, swmr in opens:
+            assert fnmatch.fnmatch(name, ledger_glob), f"opened {name}"
+            assert swmr, f"{name} opened without swmr=True"
+
+
 class TestConcurrentCheckpointing:
     """Several genuinely concurrent OS processes, each checkpointing its own
     shots to its own file at the same time, must never corrupt or drop
@@ -1680,6 +2074,9 @@ class TestParentProgramFileWriting:
             history.append(Frame({"program_ref": program}))
             results.add_shot(shot_index, history)
         results.checkpoint(checkpoint_dir=checkpoint_dir)
+        # Consolidation re-encodes the shots into results.h5 through the
+        # encode cache built from parent_program.
+        results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
         # Walk the whole file (both real HDF5 groups and any array-free
         # "$collapsed" JSON blob siblings, since a QuantumProgram with no
@@ -1950,7 +2347,7 @@ class TestResumeCheckpointing:
 
     def test_load_done_shots_returns_union_from_checkpoint_and_workers(self):
         """read_checkpoint_dict_attr_union returns the union of shots
-        from results.h5 and all worker_*_checkpoint.h5 files."""
+        from results.h5 and all transient worker shot files."""
         with tempfile.TemporaryDirectory() as temp_dir:
             checkpoint_dir = Path(temp_dir) / "checkpoints"
             checkpoint_dir.mkdir()
@@ -1962,6 +2359,7 @@ class TestResumeCheckpointing:
                 history.append(Frame({"source": "main", "idx": i}))
                 results_main.add_shot(i, history)
             results_main.checkpoint(checkpoint_dir=checkpoint_dir)
+            results_main.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             # Write to worker files
             for w in range(2):
@@ -1978,7 +2376,7 @@ class TestResumeCheckpointing:
             done = read_checkpoint_dict_attr_union(
                 checkpoint_dir,
                 "results.h5",
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
             assert len(done) == 6
@@ -2006,6 +2404,7 @@ class TestResumeCheckpointing:
                     i, history, wall_clock_time=float(i) + 0.1
                 )
             results_main.checkpoint(checkpoint_dir=checkpoint_dir)
+            results_main.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             # Write to a worker file
             results_worker = ProgramResults(lazy_loading=False)
@@ -2023,7 +2422,7 @@ class TestResumeCheckpointing:
             wall_clock_times = read_checkpoint_dict_attr_union(
                 checkpoint_dir,
                 "results.h5",
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_wall_clock_times",
             )
             assert set(wall_clock_times.keys()) == {0, 1, 2, 3, 4, 5}
@@ -2053,7 +2452,7 @@ class TestResumeCheckpointing:
             done = read_checkpoint_dict_attr_union(
                 checkpoint_dir,
                 "results.h5",
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
 
@@ -2245,6 +2644,7 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2287,6 +2687,7 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2319,6 +2720,7 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2364,6 +2766,7 @@ class TestResumeCheckpointing:
             history.append(Frame({"shot": 0}))
             results.add_shot(0, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2922,7 +3325,7 @@ class TestResumeCheckpointing:
                 indices = read_checkpoint_dict_attr_union_keys(
                     checkpoint_dir,
                     "results.h5",
-                    "worker_*_checkpoint.h5",
+                    ProgramResults._WORKER_FILE_GLOBS,
                     "shot_histories",
                 )
                 # If we get here without an AssertionError, the method
@@ -3033,7 +3436,7 @@ class TestResumeCheckpointing:
             done_shots = read_checkpoint_dict_attr_union(
                 checkpoint_dir,
                 "results.h5",
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
             assert len(done_shots) == 3
@@ -3247,8 +3650,8 @@ class TestResumeCheckpointing:
         self, tmp_path, monkeypatch
     ):
         """consolidate_checkpoints still merges a worker's shots into the
-        output file after a transient HDF5 lock conflict on that worker
-        file is retried away, instead of silently skipping the worker."""
+        output file after a transient HDF5 lock conflict on that worker's
+        payload file is retried away, instead of silently skipping it."""
         checkpoint_dir = tmp_path / "checkpoint"
         checkpoint_dir.mkdir(parents=True)
 
@@ -3258,7 +3661,7 @@ class TestResumeCheckpointing:
         results1.add_shot(0, history)
         results1.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="w0")
 
-        worker_file = checkpoint_dir / "worker_w0_checkpoint.h5"
+        (worker_file,) = checkpoint_dir.glob("worker_w0_shots_*_payload.h5")
         real_file = h5py.File
         call_count = {"n": 0}
 

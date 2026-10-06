@@ -1227,9 +1227,11 @@ class TestResumeFromCheckpoint:
                     assert counter == shot_idx + 1
 
                 # Verify worker files were cleaned up
-                worker_files = list(
-                    checkpoint_dir.glob("worker_*_checkpoint.h5")
-                )
+                worker_files = [
+                    p
+                    for pattern in ProgramResults._WORKER_FILE_GLOBS
+                    for p in checkpoint_dir.glob(pattern)
+                ]
                 assert len(worker_files) == 0
 
                 # Verify consolidated results.h5 exists
@@ -1320,9 +1322,11 @@ class TestResumeFromCheckpoint:
                 counter = results.shot_histories[shot_idx][-1]["counter"]
                 assert counter == shot_idx + 1
             assert (checkpoint_dir / "results.h5").exists()
-            worker_files_after = list(
-                checkpoint_dir.glob("worker_*_checkpoint.h5")
-            )
+            worker_files_after = [
+                p
+                for pattern in ProgramResults._WORKER_FILE_GLOBS
+                for p in checkpoint_dir.glob(pattern)
+            ]
             assert len(worker_files_after) == 0
 
     def test_resume_true_without_checkpoint_raises(self):

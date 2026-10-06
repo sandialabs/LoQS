@@ -508,7 +508,7 @@ class QuantumProgram(Displayable):
         done_wall_clock_times = read_checkpoint_dict_attr_union(
             checkpoint_dir,
             results_filename,
-            "worker_*_checkpoint.h5",
+            ProgramResults._WORKER_FILE_GLOBS,
             "shot_wall_clock_times",
         )
         if lazy_loading:
@@ -516,7 +516,7 @@ class QuantumProgram(Displayable):
             done_indices = read_checkpoint_dict_attr_union_keys(
                 checkpoint_dir,
                 results_filename,
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done_indices)
@@ -526,7 +526,7 @@ class QuantumProgram(Displayable):
             done = read_checkpoint_dict_attr_union(
                 checkpoint_dir,
                 results_filename,
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done.keys())
@@ -541,10 +541,10 @@ class QuantumProgram(Displayable):
         program_results: ProgramResults,
         pbar,
     ) -> None:
-        """Serially compute every shot in `remaining`, flushing to the
-        canonical checkpoint file once `checkpoint_batch_size` shots have
-        accumulated unwritten (plus a final flush for any undersized tail
-        batch)."""
+        """Serially compute every shot in `remaining`, flushing a batch
+        payload file once `checkpoint_batch_size` shots have accumulated
+        unwritten (plus a final flush for any undersized tail batch);
+        `run()` consolidates the payloads into `results.h5` afterwards."""
         for i in remaining:
             seed = (
                 None
@@ -759,7 +759,7 @@ class QuantumProgram(Displayable):
 
          checkpoint_batch_size:
             Number of shots to accumulate, per writer, before durably
-            flushing them to that writer's own checkpoint file. Only
+            flushing them as one batch file. Only
             meaningful when `checkpoint=True`; ignored otherwise. Mutually
             exclusive with `n_shot_batches` (providing both raises `ValueError`).
             If both `n_shot_batches` and `checkpoint_batch_size` are `None`, both
@@ -767,13 +767,12 @@ class QuantumProgram(Displayable):
             given, each dispatched batch of this many shots is computed and
             checkpointed together inside its own worker process, keyed by
             that worker's own `hostname_pid` identity, so multiple workers
-            never contend for the same file; once every batch has returned,
-            `run()` merges every worker's file into one final,
-            bounded-memory-streamed `results.h5` (see
-            [](api:ProgramResults.consolidate_checkpoints)). With no
-            `shot_executor` (serial), there is only ever one writer, so
-            shots are checkpointed directly to that same `results.h5`
-            with no separate merge step needed. Set to `1` to checkpoint
+            never contend for the same file. Serial or parallel, each batch
+            goes to its own payload file and is marked done in its writer's
+            SWMR progress ledger; once every batch has returned, `run()`
+            merges every payload into one final, bounded-memory-streamed
+            `results.h5` (see
+            [](api:ProgramResults.consolidate_checkpoints)). Set to `1` to checkpoint
             every single shot as soon as it completes (the finest possible
             granularity -- a crash loses at most one in-flight shot per
             writer); a larger value trades that granularity for fewer,
@@ -940,18 +939,10 @@ class QuantumProgram(Displayable):
 
             return program_results
 
-        # Checkpointing enabled: every shot ends up durably on disk before
-        # this call returns, one writer at a time. With no `shot_executor`,
-        # this process is the only writer, so shots are checkpointed
-        # straight to the canonical `results.h5` with no merge step
-        # needed. With a `shot_executor`, each dispatched batch of
-        # `checkpoint_batch_size` shots computes and checkpoints itself
-        # inside its own worker process before returning (see
-        # `_run_shot_batch_worker`), and a race-free consolidation pass
-        # merges every worker's file into that same `results.h5`.
-        # `remaining` (rather than the full shot range) is what actually
-        # gets dispatched below, so a resuming call only redoes whatever a
-        # prior interrupted call hadn't already durably checkpointed.
+        # Checkpointing enabled: each batch goes to its own payload file,
+        # written here or in a `shot_executor` worker, and the consolidation
+        # below merges them into `results.h5`. Only `remaining` is
+        # dispatched, so a resumed call redoes only unfinished shots.
         assert resolved_checkpoint_dir is not None
         assert checkpoint_batch_size is not None
         remaining, num_done, done_data, done_wall_clock_times = (
@@ -996,11 +987,13 @@ class QuantumProgram(Displayable):
             # to merge, regardless of whether *this* call itself dispatched
             # anything in parallel, so a crashed parallel run resumed via a
             # serial call still gets its leftover worker files cleaned up.
-            if any(resolved_checkpoint_dir.glob("worker_*_checkpoint.h5")):
+            if any(
+                any(resolved_checkpoint_dir.glob(pattern))
+                for pattern in ProgramResults._WORKER_FILE_GLOBS
+            ):
                 program_results.consolidate_checkpoints(
                     checkpoint_dir=resolved_checkpoint_dir
                 )
-                program_results._worker_id = None
 
         return program_results
 

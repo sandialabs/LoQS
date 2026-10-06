@@ -45,6 +45,7 @@ from loqs.internal.streamingmerge import (
     read_checkpoint_dict_attr_union_keys,
 )
 from loqs.internal.swmrledger import (
+    is_swmr_ledger_file,
     mark_ledger_item_done,
     open_swmr_reader,
     open_swmr_writer,
@@ -1107,26 +1108,6 @@ def _assign_indices_with_keys(
     return items_with_index
 
 
-def _is_new_format_worker_file(worker_file: Path) -> bool:
-    """Whether `worker_file` is a new-format SWMR ledger file (holding a
-    `swmr_ledger` group and no root-level dict attrs of its own) rather than
-    a legacy worker file with dict attrs directly at its own root.
-
-    Opens with `swmr=True` (matching `open_swmr_reader`), since a new-format
-    file's own worker process typically never closes it -- a plain,
-    non-SWMR open would fail cross-process for as long as that writer stays
-    alive, even though nothing is actively being written at that instant.
-    Any read error here is treated as "not new-format", so the caller's own
-    exception handling -- triggered by the same underlying problem when it
-    goes on to actually open the file -- still applies.
-    """
-    try:
-        with h5py.File(worker_file, "r", libver="latest", swmr=True) as f:
-            return "swmr_ledger" in f
-    except (BlockingIOError, OSError):
-        return False
-
-
 def _read_done_union(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
@@ -1250,7 +1231,7 @@ def _consolidate_worker_files(
     # payload files below) and its writer process never closes it, so it's
     # unlinked directly rather than merged, which would otherwise block.
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
-        if _is_new_format_worker_file(worker_file):
+        if is_swmr_ledger_file(worker_file):
             if delete_originals:
                 try:
                     worker_file.unlink()
@@ -1674,7 +1655,7 @@ def _poll_one_worker_file(
     -- the file is simply retried on the next poll tick, at whichever
     consumed count it last reached here.
     """
-    if _is_new_format_worker_file(worker_file):
+    if is_swmr_ledger_file(worker_file):
         return _poll_one_new_format_worker_file(
             worker_file,
             consumed_count,
@@ -1730,7 +1711,7 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
     in_flight: set[int] = set()
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
         try:
-            if _is_new_format_worker_file(worker_file):
+            if is_swmr_ledger_file(worker_file):
                 ledger_file, ledger_group = open_swmr_reader(worker_file)
                 try:
                     status = read_swmr_ledger_status(ledger_group)
@@ -1792,6 +1773,11 @@ def _run_parallel(
     # Track consumed count per worker file for efficient polling
     consumed_counts: dict[str, int] = {}
 
+    # Highest live shot count seen per in-flight item. Consolidation deletes
+    # an item's ledgers before the item is reported done, so the raw count
+    # can drop back to 0; the mark is dropped once the item is observed done.
+    inflight_shots_high_water: dict[int, int] = {}
+
     def on_poll() -> None:
         """Poll every worker file and notify for any newly-completed items.
 
@@ -1821,7 +1807,12 @@ def _run_parallel(
             done_items = len(observed_indices)
             total_shots_from_done = done_items * num_shots_for_progress
 
-            # Count shots from in-flight items via their checkpoint directories
+            for item_index in list(inflight_shots_high_water):
+                if item_index in observed_indices:
+                    del inflight_shots_high_water[item_index]
+
+            # Count shots from in-flight items via their shot ledgers only,
+            # which are safe to read while their writers are still running.
             # Exclude items already in observed_indices to avoid double-counting
             in_flight_items = _read_worker_current_indices(item_checkpoint_dir)
             in_flight_items = in_flight_items - observed_indices
@@ -1830,9 +1821,15 @@ def _run_parallel(
                 for item_index in in_flight_items:
                     shot_subdir = shot_checkpoint_subdir(item_index)
                     if shot_subdir is not None:
-                        shots_done = ProgramResults._count_done_shots(
-                            shot_subdir, results_filename=results_filename
+                        shots_done = min(
+                            ProgramResults._count_live_done_shots(shot_subdir),
+                            num_shots_for_progress,
                         )
+                        shots_done = max(
+                            shots_done,
+                            inflight_shots_high_water.get(item_index, 0),
+                        )
+                        inflight_shots_high_water[item_index] = shots_done
                         total_shots_from_inflight += shots_done
 
             # Set absolute total and refresh

@@ -207,6 +207,64 @@ def open_swmr_reader(
     return f, f[group_name]
 
 
+def is_swmr_ledger_file(path: Path) -> bool:
+    """Whether `path` is a SWMR ledger file (holding a `swmr_ledger` group)
+    rather than a legacy checkpoint file with its data at its own root.
+
+    Opens with `swmr=True`, matching `open_swmr_reader`: a ledger's writer
+    typically never closes it, and a plain open would fail cross-process
+    while that writer stays alive. Any open or read error counts as "not a
+    ledger", so the caller's own handling of that file still applies.
+    """
+    try:
+        with h5py.File(path, "r", libver="latest", swmr=True) as f:
+            return DEFAULT_GROUP_NAME in f
+    except (BlockingIOError, OSError):
+        return False
+
+
+def read_swmr_ledger_done_union(
+    directory: Path,
+    pattern: str,
+    group_name: str = DEFAULT_GROUP_NAME,
+) -> set[int]:
+    """Return the union of `done` indices across the ledger files in
+    `directory` whose names match the glob `pattern`.
+
+    Each file is opened here, in SWMR read mode, and closed again before
+    the next one. A file that fails to open, or has no ledger group with a
+    `done` dataset (a ledger still being created, or a non-ledger file
+    sharing the name pattern), is skipped.
+
+    Parameters
+    ----------
+    directory : Path
+        Directory to scan. A missing directory yields an empty set.
+    pattern : str
+        Glob pattern, relative to `directory`, naming the ledger files.
+    group_name : str, optional
+        Name of the ledger subgroup. Default is `DEFAULT_GROUP_NAME`.
+
+    Returns
+    -------
+    set[int]
+        Every index marked done in at least one matching ledger.
+    """
+    done: set[int] = set()
+    for path in sorted(Path(directory).glob(pattern)):
+        try:
+            with h5py.File(path, "r", libver="latest", swmr=True) as f:
+                group = f.get(group_name)
+                if not isinstance(group, h5py.Group) or "done" not in group:
+                    continue
+                done_dataset = group["done"]
+                done_dataset.refresh()
+                done.update(np.flatnonzero(done_dataset[()]).tolist())
+        except (OSError, KeyError):
+            continue
+    return done
+
+
 def mark_ledger_item_done(
     ledger_group: h5py.Group,
     index: int,
