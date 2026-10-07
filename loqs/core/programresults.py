@@ -228,10 +228,10 @@ def _write_shot_checkpoint_batch_with_ledger(
     """Write one batch of shots' checkpoint entries to its own payload file,
     then mark every shot in the batch done in the SWMR ledger.
 
-    The payload file is opened fresh (`"w"`) and only once -- unlike the old
-    shared-checkpoint-file scheme, no other write can be contending for this
-    exact path. Every shot in `shot_indices` is only
-    marked done after the `with` block closes the payload file, so a
+    The payload file is opened fresh (`"w"`) and only once -- unlike the
+    serial path's shared `results.h5`, no other write can be contending for
+    this exact path. Every shot in `shot_indices` is only marked done after
+    the `with` block closes the payload file, so a
     `merge_dict_attr` exception partway through never reaches the ledger:
     no shot in this batch is ever marked done unless the whole batch's
     payload file is fully written.
@@ -264,6 +264,18 @@ def _write_shot_checkpoint_batch_with_ledger(
                 value_use_dataset=value_use_dataset,
             )
 
+    _mark_shot_batch_done(ledger_group, shot_indices, wall_clock_times)
+
+
+def _mark_shot_batch_done(
+    ledger_group: h5py.Group,
+    shot_indices: list[int],
+    wall_clock_times: dict[int, float],
+) -> None:
+    """Mark every shot in `shot_indices` done in the SWMR ledger, then flush
+    both ledger datasets once. Callers must only call this after the file
+    holding the shots' data is fully written and closed; a shot missing from
+    `wall_clock_times` is recorded as `nan`."""
     for shot_index in shot_indices:
         mark_ledger_item_done(
             ledger_group,
@@ -397,9 +409,10 @@ class ProgramResults(Displayable):
         """Directory where checkpoint files are stored."""
 
         self._payload_batches: list[tuple[Path, np.ndarray]] = []
-        """One `(payload path, int64 shot indices)` entry per batch this
-        object's `checkpoint()` wrote, so a lazy reload can read a shot from
-        its payload before consolidation. Not serialized."""
+        """One `(payload path, int64 shot indices)` entry per payload batch
+        this object's `checkpoint()` wrote with an explicit `worker_id`, so a
+        lazy reload can read a shot from its payload before consolidation. A
+        `worker_id=None` checkpoint records nothing here. Not serialized."""
 
         self._nested_source_file: Path | None = None
         """File path containing a nested group source (an entry inside
@@ -890,7 +903,7 @@ class ProgramResults(Displayable):
         checkpoint_dir: str | Path | None = None,
         worker_id: str | None = None,
     ) -> None:
-        """Write every currently-unwritten shot to this writer's own checkpoint file.
+        """Write every currently-unwritten shot to this writer's checkpoint files.
 
         Always flushes everything `get_unwritten_shots()` currently reports
         -- there is no separate "batch index" to compute or track. How
@@ -905,14 +918,29 @@ class ProgramResults(Displayable):
         checkpoint_dir:
             Directory to store checkpoint files. If None, uses `./checkpoints`.
         worker_id:
-            A string identifying which physical writer this file belongs to
+            A string identifying which physical writer these files belong to
             (e.g. `f"{socket.gethostname()}_{os.getpid()}"`), so multiple
-            concurrent writers never open the same file. If None, this
-            process's own global worker identity (`loqs.internal.worker_id`)
-            is used instead -- even a "serial" shot-execution run may
-            execute inside its own item-worker process under
-            `MultiProgramRunner`'s parallel item dispatch, so it needs the
-            same per-writer isolation as an explicit shot-batch worker.
+            concurrent writers never open the same file.
+
+            With None, the shots are appended to the canonical
+            `results.h5` (`results_filename`) through this object's
+            persistent encode cache, so objects shared with the parent
+            program are referenced rather than embedded again. They are
+            then marked done in this process's shot ledger,
+            `worker_<loqs.internal.worker_id()>_checkpoint.h5`, but only
+            after `results.h5` is closed, so live polling can count them
+            without opening `results.h5`. Only one writer per directory
+            may pass None. Another process reading `results.h5` during a
+            serial run can make this write raise; rerun with `resume=True`
+            to continue.
+
+            With an id, the shots go to their own payload file,
+            `worker_<id>_shots_<first shot>_payload.h5`, and are marked
+            done in `worker_<id>_checkpoint.h5`.
+
+            Either way, `consolidate_checkpoints()` merges any payloads
+            into `results.h5` and deletes the ledgers; `run()` calls it at
+            the end.
         """
         if checkpoint_dir is None:
             checkpoint_dir = Path("./checkpoints")
@@ -930,7 +958,9 @@ class ProgramResults(Displayable):
             worker_id if worker_id is not None else _global_worker_id()
         )
 
-        attr_entries: list[tuple[str, bool, list[tuple[int, Any]]]] = []
+        # One `(attr_name, value_use_dataset, entries)` triple per streamed
+        # dict attribute, empty entry lists included.
+        all_attr_entries: list[tuple[str, bool, list[tuple[int, Any]]]] = []
         for attr_name, value_use_dataset in self._STREAMED_DICT_ATTRS:
             attr_value = getattr(self, attr_name)
             entries = [
@@ -938,8 +968,7 @@ class ProgramResults(Displayable):
                 for shot_index in shots_to_checkpoint
                 if shot_index in attr_value
             ]
-            if entries:
-                attr_entries.append((attr_name, value_use_dataset, entries))
+            all_attr_entries.append((attr_name, value_use_dataset, entries))
 
         wall_clock_times = {
             shot_index: self.shot_wall_clock_times[shot_index]
@@ -950,18 +979,38 @@ class ProgramResults(Displayable):
         ledger_group = _get_shot_worker_ledger(
             checkpoint_dir, effective_worker_id
         )
-        payload_path = checkpoint_dir / (
-            f"worker_{effective_worker_id}_shots_"
-            f"{min(shots_to_checkpoint)}_payload.h5"
-        )
-        _write_shot_checkpoint_batch_with_ledger(
-            ledger_group,
-            payload_path,
-            shots_to_checkpoint,
-            attr_entries,
-            wall_clock_times,
-        )
-        self._record_payload_batch(payload_path, shots_to_checkpoint)
+
+        if worker_id is None:
+            # Sole writer for this directory: append straight to the
+            # canonical file through the persistent encode cache, and only
+            # mark the shots done once that file is closed.
+            results_path = checkpoint_dir / self._results_filename
+            with h5py.File(results_path, "a") as results_file:
+                for (
+                    attr_name,
+                    value_use_dataset,
+                    entries,
+                ) in all_attr_entries:
+                    self._write_streamed_dict_entries(
+                        results_file, attr_name, value_use_dataset, entries
+                    )
+            _mark_shot_batch_done(
+                ledger_group, shots_to_checkpoint, wall_clock_times
+            )
+        else:
+            payload_path = checkpoint_dir / (
+                f"worker_{effective_worker_id}_shots_"
+                f"{min(shots_to_checkpoint)}_payload.h5"
+            )
+            _write_shot_checkpoint_batch_with_ledger(
+                ledger_group,
+                payload_path,
+                shots_to_checkpoint,
+                [entry for entry in all_attr_entries if entry[2]],
+                wall_clock_times,
+            )
+            self._record_payload_batch(payload_path, shots_to_checkpoint)
+
         self.mark_shots_as_written(shots_to_checkpoint)
 
         # Implement lazy loading: remove written shots from memory
@@ -1627,9 +1676,9 @@ class ProgramResults(Displayable):
             ):
                 return False
 
-            # A shot this object checkpointed itself is read from its batch's
-            # payload file until consolidation removes that file, then from
-            # the canonical file.
+            # A shot this object wrote to a payload file (explicit
+            # `worker_id`) is read from that file until consolidation removes
+            # it; every other shot is read from the canonical file.
             payload_file = self._recorded_payload_for_shot(shot_index)
             if payload_file is not None and self._load_shot_from_single_file(
                 payload_file, shot_index, is_payload=True

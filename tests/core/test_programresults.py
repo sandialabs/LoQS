@@ -347,10 +347,9 @@ class TestProgramResults:
                 assert abs(value - float(i) * 0.1) < 1e-9
 
     def test_checkpoint_with_no_worker_id_uses_canonical_filename(self):
-        """`worker_id=None` (the single-writer case) names its transient
-        shot files after `loqs.internal.worker_id()`, and the canonical
-        `results.h5` is produced by consolidation, after which
-        `load_checkpoint(worker_id=None)` reads it."""
+        """`worker_id=None` (the single-writer case) writes the canonical
+        `results.h5` directly, with no payload file, and records the shot
+        in a ledger named after `loqs.internal.worker_id()`."""
         from loqs.internal import worker_id as global_worker_id
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -363,16 +362,10 @@ class TestProgramResults:
             results.checkpoint(checkpoint_dir=checkpoint_dir)
 
             wid = global_worker_id()
-            assert not (checkpoint_dir / "results.h5").exists()
-            assert (checkpoint_dir / f"worker_{wid}_checkpoint.h5").exists()
-            assert list(
-                checkpoint_dir.glob(f"worker_{wid}_shots_*_payload.h5")
-            )
-
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
             assert (checkpoint_dir / "results.h5").exists()
-            for pattern in ProgramResults._WORKER_FILE_GLOBS:
-                assert not list(checkpoint_dir.glob(pattern))
+            assert (checkpoint_dir / f"worker_{wid}_checkpoint.h5").exists()
+            assert not list(checkpoint_dir.glob("worker_*_shots_*_payload.h5"))
+            assert ProgramResults._count_live_done_shots(checkpoint_dir) == 1
 
             new_results = ProgramResults()
             new_results.load_checkpoint(checkpoint_dir=checkpoint_dir)
@@ -1463,6 +1456,54 @@ class TestShotCheckpointBatchWithLedger:
             assert done is False
 
 
+class TestSerialShotCheckpoint:
+    """A `worker_id=None` checkpoint appends straight to the canonical
+    `results.h5` and marks its shots done in the ledger only afterwards."""
+
+    def test_serial_checkpoint_marks_ledger_after_results_closed(
+        self, tmp_path, monkeypatch
+    ):
+        """Every ledger mark happens after `results.h5` is closed and already
+        holds the shot being marked, and no payload file is written."""
+        from loqs.internal.streamingmerge import get_dict_attr_keys
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        results_path = (checkpoint_dir / "results.h5").resolve()
+        results = ProgramResults(lazy_loading=False)
+        for shot_index in range(3):
+            history = History()
+            history.append(Frame({"shot": shot_index}))
+            results.add_shot(
+                shot_index, history, wall_clock_time=0.1 * (shot_index + 1)
+            )
+
+        real_mark = programresults_module.mark_ledger_item_done
+        marked: list[int] = []
+
+        def spy_mark(ledger_group, index, *args, **kwargs):
+            assert results_path not in _open_hdf5_file_paths()
+            assert results_path.exists()
+            with h5py.File(results_path, "r") as f:
+                assert index in get_dict_attr_keys(f, "shot_histories")
+            marked.append(index)
+            return real_mark(ledger_group, index, *args, **kwargs)
+
+        monkeypatch.setattr(
+            programresults_module, "mark_ledger_item_done", spy_mark
+        )
+
+        try:
+            results.checkpoint(checkpoint_dir=checkpoint_dir)
+
+            assert sorted(marked) == [0, 1, 2]
+            assert not list(checkpoint_dir.glob("worker_*_shots_*_payload.h5"))
+            assert ProgramResults._count_live_done_shots(checkpoint_dir) == 3
+        finally:
+            programresults_module._drop_shot_ledger_cache_entries(
+                checkpoint_dir
+            )
+
+
 def _open_hdf5_file_paths() -> set[Path]:
     """Resolved paths of every HDF5 file currently open in this process."""
     return {
@@ -2074,9 +2115,6 @@ class TestParentProgramFileWriting:
             history.append(Frame({"program_ref": program}))
             results.add_shot(shot_index, history)
         results.checkpoint(checkpoint_dir=checkpoint_dir)
-        # Consolidation re-encodes the shots into results.h5 through the
-        # encode cache built from parent_program.
-        results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
         # Walk the whole file (both real HDF5 groups and any array-free
         # "$collapsed" JSON blob siblings, since a QuantumProgram with no
@@ -2359,7 +2397,6 @@ class TestResumeCheckpointing:
                 history.append(Frame({"source": "main", "idx": i}))
                 results_main.add_shot(i, history)
             results_main.checkpoint(checkpoint_dir=checkpoint_dir)
-            results_main.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             # Write to worker files
             for w in range(2):
@@ -2404,7 +2441,6 @@ class TestResumeCheckpointing:
                     i, history, wall_clock_time=float(i) + 0.1
                 )
             results_main.checkpoint(checkpoint_dir=checkpoint_dir)
-            results_main.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             # Write to a worker file
             results_worker = ProgramResults(lazy_loading=False)
@@ -2601,7 +2637,6 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2644,7 +2679,6 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2678,7 +2712,6 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2714,7 +2747,6 @@ class TestResumeCheckpointing:
                 history.append(Frame({"shot": i}))
                 results.add_shot(i, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
@@ -2760,7 +2792,6 @@ class TestResumeCheckpointing:
             history.append(Frame({"shot": 0}))
             results.add_shot(0, history)
             results.checkpoint(checkpoint_dir=checkpoint_dir)
-            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
 
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir

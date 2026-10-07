@@ -396,13 +396,17 @@ The [Basic Workflow](workflow.md) tutorial introduces
 [QuantumProgram.run](api:QuantumProgram.run)'s `checkpoint_batch_size`/
 `checkpoint_dir` for the serial case. With a `shot_executor`,
 `checkpoint_batch_size` also sets how many shots are dispatched to one
-worker per call: each worker computes its whole batch, checkpoints all of
-it to its own private file (keyed by that worker's own hostname/PID, so
-concurrent workers never open the same file), and only then returns. Once
-every dispatched batch is confirmed done, `run()` runs one race-free,
-driver-side pass that streams every worker's file into the same canonical
-`results.h5` a serial run would have written directly -- callers never
-need to touch the per-worker files themselves.
+worker per call: each worker computes its whole batch, writes all of it to
+a new payload file of its own (named after that worker's own ID and the
+batch's first shot, so concurrent workers never open the same file), marks
+those shots done in its own progress ledger, and only then returns. The
+ledger is an HDF5 single-writer/multiple-reader (SWMR) file, so
+`MultiProgramRunner` can poll it for live shot progress while the worker
+keeps writing. Once every dispatched batch is confirmed done, `run()` runs
+one race-free, driver-side pass that streams every payload into the same
+canonical `results.h5` a serial run would have written directly, then
+deletes the payloads and ledgers -- callers never need to touch the
+per-worker files themselves.
 
 ```{code-cell} ipython3
 import tempfile
@@ -445,7 +449,7 @@ it stays fully populated in memory regardless of checkpointing.
 
 ### Resuming after a crash
 
-A checkpointing-enabled `run()` also supports genuine resume, regardless of whether the original call used a `shot_executor`: calling `run()` again with `checkpoint=True, resume=True` against the same `checkpoint_dir` only computes whatever wasn't already durably checkpointed, rather than starting over from shot 0. `run()` never returns leaving stray `worker_*_checkpoint.h5` files behind either -- a race-free consolidation pass into `results.h5` runs whenever any exist, even if the resuming call itself dispatches serially, so a parallel run that crashed mid-batch can always be finished off with a plain serial call.
+A checkpointing-enabled `run()` also supports genuine resume, regardless of whether the original call used a `shot_executor`: calling `run()` again with `checkpoint=True, resume=True` against the same `checkpoint_dir` only computes whatever wasn't already durably checkpointed, rather than starting over from shot 0. `run()` never returns leaving stray per-worker files (`worker_*_checkpoint.h5` or `worker_*_shots_*_payload.h5`) behind either -- a race-free consolidation pass into `results.h5` runs whenever any exist, even if the resuming call itself dispatches serially, so a parallel run that crashed mid-batch can always be finished off with a plain serial call.
 
 ```{code-cell} ipython3
 with tempfile.TemporaryDirectory() as resume_checkpoint_dir:

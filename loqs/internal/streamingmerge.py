@@ -1140,7 +1140,9 @@ def read_checkpoint_dict_attr_union(
             except (BlockingIOError, OSError):
                 if strict:
                     raise
-                pass  # Transient lock conflict; skip
+                # Can't be opened (e.g. a damaged file, or a `results.h5` a
+                # serial writer has open); skip
+                pass
 
     # Then, read every worker file matching each glob pattern (sorted per
     # pattern, excluding .tmp files).
@@ -1172,7 +1174,9 @@ def read_checkpoint_dict_attr_union(
                 except (BlockingIOError, OSError):
                     if strict:
                         raise
-                    continue  # Transient lock conflict; skip
+                    # Can't be opened (e.g. a ledger a writer holds in SWMR
+                    # mode, or a damaged file); skip
+                    continue
 
     return done
 
@@ -1250,7 +1254,9 @@ def read_checkpoint_dict_attr_union_keys(
             except (BlockingIOError, OSError):
                 if strict:
                     raise
-                pass  # Transient lock conflict; skip
+                # Can't be opened (e.g. a damaged file, or a `results.h5` a
+                # serial writer has open); skip
+                pass
 
     # Then, read every worker file matching each glob pattern (sorted per
     # pattern, excluding .tmp files).
@@ -1278,6 +1284,8 @@ def read_checkpoint_dict_attr_union_keys(
                 except (BlockingIOError, OSError):
                     if strict:
                         raise
-                    continue  # Transient lock conflict; skip
+                    # Can't be opened (e.g. a ledger a writer holds in SWMR
+                    # mode, or a damaged file); skip
+                    continue
 
     return keys

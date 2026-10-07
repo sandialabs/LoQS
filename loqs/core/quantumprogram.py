@@ -541,10 +541,10 @@ class QuantumProgram(Displayable):
         program_results: ProgramResults,
         pbar,
     ) -> None:
-        """Serially compute every shot in `remaining`, flushing a batch
-        payload file once `checkpoint_batch_size` shots have accumulated
-        unwritten (plus a final flush for any undersized tail batch);
-        `run()` consolidates the payloads into `results.h5` afterwards."""
+        """Serially compute every shot in `remaining`, flushing to the
+        canonical checkpoint file once `checkpoint_batch_size` shots have
+        accumulated unwritten (plus a final flush for any undersized tail
+        batch)."""
         for i in remaining:
             seed = (
                 None
@@ -759,7 +759,7 @@ class QuantumProgram(Displayable):
 
          checkpoint_batch_size:
             Number of shots to accumulate, per writer, before durably
-            flushing them as one batch file. Only
+            flushing them to disk. Only
             meaningful when `checkpoint=True`; ignored otherwise. Mutually
             exclusive with `n_shot_batches` (providing both raises `ValueError`).
             If both `n_shot_batches` and `checkpoint_batch_size` are `None`, both
@@ -767,12 +767,14 @@ class QuantumProgram(Displayable):
             given, each dispatched batch of this many shots is computed and
             checkpointed together inside its own worker process, keyed by
             that worker's own `hostname_pid` identity, so multiple workers
-            never contend for the same file. Serial or parallel, each batch
-            goes to its own payload file and is marked done in its writer's
-            SWMR progress ledger; once every batch has returned, `run()`
-            merges every payload into one final, bounded-memory-streamed
-            `results.h5` (see
-            [](api:ProgramResults.consolidate_checkpoints)). Set to `1` to checkpoint
+            never contend for the same file. Each worker writes a batch to
+            its own payload file and marks it done in its own SWMR progress
+            ledger; once every batch has returned, `run()` merges every
+            payload into one final, bounded-memory-streamed `results.h5`
+            (see [](api:ProgramResults.consolidate_checkpoints)). With no
+            `shot_executor` (serial), there is only ever one writer, so
+            shots are appended directly to that same `results.h5` with no
+            merge step. Set to `1` to checkpoint
             every single shot as soon as it completes (the finest possible
             granularity -- a crash loses at most one in-flight shot per
             writer); a larger value trades that granularity for fewer,
@@ -939,10 +941,11 @@ class QuantumProgram(Displayable):
 
             return program_results
 
-        # Checkpointing enabled: each batch goes to its own payload file,
-        # written here or in a `shot_executor` worker, and the consolidation
-        # below merges them into `results.h5`. Only `remaining` is
-        # dispatched, so a resumed call redoes only unfinished shots.
+        # Checkpointing enabled: with no `shot_executor`, each batch is
+        # appended straight to `results.h5`; with one, each batch goes to a
+        # payload file in its worker, and the consolidation below merges the
+        # payloads into `results.h5`. Only `remaining` is dispatched, so a
+        # resumed call redoes only unfinished shots.
         assert resolved_checkpoint_dir is not None
         assert checkpoint_batch_size is not None
         remaining, num_done, done_data, done_wall_clock_times = (
@@ -987,6 +990,8 @@ class QuantumProgram(Displayable):
             # to merge, regardless of whether *this* call itself dispatched
             # anything in parallel, so a crashed parallel run resumed via a
             # serial call still gets its leftover worker files cleaned up.
+            # After a serial run, the only file left is the run's shot
+            # ledger, which this pass deletes.
             if any(
                 any(resolved_checkpoint_dir.glob(pattern))
                 for pattern in ProgramResults._WORKER_FILE_GLOBS

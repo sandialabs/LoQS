@@ -1635,8 +1635,9 @@ def _poll_one_new_format_worker_file(
                             pbar,
                         )
             except (BlockingIOError, OSError, KeyError):
-                # Transient lock conflict, missing attribute, or file
-                # corruption; retry this item's payload on a later poll.
+                # A missing attribute, or a payload that is gone or damaged
+                # (no writer holds it: it was closed before its item was
+                # marked done); retry this item's payload on a later poll.
                 continue
     finally:
         ledger_file.close()
@@ -1656,10 +1657,11 @@ def _poll_one_worker_file(
 
     Branches on whether `worker_file` is a legacy worker file (dict attrs at
     its own root) or a new-format SWMR ledger file, delegating the
-    new-format case to `_poll_one_new_format_worker_file`. A transient HDF5
-    lock conflict (e.g. the worker itself mid-write) is silently tolerated
-    -- the file is simply retried on the next poll tick, at whichever
-    consumed count it last reached here.
+    new-format case to `_poll_one_new_format_worker_file`. A file that
+    can't be opened or read (e.g. a ledger still in its creation window,
+    which `is_swmr_ledger_file` can't identify yet, or a damaged file) is
+    skipped and retried on the next poll tick, at whichever consumed count
+    it last reached here.
     """
     if is_swmr_ledger_file(worker_file):
         return _poll_one_new_format_worker_file(
@@ -1689,8 +1691,9 @@ def _poll_one_worker_file(
                     key, value, observed_indices, items_map, on_item_done, pbar
                 )
     except (BlockingIOError, OSError, KeyError):
-        # Transient lock conflict, missing attribute, or file corruption;
-        # skip this file for now
+        # A file that can't be opened yet (e.g. a ledger still in its
+        # creation window), a missing attribute, or a damaged file; skip
+        # this file for now
         pass
     return consumed_count
 
@@ -1701,8 +1704,9 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
     Returns the set of item indices currently being processed by any worker.
     A legacy worker file's `current_item_index` comes from its own file
     attrs; a new-format worker file's comes from its SWMR ledger instead.
-    Silently tolerates missing files or transient HDF5 lock conflicts, which
-    is appropriate since the set of workers can change mid-dispatch.
+    Silently skips a file that is missing or can't be opened yet (e.g. a
+    ledger still in its creation window), which is appropriate since the
+    set of workers can change mid-dispatch.
 
     Parameters
     ----------
@@ -1730,7 +1734,8 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
                     if "current_item_index" in f.attrs:
                         in_flight.add(int(f.attrs["current_item_index"]))
         except (BlockingIOError, OSError, KeyError):
-            # Transient lock conflict -- skip this file for now
+            # Missing, or can't be opened yet (e.g. a ledger still in its
+            # creation window) -- skip this file for now
             continue
     return in_flight
 
