@@ -20,6 +20,7 @@ fields), so this module never assumes a fixed schema.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -153,6 +154,17 @@ def open_swmr_writer(
     `init_swmr_ledger` before SWMR write mode is turned on, since dataset
     creation is not permitted once it's active.
 
+    A new ledger is built under `path` plus a `.tmp` suffix and renamed
+    onto `path` only once SWMR write mode is on, so a poller only ever sees
+    a new ledger already in SWMR mode. If anything fails before the file
+    reaches `path`, the temporary file is closed and removed.
+
+    Two cases keep a short window in which a concurrent SWMR reader's open
+    can make enabling SWMR write mode fail: an existing `path` is reopened
+    in place, and a platform that can't rename an open file (Windows)
+    falls back to closing, renaming, and reopening it in place. Pollers
+    skip a ledger they can't open.
+
     Parameters
     ----------
     path : Path
@@ -172,6 +184,52 @@ def open_swmr_writer(
     tuple[h5py.File, h5py.Group]
         The open file (in SWMR write mode) and its ledger subgroup.
     """
+    path = Path(path)
+    if path.exists():
+        return _open_swmr_writer_in_place(
+            path, fields, capacity, chunk_size, group_name
+        )
+
+    tmp_path = path.with_name(path.name + ".tmp")
+    f: h5py.File | None = None
+    try:
+        f = h5py.File(tmp_path, "w", libver="latest")
+        ledger_group = init_swmr_ledger(
+            f,
+            fields,
+            capacity=capacity,
+            chunk_size=chunk_size,
+            group_name=group_name,
+        )
+        f.swmr_mode = True
+        try:
+            os.replace(tmp_path, path)
+        except OSError:
+            # The rename of an open file failed (as on Windows): close it,
+            # rename it, and reopen it at its final path.
+            f.close()
+            f = None
+            os.replace(tmp_path, path)
+            return _open_swmr_writer_in_place(
+                path, fields, capacity, chunk_size, group_name
+            )
+    except BaseException:
+        if f is not None:
+            f.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return f, ledger_group
+
+
+def _open_swmr_writer_in_place(
+    path: Path,
+    fields: Sequence[str],
+    capacity: int,
+    chunk_size: int,
+    group_name: str,
+) -> tuple[h5py.File, h5py.Group]:
+    """Open `path` in place as the SWMR writer: `"a"`, then
+    `init_swmr_ledger`, then enable SWMR write mode."""
     f = h5py.File(path, "a", libver="latest")
     ledger_group = init_swmr_ledger(
         f,

@@ -18,7 +18,7 @@ from loqs.codepacks import codepack_trivial_counter as trivial_codepack
 from loqs.core import QuantumProgram
 from loqs.core.historydatacollector import HistoryDataCollector
 from loqs.core.programresults import _resolve_checkpoint_object_group
-from loqs.internal import _retry_hdf5_write, worker_id
+from loqs.internal import worker_id
 from loqs.internal.serializable import Serializable
 from loqs.internal.streamingmerge import iter_dict_attr_entries
 from loqs.tools.paralleltools import ParallelStrategy
@@ -122,21 +122,6 @@ def _write_worker_file(args):
                 key_use_dataset=True,
                 value_use_dataset=False,
             )
-
-
-def _no_retry_hdf5_write(path, write_fn, max_retries=8):
-    """Single-attempt stand-in for `_retry_hdf5_write`, so lock contention
-    raises instead of being retried."""
-    with h5py.File(path, "a") as f:
-        write_fn(f)
-
-
-def _init_worker_disable_hdf5_retries():
-    """Worker-process initializer swapping `_no_retry_hdf5_write` into the
-    shot-checkpoint writer's module."""
-    import loqs.core.programresults
-
-    loqs.core.programresults._retry_hdf5_write = _no_retry_hdf5_write
 
 
 # Test runner helpers for checkpoint/resume/parallel tests
@@ -1855,56 +1840,6 @@ class TestMergeReducedResult:
         assert len(open_calls) == 1
 
 
-class TestRetryHdf5Write:
-    """Unit tests for `loqs.internal._retry_hdf5_write`, the shared
-    exponential-backoff retry helper every HDF5 checkpoint-write call site
-    (across both ProgramResults and MultiProgramRunner) funnels through to
-    tolerate a transient concurrent-reader lock conflict."""
-
-    def test_retries_on_blocking_io_error_then_succeeds(
-        self, tmp_path, monkeypatch
-    ):
-        """The first two opens raise BlockingIOError; the third succeeds
-        and write_fn actually runs."""
-        target = tmp_path / "retry_target.h5"
-        real_file = h5py.File
-        call_count = {"n": 0}
-
-        def flaky_file(path, mode, *args, **kwargs):
-            call_count["n"] += 1
-            if call_count["n"] <= 2:
-                raise BlockingIOError("simulated transient lock")
-            return real_file(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr(h5py, "File", flaky_file)
-
-        written = []
-        _retry_hdf5_write(
-            target, lambda f: written.append(True), max_retries=5
-        )
-
-        assert call_count["n"] == 3
-        assert written == [True]
-
-    def test_reraises_after_max_retries_exhausted(self, tmp_path, monkeypatch):
-        """Every open raises BlockingIOError; once max_retries is
-        exhausted, the original error propagates rather than being
-        swallowed."""
-        target = tmp_path / "retry_target_always_fails.h5"
-        call_count = {"n": 0}
-
-        def always_fails(path, mode, *args, **kwargs):
-            call_count["n"] += 1
-            raise BlockingIOError("simulated persistent lock")
-
-        monkeypatch.setattr(h5py, "File", always_fails)
-
-        with pytest.raises(BlockingIOError):
-            _retry_hdf5_write(target, lambda f: None, max_retries=3)
-
-        assert call_count["n"] == 3
-
-
 class TestProcessAndCheckpointItemAtomicity:
     """`_process_and_checkpoint_item` must checkpoint one item's results via
     a single payload-file open, not one separate open per attribute -- a
@@ -2837,19 +2772,16 @@ class TestKeepShotResults:
         self, tmp_path
     ):
         """With `poll_interval=0.0`, the driver polls shot progress as fast
-        as it can while workers flush shot checkpoints, with worker retries
-        disabled so any lock collision would surface as `BlockingIOError`.
-        The driver reads only SWMR shot ledgers while workers write, so the
-        run completes with every shot kept."""
+        as it can while workers flush shot checkpoints. Checkpoint opens are
+        never retried, so any lock collision would surface as
+        `BlockingIOError`. The driver reads only SWMR shot ledgers while
+        workers write, so the run completes with every shot kept."""
         loky = pytest.importorskip("loky")
 
         item_checkpoint_dir = tmp_path / "item_ckpt"
         shot_checkpoint_dir = tmp_path / "shot_ckpt"
 
-        executor = loky.ProcessPoolExecutor(
-            max_workers=2,
-            initializer=_init_worker_disable_hdf5_retries,
-        )
+        executor = loky.ProcessPoolExecutor(max_workers=2)
         try:
             strategy = ParallelStrategy(
                 program_executor=executor,
@@ -3463,20 +3395,22 @@ class TestWorkerFileConsolidation:
         # _reduced_results, written before ever consulting stored state).
         assert captured_on_first_write[0] == {0: 2, 1: 4, 2: 6}
 
-    def test_final_assembly_lock_contention_silently_drops_program_result(
+    def test_consolidate_worker_files_leaves_locked_worker_file_in_place(
         self, tmp_path, monkeypatch
     ):
-        """Verify that a bounded/transient lock on a worker file during
-        `_consolidate_worker_files`'s one-shot final-assembly pass no longer
-        causes silent data loss in `_program_results`. Asserts that the
-        transiently locked worker's index is present in `_program_results`
-        with its correct value and without raising an exception.
+        """A worker file whose one open fails during
+        `_consolidate_worker_files` is opened once, not retried, and left in
+        place unmerged; final assembly's strict union read then still finds
+        its entry once the file can be opened.
         """
         from loqs.tools.multiprogramrunner import (
             _consolidate_worker_files,
             _read_done_union,
         )
-        from loqs.internal.streamingmerge import merge_dict_attr
+        from loqs.internal.streamingmerge import (
+            get_dict_attr_keys,
+            merge_dict_attr,
+        )
 
         checkpoint_dir = tmp_path / "checkpoints"
         checkpoint_dir.mkdir()
@@ -3507,20 +3441,22 @@ class TestWorkerFileConsolidation:
                 )
             worker_files.append(worker_file)
 
-        # Worker 1 hits a transient lock conflict on its first 3 reads,
-        # comfortably under the production retry budget of 8 attempts, then
-        # succeeds -- modeling a lock that's genuinely transient (a few
-        # retries recover it), not a permanently-stuck one.
+        # Only worker 1's first plain read-only open fails; the SWMR open
+        # from `is_swmr_ledger_file` passes through uncounted.
         locked_worker_file = worker_files[1]
         real_file = h5py.File
-        locked_read_attempts = {"n": 0}
+        plain_read_opens = {"n": 0}
 
         def flaky_file(path, mode="r", *args, **kwargs):
-            if Path(path) == locked_worker_file and mode == "r":
-                locked_read_attempts["n"] += 1
-                if locked_read_attempts["n"] <= 3:
+            if (
+                Path(path) == locked_worker_file
+                and mode == "r"
+                and not kwargs.get("swmr", False)
+            ):
+                plain_read_opens["n"] += 1
+                if plain_read_opens["n"] == 1:
                     raise BlockingIOError(
-                        "simulated transient lock held by another process"
+                        "simulated lock held by another process"
                     )
             return real_file(path, mode, *args, **kwargs)
 
@@ -3531,24 +3467,86 @@ class TestWorkerFileConsolidation:
             checkpoint_dir, runner_filename="runner.h5", delete_originals=True
         )
 
+        # Worker 1 was opened once, not retried, and kept for a later read;
+        # workers 0 and 2 merged and were deleted.
+        assert locked_worker_file.exists()
+        assert plain_read_opens["n"] == 1
+        assert not worker_files[0].exists()
+        assert not worker_files[2].exists()
+        with real_file(runner_path, "r") as f:
+            merged_keys = set(
+                get_dict_attr_keys(
+                    _resolve_checkpoint_object_group(f), "_program_results"
+                )
+            )
+        assert 1 not in merged_keys
+
+        # Final assembly's strict read picks worker 1's entry up from the
+        # file left in place.
         program_results = _read_done_union(
             checkpoint_dir,
             runner_filename="runner.h5",
             attr_name="_program_results",
+            strict=True,
         )
+        assert program_results == {
+            0: "program_result_0",
+            1: "program_result_1",
+            2: "program_result_2",
+        }
 
-        # Verify that a transient lock on one worker file does not cause
-        # silent data loss -- worker 1's entry should be present in
-        # _program_results with its correct value.
-        assert 1 in program_results, (
-            "Worker 1's _program_results entry is missing: a transient lock "
-            "during final assembly silently dropped it instead of being "
-            "retried or reported."
-        )
-        assert program_results[1] == "program_result_1"
-        # Unaffected workers still made it through.
-        assert 0 in program_results
-        assert 2 in program_results
+    def test_read_done_union_strict_propagates_open_error(
+        self, tmp_path, monkeypatch
+    ):
+        """`_read_done_union` skips a worker file it can't open by default,
+        and lets the open error propagate with `strict=True`."""
+        from loqs.tools.multiprogramrunner import _read_done_union
+        from loqs.internal.streamingmerge import merge_dict_attr
+
+        checkpoint_dir = tmp_path / "checkpoints"
+        checkpoint_dir.mkdir()
+
+        worker_files = []
+        for i in range(2):
+            worker_file = checkpoint_dir / f"worker_{i}_runner.h5"
+            with h5py.File(worker_file, "a") as f:
+                merge_dict_attr(
+                    f,
+                    "_program_results",
+                    [(i, f"program_result_{i}")],
+                    key_use_dataset=True,
+                    value_use_dataset=False,
+                )
+            worker_files.append(worker_file)
+
+        locked_worker_file = worker_files[1]
+        real_file = h5py.File
+
+        def locked_file(path, mode="r", *args, **kwargs):
+            if (
+                Path(path) == locked_worker_file
+                and mode == "r"
+                and not kwargs.get("swmr", False)
+            ):
+                raise BlockingIOError("simulated lock held by another process")
+            return real_file(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(h5py, "File", locked_file)
+
+        assert _read_done_union(
+            checkpoint_dir,
+            runner_filename="runner.h5",
+            attr_name="_program_results",
+            strict=False,
+        ) == {0: "program_result_0"}
+
+        with pytest.raises(BlockingIOError):
+            _read_done_union(
+                checkpoint_dir,
+                runner_filename="runner.h5",
+                attr_name="_program_results",
+                strict=True,
+            )
 
     def test_missing_program_results_entry_should_raise(
         self, tmp_path, monkeypatch

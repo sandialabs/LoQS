@@ -2543,11 +2543,12 @@ class TestResumeCheckpointing:
             history = nested_pr._memory_cache[1]
             assert history is not None
 
-    def test_load_shot_from_single_file_retries_transient_lock_then_succeeds(
+    def test_load_shot_from_single_file_propagates_open_error(
         self, monkeypatch
     ):
-        """`_load_shot_from_checkpoint` still recovers a nested-source shot
-        after a transient HDF5 lock conflict is retried away."""
+        """`_load_shot_from_checkpoint` propagates a `BlockingIOError` from
+        its single open instead of silently reporting the shot as not
+        found."""
         with tempfile.TemporaryDirectory() as temp_dir:
             parent_path = Path(temp_dir) / "parent.h5"
 
@@ -2573,61 +2574,17 @@ class TestResumeCheckpointing:
             nested_pr._set_nested_shot_source(parent_path, 0)
             nested_pr._checkpoint_dir = Path(temp_dir)
 
-            real_file = h5py.File
             call_count = {"n": 0}
 
-            def flaky_file(path, mode, *args, **kwargs):
-                call_count["n"] += 1
-                if call_count["n"] <= 2:
-                    raise BlockingIOError("simulated transient lock")
-                return real_file(path, mode, *args, **kwargs)
-
-            monkeypatch.setattr(h5py, "File", flaky_file)
-
-            assert nested_pr._load_shot_from_checkpoint(1) is True
-            assert call_count["n"] > 1
-            history = nested_pr._memory_cache[1]
-            assert isinstance(history, History)
-            assert history[0]["nested"] == 1
-
-    def test_load_shot_from_single_file_raises_after_persistent_lock_error(
-        self, monkeypatch
-    ):
-        """`_load_shot_from_checkpoint` propagates a persistent
-        `BlockingIOError` instead of silently reporting the shot as
-        not found."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            parent_path = Path(temp_dir) / "parent.h5"
-
-            with h5py.File(parent_path, "w") as parent_f:
-                pr1 = ProgramResults(lazy_loading=False)
-                for i in range(3):
-                    history = History()
-                    history.append(Frame({"nested": i}))
-                    pr1.add_shot(i, history)
-
-                from loqs.internal.streamingmerge import merge_dict_attr
-
-                root_group = parent_f.create_group("container")
-                merge_dict_attr(
-                    root_group,
-                    "_program_results",
-                    [(0, pr1)],
-                    key_use_dataset=True,
-                    value_use_dataset=False,
-                )
-
-            nested_pr = ProgramResults(lazy_loading=True)
-            nested_pr._set_nested_shot_source(parent_path, 0)
-            nested_pr._checkpoint_dir = Path(temp_dir)
-
             def always_fails(path, mode, *args, **kwargs):
-                raise BlockingIOError("simulated persistent lock")
+                call_count["n"] += 1
+                raise BlockingIOError("simulated lock")
 
             monkeypatch.setattr(h5py, "File", always_fails)
 
             with pytest.raises(BlockingIOError):
                 nested_pr._load_shot_from_checkpoint(1)
+            assert call_count["n"] == 1
 
     def test_get_available_shot_indices_retries_transient_stale_keys_then_succeeds(
         self, monkeypatch
@@ -2692,17 +2649,54 @@ class TestResumeCheckpointing:
             pr_read = ProgramResults(num_shots=2, lazy_loading=True)
             pr_read._checkpoint_dir = checkpoint_dir
 
-            import loqs.internal.streamingmerge as streamingmerge_module
+            call_count = {"n": 0}
 
             def always_stale(*args, **kwargs):
+                call_count["n"] += 1
                 return [0]
 
             monkeypatch.setattr(
-                streamingmerge_module, "get_dict_attr_keys", always_stale
+                programresults_module, "get_dict_attr_keys", always_stale
             )
 
             indices = pr_read._get_available_shot_indices(expected_num_shots=2)
             assert indices == [0, 1]
+            assert call_count["n"] == 5
+
+    def test_get_available_shot_indices_does_not_retry_open_error(
+        self, monkeypatch
+    ):
+        """An `OSError` opening `results.h5` is not a stale read, so
+        `_get_available_shot_indices` opens it once and falls back to
+        `range(num_shots)` instead of retrying the open."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+
+            results = ProgramResults(num_shots=2, lazy_loading=False)
+            for i in range(2):
+                history = History()
+                history.append(Frame({"shot": i}))
+                results.add_shot(i, history)
+            results.checkpoint(checkpoint_dir=checkpoint_dir)
+            results.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
+
+            pr_read = ProgramResults(num_shots=2, lazy_loading=True)
+            pr_read._checkpoint_dir = checkpoint_dir
+
+            real_file = h5py.File
+            results_opens = {"n": 0}
+
+            def failing_results_open(path, *args, **kwargs):
+                if Path(path).name == "results.h5":
+                    results_opens["n"] += 1
+                    raise OSError("simulated unreadable results.h5")
+                return real_file(path, *args, **kwargs)
+
+            monkeypatch.setattr(h5py, "File", failing_results_open)
+
+            indices = pr_read._get_available_shot_indices(expected_num_shots=2)
+            assert indices == [0, 1]
+            assert results_opens["n"] == 1
 
     def test_load_shot_from_checkpoint_retries_transient_key_error_then_succeeds(
         self, monkeypatch
@@ -2933,12 +2927,10 @@ class TestResumeCheckpointing:
 
             assert nested_pr.max_frame_limit == 17
 
-    def test_resolve_nested_attr_raises_after_persistent_lock_error(
-        self, monkeypatch
-    ):
+    def test_resolve_nested_attr_propagates_open_error(self, monkeypatch):
         """Resolving `.max_frame_limit` on a lazy nested-source proxy
-        propagates a persistent `BlockingIOError` instead of silently
-        falling back to its `default` of `None`."""
+        propagates a `BlockingIOError` from its single open instead of
+        silently falling back to its `default` of `None`."""
         with tempfile.TemporaryDirectory() as temp_dir:
             parent_path = self._build_nested_source_with_name_and_parent(
                 temp_dir, max_frame_limit=17
@@ -2947,13 +2939,17 @@ class TestResumeCheckpointing:
             nested_pr = ProgramResults(lazy_loading=True, max_frame_limit=None)
             nested_pr._set_nested_shot_source(parent_path, 0)
 
+            call_count = {"n": 0}
+
             def always_fails(path, mode, *args, **kwargs):
-                raise BlockingIOError("simulated persistent lock")
+                call_count["n"] += 1
+                raise BlockingIOError("simulated lock")
 
             monkeypatch.setattr(h5py, "File", always_fails)
 
             with pytest.raises(BlockingIOError):
                 nested_pr.max_frame_limit
+            assert call_count["n"] == 1
 
     def test_set_nested_shot_source_preserves_non_none_max_frame_limit(self):
         """A `ProgramResults` constructed with a real, non-`None`
@@ -3646,12 +3642,16 @@ class TestResumeCheckpointing:
             8,
         }
 
-    def test_merge_worker_into_output_retries_transient_lock_then_succeeds(
+    def test_consolidate_leaves_locked_payload_in_place(
         self, tmp_path, monkeypatch
     ):
-        """consolidate_checkpoints still merges a worker's shots into the
-        output file after a transient HDF5 lock conflict on that worker's
-        payload file is retried away, instead of silently skipping it."""
+        """consolidate_checkpoints opens a worker payload once, without
+        retrying, and leaves a payload it can't open in place and unmerged,
+        so a later load still finds its shots."""
+        from loqs.internal.streamingmerge import (
+            read_checkpoint_dict_attr_union_keys,
+        )
+
         checkpoint_dir = tmp_path / "checkpoint"
         checkpoint_dir.mkdir(parents=True)
 
@@ -3665,11 +3665,11 @@ class TestResumeCheckpointing:
         real_file = h5py.File
         call_count = {"n": 0}
 
-        def flaky_file(path, mode, *args, **kwargs):
+        def flaky_file(path, mode="r", *args, **kwargs):
             if Path(path) == worker_file:
                 call_count["n"] += 1
-                if call_count["n"] <= 2:
-                    raise BlockingIOError("simulated transient lock")
+                if call_count["n"] == 1:
+                    raise BlockingIOError("simulated lock")
             return real_file(path, mode, *args, **kwargs)
 
         monkeypatch.setattr(h5py, "File", flaky_file)
@@ -3679,7 +3679,11 @@ class TestResumeCheckpointing:
             checkpoint_dir=checkpoint_dir, delete_originals=True
         )
 
-        assert call_count["n"] > 1
+        assert worker_file.exists()
+        assert call_count["n"] == 1
+        assert 0 not in read_checkpoint_dict_attr_union_keys(
+            checkpoint_dir, "results.h5", None, "shot_histories"
+        )
 
         result = ProgramResults()
         result.load_checkpoint(checkpoint_dir=checkpoint_dir)

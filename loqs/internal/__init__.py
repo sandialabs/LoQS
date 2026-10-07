@@ -10,16 +10,9 @@
 """Utility classes and functions for LoQS."""
 
 import os
-import random
 import socket
-import time
 import uuid
 import warnings
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any
-
-import h5py
 
 try:
     from threadpoolctl import threadpool_limits
@@ -84,52 +77,3 @@ def pin_worker_threads() -> None:
             "cannot be limited to avoid oversubscription. Install "
             "loqs[parallel] or loqs[mpi]."
         )
-
-
-def _retry_hdf5_write(
-    worker_file_path: Path,
-    write_fn: Callable[[h5py.File], None],
-    max_retries: int = 8,
-) -> None:
-    """Open `worker_file_path` in append mode and call `write_fn(f)`, retrying with
-    jittered exponential backoff on transient HDF5 locking errors (`BlockingIOError`/`OSError`).
-    """
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(worker_file_path, "a") as f:
-                write_fn(f)
-            break
-        except (BlockingIOError, OSError):
-            if attempt < max_retries - 1:
-                delay = 0.01 * (2**attempt)
-                time.sleep(delay + random.uniform(0, delay))
-            else:
-                raise
-
-
-def _retry_hdf5_read(
-    filename: Path,
-    read_fn: Callable[[h5py.File], Any],
-    max_retries: int = 8,
-    retry_exceptions: tuple[type[Exception], ...] = (BlockingIOError, OSError),
-) -> Any:
-    """Open `filename` read-only and call `read_fn(f)`, retrying with the
-    same jittered exponential backoff as `_retry_hdf5_write` on transient
-    HDF5 locking errors (`BlockingIOError`/`OSError` by default). Kept
-    separate from that helper since it can't use its append-mode-only open.
-
-    `retry_exceptions` lets a caller widen (or narrow) which exceptions
-    count as transient and retryable -- e.g. including `KeyError` when
-    `read_fn` looks up a key that may not be visible yet due to a benign
-    write/read race rather than genuine absence.
-    """
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(filename, "r") as f:
-                return read_fn(f)
-        except retry_exceptions:
-            if attempt < max_retries - 1:
-                delay = 0.01 * (2**attempt)
-                time.sleep(delay + random.uniform(0, delay))
-            else:
-                raise

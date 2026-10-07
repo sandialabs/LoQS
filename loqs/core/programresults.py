@@ -24,8 +24,6 @@ import numpy as np
 from loqs.internal import (
     Displayable,
     Serializable,
-    _retry_hdf5_read,
-    _retry_hdf5_write,
     worker_id as _global_worker_id,
 )
 from loqs.internal.serializable import ResolvingDecodeCache
@@ -230,9 +228,9 @@ def _write_shot_checkpoint_batch_with_ledger(
     """Write one batch of shots' checkpoint entries to its own payload file,
     then mark every shot in the batch done in the SWMR ledger.
 
-    The payload file is opened fresh (`"w"`), so no retry wrapping is needed
-    -- unlike the old shared-checkpoint-file scheme, no other write can be
-    contending for this exact path. Every shot in `shot_indices` is only
+    The payload file is opened fresh (`"w"`) and only once -- unlike the old
+    shared-checkpoint-file scheme, no other write can be contending for this
+    exact path. Every shot in `shot_indices` is only
     marked done after the `with` block closes the payload file, so a
     `merge_dict_attr` exception partway through never reaches the ledger:
     no shot in this batch is ever marked done unless the whole batch's
@@ -593,7 +591,8 @@ class ProgramResults(Displayable):
             return default
 
         try:
-            return _retry_hdf5_read(self._nested_source_file, _read_attr)
+            with h5py.File(self._nested_source_file, "r") as f:
+                return _read_attr(f)
         except (ValueError, KeyError):
             return default
 
@@ -623,7 +622,8 @@ class ProgramResults(Displayable):
                 for attr_name, _ in self._STREAMED_DICT_ATTRS:
                     _reset_empty_groups_format_dict_attr(f, attr_name)
 
-            _retry_hdf5_write(results_path, _reset_skeletons)
+            with h5py.File(results_path, "a") as f:
+                _reset_skeletons(f)
 
         # Always reassign parent_program to the results.h5 path (whether or not
         # we just wrote it), so _build_encode_cache_from_parent_program works
@@ -735,7 +735,7 @@ class ProgramResults(Displayable):
         ]
         return Counter(data) if return_counter else data
 
-    def _get_available_shot_indices(
+    def _get_available_shot_indices(  # noqa: C901 -- two sources, each with a bounded stale-read retry loop
         self, expected_num_shots: int | None = None
     ) -> list[int]:
         """Return the available shot indices for lazy loading: checked first
@@ -744,11 +744,13 @@ class ProgramResults(Displayable):
         whatever's already in the in-memory cache) if neither is present.
 
         `expected_num_shots`, when given, opts into retrying a branch (up to
-        5 total attempts, jittered exponential backoff) whenever a
-        successful read returns fewer keys than expected, to ride out a
-        benign write/read race rather than silently reporting a partial
-        shot list. Left `None` (the default), a single successful read is
-        returned immediately regardless of completeness -- some callers
+        5 total attempts, jittered exponential backoff) whenever a read
+        finds a stale key (`KeyError`) or returns fewer keys than expected,
+        to ride out a benign write/read race rather than silently reporting
+        a partial shot list. Only stale or short reads are retried: a file
+        that can't be opened (`OSError`) ends that branch's attempts. Left
+        `None` (the default), a single successful read is returned
+        immediately regardless of completeness -- some callers
         (e.g. live progress polling) expect a partial list as a normal
         result, not a bug to retry away.
         """
@@ -761,11 +763,18 @@ class ProgramResults(Displayable):
         ) -> list[int] | None:
             for attempt in range(max_attempts):
                 keys: list[int] | None = None
+                open_failed = False
                 if filename is not None:
                     try:
-                        keys = _retry_hdf5_read(filename, read_fn)
-                    except (KeyError, OSError):
+                        with h5py.File(filename, "r") as f:
+                            keys = read_fn(f)
+                    except KeyError:
                         keys = None
+                    except OSError:
+                        # Not a stale read: another attempt would only
+                        # retry the open, so this attempt is the last one.
+                        keys = None
+                        open_failed = True
                 if extra_keys_fn is not None:
                     seen = set(keys or [])
                     keys = list(keys or []) + sorted(extra_keys_fn() - seen)
@@ -774,6 +783,8 @@ class ProgramResults(Displayable):
                     or len(keys) >= expected_num_shots
                 ):
                     return keys
+                if open_failed:
+                    return None
                 if attempt < max_attempts - 1:
                     delay = 0.01 * (2**attempt)
                     time.sleep(delay + random.uniform(0, delay))
@@ -1284,7 +1295,8 @@ class ProgramResults(Displayable):
                 (loaded_results.shot_wall_clock_times or {}).items(),
             )
 
-        _retry_hdf5_read(filename, _load)
+        with h5py.File(filename, "r") as f:
+            _load(f)
 
     def consolidate_checkpoints(
         self,
@@ -1347,23 +1359,22 @@ class ProgramResults(Displayable):
             checkpoint_dir
         )
 
-        # Sources merged in the current write attempt, unlinked only once
-        # that attempt's transaction on output_file has closed.
+        # Sources merged into output_file, unlinked only once output_file
+        # has closed.
         merged_sources: list[Path] = []
 
         # Merge each source directly into output_file (created if missing),
-        # deduplicating against already-merged keys so a retry never
-        # double-counts.
+        # deduplicating against already-merged keys so a re-run after a
+        # crash mid-consolidation never double-counts.
         def _do_merge(out_f: h5py.File) -> None:
-            merged_sources.clear()
             for worker_file in source_files:
                 # Read already-merged keys from output_file so we can skip
-                # duplicates and avoid corrupt entries on a retry -- tracked
+                # duplicates left by an interrupted earlier pass -- tracked
                 # separately per attribute (keyed by name, so there's no
                 # ambiguity about which set belongs to which attr), since a
                 # shot's History and its wall-clock time are two
                 # independent dict attrs that could in principle merge out
-                # of lockstep across retries.
+                # of lockstep.
                 already_merged_by_attr: dict[str, set[int]] = {}
                 for attr_name, _ in self._STREAMED_DICT_ATTRS:
                     already_merged_keys: set[int] = set()
@@ -1384,12 +1395,13 @@ class ProgramResults(Displayable):
                     )
                 except (BlockingIOError, OSError, KeyError):
                     # Skip a truncated/corrupted worker file, leaving it for a
-                    # later consolidation pass to retry once readable.
+                    # later consolidation pass to merge once readable.
                     continue
 
                 merged_sources.append(worker_file)
 
-        _retry_hdf5_write(output_file, _do_merge)
+        with h5py.File(output_file, "a") as out_f:
+            _do_merge(out_f)
 
         # output_file is closed here, so its merged entries are durable
         # before any source of them disappears.
@@ -1407,9 +1419,8 @@ class ProgramResults(Displayable):
         # Ensure output_file has valid structure even if no workers were present
         needs_init = not output_file.exists()
         if not needs_init:
-            needs_init = _retry_hdf5_read(
-                output_file, lambda check_f: len(check_f.keys()) == 0
-            )
+            with h5py.File(output_file, "r") as check_f:
+                needs_init = len(check_f.keys()) == 0
         if needs_init:
 
             def _init(out_f: h5py.File) -> None:
@@ -1422,7 +1433,8 @@ class ProgramResults(Displayable):
                             out_f, attr_name, value_use_dataset, iter(())
                         )
 
-            _retry_hdf5_write(output_file, _init)
+            with h5py.File(output_file, "a") as out_f:
+                _init(out_f)
 
         return output_file
 
@@ -1481,8 +1493,8 @@ class ProgramResults(Displayable):
         ------
         OSError
             If `merge_worker_checkpoint_file` reports failure (a
-            retry-exhausted lock conflict, or corruption/a missing
-            attribute in `worker_file`).
+            `worker_file` that can't be opened, or corruption/a missing
+            attribute in it).
         """
         already_merged_by_attr = {
             attr_name: (already_merged_by_attr or {}).get(attr_name, set())
@@ -1637,7 +1649,7 @@ class ProgramResults(Displayable):
                 self._nested_source_file, shot_index
             )
 
-    def _load_shot_from_single_file(
+    def _load_shot_from_single_file(  # noqa: C901 -- nested/standalone/payload sources plus a stale-KeyError retry loop
         self, filename: Path, shot_index: int, is_payload: bool = False
     ) -> bool:
         """Load a shot from a checkpoint file without materializing the full object.
@@ -1702,9 +1714,9 @@ class ProgramResults(Displayable):
 
             # Use get_dict_attr_value to fetch only this one shot
             # without decoding all others. A KeyError here is allowed to
-            # propagate out of this closure so _retry_hdf5_read can retry it
-            # as a possibly-transient "not visible yet" race rather than
-            # treating it as immediately conclusive.
+            # propagate out of this closure so the canonical-file loop below
+            # can retry it as a possibly-transient "not visible yet" race
+            # rather than treating it as immediately conclusive.
             history = get_dict_attr_value(
                 actual_group,
                 "shot_histories",
@@ -1732,12 +1744,18 @@ class ProgramResults(Displayable):
             except (OSError, KeyError, ValueError):
                 return False
 
-        try:
-            return _retry_hdf5_read(
-                filename,
-                _load,
-                max_retries=5,
-                retry_exceptions=(BlockingIOError, OSError, KeyError),
-            )
-        except (ValueError, KeyError):
-            return False
+        # The canonical file is reopened on each attempt, retrying only a
+        # stale KeyError. An open error is not retried and propagates.
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                with h5py.File(filename, "r") as f:
+                    return _load(f)
+            except ValueError:
+                return False
+            except KeyError:
+                if attempt == max_attempts - 1:
+                    return False
+                delay = 0.01 * (2**attempt)
+                time.sleep(delay + random.uniform(0, delay))
+        return False

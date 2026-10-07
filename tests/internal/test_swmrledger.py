@@ -10,6 +10,7 @@ import h5py
 import numpy as np
 import pytest
 
+import loqs.internal.swmrledger as swmrledger_module
 from loqs.internal import worker_id
 from loqs.internal.swmrledger import (
     SwmrLedgerSnapshot,
@@ -369,6 +370,104 @@ class TestSwmrLedgerUnit:
         # this module's cached state) must never reuse the cached value.
         monkeypatch.setattr(os, "getpid", lambda: real_getpid() + 12345)
         assert worker_id() != first
+
+
+def test_open_swmr_writer_publishes_ledger_only_in_swmr_mode(
+    tmp_path, monkeypatch
+):
+    """A new ledger must not appear at its final path before SWMR write mode
+    is on, or a poller's open there could make `swmr_mode = True` fail."""
+    path = tmp_path / "worker_ledger.h5"
+    real_init = swmrledger_module.init_swmr_ledger
+    real_replace = os.replace
+    path_existed_at_init = []
+    writer_handles = []
+    swmr_mode_at_replace = []
+
+    def recording_init(f, *args, **kwargs):
+        path_existed_at_init.append(path.exists())
+        writer_handles.append(f)
+        return real_init(f, *args, **kwargs)
+
+    def recording_replace(src, dst):
+        swmr_mode_at_replace.append(writer_handles[-1].swmr_mode)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(swmrledger_module, "init_swmr_ledger", recording_init)
+    monkeypatch.setattr(os, "replace", recording_replace)
+
+    f, ledger_group = open_swmr_writer(path, ALL_FIELDS)
+    try:
+        assert path_existed_at_init == [False]
+        assert swmr_mode_at_replace == [True]
+        assert path.exists()
+        assert f.swmr_mode is True
+        assert "done" in ledger_group
+        assert list(tmp_path.glob("*.tmp")) == []
+    finally:
+        f.close()
+
+
+def test_open_swmr_writer_falls_back_when_rename_of_open_file_fails(
+    tmp_path, monkeypatch
+):
+    """Where an open file can't be renamed (as on Windows), the writer closes
+    it, renames it, and reopens it at its final path in SWMR mode."""
+    path = tmp_path / "worker_ledger.h5"
+    real_replace = os.replace
+    calls = []
+
+    def failing_first_replace(src, dst):
+        calls.append((src, dst))
+        if len(calls) == 1:
+            raise OSError("cannot rename an open file")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_first_replace)
+
+    f, ledger_group = open_swmr_writer(path, ALL_FIELDS)
+    try:
+        assert len(calls) == 2
+        assert path.exists()
+        assert f.swmr_mode is True
+        mark_ledger_item_done(ledger_group, 3, 1.5)
+        assert list(tmp_path.glob("*.tmp")) == []
+    finally:
+        f.close()
+
+    with h5py.File(path, "r", libver="latest", swmr=True) as reader:
+        assert bool(reader["swmr_ledger/done"][3]) is True
+
+
+def test_open_swmr_writer_cleans_up_tmp_on_failure(tmp_path):
+    """A failure before a new ledger reaches its final path leaves neither
+    the final path nor its temporary file behind."""
+    path = tmp_path / "worker_ledger.h5"
+    with pytest.raises(ValueError):
+        open_swmr_writer(path, ["not_a_real_field"])
+    assert not path.exists()
+    assert not path.with_name(path.name + ".tmp").exists()
+
+
+def test_open_swmr_writer_reopens_existing_ledger_in_place(tmp_path):
+    """Reopening an existing ledger keeps its datasets and `done` bits."""
+    path = tmp_path / "worker_ledger.h5"
+    f, ledger_group = open_swmr_writer(path, ALL_FIELDS, capacity=4)
+    mark_ledger_item_done(ledger_group, 2, 0.25)
+    f.close()
+
+    f, ledger_group = open_swmr_writer(path, ALL_FIELDS)
+    try:
+        assert f.swmr_mode is True
+        assert set(ledger_group) == set(ALL_FIELDS)
+        snapshot = read_swmr_ledger_status(ledger_group)
+        assert snapshot.done is not None
+        assert np.flatnonzero(snapshot.done).tolist() == [2]
+        assert snapshot.wall_clock_times is not None
+        assert snapshot.wall_clock_times[2] == 0.25
+        assert list(tmp_path.glob("*.tmp")) == []
+    finally:
+        f.close()
 
 
 # --------------------------------------------------------------------------

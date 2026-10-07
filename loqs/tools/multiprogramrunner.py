@@ -31,7 +31,6 @@ from loqs.core.programresults import (
 )
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal import (
-    _retry_hdf5_write,
     pin_worker_threads,
     worker_id,
 )
@@ -546,7 +545,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 for attr_name in self._NO_COLLAPSE_ATTRS:
                     _reset_empty_groups_format_dict_attr(f, attr_name)
 
-            _retry_hdf5_write(runner_path, _reset_runner_format)
+            with h5py.File(runner_path, "a") as f:
+                _reset_runner_format(f)
 
         # Pre-assign indices via item_key_fn, adopting the persisted map
         # (or the now-seeded map) so a fresh resumed instance doesn't reassign
@@ -573,7 +573,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     for attr_name in self._NO_COLLAPSE_ATTRS:
                         _reset_empty_groups_format_dict_attr(f, attr_name)
 
-                _retry_hdf5_write(index_map_path, _reset_indexmap_format)
+                with h5py.File(index_map_path, "a") as f:
+                    _reset_indexmap_format(f)
 
         self._run_dispatch(
             precomputed_indices=precomputed_indices,
@@ -724,8 +725,9 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     delete_originals=True,
                 )
                 # Read every always-merged attribute from disk directly into
-                # its own runner-side attribute; a lock conflict here
-                # propagates, since this one-shot pass has no next poll tick.
+                # its own runner-side attribute. These reads are strict: a
+                # file that still can't be opened propagates its error, since
+                # this one-shot pass has no next poll tick.
                 for worker_key, runner_key, _ in self._ALWAYS_MERGED_ATTRS:
                     setattr(
                         self,
@@ -734,7 +736,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             self.item_checkpoint_dir,
                             runner_filename=self.runner_filename,
                             attr_name=worker_key,
-                            retry_on_conflict=True,
+                            strict=True,
                         ),
                     )
                 final_done = self._reduced_results
@@ -748,7 +750,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             self.item_checkpoint_dir,
                             runner_filename=self.runner_filename,
                             attr_name="_program_results",
-                            retry_on_conflict=True,
+                            strict=True,
                         )
                         self._program_results = {
                             index: self._make_lazy_program_results(
@@ -761,7 +763,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             self.item_checkpoint_dir,
                             runner_filename=self.runner_filename,
                             attr_name="_program_results",
-                            retry_on_conflict=True,
+                            strict=True,
                         )
             else:
                 # No checkpointing: merge each _ALWAYS_MERGED_ATTRS value out
@@ -863,7 +865,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 value_use_dataset=False,
             )
 
-        _retry_hdf5_write(runner_path, _write)
+        with h5py.File(runner_path, "a") as f:
+            _write(f)
 
     # Hook methods -- subclasses implement these
     def build_program(self, index: int) -> QuantumProgram:
@@ -1112,7 +1115,7 @@ def _read_done_union(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
     attr_name: str = "results",
-    retry_on_conflict: bool = False,
+    strict: bool = False,
 ) -> dict[int, Any]:
     """Compute the union of runner.h5's consolidated dict attribute and all
     worker_*_runner.h5/worker_*_item_*_payload.h5 files' matching attributes,
@@ -1134,11 +1137,11 @@ def _read_done_union(
         Name of the dict attribute to read. Maps "results" to "_reduced_results"
         in runner.h5's actual attribute name; other names used as-is.
         Default is "results".
-    retry_on_conflict : bool, optional
-        If True, a transient lock conflict on the runner.h5 read is retried
-        via `_retry_hdf5_read`, with a conflict surviving that retry budget
-        propagating instead of falling back to worker files. Default False
-        (live-polling behavior).
+    strict : bool, optional
+        Covers every file read, runner.h5 and each worker file alike, each
+        opened once with no retry. If True, an `OSError` (including
+        `BlockingIOError`) opening or reading any of them propagates; if
+        False (default, live-polling behavior), that file is skipped.
 
     Returns
     -------
@@ -1155,7 +1158,7 @@ def _read_done_union(
         ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
         attr_name,
         canonical_attr_name=canonical_attr_name,
-        retry_on_conflict=retry_on_conflict,
+        strict=strict,
     )
 
 
@@ -1163,14 +1166,14 @@ def _read_done_union_keys(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
     attr_name: str = "results",
-    retry_on_conflict: bool = False,
+    strict: bool = False,
 ) -> set[int]:
     """Key-only sibling of `_read_done_union`: returns the union of keys
     present in runner.h5's consolidated dict attribute and all
     worker_*_runner.h5/worker_*_item_*_payload.h5 files' matching attributes,
     without decoding any values. Same "results" -> "_reduced_results"
-    attribute-name mapping and `retry_on_conflict` semantics as
-    `_read_done_union`; returns an empty set if no checkpoints exist.
+    attribute-name mapping and `strict` semantics (covering every file read)
+    as `_read_done_union`; returns an empty set if no checkpoints exist.
     """
     canonical_attr_name = (
         "_reduced_results" if attr_name == "results" else None
@@ -1181,7 +1184,7 @@ def _read_done_union_keys(
         ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
         attr_name,
         canonical_attr_name=canonical_attr_name,
-        retry_on_conflict=retry_on_conflict,
+        strict=strict,
     )
 
 
@@ -1220,13 +1223,16 @@ def _consolidate_worker_files(
             for _, runner_key, _ in MultiProgramRunner._STREAMED_DICT_ATTRS
         }
 
-    _retry_hdf5_write(runner_path, _read_existing_keys)
+    with h5py.File(runner_path, "a") as f:
+        _read_existing_keys(f)
     if runner_is_empty:
         return
 
-    # Consolidate each worker file and delete it once merged; a
-    # retry-exhausted lock conflict is swallowed internally, caught
-    # downstream instead by run()'s own final-assembly completeness checks.
+    # Consolidate each worker file and delete it once merged. A file that
+    # fails to merge is left in place: final assembly's strict union read
+    # then reads it if it can now be opened, and raises if the open fails
+    # again. A file failing with `KeyError` is skipped by that read too, and
+    # `_verify_final_completeness` reports any item it held.
     # A new-format ledger file has no dict attrs to merge (its data lives in
     # payload files below) and its writer process never closes it, so it's
     # unlinked directly rather than merged, which would otherwise block.
@@ -1310,9 +1316,9 @@ def _write_item_checkpoint_with_ledger(
     """Write one item's checkpoint entries to its own payload file, then mark
     it done in the SWMR ledger.
 
-    The payload file is opened fresh (`"w"`), so no retry wrapping is needed
-    -- unlike the old shared-worker-file scheme, no other write can be
-    contending for this exact path. `mark_ledger_item_done` runs only after
+    The payload file is opened fresh (`"w"`) and only once -- unlike the old
+    shared-worker-file scheme, no other write can be contending for this
+    exact path. `mark_ledger_item_done` runs only after
     the `with` block closes the payload file, so a `merge_dict_attr`
     exception partway through never reaches the ledger: the item is only
     ever marked done once its payload file is fully written.

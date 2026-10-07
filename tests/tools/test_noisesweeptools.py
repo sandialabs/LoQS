@@ -451,14 +451,19 @@ class TestRunParallel:
         finally:
             NoiseSweepRunner.build_program = real_build_program
 
-        # Read the partial state (indices 0 and 1) from the worker_*_runner.h5
-        # files directly.
+        # Read the partial state (indices 0 and 1) with the same glob pair
+        # as _read_done_union. The completed entries come from the per-item
+        # payload files; the worker ledgers hold no results, so the read
+        # skips them.
         from loqs.internal.streamingmerge import (
             read_checkpoint_dict_attr_union,
         )
 
         completed = read_checkpoint_dict_attr_union(
-            item_checkpoint_dir, None, "worker_*_runner.h5", "results"
+            item_checkpoint_dir,
+            None,
+            ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
+            "results",
         )
         assert len(completed) == 2  # Only 0 and 1 completed
         assert 0 in completed
