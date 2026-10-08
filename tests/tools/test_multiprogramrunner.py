@@ -8,6 +8,7 @@ import multiprocessing as mp
 import pickle
 import sys
 import time
+import unittest.mock
 import weakref
 from pathlib import Path
 from typing import Any, ClassVar
@@ -29,6 +30,14 @@ from loqs.tools.multiprogramrunner import (
 )
 
 # Module-level worker functions for parallel/multiprocessing tests
+
+
+def _open_hdf5_file_paths() -> set[Path]:
+    """Resolved paths of every HDF5 file currently open in this process."""
+    return {
+        Path(h5py.h5f.get_name(fid).decode()).resolve()
+        for fid in h5py.h5f.get_obj_ids(types=h5py.h5f.OBJ_FILE)
+    }
 
 
 def _double_item(item, index, *, shot_executor, **kwargs):
@@ -2033,25 +2042,41 @@ class TestItemCheckpointWithLedger:
         )
         assert done_at_5 is False
 
-    def test_get_worker_ledger_caches_across_calls(self, tmp_path):
-        """A second call with the same `item_checkpoint_dir` (within the
-        same process) returns the identical cached `h5py.Group` object
-        rather than reopening the file."""
-        from loqs.internal.swmrledger import (
-            read_swmr_ledger_status,
-            update_ledger_in_flight,
+    @pytest.mark.parametrize("program_executor", ["serial", "pool"])
+    def test_no_item_ledger_open_after_run(self, tmp_path, program_executor):
+        """Neither the driver nor a pool worker keeps its item ledger open
+        after its task: an open ledger fails consolidation's delete on
+        Windows and leaves a live ledger final assembly can't read."""
+        strategy = None
+        executor = None
+        if program_executor == "pool":
+            loky = pytest.importorskip("loky")
+            executor = loky.get_reusable_executor(max_workers=1)
+            strategy = ParallelStrategy(
+                program_executor=executor, n_program_chunks=2
+            )
+        checkpoint_dir = tmp_path / "checkpoints"
+
+        runner = _TrackingRunner(
+            list(range(4)),
+            process_fn=_double_item,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+            parallel_strategy=strategy,
         )
-        from loqs.tools.multiprogramrunner import _get_worker_ledger
+        results = runner.run()
 
-        item_checkpoint_dir = tmp_path / "ckpt"
-        item_checkpoint_dir.mkdir()
-
-        first = _get_worker_ledger(item_checkpoint_dir)
-        update_ledger_in_flight(first, item_index=7)
-
-        second = _get_worker_ledger(item_checkpoint_dir)
-        assert second is first
-        assert read_swmr_ledger_status(second).current_item_index == 7
+        assert results == [0, 2, 4, 6]
+        assert not list(checkpoint_dir.glob("worker_*"))
+        resolved_dir = checkpoint_dir.resolve()
+        assert not any(
+            path.is_relative_to(resolved_dir)
+            for path in _open_hdf5_file_paths()
+        )
+        if executor is not None:
+            worker_open_paths = executor.submit(_open_hdf5_file_paths).result()
+            assert not any(
+                path.is_relative_to(resolved_dir) for path in worker_open_paths
+            )
 
 
 class TestIndexMapPersistence:
@@ -3210,6 +3235,33 @@ class TestWorkerFileConsolidation:
         assert len(entries) == 5
         assert entries == {0: 0, 1: 2, 2: 4, 3: 6, 4: 8}
 
+    def test_consolidate_warns_when_delete_fails(self, tmp_path):
+        """A worker file whose delete fails after its merge raises a
+        `RuntimeWarning` and is left in place, instead of being silently
+        ignored; the run still returns the right results."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        real_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name.startswith("worker_"):
+                raise PermissionError(13, "file in use", str(self))
+            return real_unlink(self, *args, **kwargs)
+
+        runner = _TrackingRunner(
+            list(range(3)),
+            process_fn=_double_item,
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+        )
+        with unittest.mock.patch.object(Path, "unlink", failing_unlink):
+            with pytest.warns(
+                RuntimeWarning, match="Could not delete merged checkpoint file"
+            ):
+                results = runner.run()
+
+        assert results == [0, 2, 4]
+        assert list(checkpoint_dir.glob("worker_*_runner.h5"))
+        assert list(checkpoint_dir.glob("worker_*_item_*_payload.h5"))
+
     def test_resume_with_deleted_worker_files_reads_from_runner_h5(
         self, tmp_path
     ):
@@ -3965,7 +4017,7 @@ class TestWorkerFileConsolidation:
             )
 
         # New-format: item 1's SWMR ledger file plus its own payload file.
-        _, ledger_group = open_swmr_writer(
+        ledger_file, ledger_group = open_swmr_writer(
             checkpoint_dir / "worker_new_runner.h5",
             fields=_ITEM_LEDGER_FIELDS,
         )
@@ -3996,6 +4048,9 @@ class TestWorkerFileConsolidation:
 
         # Consolidation folds both source formats into runner.h5 and deletes
         # every source file (legacy worker file, ledger file, payload file).
+        # The writer closes its ledger first, as a real worker does when its
+        # task returns; an open ledger can't be deleted on Windows.
+        ledger_file.close()
         _consolidate_worker_files(
             checkpoint_dir, runner_filename="runner.h5", delete_originals=True
         )

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from concurrent.futures import as_completed
+import contextlib
 import copy
 import math
 from pathlib import Path
@@ -42,7 +43,7 @@ from loqs.core.instructions.instructionstack import (
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchLayout
 from loqs.core.recordables.patchlayout import PatchLayoutLike
-from loqs.core.programresults import ProgramResults
+from loqs.core.programresults import ProgramResults, _held_shot_ledger
 from loqs.internal import Displayable, pin_worker_threads, worker_id
 from loqs.internal.legacy import legacy_name_hint
 from loqs.internal.streamingmerge import (
@@ -544,26 +545,38 @@ class QuantumProgram(Displayable):
         """Serially compute every shot in `remaining`, flushing to the
         canonical checkpoint file once `checkpoint_batch_size` shots have
         accumulated unwritten (plus a final flush for any undersized tail
-        batch)."""
-        for i in remaining:
-            seed = (
-                None
-                if self.default_base_seed is None
-                else self.default_base_seed + i
-            )
-            start_time = time.perf_counter()
-            result = QuantumProgram._run_shot(self, max_frame_limit, seed, i)
-            wall_clock_time = time.perf_counter() - start_time
-            program_results.add_shot(
-                i, result, wall_clock_time=wall_clock_time
-            )
-            pbar.update(1)
-            if (
-                len(program_results.get_unwritten_shots())
-                >= checkpoint_batch_size
-            ):
-                program_results.checkpoint(checkpoint_dir=checkpoint_dir)
-        program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+        batch).
+
+        With a `checkpoint_dir` and shots to run, the shot ledger is held
+        open across the whole loop and closed before returning, so `run()`'s
+        consolidation sees it closed."""
+        held_ledger = (
+            contextlib.nullcontext()
+            if checkpoint_dir is None or not remaining
+            else _held_shot_ledger(checkpoint_dir, worker_id())
+        )
+        with held_ledger:
+            for i in remaining:
+                seed = (
+                    None
+                    if self.default_base_seed is None
+                    else self.default_base_seed + i
+                )
+                start_time = time.perf_counter()
+                result = QuantumProgram._run_shot(
+                    self, max_frame_limit, seed, i
+                )
+                wall_clock_time = time.perf_counter() - start_time
+                program_results.add_shot(
+                    i, result, wall_clock_time=wall_clock_time
+                )
+                pbar.update(1)
+                if (
+                    len(program_results.get_unwritten_shots())
+                    >= checkpoint_batch_size
+                ):
+                    program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+            program_results.checkpoint(checkpoint_dir=checkpoint_dir)
 
     def _run_parallel_checkpointed(
         self,

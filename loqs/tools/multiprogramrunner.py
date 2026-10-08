@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import functools
 import h5py
@@ -42,12 +43,13 @@ from loqs.internal.streamingmerge import (
     iter_dict_attr_entries,
     read_checkpoint_dict_attr_union,
     read_checkpoint_dict_attr_union_keys,
+    remove_transient_file,
 )
 from loqs.internal.swmrledger import (
+    held_swmr_writer,
     is_swmr_ledger_file,
     mark_ledger_item_done,
     open_swmr_reader,
-    open_swmr_writer,
     read_swmr_ledger_status,
     update_ledger_in_flight,
 )
@@ -1234,15 +1236,12 @@ def _consolidate_worker_files(
     # again. A file failing with `KeyError` is skipped by that read too, and
     # `_verify_final_completeness` reports any item it held.
     # A new-format ledger file has no dict attrs to merge (its data lives in
-    # payload files below) and its writer process never closes it, so it's
-    # unlinked directly rather than merged, which would otherwise block.
+    # payload files below), so it's deleted directly; its writer closed it
+    # when its task returned.
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
         if is_swmr_ledger_file(worker_file):
             if delete_originals:
-                try:
-                    worker_file.unlink()
-                except OSError:
-                    pass
+                remove_transient_file(worker_file)
             continue
         merge_worker_checkpoint_file(
             worker_file,
@@ -1269,8 +1268,6 @@ def _consolidate_worker_files(
         )
 
 
-_WORKER_LEDGER_CACHE: dict[Path, tuple[h5py.File, h5py.Group]] = {}
-
 # Ledger fields an item-level worker ledger tracks; item_shots_done/
 # item_shots_total stay at their zero fill value, since nothing in this
 # runner yet populates them with real shot-progress data.
@@ -1284,26 +1281,22 @@ _ITEM_LEDGER_FIELDS: tuple[str, ...] = (
 )
 
 
-def _get_worker_ledger(item_checkpoint_dir: Path) -> h5py.Group:
-    """Return this worker process's SWMR ledger group for
-    `item_checkpoint_dir`, opening (and caching) it on first use.
+def _item_ledger_path(item_checkpoint_dir: Path) -> Path:
+    """Return this worker process's SWMR ledger path in
+    `item_checkpoint_dir`."""
+    return item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
 
-    The underlying `worker_{worker_id()}_runner.h5` file is opened once per
-    process per directory via `open_swmr_writer` and never explicitly
-    closed -- every ledger write already flushes immediately, and an
-    unclosed SWMR file left behind by a killed or exited process is safe to
-    reopen.
-    """
-    cached = _WORKER_LEDGER_CACHE.get(item_checkpoint_dir)
-    if cached is not None:
-        return cached[1]
 
-    ledger_path = item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-    ledger_file, ledger_group = open_swmr_writer(
-        ledger_path, fields=_ITEM_LEDGER_FIELDS
+def _held_item_ledger(
+    item_checkpoint_dir: Path | None,
+) -> contextlib.AbstractContextManager[h5py.Group | None]:
+    """Hold this worker's item ledger for a `with` block (see
+    `held_swmr_writer`), or yield None when checkpointing is disabled."""
+    if item_checkpoint_dir is None:
+        return contextlib.nullcontext(None)
+    return held_swmr_writer(
+        _item_ledger_path(item_checkpoint_dir), _ITEM_LEDGER_FIELDS
     )
-    _WORKER_LEDGER_CACHE[item_checkpoint_dir] = (ledger_file, ledger_group)
-    return ledger_group
 
 
 def _write_item_checkpoint_with_ledger(
@@ -1326,7 +1319,7 @@ def _write_item_checkpoint_with_ledger(
     Parameters
     ----------
     ledger_group : h5py.Group
-        The worker's SWMR ledger group, as returned by `_get_worker_ledger`.
+        The worker's SWMR ledger group, as yielded by `held_swmr_writer`.
     payload_path : Path
         Path to this item's own dedicated payload file.
     index : int
@@ -1432,8 +1425,8 @@ def _process_and_checkpoint_item(
     Parameters
     ----------
     ledger_group : h5py.Group | None
-        The worker's SWMR ledger group (as returned by
-        `_get_worker_ledger`), or None when checkpointing is disabled.
+        The worker's SWMR ledger group (as yielded by
+        `held_swmr_writer`), or None when checkpointing is disabled.
     payload_path : Path | None
         Path to this item's own dedicated payload file, or None when
         checkpointing is disabled.
@@ -1524,41 +1517,38 @@ def _run_serial(
     )
     results_dict: dict[int, dict[str, Any]] = {}
 
-    ledger_group = (
-        _get_worker_ledger(item_checkpoint_dir)
-        if item_checkpoint_dir is not None
-        else None
-    )
+    # The ledger is closed when the `with` exits, so `run()`'s consolidation
+    # sees it closed.
+    with _held_item_ledger(item_checkpoint_dir) as ledger_group:
+        for index, item in remaining:
+            payload_path = None
+            if item_checkpoint_dir is not None:
+                payload_path = (
+                    item_checkpoint_dir
+                    / f"worker_{worker_id()}_item_{index}_payload.h5"
+                )
 
-    for index, item in remaining:
-        payload_path = None
-        if item_checkpoint_dir is not None:
-            payload_path = (
-                item_checkpoint_dir
-                / f"worker_{worker_id()}_item_{index}_payload.h5"
+            aux = _process_and_checkpoint_item(
+                process_item,
+                item,
+                index,
+                static_kwargs,
+                shot_executor,
+                n_shot_batches,
+                keep_shot_results,
+                shot_checkpoint_subdir,
+                ledger_group,
+                payload_path,
+                results_filename=results_filename,
             )
 
-        aux = _process_and_checkpoint_item(
-            process_item,
-            item,
-            index,
-            static_kwargs,
-            shot_executor,
-            n_shot_batches,
-            keep_shot_results,
-            shot_checkpoint_subdir,
-            ledger_group,
-            payload_path,
-            results_filename=results_filename,
-        )
+            results_dict[index] = aux
 
-        results_dict[index] = aux
+            if on_item_done is not None:
+                on_item_done(index, item, aux["_reduced_results"])
 
-        if on_item_done is not None:
-            on_item_done(index, item, aux["_reduced_results"])
-
-        if pbar is not None:
-            pbar.update(1)
+            if pbar is not None:
+                pbar.update(1)
 
     return results_dict
 
@@ -1658,9 +1648,8 @@ def _poll_one_worker_file(
     Branches on whether `worker_file` is a legacy worker file (dict attrs at
     its own root) or a new-format SWMR ledger file, delegating the
     new-format case to `_poll_one_new_format_worker_file`. A file that
-    can't be opened or read (e.g. a ledger still in its creation window,
-    which `is_swmr_ledger_file` can't identify yet, or a damaged file) is
-    skipped and retried on the next poll tick, at whichever consumed count
+    can't be opened or read (e.g. a file deleted since the glob, or a
+    damaged file) is skipped and retried on the next poll tick, at whichever consumed count
     it last reached here.
     """
     if is_swmr_ledger_file(worker_file):
@@ -1691,9 +1680,9 @@ def _poll_one_worker_file(
                     key, value, observed_indices, items_map, on_item_done, pbar
                 )
     except (BlockingIOError, OSError, KeyError):
-        # A file that can't be opened yet (e.g. a ledger still in its
-        # creation window), a missing attribute, or a damaged file; skip
-        # this file for now
+        # A file that can't be opened (e.g. a file deleted since the
+        # glob), a missing attribute, or a damaged file; skip this file
+        # for now
         pass
     return consumed_count
 
@@ -1704,8 +1693,8 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
     Returns the set of item indices currently being processed by any worker.
     A legacy worker file's `current_item_index` comes from its own file
     attrs; a new-format worker file's comes from its SWMR ledger instead.
-    Silently skips a file that is missing or can't be opened yet (e.g. a
-    ledger still in its creation window), which is appropriate since the
+    Silently skips a file that is missing or can't be opened (e.g. a file
+    deleted since the glob), which is appropriate since the
     set of workers can change mid-dispatch.
 
     Parameters
@@ -1734,8 +1723,8 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
                     if "current_item_index" in f.attrs:
                         in_flight.add(int(f.attrs["current_item_index"]))
         except (BlockingIOError, OSError, KeyError):
-            # Missing, or can't be opened yet (e.g. a ledger still in its
-            # creation window) -- skip this file for now
+            # Missing, or can't be opened (e.g. a file deleted since the
+            # glob) -- skip this file for now
             continue
     return in_flight
 
@@ -1942,38 +1931,34 @@ def _generic_chunk_worker(
     pin_worker_threads()
     shot_executor = resolve_shot_executor(shot_executor)
 
-    ledger_group = (
-        _get_worker_ledger(item_checkpoint_dir)
-        if item_checkpoint_dir is not None
-        else None
-    )
-
     results = []
-    for index, item in chunk:
-        # Mark this item in flight in the ledger if checkpointing is enabled
-        payload_path = None
-        if item_checkpoint_dir is not None:
-            assert ledger_group is not None
-            update_ledger_in_flight(ledger_group, item_index=index)
-            payload_path = (
-                item_checkpoint_dir
-                / f"worker_{worker_id()}_item_{index}_payload.h5"
+    with _held_item_ledger(item_checkpoint_dir) as ledger_group:
+        for index, item in chunk:
+            # Mark this item in flight in the ledger if checkpointing is
+            # enabled
+            payload_path = None
+            if item_checkpoint_dir is not None:
+                assert ledger_group is not None
+                update_ledger_in_flight(ledger_group, item_index=index)
+                payload_path = (
+                    item_checkpoint_dir
+                    / f"worker_{worker_id()}_item_{index}_payload.h5"
+                )
+
+            aux = _process_and_checkpoint_item(
+                process_item,
+                item,
+                index,
+                static_kwargs,
+                shot_executor,
+                n_shot_batches,
+                keep_shot_results,
+                shot_checkpoint_subdir,
+                ledger_group,
+                payload_path,
+                results_filename=results_filename,
             )
 
-        aux = _process_and_checkpoint_item(
-            process_item,
-            item,
-            index,
-            static_kwargs,
-            shot_executor,
-            n_shot_batches,
-            keep_shot_results,
-            shot_checkpoint_subdir,
-            ledger_group,
-            payload_path,
-            results_filename=results_filename,
-        )
-
-        results.append((index, aux))
+            results.append((index, aux))
 
     return results

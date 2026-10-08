@@ -16,21 +16,34 @@ HDF5's SWMR mode -- without either side needing a file lock. A caller
 picks which of the six available fields it needs (an item-level ledger
 wants all six; a shot-level ledger typically omits the in-flight-item
 fields), so this module never assumes a fixed schema.
+
+SWMR relies on the file system preserving POSIX write ordering, so
+ledgers need a local disk or a parallel file system such as Lustre or
+GPFS, not an NFS or SMB share. Ledger opens turn HDF5 file locking off:
+SWMR's guarantees don't depend on it, and the locks are what made a
+writer's open fail while a reader was polling the ledger.
 """
 
 from __future__ import annotations
 
 import os
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 import h5py
 import numpy as np
 
 DEFAULT_GROUP_NAME = "swmr_ledger"
 DEFAULT_CHUNK_SIZE = 1024
+
+# Writer handles shared by nested `held_swmr_writer` holders in this
+# process, keyed by resolved ledger path: [file, ledger group, hold count].
+_HELD_WRITERS: dict[Path, list] = {}
+_HELD_WRITERS_LOCK = threading.Lock()
 
 # Datasets that grow to accommodate an index beyond their current capacity
 # (loky distributes work dynamically, so a resumed run's assigned indices
@@ -149,21 +162,21 @@ def open_swmr_writer(
     """Open (creating if necessary) `path` as the single SWMR writer,
     initializing the ledger group and enabling SWMR write mode.
 
-    `libver="latest"` is required on the `h5py.File` open for SWMR to be
-    available at all; the ledger's datasets are created via
-    `init_swmr_ledger` before SWMR write mode is turned on, since dataset
-    creation is not permitted once it's active.
+    `libver="latest"` is required for SWMR to be available at all; the
+    ledger's datasets are created via `init_swmr_ledger` before the file
+    is opened in SWMR write mode, since dataset creation is not permitted
+    once it's active.
 
-    A new ledger is built under `path` plus a `.tmp` suffix and renamed
-    onto `path` only once SWMR write mode is on, so a poller only ever sees
-    a new ledger already in SWMR mode. If anything fails before the file
-    reaches `path`, the temporary file is closed and removed.
+    A new ledger is built under `path` plus a `.tmp` suffix, closed, and
+    renamed onto `path` (an open file can't be renamed on Windows), so a
+    poller never sees a half-built ledger. If anything fails before the
+    rename, the temporary file is closed and removed; a failure in the
+    reopen that follows leaves a valid, closed ledger at `path`.
 
-    Two cases keep a short window in which a concurrent SWMR reader's open
-    can make enabling SWMR write mode fail: an existing `path` is reopened
-    in place, and a platform that can't rename an open file (Windows)
-    falls back to closing, renaming, and reopening it in place. Pollers
-    skip a ledger they can't open.
+    Both a new and an existing ledger end in a direct SWMR-write open of
+    `path` with HDF5 file locking off, so a concurrent SWMR reader can't
+    make the open fail. An existing ledger must already hold every
+    requested field; `capacity` and `chunk_size` only apply to a new one.
 
     Parameters
     ----------
@@ -183,63 +196,124 @@ def open_swmr_writer(
     -------
     tuple[h5py.File, h5py.Group]
         The open file (in SWMR write mode) and its ledger subgroup.
+
+    Raises
+    ------
+    ValueError
+        If `fields` names an unknown field, or an existing ledger lacks
+        one of `fields`.
     """
     path = Path(path)
     if path.exists():
-        return _open_swmr_writer_in_place(
-            path, fields, capacity, chunk_size, group_name
-        )
+        return _reopen_swmr_writer(path, fields, group_name)
 
     tmp_path = path.with_name(path.name + ".tmp")
     f: h5py.File | None = None
     try:
         f = h5py.File(tmp_path, "w", libver="latest")
-        ledger_group = init_swmr_ledger(
+        init_swmr_ledger(
             f,
             fields,
             capacity=capacity,
             chunk_size=chunk_size,
             group_name=group_name,
         )
-        f.swmr_mode = True
-        try:
-            os.replace(tmp_path, path)
-        except OSError:
-            # The rename of an open file failed (as on Windows): close it,
-            # rename it, and reopen it at its final path.
-            f.close()
-            f = None
-            os.replace(tmp_path, path)
-            return _open_swmr_writer_in_place(
-                path, fields, capacity, chunk_size, group_name
-            )
+        f.close()
+        f = None
+        os.replace(tmp_path, path)
     except BaseException:
         if f is not None:
             f.close()
         tmp_path.unlink(missing_ok=True)
         raise
-    return f, ledger_group
+    return _reopen_swmr_writer(path, fields, group_name)
 
 
-def _open_swmr_writer_in_place(
+def _reopen_swmr_writer(
     path: Path,
     fields: Sequence[str],
-    capacity: int,
-    chunk_size: int,
     group_name: str,
 ) -> tuple[h5py.File, h5py.Group]:
-    """Open `path` in place as the SWMR writer: `"a"`, then
-    `init_swmr_ledger`, then enable SWMR write mode."""
-    f = h5py.File(path, "a", libver="latest")
-    ledger_group = init_swmr_ledger(
-        f,
-        fields,
-        capacity=capacity,
-        chunk_size=chunk_size,
-        group_name=group_name,
+    """Open the existing ledger at `path` directly in SWMR write mode, with
+    HDF5 file locking off, and check that it holds every requested field.
+
+    The close degree stays at h5py's default, since HDF5 refuses a second
+    open of a file in the same process whose close degree differs.
+
+    Raises
+    ------
+    ValueError
+        If the ledger group or any of `fields` is missing; datasets can't
+        be created once SWMR write mode is active.
+    """
+    fapl = h5py.h5p.create(h5py.h5p.FILE_ACCESS)
+    fapl.set_libver_bounds(h5py.h5f.LIBVER_LATEST, h5py.h5f.LIBVER_LATEST)
+    fapl.set_file_locking(False, True)
+    fid = h5py.h5f.open(
+        os.fsencode(path),
+        h5py.h5f.ACC_RDWR | h5py.h5f.ACC_SWMR_WRITE,
+        fapl=fapl,
     )
-    f.swmr_mode = True
-    return f, ledger_group
+    f = h5py.File(fid)
+    group = f.get(group_name)
+    if not isinstance(group, h5py.Group):
+        missing = [group_name]
+    else:
+        missing = [field for field in fields if field not in group]
+    if missing:
+        f.close()
+        raise ValueError(
+            f"SWMR ledger {str(path)!r} is missing {missing}, which can't be "
+            "created under SWMR write mode"
+        )
+    return f, group
+
+
+@contextmanager
+def held_swmr_writer(
+    path: Path,
+    fields: Sequence[str],
+) -> Iterator[h5py.Group]:
+    """Hold `path` open as this process's SWMR writer for the `with` block,
+    yielding its ledger group.
+
+    Holders of the same ledger (keyed by resolved path) share one handle,
+    opened via `open_swmr_writer` by the first holder and closed when the
+    outermost holder exits. An enclosing `with` therefore keeps one handle
+    across many inner uses (for example a loop of `checkpoint()` calls),
+    while a lone use closes its handle before returning. Thread-safe.
+    A reader of the same ledger open in this process when the handle is
+    opened makes the open fail, so thread-based executors must not poll
+    ledgers that their own threads write.
+
+    Parameters
+    ----------
+    path : Path
+        Path to the ledger's HDF5 file, created if absent.
+    fields : Sequence[str]
+        Which ledger fields it holds -- see `open_swmr_writer`.
+
+    Yields
+    ------
+    h5py.Group
+        The ledger subgroup, in SWMR write mode.
+    """
+    key = Path(path).resolve()
+    with _HELD_WRITERS_LOCK:
+        entry = _HELD_WRITERS.get(key)
+        if entry is None:
+            f, group = open_swmr_writer(key, fields)
+            entry = [f, group, 0]
+            _HELD_WRITERS[key] = entry
+        entry[2] += 1
+    try:
+        yield entry[1]
+    finally:
+        with _HELD_WRITERS_LOCK:
+            entry[2] -= 1
+            if entry[2] == 0:
+                del _HELD_WRITERS[key]
+                entry[0].close()
 
 
 def open_swmr_reader(
@@ -261,7 +335,7 @@ def open_swmr_reader(
     tuple[h5py.File, h5py.Group]
         The open file (in SWMR read mode) and its ledger subgroup.
     """
-    f = h5py.File(path, "r", libver="latest", swmr=True)
+    f = h5py.File(path, "r", libver="latest", swmr=True, locking=False)
     return f, f[group_name]
 
 
@@ -269,13 +343,15 @@ def is_swmr_ledger_file(path: Path) -> bool:
     """Whether `path` is a SWMR ledger file (holding a `swmr_ledger` group)
     rather than a legacy checkpoint file with its data at its own root.
 
-    Opens with `swmr=True`, matching `open_swmr_reader`: a ledger's writer
-    typically never closes it, and a plain open would fail cross-process
-    while that writer stays alive. Any open or read error counts as "not a
-    ledger", so the caller's own handling of that file still applies.
+    Opens like `open_swmr_reader` (SWMR read, file locking off), so the
+    check succeeds while the ledger's writer still holds it open. Any open
+    or read error counts as "not a ledger", so the caller's own handling
+    of that file still applies.
     """
     try:
-        with h5py.File(path, "r", libver="latest", swmr=True) as f:
+        with h5py.File(
+            path, "r", libver="latest", swmr=True, locking=False
+        ) as f:
             return DEFAULT_GROUP_NAME in f
     except (BlockingIOError, OSError):
         return False
@@ -311,7 +387,9 @@ def read_swmr_ledger_done_union(
     done: set[int] = set()
     for path in sorted(Path(directory).glob(pattern)):
         try:
-            with h5py.File(path, "r", libver="latest", swmr=True) as f:
+            with h5py.File(
+                path, "r", libver="latest", swmr=True, locking=False
+            ) as f:
                 group = f.get(group_name)
                 if not isinstance(group, h5py.Group) or "done" not in group:
                     continue

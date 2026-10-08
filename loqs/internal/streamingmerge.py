@@ -20,11 +20,37 @@ from __future__ import annotations
 import h5py
 import itertools
 import numpy as np
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.serializable import Serializable
+
+
+def remove_transient_file(path: Path) -> bool:
+    """Delete a merged transient checkpoint file (payload or ledger).
+
+    Returns True once the file is gone, including when it was already gone.
+    Any other failure (for example a file still open elsewhere on Windows)
+    emits a `RuntimeWarning` and returns False, leaving the file in place: its
+    entries are already merged, and a later consolidation merges it again
+    without duplicates and retries the delete.
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        warnings.warn(
+            f"Could not delete merged checkpoint file {path}: {exc!r}. The "
+            "file is left in place; a later consolidation merges it again "
+            "without duplicates.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
+    return True
 
 
 def merge_dict_attr(
@@ -373,8 +399,9 @@ def merge_worker_checkpoint_file(
         place as entries are merged.
     delete_original : bool, optional
         If True (default), unlink `worker_file` once its entries are
-        confirmed merged, swallowing `OSError` if it's already gone. Left
-        in place if False, or if the merge fails.
+        confirmed merged, via `remove_transient_file` (a failed delete
+        warns and keeps the file). Left in place if False, or if the merge
+        fails.
     shared_decode_cache : bool, optional
         If True (default), allocate one `ResolvingDecodeCache` before the
         attribute loop and reuse it for every attribute -- required when a
@@ -457,10 +484,7 @@ def merge_worker_checkpoint_file(
         return False
 
     if delete_original:
-        try:
-            worker_file.unlink()
-        except OSError:
-            pass
+        remove_transient_file(worker_file)
     return True
 
 

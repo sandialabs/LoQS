@@ -16,6 +16,7 @@ import random
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from typing import Any, ClassVar
 from pathlib import Path
 import h5py
@@ -28,9 +29,9 @@ from loqs.internal import (
 )
 from loqs.internal.serializable import ResolvingDecodeCache
 from loqs.internal.swmrledger import (
+    held_swmr_writer,
     is_swmr_ledger_file,
     mark_ledger_item_done,
-    open_swmr_writer,
     read_swmr_ledger_done_union,
 )
 from loqs.core.history import (
@@ -50,6 +51,7 @@ from loqs.internal.streamingmerge import (
     get_dict_attr_keys,
     iter_dict_attr_entries,
     read_checkpoint_dict_attr_union_keys,
+    remove_transient_file,
 )
 
 if TYPE_CHECKING:
@@ -135,9 +137,8 @@ def _normalize_decoded_int_keyed_dict(
     return raw
 
 
-_SHOT_LEDGER_CACHE: dict[tuple[Path, str], tuple[h5py.File, h5py.Group]] = {}
-"""This process's open shot-level ledgers, keyed by `(resolved checkpoint
-directory, worker id)`."""
+_SHOT_LEDGER_FIELDS: tuple[str, ...] = ("done", "wall_clock_times")
+"""Ledger fields a shot-level ledger tracks."""
 
 
 def _shot_ledger_path(checkpoint_dir: Path, effective_worker_id: str) -> Path:
@@ -145,77 +146,16 @@ def _shot_ledger_path(checkpoint_dir: Path, effective_worker_id: str) -> Path:
     return checkpoint_dir / f"worker_{effective_worker_id}_checkpoint.h5"
 
 
-def _close_ledger_file_quietly(ledger_file: h5py.File) -> None:
-    """Close a cached ledger handle, ignoring errors from a handle that is
-    already closed or whose file was unlinked underneath it."""
-    try:
-        ledger_file.close()
-    except (OSError, ValueError, RuntimeError):
-        pass
-
-
-def _drop_shot_ledger_cache_entries(
-    checkpoint_dir: Path | None = None,
-) -> None:
-    """Close and drop cached shot-ledger handles.
-
-    With `checkpoint_dir` given, drops every entry for that directory (used
-    before its ledgers are unlinked). Otherwise drops only entries whose
-    ledger file no longer exists, so a long-lived process that serves many
-    directories never accumulates one open handle per directory.
-    """
-    resolved_dir = None if checkpoint_dir is None else checkpoint_dir.resolve()
-    for key in list(_SHOT_LEDGER_CACHE):
-        key_dir, key_worker_id = key
-        if resolved_dir is not None:
-            stale = key_dir == resolved_dir
-        else:
-            stale = not _shot_ledger_path(key_dir, key_worker_id).exists()
-        if stale:
-            ledger_file, _ = _SHOT_LEDGER_CACHE.pop(key)
-            _close_ledger_file_quietly(ledger_file)
-
-
-def _unlink_quietly(paths: Iterable[Path]) -> None:
-    """Unlink each path, ignoring one that is already gone or can't be
-    removed (a later consolidation pass retries it)."""
-    for path in paths:
-        try:
-            path.unlink()
-        except OSError:
-            pass
-
-
-def _get_shot_worker_ledger(
-    checkpoint_dir: Path, effective_worker_id: str
-) -> h5py.Group:
-    """Return this worker process's shot-level SWMR ledger group for
-    `checkpoint_dir`, opening (and caching) it on first use.
-
-    The `worker_{effective_worker_id}_checkpoint.h5` file is opened via
-    `open_swmr_writer` and kept open; every ledger write flushes at once,
-    and an unclosed SWMR file left by a killed process is safe to reopen.
-    A cached handle that is closed, or whose file was unlinked (e.g. by
-    consolidation), is replaced by a fresh open, and every cache miss also
-    drops entries whose file no longer exists.
-    """
-    resolved_dir = checkpoint_dir.resolve()
-    key = (resolved_dir, effective_worker_id)
-    ledger_path = _shot_ledger_path(resolved_dir, effective_worker_id)
-
-    cached = _SHOT_LEDGER_CACHE.get(key)
-    if cached is not None:
-        if cached[0].id.valid and ledger_path.exists():
-            return cached[1]
-        del _SHOT_LEDGER_CACHE[key]
-        _close_ledger_file_quietly(cached[0])
-
-    _drop_shot_ledger_cache_entries()
-    ledger_file, ledger_group = open_swmr_writer(
-        ledger_path, fields=["done", "wall_clock_times"]
+def _held_shot_ledger(
+    checkpoint_dir: str | Path, effective_worker_id: str
+) -> AbstractContextManager[h5py.Group]:
+    """Hold this writer's shot-level SWMR ledger in `checkpoint_dir` for a
+    `with` block -- see `held_swmr_writer`. Nested holders share one handle,
+    closed when the outermost one exits."""
+    return held_swmr_writer(
+        _shot_ledger_path(Path(checkpoint_dir).resolve(), effective_worker_id),
+        _SHOT_LEDGER_FIELDS,
     )
-    _SHOT_LEDGER_CACHE[key] = (ledger_file, ledger_group)
-    return ledger_group
 
 
 def _write_shot_checkpoint_batch_with_ledger(
@@ -239,8 +179,8 @@ def _write_shot_checkpoint_batch_with_ledger(
     Parameters
     ----------
     ledger_group : h5py.Group
-        The worker's shot-level SWMR ledger group, as returned by
-        `_get_shot_worker_ledger`.
+        The worker's shot-level SWMR ledger group, as yielded by
+        `held_swmr_writer`.
     payload_path : Path
         Path to this batch's own dedicated payload file.
     shot_indices : list[int]
@@ -941,6 +881,10 @@ class ProgramResults(Displayable):
             Either way, `consolidate_checkpoints()` merges any payloads
             into `results.h5` and deletes the ledgers; `run()` calls it at
             the end.
+
+            The call closes its ledger handle before returning, unless an
+            enclosing holder (the serial loop in `QuantumProgram.run()`)
+            keeps it open.
         """
         if checkpoint_dir is None:
             checkpoint_dir = Path("./checkpoints")
@@ -976,40 +920,42 @@ class ProgramResults(Displayable):
             if shot_index in self.shot_wall_clock_times
         }
 
-        ledger_group = _get_shot_worker_ledger(
+        with _held_shot_ledger(
             checkpoint_dir, effective_worker_id
-        )
-
-        if worker_id is None:
-            # Sole writer for this directory: append straight to the
-            # canonical file through the persistent encode cache, and only
-            # mark the shots done once that file is closed.
-            results_path = checkpoint_dir / self._results_filename
-            with h5py.File(results_path, "a") as results_file:
-                for (
-                    attr_name,
-                    value_use_dataset,
-                    entries,
-                ) in all_attr_entries:
-                    self._write_streamed_dict_entries(
-                        results_file, attr_name, value_use_dataset, entries
-                    )
-            _mark_shot_batch_done(
-                ledger_group, shots_to_checkpoint, wall_clock_times
-            )
-        else:
-            payload_path = checkpoint_dir / (
-                f"worker_{effective_worker_id}_shots_"
-                f"{min(shots_to_checkpoint)}_payload.h5"
-            )
-            _write_shot_checkpoint_batch_with_ledger(
-                ledger_group,
-                payload_path,
-                shots_to_checkpoint,
-                [entry for entry in all_attr_entries if entry[2]],
-                wall_clock_times,
-            )
-            self._record_payload_batch(payload_path, shots_to_checkpoint)
+        ) as ledger_group:
+            if worker_id is None:
+                # Sole writer for this directory: append straight to the
+                # canonical file through the persistent encode cache, and
+                # only mark the shots done once that file is closed.
+                results_path = checkpoint_dir / self._results_filename
+                with h5py.File(results_path, "a") as results_file:
+                    for (
+                        attr_name,
+                        value_use_dataset,
+                        entries,
+                    ) in all_attr_entries:
+                        self._write_streamed_dict_entries(
+                            results_file,
+                            attr_name,
+                            value_use_dataset,
+                            entries,
+                        )
+                _mark_shot_batch_done(
+                    ledger_group, shots_to_checkpoint, wall_clock_times
+                )
+            else:
+                payload_path = checkpoint_dir / (
+                    f"worker_{effective_worker_id}_shots_"
+                    f"{min(shots_to_checkpoint)}_payload.h5"
+                )
+                _write_shot_checkpoint_batch_with_ledger(
+                    ledger_group,
+                    payload_path,
+                    shots_to_checkpoint,
+                    [entry for entry in all_attr_entries if entry[2]],
+                    wall_clock_times,
+                )
+                self._record_payload_batch(payload_path, shots_to_checkpoint)
 
         self.mark_shots_as_written(shots_to_checkpoint)
 
@@ -1366,9 +1312,10 @@ class ProgramResults(Displayable):
 
         Files are deleted only after the output file is closed: every merged
         source, plus every ledger in the directory (ledgers carry no data a
-        reader uses; this process's cached ledger handles for the directory
-        are closed first). A crash mid-consolidation therefore leaves every
+        reader uses). A crash mid-consolidation therefore leaves every
         source in place, to be re-merged without duplicates on the next pass.
+        A file whose delete fails is kept the same way, with a
+        `RuntimeWarning`.
 
         Parameters
         ----------
@@ -1455,8 +1402,8 @@ class ProgramResults(Displayable):
         # output_file is closed here, so its merged entries are durable
         # before any source of them disappears.
         if delete_originals:
-            _drop_shot_ledger_cache_entries(checkpoint_dir)
-            _unlink_quietly([*merged_sources, *ledger_files])
+            for path in (*merged_sources, *ledger_files):
+                remove_transient_file(path)
             # Forget deleted payloads, so lazy reloads stop scanning them
             # and go straight to the output file.
             self._payload_batches = [

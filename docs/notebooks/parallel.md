@@ -408,6 +408,11 @@ canonical `results.h5` a serial run would have written directly, then
 deletes the payloads and ledgers -- callers never need to touch the
 per-worker files themselves.
 
+The progress ledgers rely on SWMR, which needs a file system that preserves
+POSIX write ordering: a local disk, or a parallel file system such as Lustre
+or GPFS. Keep checkpoint directories, for both `QuantumProgram.run()` and
+`MultiProgramRunner`, off NFS and SMB (Windows network) shares.
+
 ```{code-cell} ipython3
 import tempfile
 

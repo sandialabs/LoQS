@@ -7,7 +7,7 @@ dependencies = [
     "scipy",
     "tk",
     "tqdm>=4",
-    "h5py",
+    "h5py>=3.5",
     "libcst>=1"
 ]
 authors = [
