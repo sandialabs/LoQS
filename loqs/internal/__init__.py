@@ -10,15 +10,9 @@
 """Utility classes and functions for LoQS."""
 
 import os
-import random
 import socket
-import time
+import uuid
 import warnings
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any
-
-import h5py
 
 try:
     from threadpoolctl import threadpool_limits
@@ -35,12 +29,29 @@ from .serializable import (
 # Must be after Serializable
 from .displayable import Displayable
 
+_worker_id_cache: tuple[int, str] | None = None
+
 
 def worker_id() -> str:
-    """Return this process's `hostname_pid` worker identity string, used to
-    key per-writer checkpoint files across LoQS's parallel dispatch
-    mechanisms."""
-    return f"{socket.gethostname()}_{os.getpid()}"
+    """Return this process's cached `hostname_pid_suffix` worker identity
+    string, used to key per-writer checkpoint files across LoQS's parallel
+    dispatch mechanisms.
+
+    The suffix is a short UUID4-derived string, appended so that no two
+    workers ever resolve to the same identity even if the OS reuses a PID
+    across process launches on the same host. The result is cached
+    per-process, so multiple call sites within the same worker process
+    always agree -- but the cache is only reused after re-checking
+    `os.getpid()` against the cached PID, so a value cached before a
+    `fork()` is never silently inherited by the child process.
+    """
+    global _worker_id_cache
+    pid = os.getpid()
+    if _worker_id_cache is not None and _worker_id_cache[0] == pid:
+        return _worker_id_cache[1]
+    value = f"{socket.gethostname()}_{pid}_{uuid.uuid4().hex[:8]}"
+    _worker_id_cache = (pid, value)
+    return value
 
 
 def pin_worker_threads() -> None:
@@ -66,52 +77,3 @@ def pin_worker_threads() -> None:
             "cannot be limited to avoid oversubscription. Install "
             "loqs[parallel] or loqs[mpi]."
         )
-
-
-def _retry_hdf5_write(
-    worker_file_path: Path,
-    write_fn: Callable[[h5py.File], None],
-    max_retries: int = 8,
-) -> None:
-    """Open `worker_file_path` in append mode and call `write_fn(f)`, retrying with
-    jittered exponential backoff on transient HDF5 locking errors (`BlockingIOError`/`OSError`).
-    """
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(worker_file_path, "a") as f:
-                write_fn(f)
-            break
-        except (BlockingIOError, OSError):
-            if attempt < max_retries - 1:
-                delay = 0.01 * (2**attempt)
-                time.sleep(delay + random.uniform(0, delay))
-            else:
-                raise
-
-
-def _retry_hdf5_read(
-    filename: Path,
-    read_fn: Callable[[h5py.File], Any],
-    max_retries: int = 8,
-    retry_exceptions: tuple[type[Exception], ...] = (BlockingIOError, OSError),
-) -> Any:
-    """Open `filename` read-only and call `read_fn(f)`, retrying with the
-    same jittered exponential backoff as `_retry_hdf5_write` on transient
-    HDF5 locking errors (`BlockingIOError`/`OSError` by default). Kept
-    separate from that helper since it can't use its append-mode-only open.
-
-    `retry_exceptions` lets a caller widen (or narrow) which exceptions
-    count as transient and retryable -- e.g. including `KeyError` when
-    `read_fn` looks up a key that may not be visible yet due to a benign
-    write/read race rather than genuine absence.
-    """
-    for attempt in range(max_retries):
-        try:
-            with h5py.File(filename, "r") as f:
-                return read_fn(f)
-        except retry_exceptions:
-            if attempt < max_retries - 1:
-                delay = 0.01 * (2**attempt)
-                time.sleep(delay + random.uniform(0, delay))
-            else:
-                raise

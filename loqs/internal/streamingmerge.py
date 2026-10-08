@@ -20,11 +20,37 @@ from __future__ import annotations
 import h5py
 import itertools
 import numpy as np
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.serializable import Serializable
+
+
+def remove_transient_file(path: Path) -> bool:
+    """Delete a merged transient checkpoint file (payload or ledger).
+
+    Returns True once the file is gone, including when it was already gone.
+    Any other failure (for example a file still open elsewhere on Windows)
+    emits a `RuntimeWarning` and returns False, leaving the file in place: its
+    entries are already merged, and a later consolidation merges it again
+    without duplicates and retries the delete.
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        warnings.warn(
+            f"Could not delete merged checkpoint file {path}: {exc!r}. The "
+            "file is left in place; a later consolidation merges it again "
+            "without duplicates.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
+    return True
 
 
 def merge_dict_attr(
@@ -339,8 +365,8 @@ def merge_worker_checkpoint_file(
     on it per worker file, one decode cache shared across all attributes)
     and `ProgramResults`' consolidation (`target` given as an already-open
     `h5py.File` held across the whole run, a fresh decode cache allocated
-    per attribute). Reads `worker_file` via `_retry_hdf5_read`; if it is
-    empty, treats it as already merged with nothing to do. Each worker
+    per attribute). Opens `worker_file` once, read-only, with no retry; if
+    it is empty, treats it as already merged with nothing to do. Each worker
     attribute is read directly off the open worker file (not pre-resolved
     via `_resolve_checkpoint_object_group`), since `iter_dict_attr_entries`
     already navigates single-child wrapper groups by attribute name --
@@ -353,12 +379,12 @@ def merge_worker_checkpoint_file(
     worker_file : Path
         Path to the worker checkpoint file to read and merge.
     target : h5py.File | Path
-        Canonical file to merge into. If a `Path`, this function opens and
-        closes its own write transaction (via `_retry_hdf5_write`) scoped
-        to just this one worker file's merge. If an already-open
-        `h5py.File`, it is used directly with no new lock acquired -- the
-        caller is assumed to already be holding it open across the whole
-        consolidation.
+        Canonical file to merge into. If a `Path`, this function opens it
+        once in append mode, with no retry, and closes it again, scoping the
+        write transaction to just this one worker file's merge. If an
+        already-open `h5py.File`, it is used directly with no new lock
+        acquired -- the caller is assumed to already be holding it open
+        across the whole consolidation.
     streamed_attrs : Sequence[tuple[str, str, bool]]
         `(worker_attr, canonical_attr, value_use_dataset)` triples naming
         each dict attribute to merge, its corresponding name on the
@@ -373,8 +399,9 @@ def merge_worker_checkpoint_file(
         place as entries are merged.
     delete_original : bool, optional
         If True (default), unlink `worker_file` once its entries are
-        confirmed merged, swallowing `OSError` if it's already gone. Left
-        in place if False, or if the merge fails.
+        confirmed merged, via `remove_transient_file` (a failed delete
+        warns and keeps the file). Left in place if False, or if the merge
+        fails.
     shared_decode_cache : bool, optional
         If True (default), allocate one `ResolvingDecodeCache` before the
         attribute loop and reuse it for every attribute -- required when a
@@ -393,12 +420,11 @@ def merge_worker_checkpoint_file(
         True on success -- including the empty-worker-file no-op case, and
         an attribute genuinely absent from `worker_file` (skipped, not an
         error). False if a `BlockingIOError`, `OSError`, or `KeyError` was
-        raised anywhere in the read/merge/write sequence -- a
-        retry-exhausted lock conflict, or actual corruption -- in which
-        case the worker file is left in place, never deleted.
+        raised anywhere in the read/merge/write sequence -- a file that
+        can't be opened, or actual corruption -- in which case the worker
+        file is left in place, never deleted.
     """
     from loqs.core.programresults import _resolve_checkpoint_object_group
-    from loqs.internal import _retry_hdf5_read, _retry_hdf5_write
     from loqs.internal.serializable import ResolvingDecodeCache
 
     try:
@@ -447,19 +473,18 @@ def merge_worker_checkpoint_file(
                         )
 
             if isinstance(target, Path):
-                _retry_hdf5_write(target, _merge_into)
+                with h5py.File(target, "a") as out_f:
+                    _merge_into(out_f)
             else:
                 _merge_into(target)
 
-        _retry_hdf5_read(worker_file, _read_and_merge)
+        with h5py.File(worker_file, "r") as in_f:
+            _read_and_merge(in_f)
     except (BlockingIOError, OSError, KeyError):
         return False
 
     if delete_original:
-        try:
-            worker_file.unlink()
-        except OSError:
-            pass
+        remove_transient_file(worker_file)
     return True
 
 
@@ -1053,13 +1078,13 @@ def get_dict_attr_group(
     return values_iterable_group[str(index)]
 
 
-def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for canonical read and worker scan with conflict retry
+def read_checkpoint_dict_attr_union(
     checkpoint_dir: Path,
     canonical_filename: str | None,
-    worker_glob: str | None,
+    worker_glob: str | Sequence[str] | None,
     attr_name: str,
     canonical_attr_name: str | None = None,
-    retry_on_conflict: bool = False,
+    strict: bool = False,
 ) -> dict:
     """Scan checkpoint_dir for a dict-shaped attribute union across canonical
     and worker checkpoint files, merging entries with worker files winning on
@@ -1069,8 +1094,9 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
     pattern used by both ProgramResults and MultiProgramRunner's resume/
     consolidation paths. Reads the specified dict attribute from a canonical
     checkpoint file (if it exists), then from every sorted worker checkpoint
-    file, decoding entries incrementally via iter_dict_attr_entries without
-    materializing individual file contents simultaneously in memory.
+    file matching each given glob pattern, decoding entries incrementally via
+    iter_dict_attr_entries without materializing individual file contents
+    simultaneously in memory.
 
     Parameters
     ----------
@@ -1079,10 +1105,12 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
     canonical_filename : str | None
         Filename for the canonical checkpoint file (e.g. "results.h5" or
         "runner.h5"). If None, the canonical-file read is skipped entirely.
-    worker_glob : str | None
-        Glob pattern for worker checkpoint files relative to checkpoint_dir
-        (e.g. "worker_*_checkpoint.h5" or "worker_*_runner.h5"). If None,
-        the worker-file scan is skipped entirely.
+    worker_glob : str | Sequence[str] | None
+        Glob pattern(s) for worker checkpoint files relative to
+        checkpoint_dir (e.g. "worker_*_checkpoint.h5", or
+        ("worker_*_runner.h5", "worker_*_item_*_payload.h5") to scan two
+        on-disk worker-file shapes in one pass). If None, the worker-file
+        scan is skipped entirely.
     attr_name : str
         Name of the dict attribute to read from worker files (and from the
         canonical file unless canonical_attr_name is given).
@@ -1090,10 +1118,12 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
         Attribute name to use when reading the canonical file, if different
         from attr_name (e.g. "results" maps to "_reduced_results" in
         MultiProgramRunner's runner.h5). Default is None (use attr_name).
-    retry_on_conflict : bool, optional
-        If True, retry a transient HDF5 lock conflict via _retry_hdf5_read
-        and let a conflict that survives the retry budget propagate rather
-        than being silently skipped. Default False (live-polling behavior).
+    strict : bool, optional
+        Applies to every file read, canonical and worker. Each file is
+        opened once, read-only, with no retry. If True, an `OSError`
+        (including `BlockingIOError`) from any file propagates; if False
+        (default, live-polling behavior), that file is skipped. A
+        `KeyError` (attribute missing) always skips the file.
 
     Returns
     -------
@@ -1105,11 +1135,9 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
     Raises
     ------
     BlockingIOError, OSError
-        On a lock conflict that survives the retry budget (only if
-        retry_on_conflict=True); silently skipped otherwise.
+        If a file can't be opened or read and strict=True.
     """
     from loqs.internal.serializable import ResolvingDecodeCache
-    from loqs.internal import _retry_hdf5_read
 
     done: dict = {}
     resolved_canonical_attr_name = (
@@ -1129,45 +1157,50 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
                     done[key] = value
 
             try:
-                if retry_on_conflict:
-                    _retry_hdf5_read(canonical_path, _read_canonical)
-                else:
-                    with h5py.File(canonical_path, "r") as f:
-                        _read_canonical(f)
+                with h5py.File(canonical_path, "r") as f:
+                    _read_canonical(f)
             except KeyError:
                 pass  # Attribute missing or file corruption; skip
             except (BlockingIOError, OSError):
-                if retry_on_conflict:
+                if strict:
                     raise
-                pass  # Transient lock conflict; skip
+                # Can't be opened (e.g. a damaged file, or a `results.h5` a
+                # serial writer has open); skip
+                pass
 
-    # Then, read every worker file (sorted, excluding .tmp files)
+    # Then, read every worker file matching each glob pattern (sorted per
+    # pattern, excluding .tmp files).
     if worker_glob is not None:
-        for worker_file in sorted(
-            f
-            for f in checkpoint_dir.glob(worker_glob)
-            if not f.name.endswith(".tmp")
-        ):
+        glob_patterns = (
+            (worker_glob,)
+            if isinstance(worker_glob, str)
+            else tuple(worker_glob)
+        )
+        for pattern in glob_patterns:
+            for worker_file in sorted(
+                f
+                for f in checkpoint_dir.glob(pattern)
+                if not f.name.endswith(".tmp")
+            ):
 
-            def _read_worker(f: h5py.File) -> None:
-                decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
-                for key, value in iter_dict_attr_entries(
-                    f, attr_name, decode_cache=decode_cache
-                ):
-                    done[key] = value
+                def _read_worker(f: h5py.File) -> None:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                    for key, value in iter_dict_attr_entries(
+                        f, attr_name, decode_cache=decode_cache
+                    ):
+                        done[key] = value
 
-            try:
-                if retry_on_conflict:
-                    _retry_hdf5_read(worker_file, _read_worker)
-                else:
+                try:
                     with h5py.File(worker_file, "r") as f:
                         _read_worker(f)
-            except KeyError:
-                continue  # Attribute missing or file corruption; skip
-            except (BlockingIOError, OSError):
-                if retry_on_conflict:
-                    raise
-                continue  # Transient lock conflict; skip
+                except KeyError:
+                    continue  # Attribute missing or file corruption; skip
+                except (BlockingIOError, OSError):
+                    if strict:
+                        raise
+                    # Can't be opened (e.g. a ledger a writer holds in SWMR
+                    # mode, or a damaged file); skip
+                    continue
 
     return done
 
@@ -1175,18 +1208,18 @@ def read_checkpoint_dict_attr_union(  # noqa: C901 -- symmetric branches for can
 def read_checkpoint_dict_attr_union_keys(
     checkpoint_dir: Path,
     canonical_filename: str | None,
-    worker_glob: str | None,
+    worker_glob: str | Sequence[str] | None,
     attr_name: str,
     canonical_attr_name: str | None = None,
-    retry_on_conflict: bool = False,
+    strict: bool = False,
 ) -> set:
     """Scan checkpoint_dir for dict-attribute keys union (no value decoding).
 
     Key-only sibling of read_checkpoint_dict_attr_union: returns the union of
-    keys present in a canonical checkpoint file and all worker checkpoint files,
-    without decoding any values. This is a cheap operation useful for
-    determining which items have been completed without the cost of decoding
-    their full entry values.
+    keys present in a canonical checkpoint file and all worker checkpoint files
+    matching each given glob pattern, without decoding any values. This is a
+    cheap operation useful for determining which items have been completed
+    without the cost of decoding their full entry values.
 
     Parameters
     ----------
@@ -1195,19 +1228,21 @@ def read_checkpoint_dict_attr_union_keys(
     canonical_filename : str | None
         Filename for the canonical checkpoint file. If None, the
         canonical-file read is skipped entirely.
-    worker_glob : str | None
-        Glob pattern for worker checkpoint files. If None, the worker-file
-        scan is skipped entirely.
+    worker_glob : str | Sequence[str] | None
+        Glob pattern(s) for worker checkpoint files. If None, the
+        worker-file scan is skipped entirely.
     attr_name : str
         Name of the dict attribute to read from worker files (and from the
         canonical file unless canonical_attr_name is given).
     canonical_attr_name : str | None, optional
         Attribute name to use when reading the canonical file, if different
         from attr_name. Default is None (use attr_name).
-    retry_on_conflict : bool, optional
-        If True, retry a transient HDF5 lock conflict via _retry_hdf5_read
-        and let a conflict that survives the retry budget propagate rather
-        than being silently skipped. Default False (live-polling behavior).
+    strict : bool, optional
+        Applies to every file read, canonical and worker. Each file is
+        opened once, read-only, with no retry. If True, an `OSError`
+        (including `BlockingIOError`) from any file propagates; if False
+        (default, live-polling behavior), that file is skipped. A
+        `KeyError` (attribute missing) always skips the file.
 
     Returns
     -------
@@ -1218,11 +1253,8 @@ def read_checkpoint_dict_attr_union_keys(
     Raises
     ------
     BlockingIOError, OSError
-        On a lock conflict that survives the retry budget (only if
-        retry_on_conflict=True); silently skipped otherwise.
+        If a file can't be opened or read and strict=True.
     """
-    from loqs.internal import _retry_hdf5_read
-
     keys: set = set()
     resolved_canonical_attr_name = (
         canonical_attr_name if canonical_attr_name is not None else attr_name
@@ -1239,40 +1271,45 @@ def read_checkpoint_dict_attr_union_keys(
                 )
 
             try:
-                if retry_on_conflict:
-                    _retry_hdf5_read(canonical_path, _read_canonical)
-                else:
-                    with h5py.File(canonical_path, "r") as f:
-                        _read_canonical(f)
+                with h5py.File(canonical_path, "r") as f:
+                    _read_canonical(f)
             except KeyError:
                 pass  # Attribute missing or file corruption; skip
             except (BlockingIOError, OSError):
-                if retry_on_conflict:
+                if strict:
                     raise
-                pass  # Transient lock conflict; skip
+                # Can't be opened (e.g. a damaged file, or a `results.h5` a
+                # serial writer has open); skip
+                pass
 
-    # Then, read every worker file (sorted, excluding .tmp files)
+    # Then, read every worker file matching each glob pattern (sorted per
+    # pattern, excluding .tmp files).
     if worker_glob is not None:
-        for worker_file in sorted(
-            f
-            for f in checkpoint_dir.glob(worker_glob)
-            if not f.name.endswith(".tmp")
-        ):
+        glob_patterns = (
+            (worker_glob,)
+            if isinstance(worker_glob, str)
+            else tuple(worker_glob)
+        )
+        for pattern in glob_patterns:
+            for worker_file in sorted(
+                f
+                for f in checkpoint_dir.glob(pattern)
+                if not f.name.endswith(".tmp")
+            ):
 
-            def _read_worker(f: h5py.File) -> None:
-                keys.update(get_dict_attr_keys(f, attr_name))
+                def _read_worker(f: h5py.File) -> None:
+                    keys.update(get_dict_attr_keys(f, attr_name))
 
-            try:
-                if retry_on_conflict:
-                    _retry_hdf5_read(worker_file, _read_worker)
-                else:
+                try:
                     with h5py.File(worker_file, "r") as f:
                         _read_worker(f)
-            except KeyError:
-                continue  # Attribute missing or file corruption; skip
-            except (BlockingIOError, OSError):
-                if retry_on_conflict:
-                    raise
-                continue  # Transient lock conflict; skip
+                except KeyError:
+                    continue  # Attribute missing or file corruption; skip
+                except (BlockingIOError, OSError):
+                    if strict:
+                        raise
+                    # Can't be opened (e.g. a ledger a writer holds in SWMR
+                    # mode, or a damaged file); skip
+                    continue
 
     return keys

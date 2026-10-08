@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from concurrent.futures import as_completed
+import contextlib
 import copy
 import math
 from pathlib import Path
@@ -42,7 +43,7 @@ from loqs.core.instructions.instructionstack import (
 from loqs.core.qeccode import QECCode
 from loqs.core.recordables import PatchLayout
 from loqs.core.recordables.patchlayout import PatchLayoutLike
-from loqs.core.programresults import ProgramResults
+from loqs.core.programresults import ProgramResults, _held_shot_ledger
 from loqs.internal import Displayable, pin_worker_threads, worker_id
 from loqs.internal.legacy import legacy_name_hint
 from loqs.internal.streamingmerge import (
@@ -508,7 +509,7 @@ class QuantumProgram(Displayable):
         done_wall_clock_times = read_checkpoint_dict_attr_union(
             checkpoint_dir,
             results_filename,
-            "worker_*_checkpoint.h5",
+            ProgramResults._WORKER_FILE_GLOBS,
             "shot_wall_clock_times",
         )
         if lazy_loading:
@@ -516,7 +517,7 @@ class QuantumProgram(Displayable):
             done_indices = read_checkpoint_dict_attr_union_keys(
                 checkpoint_dir,
                 results_filename,
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done_indices)
@@ -526,7 +527,7 @@ class QuantumProgram(Displayable):
             done = read_checkpoint_dict_attr_union(
                 checkpoint_dir,
                 results_filename,
-                "worker_*_checkpoint.h5",
+                ProgramResults._WORKER_FILE_GLOBS,
                 "shot_histories",
             )
             remaining = sorted(set(range(num_shots)) - done.keys())
@@ -544,26 +545,38 @@ class QuantumProgram(Displayable):
         """Serially compute every shot in `remaining`, flushing to the
         canonical checkpoint file once `checkpoint_batch_size` shots have
         accumulated unwritten (plus a final flush for any undersized tail
-        batch)."""
-        for i in remaining:
-            seed = (
-                None
-                if self.default_base_seed is None
-                else self.default_base_seed + i
-            )
-            start_time = time.perf_counter()
-            result = QuantumProgram._run_shot(self, max_frame_limit, seed, i)
-            wall_clock_time = time.perf_counter() - start_time
-            program_results.add_shot(
-                i, result, wall_clock_time=wall_clock_time
-            )
-            pbar.update(1)
-            if (
-                len(program_results.get_unwritten_shots())
-                >= checkpoint_batch_size
-            ):
-                program_results.checkpoint(checkpoint_dir=checkpoint_dir)
-        program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+        batch).
+
+        With a `checkpoint_dir` and shots to run, the shot ledger is held
+        open across the whole loop and closed before returning, so `run()`'s
+        consolidation sees it closed."""
+        held_ledger = (
+            contextlib.nullcontext()
+            if checkpoint_dir is None or not remaining
+            else _held_shot_ledger(checkpoint_dir, worker_id())
+        )
+        with held_ledger:
+            for i in remaining:
+                seed = (
+                    None
+                    if self.default_base_seed is None
+                    else self.default_base_seed + i
+                )
+                start_time = time.perf_counter()
+                result = QuantumProgram._run_shot(
+                    self, max_frame_limit, seed, i
+                )
+                wall_clock_time = time.perf_counter() - start_time
+                program_results.add_shot(
+                    i, result, wall_clock_time=wall_clock_time
+                )
+                pbar.update(1)
+                if (
+                    len(program_results.get_unwritten_shots())
+                    >= checkpoint_batch_size
+                ):
+                    program_results.checkpoint(checkpoint_dir=checkpoint_dir)
+            program_results.checkpoint(checkpoint_dir=checkpoint_dir)
 
     def _run_parallel_checkpointed(
         self,
@@ -759,7 +772,7 @@ class QuantumProgram(Displayable):
 
          checkpoint_batch_size:
             Number of shots to accumulate, per writer, before durably
-            flushing them to that writer's own checkpoint file. Only
+            flushing them to disk. Only
             meaningful when `checkpoint=True`; ignored otherwise. Mutually
             exclusive with `n_shot_batches` (providing both raises `ValueError`).
             If both `n_shot_batches` and `checkpoint_batch_size` are `None`, both
@@ -767,13 +780,14 @@ class QuantumProgram(Displayable):
             given, each dispatched batch of this many shots is computed and
             checkpointed together inside its own worker process, keyed by
             that worker's own `hostname_pid` identity, so multiple workers
-            never contend for the same file; once every batch has returned,
-            `run()` merges every worker's file into one final,
-            bounded-memory-streamed `results.h5` (see
-            [](api:ProgramResults.consolidate_checkpoints)). With no
+            never contend for the same file. Each worker writes a batch to
+            its own payload file and marks it done in its own SWMR progress
+            ledger; once every batch has returned, `run()` merges every
+            payload into one final, bounded-memory-streamed `results.h5`
+            (see [](api:ProgramResults.consolidate_checkpoints)). With no
             `shot_executor` (serial), there is only ever one writer, so
-            shots are checkpointed directly to that same `results.h5`
-            with no separate merge step needed. Set to `1` to checkpoint
+            shots are appended directly to that same `results.h5` with no
+            merge step. Set to `1` to checkpoint
             every single shot as soon as it completes (the finest possible
             granularity -- a crash loses at most one in-flight shot per
             writer); a larger value trades that granularity for fewer,
@@ -940,18 +954,11 @@ class QuantumProgram(Displayable):
 
             return program_results
 
-        # Checkpointing enabled: every shot ends up durably on disk before
-        # this call returns, one writer at a time. With no `shot_executor`,
-        # this process is the only writer, so shots are checkpointed
-        # straight to the canonical `results.h5` with no merge step
-        # needed. With a `shot_executor`, each dispatched batch of
-        # `checkpoint_batch_size` shots computes and checkpoints itself
-        # inside its own worker process before returning (see
-        # `_run_shot_batch_worker`), and a race-free consolidation pass
-        # merges every worker's file into that same `results.h5`.
-        # `remaining` (rather than the full shot range) is what actually
-        # gets dispatched below, so a resuming call only redoes whatever a
-        # prior interrupted call hadn't already durably checkpointed.
+        # Checkpointing enabled: with no `shot_executor`, each batch is
+        # appended straight to `results.h5`; with one, each batch goes to a
+        # payload file in its worker, and the consolidation below merges the
+        # payloads into `results.h5`. Only `remaining` is dispatched, so a
+        # resumed call redoes only unfinished shots.
         assert resolved_checkpoint_dir is not None
         assert checkpoint_batch_size is not None
         remaining, num_done, done_data, done_wall_clock_times = (
@@ -996,11 +1003,15 @@ class QuantumProgram(Displayable):
             # to merge, regardless of whether *this* call itself dispatched
             # anything in parallel, so a crashed parallel run resumed via a
             # serial call still gets its leftover worker files cleaned up.
-            if any(resolved_checkpoint_dir.glob("worker_*_checkpoint.h5")):
+            # After a serial run, the only file left is the run's shot
+            # ledger, which this pass deletes.
+            if any(
+                any(resolved_checkpoint_dir.glob(pattern))
+                for pattern in ProgramResults._WORKER_FILE_GLOBS
+            ):
                 program_results.consolidate_checkpoints(
                     checkpoint_dir=resolved_checkpoint_dir
                 )
-                program_results._worker_id = None
 
         return program_results
 

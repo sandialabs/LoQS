@@ -1446,6 +1446,7 @@ class TestResolvingDecodeCache:
             writer.add_shot(0, history0)
             writer.add_shot(1, history1)
             writer.checkpoint(checkpoint_dir=checkpoint_dir)
+            writer.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
             assert (checkpoint_dir / "results.h5").exists()
 
             # Lazy consumer: each get_shot_history call below opens and

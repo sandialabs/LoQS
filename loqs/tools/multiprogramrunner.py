@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import functools
 import h5py
@@ -31,7 +32,6 @@ from loqs.core.programresults import (
 )
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal import (
-    _retry_hdf5_write,
     pin_worker_threads,
     worker_id,
 )
@@ -43,6 +43,15 @@ from loqs.internal.streamingmerge import (
     iter_dict_attr_entries,
     read_checkpoint_dict_attr_union,
     read_checkpoint_dict_attr_union_keys,
+    remove_transient_file,
+)
+from loqs.internal.swmrledger import (
+    held_swmr_writer,
+    is_swmr_ledger_file,
+    mark_ledger_item_done,
+    open_swmr_reader,
+    read_swmr_ledger_status,
+    update_ledger_in_flight,
 )
 from loqs.tools.paralleltools import (
     ParallelStrategy,
@@ -538,7 +547,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 for attr_name in self._NO_COLLAPSE_ATTRS:
                     _reset_empty_groups_format_dict_attr(f, attr_name)
 
-            _retry_hdf5_write(runner_path, _reset_runner_format)
+            with h5py.File(runner_path, "a") as f:
+                _reset_runner_format(f)
 
         # Pre-assign indices via item_key_fn, adopting the persisted map
         # (or the now-seeded map) so a fresh resumed instance doesn't reassign
@@ -565,7 +575,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     for attr_name in self._NO_COLLAPSE_ATTRS:
                         _reset_empty_groups_format_dict_attr(f, attr_name)
 
-                _retry_hdf5_write(index_map_path, _reset_indexmap_format)
+                with h5py.File(index_map_path, "a") as f:
+                    _reset_indexmap_format(f)
 
         self._run_dispatch(
             precomputed_indices=precomputed_indices,
@@ -716,8 +727,9 @@ class MultiProgramRunner(Serializable, Generic[T]):
                     delete_originals=True,
                 )
                 # Read every always-merged attribute from disk directly into
-                # its own runner-side attribute; a lock conflict here
-                # propagates, since this one-shot pass has no next poll tick.
+                # its own runner-side attribute. These reads are strict: a
+                # file that still can't be opened propagates its error, since
+                # this one-shot pass has no next poll tick.
                 for worker_key, runner_key, _ in self._ALWAYS_MERGED_ATTRS:
                     setattr(
                         self,
@@ -726,7 +738,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             self.item_checkpoint_dir,
                             runner_filename=self.runner_filename,
                             attr_name=worker_key,
-                            retry_on_conflict=True,
+                            strict=True,
                         ),
                     )
                 final_done = self._reduced_results
@@ -740,7 +752,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             self.item_checkpoint_dir,
                             runner_filename=self.runner_filename,
                             attr_name="_program_results",
-                            retry_on_conflict=True,
+                            strict=True,
                         )
                         self._program_results = {
                             index: self._make_lazy_program_results(
@@ -753,7 +765,7 @@ class MultiProgramRunner(Serializable, Generic[T]):
                             self.item_checkpoint_dir,
                             runner_filename=self.runner_filename,
                             attr_name="_program_results",
-                            retry_on_conflict=True,
+                            strict=True,
                         )
             else:
                 # No checkpointing: merge each _ALWAYS_MERGED_ATTRS value out
@@ -855,7 +867,8 @@ class MultiProgramRunner(Serializable, Generic[T]):
                 value_use_dataset=False,
             )
 
-        _retry_hdf5_write(runner_path, _write)
+        with h5py.File(runner_path, "a") as f:
+            _write(f)
 
     # Hook methods -- subclasses implement these
     def build_program(self, index: int) -> QuantumProgram:
@@ -1104,31 +1117,33 @@ def _read_done_union(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
     attr_name: str = "results",
-    retry_on_conflict: bool = False,
+    strict: bool = False,
 ) -> dict[int, Any]:
     """Compute the union of runner.h5's consolidated dict attribute and all
-    worker_*_runner.h5 files' matching attributes, via the shared
-    read_checkpoint_dict_attr_union primitive.
+    worker_*_runner.h5/worker_*_item_*_payload.h5 files' matching attributes,
+    via the shared read_checkpoint_dict_attr_union primitive.
 
     Reads from runner.h5's own state first (if it exists), then merges in any
-    entries from worker files, with worker file entries taking precedence on
-    key collision (same merge semantics as merge_dict_attr).
+    entries from worker files (both a legacy worker file with dict attrs at
+    its own root, and a new-format per-item payload file), with worker file
+    entries taking precedence on key collision (same merge semantics as
+    merge_dict_attr).
 
     Parameters
     ----------
     checkpoint_dir : Path
-        Directory containing runner.h5 and/or worker_*_runner.h5 files.
+        Directory containing runner.h5 and/or worker checkpoint files.
     runner_filename : str, optional
         Name of the runner checkpoint file (default "runner.h5").
     attr_name : str, optional
         Name of the dict attribute to read. Maps "results" to "_reduced_results"
         in runner.h5's actual attribute name; other names used as-is.
         Default is "results".
-    retry_on_conflict : bool, optional
-        If True, a transient lock conflict on the runner.h5 read is retried
-        via `_retry_hdf5_read`, with a conflict surviving that retry budget
-        propagating instead of falling back to worker files. Default False
-        (live-polling behavior).
+    strict : bool, optional
+        Covers every file read, runner.h5 and each worker file alike, each
+        opened once with no retry. If True, an `OSError` (including
+        `BlockingIOError`) opening or reading any of them propagates; if
+        False (default, live-polling behavior), that file is skipped.
 
     Returns
     -------
@@ -1142,10 +1157,10 @@ def _read_done_union(
     return read_checkpoint_dict_attr_union(
         checkpoint_dir,
         runner_filename,
-        "worker_*_runner.h5",
+        ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
         attr_name,
         canonical_attr_name=canonical_attr_name,
-        retry_on_conflict=retry_on_conflict,
+        strict=strict,
     )
 
 
@@ -1153,14 +1168,14 @@ def _read_done_union_keys(
     checkpoint_dir: Path,
     runner_filename: str = "runner.h5",
     attr_name: str = "results",
-    retry_on_conflict: bool = False,
+    strict: bool = False,
 ) -> set[int]:
     """Key-only sibling of `_read_done_union`: returns the union of keys
     present in runner.h5's consolidated dict attribute and all
-    worker_*_runner.h5 files' matching attributes, without decoding any
-    values. Same "results" -> "_reduced_results" attribute-name mapping and
-    `retry_on_conflict` semantics as `_read_done_union`; returns an empty
-    set if no checkpoints exist.
+    worker_*_runner.h5/worker_*_item_*_payload.h5 files' matching attributes,
+    without decoding any values. Same "results" -> "_reduced_results"
+    attribute-name mapping and `strict` semantics (covering every file read)
+    as `_read_done_union`; returns an empty set if no checkpoints exist.
     """
     canonical_attr_name = (
         "_reduced_results" if attr_name == "results" else None
@@ -1168,10 +1183,10 @@ def _read_done_union_keys(
     return read_checkpoint_dict_attr_union_keys(
         checkpoint_dir,
         runner_filename,
-        "worker_*_runner.h5",
+        ("worker_*_runner.h5", "worker_*_item_*_payload.h5"),
         attr_name,
         canonical_attr_name=canonical_attr_name,
-        retry_on_conflict=retry_on_conflict,
+        strict=strict,
     )
 
 
@@ -1180,12 +1195,15 @@ def _consolidate_worker_files(
     runner_filename: str = "runner.h5",
     delete_originals: bool = True,
 ) -> None:
-    """Consolidate all worker_*_runner.h5 files into runner.h5 and optionally
-    delete worker files once merged. Thin wrapper around
-    `merge_worker_checkpoint_file`, called once per worker file with a fresh
-    write lock on `runner.h5` each time and a shared decode cache across
-    streamed dict attributes. Skips indices already present in runner.h5 to
-    avoid duplicate entries on resume.
+    """Consolidate all worker_*_runner.h5 and worker_*_item_*_payload.h5
+    files into runner.h5 and optionally delete worker files once merged.
+    Thin wrapper around `merge_worker_checkpoint_file`, called once per
+    worker file with a fresh write lock on `runner.h5` each time and a
+    shared decode cache across streamed dict attributes. The same
+    `existing_keys` mapping is shared across both the legacy-file and
+    payload-file passes, so an index already merged from one format is
+    skipped when later seen in the other, avoiding duplicate entries on
+    resume.
     """
     runner_path = checkpoint_dir / runner_filename
     if not runner_path.exists():
@@ -1207,14 +1225,24 @@ def _consolidate_worker_files(
             for _, runner_key, _ in MultiProgramRunner._STREAMED_DICT_ATTRS
         }
 
-    _retry_hdf5_write(runner_path, _read_existing_keys)
+    with h5py.File(runner_path, "a") as f:
+        _read_existing_keys(f)
     if runner_is_empty:
         return
 
-    # Consolidate each worker file and delete it once merged; a
-    # retry-exhausted lock conflict is swallowed internally, caught
-    # downstream instead by run()'s own final-assembly completeness checks.
+    # Consolidate each worker file and delete it once merged. A file that
+    # fails to merge is left in place: final assembly's strict union read
+    # then reads it if it can now be opened, and raises if the open fails
+    # again. A file failing with `KeyError` is skipped by that read too, and
+    # `_verify_final_completeness` reports any item it held.
+    # A new-format ledger file has no dict attrs to merge (its data lives in
+    # payload files below), so it's deleted directly; its writer closed it
+    # when its task returned.
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
+        if is_swmr_ledger_file(worker_file):
+            if delete_originals:
+                remove_transient_file(worker_file)
+            continue
         merge_worker_checkpoint_file(
             worker_file,
             target=runner_path,
@@ -1224,63 +1252,96 @@ def _consolidate_worker_files(
             shared_decode_cache=True,
         )
 
+    # Consolidate each item's own payload file the same way; a new-format
+    # worker's ledger file (above) carries no dict attrs of its own, so its
+    # items' entries only ever show up here.
+    for payload_file in sorted(
+        checkpoint_dir.glob("worker_*_item_*_payload.h5")
+    ):
+        merge_worker_checkpoint_file(
+            payload_file,
+            target=runner_path,
+            streamed_attrs=MultiProgramRunner._STREAMED_DICT_ATTRS,
+            already_merged_keys=existing_keys,
+            delete_original=delete_originals,
+            shared_decode_cache=True,
+        )
 
-def _write_item_checkpoint_entries_with_retry(
-    worker_file_path: Path,
+
+# Ledger fields an item-level worker ledger tracks; item_shots_done/
+# item_shots_total stay at their zero fill value, since nothing in this
+# runner yet populates them with real shot-progress data.
+_ITEM_LEDGER_FIELDS: tuple[str, ...] = (
+    "done",
+    "wall_clock_times",
+    "current_item_index",
+    "item_shots_done",
+    "item_shots_total",
+    "last_heartbeat",
+)
+
+
+def _item_ledger_path(item_checkpoint_dir: Path) -> Path:
+    """Return this worker process's SWMR ledger path in
+    `item_checkpoint_dir`."""
+    return item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+
+
+def _held_item_ledger(
+    item_checkpoint_dir: Path | None,
+) -> contextlib.AbstractContextManager[h5py.Group | None]:
+    """Hold this worker's item ledger for a `with` block (see
+    `held_swmr_writer`), or yield None when checkpointing is disabled."""
+    if item_checkpoint_dir is None:
+        return contextlib.nullcontext(None)
+    return held_swmr_writer(
+        _item_ledger_path(item_checkpoint_dir), _ITEM_LEDGER_FIELDS
+    )
+
+
+def _write_item_checkpoint_with_ledger(
+    ledger_group: h5py.Group,
+    payload_path: Path,
     index: int,
     entries: Sequence[tuple[str, Any, bool]],
+    wall_clock_time: float,
 ) -> None:
-    """Write several dict-attribute entries for one item to a worker file in
-    a single retry-wrapped HDF5 transaction, so a crash can never leave one
-    of the item's attributes durably written while another is missing.
+    """Write one item's checkpoint entries to its own payload file, then mark
+    it done in the SWMR ledger.
+
+    The payload file is opened fresh (`"w"`) and only once -- unlike the old
+    shared-worker-file scheme, no other write can be contending for this
+    exact path. `mark_ledger_item_done` runs only after
+    the `with` block closes the payload file, so a `merge_dict_attr`
+    exception partway through never reaches the ledger: the item is only
+    ever marked done once its payload file is fully written.
 
     Parameters
     ----------
-    worker_file_path : Path
-        Path to the worker_*_runner.h5 file.
+    ledger_group : h5py.Group
+        The worker's SWMR ledger group, as yielded by `held_swmr_writer`.
+    payload_path : Path
+        Path to this item's own dedicated payload file.
     index : int
         The key for every entry (this item's index).
     entries : Sequence[tuple[str, Any, bool]]
         `(attr_name, value, value_use_dataset)` triples, one per dict
         attribute to write for this item.
+    wall_clock_time : float
+        This item's own wall-clock duration, recorded in the ledger.
     """
-
-    def _write(f: h5py.File) -> None:
-        encode_cache: dict[Any, Any] = {}
+    encode_cache: dict[Any, Any] = {}
+    with h5py.File(payload_path, "w") as payload_file:
         for attr_name, value, value_use_dataset in entries:
             merge_dict_attr(
-                f,
+                payload_file,
                 attr_name,
                 [(index, value)],
                 encode_cache=encode_cache,
                 key_use_dataset=True,
                 value_use_dataset=value_use_dataset,
             )
-
-    _retry_hdf5_write(worker_file_path, _write)
-
-
-def _write_current_item_index_with_retry(
-    worker_file_path: Path,
-    index: int,
-) -> None:
-    """Write current_item_index attribute to a worker file with retry logic.
-
-    Handles transient HDF5 locking issues via exponential backoff, using
-    `_retry_hdf5_write`'s own default retry budget. Overwrites any prior
-    value.
-
-    Parameters
-    ----------
-    worker_file_path : Path
-        Path to the worker_*_runner.h5 file.
-    index : int
-        The current item index being processed.
-    """
-    _retry_hdf5_write(
-        worker_file_path,
-        lambda f: f.attrs.__setitem__("current_item_index", index),
-    )
+    mark_ledger_item_done(ledger_group, index, wall_clock_time)
 
 
 def _resolve_kept_program_results(
@@ -1345,23 +1406,30 @@ def _process_and_checkpoint_item(
     n_shot_batches: int | None,
     keep_shot_results: bool,
     shot_checkpoint_subdir: Callable[[int], Path | None] | None,
-    item_checkpoint_dir: Path | None,
+    ledger_group: h5py.Group | None,
+    payload_path: Path | None,
     results_filename: str = "results.h5",
 ) -> dict[str, Any]:
-    """Call process_item, checkpoint its result to a worker file, and return
-    a dict for the caller to thread upward.
+    """Call process_item, checkpoint its result to a dedicated payload file
+    plus the SWMR ledger, and return a dict for the caller to thread upward.
 
     When checkpointing, everything is already durable on disk, so only
     `{"_reduced_results": ...}` is returned (the sole key `on_item_done`
     reads); otherwise the full `_ALWAYS_MERGED_ATTRS` runner-side mapping is
     returned for the no-checkpoint branch's own in-memory merge.
     `process_item`'s own `"program_results"` entry (when `keep_shot_results`)
-    is checkpointed to the worker file directly below but excluded either
+    is checkpointed to the payload file directly below but excluded either
     way, to avoid forwarding a lazy-loading `ProgramResults`'s open HDF5
     handle across a pickle boundary in the parallel case.
 
     Parameters
     ----------
+    ledger_group : h5py.Group | None
+        The worker's SWMR ledger group (as yielded by
+        `held_swmr_writer`), or None when checkpointing is disabled.
+    payload_path : Path | None
+        Path to this item's own dedicated payload file, or None when
+        checkpointing is disabled.
     results_filename : str, optional
         Filename for checkpoint loading (default "results.h5").
     """
@@ -1380,11 +1448,9 @@ def _process_and_checkpoint_item(
 
     in_memory_pr = aux.get("program_results")
 
-    # Checkpoint result to worker file
-    if item_checkpoint_dir is not None:
-        worker_file_path = (
-            item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
-        )
+    # Checkpoint result to this item's own payload file plus the ledger
+    if ledger_group is not None:
+        assert payload_path is not None
         # If keep_shot_results is enabled, retrieve ProgramResults
         pr = None
         if keep_shot_results:
@@ -1402,11 +1468,15 @@ def _process_and_checkpoint_item(
         ]
         if keep_shot_results and pr is not None:
             entries.append(("_program_results", pr, False))
-        _write_item_checkpoint_entries_with_retry(
-            worker_file_path, index, entries
+        _write_item_checkpoint_with_ledger(
+            ledger_group,
+            payload_path,
+            index,
+            entries,
+            aux["item_wall_clock_times"],
         )
 
-    if item_checkpoint_dir is not None:
+    if ledger_group is not None:
         return {"_reduced_results": aux["_reduced_results"]}
     return {
         runner_key: aux[runner_key]
@@ -1447,27 +1517,38 @@ def _run_serial(
     )
     results_dict: dict[int, dict[str, Any]] = {}
 
-    for index, item in remaining:
-        aux = _process_and_checkpoint_item(
-            process_item,
-            item,
-            index,
-            static_kwargs,
-            shot_executor,
-            n_shot_batches,
-            keep_shot_results,
-            shot_checkpoint_subdir,
-            item_checkpoint_dir,
-            results_filename=results_filename,
-        )
+    # The ledger is closed when the `with` exits, so `run()`'s consolidation
+    # sees it closed.
+    with _held_item_ledger(item_checkpoint_dir) as ledger_group:
+        for index, item in remaining:
+            payload_path = None
+            if item_checkpoint_dir is not None:
+                payload_path = (
+                    item_checkpoint_dir
+                    / f"worker_{worker_id()}_item_{index}_payload.h5"
+                )
 
-        results_dict[index] = aux
+            aux = _process_and_checkpoint_item(
+                process_item,
+                item,
+                index,
+                static_kwargs,
+                shot_executor,
+                n_shot_batches,
+                keep_shot_results,
+                shot_checkpoint_subdir,
+                ledger_group,
+                payload_path,
+                results_filename=results_filename,
+            )
 
-        if on_item_done is not None:
-            on_item_done(index, item, aux["_reduced_results"])
+            results_dict[index] = aux
 
-        if pbar is not None:
-            pbar.update(1)
+            if on_item_done is not None:
+                on_item_done(index, item, aux["_reduced_results"])
+
+            if pbar is not None:
+                pbar.update(1)
 
     return results_dict
 
@@ -1495,6 +1576,64 @@ def _mark_observed_and_notify(
             pbar.update(1)
 
 
+def _poll_one_new_format_worker_file(
+    worker_file: Path,
+    consumed_count: int,
+    observed_indices: set[int],
+    items_map: dict[int, Any],
+    on_item_done: Callable[[int, Any, Any], None] | None,
+    pbar: Any,
+) -> int:
+    """New-format sibling of `_poll_one_worker_file`: reads newly-done
+    indices from `worker_file`'s SWMR ledger, notifying for each one by
+    reading its own dedicated `..._item_{index}_payload.h5` file.
+
+    `consumed_count` is incremented by the number of newly-done indices
+    found this call, mirroring the legacy path's own return-value contract
+    so `on_poll()`'s bookkeeping keeps working unchanged for either format.
+    """
+    try:
+        ledger_file, ledger_group = open_swmr_reader(worker_file)
+    except (BlockingIOError, OSError, KeyError):
+        return consumed_count
+    try:
+        status = read_swmr_ledger_status(ledger_group)
+        done_indices = (
+            {i for i, is_done in enumerate(status.done) if is_done}
+            if status.done is not None
+            else set()
+        )
+        worker_id_prefix = worker_file.stem.removesuffix("_runner")
+        for index in sorted(done_indices - observed_indices):
+            payload_path = (
+                worker_file.parent
+                / f"{worker_id_prefix}_item_{index}_payload.h5"
+            )
+            try:
+                with h5py.File(payload_path, "r") as pf:
+                    decode_cache = ResolvingDecodeCache(root=pf, format="hdf5")
+                    for key, value in iter_dict_attr_entries(
+                        pf, "results", start_index=0, decode_cache=decode_cache
+                    ):
+                        consumed_count += 1
+                        _mark_observed_and_notify(
+                            key,
+                            value,
+                            observed_indices,
+                            items_map,
+                            on_item_done,
+                            pbar,
+                        )
+            except (BlockingIOError, OSError, KeyError):
+                # A missing attribute, or a payload that is gone or damaged
+                # (no writer holds it: it was closed before its item was
+                # marked done); retry this item's payload on a later poll.
+                continue
+    finally:
+        ledger_file.close()
+    return consumed_count
+
+
 def _poll_one_worker_file(
     worker_file: Path,
     consumed_count: int,
@@ -1506,10 +1645,22 @@ def _poll_one_worker_file(
     """Read this worker file's entries past `consumed_count`, notifying for
     each one, and return the file's updated consumed count.
 
-    A transient HDF5 lock conflict (e.g. the worker itself mid-write) is
-    silently tolerated -- the file is simply retried on the next poll tick,
-    at whichever consumed count it last reached here.
+    Branches on whether `worker_file` is a legacy worker file (dict attrs at
+    its own root) or a new-format SWMR ledger file, delegating the
+    new-format case to `_poll_one_new_format_worker_file`. A file that
+    can't be opened or read (e.g. a file deleted since the glob, or a
+    damaged file) is skipped and retried on the next poll tick, at whichever consumed count
+    it last reached here.
     """
+    if is_swmr_ledger_file(worker_file):
+        return _poll_one_new_format_worker_file(
+            worker_file,
+            consumed_count,
+            observed_indices,
+            items_map,
+            on_item_done,
+            pbar,
+        )
     try:
         with h5py.File(worker_file, "r") as f:
             # A shared decode_cache is required across this loop so that
@@ -1529,18 +1680,22 @@ def _poll_one_worker_file(
                     key, value, observed_indices, items_map, on_item_done, pbar
                 )
     except (BlockingIOError, OSError, KeyError):
-        # Transient lock conflict, missing attribute, or file corruption;
-        # skip this file for now
+        # A file that can't be opened (e.g. a file deleted since the
+        # glob), a missing attribute, or a damaged file; skip this file
+        # for now
         pass
     return consumed_count
 
 
 def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
-    """Read current_item_index attributes from all worker_*_runner.h5 files.
+    """Read the in-flight item index from all worker_*_runner.h5 files.
 
     Returns the set of item indices currently being processed by any worker.
-    Silently tolerates missing files or transient HDF5 lock conflicts, which
-    is appropriate since the set of workers can change mid-dispatch.
+    A legacy worker file's `current_item_index` comes from its own file
+    attrs; a new-format worker file's comes from its SWMR ledger instead.
+    Silently skips a file that is missing or can't be opened (e.g. a file
+    deleted since the glob), which is appropriate since the
+    set of workers can change mid-dispatch.
 
     Parameters
     ----------
@@ -1555,11 +1710,21 @@ def _read_worker_current_indices(checkpoint_dir: Path) -> set[int]:
     in_flight: set[int] = set()
     for worker_file in sorted(checkpoint_dir.glob("worker_*_runner.h5")):
         try:
-            with h5py.File(worker_file, "r") as f:
-                if "current_item_index" in f.attrs:
-                    in_flight.add(int(f.attrs["current_item_index"]))
-        except (BlockingIOError, OSError):
-            # Transient lock conflict -- skip this file for now
+            if is_swmr_ledger_file(worker_file):
+                ledger_file, ledger_group = open_swmr_reader(worker_file)
+                try:
+                    status = read_swmr_ledger_status(ledger_group)
+                    if status.current_item_index is not None:
+                        in_flight.add(status.current_item_index)
+                finally:
+                    ledger_file.close()
+            else:
+                with h5py.File(worker_file, "r") as f:
+                    if "current_item_index" in f.attrs:
+                        in_flight.add(int(f.attrs["current_item_index"]))
+        except (BlockingIOError, OSError, KeyError):
+            # Missing, or can't be opened (e.g. a file deleted since the
+            # glob) -- skip this file for now
             continue
     return in_flight
 
@@ -1608,6 +1773,11 @@ def _run_parallel(
     # Track consumed count per worker file for efficient polling
     consumed_counts: dict[str, int] = {}
 
+    # Highest live shot count seen per in-flight item. Consolidation deletes
+    # an item's ledgers before the item is reported done, so the raw count
+    # can drop back to 0; the mark is dropped once the item is observed done.
+    inflight_shots_high_water: dict[int, int] = {}
+
     def on_poll() -> None:
         """Poll every worker file and notify for any newly-completed items.
 
@@ -1637,7 +1807,12 @@ def _run_parallel(
             done_items = len(observed_indices)
             total_shots_from_done = done_items * num_shots_for_progress
 
-            # Count shots from in-flight items via their checkpoint directories
+            for item_index in list(inflight_shots_high_water):
+                if item_index in observed_indices:
+                    del inflight_shots_high_water[item_index]
+
+            # Count shots from in-flight items via their shot ledgers only,
+            # which are safe to read while their writers are still running.
             # Exclude items already in observed_indices to avoid double-counting
             in_flight_items = _read_worker_current_indices(item_checkpoint_dir)
             in_flight_items = in_flight_items - observed_indices
@@ -1646,9 +1821,15 @@ def _run_parallel(
                 for item_index in in_flight_items:
                     shot_subdir = shot_checkpoint_subdir(item_index)
                     if shot_subdir is not None:
-                        shots_done = ProgramResults._count_done_shots(
-                            shot_subdir, results_filename=results_filename
+                        shots_done = min(
+                            ProgramResults._count_live_done_shots(shot_subdir),
+                            num_shots_for_progress,
                         )
+                        shots_done = max(
+                            shots_done,
+                            inflight_shots_high_water.get(item_index, 0),
+                        )
+                        inflight_shots_high_water[item_index] = shots_done
                         total_shots_from_inflight += shots_done
 
             # Set absolute total and refresh
@@ -1751,27 +1932,33 @@ def _generic_chunk_worker(
     shot_executor = resolve_shot_executor(shot_executor)
 
     results = []
-    for index, item in chunk:
-        # Write current_item_index to worker file if checkpointing is enabled
-        if item_checkpoint_dir is not None:
-            worker_file_path = (
-                item_checkpoint_dir / f"worker_{worker_id()}_runner.h5"
+    with _held_item_ledger(item_checkpoint_dir) as ledger_group:
+        for index, item in chunk:
+            # Mark this item in flight in the ledger if checkpointing is
+            # enabled
+            payload_path = None
+            if item_checkpoint_dir is not None:
+                assert ledger_group is not None
+                update_ledger_in_flight(ledger_group, item_index=index)
+                payload_path = (
+                    item_checkpoint_dir
+                    / f"worker_{worker_id()}_item_{index}_payload.h5"
+                )
+
+            aux = _process_and_checkpoint_item(
+                process_item,
+                item,
+                index,
+                static_kwargs,
+                shot_executor,
+                n_shot_batches,
+                keep_shot_results,
+                shot_checkpoint_subdir,
+                ledger_group,
+                payload_path,
+                results_filename=results_filename,
             )
-            _write_current_item_index_with_retry(worker_file_path, index)
 
-        aux = _process_and_checkpoint_item(
-            process_item,
-            item,
-            index,
-            static_kwargs,
-            shot_executor,
-            n_shot_batches,
-            keep_shot_results,
-            shot_checkpoint_subdir,
-            item_checkpoint_dir,
-            results_filename=results_filename,
-        )
-
-        results.append((index, aux))
+            results.append((index, aux))
 
     return results
