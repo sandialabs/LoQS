@@ -1655,9 +1655,11 @@ time.sleep(600)
         finally:
             proc.kill()
             proc.wait(timeout=30)
-        assert proc.returncode == (
-            1 if sys.platform == "win32" else -signal.SIGKILL
-        )
+        if sys.platform == "win32":
+            expected_returncode = 1
+        else:
+            expected_returncode = -signal.SIGKILL
+        assert proc.returncode == expected_returncode
 
     def test_mixed_legacy_and_swmr_shot_checkpoints(self, tmp_path):
         """Every shot-level read sees a pre-fix `results.h5`, a pre-fix
