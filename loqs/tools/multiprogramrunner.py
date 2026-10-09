@@ -1325,20 +1325,15 @@ def _make_ledger_progress_callback(
     item_index: int,
     *,
     clock: Callable[[], float] = time.monotonic,
-    min_interval: float | None = None,
 ) -> Callable[[int, int], None]:
     """Build a rate-limited `(shots_done, shots_total)` callback writing an
     item's shot progress plus a heartbeat to its SWMR ledger.
 
     It writes on its first call, when `shots_done >= shots_total`, and when
-    at least `min_interval` seconds of `clock` have passed since its last
-    write; other calls do nothing. `min_interval=None` reads
-    `_LEDGER_PROGRESS_MIN_INTERVAL` now. `clock` only drives the rate
-    limit: the heartbeat records wall-clock `time.time()`.
+    at least `_LEDGER_PROGRESS_MIN_INTERVAL` seconds of `clock` have passed
+    since its last write; other calls do nothing. `clock` only drives the
+    rate limit: the heartbeat records wall-clock `time.time()`.
     """
-    interval = (
-        _LEDGER_PROGRESS_MIN_INTERVAL if min_interval is None else min_interval
-    )
     last_write: float | None = None
 
     def callback(shots_done: int, shots_total: int) -> None:
@@ -1347,7 +1342,7 @@ def _make_ledger_progress_callback(
         if (
             last_write is not None
             and shots_done < shots_total
-            and now - last_write < interval
+            and now - last_write < _LEDGER_PROGRESS_MIN_INTERVAL
         ):
             return
         update_ledger_in_flight(

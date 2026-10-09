@@ -167,7 +167,7 @@ def test_by_host_aggregation_and_filter(tmp_path):
     empty, _ = cli.filter_hosts(snap, ["HOSTA"])
     assert empty.workers == ()
     same, n = cli.filter_hosts(snap, [])
-    assert same is snap and n == 3
+    assert same is snap and n is None
 
 
 def test_once_by_host_smoke(tmp_path, capsys):

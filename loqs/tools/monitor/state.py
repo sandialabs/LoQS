@@ -57,13 +57,14 @@ class WorkerSummary:
     `state` is running or stale. `heartbeat_age` is
     `wall_clock() - last_heartbeat` (unclamped; None with no heartbeat).
     `since_change` is monitor-clock seconds since the last observed change
-    (None until a change has been observed).
+    (None until a change has been observed). `no_update_age` is
+    `since_change` when set, else `heartbeat_age` clamped at 0 (None with
+    no heartbeat); staleness and the "no update in" column both use it.
     """
 
     worker_id: str
     host: str
     pid: int
-    path: Path
     state: WorkerState
     items_done: int
     current_item: int | None
@@ -71,6 +72,7 @@ class WorkerSummary:
     shots_total: int | None
     heartbeat_age: float | None
     since_change: float | None
+    no_update_age: float | None
 
 
 @dataclass(frozen=True)
@@ -183,17 +185,19 @@ def _is_in_flight(snap: SwmrLedgerSnapshot) -> bool:
 
 def _classify(
     snap: SwmrLedgerSnapshot,
-    heartbeat_age: float | None,
-    since_change: float | None,
+    no_update_age: float | None,
     stale_after: float,
 ) -> WorkerState:
     """Starting / idle / running / stale for one worker's snapshot."""
-    if heartbeat_age is None:
+    if no_update_age is None:
         return WorkerState.STARTING
     if not _is_in_flight(snap):
         return WorkerState.IDLE
-    age = since_change if since_change is not None else heartbeat_age
-    return WorkerState.STALE if age >= stale_after else WorkerState.RUNNING
+    return (
+        WorkerState.STALE
+        if no_update_age >= stale_after
+        else WorkerState.RUNNING
+    )
 
 
 def compute_totals(workers: list[WorkerSummary]) -> MonitorTotals:
@@ -295,7 +299,6 @@ class MonitorTracker:
 
     def _summarize(
         self,
-        path: Path,
         ident: tuple[str, str, int],
         snap: SwmrLedgerSnapshot,
         now: float,
@@ -313,13 +316,18 @@ class MonitorTracker:
             if math.isnan(snap.last_heartbeat)
             else wall - snap.last_heartbeat
         )
-        state = _classify(snap, heartbeat_age, since_change, self.stale_after)
+        if since_change is not None:
+            no_update_age: float | None = since_change
+        elif heartbeat_age is not None:
+            no_update_age = max(heartbeat_age, 0.0)
+        else:
+            no_update_age = None
+        state = _classify(snap, no_update_age, self.stale_after)
         active = state in (WorkerState.RUNNING, WorkerState.STALE)
         return WorkerSummary(
             worker_id=worker_id,
             host=host,
             pid=pid,
-            path=path,
             state=state,
             items_done=items_done,
             current_item=snap.current_item_index if active else None,
@@ -327,6 +335,7 @@ class MonitorTracker:
             shots_total=snap.item_shots_total or 0 if active else None,
             heartbeat_age=heartbeat_age,
             since_change=since_change,
+            no_update_age=no_update_age,
         )
 
     def poll(self) -> MonitorSnapshot:
@@ -349,7 +358,7 @@ class MonitorTracker:
             if isinstance(result, str):
                 skipped.append(SkippedFile(path, result))
             else:
-                workers.append(self._summarize(path, ident, result, now, wall))
+                workers.append(self._summarize(ident, result, now, wall))
 
         for gone in set(self._history) - listed_ids:
             del self._history[gone]

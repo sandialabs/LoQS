@@ -109,8 +109,9 @@ def test_idle_worker_never_stale(tmp_path):
     w = tracker.poll().workers[0]
     assert w.since_change >= STALE
     assert w.state is WorkerState.IDLE
-    assert w.state is WorkerState.IDLE
-    assert (w.current_item, w.shots_done, w.shots_total) == (None, None, None)
+    assert w.current_item is None
+    assert w.shots_done is None
+    assert w.shots_total is None
     assert w.items_done == 3
 
 

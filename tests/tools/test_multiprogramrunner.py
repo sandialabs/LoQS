@@ -5149,8 +5149,8 @@ class TestLedgerShotProgress:
         self, tmp_path
     ):
         """With a fake clock, only the first call, a call at least
-        `min_interval` after the last write, and the final `(N, N)` call
-        write shot counts and a heartbeat. A missing limit would flush HDF5
+        `_LEDGER_PROGRESS_MIN_INTERVAL` (1 s) after the last write, and the
+        final `(N, N)` call write shot counts and a heartbeat. A missing limit would flush HDF5
         on every shot; a dropped final write would leave the item looking
         unfinished."""
         from loqs.internal.swmrledger import (
@@ -5168,7 +5168,7 @@ class TestLedgerShotProgress:
         try:
             now = [0.0]
             callback = _make_ledger_progress_callback(
-                ledger_group, 3, clock=lambda: now[0], min_interval=1.0
+                ledger_group, 3, clock=lambda: now[0]
             )
             num_shots = 10
             # (clock time, shots_done, expect a write)

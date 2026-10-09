@@ -52,15 +52,15 @@ COLUMNS = (
 )
 
 HOST_COLUMNS = (
-    "Host",
-    "Workers",
-    "Starting",
-    "Running",
-    "Idle",
-    "Stale",
-    "Items done",
-    "Shots",
-    "No update",
+    "host",
+    "workers",
+    "starting",
+    "running",
+    "idle",
+    "stale",
+    "items done",
+    "shots",
+    "no update in",
 )
 
 
@@ -134,32 +134,20 @@ def format_age(seconds: float | None) -> str:
     return f"{total // 3600}h{(total % 3600) // 60:02d}m"
 
 
-def _no_update_age(w: WorkerSummary) -> float | None:
-    if w.since_change is not None:
-        return w.since_change
-    if w.heartbeat_age is not None:
-        return max(w.heartbeat_age, 0.0)
-    return None
-
-
 def format_rows(snapshot: MonitorSnapshot) -> list[tuple[str, ...]]:
-    """One row of strings per worker, sorted by host then pid."""
+    """One row of strings per worker, in the snapshot's host-then-pid order."""
     rows: list[tuple[str, ...]] = []
-    for w in sorted(snapshot.workers, key=lambda w: (w.host, w.pid)):
+    for w in snapshot.workers:
         active = w.state in (WorkerState.RUNNING, WorkerState.STALE)
         rows.append(
             (
                 w.host,
                 str(w.pid),
                 w.state.value,
-                (
-                    str(w.current_item)
-                    if active and w.current_item is not None
-                    else "-"
-                ),
+                str(w.current_item) if active else "-",
                 str(w.items_done),
                 f"{w.shots_done}/{w.shots_total}" if active else "-",
-                format_age(_no_update_age(w)),
+                format_age(w.no_update_age),
             )
         )
     return rows
@@ -180,7 +168,10 @@ class HostRow:
     shots_done: int
     shots_total: int
     no_update_age: float | None
-    has_stale: bool
+
+    @property
+    def has_stale(self) -> bool:
+        return self.state_counts[WorkerState.STALE] > 0
 
 
 def aggregate_by_host(workers: Iterable[WorkerSummary]) -> list[HostRow]:
@@ -196,7 +187,7 @@ def aggregate_by_host(workers: Iterable[WorkerSummary]) -> list[HostRow]:
             age
             for w in group
             if w.state in (WorkerState.RUNNING, WorkerState.STALE)
-            and (age := _no_update_age(w)) is not None
+            and (age := w.no_update_age) is not None
         ]
         rows.append(
             HostRow(
@@ -207,7 +198,6 @@ def aggregate_by_host(workers: Iterable[WorkerSummary]) -> list[HostRow]:
                 shots_done=totals.shots_done,
                 shots_total=totals.shots_total,
                 no_update_age=max(ages) if ages else None,
-                has_stale=totals.state_counts[WorkerState.STALE] > 0,
             )
         )
     return rows
@@ -226,17 +216,17 @@ def _format_host_row(row: HostRow) -> tuple[str, ...]:
 
 def filter_hosts(
     snapshot: MonitorSnapshot, patterns: Sequence[str]
-) -> tuple[MonitorSnapshot, int]:
+) -> tuple[MonitorSnapshot, int | None]:
     """Keep the workers whose host matches any glob in `patterns`.
 
     Matching is case-sensitive (`fnmatch.fnmatchcase`). Returns the
     filtered snapshot, with totals recomputed and a note for each pattern
     that matched no host, and the number of hosts before filtering. With no
-    patterns the snapshot is returned unchanged.
+    patterns the snapshot is returned unchanged, with None for the count.
     """
-    n_before = len(snapshot.totals.hosts)
     if not patterns:
-        return snapshot, n_before
+        return snapshot, None
+    n_before = len(snapshot.totals.hosts)
     hosts = snapshot.totals.hosts
     kept = tuple(
         w
@@ -318,7 +308,7 @@ def _run_once(
     patterns: Sequence[str] = (),
 ) -> int:
     snapshot = read_snapshot(directory, stale_after=stale_after)
-    snapshot, hosts_total = _view(snapshot, patterns)
+    snapshot, hosts_total = filter_hosts(snapshot, patterns)
     print(format_plain(snapshot, by_host=by_host, hosts_total=hosts_total))
     return 0 if snapshot.directory_exists else 2
 
@@ -353,14 +343,6 @@ def _render_live(
     return Group(*parts)
 
 
-def _view(
-    snapshot: MonitorSnapshot, patterns: Sequence[str]
-) -> tuple[MonitorSnapshot, int | None]:
-    """Apply the host filter; `hosts_total` is None when not filtering."""
-    filtered, hosts_total = filter_hosts(snapshot, patterns)
-    return filtered, (hosts_total if patterns else None)
-
-
 def _run_live(
     directory: str,
     interval: float,
@@ -381,7 +363,7 @@ def _run_live(
     tracker = MonitorTracker(directory, stale_after=stale_after)
 
     def render():
-        snapshot, hosts_total = _view(tracker.poll(), patterns)
+        snapshot, hosts_total = filter_hosts(tracker.poll(), patterns)
         return _render_live(snapshot, by_host, hosts_total)
 
     try:

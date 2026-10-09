@@ -535,10 +535,11 @@ A worker is *starting* before it has begun an item, *running* while it works on 
 
 Some caveats on reading the output:
 
-- The heartbeat advances only at item start and when shots complete (once per completed batch under a `shot_executor`, and at most once per second). A worker inside one very long shot or batch therefore shows a growing "no update in" without being dead, so `--stale-after` must exceed the longest gap between shot or batch completions.
+- The heartbeat advances only at item start and when shots complete (once per completed batch under a `shot_executor`, and at most once per second). A healthy worker therefore shows a growing "no update in" without being dead while it is inside one very long shot or batch, and also while it builds the program, loads a resumed checkpoint, consolidates after its last shot, reduces, and writes its payload. `--stale-after` must exceed the longest of these gaps, not only the longest gap between shot or batch completions.
 - `--once` has no poll history, so its ages come from heartbeats and can be off by the clock difference between the worker's node and the monitor's. Live mode measures age on the monitor's own clock once it has seen a change.
 - Shot counts are shots computed, not shots durably checkpointed.
-- With item checkpointing on, a user `progress_callback` in `run_kwargs` must be a plain Python function, not a builtin such as `print`, a `functools.partial` or a callable instance. Those are rejected before dispatch, and under parallel dispatch the callback runs in the item worker, so driver-side side effects are lost.
+- Worker ledgers are consolidated and deleted only after a dispatch succeeds. When you resume an interrupted run, the interrupted run's ledgers stay in the directory for the whole resumed run. The monitor shows those workers as stale (if they were killed mid-item) or idle, with hours-old ages, counts them in the worker and shot totals, and `--by-host` highlights their hosts. Their pids and ages tell them apart from the resumed run's workers.
+- With item checkpointing on, a user `progress_callback` in `run_kwargs` must be a module-level `def`, not a builtin such as `print`, a `functools.partial` or a callable instance. Those are rejected before dispatch. A local `lambda` passes that check, but it is serialized as its call-site source line, so it may not survive `Runner.read()`, and under parallel dispatch the callback runs in the item worker, so driver-side side effects are lost.
 
 ## Performance profiling
 
