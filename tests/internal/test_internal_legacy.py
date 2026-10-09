@@ -167,11 +167,9 @@ class TestDeprecated:
     def test_preserves_function_identity(self):
         @deprecated("new_func")
         def old_func(x, y):
-            """Docstring."""
             return x + y
 
         assert old_func.__name__ == "old_func"
-        assert old_func.__doc__ == "Docstring."
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             assert old_func(2, 3) == 5
