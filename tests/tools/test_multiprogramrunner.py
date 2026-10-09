@@ -5263,3 +5263,84 @@ class TestLedgerShotProgress:
         assert snapshot.current_item_index == 4
         assert snapshot.item_shots_done == num_shots
         assert snapshot.item_shots_total == num_shots
+
+
+class TestDriverLiveItemReads:
+    """The driver's live reads of new-format worker ledgers, over
+    synthetic ledgers from the shared builder."""
+
+    def test_live_poll_opens_only_done_payloads(self, tmp_path, monkeypatch):
+        """Only done items' payloads are opened and each notifies once.
+        Catches the live path opening unfinished items' payloads,
+        double-notifying, or not notifying (the end-of-dispatch pass
+        would otherwise hide it)."""
+        import shutil
+
+        from _shared_checkpoint_test_helpers import write_item_ledger
+        from loqs.tools import multiprogramrunner as mpr
+
+        worker_file = write_item_ledger(
+            tmp_path,
+            payloads={0: "value0", 2: "value2"},
+            current_item=3,
+            shots_done=1,
+            shots_total=4,
+        )
+        prefix = "worker_nodeA_1000_0000abcd"
+        for decoy in (1, 3):
+            shutil.copy(
+                tmp_path / f"{prefix}_item_0_payload.h5",
+                tmp_path / f"{prefix}_item_{decoy}_payload.h5",
+            )
+
+        opened = []
+
+        def recording_iter(f, *args, **kwargs):
+            opened.append(Path(f.filename).name)
+            return iter_dict_attr_entries(f, *args, **kwargs)
+
+        monkeypatch.setattr(mpr, "iter_dict_attr_entries", recording_iter)
+
+        items_map = {i: f"item{i}" for i in range(4)}
+        notified = []
+        observed: set[int] = set()
+
+        def on_item_done(index, item, value):
+            notified.append((index, item, value))
+
+        count = mpr._poll_one_new_format_worker_file(
+            worker_file, 0, observed, items_map, on_item_done, None
+        )
+        assert sorted(opened) == [
+            f"{prefix}_item_0_payload.h5",
+            f"{prefix}_item_2_payload.h5",
+        ]
+        assert sorted(notified) == [
+            (0, "item0", "value0"),
+            (2, "item2", "value2"),
+        ]
+        assert count == 2
+        assert observed == {0, 2}
+
+        opened.clear()
+        notified.clear()
+        again = mpr._poll_one_new_format_worker_file(
+            worker_file, count, observed, items_map, on_item_done, None
+        )
+        assert opened == []
+        assert notified == []
+        assert again == count
+
+    def test_current_indices_from_ledgers(self, tmp_path):
+        """Two ledgers' in-flight items are both reported. Catches the
+        driver's in-flight shot count losing new-format workers."""
+        from _shared_checkpoint_test_helpers import write_item_ledger
+        from loqs.tools import multiprogramrunner as mpr
+
+        write_item_ledger(
+            tmp_path, pid=1, current_item=3, shots_done=1, shots_total=2
+        )
+        write_item_ledger(
+            tmp_path, pid=2, current_item=5, shots_done=1, shots_total=2
+        )
+        assert mpr._read_worker_current_indices(tmp_path) == {3, 5}
