@@ -1657,3 +1657,50 @@ class TestResolvingDecodeCache:
         assert isinstance(instruction, Instruction)
         assert not isinstance(instruction, DeferredRef)
         assert instruction.name == "TestInstruction"
+
+
+def _handle_is_closed(f):
+    if isinstance(f, h5py.File):
+        return not f.id.valid
+    return f.closed
+
+
+class TestFileHandles:
+    """`read` and `write` must close their file when `load`/`dump` raises."""
+
+    @pytest.mark.parametrize("ext", ["json", "json.gz", "hdf5"])
+    def test_read_closes_file_on_error(self, tmp_path, monkeypatch, ext):
+        path = tmp_path / f"obj.{ext}"
+        MockSerializable(name="a", value=1).write(path)
+
+        seen = []
+
+        def failing_load(cls, f, *args, **kwargs):
+            seen.append(f)
+            raise RuntimeError("load failed")
+
+        monkeypatch.setattr(Serializable, "load", classmethod(failing_load))
+        # Keep excinfo (and so the traceback frames) alive during the check
+        with pytest.raises(RuntimeError) as excinfo:
+            MockSerializable.read(path)
+
+        assert len(seen) == 1
+        assert _handle_is_closed(seen[0])
+        assert excinfo.value is not None
+
+    @pytest.mark.parametrize("ext", ["json", "json.gz", "hdf5"])
+    def test_write_closes_file_on_error(self, tmp_path, monkeypatch, ext):
+        path = tmp_path / f"obj.{ext}"
+        seen = []
+
+        def failing_dump(self, f, *args, **kwargs):
+            seen.append(f)
+            raise RuntimeError("dump failed")
+
+        monkeypatch.setattr(Serializable, "dump", failing_dump)
+        with pytest.raises(RuntimeError) as excinfo:
+            MockSerializable(name="a", value=1).write(path)
+
+        assert len(seen) == 1
+        assert _handle_is_closed(seen[0])
+        assert excinfo.value is not None

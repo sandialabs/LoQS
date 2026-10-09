@@ -1095,16 +1095,16 @@ class Serializable:
                 )
 
         if format == "json":
-            f = open(str(path), "r")
+            opener = open(str(path), "r")
         elif format == "json.gz":
-            f = gzip.open(str(path), "rt")
+            opener = gzip.open(str(path), "rt")
             format = "json"
         elif format in ["hdf5", "h5"]:
-            f = h5py.File(str(path), "r")
+            opener = h5py.File(str(path), "r")
         else:
             raise ValueError("Cannot write format")
 
-        try:
+        with opener as f:
             loaded = cls.load(
                 f,
                 format,
@@ -1112,8 +1112,6 @@ class Serializable:
                 decode_cache=decode_cache,
                 migrate_legacy_fns=migrate_legacy_fns,
             )
-        finally:
-            f.close()
 
         return loaded
 
@@ -1259,23 +1257,22 @@ class Serializable:
                 )
 
         if format == "json":
-            f = open(str(path), "w")
+            opener = open(str(path), "w")
         elif format == "json.gz":
-            f = gzip.open(str(path), "wt")
+            opener = gzip.open(str(path), "wt")
         elif format in ["hdf5", "h5"]:
-            f = h5py.File(str(path), "w")
+            opener = h5py.File(str(path), "w")
         else:
             raise ValueError("Cannot write format")
 
-        self.dump(
-            f,
-            format,
-            use_caching=use_caching,
-            encode_cache=encode_cache,
-            json_format_kwargs=json_format_kwargs,
-        )
-
-        f.close()
+        with opener as f:
+            self.dump(
+                f,
+                format,
+                use_caching=use_caching,
+                encode_cache=encode_cache,
+                json_format_kwargs=json_format_kwargs,
+            )
 
     ## INTERNAL FUNCTIONS
 

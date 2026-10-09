@@ -438,10 +438,23 @@ deletes the payloads and ledgers -- callers never need to touch the
 per-worker files themselves. Each payload references the parent program
 stored once in `results.h5` rather than embedding its own copy.
 
-The progress ledgers rely on SWMR, which needs a file system that preserves
-POSIX write ordering: a local disk, or a parallel file system such as Lustre
-or GPFS. Keep checkpoint directories, for both `QuantumProgram.run()` and
-`MultiProgramRunner`, off NFS and SMB (Windows network) shares.
+The progress ledgers' SWMR mode relies on the file system preserving POSIX
+write ordering while a ledger is being written. Only live progress reads
+depend on that ordering. Results, resume and consolidation read only each
+ledger's root group, to tell it from a data file, and take every result from
+the payload files, which each worker closes before marking its shots done.
+So on an NFS or SMB (Windows network) share the risk is live progress that
+stalls or shows wrong counts, not wrong results. For reliable live progress,
+keep checkpoint directories, for both `QuantumProgram.run()` and
+`MultiProgramRunner`, on a local disk or a parallel file system such as
+Lustre or GPFS.
+
+Checkpointing needs process-based executors: loky,
+`concurrent.futures.ProcessPoolExecutor`, submitit or `mpi4py.futures`. With
+a thread executor, a worker thread's ledger open fails while the driver's
+poll holds a reader of that ledger, and threads that share one held ledger
+race when they grow it. Threads don't speed up shots anyway, since shots run
+under the GIL.
 
 ```{code-cell} ipython3
 import tempfile

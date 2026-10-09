@@ -1202,6 +1202,23 @@ time.sleep(600)
             expected_returncode = -signal.SIGKILL
         assert proc.returncode == expected_returncode
 
+    def test_checkpoint_reuses_killed_writers_worker_id(self, tmp_path):
+        """A checkpoint under the `worker_id` of a killed writer succeeds,
+        and the reloaded run holds the killed and the new shots."""
+        checkpoint_dir = tmp_path / "checkpoints"
+        canonical = ProgramResults(lazy_loading=False)
+        canonical.add_shot(0, self._shot_history(0))
+        canonical.checkpoint(checkpoint_dir=checkpoint_dir)
+        self._write_killed_writer_files(checkpoint_dir)
+
+        results = ProgramResults(lazy_loading=False)
+        results.add_shot(8, self._shot_history(8))
+        results.checkpoint(checkpoint_dir=checkpoint_dir, worker_id="killed")
+
+        loaded = ProgramResults(lazy_loading=False)
+        loaded.load_checkpoint(checkpoint_dir=checkpoint_dir)
+        assert set(loaded.shot_histories) == {0, 6, 7, 8}
+
     def test_mixed_canonical_live_and_killed_shot_checkpoints(self, tmp_path):
         """Every shot-level read sees a serial writer's `results.h5`, a live
         writer's ledger plus payload and a killed writer's ledger plus
