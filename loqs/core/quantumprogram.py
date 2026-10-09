@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import as_completed
 import contextlib
 import copy
@@ -52,6 +52,36 @@ from loqs.internal.streamingmerge import (
 )
 
 T = TypeVar("T", bound="QuantumProgram")
+
+
+class _ShotProgress:
+    """Advance a tqdm bar, an absolute shot counter and an optional
+    `progress_callback(shots_done, shots_total)` together. The counter is
+    kept separately because a disabled bar (`verbose=False`) ignores
+    `update`, so its `n` would stay at 0."""
+
+    def __init__(
+        self,
+        pbar,
+        num_shots: int,
+        progress_callback: Callable[[int, int], None] | None,
+        num_done: int = 0,
+    ) -> None:
+        self._pbar = pbar
+        self._num_shots = num_shots
+        self._callback = progress_callback
+        self.shots_done = num_done
+        if num_done:
+            pbar.update(num_done)
+        if progress_callback is not None:
+            progress_callback(num_done, num_shots)
+
+    def update(self, n: int) -> None:
+        """Advance the bar and the counter by `n` shots, then report."""
+        self._pbar.update(n)
+        self.shots_done += n
+        if self._callback is not None:
+            self._callback(self.shots_done, self._num_shots)
 
 
 class QuantumProgram(Displayable):
@@ -540,12 +570,12 @@ class QuantumProgram(Displayable):
         checkpoint_batch_size: int,
         checkpoint_dir: str | Path | None,
         program_results: ProgramResults,
-        pbar,
+        progress: _ShotProgress,
     ) -> None:
         """Serially compute every shot in `remaining`, flushing to the
         canonical checkpoint file once `checkpoint_batch_size` shots have
         accumulated unwritten (plus a final flush for any undersized tail
-        batch).
+        batch). `progress` advances by one after each shot.
 
         With a `checkpoint_dir` and shots to run, the shot ledger is held
         open across the whole loop and closed before returning, so `run()`'s
@@ -570,7 +600,7 @@ class QuantumProgram(Displayable):
                 program_results.add_shot(
                     i, result, wall_clock_time=wall_clock_time
                 )
-                pbar.update(1)
+                progress.update(1)
                 if (
                     len(program_results.get_unwritten_shots())
                     >= checkpoint_batch_size
@@ -586,12 +616,13 @@ class QuantumProgram(Displayable):
         checkpoint_dir: str | Path | None,
         shot_executor: SubmitExecutor,
         program_results: ProgramResults,
-        pbar,
+        progress: _ShotProgress,
     ) -> None:
         """Dispatch `remaining` to `shot_executor` in `checkpoint_batch_size`-
         sized chunks; each batch is computed and checkpointed inside its own
         worker process (see `_run_shot_batch_worker`) before returning. A
-        no-op if `remaining` is empty."""
+        no-op if `remaining` is empty. `progress` advances in this process
+        as each batch returns."""
         if not remaining:
             return
         batches = [
@@ -627,7 +658,7 @@ class QuantumProgram(Displayable):
                     wall_clock_time=batch_wall_clock_times.get(shot_index),
                 )
             program_results.mark_shots_checkpointed(list(batch_shots.keys()))
-            pbar.update(len(batch_shots))
+            progress.update(len(batch_shots))
 
     def _resolve_shot_batching(
         self,
@@ -719,6 +750,7 @@ class QuantumProgram(Displayable):
         force_resume: bool = False,
         n_shot_batches: int | None = None,
         results_filename: str = "results.h5",
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> ProgramResults:
         """Execute some shots of this [](api:QuantumProgram).
 
@@ -835,6 +867,18 @@ class QuantumProgram(Displayable):
             Filename to use for the canonical results checkpoint file.
             Defaults to "results.h5". Only relevant when `checkpoint=True`.
 
+        progress_callback:
+            Optional callable invoked as `progress_callback(shots_done,
+            shots_total)`: once before the first shot, then each time the
+            progress bar advances (after every serial shot, or as each
+            parallel batch returns). `shots_total` is `num_shots`;
+            `shots_done` is the absolute number of shots computed in this
+            call's results, including shots loaded from a resumed
+            checkpoint -- not the number durably checkpointed so far. It
+            always runs in the calling process, never in a `shot_executor`
+            worker, and is called regardless of `verbose`. Defaults to
+            `None` (no callback).
+
         Returns
         -------
         ProgramResults
@@ -898,18 +942,22 @@ class QuantumProgram(Displayable):
                     (self, max_frame_limit, _seed_for_shot(i), i)
                     for i in range(num_shots)
                 ]
-                for task in tqdm(
-                    tasks,
-                    f"Program {self.name}",
-                    disable=not verbose,
+                with tqdm(
                     total=num_shots,
-                ):
-                    start_time = time.perf_counter()
-                    result = QuantumProgram._run_shot(*task)
-                    wall_clock_time = time.perf_counter() - start_time
-                    program_results.add_shot(
-                        task[3], result, wall_clock_time=wall_clock_time
-                    )  # task[3] is shot index
+                    desc=f"Program {self.name}",
+                    disable=not verbose,
+                ) as pbar:
+                    progress = _ShotProgress(
+                        pbar, num_shots, progress_callback
+                    )
+                    for task in tasks:
+                        start_time = time.perf_counter()
+                        result = QuantumProgram._run_shot(*task)
+                        wall_clock_time = time.perf_counter() - start_time
+                        program_results.add_shot(
+                            task[3], result, wall_clock_time=wall_clock_time
+                        )  # task[3] is shot index
+                        progress.update(1)
             else:
                 # Dispatch shots in batches (resolved_n_shot_batches is
                 # non-None whenever shot_executor is set); checkpoint_dir is
@@ -940,6 +988,9 @@ class QuantumProgram(Displayable):
                     desc=f"Program {self.name}",
                     disable=not verbose,
                 ) as pbar:
+                    progress = _ShotProgress(
+                        pbar, num_shots, progress_callback
+                    )
                     for future in as_completed(futures_to_batch):
                         batch_shots, batch_wall_clock_times = future.result()
                         for shot_index, history in batch_shots.items():
@@ -950,7 +1001,7 @@ class QuantumProgram(Displayable):
                                     shot_index
                                 ),
                             )
-                        pbar.update(len(batch_shots))
+                        progress.update(len(batch_shots))
 
             return program_results
 
@@ -976,8 +1027,9 @@ class QuantumProgram(Displayable):
         with tqdm(
             total=num_shots, desc=f"Program {self.name}", disable=not verbose
         ) as pbar:
-            if num_done:
-                pbar.update(num_done)
+            progress = _ShotProgress(
+                pbar, num_shots, progress_callback, num_done=num_done
+            )
             if shot_executor is None:
                 self._run_serial_checkpointed(
                     remaining,
@@ -985,7 +1037,7 @@ class QuantumProgram(Displayable):
                     checkpoint_batch_size,
                     resolved_checkpoint_dir,
                     program_results,
-                    pbar,
+                    progress,
                 )
             else:
                 self._run_parallel_checkpointed(
@@ -995,7 +1047,7 @@ class QuantumProgram(Displayable):
                     resolved_checkpoint_dir,
                     shot_executor,
                     program_results,
-                    pbar,
+                    progress,
                 )
 
             # A race-free, driver-side, streaming (bounded-memory)

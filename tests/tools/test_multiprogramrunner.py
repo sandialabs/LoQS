@@ -1869,13 +1869,16 @@ class TestProcessAndCheckpointItemAtomicity:
         `ProgramResults` (4 attributes today, the above plus
         `_program_results`)."""
         from loqs.internal.swmrledger import open_swmr_writer
-        from loqs.tools.multiprogramrunner import _process_and_checkpoint_item
+        from loqs.tools.multiprogramrunner import (
+            _ITEM_LEDGER_FIELDS,
+            _process_and_checkpoint_item,
+        )
 
         item_checkpoint_dir = tmp_path / "ckpt"
         item_checkpoint_dir.mkdir()
         _, ledger_group = open_swmr_writer(
             item_checkpoint_dir / "worker_test_runner.h5",
-            fields=["done", "wall_clock_times"],
+            fields=_ITEM_LEDGER_FIELDS,
         )
         payload_path = item_checkpoint_dir / "worker_test_item_0_payload.h5"
 
@@ -5104,3 +5107,159 @@ class TestBaseClassMechanisms:
                 f"Expected _reduced_results keys to use 'dataset' format "
                 f"after _KeyedRunner checkpoint, but got '{storage_format}'"
             )
+
+
+class _ProgressCallingFakeProgram(_FakeProgram):
+    """`_FakeProgram` whose `run()` reports `(0, num_shots)` then
+    `(num_shots, num_shots)` to its `progress_callback`, as a real
+    `QuantumProgram.run()` does at its first and last shot."""
+
+    def __init__(self, value, num_shots, run_kwargs_log=None):
+        super().__init__(value, run_kwargs_log)
+        self.num_shots = num_shots
+
+    def run(self, **kwargs):
+        callback = kwargs["progress_callback"]
+        callback(0, self.num_shots)
+        callback(self.num_shots, self.num_shots)
+        return super().run(**kwargs)
+
+
+def _read_item_ledger_snapshot(item_checkpoint_dir):
+    """Read this process's (closed) item ledger in `item_checkpoint_dir`."""
+    from loqs.internal.swmrledger import (
+        open_swmr_reader,
+        read_swmr_ledger_status,
+    )
+    from loqs.tools.multiprogramrunner import _item_ledger_path
+
+    f, ledger_group = open_swmr_reader(_item_ledger_path(item_checkpoint_dir))
+    try:
+        return read_swmr_ledger_status(ledger_group)
+    finally:
+        f.close()
+
+
+class TestLedgerShotProgress:
+    """Item workers record the in-flight item, a heartbeat and live shot
+    progress in their SWMR item ledger, rate-limited, without swallowing a
+    user `progress_callback` given in `run_kwargs`."""
+
+    def test_rate_limited_callback_writes_first_interval_and_final_calls(
+        self, tmp_path
+    ):
+        """With a fake clock, only the first call, a call at least
+        `min_interval` after the last write, and the final `(N, N)` call
+        write shot counts and a heartbeat. A missing limit would flush HDF5
+        on every shot; a dropped final write would leave the item looking
+        unfinished."""
+        from loqs.internal.swmrledger import (
+            open_swmr_writer,
+            update_ledger_heartbeat,
+        )
+        from loqs.tools.multiprogramrunner import (
+            _ITEM_LEDGER_FIELDS,
+            _make_ledger_progress_callback,
+        )
+
+        ledger_file, ledger_group = open_swmr_writer(
+            tmp_path / "ledger.h5", fields=_ITEM_LEDGER_FIELDS
+        )
+        try:
+            now = [0.0]
+            callback = _make_ledger_progress_callback(
+                ledger_group, 3, clock=lambda: now[0], min_interval=1.0
+            )
+            num_shots = 10
+            # (clock time, shots_done, expect a write)
+            steps = [
+                (0.0, 0, True),  # first call
+                (0.5, 3, False),
+                (0.9, 5, False),
+                (1.0, 6, True),  # interval reached since t=0.0
+                (1.5, 8, False),
+                (1.7, num_shots, True),  # final shot, inside the interval
+            ]
+            last_written = None
+            for clock_time, shots_done, expect_write in steps:
+                update_ledger_heartbeat(ledger_group, timestamp=-1.0)
+                now[0] = clock_time
+                callback(shots_done, num_shots)
+
+                heartbeat = float(ledger_group["last_heartbeat"][0])
+                ledger_done = int(ledger_group["item_shots_done"][0])
+                ledger_total = int(ledger_group["item_shots_total"][0])
+                if expect_write:
+                    last_written = shots_done
+                    assert heartbeat > 0, (clock_time, heartbeat)
+                    assert int(ledger_group["current_item_index"][0]) == 3
+                else:
+                    assert heartbeat == -1.0, (clock_time, heartbeat)
+                assert ledger_done == last_written, (clock_time, ledger_done)
+                assert ledger_total == num_shots
+        finally:
+            ledger_file.close()
+
+    def test_user_progress_callback_passes_through_sweep_resolution(self):
+        """A `progress_callback` in `run_kwargs` reaches `run()` as the same
+        object, not called with the item as a sweep callable would be; with
+        no callback anywhere, no `progress_callback` key is added."""
+
+        def user_callback(shots_done, shots_total):
+            pass
+
+        log = []
+        runner = _NewHookRunner(
+            items=[5, 6],
+            run_kwargs_log=log,
+            run_kwargs={"progress_callback": user_callback},
+            config=CheckpointConfig(item_checkpoint_dir=None),
+        )
+        assert runner.run() == [10, 12]
+        assert len(log) == 2
+        assert all(
+            kwargs["progress_callback"] is user_callback for kwargs in log
+        )
+
+        plain_log = []
+        _NewHookRunner(
+            items=[5],
+            run_kwargs_log=plain_log,
+            config=CheckpointConfig(item_checkpoint_dir=None),
+        ).run()
+        assert "progress_callback" not in plain_log[0]
+
+    def test_user_progress_callback_combined_with_ledger_callback(
+        self, tmp_path
+    ):
+        """With item checkpointing on, both a user `progress_callback` in
+        `run_kwargs` and the item ledger see `run()`'s progress calls.
+        Catches the ledger callback silently replacing the user's."""
+        from loqs.tools import multiprogramrunner as mpr
+
+        item_checkpoint_dir = tmp_path / "ckpt"
+        item_checkpoint_dir.mkdir()
+        num_shots = 3
+        user_calls = []
+
+        def user_callback(shots_done, shots_total):
+            user_calls.append((shots_done, shots_total))
+
+        process_item = functools.partial(
+            mpr._shared_item_worker,
+            build_program=lambda index: _ProgressCallingFakeProgram(
+                7, num_shots
+            ),
+            reduce_program_outcomes=lambda program_results: program_results.value,
+            run_kwargs={"progress_callback": user_callback},
+        )
+        results = mpr._run_serial(
+            [(4, "x")], process_item, {}, item_checkpoint_dir, None, None, None
+        )
+
+        assert results[4]["_reduced_results"] == 7
+        assert user_calls == [(0, num_shots), (num_shots, num_shots)]
+        snapshot = _read_item_ledger_snapshot(item_checkpoint_dir)
+        assert snapshot.current_item_index == 4
+        assert snapshot.item_shots_done == num_shots
+        assert snapshot.item_shots_total == num_shots

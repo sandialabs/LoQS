@@ -401,6 +401,92 @@ class TestShotWallClockTimes:
             assert value > 0
 
 
+class TestProgressCallback:
+    """`QuantumProgram.run(progress_callback=...)` reports absolute shot
+    counts on every dispatch path. Runs use `verbose=False`, where a
+    disabled tqdm bar's own counter stays at 0."""
+
+    def _build_counter_program(self):
+        trivial_code = trivial_codepack.create_qec_code()
+        qubits = ["Q0"]
+        ideal_model = trivial_codepack.create_ideal_model(qubits)
+        stack = [
+            {
+                "instruction": "Init Patch Trivial",
+                "new_patch_label": "L0",
+                "qubits": qubits,
+            },
+            {"instruction": "Init Counter From Seed"},
+            {
+                "instruction": "Increment",
+                "patch_label": "L0",
+                "increment_by": 1,
+            },
+        ]
+        return QuantumProgram(
+            stack,
+            default_noise_model=ideal_model,
+            patch_types={"Trivial": trivial_code},
+            global_instructions={
+                "Init Counter From Seed": _SEED_COUNTER_INSTRUCTION
+            },
+            default_base_seed=0,
+            name="progress callback test",
+        )
+
+    @staticmethod
+    def _assert_progress_calls(calls, num_shots):
+        assert calls, "progress_callback was never called"
+        assert calls[0] == (0, num_shots)
+        assert calls[-1] == (num_shots, num_shots)
+        done_counts = [done for done, _ in calls]
+        assert done_counts == sorted(done_counts)
+        assert all(total == num_shots for _, total in calls)
+
+    @pytest.mark.parametrize(
+        "parallel, checkpointed",
+        [
+            (False, False),
+            (True, False),
+            (False, True),
+            (True, True),
+        ],
+        ids=[
+            "serial_no_checkpoint",
+            "executor_no_checkpoint",
+            "serial_checkpointed",
+            "executor_checkpointed",
+        ],
+    )
+    def test_reports_absolute_counts(self, tmp_path, parallel, checkpointed):
+        num_shots = 6
+        calls = []
+        run_kwargs = {
+            "num_shots": num_shots,
+            "verbose": False,
+            "progress_callback": lambda done, total: calls.append(
+                (done, total)
+            ),
+        }
+        if checkpointed:
+            run_kwargs["checkpoint"] = True
+            run_kwargs["checkpoint_dir"] = tmp_path / "checkpoints"
+            run_kwargs["checkpoint_batch_size"] = 2
+        if parallel:
+            loky = pytest.importorskip("loky")
+            run_kwargs["shot_executor"] = loky.get_reusable_executor(
+                max_workers=2
+            )
+            if not checkpointed:
+                run_kwargs["n_shot_batches"] = 3
+
+        self._build_counter_program().run(**run_kwargs)
+
+        self._assert_progress_calls(calls, num_shots)
+        # More than the initial and final calls: intermediate advances fire.
+        assert len(calls) > 2
+
+
 class TestResolveInstructionLegacyNameHint:
     """`_resolve_instruction`'s "not found" errors hint at the "Iz" ->
     "Imrz" v1.2 rename when that's the name that failed to resolve --

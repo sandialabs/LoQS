@@ -51,6 +51,7 @@ from loqs.internal.swmrledger import (
     mark_ledger_item_done,
     open_swmr_reader,
     read_swmr_ledger_status,
+    update_ledger_heartbeat,
     update_ledger_in_flight,
 )
 from loqs.tools.paralleltools import (
@@ -1014,6 +1015,25 @@ def _is_sweep_callable(value: Any) -> bool:
     return callable(value) and not isinstance(value, type)
 
 
+def _combine_progress_callbacks(
+    user_callback: Callable[[int, int], None] | None,
+    ledger_callback: Callable[[int, int], None] | None,
+) -> Callable[[int, int], None] | None:
+    """Return one `(shots_done, shots_total)` callback calling `user_callback`
+    then `ledger_callback`, either one alone when the other is None, or None
+    when both are."""
+    if user_callback is None:
+        return ledger_callback
+    if ledger_callback is None:
+        return user_callback
+
+    def combined(shots_done: int, shots_total: int) -> None:
+        user_callback(shots_done, shots_total)
+        ledger_callback(shots_done, shots_total)
+
+    return combined
+
+
 def _shared_item_worker(
     item: Any,
     index: int,
@@ -1031,6 +1051,7 @@ def _shared_item_worker(
     shot_executor: Any = None,
     n_shot_batches: int | None = None,
     keep_shot_results: bool = False,
+    progress_callback: Callable[[int, int], None] | None = None,
     **kwargs: Any,
 ) -> Any:
     """Shared worker function for processing items with program building and reduction.
@@ -1041,14 +1062,27 @@ def _shared_item_worker(
     `"item_wall_clock_times"` (this entire body's own wall-clock duration),
     and `"shot_wall_clock_times"` (per-shot wall-clock times), plus
     `"program_results"` when `keep_shot_results` is True.
+
+    A `progress_callback` in `run_kwargs` is passed to `run()` as-is, not
+    treated as a per-item sweep callable. The `progress_callback` argument
+    (the item ledger's) is combined with it: the user's runs first.
     """
     item_start_time = time.perf_counter()
     program = build_program(index)
 
     resolved_run_kwargs = {
-        key: (value(item) if _is_sweep_callable(value) else value)
+        key: (
+            value
+            if key == "progress_callback"
+            else (value(item) if _is_sweep_callable(value) else value)
+        )
         for key, value in run_kwargs.items()
     }
+    combined_callback = _combine_progress_callbacks(
+        resolved_run_kwargs.get("progress_callback"), progress_callback
+    )
+    if combined_callback is not None:
+        resolved_run_kwargs["progress_callback"] = combined_callback
     resolved_run_kwargs.setdefault("verbose", False)
     resolved_run_kwargs["lazy_loading"] = lazy_loading
     resolved_run_kwargs["force_resume"] = force_resume
@@ -1268,9 +1302,10 @@ def _consolidate_worker_files(
         )
 
 
-# Ledger fields an item-level worker ledger tracks; item_shots_done/
-# item_shots_total stay at their zero fill value, since nothing in this
-# runner yet populates them with real shot-progress data.
+# Ledger fields an item-level worker ledger tracks. `_process_and_checkpoint_item`
+# writes current_item_index and last_heartbeat at item start, and the callback
+# from `_make_ledger_progress_callback` writes item_shots_done/item_shots_total
+# (plus a heartbeat) as the item's shots complete.
 _ITEM_LEDGER_FIELDS: tuple[str, ...] = (
     "done",
     "wall_clock_times",
@@ -1279,6 +1314,52 @@ _ITEM_LEDGER_FIELDS: tuple[str, ...] = (
     "item_shots_total",
     "last_heartbeat",
 )
+
+# Minimum seconds between two shot-progress ledger writes for one item; the
+# first call and the item's last shot always write.
+_LEDGER_PROGRESS_MIN_INTERVAL = 1.0
+
+
+def _make_ledger_progress_callback(
+    ledger_group: h5py.Group,
+    item_index: int,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    min_interval: float | None = None,
+) -> Callable[[int, int], None]:
+    """Build a rate-limited `(shots_done, shots_total)` callback writing an
+    item's shot progress plus a heartbeat to its SWMR ledger.
+
+    It writes on its first call, when `shots_done >= shots_total`, and when
+    at least `min_interval` seconds of `clock` have passed since its last
+    write; other calls do nothing. `min_interval=None` reads
+    `_LEDGER_PROGRESS_MIN_INTERVAL` now. `clock` only drives the rate
+    limit: the heartbeat records wall-clock `time.time()`.
+    """
+    interval = (
+        _LEDGER_PROGRESS_MIN_INTERVAL if min_interval is None else min_interval
+    )
+    last_write: float | None = None
+
+    def callback(shots_done: int, shots_total: int) -> None:
+        nonlocal last_write
+        now = clock()
+        if (
+            last_write is not None
+            and shots_done < shots_total
+            and now - last_write < interval
+        ):
+            return
+        update_ledger_in_flight(
+            ledger_group,
+            item_index,
+            shots_done=shots_done,
+            shots_total=shots_total,
+        )
+        update_ledger_heartbeat(ledger_group)
+        last_write = now
+
+    return callback
 
 
 def _item_ledger_path(item_checkpoint_dir: Path) -> Path:
@@ -1437,6 +1518,15 @@ def _process_and_checkpoint_item(
     extra_kwargs = static_kwargs.copy()
     if keep_shot_results:
         extra_kwargs["keep_shot_results"] = True
+
+    # Mark this item in flight, then pass process_item a rate-limited
+    # callback that records its live shot progress in the ledger.
+    if ledger_group is not None:
+        update_ledger_in_flight(ledger_group, item_index=index)
+        update_ledger_heartbeat(ledger_group)
+        extra_kwargs["progress_callback"] = _make_ledger_progress_callback(
+            ledger_group, index
+        )
 
     aux = process_item(
         item,
@@ -1934,12 +2024,8 @@ def _generic_chunk_worker(
     results = []
     with _held_item_ledger(item_checkpoint_dir) as ledger_group:
         for index, item in chunk:
-            # Mark this item in flight in the ledger if checkpointing is
-            # enabled
             payload_path = None
             if item_checkpoint_dir is not None:
-                assert ledger_group is not None
-                update_ledger_in_flight(ledger_group, item_index=index)
                 payload_path = (
                     item_checkpoint_dir
                     / f"worker_{worker_id()}_item_{index}_payload.h5"
