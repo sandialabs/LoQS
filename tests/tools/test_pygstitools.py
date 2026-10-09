@@ -224,6 +224,109 @@ class TestSimulateDatasetForEdesignCheckpointing:
             assert ds[s.circs[0]].counts[("0",)] == 1
             assert ds[s.circs[1]].counts[("1",)] == 1
 
+    def test_read_and_run_resumes_transversal_cx(self, tmp_path, monkeypatch):
+        """An interrupted run with a transversal CX resumes through
+        `read(path).run()` without `force_resume`: the decoded CX equals
+        the stored one and its nested functions find their module helpers."""
+        from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
+
+        def steane_qubits(suffix):
+            base = ["A0", "A1", "A2"] + [f"D{i}" for i in range(7)]
+            return [f"{q}{suffix}" for q in base]
+
+        q0 = steane_qubits("_0")
+        q1 = steane_qubits("_1")
+        all_qubits = q0 + q1
+        geometry = PatchGeometry(
+            patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
+        )
+        cx = multipatch.build_transversal_cx_instruction(geometry)
+
+        phys_qubits = ["Q0", "Q1"]
+        pspec = QubitProcessorSpec(
+            num_qubits=2,
+            gate_names=["Gcnot", "Gi"],
+            qubit_labels=phys_qubits,
+            availability={
+                "Gcnot": [("Q0", "Q1")],
+                "Gi": [("Q0",), ("Q1",)],
+            },
+        )
+        physical_model = create_explicit_model(
+            pspec, ideal_gate_type="full unitary"
+        )
+        circs = [
+            Circuit([], line_labels=phys_qubits),
+            Circuit([("Gcnot", "Q0", "Q1")], line_labels=phys_qubits),
+        ]
+        physical_to_logical = {
+            "rho0": [
+                {
+                    "instruction": "Init State",
+                    "state": len(all_qubits),
+                    "qubit_labels": all_qubits,
+                },
+                *geometry.init_patch_entries("Steane"),
+                ("Non-FT Zero Prep", "L0"),
+                ("Non-FT Zero Prep", "L1"),
+            ],
+            ("Gcnot", "Q0", "Q1"): [(cx, None)],
+            "Mdefault": [
+                ("FT Logical Z Measure", "L0"),
+                ("FT Logical Z Measure", "L1"),
+            ],
+        }
+        program_kwargs = dict(
+            default_noise_model=steane_codepack.create_ideal_model(
+                all_qubits,
+                gaterep=StimCircuitGateRep,
+                model_backend=DictNoiseModel,
+            ),
+            state_type=STIMQuantumState,
+            patch_types={"Steane": steane_codepack.create_qec_code()},
+        )
+        ckpt = tmp_path / "ckpt"
+
+        def make_runner():
+            return EdesignRunner(
+                edesign=ExperimentDesign(circs),
+                physical_model=physical_model,
+                physical_to_logical=physical_to_logical,
+                num_shots=2,
+                collect_shot_data_args=[
+                    {
+                        "key": "logical_measurement",
+                        "frame_filter": {"patch_label": "L0"},
+                    },
+                    {
+                        "key": "logical_measurement",
+                        "frame_filter": {"patch_label": "L1"},
+                    },
+                ],
+                config=CheckpointConfig(item_checkpoint_dir=ckpt),
+                program_kwargs=program_kwargs,
+            )
+
+        original_build = EdesignRunner.build_program
+        calls = {"n": 0}
+
+        def flaky_build(self, index):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated crash")
+            return original_build(self, index)
+
+        monkeypatch.setattr(EdesignRunner, "build_program", flaky_build)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            make_runner().run()
+        monkeypatch.setattr(EdesignRunner, "build_program", original_build)
+
+        ds = EdesignRunner.read(ckpt / "runner.h5").run()
+
+        # Both circuits report results; |00> through a CX stays |00>
+        assert ds[circs[0]].counts[("00",)] == 2
+        assert ds[circs[1]].counts[("00",)] == 2
+
     def test_item_key_fn_is_picklable(self, trivial_counter_setup, tmp_path):
         """Regression test: item_key_fn and snapshot bound methods must be picklable.
 

@@ -260,6 +260,61 @@ class TestExecutorParallelism:
             == {i: i + 1 for i in range(num_shots)}
         )
 
+    def test_loky_executor_runs_stim_program(self):
+        """A STIM program's shot histories (holding a TableauSimulator)
+        must survive crossing back from a worker process."""
+        loky = pytest.importorskip("loky")
+
+        def build():
+            trivial_code = trivial_codepack.create_qec_code()
+            qubits = ["Q0"]
+            stack = [
+                {
+                    "instruction": "Init State",
+                    "state": len(qubits),
+                    "qubit_labels": qubits,
+                },
+                {
+                    "instruction": "Init Patch Trivial",
+                    "new_patch_label": "L0",
+                    "qubits": qubits,
+                },
+                {
+                    "instruction": "Init Counter",
+                    "patch_label": "L0",
+                    "initial_value": 0,
+                },
+                {
+                    "instruction": "Increment",
+                    "patch_label": "L0",
+                    "increment_by": 2,
+                },
+            ]
+            return QuantumProgram(
+                stack,
+                default_noise_model=trivial_codepack.create_ideal_model(
+                    qubits
+                ),
+                state_type=STIMQuantumState,
+                patch_types={"Trivial": trivial_code},
+                default_base_seed=0,
+                name="STIM executor parallelism test",
+            )
+
+        num_shots = 4
+        serial_results = build().run(num_shots=num_shots, verbose=False)
+        executor = loky.get_reusable_executor(max_workers=2)
+        parallel_results = build().run(
+            num_shots=num_shots, shot_executor=executor, verbose=False
+        )
+
+        assert set(parallel_results.shot_histories) == set(range(num_shots))
+        for i in range(num_shots):
+            serial_last = serial_results.shot_histories[i][-1]
+            parallel_last = parallel_results.shot_histories[i][-1]
+            assert parallel_last["counter"] == serial_last["counter"] == 2
+            assert isinstance(parallel_last["state"], STIMQuantumState)
+
     def test_n_shot_batches_auto_default_dispatches_correct_batch_count(
         self, tmp_path
     ):

@@ -79,7 +79,9 @@ small `dataclass`, reused identically by every program-level call site:
 
 - `program_executor`: dispatches chunks, auto-selecting one `.submit()` call
   per chunk vs. a bulk `.map_array()` call depending on which protocol it
-  satisfies.
+  satisfies. It also accepts a zero-argument factory, called once and cached
+  like an `ExecutorSpec` (see the `submitit` section below for checkpointing
+  with one).
 - `n_program_chunks`: how many round-robin chunks to split the batch into.
 - `shot_executor`: nested shot-level parallelism. A live executor can't
   normally cross the process boundary each dispatched chunk crosses once
@@ -300,6 +302,33 @@ On a real cluster, `submitit.Executor`'s own `slurm_*` parameters (e.g.
 `cpus_per_task`) should be sized to match the inner `loky` pool's own
 `max_workers`, so each array task actually gets the cores its own nested
 executor tries to use.
+
+To checkpoint a submitit run, pass `program_executor` a zero-argument factory
+rather than a live executor, since LoQS can't rebuild a `submitit.AutoExecutor`
+from its own state. The factory is stored as source in the runner file, so
+define it at module level in a `.py` file, with its imports and settings in its
+body:
+
+```python
+def make_executor():
+    import submitit
+
+    executor = submitit.AutoExecutor(folder="submitit-logs")
+    executor.update_parameters(timeout_min=30, slurm_partition="short")
+    return executor
+
+
+strategy = ParallelStrategy(
+    program_executor=make_executor,
+    n_program_chunks=8,
+)
+runner = fttools.FaultInjectionRunner(
+    programs,
+    parallel_strategy=strategy,
+    config=CheckpointConfig(item_checkpoint_dir="checkpoints"),
+    ...,
+)
+```
 
 ### Multi-node parallelism via `MPI`
 

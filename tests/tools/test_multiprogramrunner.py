@@ -1249,6 +1249,14 @@ class _ShotDataArgsRunner(_CountingRunner):
         ]
 
 
+def _submitit_debug_executor_factory():
+    # Module-level, with its import in the body: the factory is stored as
+    # source, so it must not depend on anything but its own body.
+    import submitit
+
+    return submitit.DebugExecutor(folder="submitit-logs")
+
+
 class _FlakyRunner(_CountingRunner):
     def build_program(self, index):
         _FLAKY_CALL_COUNT["n"] += 1
@@ -3536,6 +3544,35 @@ class TestBaseClassMechanisms:
         )
         parallel_result = runner_parallel.run()
         assert parallel_result == serial_result
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="submitit unconditionally registers a SIGCONT handler, POSIX-only",
+    )
+    def test_submitit_debug_executor_factory_with_checkpointing(
+        self, tmp_path, monkeypatch
+    ):
+        """A zero-argument program_executor factory is called, so a
+        checkpointed submitit run works and resumes from its runner file."""
+        pytest.importorskip("submitit")
+        monkeypatch.chdir(tmp_path)
+
+        items = [3, -2, 1, 4]
+        serial_result = _CountingRunner(items=items).run()
+
+        checkpoint_dir = tmp_path / "ckpt"
+        runner = _CountingRunner(
+            items=items,
+            parallel_strategy=ParallelStrategy(
+                program_executor=_submitit_debug_executor_factory,
+                n_program_chunks=2,
+            ),
+            config=CheckpointConfig(item_checkpoint_dir=checkpoint_dir),
+        )
+        assert runner.run() == serial_result
+
+        resumed = _CountingRunner.read(checkpoint_dir / "runner.h5")
+        assert resumed.run() == serial_result
 
     @pytest.mark.parametrize("shot_executor_kind", ["factory", "live_loky"])
     def test_hybrid_program_and_shot_executor_parallelism(

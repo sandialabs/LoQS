@@ -161,11 +161,13 @@ def _indent_rows(rows: Sequence[tuple[str, int]]) -> list[str]:
 def _describe_executor_tag(executor: Any) -> str:
     """Short backend tag for an executor axis value, e.g.
     `"loky(max_workers=2)"` -- for an `ExecutorSpec` directly (its own
-    `describe()`), a live executor of a recognized backend (via
-    `_introspect_executor_spec`), or the plain type name otherwise (e.g.
-    `submitit.AutoExecutor`, which isn't introspected for parameters)."""
+    `describe()`), a factory by name (e.g. `"make_executor()"`), a live
+    executor of a recognized backend (via `_introspect_executor_spec`), or
+    the plain type name otherwise (e.g. `submitit.AutoExecutor`)."""
     if isinstance(executor, ExecutorSpec):
         return executor.describe()
+    if callable(executor):
+        return f"{getattr(executor, '__name__', repr(executor))}()"
     spec = _introspect_executor_spec(executor)
     return spec.describe() if spec is not None else type(executor).__name__
 
@@ -450,32 +452,28 @@ class ParallelStrategy(Serializable):
 
     Parameters
     ----------
-    program_executor : SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
-        A `SubmitExecutor` (e.g. `loky.get_reusable_executor()` or
-        `mpi4py.futures.MPIPoolExecutor`, dispatched one `.submit()` call
-        per chunk) or a `MapArrayExecutor` (e.g. a `submitit.Executor`,
-        dispatched via a single bulk `.map_array()` call covering every
-        chunk) -- which protocol it satisfies determines the dispatch
-        mechanism automatically via `isinstance`, checking
-        `MapArrayExecutor` first (a `submitit.Executor` satisfies both
-        protocols, but `map_array`'s bulk submission is the efficient
-        path). `None` means no program-level parallelism: chunks run
-        serially, in the driver process. An `ExecutorSpec` is also
-        accepted directly -- a picklable recipe, resolved into a real
-        executor (and cached) the first time `dispatch()` actually needs
-        it, rather than a live object built up front. This is what lets
-        several differently-sized `ParallelStrategy`s coexist safely in
-        one process: `loky.get_reusable_executor()` is a genuine
-        process-wide singleton, so building more than one live,
-        differently-sized instance up front would silently invalidate
-        the earlier ones.
+    program_executor : SubmitExecutor | MapArrayExecutor | ExecutorSpec | Callable | None
+        How chunks are dispatched; `None` runs them serially in the
+        driver process. A `MapArrayExecutor` (e.g. `submitit.Executor`)
+        gets one bulk `.map_array()` call and a `SubmitExecutor` (e.g.
+        `loky.get_reusable_executor()`, `MPIPoolExecutor`) one `.submit()`
+        per chunk; `MapArrayExecutor` is checked first, since submitit's
+        executors satisfy both.
+
+        An `ExecutorSpec` or a zero-argument factory is called once, on
+        first dispatch, and cached. A spec lets differently sized
+        strategies share loky's process-wide singleton safely. A factory
+        lets you checkpoint an executor LoQS can't introspect, such as
+        submitit's. It is stored as source, so define it at module level
+        in a `.py` file (in `__main__` or a notebook, keep its settings in
+        its body); lambdas and `functools.partial` can't be stored.
     n_program_chunks : int | None
         Number of round-robin chunks to split work into. Required when
-        `program_executor` is a `MapArrayExecutor` (submitting one array
-        task per item would be dominated by scheduling overhead for
-        typical LoQS workloads); defaults to one chunk per item when
-        `program_executor` is a plain `SubmitExecutor`; ignored when
-        `program_executor` is `None`.
+        `program_executor` is, or builds, a `MapArrayExecutor`, since one
+        array task per item would be dominated by scheduling overhead
+        (checked at construction, or at first dispatch for a factory).
+        Defaults to one chunk per item for a plain `SubmitExecutor`;
+        ignored when `program_executor` is `None`.
     n_shot_batches : int | None
         Number of batches to split shots into when `shot_executor` is set,
         governing shot-level parallel dispatch chunking independent of
@@ -523,7 +521,11 @@ class ParallelStrategy(Serializable):
     ]
 
     program_executor: (
-        SubmitExecutor | MapArrayExecutor | ExecutorSpec | None
+        SubmitExecutor
+        | MapArrayExecutor
+        | ExecutorSpec
+        | Callable[[], SubmitExecutor | MapArrayExecutor]
+        | None
     ) = None
     n_program_chunks: int | None = None
     n_shot_batches: int | None = None
@@ -537,18 +539,23 @@ class ParallelStrategy(Serializable):
         field(default=None, repr=False, compare=False)
     )
 
-    def __post_init__(self) -> None:
+    def _check_map_array_chunks(self, executor: Any) -> None:
+        """Raise `ValueError` if `executor` is a `MapArrayExecutor` and
+        `n_program_chunks` is unset."""
         if (
-            isinstance(self.program_executor, MapArrayExecutor)
+            isinstance(executor, MapArrayExecutor)
             and self.n_program_chunks is None
         ):
             raise ValueError(
-                "n_program_chunks is required when program_executor is a "
-                "MapArrayExecutor -- submitting one array task per item "
+                "n_program_chunks is required when program_executor is "
+                "(or builds) a MapArrayExecutor -- submitting one array task per item "
                 "would be dominated by scheduler overhead for typical "
                 "LoQS workloads, so a chunk count must be chosen "
                 "deliberately rather than defaulted."
             )
+
+    def __post_init__(self) -> None:
+        self._check_map_array_chunks(self.program_executor)
         if (
             self.program_executor is not None
             and self.shot_executor is not None
@@ -625,16 +632,21 @@ class ParallelStrategy(Serializable):
         return chunk_round_robin(items, n)
 
     def _resolve_program_executor(self) -> SubmitExecutor | MapArrayExecutor:
-        """Resolves `program_executor` into an actual executor instance,
-        building and caching it (on `_resolved_program_executor`) the
-        first time it's an `ExecutorSpec` -- every later call on this
-        same instance reuses that cached executor rather than rebuilding
-        one from scratch, which is what lets a strategy be warmed up once
-        and then measured across several `dispatch()` calls (e.g.
-        `profile_strategies`'s `warmup`/`repeats`) at steady-state cost."""
-        if isinstance(self.program_executor, ExecutorSpec):
+        """Resolves `program_executor` into an actual executor instance.
+
+        A callable `program_executor` (an `ExecutorSpec` or a zero-argument
+        factory) is called once, and the result is cached on
+        `_resolved_program_executor`. Every later call on this instance
+        reuses it, which lets a strategy be warmed up once and measured
+        across several `dispatch()` calls (e.g. `profile_strategies`'s
+        `warmup`/`repeats`) at steady-state cost. Raises `ValueError` if
+        the built executor is a `MapArrayExecutor` and `n_program_chunks`
+        is unset."""
+        if callable(self.program_executor):
             if self._resolved_program_executor is None:
-                self._resolved_program_executor = self.program_executor()
+                built = self.program_executor()
+                self._check_map_array_chunks(built)
+                self._resolved_program_executor = built
             return self._resolved_program_executor
         assert self.program_executor is not None
         return self.program_executor
@@ -796,15 +808,7 @@ class ParallelStrategy(Serializable):
         `# of ...` rows that can be computed."""
         if self.shot_executor is None:
             return ["shot axis: serial"]
-        if isinstance(self.shot_executor, ExecutorSpec):
-            header = f"shot axis: {self.shot_executor.describe()}"
-        elif callable(self.shot_executor):
-            name = getattr(
-                self.shot_executor, "__name__", repr(self.shot_executor)
-            )
-            return [f"shot axis: factory `{name}`"]
-        else:
-            header = f"shot axis: {_describe_executor_tag(self.shot_executor)}"
+        header = f"shot axis: {_describe_executor_tag(self.shot_executor)}"
 
         rows: list[tuple[str, int]] = []
         if num_shots is not None:
@@ -1875,11 +1879,12 @@ def _profile_one_strategy(
             strategy.collect_resource_stats = prev_collect
             strategy.resource_sample_interval = prev_interval
             if (
-                isinstance(strategy.program_executor, ExecutorSpec)
+                callable(strategy.program_executor)
                 and strategy._resolved_program_executor is not None
             ):
-                # Shut down spec-owned executors to avoid cross-strategy worker
-                # reuse in singleton pools (e.g. loky) and ensure clean restarts.
+                # Shut down executors the strategy built (from a spec or a
+                # factory) to avoid cross-strategy worker reuse in singleton
+                # pools (e.g. loky) and ensure clean restarts.
                 try:
                     cast(Any, strategy._resolved_program_executor).shutdown(
                         wait=True, kill_workers=True

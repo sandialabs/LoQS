@@ -2,8 +2,11 @@
 
 import warnings
 
+import numpy as np
+
+from loqs.core import InstructionStack
 from loqs.core.frame import Frame
-from loqs.core.instructions import Instruction
+from loqs.core.instructions import Instruction, builders
 from loqs.core.instructions.instruction import DEFAULT_PRIORITIES
 
 
@@ -195,6 +198,86 @@ class TestInstruction:
         mapped_ins = loaded_ins.map_qubits({"A": "X", "B": "Y"})
         mapped_result = mapped_ins.apply(state=5, qubits=["X", "Y"])
         assert "X_Y" in mapped_result._data["result"]
+
+    def test_equal_instructions_hash_equal(self):
+        """Two instructions built from one function compare and hash equal."""
+        a = Instruction(_module_level_apply, name="x")
+        b = Instruction(_module_level_apply, name="x")
+        c = Instruction(_module_level_apply, name="y")
+
+        assert a == b
+        assert hash(a) == hash(b)
+        assert a != c
+        assert len({a, b}) == 1
+        # Comparison against non-instructions is not an error
+        assert a != "x"
+        assert (a, "L0") != ("x", "L0")
+
+    def test_eq_compares_array_data(self, make_temp_path):
+        """Array-valued data compares by content, through an HDF5 decode."""
+        data = {"H_X": np.array([[1, 0, 1], [0, 1, 1]]), "labels": ["a", "b"]}
+        ins = Instruction(_module_level_apply, data, name="arrays")
+
+        with make_temp_path(suffix=".h5") as tmp_path:
+            ins.write(tmp_path)
+            loaded = Instruction.read(tmp_path)
+
+        assert ins == loaded
+
+        changed = Instruction(
+            _module_level_apply,
+            {"H_X": np.array([[1, 0, 1], [0, 1, 0]]), "labels": ["a", "b"]},
+            name="arrays",
+        )
+        assert ins != changed
+
+        reshaped = Instruction(
+            _module_level_apply,
+            {"H_X": np.array([1, 0, 1, 0, 1, 1]), "labels": ["a", "b"]},
+            name="arrays",
+        )
+        assert ins != reshaped
+
+    def test_eq_compares_functions(self):
+        """Instructions with different function source are unequal."""
+
+        def other_apply(state):
+            return Frame({"state": state + 2})
+
+        a = Instruction(_module_level_apply, name="x")
+        b = Instruction(other_apply, name="x")
+        assert a != b
+
+    def test_tuple_held_instructions_survive_encode_cache(
+        self, make_temp_path
+    ):
+        """Instructions that share name and type (so hash equal) but differ
+        in data, held in `(instruction, label)` tuples, keep their own data
+        through the encode cache."""
+        a = Instruction(
+            _module_level_apply, {"value": 1}, name="same", type="T"
+        )
+        b = Instruction(
+            _module_level_apply, {"value": 2}, name="same", type="T"
+        )
+        comp_a = builders.build_composite_instruction([(a, "L0")])
+        comp_b = builders.build_composite_instruction([(b, "L0")])
+        stack = InstructionStack([(comp_a, "L0"), (comp_b, "L0")])
+
+        with make_temp_path(suffix=".h5") as tmp_path:
+            stack.write(tmp_path)
+            loaded = InstructionStack.read(tmp_path)
+
+        values = []
+        for label in loaded:
+            sub = label["instruction"].data["instructions"][0]
+            sub_inst = sub[0] if isinstance(sub, tuple) else sub
+            values.append(sub_inst.data["value"])
+        assert values == [1, 2]
+
+
+def _module_level_apply(state=0):
+    return Frame({"state": state + 1})
 
 
 class TestInstructionLazySerialization:

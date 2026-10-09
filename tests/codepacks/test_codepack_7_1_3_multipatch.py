@@ -12,6 +12,7 @@ from loqs.backends import (
     StimCircuitGateRep,
 )
 from loqs.core import InstructionStack, PatchGeometry, QuantumProgram
+from loqs.core.instructions import Instruction
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
@@ -182,6 +183,26 @@ class TestConjugateCxLatestSyndromes:
 
 class TestTransversalCx:
     """Truth table and Bell-correlation checks for the transversal logical CX."""
+
+    def test_equal_after_hdf5_round_trip(self, tmp_path):
+        """The CX equals its decoded HDF5 file, and not a swapped CX."""
+        q0 = steane_qubits("_0")
+        q1 = steane_qubits("_1")
+
+        def make_cx(first, second):
+            geometry = PatchGeometry(
+                patches={"ctrl": ("L0", first), "tgt": ("L1", second)},
+                layout="7_1_3",
+            )
+            return multipatch.build_transversal_cx_instruction(geometry)
+
+        cx = make_cx(q0, q1)
+        path = tmp_path / "cx.h5"
+        cx.write(path)
+        loaded = Instruction.read(path)
+
+        assert cx == loaded
+        assert cx != make_cx(q1, q0)
 
     def test_zero_zero(self):
         """|0>|0> -> CX -> |0>|0>: both Z measures deterministic 0."""

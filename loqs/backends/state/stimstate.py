@@ -72,6 +72,9 @@ class STIMQuantumState(BaseQuantumState):
     _SERIALIZE_ATTRS = ["qubit_labels", "_stim_state_vector"]
     """`seed` is deliberately not here to avoid triggering re-caching."""
 
+    _PICKLE_VIA_ENCODING_ATTRS = True
+    """The underlying TableauSimulator can't be pickled directly."""
+
     _state: _TableauSimulator
     """Underlying state object."""
 

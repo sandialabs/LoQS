@@ -10,6 +10,7 @@ from loqs.internal.serializable import (
     SERIALIZATION_VERSION,
     ResolvingDecodeCache,
     DeferredRef,
+    _rebuild_from_encoding_attrs,
 )
 from loqs.types import NDArray
 
@@ -42,6 +43,33 @@ class MockSerializable(Serializable):
             value=attr_dict["value"],
             data=attr_dict["data"],
         )
+
+
+class TestPickleBridge:
+    def test_unflagged_class_pickles_by_default(self):
+        import pickle
+
+        class Plain(Serializable):
+            _SERIALIZE_ATTRS = ["a"]
+
+            def __init__(self, a):
+                self.a = a
+                self.extra = "kept"
+
+        # Pickle needs an importable class, so register it on this module.
+        Plain.__qualname__ = Plain.__name__ = "_PickleBridgePlain"
+        globals()["_PickleBridgePlain"] = Plain
+        try:
+            obj = Plain(3)
+            assert (
+                obj.__reduce_ex__(pickle.HIGHEST_PROTOCOL)[0]
+                is not _rebuild_from_encoding_attrs
+            )
+            obj2 = pickle.loads(pickle.dumps(obj))
+            assert obj2.a == 3
+            assert obj2.extra == "kept"
+        finally:
+            del globals()["_PickleBridgePlain"]
 
 
 @pytest.fixture(params=["json", "json.gz", "hdf5"])
@@ -1172,6 +1200,50 @@ class TestGetFunctionStr:
         result2 = Serializable._get_function_str(module2.apply_fn)
         assert "defaultdict" in result2
         assert "OrderedDict" not in result2
+
+
+class TestFunctionDecoding:
+    """Stored functions decode in their defining module's globals and
+    keep their source."""
+
+    _NESTED = (
+        "def helper(x):\n"
+        "    return x + 1\n"
+        "\n"
+        "def build():\n"
+        "    def apply_fn(x):\n"
+        "        return helper(x) * 2\n"
+        "    return apply_fn\n"
+    )
+
+    def test_nested_function_sees_module_globals(self, tmp_path):
+        module = _load_module_from_source(
+            tmp_path, "mod_decode_nested.py", self._NESTED
+        )
+        src = Serializable._get_function_str(module.build())
+        decoded = Serializable._eval_function_str(src)
+        assert decoded(3) == 8
+        assert decoded.__qualname__ == "build.<locals>.apply_fn"
+        # The module's own namespace is untouched
+        assert not hasattr(module, "apply_fn")
+
+    def test_rebuilt_function_reencodes(self, tmp_path):
+        module = _load_module_from_source(
+            tmp_path, "mod_decode_reencode.py", self._NESTED
+        )
+        src = Serializable._get_function_str(module.build())
+        decoded = Serializable._eval_function_str(src)
+        assert Serializable._get_function_str(decoded) == src
+
+    def test_unimportable_module_falls_back_to_source(self):
+        src = (
+            "# loqs-function: _loqs_no_such_module_xyz:build.<locals>.f\n"
+            "def f(x):\n"
+            "    return x + 5\n"
+        )
+        decoded = Serializable._eval_function_str(src)
+        assert decoded(1) == 6
+        assert decoded.__qualname__ == "build.<locals>.f"
 
 
 class TestResolvingDecodeCache:

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 import contextvars
 import functools
 import gzip
@@ -27,7 +28,6 @@ from typing import (
     Callable,
     ClassVar,
     Literal,
-    Mapping,
     Type,
     TypeAlias,
     TypeVar,
@@ -576,6 +576,19 @@ def _import_usage_index_for_file(srcfile: str, mtime: float):
     return import_info, usage_lines
 
 
+_FUNCTION_HEADER_RE = re.compile(
+    r"# loqs-function: ([^:\s]+):(\S+)[ \t]*(?:\n|$)"
+)
+
+
+def _rebuild_from_encoding_attrs(cls: Type[T], attrs: Mapping[str, Any]) -> T:
+    """Unpickle helper for classes with `_PICKLE_VIA_ENCODING_ATTRS`.
+
+    Module-level so that it pickles by reference.
+    """
+    return cls._from_decoded_attrs(attrs)
+
+
 class Serializable:
     """
     The base class for all serializable objects in LoQS.
@@ -670,6 +683,19 @@ class Serializable:
                         for item in obj
                     )
                 )
+            elif isinstance(obj, tuple):
+                # Element by element, tagged so a tuple and a list holding
+                # the same elements hash differently. Elements may hash
+                # coarsely (e.g. Instruction), so don't defer to hash().
+                return hash(
+                    (
+                        "tuple",
+                        tuple(
+                            Serializable._serial_hash(item, _visited)
+                            for item in obj
+                        ),
+                    )
+                )
             elif isinstance(obj, dict):
                 # For dicts, hash the tuple of serial IDs of keys and values
                 keys_id = Serializable._serial_hash(list(obj.keys()), _visited)
@@ -701,6 +727,71 @@ class Serializable:
                     return hash(str(obj))
         finally:
             _visited.remove(obj_id)
+
+    @staticmethod
+    def _content_equal(a: Any, b: Any) -> bool:
+        """
+        Exact structural equality of two possibly nested values.
+
+        Unlike comparing `_serial_hash` values, this ignores dict key
+        order, handles numpy arrays and never relies on a hash collision
+        being impossible.
+
+        Rules, in order: identical objects are equal; a `Serializable`
+        only equals one of the same type, compared with the class's own
+        `__eq__` if it defines one and otherwise attribute by attribute
+        over `_SERIALIZE_ATTRS`; numpy arrays compare with
+        `np.array_equal`; mappings compare key set and values; lists
+        (or tuples) compare element by element, and a list never equals
+        a tuple; anything else uses `==`.
+
+        Parameters
+        ----------
+        a, b:
+            The values to compare.
+
+        Returns
+        -------
+        bool
+            Whether the two values have equal content.
+        """
+        if a is b:
+            return True
+
+        if isinstance(a, Serializable) or isinstance(b, Serializable):
+            if type(a) is not type(b):
+                return False
+            if type(a).__eq__ is not object.__eq__:
+                return bool(a == b)
+            return all(
+                Serializable._content_equal(
+                    a._get_encoding_attr(attr), b._get_encoding_attr(attr)
+                )
+                for attr in a._SERIALIZE_ATTRS
+            )
+
+        if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+            return (
+                isinstance(a, np.ndarray)
+                and isinstance(b, np.ndarray)
+                and bool(np.array_equal(a, b))
+            )
+
+        if isinstance(a, Mapping) and isinstance(b, Mapping):
+            return a.keys() == b.keys() and all(
+                Serializable._content_equal(a[k], b[k]) for k in a
+            )
+
+        if isinstance(a, list) and isinstance(b, list):
+            return len(a) == len(b) and all(
+                Serializable._content_equal(x, y) for x, y in zip(a, b)
+            )
+        if isinstance(a, tuple) and isinstance(b, tuple):
+            return len(a) == len(b) and all(
+                Serializable._content_equal(x, y) for x, y in zip(a, b)
+            )
+
+        return bool(a == b)
 
     # Class attributes
     _CACHE_ON_SERIALIZE: ClassVar[bool] = False
@@ -749,6 +840,27 @@ class Serializable:
     state management than the class constructor, derived
     classes should implement [](api:Serializable._from_decoded_attrs).
     """
+
+    _PICKLE_VIA_ENCODING_ATTRS: ClassVar[bool] = False
+    """When True, pickling and `copy.copy` go through
+    [](api:Serializable._get_encoding_attr) and
+    [](api:Serializable._from_decoded_attrs) instead of the instance
+    `__dict__`.
+
+    Meant for leaf classes that wrap a C++ handle (e.g. STIM and QSim
+    states) that plain pickle can't handle. Anything not in
+    `_SERIALIZE_ATTRS` is dropped (for STIM, the seed and measurement
+    record).
+    """
+
+    def __reduce_ex__(self, protocol):
+        if not self._PICKLE_VIA_ENCODING_ATTRS:
+            return super().__reduce_ex__(protocol)
+        attrs = {
+            attr: self._get_encoding_attr(attr)
+            for attr in self._SERIALIZE_ATTRS
+        }
+        return (_rebuild_from_encoding_attrs, (type(self), attrs))
 
     ## ABSTRACT METHODS
     # Implement these in derived classes
@@ -1514,14 +1626,30 @@ class Serializable:
         defaults to `updated_src` itself. Also accepts an already-callable
         `updated_src` unchanged, for callers that skip preparation
         entirely when their input was never a string to begin with.
+
+        If the first line of `original_src` is a `# loqs-function:
+        <module>:<qualname>` header (see `_get_function_str`) and the
+        module (not `__main__`) imports, the source is exec'd in a shallow
+        copy of that module's globals, so a function that calls its
+        module's helpers finds them; the module itself is untouched.
+        Otherwise it is exec'd in an empty namespace. With a header, the
+        result's `__qualname__` is restored. The result keeps `updated_src`
+        in `_loqs_serialized_source`, so it can be serialized again.
         """
         if callable(updated_src):
             return updated_src
         if original_src is None:
             original_src = updated_src
 
+        header = _FUNCTION_HEADER_RE.match(original_src)
+
         # Evaluate function
         env: dict[str, Any] = {}
+        if header is not None and header.group(1) != "__main__":
+            try:
+                env = dict(vars(importlib.import_module(header.group(1))))
+            except Exception:
+                env = {}
         exec(updated_src, env)
 
         # We need to find the function name
@@ -1532,7 +1660,17 @@ class Serializable:
         key = last_fn_def[4:-1]
 
         # Pull the function out of the executed environment
-        return env[key]
+        func = env[key]
+        if header is not None:
+            try:
+                func.__qualname__ = header.group(2)
+            except (AttributeError, TypeError):
+                pass
+        try:
+            func._loqs_serialized_source = updated_src
+        except AttributeError:
+            pass
+        return func
 
     @staticmethod
     def _eval_function_str(
@@ -1598,25 +1736,42 @@ class Serializable:
         Returns
         -------
         str
-            The complete source code string including function definition and
-            necessary imports.
+            A `# loqs-function:` header line, the necessary imports and the
+            function definition; or, for a function rebuilt from a stored
+            string, that string unchanged.
 
         Notes
         -----
         If the source file cannot be accessed or if import extraction fails,
-        only the function definition is returned.
+        only the function definition is returned. A function rebuilt from
+        a stored string returns that string unchanged. Otherwise the
+        string starts with a `# loqs-function: <module>:<qualname>` line
+        (when both are strings), which `_exec_function_str` uses to decode
+        the function in its defining module's globals.
         """
         import inspect
         import textwrap
 
+        kept = getattr(func, "_loqs_serialized_source", None)
+        if isinstance(kept, str):
+            return kept
+
         # Get source code
         src = textwrap.dedent(inspect.getsource(func))
+
+        module = getattr(func, "__module__", None)
+        qualname = getattr(func, "__qualname__", None)
+        header = (
+            f"# loqs-function: {module}:{qualname}\n"
+            if isinstance(module, str) and isinstance(qualname, str)
+            else ""
+        )
 
         # Also try to get imports
         srcfile = inspect.getsourcefile(func)
         if srcfile is None:
             # We'll fail to get imports, just return source
-            return src
+            return header + src
 
         try:
             imports = Serializable._imports_needed_by(func, srcfile)
@@ -1625,9 +1780,9 @@ class Serializable:
             # fall back silently rather than let a source snippet that
             # isn't really a standalone def (e.g. a lambda) break
             # serialization outright.
-            return src
+            return header + src
 
-        return imports + src
+        return header + imports + src
 
     @staticmethod
     def _imports_needed_by(func, srcfile: str) -> str:
