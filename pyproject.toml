@@ -43,6 +43,7 @@ classifiers = [
 
 [project.scripts]
 loqs-migrate = "loqs.tools.migrate.cli:main"
+loqs-monitor = "loqs.tools.monitor.cli:main"
 loqs-nb-sync = "docs_scripts.notebook_sync:main"
 
 [project.optional-dependencies]
@@ -50,7 +51,8 @@ parallel = [
     "loky>=3.5.6",
     "submitit",
     "threadpoolctl>=3.5.0",
-    "psutil"
+    "psutil",
+    "rich>=13"
 ]
 mpi = [
     "mpi4py",

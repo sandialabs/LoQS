@@ -334,9 +334,20 @@ def open_swmr_reader(
     -------
     tuple[h5py.File, h5py.Group]
         The open file (in SWMR read mode) and its ledger subgroup.
+
+    Raises
+    ------
+    KeyError
+        If the file has no ledger subgroup. The file is closed first.
     """
     f = h5py.File(path, "r", libver="latest", swmr=True, locking=False)
-    return f, f[group_name]
+    try:
+        return f, f[group_name]
+    except BaseException:
+        # e.g. KeyError for a file without the ledger group: don't leak
+        # the handle.
+        f.close()
+        raise
 
 
 def is_swmr_ledger_file(path: Path) -> bool:
