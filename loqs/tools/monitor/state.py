@@ -196,7 +196,7 @@ def _classify(
     return WorkerState.STALE if age >= stale_after else WorkerState.RUNNING
 
 
-def _compute_totals(workers: list[WorkerSummary]) -> MonitorTotals:
+def compute_totals(workers: list[WorkerSummary]) -> MonitorTotals:
     counts = {state: 0 for state in WorkerState}
     shots_done = shots_total = 0
     for w in workers:
@@ -360,7 +360,7 @@ class MonitorTracker:
             directory_exists=directory_exists,
             workers=tuple(workers),
             skipped=tuple(skipped),
-            totals=_compute_totals(workers),
+            totals=compute_totals(workers),
             notes=_build_notes(directory_exists, len(files), skipped),
         )
 

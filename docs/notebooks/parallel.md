@@ -517,6 +517,12 @@ node01  41234  idle      -             3           -                 5s
 node02  9912   starting  -             0           -                 -
 ```
 
+On a many-host run, `--by-host` collapses the table to one row per host (worker counts per state, items done, shots, and the longest time since a running or stale worker reported), and `--host PATTERN` limits the view to hosts matching a shell-style glob. `--host` can be repeated, and both flags work in live and `--once` modes and combine. Matching is case-sensitive, so `--host 'NODE*'` does not match `node01`. With `--host`, the summary adds a `Showing N of M hosts` line.
+
+```bash
+loqs-monitor --once --by-host --host 'node0*' --host gpu01 /scratch/run/item_checkpoints
+```
+
 The monitor needs item checkpointing, turned on by `CheckpointConfig(item_checkpoint_dir=...)`, and must run where that directory is visible, e.g. on a login node of the shared file system. It may be started before the run creates the directory; live mode then shows a note and keeps polling.
 
 Each worker writes one SWMR ledger, `worker_<host>_<pid>_<suffix>_runner.h5`, in `item_checkpoint_dir` (the name is the worker identity, `hostname_pid_suffix`). It holds the current item index, the done item indices, `item_shots_done`/`item_shots_total` and `last_heartbeat`, written at most once per second. The ledgers are consolidated away when the run ends, so a finished run shows no workers.
