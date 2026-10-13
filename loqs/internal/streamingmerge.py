@@ -53,6 +53,65 @@ def remove_transient_file(path: Path) -> bool:
     return True
 
 
+def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
+    """Navigate from a checkpoint file (or subgroup) to its actual object's encoded group.
+
+    Handles both file layouts:
+    - Bootstrap path (_write_streamed_dict_entries): Top-level is directly the object group
+      (Serializable_1 with encode_type).
+    - Fresh envelope path (_write_results_snapshot_if_fresh): Top-level is a
+      wrapper (/root with version attr), contains the object group.
+
+    Starting from parent_group, descends through single-child wrapper groups
+    (those with no encode_type attribute and only a "version" attribute) until
+    reaching a group that either has encode_type or has more than one child.
+
+    Parameters
+    ----------
+    parent_group : h5py.Group
+        The file or subgroup to resolve.
+
+    Returns
+    -------
+    h5py.Group
+        The actual object's encoded group (should have encode_type attribute).
+    """
+    current = parent_group
+    while len(current.keys()) == 1:
+        # Only descend if current has no encode_type (not an actual object yet)
+        if "encode_type" in current.attrs:
+            return current
+        # Descend to the single child
+        first_child_name = next(iter(current.keys()))
+        first_child = current[first_child_name]
+        if isinstance(first_child, h5py.Group):
+            current = first_child
+        else:
+            # Child is a dataset, stop here
+            return current
+    # Stop if we have multiple children or if encode_type is present
+    return current
+
+
+def _reset_empty_groups_format_dict_attr(
+    h5_file: h5py.File, attr_name: str
+) -> None:
+    """Delete `attr_name` from its checkpoint object group if it is an
+    empty, "groups"-format dict -- the format `Serializable.write` always
+    uses for a dict attribute regardless of its intended dataset storage
+    format. Deleting it lets the next real `merge_dict_attr` call for this
+    attribute create it fresh with the correct format inferred from real
+    data. A non-empty dict, or one already in "dataset" format, is left
+    untouched, so this is idempotent and safe to call after every write.
+    """
+    group = _resolve_checkpoint_object_group(h5_file)
+    if attr_name not in group or get_dict_attr_keys(group, attr_name):
+        return
+    keys_iterable = group[attr_name]["dict"]["keys"]["iterable"]
+    if keys_iterable.attrs.get("storage_format", "groups") == "groups":
+        del group[attr_name]
+
+
 def merge_dict_attr(
     parent_group: h5py.Group,
     attr_name: str,
