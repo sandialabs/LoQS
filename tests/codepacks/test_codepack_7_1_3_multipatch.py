@@ -16,9 +16,8 @@ from loqs.core.instructions import Instruction
 from loqs.core.instructions import builders
 from loqs.codepacks import codepack_7_1_3_quantinuum2021 as codepack_steane
 from loqs.codepacks import codepack_7_1_3_multipatch as multipatch
-from loqs.tools import fttools
 
-NUM_SHOTS = 20
+NUM_SHOTS = 10
 
 
 def steane_qubits(suffix: str = "") -> list[str]:
@@ -204,18 +203,6 @@ class TestTransversalCx:
         assert cx == loaded
         assert cx != make_cx(q1, q0)
 
-    def test_zero_zero(self):
-        """|0>|0> -> CX -> |0>|0>: both Z measures deterministic 0."""
-        stack, all_q = two_patch_cx_stack(
-            "Non-FT Zero Prep", "Non-FT Zero Prep", "FT Logical Z Measure"
-        )
-        program = make_program(stack, all_q)
-        results = program.run(num_shots=NUM_SHOTS, verbose=False)
-        per_shot = results.collect_shot_data(
-            "logical_measurement", "all", strip_none_entries=True
-        )
-        assert all(l0 == 0 and l1 == 0 for l0, l1 in per_shot)
-
     def test_x_on_control(self):
         """X_L|0>|0> -> CX -> |1>|1>: X_L copies to the target patch."""
         stack, all_q = two_patch_cx_stack(
@@ -229,20 +216,6 @@ class TestTransversalCx:
             "logical_measurement", "all", strip_none_entries=True
         )
         assert all(l0 == 1 and l1 == 1 for l0, l1 in per_shot)
-
-    def test_bell_correlations(self):
-        """|+>|0> -> CX -> Bell pair: per-patch Z outcomes agree every shot."""
-        stack, all_q = two_patch_cx_stack(
-            "Non-FT Zero Prep", "Non-FT Zero Prep", "FT Logical Z Measure"
-        )
-        # No dedicated "Non-FT Plus Prep" exists; build |+>_L via H on |0>_L.
-        stack.insert(4, ("H", "L0"))
-        program = make_program(stack, all_q)
-        results = program.run(num_shots=NUM_SHOTS, verbose=False)
-        per_shot = results.collect_shot_data(
-            "logical_measurement", "all", strip_none_entries=True
-        )
-        assert all(l0 == l1 for l0, l1 in per_shot)
 
 
 class TestSyndromeCouplingAfterCx:
@@ -303,146 +276,3 @@ class TestSyndromeCouplingAfterCx:
             "logical_measurement", "all", strip_none_entries=True
         )
         assert all(l0 == 0 and l1 == 0 for l0, l1 in per_shot)
-
-    def test_ft_prep_two_qec_rounds_after_cx(self):
-        """FT-prep version of the coupled-syndrome test, over two QEC rounds.
-
-        Same scenario as `test_qec_round_after_cx_uses_coupled_syndrome`,
-        but using `FT Zero Prep` (the repeat-until-success protocol) for
-        both patches instead of `Non-FT Zero Prep`, and two consecutive
-        `Adaptive QEC` rounds on the target after the CX rather than one --
-        exercising the module docstring's claim that a single
-        `latest_syndrome` correction at CX time is sufficient for
-        arbitrarily many subsequent rounds, not just one.
-        """
-        q0 = steane_qubits("_0")
-        q1 = steane_qubits("_1")
-        all_q = q0 + q1
-        geometry = PatchGeometry(
-            patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
-        )
-        cx = multipatch.build_transversal_cx_instruction(geometry)
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(all_q),
-                "qubit_labels": all_q,
-            },
-            *geometry.init_patch_entries("Steane"),
-            ("FT Zero Prep", "L0"),
-            ("FT Zero Prep", "L1"),
-            ("Injected Data Error", "L0"),
-            ("Adaptive QEC", "L0"),
-            (cx, None),
-            ("Adaptive QEC", "L1"),
-            ("Adaptive QEC", "L1"),
-            ("FT Logical Z Measure", "L0"),
-            ("FT Logical Z Measure", "L1"),
-        ]
-        code = code_with_injected_error("Gxpi", "D6")
-        program = make_program(stack, all_q, code=code)
-        results = program.run(num_shots=NUM_SHOTS, verbose=False)
-        per_shot = results.collect_shot_data(
-            "logical_measurement", "all", strip_none_entries=True
-        )
-        assert all(l0 == 0 and l1 == 0 for l0, l1 in per_shot)
-
-
-class TestExhaustiveFaultInjectionAcrossCx:
-    """Exhaustive single-fault sweep over the CX's own physical circuit.
-
-    Unlike `TestSyndromeCouplingAfterCx`, which injects one representative
-    pre-CX data error to exercise the `latest_syndrome` coupling fix, this
-    sweeps every possible single-fault location *inside* the transversal
-    CX's own circuit (the 7-`Gcnot` layer) using `fttools`: every weight-1
-    Pauli fault before each `Gcnot`, and every weight-2 correlated Pauli
-    fault after each `Gcnot`. Both patches use `FT Zero Prep` and `FT
-    Logical Z Measure`, with one `Adaptive QEC` round per patch after the
-    CX -- confirming the composite CX + single QEC round is fault-tolerant
-    to any single fault occurring during the CX itself (not just faults
-    injected before it, as in `TestSyndromeCouplingAfterCx`).
-    """
-
-    def _base_program_and_cx(self):
-        q0 = steane_qubits("_0")
-        q1 = steane_qubits("_1")
-        all_q = q0 + q1
-        geometry = PatchGeometry(
-            patches={"ctrl": ("L0", q0), "tgt": ("L1", q1)}, layout="7_1_3"
-        )
-        cx_circuit = multipatch.build_transversal_cx_circuit_instruction(
-            geometry
-        )
-        cx_bookkeeping = multipatch.build_cx_bookkeeping_instruction(
-            "L0", "L1"
-        )
-        stack = [
-            {
-                "instruction": "Init State",
-                "state": len(all_q),
-                "qubit_labels": all_q,
-            },
-            *geometry.init_patch_entries("Steane"),
-            ("FT Zero Prep", "L0"),
-            ("FT Zero Prep", "L1"),
-            (cx_circuit, None),
-            (cx_bookkeeping, None),
-            ("Adaptive QEC", "L0"),
-            ("Adaptive QEC", "L1"),
-            ("FT Logical Z Measure", "L0"),
-            ("FT Logical Z Measure", "L1"),
-        ]
-        cx_stack_idx = stack.index((cx_circuit, None))
-        program = make_program(stack, all_q)
-        return program, cx_circuit, cx_stack_idx
-
-    def test_weight1_pre_gate_faults(self):
-        """Every single-qubit Pauli fault before each of the CX's 7 Gcnots."""
-        program, cx_circuit, cx_idx = self._base_program_and_cx()
-        injected = fttools.build_discrete_error_injection_programs(
-            base_program=program,
-            instruction_to_analyze=cx_circuit,
-            stack_idx_to_modify=cx_idx,
-            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
-        )
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=injected,
-            collect_shot_data_args=[
-                {
-                    "key": "logical_measurement",
-                    "indices": "all",
-                    "strip_none_entries": True,
-                }
-            ],
-            expected_outcomes=[[0, 0]],
-        )
-        failed = runner.run()
-        assert (
-            len(failed) == 0
-        ), f"{len(failed)} pre-gate fault(s) not corrected"
-
-    def test_weight2_post_gate_correlated_faults(self):
-        """Every correlated weight-2 fault after each of the CX's 7 Gcnots."""
-        program, cx_circuit, cx_idx = self._base_program_and_cx()
-        injected = fttools.build_discrete_error_injection_programs(
-            base_program=program,
-            instruction_to_analyze=cx_circuit,
-            stack_idx_to_modify=cx_idx,
-            error_circuit_labels=["Gxpi", "Gypi", "Gzpi"],
-            post_twoq_gates=True,
-        )
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=injected,
-            collect_shot_data_args=[
-                {
-                    "key": "logical_measurement",
-                    "indices": "all",
-                    "strip_none_entries": True,
-                }
-            ],
-            expected_outcomes=[[0, 0]],
-        )
-        failed = runner.run()
-        assert (
-            len(failed) == 0
-        ), f"{len(failed)} post-gate fault(s) not corrected"

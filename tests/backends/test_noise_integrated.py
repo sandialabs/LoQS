@@ -22,14 +22,18 @@ from loqs.backends.reps import (
     ProbabilisticStimGateRep,
     QSimSuperopGateRep,
     StimCircuitGateRep,
+    UnitaryGateRep,
     ZBasisProjectionInstrumentRep,
     convert as convert_rep,
 )
 from loqs.backends import ListPhysicalCircuit, DictNoiseModel
+from loqs.backends import NumpyStatevectorQuantumState
 from loqs.backends import QSimQuantumState as QSimState
 from loqs.backends import STIMQuantumState as STIMState
-from loqs.core import QuantumProgram, QECCode, InstructionStack
+from loqs.core import Frame, QuantumProgram, QECCode, InstructionStack
 from loqs.core.instructions import builders
+from loqs.core.instructions.instruction import Instruction
+from loqs.core.instructions.instructionlabel import InstructionLabel
 
 
 class TestIntegratedNoise:
@@ -486,3 +490,136 @@ class TestIntegratedNoise:
         inst_dict = {("Imrz", (q,)): (0, True) for q in qubits}
 
         return gate_dict, inst_dict
+
+
+class TestBackendAgreement:
+    """A noiseless entangled program with mid-circuit measurement and
+    feed-forward gives the same outcomes on every state backend."""
+
+    DATA = ["D0", "D1", "D2"]
+    QUBITS = DATA + ["A0"]
+
+    _H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
+    _X = np.array([[0, 1], [1, 0]])
+    _CX = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]])
+    _CNOT_PAIRS = [
+        ("D0", "D1"),
+        ("D1", "D2"),
+        ("D0", "A0"),
+        ("D1", "A0"),
+        ("D2", "A0"),
+    ]
+
+    @staticmethod
+    def _flip_if_parities_equal(measurement_outcomes, stack, patch_label):
+        parities = [mo["A0"][0] for mo in measurement_outcomes]
+        if parities[0] == parities[1]:
+            stack = stack.insert_instruction(
+                0, InstructionLabel("Flip D0", patch_label=patch_label)
+            )
+        return Frame({"stack": stack, "parities": parities})
+
+    @classmethod
+    def _create_code(cls):
+        def circ(layers):
+            return builders.build_physical_circuit_instruction(
+                ListPhysicalCircuit(layers)
+            )
+
+        instructions = {
+            "GHZ": circ(
+                [
+                    [("Gh", ("D0",))],
+                    [("Gcnot", ("D0", "D1"))],
+                    [("Gcnot", ("D1", "D2"))],
+                ]
+            ),
+            "Parity 1": circ(
+                [
+                    [("Gcnot", ("D0", "A0"))],
+                    [("Gcnot", ("D1", "A0"))],
+                    [("Imrz", ("A0",))],
+                ]
+            ),
+            "Parity 2": circ(
+                [
+                    [("Gcnot", ("D1", "A0"))],
+                    [("Gcnot", ("D2", "A0"))],
+                    [("Imrz", ("A0",))],
+                ]
+            ),
+            "Flip D0": circ([[("Gx", ("D0",))]]),
+            "Measure Data": circ([[("Imrz", (q,)) for q in cls.DATA]]),
+            "Feed-Forward": Instruction(
+                cls._flip_if_parities_equal,
+                param_priorities={"measurement_outcomes": ["history[-2:]"]},
+                name="Feed-Forward",
+            ),
+        }
+        return QECCode(instructions, cls.QUBITS, cls.QUBITS)
+
+    @classmethod
+    def _create_model(cls, rep):
+        units = {("Gh", ("D0",)): cls._H, ("Gx", ("D0",)): cls._X}
+        units.update({("Gcnot", pair): cls._CX for pair in cls._CNOT_PAIRS})
+        gate_dict = {
+            key: convert_rep(UnitaryGateRep(u, key[1]), rep)
+            for key, u in units.items()
+        }
+        inst_dict = {("Imrz", (q,)): (0, True) for q in cls.QUBITS}
+        return DictNoiseModel(
+            gate_dict,
+            inst_dict,
+            gatereps=[rep],
+            instreps=[ZBasisProjectionInstrumentRep],
+        )
+
+    @pytest.mark.parametrize(
+        "state_type, gaterep",
+        [
+            (QSimState, QSimSuperopGateRep),
+            (STIMState, StimCircuitGateRep),
+            (NumpyStatevectorQuantumState, UnitaryGateRep),
+        ],
+        ids=["qsim", "stim", "numpy-statevector"],
+    )
+    def test_ghz_parity_feed_forward(self, state_type, gaterep):
+        stack = [
+            {
+                "instruction": "Init State",
+                "state": 4,
+                "qubit_labels": self.QUBITS,
+            },
+            {
+                "instruction": "Init Patch 4Q",
+                "new_patch_label": "L0",
+                "qubits": self.QUBITS,
+            },
+        ] + [
+            (name, "L0")
+            for name in (
+                "GHZ",
+                "Parity 1",
+                "Parity 2",
+                "Feed-Forward",
+                "Measure Data",
+            )
+        ]
+        program = QuantumProgram(
+            stack,
+            default_noise_model=self._create_model(gaterep),
+            default_base_seed=20260101,
+            state_type=state_type,
+            patch_types={"4Q": self._create_code()},
+            name="backend agreement test",
+        )
+        results = program.run(num_shots=20)
+
+        all_parities = results.collect_shot_data("parities", "all")
+        all_outcomes = results.collect_shot_data("measurement_outcomes", -1)
+        assert len(all_outcomes) == 20
+        for shot_parities, mo in zip(all_parities, all_outcomes):
+            # GHZ stabilizers: both parities are 0, so the flip always fires
+            assert [p for p in shot_parities if p is not None] == [[0, 0]]
+            data = tuple(mo[q][0] for q in self.DATA)
+            assert data in [(1, 0, 0), (0, 1, 1)]

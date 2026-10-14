@@ -15,13 +15,12 @@ kernelspec:
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/sandialabs/LoQS/{{ binder_branch }}?filepath=docs/notebooks/multipatch.ipynb)
 
-A single logical qubit is only half the story: real algorithms need logical qubits to *interact*. This tutorial walks through every two-qubit (2Q) operation LoQS's Surface-17/13/10 codepack provides, from simplest to most fault-tolerant, using two (or three) `"surf10"` patches throughout -- the smallest layout, chosen here purely to keep circuits small and simulation fast; every operation shown works identically on `"surf17"`/`"surf13"`. Every multi-patch instruction builder below takes a `PatchGeometry`, which bundles the patches' labels and qubit lists (and any seam qubits) into a single object -- built once per section and reused both for the builder call and for the `"Init Patch"` stack entries.
+A single logical qubit is only half the story: real algorithms need logical qubits to *interact*. This tutorial walks through the two-qubit (2Q) operations LoQS's Surface-17/13/10 codepack provides, from simplest to most fault-tolerant, using two `"surf10"` patches throughout -- the smallest layout, chosen here purely to keep circuits small and simulation fast; every operation shown works identically on `"surf17"`/`"surf13"`. Every multi-patch instruction builder below takes a `PatchGeometry`, which bundles the patches' labels and qubit lists (and any seam qubits) into a single object -- built once per section and reused both for the builder call and for the `"Init Patch"` stack entries.
 
 1. **Transversal logical CNOT**: the cheapest 2Q gate, but only fault-tolerant if the two patches are already adjacent on real hardware.
 2. **Ancilla-mediated joint parity measurement**: a non-destructive `Z_L(A) Z_L(B)` (or `X_L(A) X_L(B)`) readout using one bare ancilla qubit -- cheap, but *not* fault-tolerant.
 3. **Lattice-surgery joint parity measurement**: the same joint parity, made fault-tolerant by merging the two patches through a physical seam for several syndrome-extraction rounds instead of using a single ancilla.
 4. **Bell pair preparation** via a single `M_ZZ` merge, as the simplest genuinely fault-tolerant lattice-surgery protocol.
-5. **Surgery-based logical CNOT** (Horsman et al. 2012): a full measurement-based CNOT built from two lattice-surgery merges plus a destructive ancilla measurement -- fault-tolerant with no requirement that the two patches be physically adjacent.
 
 +++
 
@@ -226,57 +225,3 @@ assert {tuple(l) for l in logicals} == {(0, 0), (1, 1)}
 
 `reference_round_mode_Z="guarded_diff"` is needed here for two independent reasons that happen to coincide: both patches are prepped in $\ket{+}_L$ (the conjugate basis to the $Z$ measurement, which makes the round-0 $Z$ syndrome layer genuinely random), and the merge itself rewrites each patch's grown boundary check, both of which the measurement decoder needs to be told to hedge against.
 
-+++
-
-## 5. Surgery-based logical CNOT
-
-Combining two merges gives a full measurement-based CNOT (Horsman et al. 2012): with a fresh ancilla patch prepared in $\ket{+}_L$, `M_ZZ(ctrl, anc)` followed by `M_XX(anc, tgt)` and a destructive $Z$-basis measurement of the ancilla implements a CNOT up to two classically-conditioned logical Pauli corrections. Unlike the transversal CNOT, this works even when the control and target patches aren't physically adjacent -- only the ancilla needs to be adjacent to each of them in turn. `build_surgery_cnot_sequence` builds the whole protocol, including the corrections, as one stack-entry sequence.
-
-```{code-cell} ipython3
-qc = patch_qubits("_c")
-qt = patch_qubits("_t")
-qa = patch_qubits("_a")
-seams_zz = ["Qsv0", "Qsv1", "Qsv2"]
-seams_xx = ["Qsh0", "Qsh1", "Qsh2"]
-all_qubits = qc + qt + qa + seams_zz + seams_xx
-model = surf.create_ideal_model(all_qubits, gaterep=StimCircuitGateRep, model_backend=DictNoiseModel)
-
-surgery_cnot_geometry = PatchGeometry(
-    patches={"ctrl": ("C", qc), "tgt": ("T", qt), "anc": ("ANC", qa)},
-    seams={"zz": seams_zz, "xx": seams_xx},
-    layout=LAYOUT,
-)
-cnot_seq = surgery.build_surgery_cnot_sequence(surgery_cnot_geometry, mode="ft")
-
-stack = [
-    {"instruction": "Init State", "state": len(all_qubits), "qubit_labels": all_qubits},
-    *surgery_cnot_geometry.init_patch_entries("SURF"),
-    ("Plus Prep", "C"),
-    ("Zero Prep", "T"),
-    ("QEC", "C"),
-    ("QEC", "T"),
-    *cnot_seq,  # includes its own ancilla prep, both merges, and both corrections
-    ("QEC", "C"),
-    ("QEC", "T"),
-    {"instruction": "FT Logical Z Measure", "patch_label": "C", "reference_round_mode_Z": "guarded_diff"},
-    {"instruction": "FT Logical Z Measure", "patch_label": "T", "reference_round_mode_Z": "guarded_diff"},
-]
-program = QuantumProgram(
-    stack,
-    default_noise_model=model,
-    state_type=STIMQuantumState,
-    patch_types={"SURF": code},
-    name="Surgery-based logical CNOT",
-)
-results = program.run(num_shots=20, verbose=False)
-logicals = results.collect_shot_data("logical_measurement", "all", strip_none_entries=True)
-logicals[:8]
-```
-
-Each shot's logical readouts are `(m_anc, l_C, l_T)` -- the ancilla's own destructive measurement, taken inside `cnot_seq`, followed by the control/target measurements this notebook adds. `CNOT` on $\ket{+}_L\ket{0}_L$ leaves control and target correlated exactly as the transversal version did in Section 1, just without requiring the two patches to be adjacent:
-
-```{code-cell} ipython3
-assert all(lc == lt for m_anc, lc, lt in logicals)
-```
-
-Both `reference_round_mode_Z="guarded_diff"` flags are needed for the same two reasons as the Bell-prep case above: `C`'s $\ket{+}_L$ prep makes its own round-0 $Z$ layer random, and the second (`M_XX`) merge rewrites a $Z$ check on `T` regardless of prep basis.

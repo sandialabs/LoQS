@@ -82,3 +82,46 @@ class TestPatchDataNamedRole:
         }
         value = _collect("value", ["patch_data[anc]", "program"], program_data)
         assert value == "program"
+
+
+def _collect_history(key, priorities, frames, program_data=None):
+    return QuantumProgram._collect_kwarg(
+        key,
+        priorities,
+        label_kwargs={},
+        instruction_data={},
+        program_data=program_data or {},
+        history=History(history=[Frame(f) for f in frames]),
+        name="test",
+    )
+
+
+class TestHistoryPriority:
+    """The "history[<idxs>]" priority."""
+
+    def test_all_keeps_none_entries_when_some_frame_has_data(self):
+        frames = [{"v": 1}, {"v": None}, {"v": 3}]
+        assert _collect_history("v", ["history[all]"], frames) == [1, None, 3]
+
+    def test_all_none_entries_fall_through_to_next_priority(self):
+        frames = [{"v": None}, {"v": None}]
+        value = _collect_history(
+            "v",
+            ["history[all]", "program"],
+            frames,
+            program_data={"v": "program"},
+        )
+        assert value == "program"
+
+    def test_single_none_entry_falls_through_to_next_priority(self):
+        value = _collect_history(
+            "v",
+            ["history[-1]", "program"],
+            [{"v": 1}, {"v": None}],
+            program_data={"v": "program"},
+        )
+        assert value == "program"
+
+    def test_all_none_with_no_other_priority_fails(self):
+        with pytest.raises(RuntimeError):
+            _collect_history("v", ["history[all]"], [{"v": None}])

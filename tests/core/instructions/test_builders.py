@@ -8,7 +8,11 @@ from loqs.core.frame import Frame
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.core.instructions.instructionstack import InstructionStack
-from loqs.core.recordables import PatchLayout, PatchRelation
+from loqs.core.recordables import (
+    MeasurementOutcomes,
+    PatchLayout,
+    PatchRelation,
+)
 
 
 def _leaf_apply_needing_model(model, patch_label=None):
@@ -248,6 +252,175 @@ class TestPatchBuilderAndRemoverInstructions:
         inst = builders.build_patch_remover_instruction()
         f = inst.apply(del_patch_label="L0", patches=patches)
         assert f["patches"].relations == {}
+
+
+class TestLookupDecoderInstruction:
+    """The lookup decoder reads its syndrome from the history slice its
+    priorities name, XORs with the previous raw syndrome, applies the
+    table's correction to the frame, and reads the mapped qubit.
+    """
+
+    @staticmethod
+    def _measure(outcome):
+        # Report `outcome` on the qubit the decoder should read ("B0") and
+        # its opposite on a decoy qubit ("A0") it must not read
+        return Frame(
+            {
+                "measurement_outcomes": MeasurementOutcomes(
+                    {"B0": [outcome], "A0": [1 - outcome]}
+                )
+            }
+        )
+
+    def test_decodes_from_named_frame_diffs_and_updates_frame(self):
+        decoder = builders.build_lookup_decoder_instruction(
+            lookup_table={"0": "II", "1": "XI"},
+            # The frame before the latest one: each decode reads the first
+            # of the two measurement frames that precede it
+            syndrome_labels=[("A0", -2, 0)],
+            raw_syndrome_frame_key="raw_syn",
+            diff_prev_syndrome=True,
+            name="Lookup",
+        )
+        code = QECCode({"Decode": decoder}, ["D0", "D1", "A0"], ["D0", "D1"])
+
+        def measure(outcome):
+            return {"instruction": "Measure", "outcome": outcome}
+
+        # The patch sits on different qubits, so the decoder must be mapped:
+        # its "A0" becomes "B0"
+        stack = [
+            {
+                "instruction": "Init Patch 2Q",
+                "new_patch_label": "L0",
+                "qubits": ["E0", "E1", "B0"],
+            },
+            measure(1),
+            measure(0),
+            ("Decode", "L0"),
+            measure(1),
+            measure(0),
+            ("Decode", "L0"),
+            measure(0),
+            measure(1),
+            ("Decode", "L0"),
+        ]
+        program = QuantumProgram(
+            stack,
+            global_instructions={"Measure": Instruction(self._measure)},
+            patch_types={"2Q": code},
+            name="lookup decoder test",
+        )
+        results = program.run()
+
+        def decoded(key):
+            return [
+                v
+                for v in results.collect_shot_data(key, "all")[0]
+                if v is not None
+            ]
+
+        # Syndromes read: 1, 1, 0. Diffs against the previous raw syndrome
+        # are 1 (none yet), 0, 1; the table maps them to XI, II, XI.
+        assert decoded("raw_syn") == [[1], [1], [0]]
+        assert decoded("syndrome_diff") == [[1], [0], [1]]
+        assert decoded("decoded_error") == ["XI", "II", "XI"]
+        # Corrections multiply into the frame: XI, XI * II, XI * XI
+        assert decoded("new_pauli_frame") == ["XI", "XI", "II"]
+
+
+class TestErrorInjectionAcrossCircuitBackends:
+    """An injected X lands on the same layer and qubit for List, PyGSTi
+    and STIM circuits, checked against Pauli propagation through
+    H(Q0); CNOT(Q0, Q1) with idle on Q2; measure all.
+    """
+
+    QUBITS = ["Q0", "Q1", "Q2"]
+
+    @classmethod
+    def _circuit(cls, kind):
+        from loqs.backends import ListPhysicalCircuit, PyGSTiPhysicalCircuit
+        from loqs.backends.circuit.stimcircuit import STIMPhysicalCircuit
+
+        layers = [
+            [("Gh", ("Q0",))],
+            [("Gcnot", ("Q0", "Q1")), ("Gi", ("Q2",))],
+            [("Imrz", (q,)) for q in cls.QUBITS],
+        ]
+        list_circuit = ListPhysicalCircuit(layers, cls.QUBITS)
+        if kind == "list":
+            return list_circuit
+        if kind == "pygsti":
+            pytest.importorskip("pygsti")
+            return PyGSTiPhysicalCircuit(list_circuit)
+        return STIMPhysicalCircuit(
+            "H 0\nTICK\nCX 0 1\nI 2\nTICK\nM 0 1 2\nTICK", cls.QUBITS
+        )
+
+    @classmethod
+    def _model(cls, kind):
+        from loqs.backends import DictNoiseModel
+        from loqs.backends.reps import (
+            StimCircuitGateRep,
+            ZBasisProjectionInstrumentRep,
+        )
+
+        if kind == "stim":
+            gates = {"H": "H 0", "CX": "CX 0 1", "I": "I 0", "X": "X 0"}
+            insts = {"M": ZBasisProjectionInstrumentRep(None, True, ("Q0",))}
+        else:
+            gates = {("Gh", (q,)): "H 0" for q in cls.QUBITS}
+            gates.update({("Gi", (q,)): "I 0" for q in cls.QUBITS})
+            gates.update({("X", (q,)): "X 0" for q in cls.QUBITS})
+            gates[("Gcnot", ("Q0", "Q1"))] = "CX 0 1"
+            insts = {
+                ("Imrz", (q,)): ZBasisProjectionInstrumentRep(None, True, (q,))
+                for q in cls.QUBITS
+            }
+        return DictNoiseModel(
+            gates,
+            insts,
+            gatereps=[StimCircuitGateRep],
+            instreps=[ZBasisProjectionInstrumentRep],
+        )
+
+    # (injections as (layer, pauli, qubit index), expected Q0^Q1, expected Q2)
+    # The Bell pair's own outcomes are random, but Q0^Q1 is 0 without errors.
+    CASES = {
+        "none": ([], 0, 0),
+        "idle_qubit_before_all": ([(0, "X", 2)], 0, 1),
+        # X on the control before the CNOT copies onto the target
+        "control_before_cnot": ([(1, "X", 0)], 0, 0),
+        "control_after_cnot": ([(2, "X", 0)], 1, 0),
+        "target_after_cnot": ([(2, "X", 1)], 1, 0),
+        "target_before_all": ([(0, "X", 1)], 1, 0),
+    }
+
+    @pytest.mark.parametrize("kind", ["list", "pygsti", "stim"])
+    @pytest.mark.parametrize("case", list(CASES))
+    def test_injection_flips_where_pauli_propagation_predicts(
+        self, kind, case
+    ):
+        pytest.importorskip("stim")
+        from loqs.backends import STIMQuantumState
+
+        injections, parity, idle_bit = self.CASES[case]
+        circuit = self._circuit(kind)
+        inst = builders.build_physical_circuit_instruction(circuit=circuit)
+        for seed in range(4):
+            frame = inst.apply(
+                model=self._model(kind),
+                circuit=circuit,
+                state=STIMQuantumState(3, self.QUBITS, seed=seed),
+                inplace=True,
+                error_injections=injections,
+                pauli_frame_update=None,
+                patch_label="L0",
+                patches=PatchLayout(),
+            )
+            mo = frame["measurement_outcomes"]
+            assert mo["Q0"][0] ^ mo["Q1"][0] == parity
+            assert mo["Q2"][0] == idle_bit
 
 
 class TestPhysicalCircuitInstructionSTIM:

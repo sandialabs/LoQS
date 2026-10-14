@@ -1116,3 +1116,81 @@ class TestSerialization:
         pgm = PyGSTiNoiseModel(model)
         with pytest.raises(ValueError, match="both round-trip"):
             pgm._get_encoding_attr("model")
+
+
+class TestGateContentWithAliases:
+    """A PyGSTi model's `Gcnot` reps have the right control and target,
+    through `qubit_aliases`, and match a `DictNoiseModel` of the same
+    unitaries."""
+
+    QUBITS = ["A0", "D3", "D4"]
+    CNOT = np.array(
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=float
+    )
+    CNOT_PAIRS = [("A0", "D3"), ("D3", "A0"), ("D3", "D4")]
+
+    @pytest.fixture
+    def pgm(self):
+        pspec = pygsti.processors.QubitProcessorSpec(
+            3,
+            gate_names=["Gcnot", "Gh"],
+            qubit_labels=["Q0", "Q1", "Q2"],
+            availability={
+                "Gcnot": [("Q0", "Q1"), ("Q1", "Q0"), ("Q1", "Q2")],
+                "Gh": "all-permutations",
+            },
+        )
+        model = pygsti.models.create_crosstalk_free_model(pspec)
+        return PyGSTiNoiseModel(
+            model, qubit_aliases={"Q0": "A0", "Q1": "D3", "Q2": "D4"}
+        )
+
+    @staticmethod
+    def _gate_reps(model, label):
+        from loqs.backends import ListPhysicalCircuit
+
+        circuit = ListPhysicalCircuit([[label]])
+        return model.get_reps(circuit, [UnitaryGateRep], [])
+
+    def test_cnot_rep_control_is_first_aliased_qubit(self, pgm):
+        for pair in self.CNOT_PAIRS:
+            (rep,) = self._gate_reps(pgm, ("Gcnot", pair))
+            assert tuple(rep.qubit_labels) == pair
+            # Unitary is in the rep's own qubit order: first label controls
+            assert np.allclose(rep.unitary, self.CNOT)
+
+    def test_reps_act_like_dict_model_on_basis_states(self, pgm):
+        from loqs.backends import NumpyStatevectorQuantumState as SVState
+
+        dict_model = DictNoiseModel(
+            {("Gcnot", pair): self.CNOT for pair in self.CNOT_PAIRS},
+            gatereps=[UnitaryGateRep],
+            gaterep_array_cast_rep=UnitaryGateRep,
+        )
+
+        for pair in self.CNOT_PAIRS:
+            (pgsti_rep,) = self._gate_reps(pgm, ("Gcnot", pair))
+            (dict_rep,) = self._gate_reps(dict_model, ("Gcnot", pair))
+            for index in range(8):
+                bits = {
+                    q: (index >> (2 - i)) & 1
+                    for i, q in enumerate(self.QUBITS)
+                }
+                outs = []
+                for rep in (pgsti_rep, dict_rep):
+                    state = SVState(
+                        np.eye(8)[index].astype(complex), self.QUBITS
+                    )
+                    state.apply_reps_inplace([rep])
+                    outs.append(state.state.flatten())
+                assert np.allclose(outs[0], outs[1])
+
+                # The control is the pair's first qubit: the target flips
+                # exactly when the control bit is set.
+                control, target = pair
+                expected = dict(bits)
+                expected[target] ^= bits[control]
+                expected_index = sum(
+                    expected[q] << (2 - i) for i, q in enumerate(self.QUBITS)
+                )
+                assert np.allclose(outs[0], np.eye(8)[expected_index])
