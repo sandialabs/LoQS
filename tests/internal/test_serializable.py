@@ -1411,19 +1411,12 @@ class TestResolvingDecodeCache:
                 assert resolved.data == {"a": 1}
 
     def test_programresults_decode_cache_repointing(self, make_temp_path):
-        """Regression: repeated lazy per-shot loads via `get_shot_history`
-        (`_load_shot_from_checkpoint` -> `_load_shot_from_single_file`) reuse
-        one persistent `_checkpoint_decode_cache` across separate calls, each
-        of which opens and closes its own fresh `h5py.File` handle -- this is
-        the exact scenario the original bug was found in (a shared object
-        referenced across two lazily-loaded shots).
+        """Regression: lazy `get_shot_history` calls, each opening a fresh
+        `h5py.File`, must reuse the store's decode cache re-pointed at it.
 
-        Two shots share one cacheable `Frame` (`_CACHE_ON_SERIALIZE`), so
-        checkpointing produces one `"source"` + one `"reference"`/`"copy"`
-        entry across them. Loading shot 1 (whichever shot's own checkpoint
-        entry holds the reference, not the source) via a fresh
-        `ProgramResults` with `lazy_loading=True` (the default) must resolve
-        the shared `Frame` on demand through the re-pointed cache, not raise.
+        Two shots share one cacheable `Frame`, so checkpointing writes one
+        "source" and one "reference"/"copy" entry. Loading shot 1 lazily
+        must resolve the shared `Frame` through the re-pointed cache.
         """
         from loqs.core import ProgramResults
         from loqs.core.history import History
@@ -1449,9 +1442,8 @@ class TestResolvingDecodeCache:
             writer.consolidate_checkpoints(checkpoint_dir=checkpoint_dir)
             assert (checkpoint_dir / "results.h5").exists()
 
-            # Lazy consumer: each get_shot_history call below opens and
-            # closes its own fresh h5py.File via _load_shot_from_single_file,
-            # reusing this instance's one persistent _checkpoint_decode_cache.
+            # Lazy consumer: each call opens its own h5py.File but reuses
+            # the store's one canonical decode cache.
             reader = ProgramResults(lazy_loading=True)
             reader._checkpoint_dir = checkpoint_dir
 
@@ -1468,7 +1460,8 @@ class TestResolvingDecodeCache:
             # (and re-pointed across the two separate file opens above),
             # not bypassed.
             assert isinstance(
-                reader._checkpoint_decode_cache, ResolvingDecodeCache
+                reader._shot_store()._canonical_decode_cache,
+                ResolvingDecodeCache,
             )
 
     def test_strict_validators_with_qeccodepatch(self, make_temp_path):

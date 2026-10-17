@@ -59,18 +59,11 @@ class _TrivialCounterSetup:
             patch_types={"Trivial": trivial_code},
         )
 
-    def simulate(self, ckpt=None, resume=None, **overrides):
-        """Construct and run an `EdesignRunner` with this setup's edesign/
-        model/physical_to_logical/`collect_shot_data_args=[("counter", -1)]`/
+    def make_runner(self, ckpt=None, resume=False, **overrides):
+        """Construct an `EdesignRunner` with this setup's edesign/model/
+        physical_to_logical/`collect_shot_data_args=[("counter", -1)]`/
         `num_shots=1` as defaults, overridable via `overrides`. `ckpt`, if
-        given, both sets `item_checkpoint_dir` and enables checkpointing;
-        `resume`, if not given explicitly, is inferred as `True` iff `ckpt`
-        already exists with content."""
-        if resume is None:
-            resume = False
-            if ckpt is not None and ckpt.exists() and any(ckpt.iterdir()):
-                resume = True
-
+        given, both sets `item_checkpoint_dir` and enables checkpointing."""
         kwargs = dict(
             edesign=self.edesign,
             physical_model=self.model,
@@ -81,7 +74,18 @@ class _TrivialCounterSetup:
             program_kwargs=self.program_kwargs,
         )
         kwargs.update(overrides)
-        return EdesignRunner(**kwargs).run()
+        return EdesignRunner(**kwargs)
+
+    def simulate(self, ckpt=None, resume=None, **overrides):
+        """Construct and run an `EdesignRunner` via `make_runner`. `resume`,
+        if not given explicitly, is inferred as `True` iff `ckpt` already
+        exists with content."""
+        if resume is None:
+            resume = False
+            if ckpt is not None and ckpt.exists() and any(ckpt.iterdir()):
+                resume = True
+
+        return self.make_runner(ckpt, resume, **overrides).run()
 
 
 @pytest.fixture
@@ -186,71 +190,38 @@ class TestSimulateDatasetForEdesignCheckpointing:
     exercise what's genuinely EdesignRunner-specific -- its own pyGSTi
     ExperimentDesign tar/directory serialization."""
 
-    def test_edesign_roundtrip_without_checkpoint_dir(
-        self, trivial_counter_setup, tmp_path
+    @pytest.mark.parametrize(
+        "use_checkpoint_dir",
+        [False, True],
+        ids=["without_checkpoint_dir", "with_checkpoint_dir"],
+    )
+    def test_edesign_roundtrip(
+        self, trivial_counter_setup, tmp_path, use_checkpoint_dir
     ):
-        """Writing and reading an EdesignRunner with no item_checkpoint_dir
-        (checkpoint disabled) preserves edesign as bytes tar archive,
-        not just None. The round-tripped runner's edesign is equivalent to
-        the original, and calling .run() on it succeeds."""
+        """Writing and reading an EdesignRunner, with or without an
+        item_checkpoint_dir (without it, edesign is preserved as a bytes tar
+        archive, not just None; with it, the directory path is used), gives
+        an equivalent edesign. Without a checkpoint dir, calling .run() on the
+        round-tripped runner also succeeds (with one, writing the runner already
+        populates the directory with the edesign, so a fresh run isn't
+        valid)."""
         s = trivial_counter_setup
         h5_path = tmp_path / "runner.h5"
+        ckpt = tmp_path / "checkpoint" if use_checkpoint_dir else None
 
-        # Construct and write runner with no item_checkpoint_dir (checkpoint disabled)
-        runner1 = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=[("counter", -1)],
-            config=CheckpointConfig(item_checkpoint_dir=None),
-            program_kwargs=s.program_kwargs,
-        )
-        runner1.write(h5_path)
+        s.make_runner(ckpt).write(h5_path)
 
-        # Read it back
         runner2 = EdesignRunner.read(h5_path)
 
-        # Assert edesign is not None and is equivalent
         assert runner2.edesign is not None
         assert set(runner2.edesign.all_circuits_needing_data) == set(
             s.edesign.all_circuits_needing_data
         )
 
-        # Assert calling .run() on the round-tripped runner succeeds
-        ds = runner2.run()
-        assert ds[s.circs[0]].counts[("0",)] == 1
-        assert ds[s.circs[1]].counts[("1",)] == 1
-
-    def test_edesign_roundtrip_with_checkpoint_dir_still_works(
-        self, trivial_counter_setup, tmp_path
-    ):
-        """Writing and reading an EdesignRunner with item_checkpoint_dir set
-        still works (uses directory path, not tar)."""
-        s = trivial_counter_setup
-        ckpt = tmp_path / "checkpoint"
-        h5_path = tmp_path / "runner.h5"
-
-        # Construct and write runner with item_checkpoint_dir set
-        runner1 = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=[("counter", -1)],
-            config=CheckpointConfig(item_checkpoint_dir=ckpt),
-            program_kwargs=s.program_kwargs,
-        )
-        runner1.write(h5_path)
-
-        # Read it back
-        runner2 = EdesignRunner.read(h5_path)
-
-        # Assert edesign is not None and is equivalent
-        assert runner2.edesign is not None
-        assert set(runner2.edesign.all_circuits_needing_data) == set(
-            s.edesign.all_circuits_needing_data
-        )
+        if not use_checkpoint_dir:
+            ds = runner2.run()
+            assert ds[s.circs[0]].counts[("0",)] == 1
+            assert ds[s.circs[1]].counts[("1",)] == 1
 
     def test_item_key_fn_is_picklable(self, trivial_counter_setup, tmp_path):
         """Regression test: item_key_fn and snapshot bound methods must be picklable.
@@ -264,14 +235,7 @@ class TestSimulateDatasetForEdesignCheckpointing:
         import pickle
 
         s = trivial_counter_setup
-        runner = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=[("counter", -1)],
-            config=CheckpointConfig(item_checkpoint_dir=tmp_path / "ckpt"),
-        )
+        runner = s.make_runner(tmp_path / "ckpt", program_kwargs=None)
 
         # item_key_fn must be picklable (a module-level function, not a local lambda)
         pickle.dumps(runner.item_key_fn)
@@ -328,15 +292,7 @@ class TestEdesignRunnerHooks:
         non-positional index_map later becomes available, _circuit_for_index
         must rebuild its cache rather than keep serving the stale one."""
         s = trivial_counter_setup
-        runner = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=[("counter", -1)],
-            config=CheckpointConfig(item_checkpoint_dir=tmp_path),
-            program_kwargs=s.program_kwargs,
-        )
+        runner = s.make_runner(tmp_path)
 
         # Stray call before .run() ever executes: index_map is still None
         # here, so _circuit_for_index falls back to positional caching.
@@ -362,14 +318,7 @@ class TestEdesignRunnerHooks:
         a {(label,): count} dict via Counter, independent of any
         dispatch/checkpoint machinery."""
         s = trivial_counter_setup
-        runner = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=4,
-            collect_shot_data_args=[("counter", -1)],
-            program_kwargs=s.program_kwargs,
-        )
+        runner = s.make_runner(num_shots=4)
         program = runner.build_program(1)  # the one-gate circuit, outcome "1"
         program_results = program.run(num_shots=4, verbose=False)
         count_dict = runner.reduce_program_outcomes(program_results)
@@ -382,14 +331,7 @@ class TestEdesignRunnerHooks:
         and always sets the provenance comment, unconditionally (no
         dependency on checkpointing being enabled)."""
         s = trivial_counter_setup
-        runner = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=[("counter", -1)],
-            program_kwargs=s.program_kwargs,
-        )
+        runner = s.make_runner()
         ordered_results = [
             (s.circs[0], {("0",): 1}),
             (s.circs[1], {("1",): 1}),
@@ -407,14 +349,7 @@ class TestEdesignRunnerHooks:
         never itself mismatch-checked (matching NoiseSweepRunner/
         FaultInjectionRunner precedent)."""
         s = trivial_counter_setup
-        runner = EdesignRunner(
-            edesign=s.edesign,
-            physical_model=s.model,
-            physical_to_logical=s.physical_to_logical,
-            num_shots=1,
-            collect_shot_data_args=[("counter", -1)],
-            program_kwargs=s.program_kwargs,
-        )
+        runner = s.make_runner()
         assert runner._mismatch_check_fields() == [
             "num_shots",
             "_normalized_collect_shot_data_args",

@@ -15,10 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from loqs.internal.serializable import (
-    IncorrectDecodableTypeError,
-    MisformedDecodableError,
-)
+from loqs.internal.serializable import IncorrectDecodableTypeError
 from _shared_checkpoint_test_helpers import (
     H5Session,
     InlineExecutor,
@@ -138,24 +135,6 @@ _SITES = {
 # Rows that fail on 1ef75fd: the exception (or failed check) seen, and the
 # stage expected to flip each. The stage must drop the marker when it does.
 _XFAIL_REASONS: dict[str, tuple[type[BaseException], str]] = {
-    "shot_serial_snapshot": (
-        KeyError,
-        "#144 item 2: a kill in the first results.h5 write leaves a file "
-        "that resume can't read (KeyError 'name' in "
-        "ProgramResults._from_decoded_attrs); fixed in stage 3",
-    ),
-    "shot_serial_append": (
-        AssertionError,
-        "#144 item 3: after a kill mid-append, resume returns shot 1 "
-        "holding shot 0's history (recorded seed 1000, expected 1001); "
-        "fixed in stage 3",
-    ),
-    "shot_parallel_consolidation": (
-        MisformedDecodableError,
-        "#144 item 3: a kill during consolidation leaves a results.h5 "
-        "with a dict group lacking 'values', so resume raises "
-        "MisformedDecodableError; fixed in stage 3",
-    ),
     "item_serial_payload": (
         RuntimeError,
         "#144 item 4: a kill mid-payload leaves a partial payload that "
@@ -233,7 +212,14 @@ def test_interrupted_write_resumes_to_reference(
                 _run_shots(tmp_path, parallel)
         assert tap.fired, "the injection never fired"
         simulate_process_death()
-        resumed = _run_shots(tmp_path, parallel, resume=True)
+        if site_id == "shot_serial_snapshot":
+            # The snapshot is written atomically, so a kill inside it
+            # leaves nothing to resume; a fresh run then starts cleanly.
+            with pytest.raises(ValueError, match="No existing checkpoint"):
+                _run_shots(tmp_path, parallel, resume=True)
+            resumed = _run_shots(tmp_path, parallel)
+        else:
+            resumed = _run_shots(tmp_path, parallel, resume=True)
         assert_shot_results_match(
             resumed, scenario.shots, checkpoint_dir=tmp_path
         )

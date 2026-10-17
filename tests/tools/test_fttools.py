@@ -11,8 +11,10 @@ from loqs.core import Frame, QuantumProgram
 from loqs.core.instructions import builders
 from loqs.core.instructions.instruction import Instruction
 from loqs.codepacks import codepack_trivial_counter as trivial_codepack
+from loqs.core.historydatacollector import HistoryDataCollector
 from loqs.tools import fttools
 from loqs.tools.multiprogramrunner import CheckpointConfig
+from loqs.tools.noisesweeptools import NoiseSweepRunner
 from loqs.tools.paralleltools import ParallelStrategy
 
 
@@ -59,6 +61,16 @@ def _build_counter_program():
         default_noise_model=ideal_model,
         patch_types={"Trivial": trivial_code},
         name="ft counter test",
+    )
+
+
+def _make_runner(programs, expected_outcomes=(1,), **kwargs):
+    kwargs.setdefault("collect_shot_data_args", [("counter", -1)])
+    kwargs.setdefault("num_shots", 1)
+    return fttools.FaultInjectionRunner(
+        errored_programs=programs,
+        expected_outcomes=expected_outcomes,
+        **kwargs,
     )
 
 
@@ -230,41 +242,30 @@ class TestBuildDiscreteErrorInjectionPrograms:
 
 class TestRunDiscreteErrorInjectedPrograms:
 
-    def test_all_succeed_returns_empty_failed_list(self, capsys):
+    @pytest.mark.parametrize(
+        "expected_outcomes, num_failed, message",
+        [
+            ([1], 0, "All programs succeeded!"),
+            ([999], 2, "Failed 2 programs!"),
+        ],
+        ids=["all_succeed", "some_fail"],
+    )
+    def test_failed_programs_are_collected_and_reported(
+        self, capsys, expected_outcomes, num_failed, message
+    ):
         program = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-        )
+        runner = _make_runner([program, program], expected_outcomes)
         failed = runner.run()
-        assert failed == []
-        assert "All programs succeeded!" in capsys.readouterr().out
-
-    def test_some_fail_are_collected_and_reported(self, capsys):
-        program = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[999],
-            num_shots=1,
-        )
-        failed = runner.run()
-        assert failed == [program, program]
-        assert "Failed 2 programs!" in capsys.readouterr().out
+        assert failed == [program] * num_failed
+        assert message in capsys.readouterr().out
 
     def test_build_output_summary_suppressed_when_show_progress_false(
         self, capsys
     ):
         """FaultInjectionRunner._build_output suppresses summary prints when show_progress=False."""
         program = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-            config=CheckpointConfig(show_progress=False),
+        runner = _make_runner(
+            [program, program], config=CheckpointConfig(show_progress=False)
         )
         runner.run()
         out = capsys.readouterr().out
@@ -292,12 +293,8 @@ class TestRunDiscreteErrorInjectedProgramsParallel:
             n_program_chunks=2,
         )
 
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[999],
-            num_shots=1,
-            parallel_strategy=strategy,
+        runner = _make_runner(
+            [program, program], [999], parallel_strategy=strategy
         )
         failed = runner.run()
 
@@ -316,61 +313,32 @@ class TestFaultInjectionRunnerCheckpointing:
 
         return set(_read_done_union(ckpt).keys())
 
-    def test_existing_checkpoint_with_matching_config_auto_resumes(
-        self, tmp_path
+    @pytest.mark.parametrize(
+        "num_programs, resume_expected_outcomes",
+        [(2, [1]), (1, (1,))],
+        ids=["matching_config", "equivalent_expected_outcomes"],
+    )
+    def test_existing_checkpoint_auto_resumes(
+        self, tmp_path, num_programs, resume_expected_outcomes
     ):
-        """Resumed call with matching config continues from checkpoint."""
+        """A resumed call with a matching (or equivalent-but-differently-typed
+        expected_outcomes) config continues from the checkpoint."""
         program = _build_counter_program()
         ckpt = tmp_path / "checkpoint"
 
-        # First run
-        runner1 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
+        runner1 = _make_runner(
+            [program] * num_programs,
+            [1],
             config=CheckpointConfig(item_checkpoint_dir=ckpt),
         )
-        failed1 = runner1.run()
-        assert failed1 == []
+        assert runner1.run() == []
 
-        # Second run with same config: should auto-resume
-        runner2 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
+        runner2 = _make_runner(
+            [program] * num_programs,
+            resume_expected_outcomes,
             config=CheckpointConfig(item_checkpoint_dir=ckpt, resume=True),
         )
-        failed2 = runner2.run()
-        assert failed2 == []
-
-    def test_resume_with_equivalent_expected_outcomes_succeeds(self, tmp_path):
-        """Resume succeeds when expected_outcomes is passed as an
-        equivalent-but-differently-typed sequence."""
-        program = _build_counter_program()
-        ckpt = tmp_path / "checkpoint"
-        # Run with list form
-        runner1 = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-            config=CheckpointConfig(item_checkpoint_dir=ckpt),
-        )
-        runner1.run()
-
-        # Resume with tuple form
-        runner2 = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=(1,),  # tuple instead of list
-            num_shots=1,
-            config=CheckpointConfig(item_checkpoint_dir=ckpt, resume=True),
-        )
-        # Should not raise despite differently-typed expected_outcomes
-        result = runner2.run()
-        assert result is not None
+        assert runner2.run() == []
 
     def test_fault_injection_runner_with_custom_results_filename(
         self, tmp_path
@@ -380,11 +348,8 @@ class TestFaultInjectionRunnerCheckpointing:
         shot_ckpt = tmp_path / "shot_checkpoint"
         custom_filename = "my_results.h5"
 
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
+        runner = _make_runner(
+            [program],
             config=CheckpointConfig(
                 shot_checkpoint_dir=shot_ckpt, results_filename=custom_filename
             ),
@@ -405,22 +370,16 @@ class TestFaultInjectionRunnerCheckpointing:
         ckpt = tmp_path / "checkpoint"
         shot_ckpt = tmp_path / "shot_checkpoint"
 
-        runner1 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
+        runner1 = _make_runner(
+            [program, program],
             config=CheckpointConfig(
                 item_checkpoint_dir=ckpt, keep_shot_results=False
             ),
         )
         runner1.run()
 
-        runner2 = fttools.FaultInjectionRunner(
-            errored_programs=[program, program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
+        runner2 = _make_runner(
+            [program, program],
             config=CheckpointConfig(
                 item_checkpoint_dir=ckpt,
                 resume=True,
@@ -443,11 +402,8 @@ class TestRunKwargsPassthrough:
         program = _build_counter_program()
         item_ckpt = tmp_path / "item_checkpoint"
 
-        original_runner = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
+        original_runner = _make_runner(
+            [program],
             config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
             run_kwargs={"max_frame_limit": 999},
         )
@@ -466,10 +422,8 @@ class TestRunKwargsPassthrough:
         shot_ckpt = tmp_path / "shot_checkpoint"
         item_ckpt = tmp_path / "item_checkpoint"
 
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
+        runner = _make_runner(
+            [program],
             num_shots=2,
             config=CheckpointConfig(
                 shot_checkpoint_dir=shot_ckpt,
@@ -495,64 +449,53 @@ def _flip_coin_apply(seed, fail_prob=0.0) -> Frame:
 FLIP_COIN = Instruction(apply_fn=_flip_coin_apply, name="Flip Coin")
 
 
+def _fault_injection_runner(collector, config):
+    return _make_runner(
+        [_build_counter_program()],
+        collect_shot_data_args=[collector],
+        config=config,
+    )
+
+
+def _noise_sweep_runner(collector, config):
+    return NoiseSweepRunner(
+        strengths=[0.0, 0.1],
+        num_shots=1,
+        collect_shot_data_args=[collector],
+        expected_outcomes=[False, False],
+        instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
+        global_instructions={"Flip Coin": FLIP_COIN},
+        config=config,
+    )
+
+
 class TestHistoryDataCollectorWithDict:
     """Tests that a literal HistoryDataCollector instance can be used directly
     in collect_shot_data_args and survives checkpointing/serialization."""
 
+    @pytest.mark.parametrize(
+        "make_runner, key",
+        [
+            (_fault_injection_runner, "counter"),
+            (_noise_sweep_runner, "failed"),
+        ],
+        ids=["fault_injection_runner", "noise_sweep_runner"],
+    )
     def test_literal_history_data_collector_in_runner_serialize(
-        self, tmp_path, make_temp_path
+        self, tmp_path, make_temp_path, make_runner, key
     ):
-        """FaultInjectionRunner accepts a literal HistoryDataCollector instance."""
-        from loqs.core.historydatacollector import HistoryDataCollector
-
-        program = _build_counter_program()
-        item_ckpt = tmp_path / "item_checkpoint"
-
         # A literal HistoryDataCollector instance, not a raw dict/tuple spec.
-        collector = HistoryDataCollector(key="counter", indices=-1)
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[collector],  # literal, not dict
-            expected_outcomes=[1],
-            num_shots=1,
-            config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
+        collector = HistoryDataCollector(key=key, indices=-1)
+        runner = make_runner(
+            collector,
+            CheckpointConfig(item_checkpoint_dir=tmp_path / "item_checkpoint"),
         )
         runner.run()
 
         # Serialize and resume
         with make_temp_path(suffix=".h5") as f_path:
             runner.write(f_path)
-            loaded = fttools.FaultInjectionRunner.read(f_path)
-
-        # Loaded instance should have the same collector
-        assert loaded.collect_shot_data_args == [collector]
-
-    def test_literal_history_data_collector_in_noisesweep(
-        self, tmp_path, make_temp_path
-    ):
-        """NoiseSweepRunner accepts a literal HistoryDataCollector instance."""
-        from loqs.core.historydatacollector import HistoryDataCollector
-        from loqs.tools.noisesweeptools import NoiseSweepRunner
-
-        item_ckpt = tmp_path / "item_checkpoint"
-
-        # A literal HistoryDataCollector instance, not a raw dict/tuple spec.
-        collector = HistoryDataCollector(key="failed", indices=-1)
-        runner = NoiseSweepRunner(
-            strengths=[0.0, 0.1],
-            num_shots=1,
-            collect_shot_data_args=[collector],  # literal, not dict
-            expected_outcomes=[False, False],
-            instruction_stack=[{"instruction": "Flip Coin", "fail_prob": 0.1}],
-            global_instructions={"Flip Coin": FLIP_COIN},
-            config=CheckpointConfig(item_checkpoint_dir=item_ckpt),
-        )
-        runner.run()
-
-        # Serialize and resume
-        with make_temp_path(suffix=".h5") as f_path:
-            runner.write(f_path)
-            loaded = NoiseSweepRunner.read(f_path)
+            loaded = type(runner).read(f_path)
 
         # Loaded instance should have the same collector
         assert loaded.collect_shot_data_args == [collector]
@@ -574,40 +517,36 @@ class TestFaultInjectionRunnerHooks:
         index directly, with no transformation."""
         program_a = _build_counter_program()
         program_b = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program_a, program_b],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-        )
+        runner = _make_runner([program_a, program_b])
         assert runner.build_program(0) is program_a
         assert runner.build_program(1) is program_b
 
-    def test_reduce_program_outcomes_true_on_match(self):
-        """reduce_program_outcomes returns True when every shot matches
-        the expected outcome."""
+    @pytest.mark.parametrize(
+        "expected_outcome, expected_reduction",
+        [(1, True), (999, False)],
+        ids=["true_on_match", "false_on_mismatch"],
+    )
+    def test_reduce_program_outcomes_pass_fail(
+        self, expected_outcome, expected_reduction
+    ):
+        """reduce_program_outcomes returns True when every shot matches the
+        expected outcome, and False as soon as any shot mismatches."""
         program = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-        )
+        runner = _make_runner([program], [expected_outcome])
         program_results = program.run(num_shots=1, verbose=False)
-        assert runner.reduce_program_outcomes(program_results) is True
+        assert (
+            runner.reduce_program_outcomes(program_results)
+            is expected_reduction
+        )
 
-    def test_reduce_program_outcomes_false_on_mismatch(self):
-        """reduce_program_outcomes returns False as soon as any shot
-        mismatches the expected outcome."""
+    def test_reduce_program_outcomes_raises_on_missing_shot(self):
+        """A results object with fewer shots than `num_shots` raises
+        instead of judging only the shots present."""
         program = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[999],
-            num_shots=1,
-        )
+        runner = _make_runner([program], num_shots=2)
         program_results = program.run(num_shots=1, verbose=False)
-        assert runner.reduce_program_outcomes(program_results) is False
+        with pytest.raises(RuntimeError, match="1.*2"):
+            runner.reduce_program_outcomes(program_results)
 
     def test_build_output_treats_none_result_as_failed(self):
         """A None result entry (an incomplete run) is treated as failed by
@@ -615,12 +554,7 @@ class TestFaultInjectionRunnerHooks:
         build_output's own incomplete-run warning."""
         program_ok = _build_counter_program()
         program_incomplete = _build_counter_program()
-        runner = fttools.FaultInjectionRunner(
-            errored_programs=[program_ok, program_incomplete],
-            collect_shot_data_args=[("counter", -1)],
-            expected_outcomes=[1],
-            num_shots=1,
-        )
+        runner = _make_runner([program_ok, program_incomplete])
         ordered_results = [(program_ok, True), (program_incomplete, None)]
 
         with pytest.warns(UserWarning, match="None result"):

@@ -425,12 +425,16 @@ def test_collision_rule_first_committed_wins(tmp_path, histories):
     check(1, 20.0)
 
 
+def _truncate_in_half(path: Path) -> None:
+    path.write_bytes(path.read_bytes()[: path.stat().st_size // 2])
+
+
 def test_truncated_payload_is_a_strict_error(tmp_path, histories):
     store = CheckpointStore(tmp_path, SHOT_LAYOUT)
     store.put_batch(_shot_entries(histories, [0, 1]), worker_id="a")
     bad = store.put_batch(_shot_entries(histories, [2, 3]), worker_id="b")
     path = Path(bad.path)
-    path.write_bytes(path.read_bytes()[: path.stat().st_size // 2])
+    _truncate_in_half(path)
     with pytest.raises(CheckpointReadError) as info:
         store.keys(strict=True)
     assert info.value.path == str(path) and str(path) in str(info.value)
@@ -477,24 +481,65 @@ def _set_marker(path, **lengths):
         f.attrs.modify(COMMIT_MARKER_ATTR, json.dumps(marker))
 
 
-def test_marker_beyond_physical_length_is_a_strict_error(tmp_path, histories):
+def _drop_marker(path):
+    with h5py.File(path, "a") as f:
+        del f.attrs[COMMIT_MARKER_ATTR]
+
+
+@pytest.mark.parametrize(
+    "corrupt, match",
+    [
+        (lambda path: _set_marker(path, shot_histories=5), None),
+        (_drop_marker, "marker"),
+    ],
+    ids=["marker_beyond_physical_length", "no_marker"],
+)
+def test_bad_canonical_marker_is_a_strict_error(
+    tmp_path, histories, corrupt, match
+):
     store = CheckpointStore(tmp_path, SHOT_LAYOUT)
     store.write_snapshot(_shot_results(histories, [0, 1]))
     assert store.keys() == [0, 1]
-    _set_marker(store.canonical_path, shot_histories=5)
-    with pytest.raises(CheckpointReadError) as info:
+    corrupt(store.canonical_path)
+    with pytest.raises(CheckpointReadError, match=match) as info:
         store.keys()
     assert info.value.path == str(store.canonical_path)
     assert store.keys(strict=False) == []
 
 
-def test_canonical_without_marker_is_a_strict_error(tmp_path, histories):
+def test_read_attrs_decodes_no_shot(tmp_path, histories, monkeypatch):
     store = CheckpointStore(tmp_path, SHOT_LAYOUT)
-    store.write_snapshot(_shot_results(histories, [0]))
-    with h5py.File(store.canonical_path, "a") as f:
-        del f.attrs[COMMIT_MARKER_ATTR]
-    with pytest.raises(CheckpointReadError, match="marker"):
-        store.keys()
+    store.write_snapshot(_shot_results(histories, [0, 1], name="cfg"))
+    real_decode = Serializable.decode
+
+    def decode(*args, **kwargs):
+        value = real_decode(*args, **kwargs)
+        if isinstance(value, History):
+            raise AssertionError("a shot was decoded")
+        return value
+
+    monkeypatch.setattr(Serializable, "decode", staticmethod(decode))
+    attrs = store.read_attrs(("name", "num_shots"))
+    assert attrs == {"name": "cfg", "num_shots": 6}
+    # The trap does fire when a shot is read.
+    with pytest.raises(CheckpointReadError, match="a shot was decoded"):
+        store.get(0)
+    with pytest.raises(ValueError, match="streamed"):
+        store.read_attrs(("shot_histories",))
+
+
+def test_read_attrs_refuses_an_uncommitted_or_incomplete_file(
+    tmp_path, histories
+):
+    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    with pytest.raises(CheckpointReadError, match=store.canonical_path.name):
+        store.read_attrs(("name",))
+    store.write_snapshot(_shot_results(histories, [0], name="cfg"))
+    with pytest.raises(CheckpointReadError, match="nonexistent"):
+        store.read_attrs(("nonexistent",))
+    _drop_marker(store.canonical_path)
+    with pytest.raises(CheckpointReadError, match=store.canonical_path.name):
+        store.read_attrs(("name",))
 
 
 def test_missing_canonical_file_holds_nothing(tmp_path):
@@ -547,7 +592,7 @@ def _named_histories(name) -> dict[int, History]:
         default_base_seed=BASE_SEED,
     )
     results = program.run(num_shots=2, verbose=False)
-    return {i: results.get_shot_history(i) for i in range(2)}
+    return {i: results.shot_histories[i] for i in range(2)}
 
 
 def _write_as_fresh_process(store, histories) -> None:
@@ -564,29 +609,22 @@ def _digest(obj) -> int:
 
 def test_get_sees_replaced_canonical_file(tmp_path, monkeypatch):
     """A replacement reusing the old file's cache IDs for other objects
-    must not resolve through the old file's decode cache."""
+    must not resolve through the old file's decode cache, including one
+    landing between a read's open and its identity check."""
     monkeypatch.setattr(HDF5Encoder, "ENCODE_ID", 0)
-    versions = [_named_histories(name) for name in ("A", "B", "C")]
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    versions = [_named_histories(name) for name in ("A", "B", "C", "D")]
+    store = CheckpointStore(tmp_path / "main", SHOT_LAYOUT)
     _write_as_fresh_process(store, versions[0])
     assert _digest(store.get(1)) == _digest(versions[0][1])
     # Replaced by the store itself, then by another store object.
     _write_as_fresh_process(store, versions[1])
     assert _digest(store.get(1)) == _digest(versions[1][1])
-    other = CheckpointStore(tmp_path, SHOT_LAYOUT)
+    other = CheckpointStore(tmp_path / "main", SHOT_LAYOUT)
     _write_as_fresh_process(other, versions[2])
     assert _digest(store.get(1)) == _digest(versions[2][1])
 
-
-def test_replacement_just_after_open_is_seen(tmp_path, monkeypatch):
-    """A replacement landing between a read's open and its identity check
-    must not keep the old file's cache under the new file's identity."""
-    monkeypatch.setattr(HDF5Encoder, "ENCODE_ID", 0)
-    old, new = _named_histories("A"), _named_histories("B")
-    store = CheckpointStore(tmp_path, SHOT_LAYOUT)
-    _write_as_fresh_process(store, old)
     staged = CheckpointStore(tmp_path / "staged", SHOT_LAYOUT)
-    _write_as_fresh_process(staged, new)
+    _write_as_fresh_process(staged, versions[3])
     real_open = checkpointstore.open_h5
     opens = []
 
@@ -600,8 +638,8 @@ def test_replacement_just_after_open_is_seen(tmp_path, monkeypatch):
     monkeypatch.setattr(checkpointstore, "open_h5", open_then_replace)
     # `get` opens twice: once for the key index, then to decode, which
     # reads the old file while the path already names the new one.
-    assert _digest(store.get(1)) == _digest(old[1])
-    assert _digest(store.get(1)) == _digest(new[1])
+    assert _digest(store.get(1)) == _digest(versions[2][1])
+    assert _digest(store.get(1)) == _digest(versions[3][1])
 
 
 def test_interrupted_read_leaves_no_placeholders(
@@ -998,7 +1036,7 @@ def test_truncated_payload_stops_consolidation(tmp_path, histories):
     store.put_batch(_shot_entries(histories, [1, 2]), worker_id="a")
     bad = store.put_batch(_shot_entries(histories, [3, 4]), worker_id="b")
     path = Path(bad.path)
-    path.write_bytes(path.read_bytes()[: path.stat().st_size // 2])
+    _truncate_in_half(path)
     payloads = store.payload_paths()
     with pytest.raises(CheckpointReadError) as info:
         store.consolidate()

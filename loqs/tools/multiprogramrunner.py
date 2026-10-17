@@ -25,11 +25,6 @@ from typing import Any, ClassVar, Generic, TypeVar
 from tqdm import tqdm
 
 from loqs.core.historydatacollector import HistoryDataCollector
-from loqs.core.programresults import (
-    _normalize_decoded_int_keyed_dict,
-    _resolve_checkpoint_object_group,
-    _reset_empty_groups_format_dict_attr,
-)
 from loqs.core.quantumprogram import QuantumProgram
 from loqs.internal import (
     pin_worker_threads,
@@ -37,6 +32,9 @@ from loqs.internal import (
 )
 from loqs.internal.serializable import Serializable, ResolvingDecodeCache
 from loqs.internal.streamingmerge import (
+    _normalize_decoded_int_keyed_dict,
+    _reset_empty_groups_format_dict_attr,
+    _resolve_checkpoint_object_group,
     get_dict_attr_keys,
     merge_dict_attr,
     merge_worker_checkpoint_file,

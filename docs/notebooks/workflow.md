@@ -306,7 +306,7 @@ len(recovered_results6.shot_histories)
 ```
 
 ```{note}
-`run()` also supports genuine resume: calling it again with `checkpoint=True, resume=True` against the same `checkpoint_dir` picks up right where an interrupted run left off, computing only the shots not yet checkpointed rather than starting over from 0 (pass `force_resume=True` if the resuming call's own `num_shots`/`max_frame_limit`/RNG seed intentionally differ from the original -- otherwise a mismatch raises `ValueError`). Checkpointing is also useful even without resuming, for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`/`load_checkpoint`).
+`run()` also supports genuine resume: calling it again with `checkpoint=True, resume=True` against the same `checkpoint_dir` picks up right where an interrupted run left off, computing only the shots not yet checkpointed rather than starting over from 0 (pass `force_resume=True` if the resuming call's own `num_shots`/`max_frame_limit`/RNG seed intentionally differ from the original -- otherwise a mismatch raises `ValueError`). Checkpointing is also useful even without resuming, for (a) not losing already-completed shots if a long run is interrupted, and (b) collecting results from multiple parallel workers (see the `worker_id` argument of `ProgramResults.checkpoint`).
 ```
 
 ```{code-cell} ipython3

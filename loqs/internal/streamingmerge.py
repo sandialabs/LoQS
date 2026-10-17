@@ -54,17 +54,11 @@ def remove_transient_file(path: Path) -> bool:
 
 
 def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
-    """Navigate from a checkpoint file (or subgroup) to its actual object's encoded group.
+    """Navigate from a checkpoint file or subgroup to the object's group.
 
-    Handles both file layouts:
-    - Bootstrap path (_write_streamed_dict_entries): Top-level is directly the object group
-      (Serializable_1 with encode_type).
-    - Fresh envelope path (_write_results_snapshot_if_fresh): Top-level is a
-      wrapper (/root with version attr), contains the object group.
-
-    Starting from parent_group, descends through single-child wrapper groups
-    (those with no encode_type attribute and only a "version" attribute) until
-    reaching a group that either has encode_type or has more than one child.
+    Handles a bare layout (top level is the object group) and an envelope
+    layout (a wrapper such as /root with a version attr). Descends through
+    single-child wrappers until a group has encode_type or several children.
 
     Parameters
     ----------
@@ -91,6 +85,54 @@ def _resolve_checkpoint_object_group(parent_group: h5py.Group) -> h5py.Group:
             return current
     # Stop if we have multiple children or if encode_type is present
     return current
+
+
+def _normalize_decoded_int_keyed_dict(
+    raw: dict[Any, Any], value_cast: Callable[[Any], Any] | None = None
+) -> dict[int, Any]:
+    """Convert a decoded dict's string keys back to ints (HDF5/JSON encode
+    int dict keys as strings), optionally casting each value via
+    `value_cast`. Returns `raw` unchanged if it's empty or its keys aren't
+    all digit strings already."""
+    if raw and all(isinstance(k, str) and k.isdigit() for k in raw.keys()):
+        if value_cast is None:
+            return {int(k): v for k, v in raw.items()}
+        return {int(k): value_cast(v) for k, v in raw.items()}
+    return raw
+
+
+def decode_object_attrs(
+    object_group: h5py.Group,
+    names: Iterable[str],
+    decode_cache: Any,
+) -> dict[str, Any]:
+    """Decode the named attributes of an encoded object, and no others.
+
+    Each name is read from the object's collapsed blob (where small
+    attributes share one entry) or from its own child group; no other
+    child is touched, so a large sibling such as `shot_histories` is never
+    decoded. A name found in neither place is left out of the result.
+    """
+    from loqs.internal.encoder.hdf5encoder import (
+        _COLLAPSED_BLOB_NAME,
+        _decode_collapsed_children,
+    )
+
+    wanted = list(names)
+    result: dict[str, Any] = {}
+    if _COLLAPSED_BLOB_NAME in object_group:
+        collapsed = _decode_collapsed_children(
+            object_group[_COLLAPSED_BLOB_NAME], decode_cache
+        )
+        for name in wanted:
+            if name in collapsed:
+                result[name] = collapsed[name]
+    for name in wanted:
+        if name not in result and name in object_group:
+            result[name] = Serializable.decode(
+                object_group[name], format="hdf5", decode_cache=decode_cache
+            )
+    return result
 
 
 def _reset_empty_groups_format_dict_attr(
@@ -483,7 +525,6 @@ def merge_worker_checkpoint_file(
         can't be opened, or actual corruption -- in which case the worker
         file is left in place, never deleted.
     """
-    from loqs.core.programresults import _resolve_checkpoint_object_group
     from loqs.internal.serializable import ResolvingDecodeCache
 
     try:

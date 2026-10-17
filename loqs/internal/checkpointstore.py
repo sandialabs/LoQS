@@ -38,6 +38,7 @@ from loqs.internal.encoder.hdf5encoder import HDF5Encoder
 from loqs.internal.serializable import ResolvingDecodeCache, Serializable
 from loqs.internal.streamingmerge import (
     _decode_group_entry,
+    decode_object_attrs,
     _read_iterable_side,
     _reset_empty_groups_format_dict_attr,
     _resolve_checkpoint_object_group,
@@ -245,11 +246,24 @@ def _iterable_groups(
     container: h5py.Group, canonical_name: str
 ) -> tuple[h5py.Group, h5py.Group] | None:
     """The keys-side and values-side `iterable` groups of a dict attr, or
-    None if the attr is absent."""
+    None if the attr is absent.
+
+    An attr whose structure is only partly built, as a write cut short
+    leaves it, counts as absent: nothing in it can have been committed.
+    """
     if canonical_name not in container:
         return None
-    sides = container[canonical_name]["dict"]
-    return sides["keys"]["iterable"], sides["values"]["iterable"]
+    try:
+        sides = container[canonical_name]["dict"]
+        pair = sides["keys"]["iterable"], sides["values"]["iterable"]
+    except KeyError:
+        return None
+    for side in pair:
+        if side.attrs.get("storage_format", "groups") == "dataset" and (
+            "data" not in side
+        ):
+            return None
+    return pair
 
 
 def side_length(iterable_group: h5py.Group) -> int:
@@ -594,6 +608,8 @@ def _trim_attr(
                 f"attribute {name!r} is absent but {committed} entries "
                 "are committed",
             )
+        if name in container:
+            del container[name]  # a partly built attr from a cut write
         return
     lengths = [side_length(side) for side in sides]
     if min(lengths) < committed:
@@ -850,6 +866,50 @@ class CheckpointStore(_ReadableStore):
         return BatchReceipt(keys, str(path))
 
     # -- reading ----------------------------------------------------------
+
+    def read_attrs(
+        self,
+        names: Iterable[str],
+        *,
+        decode_cache: Any = None,
+    ) -> dict[str, Any]:
+        """Decode the named non-streamed attributes of the committed
+        canonical file, without decoding any streamed entry.
+
+        Raises `CheckpointReadError` naming the file if the file, marker or
+        a name is missing or decoding fails, and `ValueError` for a
+        streamed attribute. A given `decode_cache` is re-rooted at the file.
+        """
+        wanted = list(names)
+        streamed_names = {s.canonical for s in self.layout.attrs}
+        for name in wanted:
+            if name in streamed_names:
+                raise ValueError(
+                    f"{name!r} is a streamed attribute; read it through "
+                    "keys and get"
+                )
+        path = self.canonical_path
+        try:
+            f = open_h5(path, "r")
+            try:
+                _parse_marker(f)
+                if decode_cache is None:
+                    decode_cache = ResolvingDecodeCache(root=f, format="hdf5")
+                else:
+                    decode_cache._root = f
+                result = decode_object_attrs(
+                    _resolve_checkpoint_object_group(f), wanted, decode_cache
+                )
+            finally:
+                f.close()
+        except Exception as exc:
+            raise CheckpointReadError(
+                path, f"{type(exc).__name__}: {exc}"
+            ) from exc
+        absent = [name for name in wanted if name not in result]
+        if absent:
+            raise CheckpointReadError(path, f"attributes {absent} are missing")
+        return result
 
     def _sources(self) -> list[_Source]:
         sources: list[_Source] = []

@@ -60,14 +60,6 @@ def serial_reference() -> ShotSignature:
         return shot_signature(results)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#144 item 6: when a shot payload is deleted after its batch "
-    "ran, run() still returns both shots because the driver re-adds the "
-    "histories each batch returns (item 10), so no RuntimeError is "
-    "raised; fixed in stage 3",
-)
 def test_missing_shot_payload_is_not_counted_as_done(tmp_path: Path) -> None:
     deleted: list[Path] = []
     seen: set[Path] = set()
@@ -98,13 +90,6 @@ def test_missing_shot_payload_is_not_counted_as_done(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="#144 item 7: a truncated shot payload is skipped silently and "
-    "its work redone, so resume raises nothing (DID NOT RAISE); fixed in "
-    "stage 3",
-)
 def test_corrupt_shot_payload_is_reported(tmp_path: Path) -> None:
     # First session: stop cleanly when the 2nd batch is submitted.
     with pytest.raises(KeyboardInterrupt):
@@ -138,14 +123,6 @@ def consolidation_session(
     return sessions_in(tap.sessions, "results")[-1], reference
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#144 item 3: a consolidation write that fails between a value "
-    "and its key leaves results that resume mispairs (a shot holding "
-    "another shot's seed) or can't decode (decode errors); fixed in "
-    "stage 3",
-)
 def test_consolidation_failure_at_every_event_resumes_correctly(
     tmp_path: Path, consolidation_session: tuple[H5Session, ShotSignature]
 ) -> None:
@@ -248,13 +225,6 @@ def _contains_history(obj: Any, _seen: set[int] | None = None) -> bool:
     return any(_contains_history(x, seen) for x in members)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="#144 item 10: checkpointed shot workers return every History "
-    "to the driver (2 of 2 worker returns contain a History); fixed in "
-    "stage 3",
-)
 def test_checkpointed_workers_do_not_return_histories(
     tmp_path: Path, serial_reference: ShotSignature
 ) -> None:
